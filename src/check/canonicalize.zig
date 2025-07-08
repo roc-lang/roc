@@ -1034,6 +1034,11 @@ fn canonicalizeImportStatement(
 
     const import_idx = self.can_ir.store.addStatement(cir_import);
     self.can_ir.store.addScratchStatement(import_idx);
+
+    // 8. Add the module to the current scope so it can be used in qualified lookups
+    const current_scope = self.currentScope();
+    _ = current_scope.introduceImportedModule(self.can_ir.env.gpa, module_name_text, module_import_idx);
+
     return import_idx;
 }
 
@@ -1428,30 +1433,23 @@ pub fn canonicalizeExpr(
                         // Check if this is a module alias
                         if (self.scopeLookupModule(module_alias)) |module_name| {
                             // This is a module-qualified lookup
-                            // Create qualified name for external declaration
                             const module_text = self.can_ir.env.idents.getText(module_name);
-                            const field_text = self.can_ir.env.idents.getText(ident);
 
-                            // Allocate space for qualified name
-                            const qualified_text = std.fmt.allocPrint(self.can_ir.env.gpa, "{s}.{s}", .{ module_text, field_text }) catch |err| collections.utils.exitOnOom(err);
-                            defer self.can_ir.env.gpa.free(qualified_text);
-
-                            const qualified_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(qualified_text), Region.zero());
-
-                            // Create external declaration
-                            const external_decl = CIR.ExternalDecl{
-                                .qualified_name = qualified_name,
-                                .module_name = module_name,
-                                .local_name = ident,
-                                .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
-                                .kind = .value,
-                                .region = region,
+                            // Check if this module is imported in the current scope
+                            const import_idx = self.scopeLookupImportedModule(module_text) orelse {
+                                // Module not imported in current scope
+                                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .module_not_imported = .{
+                                    .module_name = module_name,
+                                    .region = region,
+                                } });
                             };
 
-                            const external_idx = self.can_ir.pushExternalDecl(external_decl);
-
-                            // Create lookup expression for external declaration
-                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = external_idx });
+                            // Create the e_lookup_external expression with Import.Idx
+                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                .module_idx = import_idx,
+                                .field_name = ident,
+                                .region = region,
+                            } });
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                             return expr_idx;
                         }
@@ -1479,23 +1477,22 @@ pub fn canonicalizeExpr(
                     .not_found => {
                         // Check if this identifier is an exposed item from an import
                         if (self.scopeLookupExposedItem(ident)) |exposed_info| {
-                            // Create qualified name using the original name, not the alias
-                            const qualified_name = self.createQualifiedName(exposed_info.module_name, exposed_info.original_name);
-
-                            // Create external declaration for the exposed item
-                            const external_decl = CIR.ExternalDecl{
-                                .qualified_name = qualified_name,
-                                .module_name = exposed_info.module_name,
-                                .local_name = ident,
-                                .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
-                                .kind = .value,
-                                .region = region,
+                            // Get the Import.Idx for the module this item comes from
+                            const module_text = self.can_ir.env.idents.getText(exposed_info.module_name);
+                            const import_idx = self.scopeLookupImportedModule(module_text) orelse {
+                                // This shouldn't happen if imports are properly tracked, but handle it gracefully
+                                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .module_not_imported = .{
+                                    .module_name = exposed_info.module_name,
+                                    .region = region,
+                                } });
                             };
 
-                            const external_idx = self.can_ir.pushExternalDecl(external_decl);
-
-                            // Create lookup expression for external declaration
-                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = external_idx });
+                            // Create the e_lookup_external expression with Import.Idx
+                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                .module_idx = import_idx,
+                                .field_name = exposed_info.original_name,
+                                .region = region,
+                            } });
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                             return expr_idx;
                         }
@@ -4922,6 +4919,23 @@ fn scopeLookupExposedItemInParentScopes(self: *const Self, item_name: Ident.Idx)
     return null;
 }
 
+/// Look up an imported module in the scope hierarchy
+fn scopeLookupImportedModule(self: *const Self, module_name: []const u8) ?CIR.Import.Idx {
+    // Search from innermost to outermost scope
+    var i = self.scopes.items.len;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+
+        switch (scope.lookupImportedModule(module_name)) {
+            .found => |import_idx| return import_idx,
+            .not_found => continue,
+        }
+    }
+
+    return null;
+}
+
 /// Extract the module name from a full qualified name (e.g., "Json" from "json.Json")
 fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) Ident.Idx {
     const module_text = self.can_ir.env.idents.getText(module_name_ident);
@@ -5363,6 +5377,18 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
 
     // Check if this is a module alias
     const module_name = self.scopeLookupModule(module_alias) orelse return null;
+    const module_text = self.can_ir.env.idents.getText(module_name);
+
+    // Check if this module is imported in the current scope
+    const import_idx = self.scopeLookupImportedModule(module_text) orelse {
+        // Module not imported in current scope
+        const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
+        _ = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .module_not_imported = .{
+            .module_name = module_name,
+            .region = region,
+        } });
+        return null;
+    };
 
     // This is a module-qualified lookup
     const right_expr = self.parse_ir.store.getExpr(field_access.right);
@@ -5371,45 +5397,14 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
     const right_ident = right_expr.ident;
     const field_name = self.parse_ir.tokens.resolveIdentifier(right_ident.token) orelse return null;
 
-    // Create qualified name by slicing from original source text
-    // The field_access region covers the entire "Module.field" span
     const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
-    const source_text = self.parse_ir.source[region.start.offset..region.end.offset];
 
-    const qualified_name = if (base.Ident.from_bytes(source_text)) |valid_ident|
-        self.can_ir.env.idents.insert(self.can_ir.env.gpa, valid_ident, region)
-    else |err| blk: {
-        // Invalid qualified name - create diagnostic and use placeholder
-        const error_msg = switch (err) {
-            base.Ident.Error.EmptyText => "malformed qualified name is empty",
-            base.Ident.Error.ContainsNullByte => "malformed qualified name contains null bytes",
-            base.Ident.Error.ContainsControlCharacters => "malformed qualified name contains invalid control characters",
-        };
-        const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, error_msg);
-        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-            .feature = feature,
-            .region = region,
-        } });
-
-        // Use a placeholder identifier instead
-        const placeholder_text = "MALFORMED_QUALIFIED_NAME";
-        break :blk self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(placeholder_text), region);
-    };
-
-    // Create external declaration
-    const external_decl = CIR.ExternalDecl{
-        .qualified_name = qualified_name,
-        .module_name = module_name,
-        .local_name = field_name,
-        .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
-        .kind = .value,
+    // Create the e_lookup_external expression with Import.Idx
+    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = .{
+        .module_idx = import_idx,
+        .field_name = field_name,
         .region = region,
-    };
-
-    const external_idx = self.can_ir.pushExternalDecl(external_decl);
-
-    // Create lookup expression for external declaration
-    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = external_idx });
+    } });
     _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
     return expr_idx;
 }

@@ -112,6 +112,10 @@ pub const Diagnostic = union(enum) {
         type_name: Ident.Idx,
         region: Region,
     },
+    module_not_imported: struct {
+        module_name: Ident.Idx,
+        region: Region,
+    },
     undeclared_type: struct {
         name: Ident.Idx,
         region: Region,
@@ -189,6 +193,7 @@ pub const Diagnostic = union(enum) {
             .module_not_found => |d| d.region,
             .value_not_exposed => |d| d.region,
             .type_not_exposed => |d| d.region,
+            .module_not_imported => |d| d.region,
             .undeclared_type => |d| d.region,
             .undeclared_type_var => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,
@@ -1068,6 +1073,34 @@ pub const Diagnostic = union(enum) {
         try report.document.addText(".");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Make sure the module exports this type, or use a type that is exposed.");
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "module not imported" diagnostic
+    pub fn buildModuleNotImportedReport(
+        allocator: Allocator,
+        module_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "MODULE NOT IMPORTED", .runtime_error);
+
+        const owned_module = try report.addOwnedString(module_name);
+        try report.document.addText("The module ");
+        try report.document.addAnnotated(owned_module, .module_name);
+        try report.document.addText(" is not imported in the current scope.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Try adding an import statement like: ");
+        try report.document.addKeyword("import");
+        try report.document.addText(" ");
+        try report.document.addAnnotated(owned_module, .module_name);
 
         try report.document.addSourceRegion(
             region_info,

@@ -299,6 +299,16 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
+        .module_not_imported => |data| blk: {
+            const module_name = self.env.idents.getText(data.module_name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildModuleNotImportedReport(
+                allocator,
+                module_name,
+                region_info,
+                filename,
+            );
+        },
         .undeclared_type => |data| blk: {
             const type_name = self.env.idents.getText(data.name);
             const region_info = self.calcRegionInfo(data.region);

@@ -367,3 +367,155 @@ test "Import.Idx is u16" {
     // Verify the size in memory
     try testing.expectEqual(@sizeOf(u16), @sizeOf(CIR.Import.Idx));
 }
+
+test "module scopes - imports are only available in their scope" {
+    const allocator = testing.allocator;
+
+    // Parse source with imports in different scopes
+    const source =
+        \\module [process]
+        \\
+        \\import List
+        \\import Dict
+        \\
+        \\process = \items ->
+        \\    # List and Dict are available here
+        \\    list = List.map items \x -> x + 1
+        \\    dict = Dict.empty
+        \\
+        \\    inner = \y ->
+        \\        # List and Dict are still available in inner scope
+        \\        import Set
+        \\        # Now Set is also available
+        \\        set = Set.empty
+        \\        list2 = List.len items
+        \\        set
+        \\
+        \\    # Set is NOT available here (out of scope)
+        \\    # This should generate MODULE_NOT_IMPORTED error
+        \\    badSet = Set.empty
+        \\
+        \\    dict
+    ;
+
+    // Parse the source
+    var tokens = try parse.tokenize(allocator, source, .file);
+    defer tokens.deinit(allocator);
+    var parse_env = base.ModuleEnv.init(allocator);
+    defer parse_env.deinit();
+    try parse_env.calcLineStarts(source);
+    var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
+    defer ast.deinit();
+
+    // Canonicalize without external module validation to focus on scope testing
+    var env = base.ModuleEnv.init(allocator);
+    defer env.deinit();
+    try env.calcLineStarts(source);
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
+    defer canonicalizer.deinit();
+
+    try canonicalizer.canonicalizeFile();
+
+    // Check for MODULE_NOT_IMPORTED error
+    var found_module_not_imported = false;
+    var error_module_name: ?[]const u8 = null;
+
+    const diagnostics = cir.diag_regions.entries.items;
+    for (diagnostics) |entry| {
+        const diag_idx: CIR.Diagnostic.Idx = @enumFromInt(entry.value);
+        const diagnostic = cir.store.getDiagnostic(diag_idx);
+
+        switch (diagnostic) {
+            .module_not_imported => |d| {
+                found_module_not_imported = true;
+                error_module_name = env.idents.getText(d.module_name);
+            },
+            else => {},
+        }
+    }
+
+    // Verify we got the MODULE_NOT_IMPORTED error for Set
+    try expectEqual(true, found_module_not_imported);
+    try testing.expectEqualStrings("Set", error_module_name.?);
+
+    // Verify that List and Dict imports were processed correctly
+    try testing.expect(cir.imports.imports.items.len >= 3); // List, Dict, and Set
+}
+
+test "module-qualified lookups with e_lookup_external" {
+    const allocator = testing.allocator;
+
+    // Parse source with module-qualified lookups
+    const source =
+        \\module [main]
+        \\
+        \\import List
+        \\import Dict
+        \\
+        \\main =
+        \\    list = List.map [1, 2, 3] \x -> x * 2
+        \\    dict = Dict.insert Dict.empty "key" "value"
+        \\    List.len list
+    ;
+
+    // Parse the source
+    var tokens = try parse.tokenize(allocator, source, .file);
+    defer tokens.deinit(allocator);
+    var parse_env = base.ModuleEnv.init(allocator);
+    defer parse_env.deinit();
+    try parse_env.calcLineStarts(source);
+    var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
+    defer ast.deinit();
+
+    // Canonicalize
+    var env = base.ModuleEnv.init(allocator);
+    defer env.deinit();
+    try env.calcLineStarts(source);
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
+    defer canonicalizer.deinit();
+
+    try canonicalizer.canonicalizeFile();
+
+    // Count e_lookup_external expressions
+    var external_lookup_count: u32 = 0;
+    var found_list_map = false;
+    var found_list_len = false;
+    var found_dict_insert = false;
+    var found_dict_empty = false;
+
+    // Traverse the CIR to find e_lookup_external expressions
+    const all_exprs = cir.store.expr_buffer.items;
+    for (all_exprs) |node| {
+        if (node.tag == .expr_lookup_external) {
+            external_lookup_count += 1;
+
+            // Get the external lookup data
+            const module_idx: CIR.Import.Idx = @enumFromInt(node.data_1);
+            const field_name_idx: base.Ident.Idx = @bitCast(node.data_2);
+
+            const module_name = cir.imports.getModuleName(module_idx);
+            const field_name = env.idents.getText(field_name_idx);
+
+            if (std.mem.eql(u8, module_name, "List")) {
+                if (std.mem.eql(u8, field_name, "map")) found_list_map = true;
+                if (std.mem.eql(u8, field_name, "len")) found_list_len = true;
+            } else if (std.mem.eql(u8, module_name, "Dict")) {
+                if (std.mem.eql(u8, field_name, "insert")) found_dict_insert = true;
+                if (std.mem.eql(u8, field_name, "empty")) found_dict_empty = true;
+            }
+        }
+    }
+
+    // Verify we found all expected external lookups
+    try expectEqual(@as(u32, 4), external_lookup_count);
+    try expectEqual(true, found_list_map);
+    try expectEqual(true, found_list_len);
+    try expectEqual(true, found_dict_insert);
+    try expectEqual(true, found_dict_empty);
+}

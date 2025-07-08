@@ -97,7 +97,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 38;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 39;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 25;
 /// Count of the statement nodes in the CIR
@@ -315,7 +315,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_external_lookup => {
             // Handle external lookups
-            return CIR.Expr{ .e_lookup_external = @enumFromInt(node.data_1) };
+            return CIR.Expr{ .e_lookup_external = .{
+                .module_idx = @enumFromInt(node.data_1),
+                .field_name = @bitCast(node.data_2),
+                .region = store.getRegionAt(node_idx),
+            } };
         },
         .expr_int => {
             // Read i128 from extra_data (stored as 4 u32s in data_1)
@@ -1412,12 +1416,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.tag = .expr_var;
             node.data_1 = @intFromEnum(local.pattern_idx);
         },
-        .e_lookup_external => |external_idx| {
-            // For external lookups, store the external decl index
-            // Use external lookup tag to distinguish from local lookups
-            region = base.Region.zero();
+        .e_lookup_external => |e| {
+            // For external lookups, store the module index and field name
+            region = e.region;
             node.tag = .expr_external_lookup;
-            node.data_1 = @intFromEnum(external_idx);
+            node.data_1 = @intFromEnum(e.module_idx);
+            node.data_2 = @as(u32, @bitCast(e.field_name));
         },
         .e_int => |e| {
             region = e.region;
@@ -2662,6 +2666,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.data_1 = @as(u32, @bitCast(r.module_name));
             node.data_2 = @as(u32, @bitCast(r.type_name));
         },
+        .module_not_imported => |r| {
+            node.tag = .diag_module_not_imported;
+            region = r.region;
+            node.data_1 = @as(u32, @bitCast(r.module_name));
+        },
         .nominal_type_redeclared => |r| {
             node.tag = .diag_nominal_type_redeclared;
             region = r.redeclared_region;
@@ -2866,6 +2875,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_type_not_exposed => return CIR.Diagnostic{ .type_not_exposed = .{
             .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
             .type_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_module_not_imported => return CIR.Diagnostic{ .module_not_imported = .{
+            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_undeclared_type_var => return CIR.Diagnostic{ .undeclared_type_var = .{

@@ -122,7 +122,11 @@ pub const Expr = union(enum) {
     /// import json.Utf8
     /// foo = Utf8.encode("hello") # "Utf8.encode" is defined in another module
     /// ```
-    e_lookup_external: ExternalDecl.Idx,
+    e_lookup_external: struct {
+        module_idx: CIR.Import.Idx,
+        field_name: Ident.Idx,
+        region: Region,
+    },
     /// A sequence of zero or more elements of the same type
     /// ```roc
     /// ["one", "two", "three"]
@@ -411,11 +415,7 @@ pub const Expr = union(enum) {
             .e_str_segment => |e| return e.region,
             .e_str => |e| return e.region,
             .e_lookup_local => |e| return e.region,
-            .e_lookup_external => {
-                // External lookups don't have a direct region access from Expr context
-                // The region should be handled where the CIR context is available
-                return null;
-            },
+            .e_lookup_external => |e| return e.region,
             .e_list => |e| return e.region,
             .e_tuple => |e| return e.region,
             .e_match => |e| return e.region,
@@ -585,11 +585,17 @@ pub const Expr = union(enum) {
 
                 return lookup_node;
             },
-            .e_lookup_external => |external_idx| {
+            .e_lookup_external => |e| {
                 var node = SExpr.init(gpa, "e-lookup-external");
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, e.region);
 
-                var external_sexpr = ir.getExternalDecl(external_idx).toSExpr(ir);
-                node.appendNode(gpa, &external_sexpr);
+                // Add module index
+                var buf: [32]u8 = undefined;
+                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(e.module_idx)}) catch unreachable;
+                node.appendRawAttr(gpa, "module-idx", module_idx_str);
+
+                // Add field name
+                node.appendStringAttr(gpa, "field", ir.getIdentText(e.field_name));
 
                 return node;
             },

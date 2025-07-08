@@ -196,7 +196,11 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(CIR.Expr{
-        .e_lookup_external = @enumFromInt(345),
+        .e_lookup_external = .{
+            .module_idx = @enumFromInt(0),
+            .field_name = @bitCast(@as(u32, 345)),
+            .region = from_raw_offsets(200, 210),
+        },
     });
     try expressions.append(CIR.Expr{
         .e_list = .{
@@ -602,6 +606,13 @@ test "NodeStore round trip - Diagnostics" {
             .module_name = @bitCast(@as(u32, 765)),
             .type_name = @bitCast(@as(u32, 766)),
             .region = from_raw_offsets(810, 820),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .module_not_imported = .{
+            .module_name = @bitCast(@as(u32, 876)),
+            .region = from_raw_offsets(820, 830),
         },
     });
 
