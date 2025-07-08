@@ -689,7 +689,7 @@ const Formatter = struct {
         const field = fmt.ast.store.getRecordField(idx);
         try fmt.pushTokenText(field.name);
         if (field.value) |v| {
-            try fmt.pushAll(if (field.optional) "? " else ": ");
+            try fmt.pushAll(": ");
             _ = try fmt.formatExpr(v);
         }
 

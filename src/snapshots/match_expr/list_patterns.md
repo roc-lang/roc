@@ -112,17 +112,19 @@ match numbers {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.7 (degenerate false)
-						(patterns)))
+					(pattern (degenerate false)
+						(p-list @2.5-2.7
+							(patterns))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
 				(patterns
-					(p-list @3.5-3.20 (degenerate false)
-						(patterns
-							(p-assign @3.6-3.11 (ident "first")))
-						(rest-at (index 1)
-							(p-assign @3.15-3.19 (ident "rest")))))
+					(pattern (degenerate false)
+						(p-list @3.5-3.20
+							(patterns
+								(p-assign @3.6-3.11 (ident "first")))
+							(rest-at (index 1)
+								(p-assign @3.15-3.19 (ident "rest"))))))
 				(value
 					(e-int @3.24-3.25 (value "0")))))))
 ~~~

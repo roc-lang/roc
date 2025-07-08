@@ -65,24 +65,25 @@ match person {
 		(branches
 			(branch
 				(patterns
-					(p-record-destructure @2.5-2.37 (degenerate false)
-						(destructs
-							(record-destruct @2.7-2.22 (label "name") (ident "name")
-								(sub-pattern
-									(p-assign @2.13-2.21 (ident "userName"))))
-							(record-destruct @2.23-2.37 (label "age") (ident "age")
-								(sub-pattern
-									(p-assign @2.28-2.35 (ident "userAge")))))))
+					(pattern (degenerate false)
+						(p-record-destructure @2.5-2.37
+							(destructs
+								(record-destruct @2.7-2.22 (label "name") (ident "name")
+									(sub-pattern
+										(p-assign @2.13-2.21 (ident "userName"))))
+								(record-destruct @2.23-2.37 (label "age") (ident "age")
+									(sub-pattern
+										(p-assign @2.28-2.35 (ident "userAge"))))))))
 				(value
 					(e-string @2.41-2.92
 						(e-literal @2.42-2.47 (string "User "))
 						(e-lookup-local @2.49-2.57
-							(pattern @2.13-2.21))
+							(p-assign @2.13-2.21 (ident "userName")))
 						(e-literal @2.58-2.62 (string " is "))
 						(e-dot-access @2.64-2.81 (field "to_str")
 							(receiver
 								(e-lookup-local @2.64-2.71
-									(pattern @2.28-2.35)))
+									(p-assign @2.28-2.35 (ident "userAge"))))
 							(args))
 						(e-literal @2.81-2.91 (string " years old"))))))))
 ~~~

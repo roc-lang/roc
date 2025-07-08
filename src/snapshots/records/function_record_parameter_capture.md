@@ -36,14 +36,14 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 				(field @1.10-1.14 (name "age") (rest false))
 				(field @1.15-1.20 (name "a") (rest true)))))
 	(e-record @1.32-1.103
-		(field (field "greeting") (optional false)
+		(field (field "greeting")
 			(e-string @1.44-1.59
 				(e-string-part @1.45-1.51 (raw "Hello "))
 				(e-ident @1.53-1.57 (raw "name"))
 				(e-string-part @1.58-1.58 (raw ""))))
-		(field (field "full_record") (optional false)
+		(field (field "full_record")
 			(e-ident @1.74-1.80 (raw "person")))
-		(field (field "is_adult") (optional false)
+		(field (field "is_adult")
 			(e-binop @1.92-1.103 (op ">=")
 				(e-ident @1.92-1.95 (raw "age"))
 				(e-int @1.99-1.101 (raw "18"))))))
@@ -71,15 +71,23 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 				(e-string @1.44-1.59
 					(e-literal @1.45-1.51 (string "Hello "))
 					(e-lookup-local @1.53-1.57
-						(pattern @1.4-1.9))
+						(p-assign @1.4-1.9 (ident "name")))
 					(e-literal @1.58-1.58 (string ""))))
 			(field (name "full_record")
 				(e-lookup-local @1.74-1.80
-					(pattern @1.2-1.30)))
+					(p-as @1.2-1.30 (as "person")
+						(p-record-destructure @1.2-1.20
+							(destructs
+								(record-destruct @1.4-1.9 (label "name") (ident "name")
+									(required))
+								(record-destruct @1.10-1.14 (label "age") (ident "age")
+									(required))
+								(record-destruct @1.15-1.20 (label "a") (ident "a")
+									(required)))))))
 			(field (name "is_adult")
 				(e-binop @1.92-1.103 (op "ge")
 					(e-lookup-local @1.92-1.95
-						(pattern @1.10-1.14))
+						(p-assign @1.10-1.14 (ident "age")))
 					(e-int @1.99-1.101 (value "18")))))))
 ~~~
 # TYPES

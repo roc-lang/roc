@@ -74,7 +74,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @7.1-7.5 (ident "sort"))
-		(e-not-implemented)
+		(e-not-implemented @7.8-7.11)
 		(annotation @7.1-7.5
 			(declared-type
 				(ty-fn @6.8-6.32 (effectful false)

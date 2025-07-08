@@ -58,7 +58,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "foo"))
-		(e-not-implemented)))
+		(e-not-implemented @6.7-6.10)))
 ~~~
 # TYPES
 ~~~clojure

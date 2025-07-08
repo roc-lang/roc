@@ -129,133 +129,140 @@ match ... {
 (e-match @1.1-9.2
 	(match @1.1-9.2
 		(cond
-			(e-not-implemented))
+			(e-not-implemented @1.7-1.10))
 		(branches
 			(branch
 				(patterns
-					(p-record-destructure @2.5-2.24 (degenerate false)
-						(destructs
-							(record-destruct @2.7-2.24 (label "a") (ident "a")
-								(sub-pattern
-									(p-record-destructure @2.10-2.22
-										(destructs
-											(record-destruct @2.12-2.22 (label "b") (ident "b")
-												(sub-pattern
-													(p-record-destructure @2.15-2.20
-														(destructs
-															(record-destruct @2.17-2.20 (label "c") (ident "c")
-																(required)))))))))))))
+					(pattern (degenerate false)
+						(p-record-destructure @2.5-2.24
+							(destructs
+								(record-destruct @2.7-2.24 (label "a") (ident "a")
+									(sub-pattern
+										(p-record-destructure @2.10-2.22
+											(destructs
+												(record-destruct @2.12-2.22 (label "b") (ident "b")
+													(sub-pattern
+														(p-record-destructure @2.15-2.20
+															(destructs
+																(record-destruct @2.17-2.20 (label "c") (ident "c")
+																	(required))))))))))))))
 				(value
 					(e-string @2.28-2.49
 						(e-literal @2.29-2.44 (string "deeply nested: "))
 						(e-lookup-local @2.46-2.47
-							(pattern @2.17-2.20))
+							(p-assign @2.17-2.20 (ident "c")))
 						(e-literal @2.48-2.48 (string "")))))
 			(branch
 				(patterns
-					(p-record-destructure @3.5-3.17 (degenerate false)
-						(destructs
-							(record-destruct @3.7-3.9 (label "x") (ident "x")
-								(required))
-							(record-destruct @3.10-3.17 (label "y") (ident "y")
-								(sub-pattern
-									(p-record-destructure @3.13-3.15
-										(destructs)))))))
+					(pattern (degenerate false)
+						(p-record-destructure @3.5-3.17
+							(destructs
+								(record-destruct @3.7-3.9 (label "x") (ident "x")
+									(required))
+								(record-destruct @3.10-3.17 (label "y") (ident "y")
+									(sub-pattern
+										(p-record-destructure @3.13-3.15
+											(destructs))))))))
 				(value
 					(e-string @3.21-3.45
 						(e-literal @3.22-3.40 (string "mixed with empty: "))
 						(e-lookup-local @3.42-3.43
-							(pattern @3.7-3.9))
+							(p-assign @3.7-3.9 (ident "x")))
 						(e-literal @3.44-3.44 (string "")))))
 			(branch
 				(patterns
-					(p-record-destructure @4.5-4.33 (degenerate false)
-						(destructs
-							(record-destruct @4.7-4.24 (label "outer") (ident "outer")
-								(sub-pattern
-									(p-record-destructure @4.14-4.23
-										(destructs
-											(record-destruct @4.16-4.23 (label "inner") (ident "inner")
-												(required))))))
-							(record-destruct @4.25-4.33 (label "simple") (ident "simple")
-								(required)))))
+					(pattern (degenerate false)
+						(p-record-destructure @4.5-4.33
+							(destructs
+								(record-destruct @4.7-4.24 (label "outer") (ident "outer")
+									(sub-pattern
+										(p-record-destructure @4.14-4.23
+											(destructs
+												(record-destruct @4.16-4.23 (label "inner") (ident "inner")
+													(required))))))
+								(record-destruct @4.25-4.33 (label "simple") (ident "simple")
+									(required))))))
 				(value
 					(e-string @4.37-4.68
 						(e-literal @4.38-4.45 (string "mixed: "))
 						(e-lookup-local @4.47-4.52
-							(pattern @4.16-4.23))
+							(p-assign @4.16-4.23 (ident "inner")))
 						(e-literal @4.53-4.58 (string " and "))
 						(e-lookup-local @4.60-4.66
-							(pattern @4.25-4.33))
+							(p-assign @4.25-4.33 (ident "simple")))
 						(e-literal @4.67-4.67 (string "")))))
 			(branch
 				(patterns
-					(p-record-destructure @5.5-5.27 (degenerate false)
-						(destructs
-							(record-destruct @5.7-5.16 (label "a") (ident "a")
-								(sub-pattern
-									(p-record-destructure @5.10-5.15
-										(destructs
-											(record-destruct @5.12-5.15 (label "b") (ident "b")
-												(required))))))
-							(record-destruct @5.17-5.27 (label "c") (ident "c")
-								(sub-pattern
-									(p-record-destructure @5.20-5.25
-										(destructs
-											(record-destruct @5.22-5.25 (label "d") (ident "d")
-												(required)))))))))
+					(pattern (degenerate false)
+						(p-record-destructure @5.5-5.27
+							(destructs
+								(record-destruct @5.7-5.16 (label "a") (ident "a")
+									(sub-pattern
+										(p-record-destructure @5.10-5.15
+											(destructs
+												(record-destruct @5.12-5.15 (label "b") (ident "b")
+													(required))))))
+								(record-destruct @5.17-5.27 (label "c") (ident "c")
+									(sub-pattern
+										(p-record-destructure @5.20-5.25
+											(destructs
+												(record-destruct @5.22-5.25 (label "d") (ident "d")
+													(required))))))))))
 				(value
 					(e-string @5.31-5.60
 						(e-literal @5.32-5.49 (string "multiple nested: "))
 						(e-lookup-local @5.51-5.52
-							(pattern @5.12-5.15))
+							(p-assign @5.12-5.15 (ident "b")))
 						(e-literal @5.53-5.55 (string ", "))
 						(e-lookup-local @5.57-5.58
-							(pattern @5.22-5.25))
+							(p-assign @5.22-5.25 (ident "d")))
 						(e-literal @5.59-5.59 (string "")))))
 			(branch
 				(patterns
-					(p-record-destructure @6.5-6.16 (degenerate false)
-						(destructs
-							(record-destruct @6.7-6.16 (label "name") (ident "name")
-								(sub-pattern
-									(p-assign @6.13-6.14 (ident "x")))))))
+					(pattern (degenerate false)
+						(p-record-destructure @6.5-6.16
+							(destructs
+								(record-destruct @6.7-6.16 (label "name") (ident "name")
+									(sub-pattern
+										(p-assign @6.13-6.14 (ident "x"))))))))
 				(value
 					(e-string @6.20-6.35
 						(e-literal @6.21-6.30 (string "renamed: "))
 						(e-lookup-local @6.32-6.33
-							(pattern @6.13-6.14))
+							(p-assign @6.13-6.14 (ident "x")))
 						(e-literal @6.34-6.34 (string "")))))
 			(branch
 				(patterns
-					(p-record-destructure @7.5-7.50 (degenerate false)
-						(destructs
-							(record-destruct @7.7-7.50 (label "person") (ident "person")
-								(sub-pattern
-									(p-record-destructure @7.15-7.48
-										(destructs
-											(record-destruct @7.17-7.33 (label "name") (ident "name")
-												(sub-pattern
-													(p-assign @7.23-7.32 (ident "firstName"))))
-											(record-destruct @7.34-7.48 (label "age") (ident "age")
-												(sub-pattern
-													(p-assign @7.39-7.46 (ident "userAge")))))))))))
+					(pattern (degenerate false)
+						(p-record-destructure @7.5-7.50
+							(destructs
+								(record-destruct @7.7-7.50 (label "person") (ident "person")
+									(sub-pattern
+										(p-record-destructure @7.15-7.48
+											(destructs
+												(record-destruct @7.17-7.33 (label "name") (ident "name")
+													(sub-pattern
+														(p-assign @7.23-7.32 (ident "firstName"))))
+												(record-destruct @7.34-7.48 (label "age") (ident "age")
+													(sub-pattern
+														(p-assign @7.39-7.46 (ident "userAge"))))))))))))
 				(value
 					(e-string @7.54-7.106
 						(e-literal @7.55-7.71 (string "renamed nested: "))
 						(e-lookup-local @7.73-7.82
-							(pattern @7.23-7.32))
+							(p-assign @7.23-7.32 (ident "firstName")))
 						(e-literal @7.83-7.85 (string " ("))
 						(e-dot-access @7.87-7.104 (field "to_str")
 							(receiver
 								(e-lookup-local @7.87-7.94
-									(pattern @7.39-7.46)))
+									(p-assign @7.39-7.46 (ident "userAge"))))
 							(args))
 						(e-literal @7.104-7.105 (string ")")))))
 			(branch
 				(patterns
-					(p-record-destructure @8.5-8.7 (degenerate false)
-						(destructs)))
+					(pattern (degenerate false)
+						(p-record-destructure @8.5-8.7
+							(destructs))))
 				(value
 					(e-string @8.11-8.25
 						(e-literal @8.12-8.24 (string "empty record"))))))))

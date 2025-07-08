@@ -107,11 +107,11 @@ main! = |_| {}
 						(e-dot-access @7.18-7.30 (field "name")
 							(receiver
 								(e-lookup-local @7.18-7.24
-									(pattern @6.14-6.20))))))
+									(p-assign @6.14-6.20 (ident "person")))))))
 				(e-dot-access @8.5-9.2 (field "name")
 					(receiver
 						(e-lookup-local @8.5-8.11
-							(pattern @6.14-6.20))))))
+							(p-assign @6.14-6.20 (ident "person")))))))
 		(annotation @6.1-6.10
 			(declared-type
 				(ty-fn @5.13-5.43 (effectful true)

@@ -32,17 +32,17 @@ LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpenCurly(4:11-4:12),DoubleDot(4:13-4:15)
 		(s-decl @3.1-3.36
 			(p-ident @3.1-3.7 (raw "person"))
 			(e-record @3.10-3.36
-				(field (field "name") (optional false)
+				(field (field "name")
 					(e-string @3.18-3.25
 						(e-string-part @3.19-3.24 (raw "Alice"))))
-				(field (field "age") (optional false)
+				(field (field "age")
 					(e-int @3.32-3.34 (raw "30")))))
 		(s-decl @4.1-4.32
 			(p-ident @4.1-4.8 (raw "updated"))
 			(e-record @4.11-4.32
 				(ext
 					(e-ident @4.15-4.21 (raw "person")))
-				(field (field "age") (optional false)
+				(field (field "age")
 					(e-int @4.28-4.30 (raw "31")))))))
 ~~~
 # FORMATTED
@@ -69,7 +69,7 @@ updated = {..person, age: 31}
 		(e-record @4.11-4.32
 			(ext
 				(e-lookup-local @4.15-4.21
-					(pattern @3.1-3.7)))
+					(p-assign @3.1-3.7 (ident "person"))))
 			(fields
 				(field (name "age")
 					(e-int @4.28-4.30 (value "31")))))))

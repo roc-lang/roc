@@ -93,7 +93,7 @@ NO CHANGE
 					(e-string @11.15-11.32
 						(e-literal @11.16-11.23 (string "Hello, "))
 						(e-lookup-local @11.25-11.29
-							(pattern @9.2-9.6))
+							(p-assign @9.2-9.6 (ident "name")))
 						(e-literal @11.30-11.31 (string "!")))))))
 	(s-import @6.1-6.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes))

@@ -46,36 +46,36 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 # PARSE
 ~~~clojure
 (e-record @1.1-15.2
-	(field (field "name") (optional false)
+	(field (field "name")
 		(e-string @2.11-2.18
 			(e-string-part @2.12-2.17 (raw "Alice"))))
-	(field (field "scores") (optional false)
+	(field (field "scores")
 		(e-list @3.13-3.29
 			(e-int @3.14-3.16 (raw "95"))
 			(e-int @3.18-3.20 (raw "87"))
 			(e-int @3.22-3.24 (raw "92"))
 			(e-int @3.26-3.28 (raw "78"))))
-	(field (field "status") (optional false)
+	(field (field "status")
 		(e-apply @4.13-4.44
 			(e-tag @4.13-4.19 (raw "Active"))
 			(e-record @4.20-4.43
-				(field (field "since") (optional false)
+				(field (field "since")
 					(e-string @4.29-4.41
 						(e-string-part @4.30-4.40 (raw "2023-01-15")))))))
-	(field (field "preferences") (optional false)
+	(field (field "preferences")
 		(e-record @5.18-5.76
-			(field (field "theme") (optional false)
+			(field (field "theme")
 				(e-tag @5.27-5.31 (raw "Dark")))
-			(field (field "notifications") (optional false)
+			(field (field "notifications")
 				(e-apply @5.48-5.74
 					(e-tag @5.48-5.53 (raw "Email"))
 					(e-string @5.54-5.73
 						(e-string-part @5.55-5.72 (raw "alice@example.com")))))))
-	(field (field "metadata") (optional false)
+	(field (field "metadata")
 		(e-apply @6.15-9.7
 			(e-tag @6.15-6.17 (raw "Ok"))
 			(e-record @6.18-9.6
-				(field (field "tags") (optional false)
+				(field (field "tags")
 					(e-list @7.15-7.51
 						(e-string @7.16-7.27
 							(e-string-part @7.17-7.26 (raw "developer")))
@@ -83,21 +83,21 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 							(e-string-part @7.30-7.36 (raw "senior")))
 						(e-string @7.39-7.50
 							(e-string-part @7.40-7.49 (raw "fullstack")))))
-				(field (field "permissions") (optional false)
+				(field (field "permissions")
 					(e-list @8.22-8.42
 						(e-tag @8.23-8.27 (raw "Read"))
 						(e-tag @8.29-8.34 (raw "Write"))
 						(e-tag @8.36-8.41 (raw "Admin")))))))
-	(field (field "callback") (optional false)
+	(field (field "callback")
 		(e-lambda @10.15-10.25
 			(args
 				(p-ident @10.16-10.17 (raw "x")))
 			(e-binop @10.19-10.25 (op "+")
 				(e-ident @10.19-10.20 (raw "x"))
 				(e-int @10.23-10.24 (raw "1")))))
-	(field (field "nested") (optional false)
+	(field (field "nested")
 		(e-record @11.13-14.6
-			(field (field "items") (optional false)
+			(field (field "items")
 				(e-list @12.16-12.52
 					(e-apply @12.17-12.30
 						(e-tag @12.17-12.21 (raw "Some"))
@@ -108,16 +108,16 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 						(e-tag @12.38-12.42 (raw "Some"))
 						(e-string @12.43-12.50
 							(e-string-part @12.44-12.49 (raw "third"))))))
-			(field (field "result") (optional false)
+			(field (field "result")
 				(e-apply @13.17-13.70
 					(e-tag @13.17-13.24 (raw "Success"))
 					(e-record @13.25-13.69
-						(field (field "data") (optional false)
+						(field (field "data")
 							(e-list @13.33-13.42
 								(e-int @13.34-13.35 (raw "1"))
 								(e-int @13.37-13.38 (raw "2"))
 								(e-int @13.40-13.41 (raw "3"))))
-						(field (field "timestamp") (optional false)
+						(field (field "timestamp")
 							(e-string @13.55-13.67
 								(e-string-part @13.56-13.66 (raw "2024-01-01"))))))))))
 ~~~
@@ -205,7 +205,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(p-assign @10.16-10.17 (ident "x")))
 				(e-binop @10.19-10.25 (op "add")
 					(e-lookup-local @10.19-10.20
-						(pattern @10.16-10.17))
+						(p-assign @10.16-10.17 (ident "x")))
 					(e-int @10.23-10.24 (value "1")))))
 		(field (name "nested")
 			(e-record @11.13-14.6

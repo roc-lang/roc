@@ -115,7 +115,7 @@ extract_age = |person| {
 						(e-runtime-error (tag "ident_not_in_scope"))))
 				(s-expr @5.15-6.8
 					(e-lookup-local @5.15-5.21
-						(pattern @4.16-4.22)))
+						(p-assign @4.16-4.22 (ident "person"))))
 				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation @4.1-4.12
 			(declared-type

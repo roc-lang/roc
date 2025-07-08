@@ -164,10 +164,10 @@ main! = |_| {
 					(p-assign @17.5-17.11 (ident "result"))
 					(e-binop @17.14-18.11 (op "add")
 						(e-lookup-local @17.14-17.22
-							(pattern @8.5-8.13))
+							(p-assign @8.5-8.13 (ident "used_var")))
 						(e-int @17.25-17.27 (value "10"))))
 				(e-lookup-local @18.5-18.11
-					(pattern @17.5-17.11))))))
+					(p-assign @17.5-17.11 (ident "result")))))))
 ~~~
 # TYPES
 ~~~clojure

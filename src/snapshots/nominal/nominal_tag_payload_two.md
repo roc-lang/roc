@@ -124,7 +124,7 @@ is_ok = |result| match result {
 			(e-tag @6.10-6.24 (name "Ok")
 				(args
 					(e-lookup-local @6.22-6.23
-						(pattern @6.7-6.8)))))
+						(p-assign @6.7-6.8 (ident "a"))))))
 		(annotation @6.1-6.3
 			(declared-type
 				(ty-fn @5.6-5.27 (effectful false)
@@ -141,16 +141,18 @@ is_ok = |result| match result {
 				(match @9.18-12.2
 					(cond
 						(e-lookup-local @9.24-9.30
-							(pattern @9.10-9.16)))
+							(p-assign @9.10-9.16 (ident "result"))))
 					(branches
 						(branch
 							(patterns
-								(p-applied-tag @10.5-10.19 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @10.5-10.19)))
 							(value
 								(e-tag @10.23-10.27 (name "True"))))
 						(branch
 							(patterns
-								(p-applied-tag @11.5-11.20 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @11.5-11.20)))
 							(value
 								(e-tag @11.24-11.29 (name "False"))))))))
 		(annotation @9.1-9.6

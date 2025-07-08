@@ -202,30 +202,33 @@ match items {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.20 (degenerate false)
-						(patterns
-							(p-assign @2.6-2.11 (ident "first")))
-						(rest-at (index 1)
-							(p-assign @2.15-2.19 (ident "rest")))))
+					(pattern (degenerate false)
+						(p-list @2.5-2.20
+							(patterns
+								(p-assign @2.6-2.11 (ident "first")))
+							(rest-at (index 1)
+								(p-assign @2.15-2.19 (ident "rest"))))))
 				(value
 					(e-int @2.24-2.25 (value "0"))))
 			(branch
 				(patterns
-					(p-list @3.5-3.19 (degenerate false)
-						(patterns
-							(p-assign @3.14-3.18 (ident "last")))
-						(rest-at (index 0)
-							(p-assign @3.8-3.12 (ident "rest")))))
+					(pattern (degenerate false)
+						(p-list @3.5-3.19
+							(patterns
+								(p-assign @3.14-3.18 (ident "last")))
+							(rest-at (index 0)
+								(p-assign @3.8-3.12 (ident "rest"))))))
 				(value
 					(e-int @3.23-3.24 (value "1"))))
 			(branch
 				(patterns
-					(p-list @4.5-4.19 (degenerate false)
-						(patterns
-							(p-assign @4.6-4.7 (ident "x"))
-							(p-assign @4.17-4.18 (ident "y")))
-						(rest-at (index 1)
-							(p-assign @4.11-4.15 (ident "rest")))))
+					(pattern (degenerate false)
+						(p-list @4.5-4.19
+							(patterns
+								(p-assign @4.6-4.7 (ident "x"))
+								(p-assign @4.17-4.18 (ident "y")))
+							(rest-at (index 1)
+								(p-assign @4.11-4.15 (ident "rest"))))))
 				(value
 					(e-int @4.23-4.24 (value "2")))))))
 ~~~

@@ -79,31 +79,32 @@ match person {
 		(branches
 			(branch
 				(patterns
-					(p-record-destructure @2.5-2.49 (degenerate false)
-						(destructs
-							(record-destruct @2.7-2.12 (label "name") (ident "name")
-								(required))
-							(record-destruct @2.13-2.49 (label "address") (ident "address")
-								(sub-pattern
-									(p-record-destructure @2.22-2.47
-										(destructs
-											(record-destruct @2.24-2.31 (label "street") (ident "street")
-												(required))
-											(record-destruct @2.32-2.37 (label "city") (ident "city")
-												(required))
-											(record-destruct @2.38-2.47 (label "zipCode") (ident "zipCode")
-												(required)))))))))
+					(pattern (degenerate false)
+						(p-record-destructure @2.5-2.49
+							(destructs
+								(record-destruct @2.7-2.12 (label "name") (ident "name")
+									(required))
+								(record-destruct @2.13-2.49 (label "address") (ident "address")
+									(sub-pattern
+										(p-record-destructure @2.22-2.47
+											(destructs
+												(record-destruct @2.24-2.31 (label "street") (ident "street")
+													(required))
+												(record-destruct @2.32-2.37 (label "city") (ident "city")
+													(required))
+												(record-destruct @2.38-2.47 (label "zipCode") (ident "zipCode")
+													(required))))))))))
 				(value
 					(e-string @2.53-2.92
 						(e-literal @2.54-2.54 (string ""))
 						(e-lookup-local @2.56-2.60
-							(pattern @2.7-2.12))
+							(p-assign @2.7-2.12 (ident "name")))
 						(e-literal @2.61-2.71 (string " lives on "))
 						(e-lookup-local @2.73-2.79
-							(pattern @2.24-2.31))
+							(p-assign @2.24-2.31 (ident "street")))
 						(e-literal @2.80-2.84 (string " in "))
 						(e-lookup-local @2.86-2.90
-							(pattern @2.32-2.37))
+							(p-assign @2.32-2.37 (ident "city")))
 						(e-literal @2.91-2.91 (string ""))))))))
 ~~~
 # TYPES

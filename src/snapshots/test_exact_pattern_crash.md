@@ -241,9 +241,9 @@ main = {
 			(e-tuple @8.22-8.28
 				(elems
 					(e-lookup-local @8.23-8.24
-						(pattern @8.18-8.19))
+						(p-assign @8.18-8.19 (ident "y")))
 					(e-lookup-local @8.26-8.27
-						(pattern @8.15-8.16)))))
+						(p-assign @8.15-8.16 (ident "x"))))))
 		(annotation @8.1-8.10
 			(declared-type
 				(ty-fn @7.13-7.37 (effectful false)
@@ -267,14 +267,14 @@ main = {
 				(elems
 					(e-call @12.28-12.32
 						(e-lookup-local @12.28-12.29
-							(pattern @12.21-12.22))
+							(p-assign @12.21-12.22 (ident "f")))
 						(e-lookup-local @12.30-12.31
-							(pattern @12.14-12.15)))
+							(p-assign @12.14-12.15 (ident "x"))))
 					(e-call @12.34-12.38
 						(e-lookup-local @12.34-12.35
-							(pattern @12.24-12.25))
+							(p-assign @12.24-12.25 (ident "g")))
 						(e-lookup-local @12.36-12.37
-							(pattern @12.17-12.18))))))
+							(p-assign @12.17-12.18 (ident "y")))))))
 		(annotation @12.1-12.9
 			(declared-type
 				(ty-fn @11.12-11.56 (effectful false)
@@ -299,7 +299,7 @@ main = {
 				(p-assign @19.5-19.7 (ident "p1"))
 				(e-call @19.10-19.27
 					(e-lookup-local @19.10-19.19
-						(pattern @8.1-8.10))
+						(p-assign @8.1-8.10 (ident "swap_pair")))
 					(e-tuple @19.20-19.26
 						(elems
 							(e-int @19.21-19.22 (value "1"))
@@ -308,7 +308,7 @@ main = {
 				(p-assign @23.5-23.7 (ident "p2"))
 				(e-call @23.10-23.50
 					(e-lookup-local @23.10-23.18
-						(pattern @12.1-12.9))
+						(p-assign @12.1-12.9 (ident "map_pair")))
 					(e-int @23.19-23.20 (value "3"))
 					(e-int @23.22-23.23 (value "4"))
 					(e-lambda @23.26-23.36
@@ -316,17 +316,17 @@ main = {
 							(p-assign @23.27-23.28 (ident "x")))
 						(e-binop @23.30-23.36 (op "add")
 							(e-lookup-local @23.30-23.31
-								(pattern @23.27-23.28))
+								(p-assign @23.27-23.28 (ident "x")))
 							(e-int @23.34-23.35 (value "1"))))
 					(e-lambda @23.39-23.49
 						(args
 							(p-assign @23.40-23.41 (ident "y")))
 						(e-binop @23.43-23.49 (op "mul")
 							(e-lookup-local @23.43-23.44
-								(pattern @23.40-23.41))
+								(p-assign @23.40-23.41 (ident "y")))
 							(e-int @23.47-23.48 (value "2"))))))
 			(e-lookup-local @25.5-25.7
-				(pattern @23.5-23.7))))
+				(p-assign @23.5-23.7 (ident "p2")))))
 	(s-alias-decl @4.1-4.20
 		(ty-header @4.1-4.11 (name "Pair")
 			(ty-args

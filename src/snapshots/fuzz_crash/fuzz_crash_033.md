@@ -44,8 +44,8 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:4),Comma(1:4-1:5),UpperIdent(1:6-1:14),Close
 # PARSE
 ~~~clojure
 (e-record @1.1-1.15
-	(field (field "i") (optional false))
-	(field (field "{") (optional false)))
+	(field (field "i"))
+	(field (field "{")))
 ~~~
 # FORMATTED
 ~~~roc

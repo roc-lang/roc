@@ -58,7 +58,7 @@ NO CHANGE
 		(p-assign @4.1-4.2 (ident "b"))
 		(e-binop @4.5-4.10 (op "add")
 			(e-lookup-local @4.5-4.6
-				(pattern @3.1-3.2))
+				(p-assign @3.1-3.2 (ident "a")))
 			(e-int @4.9-4.10 (value "1")))))
 ~~~
 # TYPES

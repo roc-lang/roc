@@ -76,7 +76,7 @@ deserialize = |_| ...
 		(e-lambda @5.15-5.22
 			(args
 				(p-underscore @5.16-5.17))
-			(e-not-implemented))
+			(e-not-implemented @5.19-5.22))
 		(annotation @5.1-5.12
 			(declared-type
 				(ty-fn @3.15-3.49 (effectful false)

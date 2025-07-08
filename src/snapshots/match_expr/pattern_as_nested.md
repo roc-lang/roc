@@ -87,41 +87,62 @@ match person {
 		(branches
 			(branch
 				(patterns
-					(p-as @2.5-2.54 (as "fullPerson") (degenerate false)
-						(p-record-destructure @2.5-2.40
-							(destructs
-								(record-destruct @2.7-2.12 (label "name") (ident "name")
-									(required))
-								(record-destruct @2.13-2.40 (label "address") (ident "address")
-									(sub-pattern
-										(p-as @2.22-2.38 (as "addr")
-											(p-record-destructure @2.22-2.30
-												(destructs
-													(record-destruct @2.24-2.30 (label "city") (ident "city")
-														(required)))))))))))
+					(pattern (degenerate false)
+						(p-as @2.5-2.54 (as "fullPerson")
+							(p-record-destructure @2.5-2.40
+								(destructs
+									(record-destruct @2.7-2.12 (label "name") (ident "name")
+										(required))
+									(record-destruct @2.13-2.40 (label "address") (ident "address")
+										(sub-pattern
+											(p-as @2.22-2.38 (as "addr")
+												(p-record-destructure @2.22-2.30
+													(destructs
+														(record-destruct @2.24-2.30 (label "city") (ident "city")
+															(required))))))))))))
 				(value
 					(e-tuple @2.58-2.82
 						(elems
 							(e-lookup-local @2.59-2.69
-								(pattern @2.5-2.54))
+								(p-as @2.5-2.54 (as "fullPerson")
+									(p-record-destructure @2.5-2.40
+										(destructs
+											(record-destruct @2.7-2.12 (label "name") (ident "name")
+												(required))
+											(record-destruct @2.13-2.40 (label "address") (ident "address")
+												(sub-pattern
+													(p-as @2.22-2.38 (as "addr")
+														(p-record-destructure @2.22-2.30
+															(destructs
+																(record-destruct @2.24-2.30 (label "city") (ident "city")
+																	(required)))))))))))
 							(e-lookup-local @2.71-2.75
-								(pattern @2.22-2.38))
+								(p-as @2.22-2.38 (as "addr")
+									(p-record-destructure @2.22-2.30
+										(destructs
+											(record-destruct @2.24-2.30 (label "city") (ident "city")
+												(required))))))
 							(e-lookup-local @2.77-2.81
-								(pattern @2.24-2.30))))))
+								(p-assign @2.24-2.30 (ident "city")))))))
 			(branch
 				(patterns
-					(p-as @3.5-3.29 (as "simplePerson") (degenerate false)
-						(p-record-destructure @3.5-3.13
-							(destructs
-								(record-destruct @3.7-3.13 (label "name") (ident "name")
-									(required))))))
+					(pattern (degenerate false)
+						(p-as @3.5-3.29 (as "simplePerson")
+							(p-record-destructure @3.5-3.13
+								(destructs
+									(record-destruct @3.7-3.13 (label "name") (ident "name")
+										(required)))))))
 				(value
 					(e-tuple @3.33-3.64
 						(elems
 							(e-lookup-local @3.34-3.46
-								(pattern @3.5-3.29))
+								(p-as @3.5-3.29 (as "simplePerson")
+									(p-record-destructure @3.5-3.13
+										(destructs
+											(record-destruct @3.7-3.13 (label "name") (ident "name")
+												(required))))))
 							(e-lookup-local @3.48-3.52
-								(pattern @3.7-3.13))
+								(p-assign @3.7-3.13 (ident "name")))
 							(e-string @3.54-3.63
 								(e-literal @3.55-3.62 (string "unknown"))))))))))
 ~~~

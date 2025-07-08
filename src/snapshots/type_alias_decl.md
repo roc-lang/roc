@@ -459,10 +459,10 @@ CloseCurly(39:1-39:2),EndOfFile(39:2-39:2),
 						(s-decl @33.5-33.40
 							(p-ident @33.5-33.11 (raw "person"))
 							(e-record @33.14-33.40
-								(field (field "name") (optional false)
+								(field (field "name")
 									(e-string @33.22-33.29
 										(e-string-part @33.23-33.28 (raw "Alice"))))
-								(field (field "age") (optional false)
+								(field (field "age")
 									(e-int @33.36-33.38 (raw "30")))))
 						(s-type-anno @1.1-1.1 (name "color")
 							(ty @35.13-35.18 (name "Color")))
@@ -548,7 +548,7 @@ main! = |_| {
 					(p-assign @36.5-36.10 (ident "color"))
 					(e-tag @36.13-36.16 (name "Red")))
 				(e-lookup-local @38.5-38.11
-					(pattern @30.5-30.11)))))
+					(p-assign @30.5-30.11 (ident "userId"))))))
 	(s-alias-decl @4.1-4.13
 		(ty-header @4.1-4.7 (name "UserId"))
 		(ty @4.10-4.13 (name "U64")))

@@ -75,14 +75,19 @@ match (1, 2) {
 		(branches
 			(branch
 				(patterns
-					(p-as @2.5-2.20 (as "point") (degenerate false)
-						(p-tuple @2.5-2.11
-							(patterns
-								(p-assign @2.6-2.7 (ident "x"))
-								(p-assign @2.9-2.10 (ident "y"))))))
+					(pattern (degenerate false)
+						(p-as @2.5-2.20 (as "point")
+							(p-tuple @2.5-2.11
+								(patterns
+									(p-assign @2.6-2.7 (ident "x"))
+									(p-assign @2.9-2.10 (ident "y")))))))
 				(value
 					(e-lookup-local @2.24-2.29
-						(pattern @2.5-2.20)))))))
+						(p-as @2.5-2.20 (as "point")
+							(p-tuple @2.5-2.11
+								(patterns
+									(p-assign @2.6-2.7 (ident "x"))
+									(p-assign @2.9-2.10 (ident "y")))))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -147,9 +147,9 @@ LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10
 					(p-ident @18.14-18.15 (raw "x"))
 					(p-ident @18.17-18.18 (raw "y")))
 				(e-record @18.20-18.43
-					(field (field "first") (optional false)
+					(field (field "first")
 						(e-ident @18.29-18.30 (raw "x")))
-					(field (field "second") (optional false)
+					(field (field "second")
 						(e-ident @18.40-18.41 (raw "y"))))))
 		(s-type-anno @1.1-1.1 (name "list_length")
 			(ty-fn @21.15-21.29
@@ -236,27 +236,29 @@ main = |_| "done"
 					(match @6.5-9.6
 						(cond
 							(e-lookup-local @6.11-6.17
-								(pattern @5.15-5.21)))
+								(p-assign @5.15-5.21 (ident "result"))))
 						(branches
 							(branch
 								(patterns
-									(p-applied-tag @7.9-7.18 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @7.9-7.18)))
 								(value
 									(e-tag @7.22-7.42 (name "Ok")
 										(args
 											(e-call @7.25-7.41
 												(e-lookup-local @7.25-7.34
-													(pattern @5.23-5.32))
+													(p-assign @5.23-5.32 (ident "transform")))
 												(e-lookup-local @7.35-7.40
-													(pattern @7.12-7.17)))))))
+													(p-assign @7.12-7.17 (ident "value"))))))))
 							(branch
 								(patterns
-									(p-applied-tag @8.9-8.19 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @8.9-8.19)))
 								(value
 									(e-tag @8.23-8.33 (name "Err")
 										(args
 											(e-lookup-local @8.27-8.32
-												(pattern @8.13-8.18)))))))))))
+												(p-assign @8.13-8.18 (ident "error"))))))))))))
 		(annotation @5.1-5.11
 			(declared-type
 				(ty-fn @4.14-4.52 (effectful false)
@@ -276,7 +278,7 @@ main = |_| "done"
 			(args
 				(p-assign @14.13-14.14 (ident "x")))
 			(e-lookup-local @14.16-14.17
-				(pattern @14.13-14.14)))
+				(p-assign @14.13-14.14 (ident "x"))))
 		(annotation @14.1-14.9
 			(declared-type
 				(ty-fn @13.12-13.18 (effectful false)
@@ -292,10 +294,10 @@ main = |_| "done"
 				(fields
 					(field (name "first")
 						(e-lookup-local @18.29-18.30
-							(pattern @18.14-18.15)))
+							(p-assign @18.14-18.15 (ident "x"))))
 					(field (name "second")
 						(e-lookup-local @18.40-18.41
-							(pattern @18.17-18.18))))))
+							(p-assign @18.17-18.18 (ident "y")))))))
 		(annotation @18.1-18.10
 			(declared-type
 				(ty-fn @17.13-17.44 (effectful false)
@@ -328,7 +330,7 @@ main = |_| "done"
 					(e-tag @26.29-26.38 (name "Ok")
 						(args
 							(e-lookup-local @26.32-26.37
-								(pattern @26.19-26.24)))))))
+								(p-assign @26.19-26.24 (ident "value"))))))))
 		(annotation @26.1-26.15
 			(declared-type
 				(ty-fn @25.18-25.50 (effectful false)

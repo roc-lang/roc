@@ -229,7 +229,7 @@ main! = |_| {
 				(p-assign @9.13-9.20 (ident "_factor")))
 			(e-binop @9.22-12.8 (op "mul")
 				(e-lookup-local @9.22-9.29
-					(pattern @9.13-9.20))
+					(p-assign @9.13-9.20 (ident "_factor")))
 				(e-int @9.32-9.33 (value "2"))))
 		(annotation @9.1-9.9
 			(declared-type
@@ -254,7 +254,7 @@ main! = |_| {
 				(p-assign @17.11-17.16 (ident "value")))
 			(e-binop @17.18-19.6 (op "mul")
 				(e-lookup-local @17.18-17.23
-					(pattern @17.11-17.16))
+					(p-assign @17.11-17.16 (ident "value")))
 				(e-int @17.26-17.27 (value "2"))))
 		(annotation @17.1-17.7
 			(declared-type
@@ -271,37 +271,37 @@ main! = |_| {
 					(p-assign @20.5-20.12 (ident "result1"))
 					(e-call @20.15-20.21
 						(e-lookup-local @20.15-20.18
-							(pattern @5.1-5.4))
+							(p-assign @5.1-5.4 (ident "add")))
 						(e-int @20.19-20.20 (value "5"))))
 				(s-let @21.5-21.26
 					(p-assign @21.5-21.12 (ident "result2"))
 					(e-call @21.15-21.26
 						(e-lookup-local @21.15-21.23
-							(pattern @9.1-9.9))
+							(p-assign @9.1-9.9 (ident "multiply")))
 						(e-int @21.24-21.25 (value "3"))))
 				(s-let @22.5-22.25
 					(p-assign @22.5-22.12 (ident "result3"))
 					(e-call @22.15-22.25
 						(e-lookup-local @22.15-22.22
-							(pattern @13.1-13.8))
+							(p-assign @13.1-13.8 (ident "process")))
 						(e-int @22.23-22.24 (value "7"))))
 				(s-let @23.5-23.24
 					(p-assign @23.5-23.12 (ident "result4"))
 					(e-call @23.15-23.24
 						(e-lookup-local @23.15-23.21
-							(pattern @17.1-17.7))
+							(p-assign @17.1-17.7 (ident "double")))
 						(e-int @23.22-23.23 (value "4"))))
 				(e-binop @24.5-25.2 (op "add")
 					(e-lookup-local @24.5-24.12
-						(pattern @20.5-20.12))
+						(p-assign @20.5-20.12 (ident "result1")))
 					(e-binop @24.15-25.2 (op "add")
 						(e-lookup-local @24.15-24.22
-							(pattern @21.5-21.12))
+							(p-assign @21.5-21.12 (ident "result2")))
 						(e-binop @24.25-25.2 (op "add")
 							(e-lookup-local @24.25-24.32
-								(pattern @22.5-22.12))
+								(p-assign @22.5-22.12 (ident "result3")))
 							(e-lookup-local @24.35-24.42
-								(pattern @23.5-23.12)))))))))
+								(p-assign @23.5-23.12 (ident "result4"))))))))))
 ~~~
 # TYPES
 ~~~clojure

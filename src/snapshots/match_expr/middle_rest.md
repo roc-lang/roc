@@ -101,51 +101,55 @@ match items {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.22 (degenerate false)
-						(patterns
-							(p-assign @2.6-2.11 (ident "first"))
-							(p-assign @2.17-2.21 (ident "last")))
-						(rest-at (index 1))))
+					(pattern (degenerate false)
+						(p-list @2.5-2.22
+							(patterns
+								(p-assign @2.6-2.11 (ident "first"))
+								(p-assign @2.17-2.21 (ident "last")))
+							(rest-at (index 1)))))
 				(value
 					(e-binop @2.26-3.6 (op "add")
 						(e-lookup-local @2.26-2.31
-							(pattern @2.6-2.11))
+							(p-assign @2.6-2.11 (ident "first")))
 						(e-lookup-local @2.34-2.38
-							(pattern @2.17-2.21)))))
+							(p-assign @2.17-2.21 (ident "last"))))))
 			(branch
 				(patterns
-					(p-list @3.5-3.31 (degenerate false)
-						(patterns
-							(p-assign @3.6-3.7 (ident "a"))
-							(p-assign @3.9-3.10 (ident "b"))
-							(p-assign @3.26-3.27 (ident "x"))
-							(p-assign @3.29-3.30 (ident "y")))
-						(rest-at (index 2)
-							(p-assign @3.18-3.24 (ident "middle")))))
+					(pattern (degenerate false)
+						(p-list @3.5-3.31
+							(patterns
+								(p-assign @3.6-3.7 (ident "a"))
+								(p-assign @3.9-3.10 (ident "b"))
+								(p-assign @3.26-3.27 (ident "x"))
+								(p-assign @3.29-3.30 (ident "y")))
+							(rest-at (index 2)
+								(p-assign @3.18-3.24 (ident "middle"))))))
 				(value
 					(e-binop @3.35-4.6 (op "add")
 						(e-lookup-local @3.35-3.36
-							(pattern @3.6-3.7))
+							(p-assign @3.6-3.7 (ident "a")))
 						(e-binop @3.39-4.6 (op "add")
 							(e-lookup-local @3.39-3.40
-								(pattern @3.9-3.10))
+								(p-assign @3.9-3.10 (ident "b")))
 							(e-binop @3.43-4.6 (op "add")
 								(e-lookup-local @3.43-3.44
-									(pattern @3.26-3.27))
+									(p-assign @3.26-3.27 (ident "x")))
 								(e-lookup-local @3.47-3.48
-									(pattern @3.29-3.30)))))))
+									(p-assign @3.29-3.30 (ident "y"))))))))
 			(branch
 				(patterns
-					(p-list @4.5-4.13 (degenerate false)
-						(patterns
-							(p-assign @4.6-4.12 (ident "single")))))
+					(pattern (degenerate false)
+						(p-list @4.5-4.13
+							(patterns
+								(p-assign @4.6-4.12 (ident "single"))))))
 				(value
 					(e-lookup-local @4.17-4.23
-						(pattern @4.6-4.12))))
+						(p-assign @4.6-4.12 (ident "single")))))
 			(branch
 				(patterns
-					(p-list @5.5-5.7 (degenerate false)
-						(patterns)))
+					(pattern (degenerate false)
+						(p-list @5.5-5.7
+							(patterns))))
 				(value
 					(e-int @5.11-5.12 (value "0")))))))
 ~~~

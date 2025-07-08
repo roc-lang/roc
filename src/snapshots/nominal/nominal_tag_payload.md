@@ -95,7 +95,7 @@ none = None
 			(e-tag @6.12-6.25 (name "Some")
 				(args
 					(e-lookup-local @6.23-6.24
-						(pattern @6.9-6.10)))))
+						(p-assign @6.9-6.10 (ident "a"))))))
 		(annotation @6.1-6.5
 			(declared-type
 				(ty-fn @5.8-5.21 (effectful false)

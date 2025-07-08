@@ -100,21 +100,27 @@ kind = |color| match color {
 				(match @6.16-9.2
 					(cond
 						(e-lookup-local @6.22-6.27
-							(pattern @6.9-6.14)))
+							(p-assign @6.9-6.14 (ident "color"))))
 					(branches
 						(branch
 							(patterns
-								(p-applied-tag @7.5-7.8 (degenerate false))
-								(p-applied-tag @7.11-7.16 (degenerate false))
-								(p-applied-tag @7.19-7.23 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @7.5-7.8))
+								(pattern (degenerate false)
+									(p-applied-tag @7.11-7.16))
+								(pattern (degenerate false)
+									(p-applied-tag @7.19-7.23)))
 							(value
 								(e-string @7.27-7.36
 									(e-literal @7.28-7.35 (string "primary")))))
 						(branch
 							(patterns
-								(p-applied-tag @8.5-8.11 (degenerate false))
-								(p-applied-tag @8.14-8.20 (degenerate false))
-								(p-applied-tag @8.23-8.29 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @8.5-8.11))
+								(pattern (degenerate false)
+									(p-applied-tag @8.14-8.20))
+								(pattern (degenerate false)
+									(p-applied-tag @8.23-8.29)))
 							(value
 								(e-string @8.33-8.44
 									(e-literal @8.34-8.43 (string "secondary")))))))))

@@ -110,56 +110,68 @@ NO CHANGE
 (e-match @1.1-8.2
 	(match @1.1-8.2
 		(cond
-			(e-not-implemented))
+			(e-not-implemented @1.7-1.10))
 		(branches
 			(branch
 				(patterns
-					(p-int @2.2-2.3 (value "1") (degenerate false))
-					(p-int @2.6-2.7 (value "2") (degenerate false))
-					(p-int @2.10-2.11 (value "3") (degenerate false)))
+					(pattern (degenerate false)
+						(p-int @2.2-2.3 (value "1")))
+					(pattern (degenerate false)
+						(p-int @2.6-2.7 (value "2")))
+					(pattern (degenerate false)
+						(p-int @2.10-2.11 (value "3"))))
 				(value
 					(e-string @2.15-2.30
 						(e-literal @2.16-2.29 (string "small numbers")))))
 			(branch
 				(patterns
-					(p-str @3.2-3.3 (text """) (degenerate false))
-					(p-str @3.12-3.13 (text """) (degenerate false)))
+					(pattern (degenerate false)
+						(p-str @3.2-3.3 (text """)))
+					(pattern (degenerate false)
+						(p-str @3.12-3.13 (text """))))
 				(value
 					(e-string @3.23-3.34
 						(e-literal @3.24-3.33 (string "greetings")))))
 			(branch
 				(patterns
-					(p-applied-tag @4.2-4.7 (degenerate false))
-					(p-applied-tag @4.10-4.17 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @4.2-4.7))
+					(pattern (degenerate false)
+						(p-applied-tag @4.10-4.17)))
 				(value
 					(e-string @4.21-4.36
 						(e-literal @4.22-4.35 (string "success value")))))
 			(branch
 				(patterns
-					(p-list @5.2-5.4 (degenerate false)
-						(patterns))
-					(p-list @5.7-5.10 (degenerate false)
-						(patterns
-							(p-underscore @5.8-5.9))))
+					(pattern (degenerate false)
+						(p-list @5.2-5.4
+							(patterns)))
+					(pattern (degenerate false)
+						(p-list @5.7-5.10
+							(patterns
+								(p-underscore @5.8-5.9)))))
 				(value
 					(e-string @5.14-5.26
 						(e-literal @5.15-5.25 (string "short list")))))
 			(branch
 				(patterns
-					(p-tuple @6.2-6.8 (degenerate false)
-						(patterns
-							(p-int @6.3-6.4 (value "0"))
-							(p-underscore @6.6-6.7)))
-					(p-tuple @6.11-6.17 (degenerate false)
-						(patterns
-							(p-underscore @6.12-6.13)
-							(p-int @6.15-6.16 (value "0")))))
+					(pattern (degenerate false)
+						(p-tuple @6.2-6.8
+							(patterns
+								(p-int @6.3-6.4 (value "0"))
+								(p-underscore @6.6-6.7))))
+					(pattern (degenerate false)
+						(p-tuple @6.11-6.17
+							(patterns
+								(p-underscore @6.12-6.13)
+								(p-int @6.15-6.16 (value "0"))))))
 				(value
 					(e-string @6.21-6.31
 						(e-literal @6.22-6.30 (string "has zero")))))
 			(branch
 				(patterns
-					(p-underscore @7.2-7.3 (degenerate false)))
+					(pattern (degenerate false)
+						(p-underscore @7.2-7.3)))
 				(value
 					(e-string @7.7-7.14
 						(e-literal @7.8-7.13 (string "other"))))))))

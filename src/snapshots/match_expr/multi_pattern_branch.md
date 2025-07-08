@@ -68,19 +68,24 @@ match color {
 		(branches
 			(branch
 				(patterns
-					(p-applied-tag @2.5-2.9 (degenerate false))
-					(p-applied-tag @2.12-2.17 (degenerate false))
-					(p-applied-tag @2.20-2.23 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @2.5-2.9))
+					(pattern (degenerate false)
+						(p-applied-tag @2.12-2.17))
+					(pattern (degenerate false)
+						(p-applied-tag @2.20-2.23)))
 				(value
 					(e-int @2.27-2.28 (value "1"))))
 			(branch
 				(patterns
-					(p-applied-tag @3.5-3.10 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @3.5-3.10)))
 				(value
 					(e-int @3.14-3.15 (value "2"))))
 			(branch
 				(patterns
-					(p-applied-tag @4.5-4.10 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @4.5-4.10)))
 				(value
 					(e-int @4.14-4.15 (value "3")))))))
 ~~~

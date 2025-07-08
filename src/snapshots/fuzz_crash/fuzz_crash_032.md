@@ -205,24 +205,27 @@ olor = |color| {
 					(match @8.5-11.6
 						(cond
 							(e-lookup-local @8.11-8.16
-								(pattern @6.9-6.14)))
+								(p-assign @6.9-6.14 (ident "color"))))
 						(branches
 							(branch
 								(patterns
-									(p-applied-tag @8.19-8.22 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @8.19-8.22)))
 								(value
 									(e-nominal @8.26-8.37 (nominal "<malformed>")
 										(e-tag @8.26-8.45 (name "Pending")))))
 							(branch
 								(patterns
-									(p-applied-tag @9.1-9.6 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @9.1-9.6)))
 								(value
 									(e-binop @1.1-1.1 (op "sub")
 										(e-tag @9.10-9.21 (name "LocalStatus"))
 										(e-tag @9.22-9.30 (name "Complete")))))
 							(branch
 								(patterns
-									(p-applied-tag @10.3-10.9 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @10.3-10.9)))
 								(value
 									(e-nominal @10.13-10.24 (nominal "<malformed>")
 										(e-tag @10.13-10.32 (name "Pending"))))))))))

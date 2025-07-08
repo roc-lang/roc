@@ -62,18 +62,18 @@ NO CHANGE
 			(e-string @1.37-1.109
 				(e-literal @1.38-1.44 (string "User: "))
 				(e-lookup-local @1.46-1.50
-					(pattern @1.17-1.22))
+					(p-assign @1.17-1.22 (ident "name")))
 				(e-literal @1.51-1.53 (string " ("))
 				(e-dot-access @1.55-1.67 (field "toStr")
 					(receiver
 						(e-lookup-local @1.55-1.58
-							(pattern @1.23-1.27)))
+							(p-assign @1.23-1.27 (ident "age"))))
 					(args))
 				(e-literal @1.67-1.90 (string " years old) - Contact: "))
 				(e-dot-access @1.92-1.108 (field "display")
 					(receiver
 						(e-lookup-local @1.92-1.97
-							(pattern @1.28-1.35)))
+							(p-assign @1.28-1.35 (ident "email"))))
 					(args))
 				(e-literal @1.108-1.108 (string ""))))))
 ~~~

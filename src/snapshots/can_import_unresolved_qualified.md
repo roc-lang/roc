@@ -173,7 +173,7 @@ parser = Json.create
 				(e-lookup-external
 					(ext-decl @11.20-11.34 (ident "json.Json.stringify") (kind "value")))
 				(e-lookup-local @11.35-11.39
-					(pattern @11.14-11.18))))
+					(p-assign @11.14-11.18 (ident "data")))))
 		(annotation @11.1-11.10
 			(declared-type
 				(ty-fn @10.13-10.36 (effectful false)
@@ -204,7 +204,7 @@ parser = Json.create
 	(d-let
 		(p-assign @21.1-21.7 (ident "config"))
 		(e-lookup-local @21.10-21.31
-			(pattern @21.1-21.7)))
+			(p-assign @21.1-21.7 (ident "config"))))
 	(d-let
 		(p-assign @24.1-24.7 (ident "client"))
 		(e-lookup-external
