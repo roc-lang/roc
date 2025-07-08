@@ -584,23 +584,27 @@ This feature is not yet implemented or doesn't have a proper error report yet: c
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
 Let us know if you want to help!
 
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:82:21:82:29:**
+```roc
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+```
+                    ^^^^^^^^
+
+
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+This feature is not yet implemented or doesn't have a proper error report yet: report an error when unable to resolve field identifier
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -1790,22 +1794,42 @@ main! = |_| { # Yeah Ie
 								(e-int @81.20-81.23 (value "123"))))
 						(branch
 							(patterns
-								(p-runtime-error @82.5-82.12 (tag "not_implemented") (degenerate false)))
+								(p-record-destructure @82.3-82.29 (degenerate false)
+									(destructs
+										(record-destruct @82.5-82.12 (label "foo") (ident "foo")
+											(sub-pattern
+												(p-int @82.10-82.11 (value "1"))))
+										(record-destruct @82.13-82.20 (label "bar") (ident "bar")
+											(sub-pattern
+												(p-int @82.18-82.19 (value "2"))))
+										(record-destruct @82.21-82.29 (label "rest") (ident "rest")
+											(required)))))
 							(value
 								(e-runtime-error (tag "not_implemented"))))
 						(branch
 							(patterns
-								(p-runtime-error @84.4-86.8 (tag "not_implemented") (degenerate false)))
+								(p-runtime-error @88.4-88.7 (tag "not_implemented") (degenerate false)))
 							(value
 								(e-int @88.11-88.13 (value "12"))))
 						(branch
 							(patterns
-								(p-runtime-error @89.5-89.12 (tag "not_implemented") (degenerate false)))
+								(p-record-destructure @89.3-89.25 (degenerate false)
+									(destructs
+										(record-destruct @89.5-89.12 (label "foo") (ident "foo")
+											(sub-pattern
+												(p-int @89.10-89.11 (value "1"))))
+										(record-destruct @89.13-89.25 (label "bar") (ident "bar")
+											(sub-pattern
+												(p-runtime-error @1.1-1.1 (tag "not_implemented")))))))
 							(value
 								(e-int @89.29-89.31 (value "12"))))
 						(branch
 							(patterns
-								(p-runtime-error @91.4-91.11 (tag "not_implemented") (degenerate false)))
+								(p-record-destructure @90.3-92.5 (degenerate false)
+									(destructs
+										(record-destruct @91.4-91.11 (label "foo") (ident "foo")
+											(sub-pattern
+												(p-int @91.9-91.10 (value "1")))))))
 							(value
 								(e-int @92.9-92.11 (value "12"))))
 						(branch

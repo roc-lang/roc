@@ -2700,60 +2700,70 @@ fn canonicalizePattern(
                 // Resolve the field name
                 if (self.parse_ir.tokens.resolveIdentifier(field.name)) |field_name_ident| {
                     // For simple destructuring like `{ name, age }`, both label and ident are the same
-                    if (field.value) |_| {
-                        // TODO: For patterns like `{ name: x }`, we'd need the value pattern, but that's not implemented yet
-                        // TODO: Handle patterns like `{ name: x }` where there's a sub-pattern
-                        const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "record pattern with sub-patterns");
-                        const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
-                            .feature = feature,
-                            .region = field_region,
-                        } });
-                        return pattern_idx;
-                    }
-
-                    // Create the RecordDestruct for this field
-                    const record_destruct = CIR.Pattern.RecordDestruct{
-                        .label = field_name_ident,
-                        .ident = field_name_ident,
-                        .kind = .Required,
-                    };
-
-                    const destruct_idx = self.can_ir.store.addRecordDestruct(record_destruct, field_region);
-                    self.can_ir.store.addScratchRecordDestruct(destruct_idx);
-
-                    // Create an assign pattern for this identifier and introduce it into scope
-                    const assign_pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
-                        .ident = field_name_ident,
-                    } }, field_region);
-                    _ = self.can_ir.setTypeVarAtPat(assign_pattern_idx, .{ .flex_var = null });
-
-                    // Introduce the identifier into scope
-                    switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, field_name_ident, assign_pattern_idx, false, true)) {
-                        .success => {},
-                        .shadowing_warning => |shadowed_pattern_idx| {
-                            const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
-                            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
-                                .ident = field_name_ident,
-                                .region = field_region,
-                                .original_region = original_region,
-                            } });
-                        },
-                        .top_level_var_error => {
-                            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{
-                                .invalid_top_level_statement = .{
-                                    .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-                                    .region = base.Region.zero(), // TODO can we get a better region here
-                                },
-                            });
-                            return pattern_idx;
-                        },
-                        .var_across_function_boundary => {
-                            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_already_in_scope = .{
-                                .ident = field_name_ident,
+                    if (field.value) |sub_pattern_idx| {
+                        // Handle patterns like `{ name: x }` or `{ address: { city } }` where there's a sub-pattern
+                        const canonicalized_sub_pattern = try self.canonicalizePattern(sub_pattern_idx) orelse {
+                            // If sub-pattern canonicalization fails, return malformed pattern
+                            const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
                                 .region = field_region,
                             } });
-                            return pattern_idx;
-                        },
+                            return malformed_idx;
+                        };
+
+                        // Create the RecordDestruct with sub-pattern
+                        const record_destruct = CIR.Pattern.RecordDestruct{
+                            .label = field_name_ident,
+                            .ident = field_name_ident,
+                            .kind = .{ .SubPattern = canonicalized_sub_pattern },
+                        };
+
+                        const destruct_idx = self.can_ir.store.addRecordDestruct(record_destruct, field_region);
+                        self.can_ir.store.addScratchRecordDestruct(destruct_idx);
+                    } else {
+                        // Simple case: Create the RecordDestruct for this field
+                        const record_destruct = CIR.Pattern.RecordDestruct{
+                            .label = field_name_ident,
+                            .ident = field_name_ident,
+                            .kind = .Required,
+                        };
+
+                        const destruct_idx = self.can_ir.store.addRecordDestruct(record_destruct, field_region);
+                        self.can_ir.store.addScratchRecordDestruct(destruct_idx);
+
+                        // Create an assign pattern for this identifier and introduce it into scope
+                        const assign_pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
+                            .ident = field_name_ident,
+                        } }, field_region);
+                        _ = self.can_ir.setTypeVarAtPat(assign_pattern_idx, .{ .flex_var = null });
+
+                        // Introduce the identifier into scope
+                        switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, field_name_ident, assign_pattern_idx, false, true)) {
+                            .success => {},
+                            .shadowing_warning => |shadowed_pattern_idx| {
+                                const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
+                                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
+                                    .ident = field_name_ident,
+                                    .region = field_region,
+                                    .original_region = original_region,
+                                } });
+                            },
+                            .top_level_var_error => {
+                                const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{
+                                    .invalid_top_level_statement = .{
+                                        .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
+                                        .region = base.Region.zero(), // TODO can we get a better region here
+                                    },
+                                });
+                                return pattern_idx;
+                            },
+                            .var_across_function_boundary => {
+                                const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_already_in_scope = .{
+                                    .ident = field_name_ident,
+                                    .region = field_region,
+                                } });
+                                return pattern_idx;
+                            },
+                        }
                     }
                 } else {
                     const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "report an error when unable to resolve field identifier");

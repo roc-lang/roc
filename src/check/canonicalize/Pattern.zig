@@ -209,9 +209,13 @@ pub const Pattern = union(enum) {
             Required,
             /// TODO Remove this, the syntax `{ name, age ? 0 }` is no longer valid in 0.1
             Guard: Pattern.Idx,
+            /// Nested pattern for record field destructuring.
+            /// ```roc
+            /// { address: { city } } => ... # address field has a SubPattern
+            /// ```
+            SubPattern: Pattern.Idx,
 
             pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
-                _ = ir;
                 switch (self.*) {
                     .Required => {
                         const begin = tree.beginNode();
@@ -224,6 +228,14 @@ pub const Pattern = union(enum) {
                         tree.pushStaticAtom("guard");
                         tree.pushStringPair("pattern", "TODO");
                         const attrs = tree.beginNode();
+                        tree.endNode(begin, attrs);
+                    },
+                    .SubPattern => |pattern_idx| {
+                        const begin = tree.beginNode();
+                        tree.pushStaticAtom("sub-pattern");
+                        const attrs = tree.beginNode();
+                        const pattern = ir.store.getPattern(pattern_idx);
+                        pattern.pushToSExprTree(ir, tree, pattern_idx, null);
                         tree.endNode(begin, attrs);
                     },
                 }

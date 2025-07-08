@@ -25,32 +25,6 @@ match person {
       ^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `userName` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**pattern_destructure_rename.md:2:49:2:57:**
-```roc
-    { name: userName, age: userAge } => "User ${userName} is ${userAge.to_str()} years old"
-```
-                                                ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `userAge` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**pattern_destructure_rename.md:2:64:2:71:**
-```roc
-    { name: userName, age: userAge } => "User ${userName} is ${userAge.to_str()} years old"
-```
-                                                               ^^^^^^^
-
-
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),Newline(1:1-1:1),
@@ -93,15 +67,24 @@ match person {
 		(branches
 			(branch
 				(patterns
-					(p-runtime-error @2.7-2.22 (tag "not_implemented") (degenerate false)))
+					(p-record-destructure @2.5-2.37 (degenerate false)
+						(destructs
+							(record-destruct @2.7-2.22 (label "name") (ident "name")
+								(sub-pattern
+									(p-assign @2.13-2.21 (ident "userName"))))
+							(record-destruct @2.23-2.37 (label "age") (ident "age")
+								(sub-pattern
+									(p-assign @2.28-2.35 (ident "userAge")))))))
 				(value
 					(e-string @2.41-2.92
 						(e-literal @2.42-2.47 (string "User "))
-						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-lookup-local @2.49-2.57
+							(pattern @2.13-2.21))
 						(e-literal @2.58-2.62 (string " is "))
 						(e-dot-access @2.64-2.81 (field "to_str")
 							(receiver
-								(e-runtime-error (tag "ident_not_in_scope")))
+								(e-lookup-local @2.64-2.71
+									(pattern @2.28-2.35)))
 							(args))
 						(e-literal @2.81-2.91 (string " years old"))))))))
 ~~~
