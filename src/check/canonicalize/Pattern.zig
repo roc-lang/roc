@@ -210,21 +210,6 @@ pub const Pattern = union(enum) {
             /// TODO Remove this, the syntax `{ name, age ? 0 }` is no longer valid in 0.1
             Guard: Pattern.Idx,
 
-            pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
-                const gpa = ir.env.gpa;
-                _ = line_starts;
-
-                switch (self.*) {
-                    .Required => return SExpr.init(gpa, "required"),
-                    .Guard => |guard_idx| {
-                        var guard_kind_node = SExpr.init(gpa, "guard");
-                        _ = guard_idx; // TODO: implement guard pattern retrieval
-                        guard_kind_node.appendStringAttr(gpa, "pattern", "TODO");
-                        return guard_kind_node;
-                    },
-                }
-            }
-
             pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
                 _ = ir;
                 switch (self.*) {
@@ -245,23 +230,6 @@ pub const Pattern = union(enum) {
             }
         };
 
-        pub fn toSExpr(self: *const @This(), ir: *const CIR, destruct_idx: RecordDestruct.Idx) SExpr {
-            const gpa = ir.env.gpa;
-
-            var node = SExpr.init(gpa, "record-destruct");
-            ir.appendRegionInfoToSexprNode(&node, destruct_idx);
-
-            const label_text = ir.env.idents.getText(self.label);
-            const ident_text = ir.env.idents.getText(self.ident);
-            node.appendStringAttr(gpa, "label", label_text);
-            node.appendStringAttr(gpa, "ident", ident_text);
-
-            var kind_node = self.kind.toSExpr(ir, std.ArrayList(u32).init(ir.env.gpa));
-            node.appendNode(gpa, &kind_node);
-
-            return node;
-        }
-
         pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, destruct_idx: RecordDestruct.Idx) void {
             const begin = tree.beginNode();
             tree.pushStaticAtom("record-destruct");
@@ -277,160 +245,6 @@ pub const Pattern = union(enum) {
             tree.endNode(begin, attrs);
         }
     };
-
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, pattern_idx: Pattern.Idx) SExpr {
-        const gpa = ir.env.gpa;
-        switch (self.*) {
-            .assign => |p| {
-                var node = SExpr.init(gpa, "p-assign");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
-
-                const ident = ir.getIdentText(p.ident);
-                node.appendStringAttr(gpa, "ident", ident);
-
-                return node;
-            },
-            .as => |p| {
-                var node = SExpr.init(gpa, "p-as");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
-
-                const ident = ir.getIdentText(p.ident);
-                node.appendStringAttr(gpa, "as", ident);
-
-                // Recurse on the inner pattern
-                var pattern_node = ir.store.getPattern(p.pattern).toSExpr(ir, p.pattern);
-                node.appendNode(gpa, &pattern_node);
-
-                return node;
-            },
-            .applied_tag => |_| {
-                var node = SExpr.init(gpa, "p-applied-tag");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
-                return node;
-            },
-            .record_destructure => |p| {
-                var node = SExpr.init(gpa, "p-record-destructure");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
-
-                // var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
-                // node.appendNode(gpa, &pattern_idx_node);
-
-                var destructs_node = SExpr.init(gpa, "destructs");
-
-                // Iterate through the destructs span and convert each to SExpr
-                for (ir.store.sliceRecordDestructs(p.destructs)) |destruct_idx| {
-                    const destruct = ir.store.getRecordDestruct(destruct_idx);
-                    const destruct_sexpr = destruct.toSExpr(ir, destruct_idx);
-                    destructs_node.appendNode(gpa, &destruct_sexpr);
-                }
-                node.appendNode(gpa, &destructs_node);
-
-                return node;
-            },
-            .list => |p| {
-                var node = SExpr.init(gpa, "p-list");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
-
-                var patterns_node = SExpr.init(gpa, "patterns");
-
-                for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
-                    var patt_sexpr = ir.store.getPattern(patt_idx).toSExpr(ir, patt_idx);
-                    patterns_node.appendNode(gpa, &patt_sexpr);
-                }
-
-                node.appendNode(gpa, &patterns_node);
-
-                // Add rest information if present
-                if (p.rest_info) |rest| {
-                    var rest_node = SExpr.init(gpa, "rest-at");
-
-                    // Add the index where rest appears
-                    const index_str = std.fmt.allocPrint(gpa, "{d}", .{rest.index}) catch |err| exitOnOom(err);
-                    defer gpa.free(index_str);
-                    rest_node.appendRawAttr(gpa, "index", index_str);
-
-                    // Add the rest pattern if it has a name
-                    if (rest.pattern) |rest_pattern_idx| {
-                        var rest_pattern_sexpr = ir.store.getPattern(rest_pattern_idx).toSExpr(ir, rest_pattern_idx);
-                        rest_node.appendNode(gpa, &rest_pattern_sexpr);
-                    }
-
-                    node.appendNode(gpa, &rest_node);
-                }
-
-                return node;
-            },
-            .tuple => |p| {
-                var node = SExpr.init(gpa, "p-tuple");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
-
-                // var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
-                // node.appendNode(gpa, &pattern_idx_node);
-
-                var patterns_node = SExpr.init(gpa, "patterns");
-
-                for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
-                    var patt_sexpr = ir.store.getPattern(patt_idx).toSExpr(ir, patt_idx);
-                    patterns_node.appendNode(gpa, &patt_sexpr);
-                }
-                node.appendNode(gpa, &patterns_node);
-
-                return node;
-            },
-            .int_literal => |p| {
-                var node = SExpr.init(gpa, "p-int");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
-
-                // Add value
-                const value_i128: i128 = @bitCast(p.value.bytes);
-                var value_buf: [40]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
-                node.appendStringAttr(gpa, "value", value_str);
-
-                return node;
-            },
-            .small_dec_literal => |_| {
-                var node = SExpr.init(gpa, "p-small-dec");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
-                // TODO: add fields
-                return node;
-            },
-            .dec_literal => |_| {
-                var node = SExpr.init(gpa, "p-dec");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
-                // TODO: add fields
-                return node;
-            },
-            .str_literal => |p| {
-                var node = SExpr.init(gpa, "p-str");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
-
-                const text = ir.env.strings.get(p.literal);
-                node.appendStringAttr(gpa, "text", text);
-
-                return node;
-            },
-
-            .underscore => {
-                var node = SExpr.init(gpa, "p-underscore");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
-
-                // var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
-                // node.appendNode(gpa, &pattern_idx_node);
-
-                return node;
-            },
-            .runtime_error => |e| {
-                var node = SExpr.init(gpa, "p-runtime-error");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
-
-                const diagnostic = ir.store.getDiagnostic(e.diagnostic);
-
-                node.appendStringAttr(gpa, "tag", @tagName(diagnostic));
-                return node;
-            },
-        }
-    }
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, pattern_idx: Pattern.Idx, degenerate: ?bool) void {
         switch (self.*) {

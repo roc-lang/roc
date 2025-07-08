@@ -12,7 +12,6 @@ const fmt = @import("fmt.zig");
 const types = @import("types.zig");
 const reporting = @import("reporting.zig");
 const tokenize = @import("check/parse/tokenize.zig");
-const SExpr = @import("base/SExpr.zig");
 const SExprTree = @import("base/SExprTree.zig");
 
 const AST = parse.AST;

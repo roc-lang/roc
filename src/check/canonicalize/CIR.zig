@@ -514,18 +514,6 @@ pub const RecordField = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
-        var node = SExpr.init(gpa, "field");
-
-        node.appendStringAttr(gpa, "name", ir.getIdentText(self.name));
-
-        var value_node = ir.store.getExpr(self.value).toSExpr(ir);
-        node.appendNode(gpa, &value_node);
-
-        return node;
-    }
-
     pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
         const begin = tree.beginNode();
         tree.pushStaticAtom("field");
@@ -577,49 +565,6 @@ pub const WhereClause = union(enum) {
         external_decl: ExternalDecl.Idx, // External declaration for module lookup
         region: Region,
     };
-
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
-        switch (self.*) {
-            .mod_method => |mm| {
-                var node = SExpr.init(gpa, "method");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, mm.region);
-
-                node.appendStringAttr(gpa, "module-of", ir.getIdentText(mm.var_name));
-                node.appendStringAttr(gpa, "ident", ir.getIdentText(mm.method_name));
-
-                // Add argument types
-                const args_slice = ir.store.sliceTypeAnnos(mm.args);
-                var args_node = SExpr.init(gpa, "args");
-                for (args_slice) |arg_idx| {
-                    const arg = ir.store.getTypeAnno(arg_idx);
-                    var arg_child = arg.toSExpr(ir);
-                    args_node.appendNode(gpa, &arg_child);
-                }
-                node.appendNode(gpa, &args_node);
-
-                // Add return type
-                var ret_node = ir.store.getTypeAnno(mm.ret_anno).toSExpr(ir);
-                node.appendNode(gpa, &ret_node);
-
-                return node;
-            },
-            .mod_alias => |ma| {
-                var node = SExpr.init(gpa, "alias");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, ma.region);
-
-                node.appendStringAttr(gpa, "module-of", ir.getIdentText(ma.var_name));
-                node.appendStringAttr(gpa, "ident", ir.getIdentText(ma.alias_name));
-
-                return node;
-            },
-            .malformed => |m| {
-                var node = SExpr.init(gpa, "malformed");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, m.region);
-                return node;
-            },
-        }
-    }
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
         switch (self.*) {
@@ -690,29 +635,6 @@ pub const TypeHeader = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
-        var node = SExpr.init(gpa, "ty-header");
-        ir.appendRegionInfoToSexprNodeFromRegion(&node, self.region);
-
-        // Add the type name
-        node.appendStringAttr(gpa, "name", ir.getIdentText(self.name));
-
-        // Add the type arguments
-        const args_slice = ir.store.sliceTypeAnnos(self.args);
-        if (args_slice.len > 0) {
-            var args_node = SExpr.init(gpa, "ty-args");
-            for (args_slice) |arg_idx| {
-                const arg = ir.store.getTypeAnno(arg_idx);
-                var arg_node = arg.toSExpr(ir);
-                args_node.appendNode(gpa, &arg_node);
-            }
-            node.appendNode(gpa, &args_node);
-        }
-
-        return node;
-    }
-
     pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
         const begin = tree.beginNode();
         tree.pushStaticAtom("ty-header");
@@ -747,25 +669,6 @@ pub const ExposedItem = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: ExposedItem, ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
-
-        var node = SExpr.init(gpa, "exposed");
-
-        // Add the original name
-        node.appendStringAttr(gpa, "name", ir.env.idents.getText(self.name));
-
-        // Add the alias if present
-        if (self.alias) |alias_idx| {
-            node.appendStringAttr(gpa, "alias", ir.env.idents.getText(alias_idx));
-        }
-
-        // Add wildcard indicator if needed
-        node.appendBoolAttr(gpa, "wildcard", self.is_wildcard);
-
-        return node;
-    }
-
     pub fn pushToSExprTree(self: ExposedItem, env: *base.ModuleEnv, ir: *const CIR, tree: *SExprTree) void {
         _ = ir; // Unused in this function, but could be used for more complex logic
 
@@ -797,20 +700,6 @@ pub const IngestedFile = struct {
     pub const Idx = List.Idx;
     pub const Range = List.Range;
     pub const NonEmptyRange = List.NonEmptyRange;
-
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
-        _ = line_starts;
-        const gpa = ir.env.gpa;
-        var node = SExpr.init(gpa, "ingested-file");
-        node.appendStringAttr(gpa, "path", "TODO");
-
-        const ident_text = ir.env.idents.getText(self.ident);
-        node.appendStringAttr(gpa, "ident", ident_text);
-
-        var type_node = self.type.toSExpr(ir);
-        node.appendNode(gpa, &type_node);
-        return node;
-    }
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
         const begin = tree.beginNode();
@@ -891,31 +780,6 @@ pub const Def = struct {
     pub const Span = struct { span: DataSpan };
     pub const Range = struct { start: u32, len: u32 };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
-
-        const kind = switch (self.kind) {
-            .let => "d-let",
-            .stmt => "d-stmt",
-            .ignored => "d-ignored",
-        };
-
-        var node = SExpr.init(gpa, kind);
-
-        var pattern_node = ir.store.getPattern(self.pattern).toSExpr(ir, self.pattern);
-        node.appendNode(gpa, &pattern_node);
-
-        var expr_node = ir.store.getExpr(self.expr).toSExpr(ir);
-        node.appendNode(gpa, &expr_node);
-
-        if (self.annotation) |anno_idx| {
-            var anno_node = ir.store.getAnnotation(anno_idx).toSExpr(ir, ir.env.line_starts);
-            node.appendNode(gpa, &anno_node);
-        }
-
-        return node;
-    }
-
     pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
         const begin = tree.beginNode();
         const name: []const u8 = switch (self.kind) {
@@ -951,22 +815,6 @@ pub const Annotation = struct {
     region: Region,
 
     pub const Idx = enum(u32) { _ };
-
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
-        _ = line_starts;
-        const gpa = ir.env.gpa;
-        var node = SExpr.init(gpa, "annotation");
-        ir.appendRegionInfoToSexprNodeFromRegion(&node, self.region);
-
-        // Add the declared type annotation structure
-        var type_anno_node = SExpr.init(gpa, "declared-type");
-        const type_anno = ir.store.getTypeAnno(self.type_anno);
-        var anno_sexpr = type_anno.toSExpr(ir);
-        type_anno_node.appendNode(gpa, &anno_sexpr);
-        node.appendNode(gpa, &type_anno_node);
-
-        return node;
-    }
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
         const begin = tree.beginNode();
@@ -1012,25 +860,6 @@ pub const ExternalDecl = struct {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
-
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
-
-        var node = SExpr.init(gpa, "ext-decl");
-        ir.appendRegionInfoToSexprNodeFromRegion(&node, self.region);
-
-        // Add fully qualified name
-        const qualified_name_str = ir.getIdentText(self.qualified_name);
-        node.appendStringAttr(gpa, "ident", qualified_name_str);
-
-        // Add kind
-        switch (self.kind) {
-            .value => node.appendStringAttr(gpa, "kind", "value"),
-            .type => node.appendStringAttr(gpa, "kind", "type"),
-        }
-
-        return node;
-    }
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
         const begin = tree.beginNode();
@@ -1172,45 +1001,6 @@ pub const IntValue = struct {
 
 /// Helper function to generate the S-expression node for the entire Canonical IR.
 /// If a single expression is provided, only that expression is returned.
-pub fn toSExpr(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SExpr {
-    // Set temporary source for region info calculation during SExpr generation
-    ir.temp_source_for_sexpr = source;
-    defer ir.temp_source_for_sexpr = null;
-    const gpa = ir.env.gpa;
-
-    if (maybe_expr_idx) |expr_idx| {
-        // Get the expression from the store
-        return ir.store.getExpr(expr_idx).toSExpr(ir);
-    } else {
-        var root_node = SExpr.init(gpa, "can-ir");
-
-        // Iterate over all the definitions in the file and convert each to an S-expression
-        const defs_slice = ir.store.sliceDefs(ir.all_defs);
-        const statements_slice = ir.store.sliceStatements(ir.all_statements);
-
-        if (defs_slice.len == 0 and statements_slice.len == 0 and ir.external_decls.items.len == 0) {
-            root_node.appendBoolAttr(gpa, "empty", true);
-        }
-
-        for (defs_slice) |def_idx| {
-            var def_node = ir.store.getDef(def_idx).toSExpr(ir);
-            root_node.appendNode(gpa, &def_node);
-        }
-
-        for (statements_slice) |stmt_idx| {
-            var stmt_node = ir.store.getStatement(stmt_idx).toSExpr(ir);
-            root_node.appendNode(gpa, &stmt_node);
-        }
-
-        for (ir.external_decls.items) |*external_decl| {
-            var external_node = external_decl.toSExpr(ir);
-            root_node.appendNode(gpa, &external_node);
-        }
-
-        return root_node;
-    }
-}
-
 pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: []const u8) void {
     // Set temporary source for region info calculation during SExpr generation
     ir.temp_source_for_sexpr = source;
@@ -1248,16 +1038,16 @@ pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, so
     }
 }
 
-/// Helper function to convert the entire Canonical IR to a string in S-expression format
-/// and write it to the given writer.
-///
-/// If a single expression is provided we only print that expression
-pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
-    const gpa = ir.env.gpa;
-    var node = toSExpr(ir, env, maybe_expr_idx, source);
-    defer node.deinit(gpa);
-    node.toStringPretty(writer);
-}
+// /// Helper function to convert the entire Canonical IR to a string in S-expression format
+// /// and write it to the given writer.
+// ///
+// /// If a single expression is provided we only print that expression
+// pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
+//     const gpa = ir.env.gpa;
+//     var node = toSExpr(ir, env, maybe_expr_idx, source);
+//     defer node.deinit(gpa);
+//     node.toStringPretty(writer);
+// }
 
 test "NodeStore - init and deinit" {
     var store = CIR.NodeStore.init(testing.allocator);
@@ -1336,170 +1126,6 @@ pub fn getNodeRegionInfo(ir: *const CIR, idx: anytype) base.RegionInfo {
 /// Helper function to convert type information from the Canonical IR to an SExpr node
 /// in S-expression format for snapshot testing. Implements the definition-focused
 /// format showing final types for defs, expressions, and builtins.
-pub fn toSexprTypes(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SExpr {
-    // Set temporary source for region info calculation during SExpr generation
-    ir.temp_source_for_sexpr = source;
-    defer ir.temp_source_for_sexpr = null;
-
-    const gpa = ir.env.gpa;
-
-    // Create TypeWriter for converting types to strings
-    var type_string_buf = std.ArrayList(u8).init(gpa);
-    defer type_string_buf.deinit();
-
-    var type_writer = types.writers.TypeWriter.init(type_string_buf.writer(), ir.env);
-
-    if (maybe_expr_idx) |expr_idx| {
-        const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
-
-        var expr_node = SExpr.init(gpa, "expr");
-
-        ir.appendRegionInfoToSexprNode(&expr_node, expr_idx);
-
-        if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
-            var unknown_node = SExpr.init(gpa, "unknown");
-            expr_node.appendNode(gpa, &unknown_node);
-        } else {
-            if (type_writer.writeVar(expr_var)) {
-                expr_node.appendStringAttr(gpa, "type", type_string_buf.items);
-            } else |err| {
-                exitOnOom(err);
-            }
-        }
-
-        return expr_node;
-    } else {
-        var root_node = SExpr.init(gpa, "inferred-types");
-
-        // Collect definitions
-        var defs_node = SExpr.init(gpa, "defs");
-        const all_defs = ir.store.sliceDefs(ir.all_defs);
-
-        for (all_defs) |def_idx| {
-            const def = ir.store.getDef(def_idx);
-
-            // Extract identifier name from the pattern (assuming it's an assign pattern)
-            const pattern = ir.store.getPattern(def.pattern);
-            switch (pattern) {
-                .assign => |_| {
-                    var def_node = SExpr.init(gpa, "patt");
-
-                    ir.appendRegionInfoToSexprNode(&def_node, def_idx);
-
-                    // Get the type variable for this definition
-                    // Each definition has a type_var at its node index which represents the type of the definition
-                    const def_var = ir.idxToTypeVar(&ir.env.types, def_idx) catch |err| exitOnOom(err);
-
-                    // Clear the buffer and write the type
-                    type_string_buf.clearRetainingCapacity();
-                    type_writer.writeVar(def_var) catch |err| exitOnOom(err);
-                    def_node.appendStringAttr(gpa, "type", type_string_buf.items);
-
-                    defs_node.appendNode(gpa, &def_node);
-                },
-                else => {
-                    // For non-assign patterns, we could handle destructuring, but for now skip
-                    continue;
-                },
-            }
-        }
-
-        root_node.appendNode(gpa, &defs_node);
-
-        // Collect statements
-        var stmts_node = SExpr.init(gpa, "type_decls");
-        const all_stmts = ir.store.sliceStatements(ir.all_statements);
-
-        var has_type_decl = false;
-        for (all_stmts) |stmt_idx| {
-            const stmt = ir.store.getStatement(stmt_idx);
-
-            // Get the type variable for this definition
-            // Each definition has a type_var at its node index which represents the type of the definition
-            const stmt_var = ir.idxToTypeVar(&ir.env.types, stmt_idx) catch |err| exitOnOom(err);
-
-            switch (stmt) {
-                .s_alias_decl => |alias| {
-                    has_type_decl = true;
-
-                    var stmt_node = SExpr.init(gpa, "alias");
-                    ir.appendRegionInfoToSexprNodeFromRegion(&stmt_node, alias.region);
-
-                    const header = ir.store.getTypeHeader(alias.header);
-                    const header_sexpr = header.toSExpr(ir);
-                    stmt_node.appendNode(gpa, &header_sexpr);
-
-                    // Clear the buffer and write the type
-                    type_string_buf.clearRetainingCapacity();
-                    type_writer.writeVar(stmt_var) catch |err| exitOnOom(err);
-                    stmt_node.appendStringAttr(gpa, "type", type_string_buf.items);
-
-                    stmts_node.appendNode(gpa, &stmt_node);
-                },
-                .s_nominal_decl => |nominal| {
-                    has_type_decl = true;
-
-                    var stmt_node = SExpr.init(gpa, "nominal");
-                    ir.appendRegionInfoToSexprNodeFromRegion(&stmt_node, nominal.region);
-
-                    const header = ir.store.getTypeHeader(nominal.header);
-                    const header_sexpr = header.toSExpr(ir);
-                    stmt_node.appendNode(gpa, &header_sexpr);
-
-                    // Clear the buffer and write the type
-                    type_string_buf.clearRetainingCapacity();
-                    type_writer.writeVar(stmt_var) catch |err| exitOnOom(err);
-                    stmt_node.appendStringAttr(gpa, "type", type_string_buf.items);
-
-                    stmts_node.appendNode(gpa, &stmt_node);
-                },
-
-                else => {
-                    // For non-assign patterns, we could handle destructuring, but for now skip
-                    continue;
-                },
-            }
-        }
-
-        if (has_type_decl) {
-            root_node.appendNode(gpa, &stmts_node);
-        } else {
-            stmts_node.deinit(gpa);
-        }
-
-        // Collect expression types (for significant expressions with regions)
-        var expressions_node = SExpr.init(gpa, "expressions");
-
-        // Walk through all expressions and collect those with meaningful types
-        // We'll collect expressions that have regions and aren't just intermediate nodes
-        for (all_defs) |def_idx| {
-            const def = ir.store.getDef(def_idx);
-
-            // Get the expression type
-            const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(def.expr)));
-
-            var expr_node = SExpr.init(gpa, "expr");
-            ir.appendRegionInfoToSexprNodeFromRegion(&expr_node, def.expr_region);
-
-            if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
-                var unknown_node = SExpr.init(gpa, "unknown");
-                expr_node.appendNode(gpa, &unknown_node);
-            } else {
-                // Clear the buffer and write the type
-                type_string_buf.clearRetainingCapacity();
-                type_writer.writeVar(expr_var) catch |err| exitOnOom(err);
-                expr_node.appendStringAttr(gpa, "type", type_string_buf.items);
-            }
-
-            expressions_node.appendNode(gpa, &expr_node);
-        }
-
-        root_node.appendNode(gpa, &expressions_node);
-
-        return root_node;
-    }
-}
-
 pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: []const u8) void {
     // Set temporary source for region info calculation during SExpr generation
     ir.temp_source_for_sexpr = source;
@@ -1699,13 +1325,4 @@ pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTre
 
         tree.endNode(root_begin, attrs);
     }
-}
-
-/// Helper function to convert type information from the Canonical IR to a string
-/// in S-expression format for snapshot testing. Calls `toSexprTypes` and writes the result.
-pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
-    const gpa = ir.env.gpa;
-    var node = toSexprTypes(ir, maybe_expr_idx, source);
-    defer node.deinit(gpa);
-    node.toStringPretty(writer);
 }
