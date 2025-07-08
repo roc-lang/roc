@@ -1082,7 +1082,7 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
         // const category = tokenToCategory(tok);
 
         // Markdown token output
-        const region_str = try std.fmt.allocPrint(output.gpa, "{s}({d}:{d}-{d}:{d}),", .{
+        try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
             @tagName(tok),
             // add one to display numbers instead of index
             info.start_line_idx + 1,
@@ -1090,9 +1090,6 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
             info.end_line_idx + 1,
             info.end_col_idx + 1,
         });
-        defer output.gpa.free(region_str);
-
-        try output.md_writer.writeAll(region_str);
 
         // HTML token output as JavaScript array element: [token_kind_str, start_byte, end_byte]
         try output.html_writer.print("                    [\"{s}\", {d}, {d}]", .{
@@ -1167,12 +1164,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
         try output.begin_section("PARSE");
         try output.begin_code_block("clojure");
 
-        // Generate markdown output
-        var parse_buffer = std.ArrayList(u8).init(output.gpa);
-        defer parse_buffer.deinit();
-
-        tree.toStringPretty(parse_buffer.writer().any());
-        try output.md_writer.writeAll(parse_buffer.items);
+        tree.toStringPretty(output.md_writer.any());
         try output.md_writer.writeAll("\n");
 
         // Generate HTML output with syntax highlighting
