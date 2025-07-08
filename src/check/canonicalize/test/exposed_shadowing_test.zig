@@ -25,7 +25,7 @@ test "exposed but not implemented - values" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&cir, &ast);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -66,7 +66,7 @@ test "exposed but not implemented - types" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&cir, &ast);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -109,7 +109,7 @@ test "redundant exposed entries" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&cir, &ast);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -158,7 +158,7 @@ test "shadowing with exposed items" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&cir, &ast);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -196,7 +196,7 @@ test "shadowing non-exposed items" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&cir, &ast);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -242,7 +242,7 @@ test "exposed items correctly tracked across shadowing" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&cir, &ast);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -307,7 +307,7 @@ test "complex case with redundant, shadowing, and not implemented" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&cir, &ast);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -367,7 +367,7 @@ test "exposed_by_str is populated correctly" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&cir, &ast);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -401,7 +401,7 @@ test "exposed_by_str persists after canonicalization" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&cir, &ast);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -435,7 +435,7 @@ test "exposed_by_str never has entries removed" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&cir, &ast);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();

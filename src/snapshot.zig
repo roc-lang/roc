@@ -370,7 +370,7 @@ fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []con
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var can = canonicalize.init(&can_ir, &ast) catch |err| {
+    var can = canonicalize.init(&can_ir, &ast, null) catch |err| {
         warn("Canonicalization init failed: {}", .{err});
         return;
     };
@@ -1503,7 +1503,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var can = try canonicalize.init(&can_ir, &parse_ast);
+    var can = try canonicalize.init(&can_ir, &parse_ast, null);
     defer can.deinit();
 
     var maybe_expr_idx: ?CIR.Expr.Idx = null;

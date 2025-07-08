@@ -32,6 +32,8 @@ var_function_regions: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region),
 var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Map of module name strings to their ModuleEnv pointers for import validation
+module_envs: ?*const std.StringHashMap(*ModuleEnv),
 /// Scratch type variables
 scratch_vars: base.Scratch(TypeVar),
 /// Scratch ident
@@ -120,7 +122,7 @@ pub fn deinit(
     self.scratch_seen_record_fields.deinit(gpa);
 }
 
-pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
+pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*ModuleEnv)) std.mem.Allocator.Error!Self {
     const gpa = self.env.gpa;
 
     // Create the canonicalizer with scopes
@@ -132,6 +134,7 @@ pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
         .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
+        .module_envs = module_envs,
         .scratch_vars = base.Scratch(TypeVar).init(gpa),
         .scratch_idents = base.Scratch(Ident.Idx).init(gpa),
         .scratch_record_fields = base.Scratch(types.RecordField).init(gpa),
@@ -999,7 +1002,8 @@ fn canonicalizeImportStatement(
 
     // 4. Convert exposed items and introduce them into scope
     const cir_exposes = self.convertASTExposesToCIR(import_stmt.exposes);
-    self.introduceExposedItemsIntoScope(cir_exposes, module_name);
+    const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
+    self.introduceExposedItemsIntoScope(cir_exposes, module_name, import_region);
 
     // 5. Create CIR import statement
     const cir_import = CIR.Statement{
@@ -1131,24 +1135,74 @@ fn introduceExposedItemsIntoScope(
     self: *Self,
     exposed_items_span: CIR.ExposedItem.Span,
     module_name: Ident.Idx,
+    import_region: Region,
 ) void {
     const exposed_items_slice = self.can_ir.store.sliceExposedItems(exposed_items_span);
 
-    for (exposed_items_slice) |exposed_item_idx| {
-        const exposed_item = self.can_ir.store.getExposedItem(exposed_item_idx);
+    // If we have module_envs, validate the imports
+    if (self.module_envs) |envs_map| {
+        const module_name_text = self.can_ir.env.idents.getText(module_name);
 
-        // Use the alias if provided, otherwise use the original name for the local lookup
-        const item_name = exposed_item.alias orelse exposed_item.name;
+        // Check if the module exists
+        if (!envs_map.contains(module_name_text)) {
+            // Module not found - create diagnostic
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .module_not_found = .{
+                .module_name = module_name,
+                .region = import_region,
+            } });
+            return;
+        }
 
-        // Create the exposed item info with module name and original name
-        const item_info = Scope.ExposedItemInfo{
-            .module_name = module_name,
-            .original_name = exposed_item.name, // Always use the original name for module lookup
-        };
+        // Get the module's exposed_by_str map
+        const module_env = envs_map.get(module_name_text).?;
 
-        // Introduce the exposed item into scope
-        // This allows `decode` to resolve to `json.Json.decode`
-        self.scopeIntroduceExposedItem(item_name, item_info);
+        // Validate each exposed item
+        for (exposed_items_slice) |exposed_item_idx| {
+            const exposed_item = self.can_ir.store.getExposedItem(exposed_item_idx);
+            const item_name_text = self.can_ir.env.idents.getText(exposed_item.name);
+
+            // Check if the item is exposed by the module
+            if (!module_env.exposed_by_str.contains(item_name_text)) {
+                // Determine if it's a type or value based on capitalization
+                const first_char = item_name_text[0];
+
+                if (first_char >= 'A' and first_char <= 'Z') {
+                    // Type not exposed
+                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .type_not_exposed = .{
+                        .module_name = module_name,
+                        .type_name = exposed_item.name,
+                        .region = import_region,
+                    } });
+                } else {
+                    // Value not exposed
+                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .value_not_exposed = .{
+                        .module_name = module_name,
+                        .value_name = exposed_item.name,
+                        .region = import_region,
+                    } });
+                }
+                continue; // Skip introducing this item to scope
+            }
+
+            // Item is valid, introduce it to scope
+            const item_name = exposed_item.alias orelse exposed_item.name;
+            const item_info = Scope.ExposedItemInfo{
+                .module_name = module_name,
+                .original_name = exposed_item.name,
+            };
+            self.scopeIntroduceExposedItem(item_name, item_info);
+        }
+    } else {
+        // No module_envs provided, introduce all items without validation
+        for (exposed_items_slice) |exposed_item_idx| {
+            const exposed_item = self.can_ir.store.getExposedItem(exposed_item_idx);
+            const item_name = exposed_item.alias orelse exposed_item.name;
+            const item_info = Scope.ExposedItemInfo{
+                .module_name = module_name,
+                .original_name = exposed_item.name,
+            };
+            self.scopeIntroduceExposedItem(item_name, item_info);
+        }
     }
 }
 
@@ -5480,7 +5534,7 @@ const ScopeTestContext = struct {
         cir.* = CIR.init(env);
 
         return ScopeTestContext{
-            .self = try Self.init(cir, undefined),
+            .self = try Self.init(cir, undefined, null),
             .cir = cir,
             .env = env,
             .gpa = gpa,
@@ -5795,7 +5849,7 @@ test "hexadecimal integer literals" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try init(&cir, &ast);
+        var can = try init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -5885,7 +5939,7 @@ test "binary integer literals" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try init(&cir, &ast);
+        var can = try init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -5975,7 +6029,7 @@ test "octal integer literals" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try init(&cir, &ast);
+        var can = try init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6065,7 +6119,7 @@ test "integer literals with uppercase base prefixes" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try init(&cir, &ast);
+        var can = try init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6457,7 +6511,7 @@ test "record literal uses record_unbound" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try Self.init(&cir, &ast);
+        var can = try Self.init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6493,7 +6547,7 @@ test "record literal uses record_unbound" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try Self.init(&cir, &ast);
+        var can = try Self.init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6528,7 +6582,7 @@ test "record literal uses record_unbound" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try Self.init(&cir, &ast);
+        var can = try Self.init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6572,7 +6626,7 @@ test "record_unbound basic functionality" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var can = try Self.init(&cir, &ast);
+    var can = try Self.init(&cir, &ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6615,7 +6669,7 @@ test "record_unbound with multiple fields" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var can = try Self.init(&cir, &ast);
+    var can = try Self.init(&cir, &ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);

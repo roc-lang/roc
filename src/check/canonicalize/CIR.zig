@@ -261,6 +261,40 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             );
         },
         .tuple_elem_not_canonicalized => Diagnostic.buildTupleElemNotCanonicalizedReport(allocator),
+        .module_not_found => |data| blk: {
+            const module_name = self.env.idents.getText(data.module_name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildModuleNotFoundReport(
+                allocator,
+                module_name,
+                region_info,
+                filename,
+            );
+        },
+        .value_not_exposed => |data| blk: {
+            const module_name = self.env.idents.getText(data.module_name);
+            const value_name = self.env.idents.getText(data.value_name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildValueNotExposedReport(
+                allocator,
+                module_name,
+                value_name,
+                region_info,
+                filename,
+            );
+        },
+        .type_not_exposed => |data| blk: {
+            const module_name = self.env.idents.getText(data.module_name);
+            const type_name = self.env.idents.getText(data.type_name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildTypeNotExposedReport(
+                allocator,
+                module_name,
+                type_name,
+                region_info,
+                filename,
+            );
+        },
         .undeclared_type => |data| blk: {
             const type_name = self.env.idents.getText(data.name);
             const region_info = self.calcRegionInfo(data.region);

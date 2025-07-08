@@ -97,7 +97,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 35;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 38;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 25;
 /// Count of the statement nodes in the CIR
@@ -2645,6 +2645,23 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.tag = .diag_tuple_elem_not_canonicalized;
             region = r.region;
         },
+        .module_not_found => |r| {
+            node.tag = .diag_module_not_found;
+            region = r.region;
+            node.data_1 = @as(u32, @bitCast(r.module_name));
+        },
+        .value_not_exposed => |r| {
+            node.tag = .diag_value_not_exposed;
+            region = r.region;
+            node.data_1 = @as(u32, @bitCast(r.module_name));
+            node.data_2 = @as(u32, @bitCast(r.value_name));
+        },
+        .type_not_exposed => |r| {
+            node.tag = .diag_type_not_exposed;
+            region = r.region;
+            node.data_1 = @as(u32, @bitCast(r.module_name));
+            node.data_2 = @as(u32, @bitCast(r.type_name));
+        },
         .nominal_type_redeclared => |r| {
             node.tag = .diag_nominal_type_redeclared;
             region = r.redeclared_region;
@@ -2835,6 +2852,20 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_tuple_elem_not_canonicalized => return CIR.Diagnostic{ .tuple_elem_not_canonicalized = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_module_not_found => return CIR.Diagnostic{ .module_not_found = .{
+            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_value_not_exposed => return CIR.Diagnostic{ .value_not_exposed = .{
+            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .value_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_type_not_exposed => return CIR.Diagnostic{ .type_not_exposed = .{
+            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .type_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_undeclared_type_var => return CIR.Diagnostic{ .undeclared_type_var = .{

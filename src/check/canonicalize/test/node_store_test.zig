@@ -582,6 +582,29 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(CIR.Diagnostic{
+        .module_not_found = .{
+            .module_name = @bitCast(@as(u32, 543)),
+            .region = from_raw_offsets(790, 800),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .value_not_exposed = .{
+            .module_name = @bitCast(@as(u32, 654)),
+            .value_name = @bitCast(@as(u32, 655)),
+            .region = from_raw_offsets(800, 810),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .type_not_exposed = .{
+            .module_name = @bitCast(@as(u32, 765)),
+            .type_name = @bitCast(@as(u32, 766)),
+            .region = from_raw_offsets(810, 820),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = store.addDiagnostic(diagnostic);
