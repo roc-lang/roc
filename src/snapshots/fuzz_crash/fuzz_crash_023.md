@@ -2765,8 +2765,7 @@ expect {
 				(s-expr @190.2-191.8
 					(e-runtime-error (tag "not_implemented")))
 				(e-call @191.2-195.3
-					(e-lookup-external
-						(ext-decl @191.2-191.14 (ident "pf.Stdout.line!") (kind "value")))
+					(e-lookup-external @191.2-191.14 (module-idx 0) (field "line!") (target-node-idx 0))
 					(e-string @192.3-194.18
 						(e-literal @192.4-192.14 (string "How about "))
 						(e-call @193.4-193.21

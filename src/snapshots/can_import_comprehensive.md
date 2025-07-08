@@ -179,36 +179,28 @@ main = {
 		(e-block @7.8-35.2
 			(s-let @8.5-8.22
 				(p-assign @8.5-8.11 (ident "client"))
-				(e-lookup-external
-					(ext-decl @8.14-8.22 (ident "http.Client.get") (kind "value"))))
+				(e-lookup-external @8.14-8.22 (module-idx 1) (field "get") (target-node-idx 0)))
 			(s-let @9.5-9.23
 				(p-assign @9.5-9.11 (ident "parser"))
-				(e-lookup-external
-					(ext-decl @9.14-9.23 (ident "json.Json.utf8") (kind "value"))))
+				(e-lookup-external @9.14-9.23 (module-idx 0) (field "utf8") (target-node-idx 0)))
 			(s-let @10.5-10.22
 				(p-assign @10.5-10.11 (ident "helper"))
-				(e-lookup-external
-					(ext-decl @10.14-10.22 (ident "utils.String.trim") (kind "value"))))
+				(e-lookup-external @10.14-10.22 (module-idx 2) (field "trim") (target-node-idx 0)))
 			(s-let @13.5-13.25
 				(p-assign @13.5-13.12 (ident "result1"))
-				(e-lookup-external
-					(ext-decl @13.15-13.25 (ident "json.Json.parse") (kind "value"))))
+				(e-lookup-external @13.15-13.25 (module-idx 0) (field "parse") (target-node-idx 0)))
 			(s-let @16.5-16.24
 				(p-assign @16.5-16.12 (ident "result2"))
-				(e-lookup-external
-					(ext-decl @16.15-16.24 (ident "http.Client.post") (kind "value"))))
+				(e-lookup-external @16.15-16.24 (module-idx 1) (field "post") (target-node-idx 0)))
 			(s-let @19.5-19.18
 				(p-assign @19.5-19.12 (ident "result3"))
-				(e-lookup-external
-					(ext-decl @19.15-19.18 (ident "http.Client.get") (kind "value"))))
+				(e-lookup-external @19.15-19.18 (module-idx 1) (field "get") (target-node-idx 0)))
 			(s-let @20.5-20.19
 				(p-assign @20.5-20.12 (ident "result4"))
-				(e-lookup-external
-					(ext-decl @20.15-20.19 (ident "http.Client.post") (kind "value"))))
+				(e-lookup-external @20.15-20.19 (module-idx 1) (field "post") (target-node-idx 0)))
 			(s-let @23.5-23.26
 				(p-assign @23.5-23.13 (ident "combined"))
-				(e-lookup-external
-					(ext-decl @23.16-23.26 (ident "utils.String.concat") (kind "value"))))
+				(e-lookup-external @23.16-23.26 (module-idx 2) (field "concat") (target-node-idx 0)))
 			(e-tuple @25.5-34.6
 				(elems
 					(e-lookup-local @26.9-26.15

@@ -421,8 +421,7 @@ combineResults = |result1, result2|
 		(e-lambda @8.18-8.44
 			(args
 				(p-assign @8.19-8.22 (ident "req")))
-			(e-lookup-external
-				(ext-decl @8.24-8.44 (ident "http.Client.defaultResponse") (kind "value"))))
+			(e-lookup-external @8.24-8.44 (module-idx 0) (field "defaultResponse") (target-node-idx 0)))
 		(annotation @8.1-8.15
 			(declared-type
 				(ty-fn @7.18-7.37 (effectful false)
@@ -434,8 +433,7 @@ combineResults = |result1, result2|
 			(args
 				(p-assign @11.14-11.19 (ident "input")))
 			(e-call @11.21-11.38
-				(e-lookup-external
-					(ext-decl @11.21-11.31 (ident "json.Json.parse") (kind "value")))
+				(e-lookup-external @11.21-11.31 (module-idx 1) (field "parse") (target-node-idx 0))
 				(e-lookup-local @11.32-11.37
 					(pattern @11.14-11.19))))
 		(annotation @11.1-11.10
@@ -453,8 +451,7 @@ combineResults = |result1, result2|
 				(s-let @15.5-15.39
 					(p-assign @15.5-15.11 (ident "result"))
 					(e-call @15.14-15.39
-						(e-lookup-external
-							(ext-decl @15.14-15.25 (ident "json.Json.decode") (kind "value")))
+						(e-lookup-external @15.14-15.25 (module-idx 1) (field "decode") (target-node-idx 0))
 						(e-dot-access @15.26-15.39 (field "body")
 							(receiver
 								(e-lookup-local @15.26-15.33
@@ -495,8 +492,7 @@ combineResults = |result1, result2|
 							(ext-decl @13.51-13.61 (ident "Json.Error") (kind "type"))))))))
 	(d-let
 		(p-assign @23.1-23.7 (ident "config"))
-		(e-lookup-external
-			(ext-decl @23.10-23.28 (ident "json.Json.defaultConfig") (kind "value")))
+		(e-lookup-external @23.10-23.28 (module-idx 1) (field "defaultConfig") (target-node-idx 0))
 		(annotation @23.1-23.7
 			(declared-type
 				(ty-lookup-external @22.10-22.21
@@ -508,8 +504,7 @@ combineResults = |result1, result2|
 				(p-assign @27.19-27.31 (ident "parserConfig"))
 				(p-assign @27.33-27.38 (ident "input")))
 			(e-call @27.40-27.82
-				(e-lookup-external
-					(ext-decl @27.40-27.61 (ident "json.Json.parseWith") (kind "value")))
+				(e-lookup-external @27.40-27.61 (module-idx 1) (field "parseWith") (target-node-idx 0))
 				(e-lookup-local @27.62-27.74
 					(pattern @27.19-27.31))
 				(e-lookup-local @27.76-27.81

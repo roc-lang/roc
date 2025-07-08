@@ -264,7 +264,8 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("The module header says that `");
         try report.document.addInlineCode(owned_ident);
         try report.document.addReflowingText("` is exposed, but it is not defined anywhere in this module.");
-
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -292,7 +293,8 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("The identifier `");
         try report.document.addInlineCode(owned_ident);
         try report.document.addReflowingText("` is exposed multiple times in the module header.");
-
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,

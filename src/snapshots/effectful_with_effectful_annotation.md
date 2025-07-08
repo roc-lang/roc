@@ -78,8 +78,7 @@ NO CHANGE
 			(args
 				(p-assign @7.15-7.18 (ident "msg")))
 			(e-call @7.20-7.37
-				(e-lookup-external
-					(ext-decl @7.20-7.32 (ident "pf.Stdout.line!") (kind "value")))
+				(e-lookup-external @7.20-7.32 (module-idx 0) (field "line!") (target-node-idx 0))
 				(e-lookup-local @7.33-7.36
 					(pattern @7.15-7.18))))
 		(annotation @7.1-7.11

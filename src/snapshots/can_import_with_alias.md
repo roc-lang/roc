@@ -43,8 +43,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @5.1-5.5 (ident "main"))
-		(e-lookup-external
-			(ext-decl @5.8-5.21 (ident "json.Json.decode") (kind "value"))))
+		(e-lookup-external @5.8-5.21 (module-idx 0) (field "decode") (target-node-idx 0)))
 	(s-import @3.1-3.27 (module "json.Json") (qualifier "json") (alias "MyJson")
 		(exposes)))
 ~~~

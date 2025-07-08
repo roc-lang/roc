@@ -13,9 +13,18 @@ decodeThings : List(List(U8)) -> List(a)
 	where a.Decode
 ~~~
 # EXPECTED
-NIL
+EXPOSED BUT NOT DEFINED - where_clauses_4.md:1:9:1:15
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``decode`` is exposed, but it is not defined anywhere in this module.
+
+**where_clauses_4.md:1:9:1:15:**
+```roc
+module [decode]
+```
+        ^^^^^^
+You can fix this by either defining ``decode`` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),CloseSquare(1:15-1:16),Newline(1:1-1:1),
