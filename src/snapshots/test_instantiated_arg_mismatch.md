@@ -64,13 +64,13 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~clojure
 (e-block @1.1-6.2
 	(s-type-anno @2.5-3.9 (name "pair")
-		(ty-func @2.12-2.26 (effectful false)
+		(ty-fn @2.12-2.26 (effectful false)
 			(ty-var @2.12-2.13 (name "a"))
 			(ty-var @2.15-2.16 (name "a"))
 			(ty-tuple @2.20-2.26
 				(ty-var @2.21-2.22 (name "a"))
 				(ty-var @2.24-2.25 (name "a")))))
-	(s-var @3.5-3.25
+	(s-let @3.5-3.25
 		(p-assign @3.5-3.9 (ident "pair"))
 		(e-lambda @3.12-3.25
 			(args
@@ -86,10 +86,10 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 		(e-lookup-local @5.5-5.9
 			(p-assign @3.5-3.9 (ident "pair")))
 		(e-int @5.10-5.12 (value "42"))
-		(e-str @5.14-5.21
+		(e-string @5.14-5.21
 			(e-literal @5.15-5.20 (string "hello")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "*"))
+(expr @1.1-6.2 (type "(*, *)"))
 ~~~

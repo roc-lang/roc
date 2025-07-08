@@ -52,23 +52,23 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-4.2
-	(match
+	(match @1.1-4.2
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch @2.10-2.24
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @2.2-2.6)))
 				(value
-					(e-str @2.10-2.24
+					(e-string @2.10-2.24
 						(e-literal @2.11-2.23 (string "ready to go!")))))
-			(branch @3.11-3.26
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @3.2-3.7)))
 				(value
-					(e-str @3.11-3.26
+					(e-string @3.11-3.26
 						(e-literal @3.12-3.25 (string "not ready yet"))))))))
 ~~~
 # TYPES

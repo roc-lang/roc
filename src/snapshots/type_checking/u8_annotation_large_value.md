@@ -55,13 +55,13 @@ NO CHANGE
 		(e-int @4.5-4.8 (value "500"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty-type @3.5-3.7 (name "U8"))))))
+				(ty @3.5-3.7 (name "U8"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "Error")))
+		(patt @4.1-4.2 (type "Error")))
 	(expressions
-		(expr (type "Error"))))
+		(expr @4.5-4.8 (type "Error"))))
 ~~~

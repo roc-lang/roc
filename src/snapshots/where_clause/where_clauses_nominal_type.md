@@ -62,14 +62,14 @@ Cache(k, v) := Dict(U64, v)
 				(ty-var @3.7-3.8 (name "k"))
 				(ty-var @3.10-3.11 (name "v"))))
 		(ty-apply @3.16-3.28 (symbol "Dict")
-			(ty-type @3.21-3.24 (name "U64"))
+			(ty @3.21-3.24 (name "U64"))
 			(ty-var @3.26-3.27 (name "v")))
 		(where
-			(where-mod-method (module-of "k") (ident "hash")
+			(method @5.5-5.31 (module-of "k") (ident "hash")
 				(args
 					(ty-var @5.22-5.23 (name "k")))
-				(ty-type @5.27-5.30 (name "U64")))))
-	(ext-decl (ident "module(k).hash") (kind "value")))
+				(ty @5.27-5.30 (name "U64")))))
+	(ext-decl @5.5-5.31 (ident "module(k).hash") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

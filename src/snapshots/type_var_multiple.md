@@ -174,7 +174,7 @@ main! = |_| {}
 						(e-runtime-error (tag "ident_not_in_scope"))))))
 		(annotation @5.1-5.5
 			(declared-type
-				(ty-func @4.8-4.24 (effectful false)
+				(ty-fn @4.8-4.24 (effectful false)
 					(ty-tuple @4.8-4.14
 						(ty-var @4.9-4.10 (name "a"))
 						(ty-var @4.12-4.13 (name "b")))
@@ -186,15 +186,15 @@ main! = |_| {}
 		(e-lambda @10.9-10.15
 			(args
 				(p-underscore @10.10-10.11))
-			(e-empty-record @10.13-10.15))))
+			(e-empty_record @10.13-10.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-8.2 (type "(a, b) -> (Error, Error)"))
-		(patt @10.1-10.15 (type "* -> {}")))
+		(patt @5.1-5.5 (type "(a, b) -> (Error, Error)"))
+		(patt @10.1-10.6 (type "* -> {}")))
 	(expressions
-		(expr (type "(a, b) -> (Error, Error)"))
-		(expr (type "* -> {}"))))
+		(expr @5.8-8.2 (type "(a, b) -> (Error, Error)"))
+		(expr @10.9-10.15 (type "* -> {}"))))
 ~~~

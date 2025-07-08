@@ -108,11 +108,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-8.2
-	(match
+	(match @1.1-8.2
 		(cond
 			(e-not-implemented @1.7-1.10))
 		(branches
-			(branch @2.15-2.30
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-int @2.2-2.3 (value "1")))
@@ -121,27 +121,27 @@ NO CHANGE
 					(pattern (degenerate false)
 						(p-int @2.10-2.11 (value "3"))))
 				(value
-					(e-str @2.15-2.30
+					(e-string @2.15-2.30
 						(e-literal @2.16-2.29 (string "small numbers")))))
-			(branch @3.23-3.34
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-str @3.2-3.3 (text """)))
 					(pattern (degenerate false)
 						(p-str @3.12-3.13 (text """))))
 				(value
-					(e-str @3.23-3.34
+					(e-string @3.23-3.34
 						(e-literal @3.24-3.33 (string "greetings")))))
-			(branch @4.21-4.36
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @4.2-4.7))
 					(pattern (degenerate false)
 						(p-applied-tag @4.10-4.17)))
 				(value
-					(e-str @4.21-4.36
+					(e-string @4.21-4.36
 						(e-literal @4.22-4.35 (string "success value")))))
-			(branch @5.14-5.26
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-list @5.2-5.4
@@ -151,9 +151,9 @@ NO CHANGE
 							(patterns
 								(p-underscore @5.8-5.9)))))
 				(value
-					(e-str @5.14-5.26
+					(e-string @5.14-5.26
 						(e-literal @5.15-5.25 (string "short list")))))
-			(branch @6.21-6.31
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-tuple @6.2-6.8
@@ -166,14 +166,14 @@ NO CHANGE
 								(p-underscore @6.12-6.13)
 								(p-int @6.15-6.16 (value "0"))))))
 				(value
-					(e-str @6.21-6.31
+					(e-string @6.21-6.31
 						(e-literal @6.22-6.30 (string "has zero")))))
-			(branch @7.7-7.14
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-underscore @7.2-7.3)))
 				(value
-					(e-str @7.7-7.14
+					(e-string @7.7-7.14
 						(e-literal @7.8-7.13 (string "other"))))))))
 ~~~
 # TYPES

@@ -78,7 +78,7 @@ empty = Nil
 			(ty-args
 				(ty-var @3.10-3.11 (name "a"))))
 		(ty-tag-union @3.16-3.40
-			(ty-type @3.17-3.20 (name "Nil"))
+			(ty @3.17-3.20 (name "Nil"))
 			(ty-apply @3.22-3.39 (symbol "Node")
 				(ty-apply @3.27-3.38 (symbol "ConsList")
 					(ty-var @3.36-3.37 (name "a")))))))
@@ -87,12 +87,12 @@ empty = Nil
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.21 (type "ConsList([Nil, Node])")))
+		(patt @6.1-6.6 (type "ConsList([Nil, Node])")))
 	(type_decls
 		(nominal @3.1-3.40 (type "ConsList(a)")
 			(ty-header @3.1-3.12 (name "ConsList")
 				(ty-args
 					(ty-var @3.10-3.11 (name "a"))))))
 	(expressions
-		(expr (type "ConsList([])"))))
+		(expr @6.9-6.21 (type "ConsList([])"))))
 ~~~

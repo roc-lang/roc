@@ -74,11 +74,11 @@ match shape {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-5.2
-	(match
+	(match @1.1-5.2
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch @2.23-3.14
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @2.5-2.19)))
@@ -90,7 +90,7 @@ match shape {
 								(p-assign @2.12-2.18 (ident "radius")))
 							(e-lookup-local @2.39-2.45
 								(p-assign @2.12-2.18 (ident "radius")))))))
-			(branch @3.33-4.13
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @3.5-3.29)))
@@ -100,7 +100,7 @@ match shape {
 							(p-assign @3.15-3.20 (ident "width")))
 						(e-lookup-local @3.41-3.47
 							(p-assign @3.22-3.28 (ident "height"))))))
-			(branch @4.31-5.2
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @4.5-4.27)))

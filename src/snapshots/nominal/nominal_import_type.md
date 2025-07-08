@@ -67,16 +67,16 @@ red = Red
 		(annotation @6.1-6.4
 			(declared-type
 				(ty-lookup-external @5.7-5.16
-					(ext-decl (ident "Color.RGB") (kind "type"))))))
+					(ext-decl @5.7-5.16 (ident "Color.RGB") (kind "type"))))))
 	(s-import @3.1-3.13 (module "Color")
 		(exposes))
-	(ext-decl (ident "Color.RGB") (kind "type")))
+	(ext-decl @5.7-5.16 (ident "Color.RGB") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.20 (type "Error")))
+		(patt @6.1-6.4 (type "Error")))
 	(expressions
-		(expr (type "Error"))))
+		(expr @6.12-6.16 (type "Error"))))
 ~~~

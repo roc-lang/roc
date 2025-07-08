@@ -145,26 +145,26 @@ processColor = |color| {
 				(s-expr @1.1-1.1
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(e-match @11.5-15.6
-					(match
+					(match @11.5-15.6
 						(cond
 							(e-lookup-local @11.11-11.16
 								(p-assign @6.17-6.22 (ident "color"))))
 						(branches
-							(branch @12.20-12.39
+							(branch
 								(patterns
 									(pattern (degenerate false)
 										(p-applied-tag @12.9-12.16)))
 								(value
 									(e-nominal @12.20-12.39 (nominal "LocalStatus")
 										(e-tag @12.20-12.39 (name "Pending")))))
-							(branch @13.22-13.42
+							(branch
 								(patterns
 									(pattern (degenerate false)
 										(p-applied-tag @13.9-13.18)))
 								(value
 									(e-nominal @13.22-13.42 (nominal "LocalStatus")
 										(e-tag @13.22-13.42 (name "Complete")))))
-							(branch @14.21-14.40
+							(branch
 								(patterns
 									(pattern (degenerate false)
 										(p-applied-tag @14.9-14.17)))
@@ -173,23 +173,23 @@ processColor = |color| {
 										(e-tag @14.21-14.40 (name "Pending"))))))))))
 		(annotation @6.1-6.13
 			(declared-type
-				(ty-func @5.16-5.32 (effectful false)
+				(ty-fn @5.16-5.32 (effectful false)
 					(ty-underscore @5.16-5.17)
-					(ty-type @5.21-5.32 (name "LocalStatus"))))))
+					(ty @5.21-5.32 (name "LocalStatus"))))))
 	(s-nominal-decl @3.1-3.35
 		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-tag-union @3.16-3.35
-			(ty-type @3.17-3.24 (name "Pending"))
-			(ty-type @3.26-3.34 (name "Complete")))))
+			(ty @3.17-3.24 (name "Pending"))
+			(ty @3.26-3.34 (name "Complete")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-16.2 (type "[Green, Red, Blue]* -> LocalStatus")))
+		(patt @6.1-6.13 (type "[Green, Red, Blue]* -> LocalStatus")))
 	(type_decls
 		(nominal @3.1-3.35 (type "LocalStatus")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
-		(expr (type "[Green, Red, Blue]* -> LocalStatus"))))
+		(expr @6.16-16.2 (type "[Green, Red, Blue]* -> LocalStatus"))))
 ~~~

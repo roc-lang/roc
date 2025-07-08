@@ -102,11 +102,11 @@ CloseSquare(12:1-12:2),EndOfFile(12:2-12:2),
 		(e-tag @3.5-3.9 (name "None"))
 		(e-tag @4.5-4.16 (name "Ok")
 			(args
-				(e-str @4.8-4.15
+				(e-string @4.8-4.15
 					(e-literal @4.9-4.14 (string "hello")))))
 		(e-tag @5.5-5.16 (name "Err")
 			(args
-				(e-str @5.9-5.15
+				(e-string @5.9-5.15
 					(e-literal @5.10-5.14 (string "oops")))))
 		(e-tag @6.5-6.14 (name "Just")
 			(args

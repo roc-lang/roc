@@ -120,32 +120,32 @@ AnotherType : SomeModule.MissingType
 			(args
 				(p-assign @6.17-6.22 (ident "value")))
 			(e-block @6.24-8.2
-				(e-str @7.5-7.16
+				(e-string @7.5-7.16
 					(e-literal @7.6-7.15 (string "processed")))))
 		(annotation @6.1-6.13
 			(declared-type
-				(ty-func @5.16-5.39 (effectful false)
-					(ty-type @5.16-5.32 (name "UndeclaredResult"))
-					(ty-type @5.36-5.39 (name "Str"))))))
+				(ty-fn @5.16-5.39 (effectful false)
+					(ty @5.16-5.32 (name "UndeclaredResult"))
+					(ty @5.36-5.39 (name "Str"))))))
 	(s-alias-decl @3.1-3.21
 		(ty-header @3.1-3.7 (name "MyType"))
-		(ty-type @3.10-3.21 (name "UnknownType")))
+		(ty @3.10-3.21 (name "UnknownType")))
 	(s-alias-decl @10.1-10.37
 		(ty-header @10.1-10.12 (name "AnotherType"))
 		(ty-lookup-external @10.15-10.37
-			(ext-decl (ident "SomeModule.MissingType") (kind "type"))))
-	(ext-decl (ident "SomeModule.MissingType") (kind "type")))
+			(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type"))))
+	(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-8.2 (type "Error -> Str")))
+		(patt @6.1-6.13 (type "Error -> Str")))
 	(type_decls
 		(alias @3.1-3.21 (type "MyType")
 			(ty-header @3.1-3.7 (name "MyType")))
 		(alias @10.1-10.37 (type "AnotherType")
 			(ty-header @10.1-10.12 (name "AnotherType"))))
 	(expressions
-		(expr (type "Error -> Str"))))
+		(expr @6.16-8.2 (type "Error -> Str"))))
 ~~~

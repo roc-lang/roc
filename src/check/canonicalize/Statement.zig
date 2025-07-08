@@ -307,7 +307,7 @@ pub const Statement = union(enum) {
                     const where_clauses = ir.store.sliceWhereClauses(where_span);
                     for (where_clauses) |clause_idx| {
                         const clause = ir.store.getWhereClause(clause_idx);
-                        clause.pushToSExprTree(ir, tree);
+                        clause.pushToSExprTree(ir, tree, clause_idx);
                     }
                     tree.endNode(where_begin, where_attrs);
                 }
@@ -331,7 +331,7 @@ pub const Statement = union(enum) {
                     const where_clauses = ir.store.sliceWhereClauses(where_span);
                     for (where_clauses) |clause_idx| {
                         const clause = ir.store.getWhereClause(clause_idx);
-                        clause.pushToSExprTree(ir, tree);
+                        clause.pushToSExprTree(ir, tree, clause_idx);
                     }
                     tree.endNode(where_begin, where_attrs);
                 }
@@ -355,7 +355,7 @@ pub const Statement = union(enum) {
                     const where_clauses = ir.store.sliceWhereClauses(where_span);
                     for (where_clauses) |clause_idx| {
                         const clause = ir.store.getWhereClause(clause_idx);
-                        clause.pushToSExprTree(ir, tree);
+                        clause.pushToSExprTree(ir, tree, clause_idx);
                     }
                     tree.endNode(where_begin, where_attrs);
                 }

@@ -26,7 +26,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-str @1.1-1.3
+(e-string @1.1-1.3
 	(e-literal @1.2-1.2 (string "")))
 ~~~
 # TYPES

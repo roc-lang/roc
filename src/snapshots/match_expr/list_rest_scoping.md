@@ -150,11 +150,11 @@ match items {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-5.2
-	(match
+	(match @1.1-5.2
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch @2.24-3.6
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-list @2.5-2.20
@@ -167,7 +167,7 @@ match items {
 						(e-lookup-local @2.24-2.29
 							(p-assign @2.6-2.11 (ident "first")))
 						(e-int @2.32-2.33 (value "1")))))
-			(branch @3.23-4.6
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-list @3.5-3.19
@@ -180,7 +180,7 @@ match items {
 						(e-lookup-local @3.23-3.27
 							(p-assign @3.14-3.18 (ident "last")))
 						(e-int @3.30-3.31 (value "2")))))
-			(branch @4.23-5.2
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-list @4.5-4.19

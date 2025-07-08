@@ -66,14 +66,14 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-6.2
-	(s-var @2.5-2.11
+	(s-let @2.5-2.11
 		(p-assign @2.5-2.6 (ident "x"))
 		(e-int @2.9-2.11 (value "42")))
-	(s-var @3.5-3.18
+	(s-let @3.5-3.18
 		(p-assign @3.5-3.8 (ident "str"))
-		(e-str @3.11-3.18
+		(e-string @3.11-3.18
 			(e-literal @3.12-3.17 (string "hello"))))
-	(s-var @4.5-5.11
+	(s-let @4.5-5.11
 		(p-assign @4.5-4.11 (ident "result"))
 		(e-binop @4.14-5.11 (op "add")
 			(e-lookup-local @4.14-4.15

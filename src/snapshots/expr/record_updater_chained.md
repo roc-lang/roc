@@ -87,12 +87,12 @@ final = {..updated2, name: "Alice Smith", age: 32}
 		(e-record @3.10-3.52
 			(fields
 				(field (name "name")
-					(e-str @3.18-3.25
+					(e-string @3.18-3.25
 						(e-literal @3.19-3.24 (string "Alice"))))
 				(field (name "age")
 					(e-int @3.32-3.34 (value "30")))
 				(field (name "city")
-					(e-str @3.42-3.50
+					(e-string @3.42-3.50
 						(e-literal @3.43-3.49 (string "Boston")))))))
 	(d-let
 		(p-assign @4.1-4.12 (ident "updated_one"))
@@ -111,7 +111,7 @@ final = {..updated2, name: "Alice Smith", age: 32}
 					(p-assign @4.1-4.12 (ident "updated_one"))))
 			(fields
 				(field (name "city")
-					(e-str @5.35-5.45
+					(e-string @5.35-5.45
 						(e-literal @5.36-5.44 (string "New York")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "final"))
@@ -121,7 +121,7 @@ final = {..updated2, name: "Alice Smith", age: 32}
 					(p-assign @5.1-5.9 (ident "updated2"))))
 			(fields
 				(field (name "name")
-					(e-str @6.29-6.42
+					(e-string @6.29-6.42
 						(e-literal @6.30-6.41 (string "Alice Smith"))))
 				(field (name "age")
 					(e-int @6.49-6.51 (value "32")))))))
@@ -130,13 +130,13 @@ final = {..updated2, name: "Alice Smith", age: 32}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.52 (type "{ name: Str, age: Num(*), city: Str }"))
-		(patt @4.1-4.36 (type "{ age: Num(*) }"))
-		(patt @5.1-5.47 (type "{ city: Str }"))
-		(patt @6.1-6.53 (type "{ name: Str, age: Num(*) }")))
+		(patt @3.1-3.7 (type "{ name: Str, age: Num(*), city: Str }"))
+		(patt @4.1-4.12 (type "{ age: Num(*) }"))
+		(patt @5.1-5.9 (type "{ city: Str }"))
+		(patt @6.1-6.6 (type "{ name: Str, age: Num(*) }")))
 	(expressions
-		(expr (type "{ name: Str, age: Num(*), city: Str }"))
-		(expr (type "{ age: Num(*) }"))
-		(expr (type "{ city: Str }"))
-		(expr (type "{ name: Str, age: Num(*) }"))))
+		(expr @3.10-3.52 (type "{ name: Str, age: Num(*), city: Str }"))
+		(expr @4.15-4.36 (type "{ age: Num(*) }"))
+		(expr @5.12-5.47 (type "{ city: Str }"))
+		(expr @6.9-6.53 (type "{ name: Str, age: Num(*) }"))))
 ~~~

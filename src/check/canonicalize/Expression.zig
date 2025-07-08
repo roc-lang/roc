@@ -503,7 +503,7 @@ pub const Expr = union(enum) {
             },
             .e_str => |e| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("e-str");
+                tree.pushStaticAtom("e-string");
                 const region = ir.store.getExprRegion(expr_idx);
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
@@ -533,7 +533,7 @@ pub const Expr = union(enum) {
             },
             .e_empty_list => |_| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("e-empty-list");
+                tree.pushStaticAtom("e-empty_list");
                 const region = ir.store.getExprRegion(expr_idx);
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
@@ -572,7 +572,8 @@ pub const Expr = union(enum) {
                 tree.pushStaticAtom("e-lookup-external");
                 const attrs = tree.beginNode();
 
-                ir.getExternalDecl(external_idx).pushToSExprTree(ir, tree);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.getExternalDecl(external_idx).pushToSExprTreeWithRegion(ir, tree, region);
 
                 tree.endNode(begin, attrs);
             },
@@ -583,7 +584,7 @@ pub const Expr = union(enum) {
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
-                e.pushToSExprTree(ir, tree);
+                e.pushToSExprTree(ir, tree, region);
 
                 tree.endNode(begin, attrs);
             },
@@ -668,7 +669,7 @@ pub const Expr = union(enum) {
             },
             .e_empty_record => |_| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("e-empty-record");
+                tree.pushStaticAtom("e-empty_record");
                 const region = ir.store.getExprRegion(expr_idx);
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
@@ -904,11 +905,9 @@ pub const Expr = union(enum) {
             /// Marks whether a match branch is redundant using a variable.
             redundant: TypeVar,
 
-            pub fn pushToSExprTree(self: *const Match.Branch, ir: *const CIR, tree: *SExprTree, branch_idx: Match.Branch.Idx) void {
+            pub fn pushToSExprTree(self: *const Match.Branch, ir: *const CIR, tree: *SExprTree, _: Match.Branch.Idx) void {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("branch");
-                const region = ir.store.getRegionAt(@enumFromInt(@intFromEnum(branch_idx)));
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
                 const patterns_begin = tree.beginNode();
@@ -971,9 +970,10 @@ pub const Expr = union(enum) {
             pub const Span = struct { span: base.DataSpan };
         };
 
-        pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, region: Region) void {
             const begin = tree.beginNode();
             tree.pushStaticAtom("match");
+            ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
             const attrs = tree.beginNode();
 
             const cond_begin = tree.beginNode();

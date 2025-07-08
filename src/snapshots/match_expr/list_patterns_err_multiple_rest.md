@@ -66,11 +66,11 @@ match numbers {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-3.2
-	(match
+	(match @1.1-3.2
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch @2.25-2.28
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-list @2.5-2.21

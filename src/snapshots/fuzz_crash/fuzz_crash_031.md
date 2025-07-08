@@ -97,7 +97,7 @@ vavart = '
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.7-4.11 (type "Error")))
+		(patt @4.7-4.8 (type "Error")))
 	(expressions
-		(expr (type "Error"))))
+		(expr @4.10-4.11 (type "Error"))))
 ~~~

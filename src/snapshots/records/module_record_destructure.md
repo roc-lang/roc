@@ -119,17 +119,17 @@ extract_age = |person| {
 				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation @4.1-4.12
 			(declared-type
-				(ty-func @3.15-3.35 (effectful false)
+				(ty-fn @3.15-3.35 (effectful false)
 					(ty-record @3.15-3.28
 						(field (field "age")
-							(ty-type @3.23-3.26 (name "U64"))))
-					(ty-type @3.32-3.35 (name "U64")))))))
+							(ty @3.23-3.26 (name "U64"))))
+					(ty @3.32-3.35 (name "U64")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-7.2 (type "{ age: U64 } -> Error")))
+		(patt @4.1-4.12 (type "{ age: U64 } -> Error")))
 	(expressions
-		(expr (type "{ age: U64 } -> Error"))))
+		(expr @4.15-7.2 (type "{ age: U64 } -> Error"))))
 ~~~

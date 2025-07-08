@@ -527,31 +527,31 @@ main! = |_| {
 				(p-underscore @27.10-27.11))
 			(e-block @27.13-39.2
 				(s-type-anno @1.1-1.1 (name "userId")
-					(ty-type @29.14-29.20 (name "UserId")))
-				(s-var @30.5-30.17
+					(ty @29.14-29.20 (name "UserId")))
+				(s-let @30.5-30.17
 					(p-assign @30.5-30.11 (ident "userId"))
 					(e-int @30.14-30.17 (value "123")))
 				(s-type-anno @1.1-1.1 (name "person")
-					(ty-type @32.14-32.20 (name "Person")))
-				(s-var @33.5-33.40
+					(ty @32.14-32.20 (name "Person")))
+				(s-let @33.5-33.40
 					(p-assign @33.5-33.11 (ident "person"))
 					(e-record @33.14-33.40
 						(fields
 							(field (name "name")
-								(e-str @33.22-33.29
+								(e-string @33.22-33.29
 									(e-literal @33.23-33.28 (string "Alice"))))
 							(field (name "age")
 								(e-int @33.36-33.38 (value "30"))))))
 				(s-type-anno @1.1-1.1 (name "color")
-					(ty-type @35.13-35.18 (name "Color")))
-				(s-var @36.5-36.16
+					(ty @35.13-35.18 (name "Color")))
+				(s-let @36.5-36.16
 					(p-assign @36.5-36.10 (ident "color"))
 					(e-tag @36.13-36.16 (name "Red")))
 				(e-lookup-local @38.5-38.11
 					(p-assign @30.5-30.11 (ident "userId"))))))
 	(s-alias-decl @4.1-4.13
 		(ty-header @4.1-4.7 (name "UserId"))
-		(ty-type @4.10-4.13 (name "U64")))
+		(ty @4.10-4.13 (name "U64")))
 	(s-alias-decl @7.1-7.37
 		(ty-header @7.1-7.16 (name "Result")
 			(ty-args
@@ -566,15 +566,15 @@ main! = |_| {
 		(ty-header @10.1-10.7 (name "Person"))
 		(ty-record @10.10-10.35
 			(field (field "name")
-				(ty-type @10.19-10.22 (name "Str")))
+				(ty @10.19-10.22 (name "Str")))
 			(field (field "age")
-				(ty-type @10.30-10.33 (name "U64")))))
+				(ty @10.30-10.33 (name "U64")))))
 	(s-alias-decl @13.1-13.21
 		(ty-header @13.1-13.12 (name "MapFn")
 			(ty-args
 				(ty-var @13.7-13.8 (name "a"))
 				(ty-var @13.10-13.11 (name "b"))))
-		(ty-func @13.15-13.21 (effectful false)
+		(ty-fn @13.15-13.21 (effectful false)
 			(ty-var @13.15-13.16 (name "a"))
 			(ty-var @13.20-13.21 (name "b"))))
 	(s-alias-decl @16.1-16.38
@@ -583,17 +583,17 @@ main! = |_| {
 				(ty-var @16.13-16.17 (name "data"))))
 		(ty-apply @16.21-16.38 (symbol "Result")
 			(ty-var @16.28-16.32 (name "data"))
-			(ty-type @16.34-16.37 (name "Str"))))
+			(ty @16.34-16.37 (name "Str"))))
 	(s-alias-decl @19.1-19.47
 		(ty-header @19.1-19.6 (name "Color"))
 		(ty-tag-union @19.9-19.47
-			(ty-type @19.10-19.13 (name "Red"))
-			(ty-type @19.15-19.20 (name "Green"))
-			(ty-type @19.22-19.26 (name "Blue"))
+			(ty @19.10-19.13 (name "Red"))
+			(ty @19.15-19.20 (name "Green"))
+			(ty @19.22-19.26 (name "Blue"))
 			(ty-apply @19.28-19.46 (symbol "Custom")
-				(ty-type @19.35-19.37 (name "U8"))
-				(ty-type @19.39-19.41 (name "U8"))
-				(ty-type @19.43-19.45 (name "U8")))))
+				(ty @19.35-19.37 (name "U8"))
+				(ty @19.39-19.41 (name "U8"))
+				(ty @19.43-19.45 (name "U8")))))
 	(s-alias-decl @22.1-25.2
 		(ty-header @22.1-22.16 (name "Container")
 			(ty-args
@@ -605,15 +605,15 @@ main! = |_| {
 			(field (field "metadata")
 				(ty-record @24.16-24.45
 					(field (field "size")
-						(ty-type @24.25-24.28 (name "U64")))
+						(ty @24.25-24.28 (name "U64")))
 					(field (field "created")
-						(ty-type @24.40-24.43 (name "Str"))))))))
+						(ty @24.40-24.43 (name "Str"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @27.1-39.2 (type "* -> *")))
+		(patt @27.1-27.6 (type "* -> Num(*)")))
 	(type_decls
 		(alias @4.1-4.13 (type "UserId")
 			(ty-header @4.1-4.7 (name "UserId")))
@@ -640,5 +640,5 @@ main! = |_| {
 				(ty-args
 					(ty-var @22.11-22.15 (name "item"))))))
 	(expressions
-		(expr (type "* -> *"))))
+		(expr @27.9-39.2 (type "* -> Num(*)"))))
 ~~~

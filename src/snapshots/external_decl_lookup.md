@@ -88,30 +88,30 @@ main! = |_| {
 			(args
 				(p-underscore @6.10-6.11))
 			(e-block @6.13-10.2
-				(s-var @8.5-8.54
+				(s-let @8.5-8.54
 					(p-assign @8.5-8.11 (ident "result"))
 					(e-call @8.14-8.54
 						(e-lookup-external
-							(ext-decl (ident "json.Json.utf8") (kind "value")))
-						(e-str @8.24-8.53
+							(ext-decl @8.14-8.23 (ident "json.Json.utf8") (kind "value")))
+						(e-string @8.24-8.53
 							(e-literal @8.25-8.52 (string "Hello from external module!")))))
 				(e-call @9.5-9.25
 					(e-lookup-external
-						(ext-decl (ident "pf.Stdout.line!") (kind "value")))
+						(ext-decl @9.5-9.17 (ident "pf.Stdout.line!") (kind "value")))
 					(e-lookup-local @9.18-9.24
 						(p-assign @8.5-8.11 (ident "result")))))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes))
 	(s-import @4.1-4.17 (module "json.Json") (qualifier "json")
 		(exposes))
-	(ext-decl (ident "json.Json.utf8") (kind "value"))
-	(ext-decl (ident "pf.Stdout.line!") (kind "value")))
+	(ext-decl @8.14-8.23 (ident "json.Json.utf8") (kind "value"))
+	(ext-decl @9.5-9.17 (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-10.2 (type "* -> *")))
+		(patt @6.1-6.6 (type "* -> *")))
 	(expressions
-		(expr (type "* -> *"))))
+		(expr @6.9-10.2 (type "* -> *"))))
 ~~~

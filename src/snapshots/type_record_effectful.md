@@ -103,7 +103,7 @@ main! = |_| {}
 				(s-expr @7.5-8.11
 					(e-call @7.5-7.30
 						(e-lookup-external
-							(ext-decl (ident "pf.Stdout.line!") (kind "value")))
+							(ext-decl @7.5-7.17 (ident "pf.Stdout.line!") (kind "value")))
 						(e-dot-access @7.18-7.30 (field "name")
 							(receiver
 								(e-lookup-local @7.18-7.24
@@ -114,30 +114,30 @@ main! = |_| {}
 							(p-assign @6.14-6.20 (ident "person")))))))
 		(annotation @6.1-6.10
 			(declared-type
-				(ty-func @5.13-5.43 (effectful true)
+				(ty-fn @5.13-5.43 (effectful true)
 					(ty-record @5.13-5.36
 						(field (field "name")
-							(ty-type @5.21-5.24 (name "Str")))
+							(ty @5.21-5.24 (name "Str")))
 						(field (field "age")
-							(ty-type @5.31-5.34 (name "U64"))))
-					(ty-type @5.40-5.43 (name "Str"))))))
+							(ty @5.31-5.34 (name "U64"))))
+					(ty @5.40-5.43 (name "Str"))))))
 	(d-let
 		(p-assign @10.1-10.6 (ident "main!"))
 		(e-lambda @10.9-10.15
 			(args
 				(p-underscore @10.10-10.11))
-			(e-empty-record @10.13-10.15)))
+			(e-empty_record @10.13-10.15)))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes))
-	(ext-decl (ident "pf.Stdout.line!") (kind "value")))
+	(ext-decl @7.5-7.17 (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-9.2 (type "{ name: Str, age: U64 } => Str"))
-		(patt @10.1-10.15 (type "* -> {}")))
+		(patt @6.1-6.10 (type "{ name: Str, age: U64 } => Str"))
+		(patt @10.1-10.6 (type "* -> {}")))
 	(expressions
-		(expr (type "{ name: Str, age: U64 } => Str"))
-		(expr (type "* -> {}"))))
+		(expr @6.13-9.2 (type "{ name: Str, age: U64 } => Str"))
+		(expr @10.9-10.15 (type "* -> {}"))))
 ~~~

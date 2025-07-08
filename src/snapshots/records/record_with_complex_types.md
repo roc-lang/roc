@@ -152,7 +152,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 (e-record @1.1-15.2
 	(fields
 		(field (name "name")
-			(e-str @2.11-2.18
+			(e-string @2.11-2.18
 				(e-literal @2.12-2.17 (string "Alice"))))
 		(field (name "scores")
 			(e-list @3.13-3.29
@@ -167,7 +167,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(e-record @4.20-4.43
 						(fields
 							(field (name "since")
-								(e-str @4.29-4.41
+								(e-string @4.29-4.41
 									(e-literal @4.30-4.40 (string "2023-01-15")))))))))
 		(field (name "preferences")
 			(e-record @5.18-5.76
@@ -177,7 +177,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(field (name "notifications")
 						(e-tag @5.48-5.74 (name "Email")
 							(args
-								(e-str @5.54-5.73
+								(e-string @5.54-5.73
 									(e-literal @5.55-5.72 (string "alice@example.com")))))))))
 		(field (name "metadata")
 			(e-tag @6.15-9.7 (name "Ok")
@@ -187,11 +187,11 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 							(field (name "tags")
 								(e-list @7.15-7.51
 									(elems
-										(e-str @7.16-7.27
+										(e-string @7.16-7.27
 											(e-literal @7.17-7.26 (string "developer")))
-										(e-str @7.29-7.37
+										(e-string @7.29-7.37
 											(e-literal @7.30-7.36 (string "senior")))
-										(e-str @7.39-7.50
+										(e-string @7.39-7.50
 											(e-literal @7.40-7.49 (string "fullstack"))))))
 							(field (name "permissions")
 								(e-list @8.22-8.42
@@ -215,12 +215,12 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 							(elems
 								(e-tag @12.17-12.30 (name "Some")
 									(args
-										(e-str @12.22-12.29
+										(e-string @12.22-12.29
 											(e-literal @12.23-12.28 (string "first")))))
 								(e-tag @12.32-12.36 (name "None"))
 								(e-tag @12.38-12.51 (name "Some")
 									(args
-										(e-str @12.43-12.50
+										(e-string @12.43-12.50
 											(e-literal @12.44-12.49 (string "third"))))))))
 					(field (name "result")
 						(e-tag @13.17-13.70 (name "Success")
@@ -234,7 +234,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 													(e-int @13.37-13.38 (value "2"))
 													(e-int @13.40-13.41 (value "3")))))
 										(field (name "timestamp")
-											(e-str @13.55-13.67
+											(e-string @13.55-13.67
 												(e-literal @13.56-13.66 (string "2024-01-01"))))))))))))))
 ~~~
 # TYPES

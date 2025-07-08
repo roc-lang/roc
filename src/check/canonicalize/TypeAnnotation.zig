@@ -117,7 +117,7 @@ pub const TypeAnno = union(enum) {
             },
             .ty => |t| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("ty-type");
+                tree.pushStaticAtom("ty");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 tree.pushStringPair("name", ir.getIdentText(t.symbol));
@@ -181,7 +181,7 @@ pub const TypeAnno = union(enum) {
             },
             .@"fn" => |f| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("ty-func");
+                tree.pushStaticAtom("ty-fn");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 tree.pushBoolPair("effectful", f.effectful);
@@ -214,7 +214,7 @@ pub const TypeAnno = union(enum) {
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
-                ir.getExternalDecl(tle.external_decl).pushToSExprTree(ir, tree);
+                ir.getExternalDecl(tle.external_decl).pushToSExprTreeWithRegion(ir, tree, region);
 
                 tree.endNode(begin, attrs);
             },

@@ -135,7 +135,7 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 		(ty-malformed @2.8-2.10))
 	(s-type-anno @3.5-3.10 (name "y")
 		(ty-malformed @3.8-3.10))
-	(e-empty-record @1.1-4.2))
+	(e-empty_record @1.1-4.2))
 ~~~
 # TYPES
 ~~~clojure

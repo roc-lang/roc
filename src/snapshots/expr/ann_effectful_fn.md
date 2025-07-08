@@ -60,14 +60,14 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~clojure
 (e-block @1.1-6.2
 	(s-type-anno @2.5-2.39 (name "launchTheNukes")
-		(ty-func @2.22-2.34 (effectful true)
+		(ty-fn @2.22-2.34 (effectful true)
 			(ty-record @2.22-2.24)
-			(ty-type @2.28-2.34 (name "Result"))))
+			(ty @2.28-2.34 (name "Result"))))
 	(s-expr @2.35-2.53
 		(e-tag @2.35-2.39 (name "Bool")))
 	(s-expr @1.1-1.1
 		(e-tag @2.40-2.53 (name "LaunchNukeErr")))
-	(s-var @3.5-3.30
+	(s-let @3.5-3.30
 		(p-assign @3.5-3.19 (ident "launchTheNukes"))
 		(e-lambda @3.22-3.30
 			(args
@@ -77,7 +77,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 	(e-call @5.5-5.23
 		(e-lookup-local @5.5-5.19
 			(p-assign @3.5-3.19 (ident "launchTheNukes")))
-		(e-empty-record @5.20-5.22)))
+		(e-empty_record @5.20-5.22)))
 ~~~
 # TYPES
 ~~~clojure

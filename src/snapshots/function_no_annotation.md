@@ -115,7 +115,7 @@ NO CHANGE
 				(p-assign @9.18-9.19 (ident "n")))
 			(e-call @9.21-9.36
 				(e-lookup-external
-					(ext-decl (ident "pf.Stdout.line!") (kind "value")))
+					(ext-decl @9.21-9.33 (ident "pf.Stdout.line!") (kind "value")))
 				(e-lookup-local @9.34-9.35
 					(p-assign @9.18-9.19 (ident "n"))))))
 	(d-let
@@ -140,19 +140,19 @@ NO CHANGE
 			(e-int @14.18-14.20 (value "42"))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes))
-	(ext-decl (ident "pf.Stdout.line!") (kind "value")))
+	(ext-decl @9.21-9.33 (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-9.14 (type "*, * -> *"))
-		(patt @9.1-9.36 (type "* -> *"))
-		(patt @12.1-12.45 (type "* -> *"))
-		(patt @14.1-14.21 (type "*")))
+		(patt @6.1-6.9 (type "*, * -> *"))
+		(patt @9.1-9.14 (type "* -> *"))
+		(patt @12.1-12.9 (type "* -> *"))
+		(patt @14.1-14.6 (type "*")))
 	(expressions
-		(expr (type "*, * -> *"))
-		(expr (type "* -> *"))
-		(expr (type "* -> *"))
-		(expr (type "*"))))
+		(expr @6.12-9.14 (type "*, * -> *"))
+		(expr @9.17-9.36 (type "* -> *"))
+		(expr @12.12-12.45 (type "* -> *"))
+		(expr @14.9-14.21 (type "*"))))
 ~~~

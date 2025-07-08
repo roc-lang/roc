@@ -61,13 +61,13 @@ process_user! : { name : Str, age :  } => Str
 ~~~clojure
 (can-ir
 	(s-type-anno @1.1-1.54 (name "process_user!")
-		(ty-func @1.17-1.54 (effectful true)
+		(ty-fn @1.17-1.54 (effectful true)
 			(ty-record @1.17-1.47
 				(field (field "name")
-					(ty-type @1.26-1.29 (name "Str")))
+					(ty @1.26-1.29 (name "Str")))
 				(field (field "age")
 					(ty-malformed @1.37-1.47)))
-			(ty-type @1.51-1.54 (name "Str")))))
+			(ty @1.51-1.54 (name "Str")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -50,7 +50,7 @@ NO CHANGE
 (e-list @1.1-1.20
 	(elems
 		(e-int @1.2-1.4 (value "42"))
-		(e-str @1.6-1.13
+		(e-string @1.6-1.13
 			(e-literal @1.7-1.12 (string "world")))
 		(e-dec-small @1.15-1.19 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
 ~~~

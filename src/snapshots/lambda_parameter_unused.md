@@ -219,9 +219,9 @@ main! = |_| {
 			(e-int @5.16-5.18 (value "42")))
 		(annotation @5.1-5.4
 			(declared-type
-				(ty-func @4.7-4.17 (effectful false)
-					(ty-type @4.7-4.10 (name "U64"))
-					(ty-type @4.14-4.17 (name "U64"))))))
+				(ty-fn @4.7-4.17 (effectful false)
+					(ty @4.7-4.10 (name "U64"))
+					(ty @4.14-4.17 (name "U64"))))))
 	(d-let
 		(p-assign @9.1-9.9 (ident "multiply"))
 		(e-lambda @9.12-12.8
@@ -233,9 +233,9 @@ main! = |_| {
 				(e-int @9.32-9.33 (value "2"))))
 		(annotation @9.1-9.9
 			(declared-type
-				(ty-func @8.12-8.22 (effectful false)
-					(ty-type @8.12-8.15 (name "U64"))
-					(ty-type @8.19-8.22 (name "U64"))))))
+				(ty-fn @8.12-8.22 (effectful false)
+					(ty @8.12-8.15 (name "U64"))
+					(ty @8.19-8.22 (name "U64"))))))
 	(d-let
 		(p-assign @13.1-13.8 (ident "process"))
 		(e-lambda @13.11-13.23
@@ -244,9 +244,9 @@ main! = |_| {
 			(e-int @13.20-13.23 (value "100")))
 		(annotation @13.1-13.8
 			(declared-type
-				(ty-func @12.11-12.21 (effectful false)
-					(ty-type @12.11-12.14 (name "U64"))
-					(ty-type @12.18-12.21 (name "U64"))))))
+				(ty-fn @12.11-12.21 (effectful false)
+					(ty @12.11-12.14 (name "U64"))
+					(ty @12.18-12.21 (name "U64"))))))
 	(d-let
 		(p-assign @17.1-17.7 (ident "double"))
 		(e-lambda @17.10-19.6
@@ -258,34 +258,34 @@ main! = |_| {
 				(e-int @17.26-17.27 (value "2"))))
 		(annotation @17.1-17.7
 			(declared-type
-				(ty-func @16.10-16.20 (effectful false)
-					(ty-type @16.10-16.13 (name "U64"))
-					(ty-type @16.17-16.20 (name "U64"))))))
+				(ty-fn @16.10-16.20 (effectful false)
+					(ty @16.10-16.13 (name "U64"))
+					(ty @16.17-16.20 (name "U64"))))))
 	(d-let
 		(p-assign @19.1-19.6 (ident "main!"))
 		(e-lambda @19.9-25.2
 			(args
 				(p-underscore @19.10-19.11))
 			(e-block @19.13-25.2
-				(s-var @20.5-20.21
+				(s-let @20.5-20.21
 					(p-assign @20.5-20.12 (ident "result1"))
 					(e-call @20.15-20.21
 						(e-lookup-local @20.15-20.18
 							(p-assign @5.1-5.4 (ident "add")))
 						(e-int @20.19-20.20 (value "5"))))
-				(s-var @21.5-21.26
+				(s-let @21.5-21.26
 					(p-assign @21.5-21.12 (ident "result2"))
 					(e-call @21.15-21.26
 						(e-lookup-local @21.15-21.23
 							(p-assign @9.1-9.9 (ident "multiply")))
 						(e-int @21.24-21.25 (value "3"))))
-				(s-var @22.5-22.25
+				(s-let @22.5-22.25
 					(p-assign @22.5-22.12 (ident "result3"))
 					(e-call @22.15-22.25
 						(e-lookup-local @22.15-22.22
 							(p-assign @13.1-13.8 (ident "process")))
 						(e-int @22.23-22.24 (value "7"))))
-				(s-var @23.5-23.24
+				(s-let @23.5-23.24
 					(p-assign @23.5-23.12 (ident "result4"))
 					(e-call @23.15-23.24
 						(e-lookup-local @23.15-23.21
@@ -307,15 +307,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.18 (type "U64 -> U64"))
-		(patt @9.1-12.8 (type "U64 -> U64"))
-		(patt @13.1-13.23 (type "U64 -> U64"))
-		(patt @17.1-19.6 (type "U64 -> U64"))
-		(patt @19.1-25.2 (type "* -> *")))
+		(patt @5.1-5.4 (type "U64 -> U64"))
+		(patt @9.1-9.9 (type "U64 -> U64"))
+		(patt @13.1-13.8 (type "U64 -> U64"))
+		(patt @17.1-17.7 (type "U64 -> U64"))
+		(patt @19.1-19.6 (type "* -> *")))
 	(expressions
-		(expr (type "U64 -> U64"))
-		(expr (type "U64 -> U64"))
-		(expr (type "U64 -> U64"))
-		(expr (type "U64 -> U64"))
-		(expr (type "* -> *"))))
+		(expr @5.7-5.18 (type "U64 -> U64"))
+		(expr @9.12-12.8 (type "U64 -> U64"))
+		(expr @13.11-13.23 (type "U64 -> U64"))
+		(expr @17.10-19.6 (type "U64 -> U64"))
+		(expr @19.9-25.2 (type "* -> *"))))
 ~~~

@@ -79,32 +79,32 @@ NO CHANGE
 				(p-assign @7.15-7.18 (ident "msg")))
 			(e-call @7.20-7.37
 				(e-lookup-external
-					(ext-decl (ident "pf.Stdout.line!") (kind "value")))
+					(ext-decl @7.20-7.32 (ident "pf.Stdout.line!") (kind "value")))
 				(e-lookup-local @7.33-7.36
 					(p-assign @7.15-7.18 (ident "msg")))))
 		(annotation @7.1-7.11
 			(declared-type
-				(ty-func @6.14-6.23 (effectful true)
-					(ty-type @6.14-6.17 (name "Str"))
+				(ty-fn @6.14-6.23 (effectful true)
+					(ty @6.14-6.17 (name "Str"))
 					(ty-record @6.21-6.23)))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "main!"))
 		(e-call @9.9-9.36
 			(e-lookup-local @9.9-9.19
 				(p-assign @7.1-7.11 (ident "print_msg!")))
-			(e-str @9.20-9.35
+			(e-string @9.20-9.35
 				(e-literal @9.21-9.34 (string "Hello, world!")))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes))
-	(ext-decl (ident "pf.Stdout.line!") (kind "value")))
+	(ext-decl @7.20-7.32 (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.37 (type "Str => {  }"))
-		(patt @9.1-9.36 (type "{  }")))
+		(patt @7.1-7.11 (type "Str => {  }"))
+		(patt @9.1-9.6 (type "{  }")))
 	(expressions
-		(expr (type "Str => {  }"))
-		(expr (type "{  }"))))
+		(expr @7.14-7.37 (type "Str => {  }"))
+		(expr @9.9-9.36 (type "{  }"))))
 ~~~

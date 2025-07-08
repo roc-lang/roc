@@ -43,8 +43,8 @@ NO CHANGE
 (e-binop @1.1-1.23 (op "null_coalesce")
 	(e-call @1.1-1.14
 		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-empty-record @1.11-1.13))
-	(e-str @1.18-1.23
+		(e-empty_record @1.11-1.13))
+	(e-string @1.18-1.23
 		(e-literal @1.19-1.22 (string "Bob"))))
 ~~~
 # TYPES

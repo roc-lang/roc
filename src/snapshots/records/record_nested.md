@@ -104,7 +104,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 			(e-record @2.13-2.39
 				(fields
 					(field (name "name")
-						(e-str @2.21-2.28
+						(e-string @2.21-2.28
 							(e-literal @2.22-2.27 (string "Alice"))))
 					(field (name "age")
 						(e-int @2.35-2.37 (value "30"))))))
@@ -112,10 +112,10 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 			(e-record @3.14-7.6
 				(fields
 					(field (name "street")
-						(e-str @4.17-4.30
+						(e-string @4.17-4.30
 							(e-literal @4.18-4.29 (string "123 Main St"))))
 					(field (name "city")
-						(e-str @5.15-5.28
+						(e-string @5.15-5.28
 							(e-literal @5.16-5.27 (string "Springfield"))))
 					(field (name "coordinates")
 						(e-record @6.22-6.53
@@ -128,16 +128,16 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 			(e-record @8.14-11.6
 				(fields
 					(field (name "email")
-						(e-str @9.16-9.35
+						(e-string @9.16-9.35
 							(e-literal @9.17-9.34 (string "alice@example.com"))))
 					(field (name "phone")
 						(e-record @10.16-10.54
 							(fields
 								(field (name "home")
-									(e-str @10.24-10.34
+									(e-string @10.24-10.34
 										(e-literal @10.25-10.33 (string "555-1234"))))
 								(field (name "work")
-									(e-str @10.42-10.52
+									(e-string @10.42-10.52
 										(e-literal @10.43-10.51 (string "555-5678"))))))))))))
 ~~~
 # TYPES

@@ -28,7 +28,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-str @1.1-1.17
+(e-string @1.1-1.17
 	(e-literal @1.2-1.16 (string "abc\u(zzzz)def")))
 ~~~
 # TYPES

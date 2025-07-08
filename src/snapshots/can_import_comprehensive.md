@@ -177,38 +177,38 @@ main = {
 	(d-let
 		(p-assign @7.1-7.5 (ident "main"))
 		(e-block @7.8-35.2
-			(s-var @8.5-8.22
+			(s-let @8.5-8.22
 				(p-assign @8.5-8.11 (ident "client"))
 				(e-lookup-external
-					(ext-decl (ident "http.Client.get") (kind "value"))))
-			(s-var @9.5-9.23
+					(ext-decl @8.14-8.22 (ident "http.Client.get") (kind "value"))))
+			(s-let @9.5-9.23
 				(p-assign @9.5-9.11 (ident "parser"))
 				(e-lookup-external
-					(ext-decl (ident "json.Json.utf8") (kind "value"))))
-			(s-var @10.5-10.22
+					(ext-decl @9.14-9.23 (ident "json.Json.utf8") (kind "value"))))
+			(s-let @10.5-10.22
 				(p-assign @10.5-10.11 (ident "helper"))
 				(e-lookup-external
-					(ext-decl (ident "utils.String.trim") (kind "value"))))
-			(s-var @13.5-13.25
+					(ext-decl @10.14-10.22 (ident "utils.String.trim") (kind "value"))))
+			(s-let @13.5-13.25
 				(p-assign @13.5-13.12 (ident "result1"))
 				(e-lookup-external
-					(ext-decl (ident "json.Json.parse") (kind "value"))))
-			(s-var @16.5-16.24
+					(ext-decl @13.15-13.25 (ident "json.Json.parse") (kind "value"))))
+			(s-let @16.5-16.24
 				(p-assign @16.5-16.12 (ident "result2"))
 				(e-lookup-external
-					(ext-decl (ident "http.Client.post") (kind "value"))))
-			(s-var @19.5-19.18
+					(ext-decl @16.15-16.24 (ident "http.Client.post") (kind "value"))))
+			(s-let @19.5-19.18
 				(p-assign @19.5-19.12 (ident "result3"))
 				(e-lookup-external
-					(ext-decl (ident "http.Client.get") (kind "value"))))
-			(s-var @20.5-20.19
+					(ext-decl @19.15-19.18 (ident "http.Client.get") (kind "value"))))
+			(s-let @20.5-20.19
 				(p-assign @20.5-20.12 (ident "result4"))
 				(e-lookup-external
-					(ext-decl (ident "http.Client.post") (kind "value"))))
-			(s-var @23.5-23.26
+					(ext-decl @20.15-20.19 (ident "http.Client.post") (kind "value"))))
+			(s-let @23.5-23.26
 				(p-assign @23.5-23.13 (ident "combined"))
 				(e-lookup-external
-					(ext-decl (ident "utils.String.concat") (kind "value"))))
+					(ext-decl @23.16-23.26 (ident "utils.String.concat") (kind "value"))))
 			(e-tuple @25.5-34.6
 				(elems
 					(e-lookup-local @26.9-26.15
@@ -235,20 +235,20 @@ main = {
 			(exposed (name "post") (wildcard false))))
 	(s-import @5.1-5.27 (module "utils.String") (qualifier "utils") (alias "Str")
 		(exposes))
-	(ext-decl (ident "http.Client.get") (kind "value"))
-	(ext-decl (ident "json.Json.utf8") (kind "value"))
-	(ext-decl (ident "utils.String.trim") (kind "value"))
-	(ext-decl (ident "json.Json.parse") (kind "value"))
-	(ext-decl (ident "http.Client.post") (kind "value"))
-	(ext-decl (ident "http.Client.get") (kind "value"))
-	(ext-decl (ident "http.Client.post") (kind "value"))
-	(ext-decl (ident "utils.String.concat") (kind "value")))
+	(ext-decl @8.14-8.22 (ident "http.Client.get") (kind "value"))
+	(ext-decl @9.14-9.23 (ident "json.Json.utf8") (kind "value"))
+	(ext-decl @10.14-10.22 (ident "utils.String.trim") (kind "value"))
+	(ext-decl @13.15-13.25 (ident "json.Json.parse") (kind "value"))
+	(ext-decl @16.15-16.24 (ident "http.Client.post") (kind "value"))
+	(ext-decl @19.15-19.18 (ident "http.Client.get") (kind "value"))
+	(ext-decl @20.15-20.19 (ident "http.Client.post") (kind "value"))
+	(ext-decl @23.16-23.26 (ident "utils.String.concat") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-35.2 (type "(*, *, *, *, *, *, *, *)")))
+		(patt @7.1-7.5 (type "(*, *, *, *, *, *, *, *)")))
 	(expressions
-		(expr (type "(*, *, *, *, *, *, *, *)"))))
+		(expr @7.8-35.2 (type "(*, *, *, *, *, *, *, *)"))))
 ~~~

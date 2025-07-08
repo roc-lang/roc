@@ -87,11 +87,11 @@ match coord {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-6.2
-	(match
+	(match @1.1-6.2
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch @2.21-2.29
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-tuple @2.5-2.17
@@ -99,9 +99,9 @@ match coord {
 								(p-applied-tag @2.6-2.10)
 								(p-applied-tag @2.12-2.16)))))
 				(value
-					(e-str @2.21-2.29
+					(e-string @2.21-2.29
 						(e-literal @2.22-2.28 (string "origin")))))
-			(branch @3.18-3.19
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-tuple @3.5-3.14
@@ -111,7 +111,7 @@ match coord {
 				(value
 					(e-lookup-local @3.18-3.19
 						(p-assign @3.6-3.7 (ident "x")))))
-			(branch @4.18-4.19
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-tuple @4.5-4.14
@@ -121,7 +121,7 @@ match coord {
 				(value
 					(e-lookup-local @4.18-4.19
 						(p-assign @4.12-4.13 (ident "y")))))
-			(branch @5.15-5.16
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-tuple @5.5-5.11

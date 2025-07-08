@@ -44,17 +44,17 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @4.1-4.4 (ident "foo"))
-		(e-str @4.7-4.12
+		(e-string @4.7-4.12
 			(e-literal @4.8-4.11 (string "one")))
 		(annotation @4.1-4.4
 			(declared-type
-				(ty-type @3.7-3.10 (name "Str"))))))
+				(ty @3.7-3.10 (name "Str"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "Str")))
+		(patt @4.1-4.4 (type "Str")))
 	(expressions
-		(expr (type "Str"))))
+		(expr @4.7-4.12 (type "Str"))))
 ~~~

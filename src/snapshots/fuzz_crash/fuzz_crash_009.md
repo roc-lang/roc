@@ -88,14 +88,14 @@ foo =
 (can-ir
 	(d-let
 		(p-assign @4.1-4.4 (ident "foo"))
-		(e-str @6.5-6.12
+		(e-string @6.5-6.12
 			(e-literal @6.6-6.12 (string "onmo %")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-6.12 (type "Str")))
+		(patt @4.1-4.4 (type "Str")))
 	(expressions
-		(expr (type "Str"))))
+		(expr @6.5-6.12 (type "Str"))))
 ~~~

@@ -59,11 +59,11 @@ match person {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-3.2
-	(match
+	(match @1.1-3.2
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch @2.41-2.92
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @2.5-2.37
@@ -75,7 +75,7 @@ match person {
 									(sub-pattern
 										(p-assign @2.28-2.35 (ident "userAge"))))))))
 				(value
-					(e-str @2.41-2.92
+					(e-string @2.41-2.92
 						(e-literal @2.42-2.47 (string "User "))
 						(e-lookup-local @2.49-2.57
 							(p-assign @2.13-2.21 (ident "userName")))

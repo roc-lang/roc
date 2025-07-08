@@ -44,16 +44,16 @@ NO CHANGE
 	(d-let
 		(p-assign @5.1-5.5 (ident "main"))
 		(e-lookup-external
-			(ext-decl (ident "json.Json.utf8") (kind "value"))))
+			(ext-decl @5.8-5.17 (ident "json.Json.utf8") (kind "value"))))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes))
-	(ext-decl (ident "json.Json.utf8") (kind "value")))
+	(ext-decl @5.8-5.17 (ident "json.Json.utf8") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.17 (type "*")))
+		(patt @5.1-5.5 (type "*")))
 	(expressions
-		(expr (type "*"))))
+		(expr @5.8-5.17 (type "*"))))
 ~~~

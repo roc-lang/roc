@@ -159,7 +159,7 @@ NO CHANGE
 						(e-lookup-local @10.11-10.17
 							(p-assign @6.2-9.8 (ident "total_")))
 						(e-int @10.20-10.22 (value "10"))))
-				(s-var @13.2-17.3
+				(s-let @13.2-17.3
 					(p-assign @13.2-13.12 (ident "nestedFunc"))
 					(e-lambda @13.15-17.3
 						(args
@@ -173,12 +173,12 @@ NO CHANGE
 								(e-runtime-error (tag "var_across_function_boundary")))
 							(e-lookup-local @16.3-16.9
 								(p-assign @5.2-6.5 (ident "count_"))))))
-				(s-var @19.2-19.25
+				(s-let @19.2-19.25
 					(p-assign @19.2-19.8 (ident "result"))
 					(e-call @19.11-19.25
 						(e-lookup-local @19.11-19.21
 							(p-assign @13.2-13.12 (ident "nestedFunc")))
-						(e-empty-record @19.22-19.24)))
+						(e-empty_record @19.22-19.24)))
 				(e-binop @20.2-21.2 (op "add")
 					(e-lookup-local @20.2-20.8
 						(p-assign @6.2-9.8 (ident "total_")))
@@ -189,7 +189,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-21.2 (type "* -> *")))
+		(patt @4.1-4.13 (type "* -> *")))
 	(expressions
-		(expr (type "* -> *"))))
+		(expr @4.16-21.2 (type "* -> *"))))
 ~~~

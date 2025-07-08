@@ -215,25 +215,25 @@ main! = |_| {
 			(args
 				(p-underscore @15.10-15.11))
 			(e-block @15.13-21.2
-				(s-var @16.5-16.26
+				(s-let @16.5-16.26
 					(p-assign @16.5-16.6 (ident "a"))
 					(e-call @16.9-16.26
 						(e-lookup-local @16.9-16.23
 							(p-assign @4.1-4.15 (ident "unused_regular")))
 						(e-int @16.24-16.25 (value "5"))))
-				(s-var @17.5-17.28
+				(s-let @17.5-17.28
 					(p-assign @17.5-17.6 (ident "b"))
 					(e-call @17.9-17.28
 						(e-lookup-local @17.9-17.24
 							(p-assign @7.1-7.16 (ident "used_underscore")))
 						(e-int @17.25-17.27 (value "10"))))
-				(s-var @18.5-18.30
+				(s-let @18.5-18.30
 					(p-assign @18.5-18.6 (ident "c"))
 					(e-call @18.9-18.30
 						(e-lookup-local @18.9-18.26
 							(p-assign @10.1-10.18 (ident "unused_underscore")))
 						(e-int @18.27-18.29 (value "15"))))
-				(s-var @19.5-19.25
+				(s-let @19.5-19.25
 					(p-assign @19.5-19.6 (ident "d"))
 					(e-call @19.9-19.25
 						(e-lookup-local @19.9-19.21
@@ -255,15 +255,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.24 (type "* -> Num(*)"))
-		(patt @7.1-7.34 (type "* -> *"))
-		(patt @10.1-10.35 (type "* -> Num(*)"))
-		(patt @13.1-15.6 (type "* -> *"))
-		(patt @15.1-21.2 (type "* -> *")))
+		(patt @4.1-4.15 (type "* -> Num(*)"))
+		(patt @7.1-7.16 (type "* -> *"))
+		(patt @10.1-10.18 (type "* -> Num(*)"))
+		(patt @13.1-13.13 (type "* -> *"))
+		(patt @15.1-15.6 (type "* -> *")))
 	(expressions
-		(expr (type "* -> Num(*)"))
-		(expr (type "* -> *"))
-		(expr (type "* -> Num(*)"))
-		(expr (type "* -> *"))
-		(expr (type "* -> *"))))
+		(expr @4.18-4.24 (type "* -> Num(*)"))
+		(expr @7.19-7.34 (type "* -> *"))
+		(expr @10.21-10.35 (type "* -> Num(*)"))
+		(expr @13.16-15.6 (type "* -> *"))
+		(expr @15.9-21.2 (type "* -> *"))))
 ~~~

@@ -87,14 +87,14 @@ foo =
 (can-ir
 	(d-let
 		(p-assign @3.1-3.4 (ident "foo"))
-		(e-str @5.5-5.35
+		(e-string @5.5-5.35
 			(e-literal @5.6-5.35 (string "on        (string 'onmo %')))")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-5.35 (type "Str")))
+		(patt @3.1-3.4 (type "Str")))
 	(expressions
-		(expr (type "Str"))))
+		(expr @5.5-5.35 (type "Str"))))
 ~~~

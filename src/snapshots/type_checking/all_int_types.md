@@ -144,85 +144,85 @@ NO CHANGE
 		(e-int @4.5-4.8 (value "255"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty-type @3.5-3.7 (name "U8")))))
+				(ty @3.5-3.7 (name "U8")))))
 	(d-let
 		(p-assign @7.1-7.2 (ident "b"))
 		(e-int @7.5-7.10 (value "65535"))
 		(annotation @7.1-7.2
 			(declared-type
-				(ty-type @6.5-6.8 (name "U16")))))
+				(ty @6.5-6.8 (name "U16")))))
 	(d-let
 		(p-assign @10.1-10.2 (ident "c"))
 		(e-int @10.5-10.15 (value "4294967295"))
 		(annotation @10.1-10.2
 			(declared-type
-				(ty-type @9.5-9.8 (name "U32")))))
+				(ty @9.5-9.8 (name "U32")))))
 	(d-let
 		(p-assign @13.1-13.2 (ident "d"))
 		(e-int @13.5-13.25 (value "18446744073709551615"))
 		(annotation @13.1-13.2
 			(declared-type
-				(ty-type @12.5-12.8 (name "U64")))))
+				(ty @12.5-12.8 (name "U64")))))
 	(d-let
 		(p-assign @16.1-16.2 (ident "e"))
 		(e-int @16.5-16.44 (value "-1"))
 		(annotation @16.1-16.2
 			(declared-type
-				(ty-type @15.5-15.9 (name "U128")))))
+				(ty @15.5-15.9 (name "U128")))))
 	(d-let
 		(p-assign @19.1-19.2 (ident "f"))
 		(e-int @19.5-19.9 (value "-128"))
 		(annotation @19.1-19.2
 			(declared-type
-				(ty-type @18.5-18.7 (name "I8")))))
+				(ty @18.5-18.7 (name "I8")))))
 	(d-let
 		(p-assign @22.1-22.2 (ident "g"))
 		(e-int @22.5-22.11 (value "-32768"))
 		(annotation @22.1-22.2
 			(declared-type
-				(ty-type @21.5-21.8 (name "I16")))))
+				(ty @21.5-21.8 (name "I16")))))
 	(d-let
 		(p-assign @25.1-25.2 (ident "h"))
 		(e-int @25.5-25.16 (value "-2147483648"))
 		(annotation @25.1-25.2
 			(declared-type
-				(ty-type @24.5-24.8 (name "I32")))))
+				(ty @24.5-24.8 (name "I32")))))
 	(d-let
 		(p-assign @28.1-28.2 (ident "i"))
 		(e-int @28.5-28.25 (value "-9223372036854775808"))
 		(annotation @28.1-28.2
 			(declared-type
-				(ty-type @27.5-27.8 (name "I64")))))
+				(ty @27.5-27.8 (name "I64")))))
 	(d-let
 		(p-assign @31.1-31.2 (ident "j"))
 		(e-int @31.5-31.45 (value "-170141183460469231731687303715884105728"))
 		(annotation @31.1-31.2
 			(declared-type
-				(ty-type @30.5-30.9 (name "I128"))))))
+				(ty @30.5-30.9 (name "I128"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "U8"))
-		(patt @7.1-7.10 (type "U16"))
-		(patt @10.1-10.15 (type "U32"))
-		(patt @13.1-13.25 (type "U64"))
-		(patt @16.1-16.44 (type "U128"))
-		(patt @19.1-19.9 (type "I8"))
-		(patt @22.1-22.11 (type "I16"))
-		(patt @25.1-25.16 (type "I32"))
-		(patt @28.1-28.25 (type "I64"))
-		(patt @31.1-31.45 (type "I128")))
+		(patt @4.1-4.2 (type "U8"))
+		(patt @7.1-7.2 (type "U16"))
+		(patt @10.1-10.2 (type "U32"))
+		(patt @13.1-13.2 (type "U64"))
+		(patt @16.1-16.2 (type "U128"))
+		(patt @19.1-19.2 (type "I8"))
+		(patt @22.1-22.2 (type "I16"))
+		(patt @25.1-25.2 (type "I32"))
+		(patt @28.1-28.2 (type "I64"))
+		(patt @31.1-31.2 (type "I128")))
 	(expressions
-		(expr (type "U8"))
-		(expr (type "U16"))
-		(expr (type "U32"))
-		(expr (type "U64"))
-		(expr (type "U128"))
-		(expr (type "I8"))
-		(expr (type "I16"))
-		(expr (type "I32"))
-		(expr (type "I64"))
-		(expr (type "I128"))))
+		(expr @4.5-4.8 (type "U8"))
+		(expr @7.5-7.10 (type "U16"))
+		(expr @10.5-10.15 (type "U32"))
+		(expr @13.5-13.25 (type "U64"))
+		(expr @16.5-16.44 (type "U128"))
+		(expr @19.5-19.9 (type "I8"))
+		(expr @22.5-22.11 (type "I16"))
+		(expr @25.5-25.16 (type "I32"))
+		(expr @28.5-28.25 (type "I64"))
+		(expr @31.5-31.45 (type "I128"))))
 ~~~

@@ -76,7 +76,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),OpCol
 		(field (name "email")
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(field (name "status")
-			(e-str @1.33-1.41
+			(e-string @1.33-1.41
 				(e-literal @1.34-1.40 (string "active"))))
 		(field (name "balance")
 			(e-runtime-error (tag "ident_not_in_scope")))))

@@ -93,16 +93,16 @@ NO CHANGE
 							(e-lookup-local @6.20-6.22
 								(p-assign @6.12-6.14 (ident "id")))
 							(e-int @6.25-6.27 (value "10")))
-						(e-str @6.29-6.34
+						(e-string @6.29-6.34
 							(e-literal @6.30-6.33 (string "big")))))
 				(if-else
-					(e-str @6.40-6.47
+					(e-string @6.40-6.47
 						(e-literal @6.41-6.46 (string "small"))))))
 		(annotation @6.1-6.8
 			(declared-type
-				(ty-func @5.11-5.24 (effectful false)
-					(ty-type @5.11-5.17 (name "UserId"))
-					(ty-type @5.21-5.24 (name "Str"))))))
+				(ty-fn @5.11-5.24 (effectful false)
+					(ty @5.11-5.17 (name "UserId"))
+					(ty @5.21-5.24 (name "Str"))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "main!"))
 		(e-lambda @8.9-8.25
@@ -114,18 +114,18 @@ NO CHANGE
 				(e-int @8.21-8.24 (value "100")))))
 	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
-		(ty-type @3.10-3.13 (name "U64"))))
+		(ty @3.10-3.13 (name "U64"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.1 (type "UserId -> Str"))
-		(patt @8.1-8.25 (type "* -> Str")))
+		(patt @6.1-6.8 (type "UserId -> Str"))
+		(patt @8.1-8.6 (type "* -> Str")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
-		(expr (type "UserId -> Str"))
-		(expr (type "* -> Str"))))
+		(expr @1.1-1.1 (type "UserId -> Str"))
+		(expr @8.9-8.25 (type "* -> Str"))))
 ~~~

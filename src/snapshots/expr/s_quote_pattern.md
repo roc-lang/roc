@@ -48,11 +48,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-5.2
-	(match
+	(match @1.1-5.2
 		(cond
 			(e-not-implemented @1.7-1.10))
 		(branches
-			(branch @2.11-2.14
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-list @2.2-2.7
@@ -60,7 +60,7 @@ NO CHANGE
 								(p-int @2.3-2.6 (value "35"))))))
 				(value
 					(e-not-implemented @2.11-2.14)))
-			(branch @3.16-3.19
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-list @3.2-3.12
@@ -69,7 +69,7 @@ NO CHANGE
 								(p-int @3.8-3.11 (value "98"))))))
 				(value
 					(e-not-implemented @3.16-3.19)))
-			(branch @4.7-4.10
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-underscore @4.2-4.3)))

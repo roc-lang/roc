@@ -62,18 +62,18 @@ NO CHANGE
 				(p-underscore @5.10-5.11))
 			(e-call @5.13-5.42
 				(e-lookup-external
-					(ext-decl (ident "pf.Stdout.line!") (kind "value")))
-				(e-str @5.26-5.41
+					(ext-decl @5.13-5.25 (ident "pf.Stdout.line!") (kind "value")))
+				(e-string @5.26-5.41
 					(e-literal @5.27-5.40 (string "Hello, world!"))))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes))
-	(ext-decl (ident "pf.Stdout.line!") (kind "value")))
+	(ext-decl @5.13-5.25 (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.42 (type "* -> *")))
+		(patt @5.1-5.6 (type "* -> *")))
 	(expressions
-		(expr (type "* -> *"))))
+		(expr @5.9-5.42 (type "* -> *"))))
 ~~~

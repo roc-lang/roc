@@ -51,7 +51,7 @@ NO CHANGE
 	(elems
 		(e-int @1.2-1.3 (value "1"))
 		(e-int @1.5-1.6 (value "2"))
-		(e-str @1.8-1.15
+		(e-string @1.8-1.15
 			(e-literal @1.9-1.14 (string "hello")))))
 ~~~
 # TYPES

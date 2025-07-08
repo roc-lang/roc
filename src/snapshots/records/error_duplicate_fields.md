@@ -78,12 +78,12 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 (e-record @1.1-1.77
 	(fields
 		(field (name "name")
-			(e-str @1.9-1.16
+			(e-string @1.9-1.16
 				(e-literal @1.10-1.15 (string "Alice"))))
 		(field (name "age")
 			(e-int @1.23-1.25 (value "30")))
 		(field (name "email")
-			(e-str @1.47-1.66
+			(e-string @1.47-1.66
 				(e-literal @1.48-1.65 (string "alice@example.com"))))))
 ~~~
 # TYPES

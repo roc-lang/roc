@@ -85,7 +85,7 @@ main! = |_| {}
 						(p-assign @4.13-4.19 (ident "record"))))))
 		(annotation @4.1-4.9
 			(declared-type
-				(ty-func @3.12-3.39 (effectful false)
+				(ty-fn @3.12-3.39 (effectful false)
 					(ty-record @3.12-3.34
 						(field (field "field")
 							(ty-var @3.21-3.22 (name "a")))
@@ -97,15 +97,15 @@ main! = |_| {}
 		(e-lambda @6.9-6.15
 			(args
 				(p-underscore @6.10-6.11))
-			(e-empty-record @6.13-6.15))))
+			(e-empty_record @6.13-6.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-6.6 (type "{ field: a, other: b } -> a"))
-		(patt @6.1-6.15 (type "* -> {}")))
+		(patt @4.1-4.9 (type "{ field: a, other: b } -> a"))
+		(patt @6.1-6.6 (type "* -> {}")))
 	(expressions
-		(expr (type "{ field: a, other: b } -> a"))
-		(expr (type "* -> {}"))))
+		(expr @4.12-6.6 (type "{ field: a, other: b } -> a"))
+		(expr @6.9-6.15 (type "* -> {}"))))
 ~~~

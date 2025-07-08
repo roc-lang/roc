@@ -98,7 +98,7 @@ none = None
 						(p-assign @6.9-6.10 (ident "a"))))))
 		(annotation @6.1-6.5
 			(declared-type
-				(ty-func @5.8-5.21 (effectful false)
+				(ty-fn @5.8-5.21 (effectful false)
 					(ty-var @5.8-5.9 (name "a"))
 					(ty-apply @5.13-5.21 (symbol "Maybe")
 						(ty-var @5.19-5.20 (name "a")))))))
@@ -117,20 +117,20 @@ none = None
 		(ty-tag-union @3.13-3.28
 			(ty-apply @3.14-3.21 (symbol "Some")
 				(ty-var @3.19-3.20 (name "a")))
-			(ty-type @3.23-3.27 (name "None")))))
+			(ty @3.23-3.27 (name "None")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.25 (type "a -> Maybe(a)"))
-		(patt @9.1-9.18 (type "Maybe([None, Some])")))
+		(patt @6.1-6.5 (type "a -> Maybe(a)"))
+		(patt @9.1-9.5 (type "Maybe([None, Some])")))
 	(type_decls
 		(nominal @3.1-3.28 (type "Maybe(a)")
 			(ty-header @3.1-3.9 (name "Maybe")
 				(ty-args
 					(ty-var @3.7-3.8 (name "a"))))))
 	(expressions
-		(expr (type "a -> Maybe(a)"))
-		(expr (type "Maybe([])"))))
+		(expr @6.8-6.25 (type "a -> Maybe(a)"))
+		(expr @9.8-9.18 (type "Maybe([])"))))
 ~~~

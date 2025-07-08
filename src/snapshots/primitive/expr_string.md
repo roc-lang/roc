@@ -46,11 +46,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @2.1-2.5 (ident "name"))
-		(e-str @2.8-2.13
+		(e-string @2.8-2.13
 			(e-literal @2.9-2.12 (string "luc"))))
 	(d-let
 		(p-assign @3.1-3.4 (ident "foo"))
-		(e-str @3.7-3.22
+		(e-string @3.7-3.22
 			(e-literal @3.8-3.14 (string "hello "))
 			(e-lookup-local @3.16-3.20
 				(p-assign @2.1-2.5 (ident "name")))
@@ -60,9 +60,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.13 (type "Str"))
-		(patt @3.1-3.22 (type "Str")))
+		(patt @2.1-2.5 (type "Str"))
+		(patt @3.1-3.4 (type "Str")))
 	(expressions
-		(expr (type "Str"))
-		(expr (type "Str"))))
+		(expr @2.8-2.13 (type "Str"))
+		(expr @3.7-3.22 (type "Str"))))
 ~~~

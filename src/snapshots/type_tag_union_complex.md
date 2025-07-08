@@ -188,77 +188,77 @@ NO CHANGE
 		(e-lambda @18.17-18.38
 			(args
 				(p-assign @18.18-18.25 (ident "_result")))
-			(e-str @18.27-18.38
+			(e-string @18.27-18.38
 				(e-literal @18.28-18.37 (string "processed"))))
 		(annotation @18.1-18.14
 			(declared-type
-				(ty-func @17.17-17.30 (effectful false)
-					(ty-type @17.17-17.23 (name "Result"))
-					(ty-type @17.27-17.30 (name "Str"))))))
+				(ty-fn @17.17-17.30 (effectful false)
+					(ty @17.17-17.23 (name "Result"))
+					(ty @17.27-17.30 (name "Str"))))))
 	(d-let
 		(p-assign @22.1-22.15 (ident "handleResponse"))
 		(e-lambda @22.18-22.39
 			(args
 				(p-assign @22.19-22.28 (ident "_response")))
-			(e-str @22.30-22.39
+			(e-string @22.30-22.39
 				(e-literal @22.31-22.38 (string "handled"))))
 		(annotation @22.1-22.15
 			(declared-type
-				(ty-func @21.18-21.33 (effectful false)
-					(ty-type @21.18-21.26 (name "Response"))
-					(ty-type @21.30-21.33 (name "Str"))))))
+				(ty-fn @21.18-21.33 (effectful false)
+					(ty @21.18-21.26 (name "Response"))
+					(ty @21.30-21.33 (name "Str"))))))
 	(d-let
 		(p-assign @24.1-24.6 (ident "main!"))
 		(e-lambda @24.9-24.15
 			(args
 				(p-underscore @24.10-24.11))
-			(e-empty-record @24.13-24.15)))
+			(e-empty_record @24.13-24.15)))
 	(s-alias-decl @4.1-4.37
 		(ty-header @4.1-4.7 (name "Status"))
 		(ty-tag-union @4.10-4.37
-			(ty-type @4.11-4.18 (name "Loading"))
-			(ty-type @4.20-4.28 (name "Complete"))
-			(ty-type @4.30-4.36 (name "Failed"))))
+			(ty @4.11-4.18 (name "Loading"))
+			(ty @4.20-4.28 (name "Complete"))
+			(ty @4.30-4.36 (name "Failed"))))
 	(s-alias-decl @7.1-7.55
 		(ty-header @7.1-7.7 (name "Result"))
 		(ty-tag-union @7.10-7.55
 			(ty-apply @7.11-7.23 (symbol "Success")
-				(ty-type @7.19-7.22 (name "Str")))
+				(ty @7.19-7.22 (name "Str")))
 			(ty-apply @7.25-7.35 (symbol "Error")
-				(ty-type @7.31-7.34 (name "Str")))
+				(ty @7.31-7.34 (name "Str")))
 			(ty-apply @7.37-7.54 (symbol "Warning")
-				(ty-type @7.45-7.48 (name "Str"))
-				(ty-type @7.50-7.53 (name "I32")))))
+				(ty @7.45-7.48 (name "Str"))
+				(ty @7.50-7.53 (name "I32")))))
 	(s-alias-decl @10.1-10.50
 		(ty-header @10.1-10.9 (name "Response"))
 		(ty-tag-union @10.12-10.50
 			(ty-apply @10.13-10.23 (symbol "Ok")
-				(ty-type @10.16-10.22 (name "Result")))
-			(ty-type @10.25-10.37 (name "NetworkError"))
-			(ty-type @10.39-10.49 (name "ParseError"))))
+				(ty @10.16-10.22 (name "Result")))
+			(ty @10.25-10.37 (name "NetworkError"))
+			(ty @10.39-10.49 (name "ParseError"))))
 	(s-alias-decl @13.1-13.52
 		(ty-header @13.1-13.10 (name "UserState"))
 		(ty-tag-union @13.13-13.52
 			(ty-apply @13.14-13.25 (symbol "Active")
-				(ty-type @13.21-13.24 (name "Str")))
-			(ty-type @13.27-13.35 (name "Inactive"))
+				(ty @13.21-13.24 (name "Str")))
+			(ty @13.27-13.35 (name "Inactive"))
 			(ty-apply @13.37-13.51 (symbol "Suspended")
-				(ty-type @13.47-13.50 (name "Str")))))
+				(ty @13.47-13.50 (name "Str")))))
 	(s-alias-decl @14.1-14.58
 		(ty-header @14.1-14.16 (name "ConnectionState"))
 		(ty-tag-union @14.19-14.58
-			(ty-type @14.20-14.26 (name "Active"))
-			(ty-type @14.28-14.40 (name "Disconnected"))
+			(ty @14.20-14.26 (name "Active"))
+			(ty @14.28-14.40 (name "Disconnected"))
 			(ty-apply @14.42-14.57 (symbol "Connecting")
-				(ty-type @14.53-14.56 (name "Str"))))))
+				(ty @14.53-14.56 (name "Str"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.38 (type "Result -> Str"))
-		(patt @22.1-22.39 (type "Response -> Str"))
-		(patt @24.1-24.15 (type "* -> {}")))
+		(patt @18.1-18.14 (type "Result -> Str"))
+		(patt @22.1-22.15 (type "Response -> Str"))
+		(patt @24.1-24.6 (type "* -> {}")))
 	(type_decls
 		(alias @4.1-4.37 (type "Status")
 			(ty-header @4.1-4.7 (name "Status")))
@@ -271,7 +271,7 @@ NO CHANGE
 		(alias @14.1-14.58 (type "ConnectionState")
 			(ty-header @14.1-14.16 (name "ConnectionState"))))
 	(expressions
-		(expr (type "Result -> Str"))
-		(expr (type "Response -> Str"))
-		(expr (type "* -> {}"))))
+		(expr @18.17-18.38 (type "Result -> Str"))
+		(expr @22.18-22.39 (type "Response -> Str"))
+		(expr @24.9-24.15 (type "* -> {}"))))
 ~~~

@@ -253,42 +253,42 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-19.2
-	(s-var @3.5-3.21
+	(s-let @3.5-3.21
 		(p-assign @3.5-3.12 (ident "add_one"))
 		(e-lambda @3.15-3.21
 			(args
 				(p-underscore @3.16-3.17))
-			(e-empty-record @3.19-3.21)))
-	(s-var @4.5-4.11
+			(e-empty_record @3.19-3.21)))
+	(s-let @4.5-4.11
 		(p-assign @4.5-4.6 (ident "x"))
 		(e-int @4.9-4.11 (value "10")))
-	(s-var @5.5-5.11
+	(s-let @5.5-5.11
 		(p-assign @5.5-5.6 (ident "y"))
 		(e-int @5.9-5.11 (value "20")))
-	(s-var @6.5-6.11
+	(s-let @6.5-6.11
 		(p-assign @6.5-6.6 (ident "z"))
 		(e-int @6.9-6.11 (value "30")))
-	(s-var @9.2-9.12
+	(s-let @9.2-9.12
 		(p-assign @9.2-9.7 (ident "empty"))
 		(e-runtime-error (tag "empty_tuple")))
-	(s-var @10.2-10.15
+	(s-let @10.2-10.15
 		(p-assign @10.2-10.8 (ident "single"))
 		(e-int @10.12-10.14 (value "42")))
-	(s-var @11.2-11.15
+	(s-let @11.2-11.15
 		(p-assign @11.2-11.6 (ident "pair"))
 		(e-tuple @11.9-11.15
 			(elems
 				(e-int @11.10-11.11 (value "1"))
 				(e-int @11.13-11.14 (value "2")))))
-	(s-var @12.2-12.29
+	(s-let @12.2-12.29
 		(p-assign @12.2-12.8 (ident "triple"))
 		(e-tuple @12.11-12.29
 			(elems
 				(e-int @12.12-12.13 (value "1"))
-				(e-str @12.15-12.22
+				(e-string @12.15-12.22
 					(e-literal @12.16-12.21 (string "hello")))
 				(e-tag @12.24-12.28 (name "True")))))
-	(s-var @13.2-13.27
+	(s-let @13.2-13.27
 		(p-assign @13.2-13.8 (ident "nested"))
 		(e-tuple @13.11-13.27
 			(elems
@@ -300,7 +300,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(elems
 						(e-int @13.21-13.22 (value "3"))
 						(e-int @13.24-13.25 (value "4")))))))
-	(s-var @14.2-14.42
+	(s-let @14.2-14.42
 		(p-assign @14.2-14.7 (ident "mixed"))
 		(e-tuple @14.10-14.42
 			(elems
@@ -308,14 +308,14 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(e-lookup-local @14.11-14.18
 						(p-assign @3.5-3.12 (ident "add_one")))
 					(e-int @14.19-14.20 (value "5")))
-				(e-str @14.23-14.30
+				(e-string @14.23-14.30
 					(e-literal @14.24-14.29 (string "world")))
 				(e-list @14.32-14.41
 					(elems
 						(e-int @14.33-14.34 (value "1"))
 						(e-int @14.36-14.37 (value "2"))
 						(e-int @14.39-14.40 (value "3")))))))
-	(s-var @15.2-15.23
+	(s-let @15.2-15.23
 		(p-assign @15.2-15.11 (ident "with_vars"))
 		(e-tuple @15.14-15.23
 			(elems
@@ -325,7 +325,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(p-assign @5.5-5.6 (ident "y")))
 				(e-lookup-local @15.21-15.22
 					(p-assign @6.5-6.6 (ident "z"))))))
-	(s-var @16.2-16.31
+	(s-let @16.2-16.31
 		(p-assign @16.2-16.13 (ident "with_lambda"))
 		(e-tuple @16.16-16.31
 			(elems
@@ -342,5 +342,5 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-19.2 (type "*"))
+(expr @1.1-19.2 (type "Error"))
 ~~~

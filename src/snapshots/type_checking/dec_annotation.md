@@ -45,13 +45,13 @@ NO CHANGE
 		(e-frac-dec @4.5-4.12 (value "123.456"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty-type @3.5-3.8 (name "Dec"))))))
+				(ty @3.5-3.8 (name "Dec"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "Dec")))
+		(patt @4.1-4.2 (type "Dec")))
 	(expressions
-		(expr (type "Dec"))))
+		(expr @4.5-4.12 (type "Dec"))))
 ~~~

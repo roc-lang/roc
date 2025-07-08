@@ -66,25 +66,25 @@ NO CHANGE
 				(args)))
 		(annotation @4.1-4.8
 			(declared-type
-				(ty-func @3.11-3.17 (effectful false)
+				(ty-fn @3.11-3.17 (effectful false)
 					(ty-var @3.11-3.12 (name "a"))
 					(ty-var @3.16-3.17 (name "b"))))))
 	(s-type-anno @3.1-4.8 (name "convert")
-		(ty-func @3.11-3.17 (effectful false)
+		(ty-fn @3.11-3.17 (effectful false)
 			(ty-var @3.11-3.12 (name "a"))
 			(ty-var @3.16-3.17 (name "b")))
 		(where
-			(where-mod-method (module-of "a") (ident "to_b")
+			(method @3.24-4.8 (module-of "a") (ident "to_b")
 				(args
 					(ty-var @3.41-3.42 (name "a")))
 				(ty-var @3.46-3.47 (name "b")))))
-	(ext-decl (ident "module(a).to_b") (kind "value")))
+	(ext-decl @3.24-4.8 (ident "module(a).to_b") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.23 (type "{ to_b: b } -> b")))
+		(patt @4.1-4.8 (type "{ to_b: b } -> b")))
 	(expressions
-		(expr (type "{ to_b: b } -> b"))))
+		(expr @4.11-4.23 (type "{ to_b: b } -> b"))))
 ~~~

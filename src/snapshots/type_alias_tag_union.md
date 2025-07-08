@@ -148,28 +148,28 @@ NO CHANGE
 		(e-lambda @8.11-8.32
 			(args
 				(p-assign @8.12-8.19 (ident "_result")))
-			(e-str @8.21-8.32
+			(e-string @8.21-8.32
 				(e-literal @8.22-8.31 (string "processed"))))
 		(annotation @8.1-8.8
 			(declared-type
-				(ty-func @7.11-7.36 (effectful false)
+				(ty-fn @7.11-7.36 (effectful false)
 					(ty-apply @7.11-7.29 (symbol "MyResult")
-						(ty-type @7.20-7.23 (name "Str"))
-						(ty-type @7.25-7.28 (name "I32")))
-					(ty-type @7.33-7.36 (name "Str"))))))
+						(ty @7.20-7.23 (name "Str"))
+						(ty @7.25-7.28 (name "I32")))
+					(ty @7.33-7.36 (name "Str"))))))
 	(d-let
 		(p-assign @15.1-15.10 (ident "getString"))
 		(e-lambda @15.13-15.29
 			(args
 				(p-assign @15.14-15.18 (ident "_opt")))
-			(e-str @15.20-15.29
+			(e-string @15.20-15.29
 				(e-literal @15.21-15.28 (string "default"))))
 		(annotation @15.1-15.10
 			(declared-type
-				(ty-func @14.13-14.31 (effectful false)
+				(ty-fn @14.13-14.31 (effectful false)
 					(ty-apply @14.13-14.24 (symbol "Option")
-						(ty-type @14.20-14.23 (name "Str")))
-					(ty-type @14.28-14.31 (name "Str"))))))
+						(ty @14.20-14.23 (name "Str")))
+					(ty @14.28-14.31 (name "Str"))))))
 	(d-let
 		(p-assign @18.1-18.10 (ident "getNumber"))
 		(e-lambda @18.13-18.21
@@ -178,16 +178,16 @@ NO CHANGE
 			(e-int @18.20-18.21 (value "0")))
 		(annotation @18.1-18.10
 			(declared-type
-				(ty-func @17.13-17.31 (effectful false)
+				(ty-fn @17.13-17.31 (effectful false)
 					(ty-apply @17.13-17.24 (symbol "Option")
-						(ty-type @17.20-17.23 (name "I32")))
-					(ty-type @17.28-17.31 (name "I32"))))))
+						(ty @17.20-17.23 (name "I32")))
+					(ty @17.28-17.31 (name "I32"))))))
 	(d-let
 		(p-assign @20.1-20.6 (ident "main!"))
 		(e-lambda @20.9-20.15
 			(args
 				(p-underscore @20.10-20.11))
-			(e-empty-record @20.13-20.15)))
+			(e-empty_record @20.13-20.15)))
 	(s-alias-decl @4.1-4.41
 		(ty-header @4.1-4.18 (name "MyResult")
 			(ty-args
@@ -205,16 +205,16 @@ NO CHANGE
 		(ty-tag-union @11.13-11.28
 			(ty-apply @11.14-11.21 (symbol "Some")
 				(ty-var @11.19-11.20 (name "a")))
-			(ty-type @11.23-11.27 (name "None")))))
+			(ty @11.23-11.27 (name "None")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.32 (type "MyResult(Str, I32) -> Str"))
-		(patt @15.1-15.29 (type "Option(Str) -> Str"))
-		(patt @18.1-18.21 (type "Option(I32) -> I32"))
-		(patt @20.1-20.15 (type "* -> {}")))
+		(patt @8.1-8.8 (type "MyResult(Str, I32) -> Str"))
+		(patt @15.1-15.10 (type "Option(Str) -> Str"))
+		(patt @18.1-18.10 (type "Option(I32) -> I32"))
+		(patt @20.1-20.6 (type "* -> {}")))
 	(type_decls
 		(alias @4.1-4.41 (type "MyResult(ok, err)")
 			(ty-header @4.1-4.18 (name "MyResult")
@@ -226,8 +226,8 @@ NO CHANGE
 				(ty-args
 					(ty-var @11.8-11.9 (name "a"))))))
 	(expressions
-		(expr (type "MyResult(Str, I32) -> Str"))
-		(expr (type "Option(Str) -> Str"))
-		(expr (type "Option(I32) -> I32"))
-		(expr (type "* -> {}"))))
+		(expr @8.11-8.32 (type "MyResult(Str, I32) -> Str"))
+		(expr @15.13-15.29 (type "Option(Str) -> Str"))
+		(expr @18.13-18.21 (type "Option(I32) -> I32"))
+		(expr @20.9-20.15 (type "* -> {}"))))
 ~~~

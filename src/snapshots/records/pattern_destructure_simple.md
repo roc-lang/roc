@@ -62,11 +62,11 @@ match person {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-3.2
-	(match
+	(match @1.1-3.2
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch @2.22-2.26
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @2.5-2.18

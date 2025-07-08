@@ -91,10 +91,10 @@ main! = |_| processList(["one", "two"])
 				(args)))
 		(annotation @4.1-4.12
 			(declared-type
-				(ty-func @3.15-3.31 (effectful false)
+				(ty-fn @3.15-3.31 (effectful false)
 					(ty-apply @3.15-3.24 (symbol "List")
-						(ty-type @3.20-3.23 (name "Str")))
-					(ty-type @3.28-3.31 (name "U64"))))))
+						(ty @3.20-3.23 (name "Str")))
+					(ty @3.28-3.31 (name "U64"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.39
@@ -105,18 +105,18 @@ main! = |_| processList(["one", "two"])
 					(p-assign @4.1-4.12 (ident "processList")))
 				(e-list @6.25-6.38
 					(elems
-						(e-str @6.26-6.31
+						(e-string @6.26-6.31
 							(e-literal @6.27-6.30 (string "one")))
-						(e-str @6.32-6.37
+						(e-string @6.32-6.37
 							(e-literal @6.33-6.36 (string "two")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-6.6 (type "Error -> U64"))
-		(patt @6.1-6.39 (type "* -> U64")))
+		(patt @4.1-4.12 (type "Error -> U64"))
+		(patt @6.1-6.6 (type "* -> U64")))
 	(expressions
-		(expr (type "Error -> U64"))
-		(expr (type "* -> U64"))))
+		(expr @4.15-6.6 (type "Error -> U64"))
+		(expr @6.9-6.39 (type "* -> U64"))))
 ~~~

@@ -98,11 +98,11 @@ match data {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-6.2
-	(match
+	(match @1.1-6.2
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch @2.53-3.14
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @2.5-2.49)))
@@ -114,13 +114,13 @@ match data {
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @2.66-2.70
 								(p-assign @2.41-2.45 (ident "rest")))))))
-			(branch @3.33-3.34
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @3.5-3.29)))
 				(value
 					(e-int @3.33-3.34 (value "0"))))
-			(branch @4.40-5.11
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @4.5-4.36)))
@@ -130,7 +130,7 @@ match data {
 							(p-assign @4.18-4.23 (ident "value")))
 						(e-lookup-local @4.48-4.49
 							(p-assign @4.32-4.33 (ident "y"))))))
-			(branch @5.18-5.19
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @5.5-5.14)))

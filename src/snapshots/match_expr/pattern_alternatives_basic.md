@@ -97,12 +97,12 @@ kind = |color| match color {
 			(args
 				(p-assign @6.9-6.14 (ident "color")))
 			(e-match @6.16-9.2
-				(match
+				(match @6.16-9.2
 					(cond
 						(e-lookup-local @6.22-6.27
 							(p-assign @6.9-6.14 (ident "color"))))
 					(branches
-						(branch @7.27-7.36
+						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @7.5-7.8))
@@ -111,9 +111,9 @@ kind = |color| match color {
 								(pattern (degenerate false)
 									(p-applied-tag @7.19-7.23)))
 							(value
-								(e-str @7.27-7.36
+								(e-string @7.27-7.36
 									(e-literal @7.28-7.35 (string "primary")))))
-						(branch @8.33-8.44
+						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @8.5-8.11))
@@ -122,31 +122,31 @@ kind = |color| match color {
 								(pattern (degenerate false)
 									(p-applied-tag @8.23-8.29)))
 							(value
-								(e-str @8.33-8.44
+								(e-string @8.33-8.44
 									(e-literal @8.34-8.43 (string "secondary")))))))))
 		(annotation @6.1-6.5
 			(declared-type
-				(ty-func @5.8-5.20 (effectful false)
-					(ty-type @5.8-5.13 (name "Color"))
-					(ty-type @5.17-5.20 (name "Str"))))))
+				(ty-fn @5.8-5.20 (effectful false)
+					(ty @5.8-5.13 (name "Color"))
+					(ty @5.17-5.20 (name "Str"))))))
 	(s-alias-decl @3.1-3.51
 		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.9-3.51
-			(ty-type @3.10-3.13 (name "Red"))
-			(ty-type @3.15-3.20 (name "Green"))
-			(ty-type @3.22-3.26 (name "Blue"))
-			(ty-type @3.28-3.34 (name "Yellow"))
-			(ty-type @3.36-3.42 (name "Orange"))
-			(ty-type @3.44-3.50 (name "Purple")))))
+			(ty @3.10-3.13 (name "Red"))
+			(ty @3.15-3.20 (name "Green"))
+			(ty @3.22-3.26 (name "Blue"))
+			(ty @3.28-3.34 (name "Yellow"))
+			(ty @3.36-3.42 (name "Orange"))
+			(ty @3.44-3.50 (name "Purple")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-9.2 (type "[Blue, Green, Orange, Red, Yellow, Purple]* -> Str")))
+		(patt @6.1-6.5 (type "[Blue, Green, Orange, Red, Yellow, Purple]* -> Str")))
 	(type_decls
 		(alias @3.1-3.51 (type "Color")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions
-		(expr (type "[Blue, Green, Orange, Red, Yellow, Purple]* -> Str"))))
+		(expr @6.8-9.2 (type "[Blue, Green, Orange, Red, Yellow, Purple]* -> Str"))))
 ~~~

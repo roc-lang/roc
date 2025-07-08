@@ -75,7 +75,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-str @1.1-6.43
+(e-string @1.1-6.43
 	(e-literal @1.2-1.24 (string "This is a string with "))
 	(e-call @2.2-5.3
 		(e-runtime-error (tag "ident_not_in_scope"))

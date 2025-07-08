@@ -32,7 +32,7 @@ NO CHANGE
 (e-tuple @1.1-1.19
 	(elems
 		(e-int @1.2-1.3 (value "1"))
-		(e-str @1.5-1.12
+		(e-string @1.5-1.12
 			(e-literal @1.6-1.11 (string "hello")))
 		(e-tag @1.14-1.18 (name "True"))))
 ~~~

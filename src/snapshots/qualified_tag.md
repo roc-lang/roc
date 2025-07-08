@@ -59,17 +59,17 @@ test = Red
 	(s-nominal-decl @3.1-3.21
 		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.10-3.21
-			(ty-type @3.11-3.14 (name "Red"))
-			(ty-type @3.16-3.20 (name "Blue")))))
+			(ty @3.11-3.14 (name "Red"))
+			(ty @3.16-3.20 (name "Blue")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.17 (type "Color")))
+		(patt @5.1-5.5 (type "Color")))
 	(type_decls
 		(nominal @3.1-3.21 (type "Color")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions
-		(expr (type "Color"))))
+		(expr @5.8-5.17 (type "Color"))))
 ~~~

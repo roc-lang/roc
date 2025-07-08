@@ -61,7 +61,7 @@ topLevelVar_ = 0
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.5-4.21 (type "Num(*)")))
+		(patt @4.5-4.17 (type "Num(*)")))
 	(expressions
-		(expr (type "Num(*)"))))
+		(expr @4.20-4.21 (type "Num(*)"))))
 ~~~

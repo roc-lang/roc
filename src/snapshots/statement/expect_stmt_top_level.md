@@ -64,7 +64,7 @@ expect foo != False
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.16 (type "Bool")))
+		(patt @3.1-3.4 (type "Bool")))
 	(expressions
-		(expr (type "Bool"))))
+		(expr @3.7-3.16 (type "Bool"))))
 ~~~

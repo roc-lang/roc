@@ -69,11 +69,11 @@ match ... {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-5.2
-	(match
+	(match @1.1-5.2
 		(cond
 			(e-not-implemented @1.7-1.10))
 		(branches
-			(branch @2.22-2.60
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @2.5-2.18
@@ -83,7 +83,7 @@ match ... {
 								(record-destruct @2.13-2.18 (label "age") (ident "age")
 									(required))))))
 				(value
-					(e-str @2.22-2.60
+					(e-string @2.22-2.60
 						(e-literal @2.23-2.23 (string ""))
 						(e-lookup-local @2.25-2.29
 							(p-assign @2.7-2.12 (ident "name")))
@@ -94,7 +94,7 @@ match ... {
 									(p-assign @2.13-2.18 (ident "age"))))
 							(args))
 						(e-literal @2.49-2.59 (string " years old")))))
-			(branch @3.36-3.68
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @3.5-3.32
@@ -108,7 +108,7 @@ match ... {
 												(record-destruct @3.24-3.30 (label "city") (ident "city")
 													(required))))))))))
 				(value
-					(e-str @3.36-3.68
+					(e-string @3.36-3.68
 						(e-literal @3.37-3.37 (string ""))
 						(e-lookup-local @3.39-3.43
 							(p-assign @3.24-3.30 (ident "city")))
@@ -116,13 +116,13 @@ match ... {
 						(e-lookup-local @3.62-3.66
 							(p-assign @3.7-3.12 (ident "name")))
 						(e-literal @3.67-3.67 (string "")))))
-			(branch @4.11-4.18
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @4.5-4.7
 							(destructs))))
 				(value
-					(e-str @4.11-4.18
+					(e-string @4.11-4.18
 						(e-literal @4.12-4.17 (string "empty"))))))))
 ~~~
 # TYPES

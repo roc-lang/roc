@@ -54,8 +54,8 @@ Foo(a, b) : (a, b, Str, U64)
 		(ty-tuple @3.12-3.25
 			(ty-var @3.13-3.14 (name "a"))
 			(ty-var @3.15-3.16 (name "b"))
-			(ty-type @3.17-3.20 (name "Str"))
-			(ty-type @3.21-3.24 (name "U64")))))
+			(ty @3.17-3.20 (name "Str"))
+			(ty @3.21-3.24 (name "U64")))))
 ~~~
 # TYPES
 ~~~clojure

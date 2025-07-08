@@ -144,7 +144,7 @@ red = ...
 		(e-not-implemented @6.7-6.10)
 		(annotation @6.1-6.4
 			(declared-type
-				(ty-type @5.7-5.9 (name "CE")))))
+				(ty @5.7-5.9 (name "CE")))))
 	(s-import @3.1-3.21 (module "design.Styles") (qualifier "design")
 		(exposes)))
 ~~~
@@ -152,7 +152,7 @@ red = ...
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.10 (type "Error")))
+		(patt @6.1-6.4 (type "Error")))
 	(expressions
-		(expr (type "Error"))))
+		(expr @6.7-6.10 (type "Error"))))
 ~~~

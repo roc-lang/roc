@@ -207,13 +207,13 @@ InnerModule :
 		(e-lambda @6.15-7.16
 			(args
 				(p-assign @6.16-6.20 (ident "data")))
-			(e-str @7.5-7.16
+			(e-string @7.5-7.16
 				(e-literal @7.6-7.15 (string "processed"))))
 		(annotation @6.1-6.12
 			(declared-type
-				(ty-func @5.15-5.25 (effectful false)
-					(ty-type @5.15-5.18 (name "Str"))
-					(ty-type @5.22-5.25 (name "Str"))))))
+				(ty-fn @5.15-5.25 (effectful false)
+					(ty @5.15-5.18 (name "Str"))
+					(ty @5.22-5.25 (name "Str"))))))
 	(s-alias-decl @3.1-3.31
 		(ty-header @3.1-3.13 (name "Result")
 			(ty-args
@@ -232,7 +232,7 @@ InnerModule :
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-7.16 (type "Str -> Str")))
+		(patt @6.1-6.12 (type "Str -> Str")))
 	(type_decls
 		(alias @3.1-3.31 (type "Result(a, b)")
 			(ty-header @3.1-3.13 (name "Result")
@@ -242,5 +242,5 @@ InnerModule :
 		(alias @10.1-11.32 (type "InnerModule")
 			(ty-header @10.1-10.12 (name "InnerModule"))))
 	(expressions
-		(expr (type "Str -> Str"))))
+		(expr @6.15-7.16 (type "Str -> Str"))))
 ~~~

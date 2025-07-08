@@ -63,21 +63,21 @@ value = TagA
 			(e-tag @6.9-6.20 (name "TagA")))
 		(annotation @6.1-6.6
 			(declared-type
-				(ty-type @5.9-5.15 (name "MyType")))))
+				(ty @5.9-5.15 (name "MyType")))))
 	(s-nominal-decl @3.1-3.23
 		(ty-header @3.1-3.7 (name "MyType"))
 		(ty-tag-union @3.11-3.23
-			(ty-type @3.12-3.16 (name "TagA"))
-			(ty-type @3.18-3.22 (name "TagB")))))
+			(ty @3.12-3.16 (name "TagA"))
+			(ty @3.18-3.22 (name "TagB")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.20 (type "MyType")))
+		(patt @6.1-6.6 (type "MyType")))
 	(type_decls
 		(nominal @3.1-3.23 (type "MyType")
 			(ty-header @3.1-3.7 (name "MyType"))))
 	(expressions
-		(expr (type "MyType"))))
+		(expr @6.9-6.20 (type "MyType"))))
 ~~~

@@ -47,7 +47,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-var @1.1-1.109
+	(s-let @1.1-1.109
 		(p-assign @1.1-1.11 (ident "formatUser"))
 		(e-lambda @1.14-1.109
 			(args
@@ -59,7 +59,7 @@ NO CHANGE
 							(required))
 						(record-destruct @1.28-1.35 (label "email") (ident "email")
 							(required)))))
-			(e-str @1.37-1.109
+			(e-string @1.37-1.109
 				(e-literal @1.38-1.44 (string "User: "))
 				(e-lookup-local @1.46-1.50
 					(p-assign @1.17-1.22 (ident "name")))

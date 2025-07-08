@@ -75,11 +75,11 @@ match nestedList {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-5.2
-	(match
+	(match @1.1-5.2
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch @2.19-3.6
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-list @2.5-2.15
@@ -96,7 +96,7 @@ match nestedList {
 							(p-assign @2.7-2.8 (ident "x")))
 						(e-lookup-local @2.23-2.24
 							(p-assign @2.12-2.13 (ident "y"))))))
-			(branch @3.17-4.6
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-list @3.5-3.13
@@ -111,7 +111,7 @@ match nestedList {
 							(p-assign @3.7-3.8 (ident "x")))
 						(e-lookup-local @3.21-3.22
 							(p-assign @3.10-3.11 (ident "y"))))))
-			(branch @4.17-5.2
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-list @4.5-4.13

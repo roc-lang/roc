@@ -48,6 +48,20 @@ The unused variable is declared here:
     ^^
 
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**test_exact_pattern_crash.md:23:10:23:18:**
+```roc
+    p2 = map_pair(3, 4, (|x| x + 1), (|y| y * 2))
+```
+         ^^^^^^^^
+
+It is of type:
+    _Pair(a, b), a, a -> c, b, b -> d -> Pair(c, d)_
+
+But you are trying to use it as:
+    _Num(*), Num(*), *, * -> *, *, * -> * -> *_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:53),StringEnd(1:53-1:54),CloseCurly(1:55-1:56),Newline(1:1-1:1),
@@ -232,7 +246,7 @@ main = {
 						(p-assign @8.15-8.16 (ident "x"))))))
 		(annotation @8.1-8.10
 			(declared-type
-				(ty-func @7.13-7.37 (effectful false)
+				(ty-fn @7.13-7.37 (effectful false)
 					(ty-apply @7.13-7.23 (symbol "Pair")
 						(ty-var @7.18-7.19 (name "a"))
 						(ty-var @7.21-7.22 (name "b")))
@@ -263,16 +277,16 @@ main = {
 							(p-assign @12.17-12.18 (ident "y")))))))
 		(annotation @12.1-12.9
 			(declared-type
-				(ty-func @11.12-11.56 (effectful false)
+				(ty-fn @11.12-11.56 (effectful false)
 					(ty-apply @11.12-11.22 (symbol "Pair")
 						(ty-var @11.17-11.18 (name "a"))
 						(ty-var @11.20-11.21 (name "b")))
 					(ty-parens @11.24-11.32
-						(ty-func @11.25-11.31 (effectful false)
+						(ty-fn @11.25-11.31 (effectful false)
 							(ty-var @11.25-11.26 (name "a"))
 							(ty-var @11.30-11.31 (name "c"))))
 					(ty-parens @11.34-11.42
-						(ty-func @11.35-11.41 (effectful false)
+						(ty-fn @11.35-11.41 (effectful false)
 							(ty-var @11.35-11.36 (name "b"))
 							(ty-var @11.40-11.41 (name "d"))))
 					(ty-apply @11.46-11.56 (symbol "Pair")
@@ -281,7 +295,7 @@ main = {
 	(d-let
 		(p-assign @17.1-17.5 (ident "main"))
 		(e-block @17.8-26.2
-			(s-var @19.5-19.27
+			(s-let @19.5-19.27
 				(p-assign @19.5-19.7 (ident "p1"))
 				(e-call @19.10-19.27
 					(e-lookup-local @19.10-19.19
@@ -290,7 +304,7 @@ main = {
 						(elems
 							(e-int @19.21-19.22 (value "1"))
 							(e-int @19.24-19.25 (value "2"))))))
-			(s-var @23.5-23.50
+			(s-let @23.5-23.50
 				(p-assign @23.5-23.7 (ident "p2"))
 				(e-call @23.10-23.50
 					(e-lookup-local @23.10-23.18
@@ -326,9 +340,9 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.28 (type "Pair(a, b) -> Pair(b, a)"))
-		(patt @12.1-12.39 (type "Pair(a, b), a -> c, b -> d -> Pair(c, d)"))
-		(patt @17.1-26.2 (type "*")))
+		(patt @8.1-8.10 (type "Pair(a, b) -> Pair(b, a)"))
+		(patt @12.1-12.9 (type "Error"))
+		(patt @17.1-17.5 (type "*")))
 	(type_decls
 		(alias @4.1-4.20 (type "Pair(a, b)")
 			(ty-header @4.1-4.11 (name "Pair")
@@ -336,7 +350,7 @@ main = {
 					(ty-var @4.6-4.7 (name "a"))
 					(ty-var @4.9-4.10 (name "b"))))))
 	(expressions
-		(expr (type "Pair(a, b) -> Pair(b, a)"))
-		(expr (type "Pair(a, b), a -> c, b -> d -> Pair(c, d)"))
-		(expr (type "*"))))
+		(expr @8.13-8.28 (type "Pair(a, b) -> Pair(b, a)"))
+		(expr @12.12-12.39 (type "Error"))
+		(expr @17.8-26.2 (type "*"))))
 ~~~

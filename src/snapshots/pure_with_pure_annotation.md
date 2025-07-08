@@ -122,10 +122,10 @@ main! = add(1, 2)
 									(p-assign @5.11-5.12 (ident "y")))))))))
 		(annotation @5.1-5.4
 			(declared-type
-				(ty-func @4.7-4.22 (effectful false)
-					(ty-type @4.7-4.10 (name "I32"))
-					(ty-type @4.12-4.15 (name "I32"))
-					(ty-type @4.19-4.22 (name "I32"))))))
+				(ty-fn @4.7-4.22 (effectful false)
+					(ty @4.7-4.10 (name "I32"))
+					(ty @4.12-4.15 (name "I32"))
+					(ty @4.19-4.22 (name "I32"))))))
 	(d-let
 		(p-assign @9.1-9.7 (ident "double"))
 		(e-lambda @9.10-9.23
@@ -140,9 +140,9 @@ main! = add(1, 2)
 					(p-assign @9.11-9.12 (ident "x")))))
 		(annotation @9.1-9.7
 			(declared-type
-				(ty-func @8.10-8.20 (effectful false)
-					(ty-type @8.10-8.13 (name "I32"))
-					(ty-type @8.17-8.20 (name "I32"))))))
+				(ty-fn @8.10-8.20 (effectful false)
+					(ty @8.10-8.13 (name "I32"))
+					(ty @8.17-8.20 (name "I32"))))))
 	(d-let
 		(p-assign @11.1-11.6 (ident "main!"))
 		(e-call @11.9-11.18
@@ -155,11 +155,11 @@ main! = add(1, 2)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-8.7 (type "I32, I32 -> I32"))
-		(patt @9.1-9.23 (type "I32 -> I32"))
-		(patt @11.1-11.18 (type "I32")))
+		(patt @5.1-5.4 (type "I32, I32 -> I32"))
+		(patt @9.1-9.7 (type "I32 -> I32"))
+		(patt @11.1-11.6 (type "I32")))
 	(expressions
-		(expr (type "I32, I32 -> I32"))
-		(expr (type "I32 -> I32"))
-		(expr (type "I32"))))
+		(expr @5.7-8.7 (type "I32, I32 -> I32"))
+		(expr @9.10-9.23 (type "I32 -> I32"))
+		(expr @11.9-11.18 (type "I32"))))
 ~~~

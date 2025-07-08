@@ -81,10 +81,10 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 ~~~clojure
 (e-block @1.1-9.2
 	(s-type-anno @2.5-3.13 (name "identity")
-		(ty-func @2.16-2.22 (effectful false)
+		(ty-fn @2.16-2.22 (effectful false)
 			(ty-var @2.16-2.17 (name "a"))
 			(ty-var @2.21-2.22 (name "a"))))
-	(s-var @3.5-3.21
+	(s-let @3.5-3.21
 		(p-assign @3.5-3.13 (ident "identity"))
 		(e-lambda @3.16-3.21
 			(args
@@ -93,13 +93,13 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 				(p-assign @3.17-3.18 (ident "x")))))
 	(s-type-anno @5.5-6.17 (name "needs_string")
 		(ty-parens @5.20-5.41
-			(ty-func @5.21-5.40 (effectful false)
+			(ty-fn @5.21-5.40 (effectful false)
 				(ty-parens @5.21-5.33
-					(ty-func @5.22-5.32 (effectful false)
-						(ty-type @5.22-5.25 (name "Str"))
-						(ty-type @5.29-5.32 (name "Str"))))
-				(ty-type @5.37-5.40 (name "Str")))))
-	(s-var @6.5-6.36
+					(ty-fn @5.22-5.32 (effectful false)
+						(ty @5.22-5.25 (name "Str"))
+						(ty @5.29-5.32 (name "Str"))))
+				(ty @5.37-5.40 (name "Str")))))
+	(s-let @6.5-6.36
 		(p-assign @6.5-6.17 (ident "needs_string"))
 		(e-lambda @6.20-6.36
 			(args
@@ -109,7 +109,7 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 					(p-assign @6.21-6.22 (ident "f")))
 				(e-list @6.26-6.35
 					(elems
-						(e-str @6.27-6.34
+						(e-string @6.27-6.34
 							(e-literal @6.28-6.33 (string "hello"))))))))
 	(e-call @8.5-8.27
 		(e-lookup-local @8.5-8.17
@@ -119,5 +119,5 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-9.2 (type "*"))
+(expr @1.1-9.2 (type "List(Str)"))
 ~~~

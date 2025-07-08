@@ -72,23 +72,23 @@ NO CHANGE
 				(p-assign @4.13-4.14 (ident "x"))))
 		(annotation @4.1-4.9
 			(declared-type
-				(ty-func @3.12-3.22 (effectful false)
-					(ty-type @3.12-3.15 (name "Str"))
-					(ty-type @3.19-3.22 (name "Str"))))))
+				(ty-fn @3.12-3.22 (effectful false)
+					(ty @3.12-3.15 (name "Str"))
+					(ty @3.19-3.22 (name "Str"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
 			(args
 				(p-underscore @6.10-6.11))
-			(e-empty-record @6.13-6.15))))
+			(e-empty_record @6.13-6.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.17 (type "Str -> Str"))
-		(patt @6.1-6.15 (type "* -> {}")))
+		(patt @4.1-4.9 (type "Str -> Str"))
+		(patt @6.1-6.6 (type "* -> {}")))
 	(expressions
-		(expr (type "Str -> Str"))
-		(expr (type "* -> {}"))))
+		(expr @4.12-4.17 (type "Str -> Str"))
+		(expr @6.9-6.15 (type "* -> {}"))))
 ~~~

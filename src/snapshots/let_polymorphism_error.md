@@ -51,7 +51,7 @@ NO CHANGE
 	(elems
 		(e-int @1.2-1.4 (value "42"))
 		(e-dec-small @1.6-1.9 (numerator "42") (denominator-power-of-ten "1") (value "4.2"))
-		(e-str @1.11-1.18
+		(e-string @1.11-1.18
 			(e-literal @1.12-1.17 (string "hello")))))
 ~~~
 # TYPES

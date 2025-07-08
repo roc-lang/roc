@@ -954,6 +954,7 @@ fn createExternalDeclaration(
         .local_name = local_name,
         .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
         .kind = kind,
+        .region = region,
     };
 
     return self.can_ir.pushExternalDecl(external_decl);
@@ -1346,6 +1347,7 @@ pub fn canonicalizeExpr(
                                 .local_name = ident,
                                 .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
                                 .kind = .value,
+                                .region = region,
                             };
 
                             const external_idx = self.can_ir.pushExternalDecl(external_decl);
@@ -1388,6 +1390,7 @@ pub fn canonicalizeExpr(
                                 .local_name = ident,
                                 .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
                                 .kind = .value,
+                                .region = region,
                             };
 
                             const external_idx = self.can_ir.pushExternalDecl(external_decl);
@@ -3628,6 +3631,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
                     .local_name = local_name,
                     .type_var = external_type_var,
                     .kind = .type,
+                    .region = region,
                 };
 
                 const external_idx = self.can_ir.pushExternalDecl(external_decl);
@@ -3926,8 +3930,8 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             const expr_idx = try self.canonicalizeExpr(d.body) orelse return null;
 
             // Create a declaration statement
-            const var_stmt = CIR.Statement{ .s_var = .{
-                .pattern_idx = pattern_idx,
+            const var_stmt = CIR.Statement{ .s_decl = .{
+                .pattern = pattern_idx,
                 .expr = expr_idx,
             } };
             const region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getStatement(stmt_idx).decl.region);
@@ -5530,6 +5534,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
         .local_name = field_name,
         .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
         .kind = .value,
+        .region = region,
     };
 
     const external_idx = self.can_ir.pushExternalDecl(external_decl);

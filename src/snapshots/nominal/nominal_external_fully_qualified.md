@@ -117,41 +117,41 @@ handleResult = |result| {
 				(p-assign @6.17-6.23 (ident "result")))
 			(e-block @6.25-11.2
 				(e-match @7.5-10.6
-					(match
+					(match @7.5-10.6
 						(cond
 							(e-lookup-local @7.11-7.17
 								(p-assign @6.17-6.23 (ident "result"))))
 						(branches
-							(branch @8.50-8.55
+							(branch
 								(patterns
 									(pattern (degenerate false)
 										(p-applied-tag @8.9-8.46)))
 								(value
 									(e-lookup-local @8.50-8.55
 										(p-assign @8.40-8.45 (ident "value")))))
-							(branch @9.50-9.74
+							(branch
 								(patterns
 									(pattern (degenerate false)
 										(p-applied-tag @9.9-9.46)))
 								(value
-									(e-str @9.50-9.74
+									(e-string @9.50-9.74
 										(e-literal @9.51-9.73 (string "Error: $(code.toStr())"))))))))))
 		(annotation @6.1-6.13
 			(declared-type
-				(ty-func @5.16-5.60 (effectful false)
+				(ty-fn @5.16-5.60 (effectful false)
 					(ty-apply @5.16-5.53 (symbol "MyResultModule.MyResultType")
-						(ty-type @5.44-5.47 (name "Str"))
-						(ty-type @5.49-5.52 (name "I32")))
-					(ty-type @5.57-5.60 (name "Str"))))))
+						(ty @5.44-5.47 (name "Str"))
+						(ty @5.49-5.52 (name "I32")))
+					(ty @5.57-5.60 (name "Str"))))))
 	(s-import @3.1-3.22 (module "MyResultModule")
 		(exposes))
-	(ext-decl (ident "MyResultModule.MyResultType") (kind "type")))
+	(ext-decl @5.16-5.43 (ident "MyResultModule.MyResultType") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-11.2 (type "Error -> Str")))
+		(patt @6.1-6.13 (type "Error -> Str")))
 	(expressions
-		(expr (type "Error -> Str"))))
+		(expr @6.16-11.2 (type "Error -> Str"))))
 ~~~

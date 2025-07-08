@@ -52,24 +52,24 @@ NO CHANGE
 		(p-assign @3.1-3.7 (ident "hello!"))
 		(e-call @3.10-3.31
 			(e-lookup-external
-				(ext-decl (ident "pf.Stdout.line!") (kind "value")))
-			(e-str @3.23-3.30
+				(ext-decl @3.10-3.22 (ident "pf.Stdout.line!") (kind "value")))
+			(e-string @3.23-3.30
 				(e-literal @3.24-3.29 (string "Hello")))))
 	(d-let
 		(p-assign @4.1-4.6 (ident "world"))
-		(e-str @4.9-4.16
+		(e-string @4.9-4.16
 			(e-literal @4.10-4.15 (string "World"))))
 	(s-import @2.1-2.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes))
-	(ext-decl (ident "pf.Stdout.line!") (kind "value")))
+	(ext-decl @3.10-3.22 (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.31 (type "*"))
-		(patt @4.1-4.16 (type "Str")))
+		(patt @3.1-3.7 (type "*"))
+		(patt @4.1-4.6 (type "Str")))
 	(expressions
-		(expr (type "*"))
-		(expr (type "Str"))))
+		(expr @3.10-3.31 (type "*"))
+		(expr @4.9-4.16 (type "Str"))))
 ~~~

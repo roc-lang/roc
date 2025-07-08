@@ -73,9 +73,9 @@ NO CHANGE
 				(e-int @4.19-4.20 (value "1"))))
 		(annotation @4.1-4.8
 			(declared-type
-				(ty-func @3.11-3.21 (effectful false)
-					(ty-type @3.11-3.14 (name "U64"))
-					(ty-type @3.18-3.21 (name "U64"))))))
+				(ty-fn @3.11-3.21 (effectful false)
+					(ty @3.11-3.14 (name "U64"))
+					(ty @3.18-3.21 (name "U64"))))))
 	(d-let
 		(p-assign @7.1-7.10 (ident "my_number"))
 		(e-call @7.13-7.24
@@ -84,15 +84,15 @@ NO CHANGE
 			(e-int @7.21-7.23 (value "42")))
 		(annotation @7.1-7.10
 			(declared-type
-				(ty-type @6.13-6.16 (name "U64"))))))
+				(ty @6.13-6.16 (name "U64"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-6.10 (type "U64 -> U64"))
-		(patt @7.1-7.24 (type "U64")))
+		(patt @4.1-4.8 (type "U64 -> U64"))
+		(patt @7.1-7.10 (type "U64")))
 	(expressions
-		(expr (type "U64 -> U64"))
-		(expr (type "U64"))))
+		(expr @4.11-6.10 (type "U64 -> U64"))
+		(expr @7.13-7.24 (type "U64"))))
 ~~~

@@ -38,12 +38,12 @@ NO CHANGE
 		(e-tuple @1.2-1.10
 			(elems
 				(e-int @1.3-1.4 (value "1"))
-				(e-str @1.6-1.9
+				(e-string @1.6-1.9
 					(e-literal @1.7-1.8 (string "a")))))
 		(e-tuple @1.12-1.22
 			(elems
 				(e-dec-small @1.13-1.16 (numerator "25") (denominator-power-of-ten "1") (value "2.5"))
-				(e-str @1.18-1.21
+				(e-string @1.18-1.21
 					(e-literal @1.19-1.20 (string "b")))))))
 ~~~
 # TYPES

@@ -75,30 +75,30 @@ match value {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-5.2
-	(match
+	(match @1.1-5.2
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch @2.15-2.27
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @2.5-2.11)))
 				(value
-					(e-str @2.15-2.27
+					(e-string @2.15-2.27
 						(e-literal @2.16-2.26 (string "the answer")))))
-			(branch @3.13-3.19
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @3.5-3.9)))
 				(value
-					(e-str @3.13-3.19
+					(e-string @3.13-3.19
 						(e-literal @3.14-3.18 (string "zero")))))
-			(branch @4.14-4.30
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-assign @4.5-4.10 (ident "other"))))
 				(value
-					(e-str @4.14-4.30
+					(e-string @4.14-4.30
 						(e-literal @4.15-4.29 (string "something else"))))))))
 ~~~
 # TYPES

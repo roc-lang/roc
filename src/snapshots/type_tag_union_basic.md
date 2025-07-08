@@ -85,30 +85,30 @@ NO CHANGE
 		(e-lambda @4.11-4.27
 			(args
 				(p-assign @4.12-4.17 (ident "maybe")))
-			(e-str @4.19-4.27
+			(e-string @4.19-4.27
 				(e-literal @4.20-4.26 (string "result"))))
 		(annotation @4.1-4.8
 			(declared-type
-				(ty-func @3.11-3.35 (effectful false)
+				(ty-fn @3.11-3.35 (effectful false)
 					(ty-tag-union @3.11-3.28
 						(ty-apply @3.12-3.21 (symbol "Some")
-							(ty-type @3.17-3.20 (name "Str")))
-						(ty-type @3.23-3.27 (name "None")))
-					(ty-type @3.32-3.35 (name "Str"))))))
+							(ty @3.17-3.20 (name "Str")))
+						(ty @3.23-3.27 (name "None")))
+					(ty @3.32-3.35 (name "Str"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
 			(args
 				(p-underscore @6.10-6.11))
-			(e-empty-record @6.13-6.15))))
+			(e-empty_record @6.13-6.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.27 (type "[Some, None] -> Str"))
-		(patt @6.1-6.15 (type "* -> {}")))
+		(patt @4.1-4.8 (type "[Some, None] -> Str"))
+		(patt @6.1-6.6 (type "* -> {}")))
 	(expressions
-		(expr (type "[Some, None] -> Str"))
-		(expr (type "* -> {}"))))
+		(expr @4.11-4.27 (type "[Some, None] -> Str"))
+		(expr @6.9-6.15 (type "* -> {}"))))
 ~~~

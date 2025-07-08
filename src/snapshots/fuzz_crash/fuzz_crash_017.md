@@ -114,7 +114,7 @@ foo =
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.20 (type "Error")))
+		(patt @2.1-2.4 (type "Error")))
 	(expressions
-		(expr (type "Error"))))
+		(expr @2.7-2.20 (type "Error"))))
 ~~~

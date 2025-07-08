@@ -76,14 +76,14 @@ match (value, other) {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-4.2
-	(match
+	(match @1.1-4.2
 		(cond
 			(e-tuple @1.7-1.21
 				(elems
 					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-runtime-error (tag "ident_not_in_scope")))))
 		(branches
-			(branch @2.21-3.6
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-tuple @2.5-2.17
@@ -96,7 +96,7 @@ match (value, other) {
 							(p-assign @2.11-2.12 (ident "x")))
 						(e-lookup-local @2.25-2.26
 							(p-assign @2.15-2.16 (ident "y"))))))
-			(branch @3.18-4.2
+			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-tuple @3.5-3.14

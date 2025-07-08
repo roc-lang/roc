@@ -426,14 +426,14 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 	(s-expr @4.5-4.16
 		(e-tag @4.5-4.15 (name "PascalCase")))
 	(s-expr @4.17-4.26
-		(e-str @4.17-4.25
+		(e-string @4.17-4.25
 			(e-literal @4.18-4.24 (string "pascal"))))
 	(s-expr @5.5-5.16
 		(e-binop @5.5-5.16 (op "sub")
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-runtime-error (tag "ident_not_in_scope"))))
 	(s-expr @5.17-5.25
-		(e-str @5.17-5.24
+		(e-string @5.17-5.24
 			(e-literal @5.18-5.23 (string "kebab"))))
 	(s-expr @6.5-6.11
 		(e-runtime-error (tag "ident_not_in_scope")))
@@ -442,9 +442,9 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 	(s-expr @7.5-7.17
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr @7.19-7.31
-		(e-str @7.19-7.30
+		(e-string @7.19-7.30
 			(e-literal @7.20-7.29 (string "at symbol"))))
-	(e-empty-record @1.1-8.2))
+	(e-empty_record @1.1-8.2))
 ~~~
 # TYPES
 ~~~clojure

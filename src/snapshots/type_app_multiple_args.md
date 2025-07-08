@@ -92,15 +92,15 @@ NO CHANGE
 		(e-lambda @4.15-4.25
 			(args
 				(p-assign @4.16-4.21 (ident "_dict")))
-			(e-empty-list @4.23-4.25))
+			(e-empty_list @4.23-4.25))
 		(annotation @4.1-4.12
 			(declared-type
-				(ty-func @3.15-3.42 (effectful false)
+				(ty-fn @3.15-3.42 (effectful false)
 					(ty-apply @3.15-3.29 (symbol "Dict")
-						(ty-type @3.20-3.23 (name "Str"))
-						(ty-type @3.25-3.28 (name "U64")))
+						(ty @3.20-3.23 (name "Str"))
+						(ty @3.25-3.28 (name "U64")))
 					(ty-apply @3.33-3.42 (symbol "List")
-						(ty-type @3.38-3.41 (name "Str")))))))
+						(ty @3.38-3.41 (name "Str")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.55
@@ -114,7 +114,7 @@ NO CHANGE
 						(e-call @6.25-6.37
 							(e-runtime-error (tag "ident_not_in_scope"))))
 					(args
-						(e-str @6.45-6.50
+						(e-string @6.45-6.50
 							(e-literal @6.46-6.49 (string "one")))
 						(e-int @6.52-6.53 (value "1"))))))))
 ~~~
@@ -122,9 +122,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.25 (type "Error -> Error"))
-		(patt @6.1-6.55 (type "* -> Error")))
+		(patt @4.1-4.12 (type "Error -> Error"))
+		(patt @6.1-6.6 (type "* -> Error")))
 	(expressions
-		(expr (type "Error -> Error"))
-		(expr (type "* -> Error"))))
+		(expr @4.15-4.25 (type "Error -> Error"))
+		(expr @6.9-6.55 (type "* -> Error"))))
 ~~~

@@ -64,7 +64,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.10 (type "*")))
+		(patt @6.1-6.4 (type "*")))
 	(expressions
-		(expr (type "*"))))
+		(expr @6.7-6.10 (type "*"))))
 ~~~

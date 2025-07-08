@@ -173,27 +173,27 @@ broken_fn3 : a -> b
 ~~~clojure
 (can-ir
 	(s-type-anno @4.1-6.26 (name "broken_fn1")
-		(ty-func @4.14-4.20 (effectful false)
+		(ty-fn @4.14-4.20 (effectful false)
 			(ty-var @4.14-4.15 (name "a"))
 			(ty-var @4.19-4.20 (name "b")))
 		(where
-			(where-malformed)))
+			(malformed @6.5-6.26)))
 	(s-type-anno @9.1-13.11 (name "broken_fn2")
-		(ty-func @9.14-9.20 (effectful false)
+		(ty-fn @9.14-9.20 (effectful false)
 			(ty-var @9.14-9.15 (name "a"))
 			(ty-var @9.19-9.20 (name "b")))
 		(where
-			(where-malformed)))
+			(malformed @10.3-13.11)))
 	(s-type-anno @13.1-15.31 (name "broken_fn3")
-		(ty-func @13.14-13.20 (effectful false)
+		(ty-fn @13.14-13.20 (effectful false)
 			(ty-var @13.14-13.15 (name "a"))
 			(ty-var @13.19-13.20 (name "b")))
 		(where
-			(where-mod-method (module-of "c") (ident "method")
+			(method @15.5-15.31 (module-of "c") (ident "method")
 				(args
 					(ty-var @15.24-15.25 (name "c")))
 				(ty-var @15.29-15.30 (name "d")))))
-	(ext-decl (ident "module(c).method") (kind "value")))
+	(ext-decl @15.5-15.31 (ident "module(c).method") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

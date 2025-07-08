@@ -132,13 +132,13 @@ outerFunc = |_| {
 			(args
 				(p-underscore @8.14-8.15))
 			(e-block @8.17-16.2
-				(s-var @9.5-9.11
+				(s-let @9.5-9.11
 					(p-assign @9.5-9.6 (ident "x"))
 					(e-int @9.9-9.11 (value "20")))
-				(s-var @10.5-14.6
+				(s-let @10.5-14.6
 					(p-assign @10.5-10.16 (ident "innerResult"))
 					(e-block @10.19-14.6
-						(s-var @12.9-13.10
+						(s-let @12.9-13.10
 							(p-assign @12.9-12.10 (ident "z"))
 							(e-binop @12.13-13.10 (op "add")
 								(e-lookup-local @12.13-12.14
@@ -156,11 +156,11 @@ outerFunc = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.6 (type "Num(*)"))
-		(patt @5.1-5.7 (type "Num(*)"))
-		(patt @8.1-16.2 (type "* -> *")))
+		(patt @4.1-4.2 (type "Num(*)"))
+		(patt @5.1-5.2 (type "Num(*)"))
+		(patt @8.1-8.10 (type "* -> *")))
 	(expressions
-		(expr (type "Num(*)"))
-		(expr (type "Num(*)"))
-		(expr (type "* -> *"))))
+		(expr @4.5-4.6 (type "Num(*)"))
+		(expr @5.5-5.7 (type "Num(*)"))
+		(expr @8.13-16.2 (type "* -> *"))))
 ~~~

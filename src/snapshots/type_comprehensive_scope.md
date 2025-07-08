@@ -310,20 +310,20 @@ Complex : {
 (can-ir
 	(s-alias-decl @4.1-4.12
 		(ty-header @4.1-4.6 (name "MyU64"))
-		(ty-type @4.9-4.12 (name "U64")))
+		(ty @4.9-4.12 (name "U64")))
 	(s-alias-decl @5.1-5.15
 		(ty-header @5.1-5.9 (name "MyString"))
-		(ty-type @5.12-5.15 (name "Str")))
+		(ty @5.12-5.15 (name "Str")))
 	(s-alias-decl @6.1-6.14
 		(ty-header @6.1-6.7 (name "MyBool"))
-		(ty-type @6.10-6.14 (name "Bool")))
+		(ty @6.10-6.14 (name "Bool")))
 	(s-alias-decl @9.1-9.33
 		(ty-header @9.1-9.7 (name "Person"))
 		(ty-record @9.10-9.33
 			(field (field "name")
-				(ty-type @9.18-9.21 (name "Str")))
+				(ty @9.18-9.21 (name "Str")))
 			(field (field "age")
-				(ty-type @9.28-9.31 (name "U64")))))
+				(ty @9.28-9.31 (name "U64")))))
 	(s-alias-decl @12.1-12.37
 		(ty-header @12.1-12.16 (name "Result")
 			(ty-args
@@ -358,35 +358,35 @@ Complex : {
 	(s-alias-decl @21.1-21.28
 		(ty-header @21.1-21.9 (name "MyResult"))
 		(ty-apply @21.12-21.28 (symbol "Result")
-			(ty-type @21.19-21.22 (name "Str"))
-			(ty-type @21.24-21.27 (name "U64"))))
+			(ty @21.19-21.22 (name "Str"))
+			(ty @21.24-21.27 (name "U64"))))
 	(s-alias-decl @24.1-24.13
 		(ty-header @24.1-24.7 (name "Person"))
-		(ty-type @24.10-24.13 (name "U64")))
+		(ty @24.10-24.13 (name "U64")))
 	(s-alias-decl @27.1-27.29
 		(ty-header @27.1-27.8 (name "BadType"))
-		(ty-type @27.11-27.29 (name "SomeUndeclaredType")))
+		(ty @27.11-27.29 (name "SomeUndeclaredType")))
 	(s-alias-decl @30.1-30.19
 		(ty-header @30.1-30.7 (name "MyList"))
 		(ty-apply @30.10-30.19 (symbol "List")
-			(ty-type @30.15-30.18 (name "Str"))))
+			(ty @30.15-30.18 (name "Str"))))
 	(s-alias-decl @31.1-31.24
 		(ty-header @31.1-31.7 (name "MyDict"))
 		(ty-apply @31.10-31.24 (symbol "Dict")
-			(ty-type @31.15-31.18 (name "Str"))
-			(ty-type @31.20-31.23 (name "U64"))))
+			(ty @31.15-31.18 (name "Str"))
+			(ty @31.20-31.23 (name "U64"))))
 	(s-alias-decl @34.1-38.2
 		(ty-header @34.1-34.8 (name "Complex"))
 		(ty-record @34.11-38.2
 			(field (field "person")
-				(ty-type @35.13-35.19 (name "Person")))
+				(ty @35.13-35.19 (name "Person")))
 			(field (field "result")
 				(ty-apply @36.13-36.30 (symbol "Result")
-					(ty-type @36.20-36.24 (name "Bool"))
-					(ty-type @36.26-36.29 (name "Str"))))
+					(ty @36.20-36.24 (name "Bool"))
+					(ty @36.26-36.29 (name "Str"))))
 			(field (field "tree")
 				(ty-apply @37.11-37.20 (symbol "Tree")
-					(ty-type @37.16-37.19 (name "U64")))))))
+					(ty @37.16-37.19 (name "U64")))))))
 ~~~
 # TYPES
 ~~~clojure

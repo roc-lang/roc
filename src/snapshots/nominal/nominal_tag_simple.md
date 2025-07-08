@@ -92,31 +92,31 @@ yellow = Yellow
 			(e-tag @6.8-6.18 (name "Blue")))
 		(annotation @6.1-6.5
 			(declared-type
-				(ty-type @5.8-5.13 (name "Color")))))
+				(ty @5.8-5.13 (name "Color")))))
 	(d-let
 		(p-assign @9.1-9.7 (ident "yellow"))
 		(e-nominal @9.10-9.22 (nominal "Color")
 			(e-tag @9.10-9.22 (name "Yellow")))
 		(annotation @9.1-9.7
 			(declared-type
-				(ty-type @8.10-8.15 (name "Color")))))
+				(ty @8.10-8.15 (name "Color")))))
 	(s-nominal-decl @3.1-3.28
 		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.10-3.28
-			(ty-type @3.11-3.14 (name "Red"))
-			(ty-type @3.16-3.21 (name "Green"))
-			(ty-type @3.23-3.27 (name "Blue")))))
+			(ty @3.11-3.14 (name "Red"))
+			(ty @3.16-3.21 (name "Green"))
+			(ty @3.23-3.27 (name "Blue")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.18 (type "Color"))
-		(patt @9.1-9.22 (type "Error")))
+		(patt @6.1-6.5 (type "Color"))
+		(patt @9.1-9.7 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.28 (type "Color")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions
-		(expr (type "Color"))
-		(expr (type "Error"))))
+		(expr @6.8-6.18 (type "Color"))
+		(expr @9.10-9.22 (type "Error"))))
 ~~~

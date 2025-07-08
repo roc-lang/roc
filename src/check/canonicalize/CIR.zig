@@ -570,11 +570,13 @@ pub const WhereClause = union(enum) {
         external_decl: ExternalDecl.Idx, // External declaration for module lookup
     };
 
-    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, where_idx: WhereClause.Idx) void {
         switch (self.*) {
             .mod_method => |mm| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("where-mod-method");
+                tree.pushStaticAtom("method");
+                const region = ir.store.getNodeRegion(@enumFromInt(@intFromEnum(where_idx)));
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 tree.pushStringPair("module-of", ir.env.idents.getText(mm.var_name));
                 tree.pushStringPair("ident", ir.env.idents.getText(mm.method_name));
                 const attrs = tree.beginNode();
@@ -592,7 +594,9 @@ pub const WhereClause = union(enum) {
             },
             .mod_alias => |ma| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("where-mod-alias");
+                tree.pushStaticAtom("alias");
+                const region = ir.store.getNodeRegion(@enumFromInt(@intFromEnum(where_idx)));
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 tree.pushStringPair("module-of", ir.env.idents.getText(ma.var_name));
                 tree.pushStringPair("ident", ir.env.idents.getText(ma.alias_name));
                 const attrs = tree.beginNode();
@@ -600,7 +604,9 @@ pub const WhereClause = union(enum) {
             },
             .malformed => |_| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("where-malformed");
+                tree.pushStaticAtom("malformed");
+                const region = ir.store.getNodeRegion(@enumFromInt(@intFromEnum(where_idx)));
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
@@ -852,12 +858,34 @@ pub const ExternalDecl = struct {
     /// Whether this is a value or type declaration
     kind: enum { value, type },
 
+    /// Region where this external declaration was referenced
+    region: Region,
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
         const begin = tree.beginNode();
         tree.pushStaticAtom("ext-decl");
+        ir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
+
+        // Add fully qualified name
+        tree.pushStringPair("ident", ir.env.idents.getText(self.qualified_name));
+
+        // Add kind
+        switch (self.kind) {
+            .value => tree.pushStringPair("kind", "value"),
+            .type => tree.pushStringPair("kind", "type"),
+        }
+
+        const attrs = tree.beginNode();
+        tree.endNode(begin, attrs);
+    }
+
+    pub fn pushToSExprTreeWithRegion(self: *const @This(), ir: *const CIR, tree: *SExprTree, region: Region) void {
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("ext-decl");
+        ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
         // Add fully qualified name
         tree.pushStringPair("ident", ir.env.idents.getText(self.qualified_name));
@@ -1167,7 +1195,9 @@ pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTre
                     const patt_begin = tree.beginNode();
                     tree.pushStaticAtom("patt");
 
-                    ir.appendRegionInfoToSExprTree(tree, def_idx);
+                    // Get the pattern region instead of the whole def region
+                    const pattern_region = ir.store.getPatternRegion(def.pattern);
+                    ir.appendRegionInfoToSExprTreeFromRegion(tree, pattern_region);
 
                     // Get the type variable for this definition
                     const def_var = ir.idxToTypeVar(&ir.env.types, def_idx) catch |err| exitOnOom(err);
@@ -1287,6 +1317,10 @@ pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTre
 
             const expr_node_begin = tree.beginNode();
             tree.pushStaticAtom("expr");
+
+            // Add region info for the expression
+            const expr_region = ir.store.getExprRegion(def.expr);
+            ir.appendRegionInfoToSExprTreeFromRegion(tree, expr_region);
 
             if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
                 const unknown_begin = tree.beginNode();

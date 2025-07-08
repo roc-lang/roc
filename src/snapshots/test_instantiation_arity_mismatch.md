@@ -15,7 +15,20 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - test_instantiation_arity_mismatch.md:5:5:5:13
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**test_instantiation_arity_mismatch.md:5:5:5:13:**
+```roc
+    identity(1, 2)
+```
+    ^^^^^^^^
+
+It is of type:
+    _* -> *_
+
+But you are trying to use it as:
+    _Num(*), Num(*) -> *_
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),
@@ -61,14 +74,14 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~clojure
 (e-block @1.1-6.2
 	(s-type-anno @2.5-3.13 (name "identity")
-		(ty-func @2.16-2.32 (effectful false)
+		(ty-fn @2.16-2.32 (effectful false)
 			(ty-tuple @2.16-2.22
 				(ty-var @2.17-2.18 (name "a"))
 				(ty-var @2.20-2.21 (name "b")))
 			(ty-tuple @2.26-2.32
 				(ty-var @2.27-2.28 (name "a"))
 				(ty-var @2.30-2.31 (name "b")))))
-	(s-var @3.5-3.27
+	(s-let @3.5-3.27
 		(p-assign @3.5-3.13 (ident "identity"))
 		(e-lambda @3.16-3.27
 			(args

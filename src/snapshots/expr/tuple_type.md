@@ -62,14 +62,14 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~clojure
 (e-block @1.1-6.2
 	(s-type-anno @2.5-3.6 (name "f")
-		(ty-func @2.9-2.33 (effectful false)
+		(ty-fn @2.9-2.33 (effectful false)
 			(ty-tuple @2.9-2.19
-				(ty-type @2.10-2.13 (name "Str"))
-				(ty-type @2.15-2.18 (name "Str")))
+				(ty @2.10-2.13 (name "Str"))
+				(ty @2.15-2.18 (name "Str")))
 			(ty-tuple @2.23-2.33
-				(ty-type @2.24-2.27 (name "Str"))
-				(ty-type @2.29-2.32 (name "Str")))))
-	(s-var @3.5-3.14
+				(ty @2.24-2.27 (name "Str"))
+				(ty @2.29-2.32 (name "Str")))))
+	(s-let @3.5-3.14
 		(p-assign @3.5-3.6 (ident "f"))
 		(e-lambda @3.9-3.14
 			(args
