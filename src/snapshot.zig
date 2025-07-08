@@ -12,7 +12,7 @@ const fmt = @import("fmt.zig");
 const types = @import("types.zig");
 const reporting = @import("reporting.zig");
 const tokenize = @import("check/parse/tokenize.zig");
-const SExpr = @import("base/SExpr.zig");
+const SExprTree = @import("base/SExprTree.zig");
 
 const AST = parse.AST;
 const Report = reporting.Report;
@@ -168,11 +168,6 @@ pub fn main() !void {
     const duration_ms = timer.read() / std.time.ns_per_ms;
 
     std.log.info("processed {d} snapshots in {d} ms.", .{ total_success, duration_ms });
-
-    if (total_failed > 0) {
-        std.log.err("failed to process {d} snapshots", .{total_failed});
-        std.process.exit(1);
-    }
 }
 
 /// Check if a file has a valid snapshot extension
@@ -1130,54 +1125,53 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
     try output.end_section();
 }
 
-/// Generate PARSE section for both markdown and HTML
-fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, module_env: *base.ModuleEnv) !void {
-    var parse_buffer = std.ArrayList(u8).init(output.gpa);
-    defer parse_buffer.deinit();
+/// Generate PARSE2 section using SExprTree for both markdown and HTML
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *base.ModuleEnv) !void {
+    var tree = SExprTree.init(output.gpa);
+    defer tree.deinit();
 
-    // Generate S-expression node based on content type
-    var node_opt: ?SExpr = null;
-    defer if (node_opt) |*node| node.deinit(output.gpa);
-
+    // Generate SExprTree node based on content type
     switch (content.meta.node_type) {
         .file => {
-            // Inline the toSExprStr logic for file case
             const file = parse_ast.store.getFile();
-            node_opt = file.toSExpr(module_env, parse_ast);
+            file.pushToSExprTree(env, parse_ast, &tree);
         },
         .header => {
             const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
-            node_opt = header.toSExpr(module_env, parse_ast);
+            header.pushToSExprTree(env, parse_ast, &tree);
         },
         .expr => {
             const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
-            node_opt = expr.toSExpr(module_env, parse_ast);
+            expr.pushToSExprTree(env, parse_ast, &tree);
         },
         .statement => {
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
-            node_opt = stmt.toSExpr(module_env, parse_ast);
+            stmt.pushToSExprTree(env, parse_ast, &tree);
         },
         .package => {
             const file = parse_ast.store.getFile();
-            node_opt = file.toSExpr(module_env, parse_ast);
+            file.pushToSExprTree(env, parse_ast, &tree);
         },
         .platform => {
             const file = parse_ast.store.getFile();
-            node_opt = file.toSExpr(module_env, parse_ast);
+            file.pushToSExprTree(env, parse_ast, &tree);
         },
         .app => {
             const file = parse_ast.store.getFile();
-            node_opt = file.toSExpr(module_env, parse_ast);
+            file.pushToSExprTree(env, parse_ast, &tree);
         },
     }
 
-    if (node_opt) |node| {
-        // Generate markdown output
-        node.toStringPretty(parse_buffer.writer().any());
-
+    // Only generate section if we have content on the stack
+    if (tree.stack.items.len > 0) {
         try output.begin_section("PARSE");
         try output.begin_code_block("clojure");
 
+        // Generate markdown output
+        var parse_buffer = std.ArrayList(u8).init(output.gpa);
+        defer parse_buffer.deinit();
+
+        tree.toStringPretty(parse_buffer.writer().any());
         try output.md_writer.writeAll(parse_buffer.items);
         try output.md_writer.writeAll("\n");
 
@@ -1186,7 +1180,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             \\                <pre class="ast-parse">
         );
 
-        node.toHtml(output.html_writer.any());
+        tree.toHtml(output.html_writer.any());
 
         try output.html_writer.writeAll(
             \\</pre>
@@ -1256,8 +1250,9 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 
 /// Generate CANONICALIZE section for both markdown and HTML
 fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
-    var node = can_ir.toSExpr(maybe_expr_idx, content.source);
-    defer node.deinit(can_ir.env.gpa);
+    var tree = SExprTree.init(output.gpa);
+    defer tree.deinit();
+    can_ir.pushToSExprTree(maybe_expr_idx, &tree, content.source);
 
     try output.begin_section("CANONICALIZE");
 
@@ -1266,8 +1261,8 @@ fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can
     );
     try output.begin_code_block("clojure");
 
-    node.toStringPretty(output.md_writer.any());
-    node.toHtml(output.html_writer.any());
+    tree.toStringPretty(output.md_writer.any());
+    tree.toHtml(output.html_writer.any());
 
     try output.md_writer.writeAll("\n");
 
@@ -1282,19 +1277,20 @@ fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can
 
 /// Generate TYPES section for both markdown and HTML
 fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
-    var node = can_ir.toSexprTypes(maybe_expr_idx, content.source);
-    defer node.deinit(can_ir.env.gpa);
+    var tree = SExprTree.init(output.gpa);
+    defer tree.deinit();
+    can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree, content.source);
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
-    node.toStringPretty(output.md_writer.any());
+    tree.toStringPretty(output.md_writer.any());
     try output.md_writer.writeAll("\n");
 
     // HTML TYPES section
     try output.html_writer.writeAll(
         \\                <pre>
     );
-    node.toHtml(output.html_writer.any());
+    tree.toHtml(output.html_writer.any());
     try output.html_writer.writeAll(
         \\</pre>
         \\

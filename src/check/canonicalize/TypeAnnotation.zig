@@ -13,6 +13,7 @@ const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
+const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
 const Expr = CIR.Expr;
 const IntValue = CIR.IntValue;
@@ -87,133 +88,139 @@ pub const TypeAnno = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
         switch (self.*) {
             .apply => |a| {
-                var node = SExpr.init(gpa, "ty-apply");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, a.region);
-
-                node.appendStringAttr(gpa, "symbol", ir.getIdentText(a.symbol));
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-apply");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, a.region);
+                tree.pushStringPair("symbol", ir.getIdentText(a.symbol));
+                const attrs = tree.beginNode();
 
                 const args_slice = ir.store.sliceTypeAnnos(a.args);
                 for (args_slice) |arg_idx| {
-                    const arg = ir.store.getTypeAnno(arg_idx);
-                    var arg_node = arg.toSExpr(ir);
-                    node.appendNode(gpa, &arg_node);
+                    ir.store.getTypeAnno(arg_idx).pushToSExprTree(ir, tree);
                 }
 
-                return node;
+                tree.endNode(begin, attrs);
             },
             .ty_var => |tv| {
-                var node = SExpr.init(gpa, "ty-var");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, tv.region);
-                node.appendStringAttr(gpa, "name", ir.getIdentText(tv.name));
-                return node;
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-var");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, tv.region);
+                tree.pushStringPair("name", ir.getIdentText(tv.name));
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
             },
             .underscore => |u| {
-                var node = SExpr.init(gpa, "ty-underscore");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, u.region);
-                return node;
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-underscore");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, u.region);
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
             },
             .ty => |t| {
-                var node = SExpr.init(gpa, "ty");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, t.region);
-                node.appendStringAttr(gpa, "name", ir.getIdentText(t.symbol));
-                return node;
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, t.region);
+                tree.pushStringPair("name", ir.getIdentText(t.symbol));
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
             },
             .tag_union => |tu| {
-                var node = SExpr.init(gpa, "ty-tag-union");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, tu.region);
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-tag-union");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, tu.region);
+                const attrs = tree.beginNode();
 
                 const tags_slice = ir.store.sliceTypeAnnos(tu.tags);
                 for (tags_slice) |tag_idx| {
-                    const tag = ir.store.getTypeAnno(tag_idx);
-                    var tag_node = tag.toSExpr(ir);
-                    node.appendNode(gpa, &tag_node);
+                    ir.store.getTypeAnno(tag_idx).pushToSExprTree(ir, tree);
                 }
 
                 if (tu.ext) |open_idx| {
-                    const open_anno = ir.store.getTypeAnno(open_idx);
-                    var open_node = open_anno.toSExpr(ir);
-                    node.appendNode(gpa, &open_node);
+                    ir.store.getTypeAnno(open_idx).pushToSExprTree(ir, tree);
                 }
 
-                return node;
+                tree.endNode(begin, attrs);
             },
             .tuple => |tup| {
-                var node = SExpr.init(gpa, "ty-tuple");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, tup.region);
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-tuple");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, tup.region);
+                const attrs = tree.beginNode();
 
                 const annos_slice = ir.store.sliceTypeAnnos(tup.elems);
                 for (annos_slice) |anno_idx| {
-                    const anno = ir.store.getTypeAnno(anno_idx);
-                    var anno_node = anno.toSExpr(ir);
-                    node.appendNode(gpa, &anno_node);
+                    ir.store.getTypeAnno(anno_idx).pushToSExprTree(ir, tree);
                 }
 
-                return node;
+                tree.endNode(begin, attrs);
             },
             .record => |r| {
-                var node = SExpr.init(gpa, "ty-record");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, r.region);
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-record");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, r.region);
+                const attrs = tree.beginNode();
 
                 const fields_slice = ir.store.sliceAnnoRecordFields(r.fields);
                 for (fields_slice) |field_idx| {
                     const field = ir.store.getAnnoRecordField(field_idx);
-                    var field_node = SExpr.init(gpa, "field");
-                    field_node.appendStringAttr(gpa, "field", ir.getIdentText(field.name));
 
-                    var type_node = ir.store.getTypeAnno(field.ty).toSExpr(ir);
-                    field_node.appendNode(gpa, &type_node);
+                    const field_begin = tree.beginNode();
+                    tree.pushStaticAtom("field");
+                    tree.pushStringPair("field", ir.getIdentText(field.name));
+                    const field_attrs = tree.beginNode();
 
-                    node.appendNode(gpa, &field_node);
+                    ir.store.getTypeAnno(field.ty).pushToSExprTree(ir, tree);
+
+                    tree.endNode(field_begin, field_attrs);
                 }
 
-                return node;
+                tree.endNode(begin, attrs);
             },
             .@"fn" => |f| {
-                var node = SExpr.init(gpa, "ty-fn");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, f.region);
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-fn");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, f.region);
+                tree.pushBoolPair("effectful", f.effectful);
+                const attrs = tree.beginNode();
 
                 const args_slice = ir.store.sliceTypeAnnos(f.args);
                 for (args_slice) |arg_idx| {
-                    const arg = ir.store.getTypeAnno(arg_idx);
-                    var arg_node = arg.toSExpr(ir);
-                    node.appendNode(gpa, &arg_node);
+                    ir.store.getTypeAnno(arg_idx).pushToSExprTree(ir, tree);
                 }
 
-                var ret_node = ir.store.getTypeAnno(f.ret).toSExpr(ir);
-                node.appendNode(gpa, &ret_node);
+                ir.store.getTypeAnno(f.ret).pushToSExprTree(ir, tree);
 
-                node.appendBoolAttr(gpa, "effectful", f.effectful);
-
-                return node;
+                tree.endNode(begin, attrs);
             },
             .parens => |p| {
-                var node = SExpr.init(gpa, "ty-parens");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-parens");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, p.region);
+                const attrs = tree.beginNode();
 
-                const inner_anno = ir.store.getTypeAnno(p.anno);
-                var inner_node = inner_anno.toSExpr(ir);
-                node.appendNode(gpa, &inner_node);
+                ir.store.getTypeAnno(p.anno).pushToSExprTree(ir, tree);
 
-                return node;
+                tree.endNode(begin, attrs);
             },
             .ty_lookup_external => |tle| {
-                var node = SExpr.init(gpa, "ty-lookup-external");
-                node.appendRegion(gpa, ir.calcRegionInfo(tle.region));
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-lookup-external");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, tle.region);
+                const attrs = tree.beginNode();
 
-                const external_decl = ir.getExternalDecl(tle.external_decl);
-                var decl_node = external_decl.toSExpr(ir);
-                node.appendNode(gpa, &decl_node);
+                ir.getExternalDecl(tle.external_decl).pushToSExprTree(ir, tree);
 
-                return node;
+                tree.endNode(begin, attrs);
             },
             .malformed => |m| {
-                var node = SExpr.init(gpa, "ty-malformed");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, m.region);
-                return node;
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-malformed");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, m.region);
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
             },
         }
     }
