@@ -81,11 +81,11 @@ match person {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-4.2
-	(match @1.1-4.2
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch
+			(branch @2.58-2.82
 				(patterns
 					(pattern (degenerate false)
 						(p-as @2.5-2.54 (as "fullPerson")
@@ -124,7 +124,7 @@ match person {
 												(required))))))
 							(e-lookup-local @2.77-2.81
 								(p-assign @2.24-2.30 (ident "city")))))))
-			(branch
+			(branch @3.33-3.64
 				(patterns
 					(pattern (degenerate false)
 						(p-as @3.5-3.29 (as "simplePerson")
@@ -143,7 +143,7 @@ match person {
 												(required))))))
 							(e-lookup-local @3.48-3.52
 								(p-assign @3.7-3.13 (ident "name")))
-							(e-string @3.54-3.63
+							(e-str @3.54-3.63
 								(e-literal @3.55-3.62 (string "unknown"))))))))))
 ~~~
 # TYPES

@@ -49,7 +49,7 @@ NO CHANGE
 (e-list @1.1-1.13
 	(elems
 		(e-int @1.2-1.3 (value "1"))
-		(e-string @1.5-1.12
+		(e-str @1.5-1.12
 			(e-literal @1.6-1.11 (string "hello")))))
 ~~~
 # TYPES

@@ -107,30 +107,30 @@ match x {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-5.2
-	(match @1.1-5.2
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch
+			(branch @2.16-2.20
 				(patterns
 					(pattern (degenerate false)
 						(p-runtime-error @2.5-2.15 (tag "pattern_not_canonicalized"))))
 				(value
-					(e-string @2.16-2.20
+					(e-str @2.16-2.20
 						(e-literal @2.17-2.19 (string "pi")))))
-			(branch
+			(branch @3.15-3.21
 				(patterns
 					(pattern (degenerate false)
 						(p-runtime-error @3.5-3.14 (tag "pattern_not_canonicalized"))))
 				(value
-					(e-string @3.15-3.21
+					(e-str @3.15-3.21
 						(e-literal @3.16-3.20 (string "zero")))))
-			(branch
+			(branch @4.14-4.21
 				(patterns
 					(pattern (degenerate false)
 						(p-assign @4.5-4.10 (ident "value"))))
 				(value
-					(e-string @4.14-4.21
+					(e-str @4.14-4.21
 						(e-literal @4.15-4.20 (string "other"))))))))
 ~~~
 # TYPES

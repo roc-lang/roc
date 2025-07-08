@@ -73,15 +73,15 @@ decodeThings # After member name
 		(exposes
 			(exposed (name "Decode") (wildcard false))))
 	(s-type-anno @5.1-9.22 (name "decodeThings")
-		(ty-fn @7.3-7.28 (effectful false)
+		(ty-func @7.3-7.28 (effectful false)
 			(ty-apply @7.3-7.17 (symbol "List")
 				(ty-apply @7.8-7.16 (symbol "List")
-					(ty @7.13-7.15 (name "U8"))))
+					(ty-type @7.13-7.15 (name "U8"))))
 			(ty-apply @7.21-7.28 (symbol "List")
 				(ty-var @7.26-7.27 (name "a"))))
 		(where
-			(alias @9.5-9.22 (module-of "a") (ident "Decode"))))
-	(ext-decl @9.5-9.22 (ident "module(a).Decode") (kind "type")))
+			(where-mod-alias (module-of "a") (ident "Decode"))))
+	(ext-decl (ident "module(a).Decode") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

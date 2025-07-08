@@ -74,21 +74,21 @@ foo = |a| {
 					(e-binop @1.1-1.1 (op "eq")
 						(e-lookup-local @5.12-5.13
 							(p-assign @4.8-4.9 (ident "a")))
-						(e-nominal @5.17-5.21 (nominal "Bool")
+						(e-nominal @5.17-5.26 (nominal "Bool")
 							(e-tag @5.17-5.26 (name "True")))))
 				(e-lookup-local @6.5-6.6
 					(p-assign @4.8-4.9 (ident "a")))))
 		(annotation @4.1-4.4
 			(declared-type
-				(ty-fn @3.7-3.19 (effectful false)
-					(ty @3.7-3.11 (name "Bool"))
-					(ty @3.15-3.19 (name "Bool")))))))
+				(ty-func @3.7-3.19 (effectful false)
+					(ty-type @3.7-3.11 (name "Bool"))
+					(ty-type @3.15-3.19 (name "Bool")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Bool -> Bool")))
+		(patt @4.1-7.2 (type "Bool -> Bool")))
 	(expressions
-		(expr @4.7-7.2 (type "Bool -> Bool"))))
+		(expr (type "Bool -> Bool"))))
 ~~~

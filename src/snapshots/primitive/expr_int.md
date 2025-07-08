@@ -43,7 +43,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.4 (type "Num(*)")))
+		(patt @2.1-2.9 (type "Num(*)")))
 	(expressions
-		(expr @2.7-2.9 (type "Num(*)"))))
+		(expr (type "Num(*)"))))
 ~~~

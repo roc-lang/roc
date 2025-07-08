@@ -28,7 +28,7 @@ dbg True
 ~~~clojure
 (can-ir
 	(s-dbg @1.1-1.14
-		(e-nominal @1.5-1.9 (nominal "Bool")
+		(e-nominal @1.5-1.14 (nominal "Bool")
 			(e-tag @1.5-1.14 (name "True")))))
 ~~~
 # TYPES

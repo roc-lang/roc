@@ -117,7 +117,7 @@ NO CHANGE
 						(p-assign @6.14-6.15 (ident "x"))))))
 		(annotation @6.1-6.9
 			(declared-type
-				(ty-fn @5.12-5.36 (effectful false)
+				(ty-func @5.12-5.36 (effectful false)
 					(ty-apply @5.12-5.22 (symbol "Pair")
 						(ty-var @5.17-5.18 (name "a"))
 						(ty-var @5.20-5.21 (name "b")))
@@ -147,8 +147,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.9 (type "Error"))
-		(patt @8.1-8.6 (type "* -> *")))
+		(patt @6.1-6.27 (type "Error"))
+		(patt @8.1-8.27 (type "* -> *")))
 	(type_decls
 		(alias @3.1-3.20 (type "Pair(a, b)")
 			(ty-header @3.1-3.11 (name "Pair")
@@ -156,6 +156,6 @@ NO CHANGE
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.10 (name "b"))))))
 	(expressions
-		(expr @6.12-6.27 (type "Error"))
-		(expr @8.9-8.27 (type "* -> *"))))
+		(expr (type "Error"))
+		(expr (type "* -> *"))))
 ~~~

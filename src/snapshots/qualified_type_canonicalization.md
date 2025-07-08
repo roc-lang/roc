@@ -841,43 +841,43 @@ err->TypeC.default
 		(annotation @15.1-15.16
 			(declared-type
 				(ty-lookup-external @14.19-14.28
-					(ext-decl @14.19-14.28 (ident "Color.RGB") (kind "type"))))))
+					(ext-decl (ident "Color.RGB") (kind "type"))))))
 	(d-let
 		(p-assign @19.1-19.17 (ident "aliasedQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @19.1-19.17
 			(declared-type
 				(ty-lookup-external @18.20-18.35
-					(ext-decl @18.20-18.35 (ident "ExtMod.DataType") (kind "type"))))))
+					(ext-decl (ident "ExtMod.DataType") (kind "type"))))))
 	(d-let
 		(p-assign @23.1-23.20 (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @23.1-23.20
 			(declared-type
 				(ty-lookup-external @22.23-22.44
-					(ext-decl @22.23-22.44 (ident "ModuleA.ModuleB.TypeC") (kind "type"))))))
+					(ext-decl (ident "ModuleA.ModuleB.TypeC") (kind "type"))))))
 	(d-let
 		(p-assign @27.1-27.11 (ident "resultType"))
-		(e-nominal @27.14-27.20 (nominal "Result")
+		(e-nominal @27.14-27.23 (nominal "Result")
 			(e-tag @27.14-27.23 (name "Ok"))))
 	(d-let
 		(p-assign @31.1-31.9 (ident "getColor"))
 		(e-runtime-error (tag "expr_not_canonicalized"))
 		(annotation @31.1-31.9
 			(declared-type
-				(ty-fn @30.12-30.27 (effectful false)
+				(ty-func @30.12-30.27 (effectful false)
 					(ty-record @30.12-30.14)
 					(ty-lookup-external @30.18-30.27
-						(ext-decl @30.18-30.27 (ident "Color.RGB") (kind "type")))))))
+						(ext-decl (ident "Color.RGB") (kind "type")))))))
 	(d-let
 		(p-assign @35.1-35.13 (ident "processColor"))
 		(e-runtime-error (tag "expr_not_canonicalized"))
 		(annotation @35.1-35.13
 			(declared-type
-				(ty-fn @34.16-34.32 (effectful false)
+				(ty-func @34.16-34.32 (effectful false)
 					(ty-lookup-external @34.16-34.25
-						(ext-decl @34.16-34.25 (ident "Color.RGB") (kind "type")))
-					(ty @34.29-34.32 (name "Str"))))))
+						(ext-decl (ident "Color.RGB") (kind "type")))
+					(ty-type @34.29-34.32 (name "Str"))))))
 	(d-let
 		(p-assign @40.1-40.10 (ident "transform"))
 		(e-runtime-error (tag "expr_not_canonicalized")))
@@ -887,31 +887,31 @@ err->TypeC.default
 		(exposes))
 	(s-import @11.1-11.32 (module "ExternalModule") (alias "ExtMod")
 		(exposes))
-	(ext-decl @14.19-14.28 (ident "Color.RGB") (kind "type"))
-	(ext-decl @18.20-18.35 (ident "ExtMod.DataType") (kind "type"))
-	(ext-decl @22.23-22.44 (ident "ModuleA.ModuleB.TypeC") (kind "type"))
-	(ext-decl @26.14-26.27 (ident "Result.Result") (kind "type"))
-	(ext-decl @30.18-30.27 (ident "Color.RGB") (kind "type"))
-	(ext-decl @34.16-34.25 (ident "Color.RGB") (kind "type"))
-	(ext-decl @39.13-39.26 (ident "Result.Result") (kind "type")))
+	(ext-decl (ident "Color.RGB") (kind "type"))
+	(ext-decl (ident "ExtMod.DataType") (kind "type"))
+	(ext-decl (ident "ModuleA.ModuleB.TypeC") (kind "type"))
+	(ext-decl (ident "Result.Result") (kind "type"))
+	(ext-decl (ident "Color.RGB") (kind "type"))
+	(ext-decl (ident "Color.RGB") (kind "type"))
+	(ext-decl (ident "Result.Result") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @15.1-15.16 (type "Error"))
-		(patt @19.1-19.17 (type "Error"))
-		(patt @23.1-23.20 (type "Error"))
-		(patt @27.1-27.11 (type "Result"))
-		(patt @31.1-31.9 (type "Error"))
-		(patt @35.1-35.13 (type "Error"))
-		(patt @40.1-40.10 (type "Error")))
+		(patt @15.1-15.28 (type "Error"))
+		(patt @19.1-19.43 (type "Error"))
+		(patt @23.1-23.32 (type "Error"))
+		(patt @27.1-27.23 (type "Result"))
+		(patt @31.1-31.14 (type "Error"))
+		(patt @35.1-35.22 (type "Error"))
+		(patt @40.1-40.20 (type "Error")))
 	(expressions
-		(expr @15.19-15.28 (type "Error"))
-		(expr @19.20-19.43 (type "Error"))
-		(expr @23.23-23.32 (type "Error"))
-		(expr @27.14-27.23 (type "Result"))
-		(expr @31.12-31.14 (type "Error"))
-		(expr @35.16-35.22 (type "Error"))
-		(expr @40.13-40.20 (type "Error"))))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Result"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

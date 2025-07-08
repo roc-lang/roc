@@ -617,7 +617,7 @@ data = json"hello"
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @6.1-6.13
 			(declared-type
-				(ty @5.16-5.23 (name "Encoder")))))
+				(ty-type @5.16-5.23 (name "Encoder")))))
 	(d-let
 		(p-assign @14.1-14.5 (ident "data"))
 		(e-runtime-error (tag "ident_not_in_scope")))
@@ -628,9 +628,9 @@ data = json"hello"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.13 (type "Error"))
-		(patt @14.1-14.5 (type "Error")))
+		(patt @6.1-6.45 (type "Error"))
+		(patt @14.1-14.12 (type "Error")))
 	(expressions
-		(expr @6.16-6.45 (type "Error"))
-		(expr @14.8-14.12 (type "Error"))))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

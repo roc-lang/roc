@@ -202,19 +202,19 @@ olor = |color| {
 				(s-expr @1.1-1.1
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(e-match @8.5-11.6
-					(match @8.5-11.6
+					(match
 						(cond
 							(e-lookup-local @8.11-8.16
 								(p-assign @6.9-6.14 (ident "color"))))
 						(branches
-							(branch
+							(branch @8.26-8.45
 								(patterns
 									(pattern (degenerate false)
 										(p-applied-tag @8.19-8.22)))
 								(value
-									(e-nominal @8.26-8.37 (nominal "<malformed>")
+									(e-nominal @8.26-8.45 (nominal "<malformed>")
 										(e-tag @8.26-8.45 (name "Pending")))))
-							(branch
+							(branch @1.1-1.1
 								(patterns
 									(pattern (degenerate false)
 										(p-applied-tag @9.1-9.6)))
@@ -222,32 +222,32 @@ olor = |color| {
 									(e-binop @1.1-1.1 (op "sub")
 										(e-tag @9.10-9.21 (name "LocalStatus"))
 										(e-tag @9.22-9.30 (name "Complete")))))
-							(branch
+							(branch @10.13-10.32
 								(patterns
 									(pattern (degenerate false)
 										(p-applied-tag @10.3-10.9)))
 								(value
-									(e-nominal @10.13-10.24 (nominal "<malformed>")
+									(e-nominal @10.13-10.32 (nominal "<malformed>")
 										(e-tag @10.13-10.32 (name "Pending"))))))))))
 		(annotation @6.1-6.5
 			(declared-type
-				(ty-fn @5.8-5.16 (effectful false)
+				(ty-func @5.8-5.16 (effectful false)
 					(ty-underscore @5.8-5.9)
 					(ty-var @5.13-5.16 (name "tus"))))))
 	(s-alias-decl @3.1-3.24
 		(ty-header @3.1-3.12 (name "LocalStatus"))
-		(ty-fn @3.14-3.24 (effectful true)
+		(ty-func @3.14-3.24 (effectful true)
 			(ty-var @3.14-3.17 (name "lue"))
-			(ty @3.21-3.24 (name "Loc")))))
+			(ty-type @3.21-3.24 (name "Loc")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "[Green, RGB, Blue]* -> Error")))
+		(patt @6.1-12.2 (type "[Green, RGB, Blue]* -> Error")))
 	(type_decls
 		(alias @3.1-3.24 (type "LocalStatus")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
-		(expr @6.8-12.2 (type "[Green, RGB, Blue]* -> Error"))))
+		(expr (type "[Green, RGB, Blue]* -> Error"))))
 ~~~

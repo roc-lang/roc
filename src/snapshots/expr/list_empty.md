@@ -25,7 +25,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-empty_list @1.1-1.3)
+(e-empty-list @1.1-1.3)
 ~~~
 # TYPES
 ~~~clojure

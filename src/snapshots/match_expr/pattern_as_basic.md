@@ -66,14 +66,14 @@ match (1, 2) {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-3.2
-	(match @1.1-3.2
+	(match
 		(cond
 			(e-tuple @1.7-1.13
 				(elems
 					(e-int @1.8-1.9 (value "1"))
 					(e-int @1.11-1.12 (value "2")))))
 		(branches
-			(branch
+			(branch @2.24-2.29
 				(patterns
 					(pattern (degenerate false)
 						(p-as @2.5-2.20 (as "point")

@@ -45,7 +45,7 @@ NO CHANGE
 					(required))
 				(record-destruct @1.16-1.24 (label "rest") (ident "rest")
 					(required)))))
-	(e-string @1.26-1.65
+	(e-str @1.26-1.65
 		(e-literal @1.27-1.33 (string "Hello "))
 		(e-lookup-local @1.35-1.45
 			(p-assign @1.4-1.15 (ident "first_name")))

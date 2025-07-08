@@ -327,7 +327,7 @@ main = |_| {
 (can-ir
 	(d-let
 		(p-assign @4.1-4.14 (ident "my_empty_list"))
-		(e-empty_list @4.17-4.19))
+		(e-empty-list @4.17-4.19))
 	(d-let
 		(p-assign @7.1-7.9 (ident "int_list"))
 		(e-list @7.12-7.21
@@ -339,9 +339,9 @@ main = |_| {
 		(p-assign @8.1-8.9 (ident "str_list"))
 		(e-list @8.12-8.30
 			(elems
-				(e-string @8.13-8.20
+				(e-str @8.13-8.20
 					(e-literal @8.14-8.19 (string "hello")))
-				(e-string @8.22-8.29
+				(e-str @8.22-8.29
 					(e-literal @8.23-8.28 (string "world"))))))
 	(d-let
 		(p-assign @9.1-9.11 (ident "float_list"))
@@ -373,7 +373,7 @@ main = |_| {
 		(e-lambda @17.13-17.19
 			(args
 				(p-underscore @17.14-17.15))
-			(e-empty_list @17.17-17.19)))
+			(e-empty-list @17.17-17.19)))
 	(d-let
 		(p-assign @20.1-20.15 (ident "empty_int_list"))
 		(e-call @20.18-20.31
@@ -385,7 +385,7 @@ main = |_| {
 		(e-call @21.18-21.35
 			(e-lookup-local @21.18-21.27
 				(p-assign @17.1-17.10 (ident "get_empty")))
-			(e-string @21.28-21.34
+			(e-str @21.28-21.34
 				(e-literal @21.29-21.33 (string "test")))))
 	(d-let
 		(p-assign @23.1-23.5 (ident "main"))
@@ -393,19 +393,19 @@ main = |_| {
 			(args
 				(p-underscore @23.9-23.10))
 			(e-block @23.12-29.2
-				(s-let @25.5-25.34
+				(s-var @25.5-25.34
 					(p-assign @25.5-25.9 (ident "len1"))
 					(e-call @25.12-25.34
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @25.21-25.33
 							(p-assign @12.1-12.13 (ident "all_int_list")))))
-				(s-let @26.5-26.34
+				(s-var @26.5-26.34
 					(p-assign @26.5-26.9 (ident "len2"))
 					(e-call @26.12-26.34
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @26.21-26.33
 							(p-assign @13.1-13.13 (ident "all_str_list")))))
-				(s-let @27.5-27.36
+				(s-var @27.5-27.36
 					(p-assign @27.5-27.9 (ident "len3"))
 					(e-call @27.12-27.36
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -424,27 +424,27 @@ main = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.14 (type "List(*)"))
-		(patt @7.1-7.9 (type "List(Num(*))"))
-		(patt @8.1-8.9 (type "List(Str)"))
-		(patt @9.1-9.11 (type "List(Frac(*))"))
-		(patt @12.1-12.13 (type "*"))
-		(patt @13.1-13.13 (type "*"))
-		(patt @14.1-14.15 (type "*"))
-		(patt @17.1-17.10 (type "* -> List(*)"))
-		(patt @20.1-20.15 (type "List(*)"))
-		(patt @21.1-21.15 (type "List(*)"))
-		(patt @23.1-23.5 (type "* -> *")))
+		(patt @4.1-4.19 (type "List(*)"))
+		(patt @7.1-7.21 (type "List(Num(*))"))
+		(patt @8.1-8.30 (type "List(Str)"))
+		(patt @9.1-9.29 (type "List(Frac(*))"))
+		(patt @12.1-12.41 (type "*"))
+		(patt @13.1-13.41 (type "*"))
+		(patt @14.1-14.45 (type "*"))
+		(patt @17.1-17.19 (type "* -> List(*)"))
+		(patt @20.1-20.31 (type "List(*)"))
+		(patt @21.1-21.35 (type "List(*)"))
+		(patt @23.1-29.2 (type "* -> *")))
 	(expressions
-		(expr @4.17-4.19 (type "List(*)"))
-		(expr @7.12-7.21 (type "List(Num(*))"))
-		(expr @8.12-8.30 (type "List(Str)"))
-		(expr @9.14-9.29 (type "List(Frac(*))"))
-		(expr @12.16-12.41 (type "*"))
-		(expr @13.16-13.41 (type "*"))
-		(expr @14.18-14.45 (type "*"))
-		(expr @17.13-17.19 (type "* -> List(*)"))
-		(expr @20.18-20.31 (type "List(*)"))
-		(expr @21.18-21.35 (type "List(*)"))
-		(expr @23.8-29.2 (type "* -> *"))))
+		(expr (type "List(*)"))
+		(expr (type "List(Num(*))"))
+		(expr (type "List(Str)"))
+		(expr (type "List(Frac(*))"))
+		(expr (type "*"))
+		(expr (type "*"))
+		(expr (type "*"))
+		(expr (type "* -> List(*)"))
+		(expr (type "List(*)"))
+		(expr (type "List(*)"))
+		(expr (type "* -> *"))))
 ~~~

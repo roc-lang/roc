@@ -698,17 +698,17 @@ main = |_| {
 		(e-dec-small @5.8-5.11 (numerator "42") (denominator-power-of-ten "1") (value "4.2")))
 	(d-let
 		(p-assign @6.1-6.4 (ident "str"))
-		(e-string @6.7-6.14
+		(e-str @6.7-6.14
 			(e-literal @6.8-6.13 (string "hello"))))
 	(d-let
 		(p-assign @7.1-7.5 (ident "bool"))
 		(e-tag @7.8-7.12 (name "True")))
 	(d-let
 		(p-assign @10.1-10.11 (ident "empty_list"))
-		(e-empty_list @10.14-10.16))
+		(e-empty-list @10.14-10.16))
 	(d-let
 		(p-assign @11.1-11.13 (ident "empty_record"))
-		(e-empty_record @11.16-11.18))
+		(e-empty-record @11.16-11.18))
 	(d-let
 		(p-assign @14.1-14.9 (ident "int_list"))
 		(e-list @14.12-14.21
@@ -720,11 +720,11 @@ main = |_| {
 		(p-assign @15.1-15.9 (ident "str_list"))
 		(e-list @15.12-15.27
 			(elems
-				(e-string @15.13-15.16
+				(e-str @15.13-15.16
 					(e-literal @15.14-15.15 (string "a")))
-				(e-string @15.18-15.21
+				(e-str @15.18-15.21
 					(e-literal @15.19-15.20 (string "b")))
-				(e-string @15.23-15.26
+				(e-str @15.23-15.26
 					(e-literal @15.24-15.25 (string "c"))))))
 	(d-let
 		(p-assign @16.1-16.10 (ident "bool_list"))
@@ -786,11 +786,11 @@ main = |_| {
 				(field (name "items")
 					(e-list @25.29-25.44
 						(elems
-							(e-string @25.30-25.33
+							(e-str @25.30-25.33
 								(e-literal @25.31-25.32 (string "x")))
-							(e-string @25.35-25.38
+							(e-str @25.35-25.38
 								(e-literal @25.36-25.37 (string "y")))
-							(e-string @25.40-25.43
+							(e-str @25.40-25.43
 								(e-literal @25.41-25.42 (string "z"))))))
 				(field (name "count")
 					(e-int @25.53-25.54 (value "0"))))))
@@ -838,7 +838,7 @@ main = |_| {
 								(e-lookup-local @43.22-43.25
 									(p-assign @6.1-6.4 (ident "str")))))))
 				(field (name "name")
-					(e-string @45.11-45.21
+					(e-str @45.11-45.21
 						(e-literal @45.12-45.20 (string "integers")))))))
 	(d-let
 		(p-assign @48.1-48.8 (ident "config2"))
@@ -847,11 +847,11 @@ main = |_| {
 				(field (name "data")
 					(e-list @49.11-49.40
 						(elems
-							(e-string @49.12-49.19
+							(e-str @49.12-49.19
 								(e-literal @49.13-49.18 (string "apple")))
-							(e-string @49.21-49.29
+							(e-str @49.21-49.29
 								(e-literal @49.22-49.28 (string "banana")))
-							(e-string @49.31-49.39
+							(e-str @49.31-49.39
 								(e-literal @49.32-49.38 (string "cherry"))))))
 				(field (name "metadata")
 					(e-record @50.15-54.6
@@ -866,7 +866,7 @@ main = |_| {
 								(e-lookup-local @53.22-53.25
 									(p-assign @6.1-6.4 (ident "str")))))))
 				(field (name "name")
-					(e-string @55.11-55.19
+					(e-str @55.11-55.19
 						(e-literal @55.12-55.18 (string "fruits")))))))
 	(d-let
 		(p-assign @59.1-59.15 (ident "make_container"))
@@ -949,7 +949,7 @@ main = |_| {
 											(elems
 												(e-int @77.18-77.19 (value "1")))))
 									(field (name "tag")
-										(e-string @77.27-77.35
+										(e-str @77.27-77.35
 											(e-literal @77.28-77.34 (string "single"))))))
 							(e-record @78.9-78.38
 								(fields
@@ -959,7 +959,7 @@ main = |_| {
 												(e-int @78.18-78.19 (value "1"))
 												(e-int @78.21-78.22 (value "2")))))
 									(field (name "tag")
-										(e-string @78.30-78.36
+										(e-str @78.30-78.36
 											(e-literal @78.31-78.35 (string "ints"))))))
 							(e-record @79.9-79.41
 								(fields
@@ -970,7 +970,7 @@ main = |_| {
 												(e-int @79.21-79.22 (value "2"))
 												(e-int @79.24-79.25 (value "3")))))
 									(field (name "tag")
-										(e-string @79.33-79.39
+										(e-str @79.33-79.39
 											(e-literal @79.34-79.38 (string "more"))))))))))))
 	(d-let
 		(p-assign @84.1-84.9 (ident "compute1"))
@@ -1101,61 +1101,61 @@ main = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Num(*)"))
-		(patt @5.1-5.5 (type "Frac(*)"))
-		(patt @6.1-6.4 (type "Str"))
-		(patt @7.1-7.5 (type "[True]*"))
-		(patt @10.1-10.11 (type "List(Num(*))"))
-		(patt @11.1-11.13 (type "{}"))
-		(patt @14.1-14.9 (type "List(Num(*))"))
-		(patt @15.1-15.9 (type "List(Str)"))
-		(patt @16.1-16.10 (type "List([True, False]*)"))
-		(patt @19.1-19.13 (type "List(List(Num(*)))"))
-		(patt @20.1-20.13 (type "List(List(Num(*)))"))
-		(patt @23.1-23.12 (type "{ items: List(Num(*)), count: Num(*) }"))
-		(patt @24.1-24.17 (type "{ items: List(Num(*)), count: Num(*) }"))
-		(patt @25.1-25.17 (type "{ items: List(Str), count: Num(*) }"))
-		(patt @28.1-28.12 (type "{ data: List(Num(*)), metadata: { version: Num(*), ratio: Frac(*), description: Str } }"))
-		(patt @38.1-38.8 (type "{ data: List(Num(*)), metadata: { version: Num(*), ratio: Frac(*), description: Str }, name: Str }"))
-		(patt @48.1-48.8 (type "{ data: List(Str), metadata: { version: Num(*), ratio: Frac(*), description: Str }, name: Str }"))
-		(patt @59.1-59.15 (type "* -> { value: *, wrapper: List(*) }"))
-		(patt @60.1-60.11 (type "{ value: *, wrapper: List(*) }"))
-		(patt @61.1-61.11 (type "{ value: *, wrapper: List(*) }"))
-		(patt @62.1-62.11 (type "{ value: *, wrapper: List(*) }"))
-		(patt @65.1-65.5 (type "{ level1: { level2: { level3: { data: List(Num(*)), value: Num(*) }, items: List(Num(*)) }, collection: List(Num(*)) }, results: List({ data: List(Num(*)), tag: Str }) }"))
-		(patt @84.1-84.9 (type "*"))
-		(patt @85.1-85.9 (type "*"))
-		(patt @86.1-86.9 (type "List(Num(*))"))
-		(patt @87.1-87.9 (type "{ base: Num(*), derived: List(Num(*)) }"))
-		(patt @90.1-90.6 (type "{ numbers: { value: Num(*), list: List(Num(*)), float: Frac(*) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(*)), in_list: List(List(Num(*))), in_record: { data: List(Num(*)) } }, computations: { from_num: *, from_frac: *, list_from_num: List(Num(*)) } }"))
-		(patt @105.1-105.5 (type "* -> *")))
+		(patt @4.1-4.9 (type "Num(*)"))
+		(patt @5.1-5.11 (type "Frac(*)"))
+		(patt @6.1-6.14 (type "Str"))
+		(patt @7.1-7.12 (type "[True]*"))
+		(patt @10.1-10.16 (type "List(Num(*))"))
+		(patt @11.1-11.18 (type "{}"))
+		(patt @14.1-14.21 (type "List(Num(*))"))
+		(patt @15.1-15.27 (type "List(Str)"))
+		(patt @16.1-16.26 (type "List([True, False]*)"))
+		(patt @19.1-19.52 (type "List(List(Num(*)))"))
+		(patt @20.1-20.56 (type "List(List(Num(*)))"))
+		(patt @23.1-23.46 (type "{ items: List(Num(*)), count: Num(*) }"))
+		(patt @24.1-24.50 (type "{ items: List(Num(*)), count: Num(*) }"))
+		(patt @25.1-25.56 (type "{ items: List(Str), count: Num(*) }"))
+		(patt @28.1-35.2 (type "{ data: List(Num(*)), metadata: { version: Num(*), ratio: Frac(*), description: Str } }"))
+		(patt @38.1-46.2 (type "{ data: List(Num(*)), metadata: { version: Num(*), ratio: Frac(*), description: Str }, name: Str }"))
+		(patt @48.1-56.2 (type "{ data: List(Str), metadata: { version: Num(*), ratio: Frac(*), description: Str }, name: Str }"))
+		(patt @59.1-59.54 (type "* -> { value: *, wrapper: List(*) }"))
+		(patt @60.1-60.33 (type "{ value: *, wrapper: List(*) }"))
+		(patt @61.1-61.33 (type "{ value: *, wrapper: List(*) }"))
+		(patt @62.1-62.34 (type "{ value: *, wrapper: List(*) }"))
+		(patt @65.1-81.2 (type "{ level1: { level2: { level3: { data: List(Num(*)), value: Num(*) }, items: List(Num(*)) }, collection: List(Num(*)) }, results: List({ data: List(Num(*)), tag: Str }) }"))
+		(patt @84.1-85.9 (type "*"))
+		(patt @85.1-86.9 (type "*"))
+		(patt @86.1-86.22 (type "List(Num(*))"))
+		(patt @87.1-87.59 (type "{ base: Num(*), derived: List(Num(*)) }"))
+		(patt @90.1-103.2 (type "{ numbers: { value: Num(*), list: List(Num(*)), float: Frac(*) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(*)), in_list: List(List(Num(*))), in_record: { data: List(Num(*)) } }, computations: { from_num: *, from_frac: *, list_from_num: List(Num(*)) } }"))
+		(patt @105.1-108.2 (type "* -> *")))
 	(expressions
-		(expr @4.7-4.9 (type "Num(*)"))
-		(expr @5.8-5.11 (type "Frac(*)"))
-		(expr @6.7-6.14 (type "Str"))
-		(expr @7.8-7.12 (type "[True]*"))
-		(expr @10.14-10.16 (type "List(Num(*))"))
-		(expr @11.16-11.18 (type "{}"))
-		(expr @14.12-14.21 (type "List(Num(*))"))
-		(expr @15.12-15.27 (type "List(Str)"))
-		(expr @16.13-16.26 (type "List([True, False]*)"))
-		(expr @19.16-19.52 (type "List(List(Num(*)))"))
-		(expr @20.16-20.56 (type "List(List(Num(*)))"))
-		(expr @23.15-23.46 (type "{ items: List(Num(*)), count: Num(*) }"))
-		(expr @24.20-24.50 (type "{ items: List(Num(*)), count: Num(*) }"))
-		(expr @25.20-25.56 (type "{ items: List(Str), count: Num(*) }"))
-		(expr @28.15-35.2 (type "{ data: List(Num(*)), metadata: { version: Num(*), ratio: Frac(*), description: Str } }"))
-		(expr @38.11-46.2 (type "{ data: List(Num(*)), metadata: { version: Num(*), ratio: Frac(*), description: Str }, name: Str }"))
-		(expr @48.11-56.2 (type "{ data: List(Str), metadata: { version: Num(*), ratio: Frac(*), description: Str }, name: Str }"))
-		(expr @59.18-59.54 (type "* -> { value: *, wrapper: List(*) }"))
-		(expr @60.14-60.33 (type "{ value: *, wrapper: List(*) }"))
-		(expr @61.14-61.33 (type "{ value: *, wrapper: List(*) }"))
-		(expr @62.14-62.34 (type "{ value: *, wrapper: List(*) }"))
-		(expr @65.8-81.2 (type "{ level1: { level2: { level3: { data: List(Num(*)), value: Num(*) }, items: List(Num(*)) }, collection: List(Num(*)) }, results: List({ data: List(Num(*)), tag: Str }) }"))
-		(expr @84.12-85.9 (type "*"))
-		(expr @85.12-86.9 (type "*"))
-		(expr @86.12-86.22 (type "List(Num(*))"))
-		(expr @87.12-87.59 (type "{ base: Num(*), derived: List(Num(*)) }"))
-		(expr @90.9-103.2 (type "{ numbers: { value: Num(*), list: List(Num(*)), float: Frac(*) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(*)), in_list: List(List(Num(*))), in_record: { data: List(Num(*)) } }, computations: { from_num: *, from_frac: *, list_from_num: List(Num(*)) } }"))
-		(expr @105.8-108.2 (type "* -> *"))))
+		(expr (type "Num(*)"))
+		(expr (type "Frac(*)"))
+		(expr (type "Str"))
+		(expr (type "[True]*"))
+		(expr (type "List(Num(*))"))
+		(expr (type "{}"))
+		(expr (type "List(Num(*))"))
+		(expr (type "List(Str)"))
+		(expr (type "List([True, False]*)"))
+		(expr (type "List(List(Num(*)))"))
+		(expr (type "List(List(Num(*)))"))
+		(expr (type "{ items: List(Num(*)), count: Num(*) }"))
+		(expr (type "{ items: List(Num(*)), count: Num(*) }"))
+		(expr (type "{ items: List(Str), count: Num(*) }"))
+		(expr (type "{ data: List(Num(*)), metadata: { version: Num(*), ratio: Frac(*), description: Str } }"))
+		(expr (type "{ data: List(Num(*)), metadata: { version: Num(*), ratio: Frac(*), description: Str }, name: Str }"))
+		(expr (type "{ data: List(Str), metadata: { version: Num(*), ratio: Frac(*), description: Str }, name: Str }"))
+		(expr (type "* -> { value: *, wrapper: List(*) }"))
+		(expr (type "{ value: *, wrapper: List(*) }"))
+		(expr (type "{ value: *, wrapper: List(*) }"))
+		(expr (type "{ value: *, wrapper: List(*) }"))
+		(expr (type "{ level1: { level2: { level3: { data: List(Num(*)), value: Num(*) }, items: List(Num(*)) }, collection: List(Num(*)) }, results: List({ data: List(Num(*)), tag: Str }) }"))
+		(expr (type "*"))
+		(expr (type "*"))
+		(expr (type "List(Num(*))"))
+		(expr (type "{ base: Num(*), derived: List(Num(*)) }"))
+		(expr (type "{ numbers: { value: Num(*), list: List(Num(*)), float: Frac(*) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(*)), in_list: List(List(Num(*))), in_record: { data: List(Num(*)) } }, computations: { from_num: *, from_frac: *, list_from_num: List(Num(*)) } }"))
+		(expr (type "* -> *"))))
 ~~~

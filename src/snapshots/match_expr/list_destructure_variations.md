@@ -134,18 +134,18 @@ match list {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-8.2
-	(match @1.1-8.2
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch
+			(branch @2.11-2.12
 				(patterns
 					(pattern (degenerate false)
 						(p-list @2.5-2.7
 							(patterns))))
 				(value
 					(e-int @2.11-2.12 (value "0"))))
-			(branch
+			(branch @3.12-3.13
 				(patterns
 					(pattern (degenerate false)
 						(p-list @3.5-3.8
@@ -154,7 +154,7 @@ match list {
 				(value
 					(e-lookup-local @3.12-3.13
 						(p-assign @3.6-3.7 (ident "x")))))
-			(branch
+			(branch @4.24-5.6
 				(patterns
 					(pattern (degenerate false)
 						(p-list @4.5-4.20
@@ -167,7 +167,7 @@ match list {
 							(p-assign @4.6-4.11 (ident "first")))
 						(e-lookup-local @4.32-4.38
 							(p-assign @4.13-4.19 (ident "second"))))))
-			(branch
+			(branch @5.27-5.31
 				(patterns
 					(pattern (degenerate false)
 						(p-list @5.5-5.23
@@ -178,7 +178,7 @@ match list {
 				(value
 					(e-lookup-local @5.27-5.31
 						(p-assign @5.6-5.10 (ident "head")))))
-			(branch
+			(branch @6.31-6.32
 				(patterns
 					(pattern (degenerate false)
 						(p-list @6.5-6.27
@@ -189,7 +189,7 @@ match list {
 								(p-assign @6.22-6.26 (ident "rest"))))))
 				(value
 					(e-int @6.31-6.32 (value "3"))))
-			(branch
+			(branch @7.30-8.2
 				(patterns
 					(pattern (degenerate false)
 						(p-list @7.5-7.26

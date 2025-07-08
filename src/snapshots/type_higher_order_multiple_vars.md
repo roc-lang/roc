@@ -189,15 +189,15 @@ main! = |_| {}
 		(e-lambda @6.9-6.15
 			(args
 				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+			(e-empty-record @6.13-6.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "* -> *, * -> * -> * -> *"))
-		(patt @6.1-6.6 (type "* -> {}")))
+		(patt @4.1-4.29 (type "* -> *, * -> * -> * -> *"))
+		(patt @6.1-6.15 (type "* -> {}")))
 	(expressions
-		(expr @4.11-4.29 (type "* -> *, * -> * -> * -> *"))
-		(expr @6.9-6.15 (type "* -> {}"))))
+		(expr (type "* -> *, * -> * -> * -> *"))
+		(expr (type "* -> {}"))))
 ~~~

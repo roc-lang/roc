@@ -103,11 +103,11 @@ match ... {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-7.2
-	(match @1.1-7.2
+	(match
 		(cond
 			(e-not-implemented @1.7-1.10))
 		(branches
-			(branch
+			(branch @2.45-2.83
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @2.5-2.41
@@ -123,7 +123,7 @@ match ... {
 												(record-destruct @2.30-2.39 (label "country") (ident "country")
 													(required))))))))))
 				(value
-					(e-string @2.45-2.83
+					(e-str @2.45-2.83
 						(e-literal @2.46-2.46 (string ""))
 						(e-lookup-local @2.48-2.52
 							(p-assign @2.7-2.12 (ident "name")))
@@ -134,7 +134,7 @@ match ... {
 						(e-lookup-local @2.74-2.81
 							(p-assign @2.30-2.39 (ident "country")))
 						(e-literal @2.82-2.82 (string "")))))
-			(branch
+			(branch @3.54-3.94
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @3.5-3.50
@@ -154,7 +154,7 @@ match ... {
 												(record-destruct @3.42-3.48 (label "city") (ident "city")
 													(required))))))))))
 				(value
-					(e-string @3.54-3.94
+					(e-str @3.54-3.94
 						(e-literal @3.55-3.55 (string ""))
 						(e-lookup-local @3.57-3.61
 							(p-assign @3.17-3.22 (ident "name")))
@@ -168,7 +168,7 @@ match ... {
 						(e-lookup-local @3.88-3.92
 							(p-assign @3.42-3.48 (ident "city")))
 						(e-literal @3.93-3.93 (string "")))))
-			(branch
+			(branch @4.38-4.61
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @4.5-4.34
@@ -184,12 +184,12 @@ match ... {
 																(record-destruct @4.23-4.30 (label "value") (ident "value")
 																	(required))))))))))))))
 				(value
-					(e-string @4.38-4.61
+					(e-str @4.38-4.61
 						(e-literal @4.39-4.52 (string "Deep nested: "))
 						(e-lookup-local @4.54-4.59
 							(p-assign @4.23-4.30 (ident "value")))
 						(e-literal @4.60-4.60 (string "")))))
-			(branch
+			(branch @5.19-5.38
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @5.5-5.15
@@ -197,18 +197,18 @@ match ... {
 								(record-destruct @5.7-5.15 (label "simple") (ident "simple")
 									(required))))))
 				(value
-					(e-string @5.19-5.38
+					(e-str @5.19-5.38
 						(e-literal @5.20-5.28 (string "Simple: "))
 						(e-lookup-local @5.30-5.36
 							(p-assign @5.7-5.15 (ident "simple")))
 						(e-literal @5.37-5.37 (string "")))))
-			(branch
+			(branch @6.11-6.18
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @6.5-6.7
 							(destructs))))
 				(value
-					(e-string @6.11-6.18
+					(e-str @6.11-6.18
 						(e-literal @6.12-6.17 (string "empty"))))))))
 ~~~
 # TYPES

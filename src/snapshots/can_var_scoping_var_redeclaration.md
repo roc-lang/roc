@@ -121,15 +121,15 @@ NO CHANGE
 		(e-call @11.10-11.27
 			(e-lookup-local @11.10-11.23
 				(p-assign @4.1-4.14 (ident "redeclareTest")))
-			(e-empty_record @11.24-11.26))))
+			(e-empty-record @11.24-11.26))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.14 (type "* -> *"))
-		(patt @11.1-11.7 (type "*")))
+		(patt @4.1-9.2 (type "* -> *"))
+		(patt @11.1-11.27 (type "*")))
 	(expressions
-		(expr @4.17-9.2 (type "* -> *"))
-		(expr @11.10-11.27 (type "*"))))
+		(expr (type "* -> *"))
+		(expr (type "*"))))
 ~~~

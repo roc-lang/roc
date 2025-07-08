@@ -58,7 +58,7 @@ test = {
 	(d-let
 		(p-assign @3.1-3.5 (ident "test"))
 		(e-block @3.8-6.2
-			(s-let @4.5-4.11
+			(s-var @4.5-4.11
 				(p-assign @4.5-4.6 (ident "x"))
 				(e-int @4.9-4.11 (value "42")))
 			(e-dbg @5.5-6.2
@@ -69,7 +69,7 @@ test = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.5 (type "*")))
+		(patt @3.1-6.2 (type "*")))
 	(expressions
-		(expr @3.8-6.2 (type "*"))))
+		(expr (type "*"))))
 ~~~

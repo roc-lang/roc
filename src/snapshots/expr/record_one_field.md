@@ -31,7 +31,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 (e-record @1.1-1.18
 	(fields
 		(field (name "name")
-			(e-string @1.9-1.16
+			(e-str @1.9-1.16
 				(e-literal @1.10-1.15 (string "Alice"))))))
 ~~~
 # TYPES

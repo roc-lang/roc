@@ -464,10 +464,10 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(p-assign @9.16-9.24 (ident "settings")))))
 		(annotation @9.1-9.12
 			(declared-type
-				(ty-fn @8.15-8.37 (effectful false)
+				(ty-func @8.15-8.37 (effectful false)
 					(ty-lookup-external @8.15-8.30
-						(ext-decl @8.15-8.30 (ident "Config.Settings") (kind "type")))
-					(ty @8.34-8.37 (name "Str"))))))
+						(ext-decl (ident "Config.Settings") (kind "type")))
+					(ty-type @8.34-8.37 (name "Str"))))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "authenticate"))
 		(e-lambda @13.16-13.55
@@ -482,11 +482,11 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(p-assign @13.23-13.27 (ident "pass")))))
 		(annotation @13.1-13.13
 			(declared-type
-				(ty-fn @12.16-12.42 (effectful false)
-					(ty @12.16-12.19 (name "Str"))
-					(ty @12.21-12.24 (name "Str"))
+				(ty-func @12.16-12.42 (effectful false)
+					(ty-type @12.16-12.19 (name "Str"))
+					(ty-type @12.21-12.24 (name "Str"))
 					(ty-lookup-external @12.28-12.42
-						(ext-decl @12.28-12.42 (ident "HttpAuth.Token") (kind "type")))))))
+						(ext-decl (ident "HttpAuth.Token") (kind "type")))))))
 	(d-let
 		(p-assign @17.1-17.12 (ident "processData"))
 		(e-lambda @17.15-18.60
@@ -501,14 +501,14 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(p-assign @17.32-17.37 (ident "input")))))
 		(annotation @17.1-17.12
 			(declared-type
-				(ty-fn @16.15-16.78 (effectful false)
+				(ty-func @16.15-16.78 (effectful false)
 					(ty-lookup-external @16.15-16.37
-						(ext-decl @16.15-16.37 (ident "Config.Parser.Advanced") (kind "type")))
-					(ty @16.39-16.42 (name "Str"))
+						(ext-decl (ident "Config.Parser.Advanced") (kind "type")))
+					(ty-type @16.39-16.42 (name "Str"))
 					(ty-apply @16.46-16.78 (symbol "Result")
-						(ty @16.53-16.56 (name "Str"))
+						(ty-type @16.53-16.56 (name "Str"))
 						(ty-lookup-external @16.58-16.77
-							(ext-decl @16.58-16.77 (ident "Config.Parser.Error") (kind "type"))))))))
+							(ext-decl (ident "Config.Parser.Error") (kind "type"))))))))
 	(d-let
 		(p-assign @22.1-22.13 (ident "formatOutput"))
 		(e-lambda @22.16-22.59
@@ -521,9 +521,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation @22.1-22.13
 			(declared-type
-				(ty-fn @21.16-21.26 (effectful false)
-					(ty @21.16-21.19 (name "Str"))
-					(ty @21.23-21.26 (name "Str"))))))
+				(ty-func @21.16-21.26 (effectful false)
+					(ty-type @21.16-21.19 (name "Str"))
+					(ty-type @21.23-21.26 (name "Str"))))))
 	(d-let
 		(p-assign @26.1-26.13 (ident "validateAuth"))
 		(e-lambda @26.16-26.48
@@ -535,39 +535,39 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(p-assign @26.17-26.22 (ident "creds")))))
 		(annotation @26.1-26.13
 			(declared-type
-				(ty-fn @25.16-25.78 (effectful false)
+				(ty-func @25.16-25.78 (effectful false)
 					(ty-lookup-external @25.16-25.36
-						(ext-decl @25.16-25.36 (ident "HttpAuth.Credentials") (kind "type")))
+						(ext-decl (ident "HttpAuth.Credentials") (kind "type")))
 					(ty-apply @25.40-25.78 (symbol "Result")
 						(ty-lookup-external @25.47-25.61
-							(ext-decl @25.47-25.61 (ident "HttpAuth.Token") (kind "type")))
+							(ext-decl (ident "HttpAuth.Token") (kind "type")))
 						(ty-lookup-external @25.63-25.77
-							(ext-decl @25.63-25.77 (ident "HttpAuth.Error") (kind "type"))))))))
+							(ext-decl (ident "HttpAuth.Error") (kind "type"))))))))
 	(s-import @3.1-3.19 (module "json.Parser") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.19 (module "http.Client") (qualifier "http")
 		(exposes))
-	(ext-decl @8.15-8.30 (ident "Config.Settings") (kind "type"))
-	(ext-decl @12.28-12.42 (ident "HttpAuth.Token") (kind "type"))
-	(ext-decl @16.15-16.37 (ident "Config.Parser.Advanced") (kind "type"))
-	(ext-decl @16.58-16.77 (ident "Config.Parser.Error") (kind "type"))
-	(ext-decl @25.16-25.36 (ident "HttpAuth.Credentials") (kind "type"))
-	(ext-decl @25.47-25.61 (ident "HttpAuth.Token") (kind "type"))
-	(ext-decl @25.63-25.77 (ident "HttpAuth.Error") (kind "type")))
+	(ext-decl (ident "Config.Settings") (kind "type"))
+	(ext-decl (ident "HttpAuth.Token") (kind "type"))
+	(ext-decl (ident "Config.Parser.Advanced") (kind "type"))
+	(ext-decl (ident "Config.Parser.Error") (kind "type"))
+	(ext-decl (ident "HttpAuth.Credentials") (kind "type"))
+	(ext-decl (ident "HttpAuth.Token") (kind "type"))
+	(ext-decl (ident "HttpAuth.Error") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.12 (type "Config.Settings -> Str"))
-		(patt @13.1-13.13 (type "Str, Str -> HttpAuth.Token"))
-		(patt @17.1-17.12 (type "Config.Parser.Advanced, Str -> Error"))
-		(patt @22.1-22.13 (type "Str -> Str"))
-		(patt @26.1-26.13 (type "HttpAuth.Credentials -> Error")))
+		(patt @9.1-9.51 (type "Config.Settings -> Str"))
+		(patt @13.1-13.55 (type "Str, Str -> HttpAuth.Token"))
+		(patt @17.1-18.60 (type "Config.Parser.Advanced, Str -> Error"))
+		(patt @22.1-22.59 (type "Str -> Str"))
+		(patt @26.1-26.48 (type "HttpAuth.Credentials -> Error")))
 	(expressions
-		(expr @9.15-9.51 (type "Config.Settings -> Str"))
-		(expr @13.16-13.55 (type "Str, Str -> HttpAuth.Token"))
-		(expr @17.15-18.60 (type "Config.Parser.Advanced, Str -> Error"))
-		(expr @22.16-22.59 (type "Str -> Str"))
-		(expr @26.16-26.48 (type "HttpAuth.Credentials -> Error"))))
+		(expr (type "Config.Settings -> Str"))
+		(expr (type "Str, Str -> HttpAuth.Token"))
+		(expr (type "Config.Parser.Advanced, Str -> Error"))
+		(expr (type "Str -> Str"))
+		(expr (type "HttpAuth.Credentials -> Error"))))
 ~~~

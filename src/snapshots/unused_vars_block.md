@@ -147,20 +147,20 @@ main! = |_| {
 			(args
 				(p-underscore @3.10-3.11))
 			(e-block @3.13-19.2
-				(s-let @5.5-5.20
+				(s-var @5.5-5.20
 					(p-assign @5.5-5.15 (ident "unused_var"))
 					(e-int @5.18-5.20 (value "42")))
-				(s-let @8.5-8.19
+				(s-var @8.5-8.19
 					(p-assign @8.5-8.13 (ident "used_var"))
 					(e-int @8.16-8.19 (value "100")))
-				(s-let @11.5-11.29
+				(s-var @11.5-11.29
 					(p-assign @11.5-11.19 (ident "another_unused"))
-					(e-string @11.22-11.29
+					(e-str @11.22-11.29
 						(e-literal @11.23-11.28 (string "hello"))))
-				(s-let @14.5-14.19
+				(s-var @14.5-14.19
 					(p-assign @14.5-14.13 (ident "_ignored"))
 					(e-int @14.16-14.19 (value "999")))
-				(s-let @17.5-18.11
+				(s-var @17.5-18.11
 					(p-assign @17.5-17.11 (ident "result"))
 					(e-binop @17.14-18.11 (op "add")
 						(e-lookup-local @17.14-17.22
@@ -173,7 +173,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.6 (type "* -> *")))
+		(patt @3.1-19.2 (type "* -> *")))
 	(expressions
-		(expr @3.9-19.2 (type "* -> *"))))
+		(expr (type "* -> *"))))
 ~~~

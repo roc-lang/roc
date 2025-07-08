@@ -28,7 +28,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.11
+(e-str @1.1-1.11
 	(e-literal @1.2-1.10 (string "abc\qdef")))
 ~~~
 # TYPES

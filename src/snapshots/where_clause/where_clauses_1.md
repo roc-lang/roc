@@ -83,25 +83,25 @@ Decode(a) : a where module(a).decode : List(U8) -> a
 				(ty-var @3.9-3.15 (name "hasher"))))
 		(ty-var @3.19-3.20 (name "a"))
 		(where
-			(method @5.3-5.37 (module-of "a") (ident "hash")
+			(where-mod-method (module-of "a") (ident "hash")
 				(args
 					(ty-var @5.20-5.26 (name "hasher")))
 				(ty-var @5.30-5.36 (name "hasher")))
-			(alias @6.3-6.25 (module-of "hasher") (ident "Hasher"))))
+			(where-mod-alias (module-of "hasher") (ident "Hasher"))))
 	(s-alias-decl @8.1-8.53
 		(ty-header @8.1-8.10 (name "Decode")
 			(ty-args
 				(ty-var @8.8-8.9 (name "a"))))
 		(ty-var @8.13-8.14 (name "a"))
 		(where
-			(method @8.21-8.53 (module-of "a") (ident "decode")
+			(where-mod-method (module-of "a") (ident "decode")
 				(args
 					(ty-apply @8.40-8.48 (symbol "List")
-						(ty @8.45-8.47 (name "U8"))))
+						(ty-type @8.45-8.47 (name "U8"))))
 				(ty-var @8.52-8.53 (name "a")))))
-	(ext-decl @5.3-5.37 (ident "module(a).hash") (kind "value"))
-	(ext-decl @6.3-6.25 (ident "module(hasher).Hasher") (kind "type"))
-	(ext-decl @8.21-8.53 (ident "module(a).decode") (kind "value")))
+	(ext-decl (ident "module(a).hash") (kind "value"))
+	(ext-decl (ident "module(hasher).Hasher") (kind "type"))
+	(ext-decl (ident "module(a).decode") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

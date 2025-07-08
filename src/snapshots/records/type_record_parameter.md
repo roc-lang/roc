@@ -39,19 +39,19 @@ process_things : { name : Str, age : U32, thing : a }, (a -> Str) -> Str
 ~~~clojure
 (can-ir
 	(s-type-anno @1.1-1.72 (name "process_things")
-		(ty-fn @1.18-1.72 (effectful false)
+		(ty-func @1.18-1.72 (effectful false)
 			(ty-record @1.18-1.53
 				(field (field "name")
-					(ty @1.27-1.30 (name "Str")))
+					(ty-type @1.27-1.30 (name "Str")))
 				(field (field "age")
-					(ty @1.38-1.41 (name "U32")))
+					(ty-type @1.38-1.41 (name "U32")))
 				(field (field "thing")
 					(ty-var @1.50-1.51 (name "a"))))
 			(ty-parens @1.55-1.65
-				(ty-fn @1.56-1.64 (effectful false)
+				(ty-func @1.56-1.64 (effectful false)
 					(ty-var @1.56-1.57 (name "a"))
-					(ty @1.61-1.64 (name "Str"))))
-			(ty @1.69-1.72 (name "Str")))))
+					(ty-type @1.61-1.64 (name "Str"))))
+			(ty-type @1.69-1.72 (name "Str")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -100,30 +100,30 @@ match Answer {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-6.2
-	(match @1.1-6.2
+	(match
 		(cond
 			(e-tag @1.7-1.13 (name "Answer")))
 		(branches
-			(branch
+			(branch @2.15-2.16
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @2.5-2.11)))
 				(value
 					(e-int @2.15-2.16 (value "1"))))
-			(branch
+			(branch @3.13-3.20
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @3.5-3.9)))
 				(value
-					(e-string @3.13-3.20
+					(e-str @3.13-3.20
 						(e-literal @3.14-3.19 (string "hello")))))
-			(branch
+			(branch @4.17-4.18
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @4.5-4.13)))
 				(value
 					(e-int @4.17-4.18 (value "3"))))
-			(branch
+			(branch @5.11-5.12
 				(patterns
 					(pattern (degenerate false)
 						(p-int @5.5-5.7 (value "10"))))

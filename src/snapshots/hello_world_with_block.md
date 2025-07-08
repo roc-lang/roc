@@ -83,27 +83,27 @@ NO CHANGE
 			(args
 				(p-underscore @8.10-8.11))
 			(e-block @8.13-12.2
-				(s-let @9.2-9.16
+				(s-var @9.2-9.16
 					(p-assign @9.2-9.6 (ident "name"))
-					(e-string @9.9-9.16
+					(e-str @9.9-9.16
 						(e-literal @9.10-9.15 (string "World"))))
 				(e-call @11.2-11.33
 					(e-lookup-external
-						(ext-decl @11.2-11.14 (ident "pf.Stdout.line!") (kind "value")))
-					(e-string @11.15-11.32
+						(ext-decl (ident "pf.Stdout.line!") (kind "value")))
+					(e-str @11.15-11.32
 						(e-literal @11.16-11.23 (string "Hello, "))
 						(e-lookup-local @11.25-11.29
 							(p-assign @9.2-9.6 (ident "name")))
 						(e-literal @11.30-11.31 (string "!")))))))
 	(s-import @6.1-6.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes))
-	(ext-decl @11.2-11.14 (ident "pf.Stdout.line!") (kind "value")))
+	(ext-decl (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.6 (type "* -> *")))
+		(patt @8.1-12.2 (type "* -> *")))
 	(expressions
-		(expr @8.9-12.2 (type "* -> *"))))
+		(expr (type "* -> *"))))
 ~~~

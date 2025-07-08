@@ -106,7 +106,7 @@ NO CHANGE
 						(p-assign @5.10-5.11 (ident "x"))))))
 		(annotation @5.1-5.5
 			(declared-type
-				(ty-fn @4.8-4.24 (effectful false)
+				(ty-func @4.8-4.24 (effectful false)
 					(ty-tuple @4.8-4.14
 						(ty-var @4.9-4.10 (name "a"))
 						(ty-var @4.12-4.13 (name "b")))
@@ -125,9 +125,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "Error"))
-		(patt @9.1-9.5 (type "*")))
+		(patt @5.1-5.23 (type "Error"))
+		(patt @9.1-9.18 (type "*")))
 	(expressions
-		(expr @5.8-5.23 (type "Error"))
-		(expr @9.8-9.18 (type "*"))))
+		(expr (type "Error"))
+		(expr (type "*"))))
 ~~~

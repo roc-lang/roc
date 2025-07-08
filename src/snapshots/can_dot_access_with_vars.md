@@ -58,14 +58,14 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-5.2
-	(s-let @2.5-2.21
+	(s-var @2.5-2.21
 		(p-assign @2.5-2.9 (ident "list"))
 		(e-list @2.12-2.21
 			(elems
 				(e-int @2.13-2.14 (value "1"))
 				(e-int @2.16-2.17 (value "2"))
 				(e-int @2.19-2.20 (value "3")))))
-	(s-let @3.5-4.9
+	(s-var @3.5-4.9
 		(p-assign @3.5-3.7 (ident "fn"))
 		(e-lambda @3.10-4.9
 			(args

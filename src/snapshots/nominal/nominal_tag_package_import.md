@@ -71,16 +71,16 @@ blue = RGB(0, 0, 255)
 		(annotation @8.1-8.5
 			(declared-type
 				(ty-lookup-external @7.8-7.14
-					(ext-decl @7.8-7.14 (ident "CC.RGB") (kind "type"))))))
+					(ext-decl (ident "CC.RGB") (kind "type"))))))
 	(s-import @4.1-4.26 (module "styles.Color") (qualifier "styles") (alias "CC")
 		(exposes))
-	(ext-decl @7.8-7.14 (ident "CC.RGB") (kind "type")))
+	(ext-decl (ident "CC.RGB") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.5 (type "[RGB]*")))
+		(patt @8.1-8.23 (type "[RGB]*")))
 	(expressions
-		(expr @8.8-8.23 (type "[RGB]*"))))
+		(expr (type "[RGB]*"))))
 ~~~

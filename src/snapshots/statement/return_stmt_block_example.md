@@ -20,30 +20,7 @@ foo = |num| {
 # EXPECTED
 INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:5:11:5:11
 # PROBLEMS
-**INCOMPATIBLE IF BRANCHES**
-This `if` has an `else` branch with a different type from it's `then` branch:
-**return_stmt_block_example.md:5:11:**
-```roc
-    str = if (num > 10) {
-        return Err(TooBig)
-    } else {
-        "SMALL"
-    }
-    Ok(str)
-```
-        ^^^^^^^
-
-The `else` branch has the type:
-    _Str_
-
-But the `then` branch has the type:
-    _[Err]*_
-
-All branches in an `if` must have compatible types.
-
-Note: You can wrap branches in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
@@ -125,7 +102,7 @@ foo = |num| {
 			(args
 				(p-assign @4.8-4.11 (ident "num")))
 			(e-block @4.13-11.2
-				(s-let @5.5-10.7
+				(s-var @5.5-10.7
 					(p-assign @5.5-5.8 (ident "str"))
 					(e-if @5.11-10.7
 						(if-branches
@@ -144,7 +121,7 @@ foo = |num| {
 											(e-tag @6.20-6.26 (name "TooBig")))))))
 						(if-else
 							(e-block @7.12-9.6
-								(e-string @8.9-8.16
+								(e-str @8.9-8.16
 									(e-literal @8.10-8.15 (string "SMALL")))))))
 				(e-tag @10.5-10.12 (name "Ok")
 					(args
@@ -152,18 +129,18 @@ foo = |num| {
 							(p-assign @5.5-5.8 (ident "str")))))))
 		(annotation @4.1-4.4
 			(declared-type
-				(ty-fn @3.7-3.35 (effectful false)
-					(ty @3.7-3.10 (name "U64"))
+				(ty-func @3.7-3.35 (effectful false)
+					(ty-type @3.7-3.10 (name "U64"))
 					(ty-apply @3.14-3.35 (symbol "Result")
-						(ty @3.21-3.24 (name "Str"))
+						(ty-type @3.21-3.24 (name "Str"))
 						(ty-tag-union @3.26-3.34
-							(ty @3.27-3.33 (name "TooBig")))))))))
+							(ty-type @3.27-3.33 (name "TooBig")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "U64 -> Error")))
+		(patt @4.1-11.2 (type "U64 -> Error")))
 	(expressions
-		(expr @4.7-11.2 (type "U64 -> Error"))))
+		(expr (type "U64 -> Error"))))
 ~~~

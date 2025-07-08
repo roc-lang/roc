@@ -127,7 +127,7 @@ is_ok = |result| match result {
 						(p-assign @6.7-6.8 (ident "a"))))))
 		(annotation @6.1-6.3
 			(declared-type
-				(ty-fn @5.6-5.27 (effectful false)
+				(ty-func @5.6-5.27 (effectful false)
 					(ty-var @5.6-5.8 (name "ok"))
 					(ty-apply @5.12-5.27 (symbol "MyResult")
 						(ty-var @5.21-5.23 (name "ok"))
@@ -138,18 +138,18 @@ is_ok = |result| match result {
 			(args
 				(p-assign @9.10-9.16 (ident "result")))
 			(e-match @9.18-12.2
-				(match @9.18-12.2
+				(match
 					(cond
 						(e-lookup-local @9.24-9.30
 							(p-assign @9.10-9.16 (ident "result"))))
 					(branches
-						(branch
+						(branch @10.23-10.27
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @10.5-10.19)))
 							(value
 								(e-tag @10.23-10.27 (name "True"))))
-						(branch
+						(branch @11.24-11.29
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @11.5-11.20)))
@@ -157,11 +157,11 @@ is_ok = |result| match result {
 								(e-tag @11.24-11.29 (name "False"))))))))
 		(annotation @9.1-9.6
 			(declared-type
-				(ty-fn @8.9-8.34 (effectful false)
+				(ty-func @8.9-8.34 (effectful false)
 					(ty-apply @8.9-8.26 (symbol "MyResult")
 						(ty-var @8.18-8.20 (name "ok"))
 						(ty-var @8.22-8.25 (name "err")))
-					(ty @8.30-8.34 (name "Bool"))))))
+					(ty-type @8.30-8.34 (name "Bool"))))))
 	(s-nominal-decl @3.1-3.40
 		(ty-header @3.1-3.18 (name "MyResult")
 			(ty-args
@@ -177,8 +177,8 @@ is_ok = |result| match result {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.3 (type "ok -> MyResult(ok, b)"))
-		(patt @9.1-9.6 (type "MyResult(ok, err) -> [True, False]*")))
+		(patt @6.1-6.24 (type "ok -> MyResult(ok, b)"))
+		(patt @9.1-12.2 (type "MyResult(ok, err) -> [True, False]*")))
 	(type_decls
 		(nominal @3.1-3.40 (type "MyResult(ok, err)")
 			(ty-header @3.1-3.18 (name "MyResult")
@@ -186,6 +186,6 @@ is_ok = |result| match result {
 					(ty-var @3.10-3.12 (name "ok"))
 					(ty-var @3.14-3.17 (name "err"))))))
 	(expressions
-		(expr @6.6-6.24 (type "ok -> MyResult(ok, b)"))
-		(expr @9.9-12.2 (type "MyResult(ok, err) -> [True, False]*"))))
+		(expr (type "ok -> MyResult(ok, b)"))
+		(expr (type "MyResult(ok, err) -> [True, False]*"))))
 ~~~

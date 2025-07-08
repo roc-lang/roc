@@ -48,10 +48,10 @@ NO CHANGE
 			(e-binop @1.4-1.11 (op "gt")
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-int @1.8-1.9 (value "5")))
-			(e-string @1.10-1.15
+			(e-str @1.10-1.15
 				(e-literal @1.11-1.14 (string "big")))))
 	(if-else
-		(e-string @1.21-1.28
+		(e-str @1.21-1.28
 			(e-literal @1.22-1.27 (string "small")))))
 ~~~
 # TYPES

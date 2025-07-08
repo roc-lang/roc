@@ -39,18 +39,18 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-type-anno @1.1-1.78 (name "create_user!")
-		(ty-fn @1.16-1.78 (effectful true)
-			(ty @1.16-1.19 (name "Str"))
-			(ty @1.21-1.24 (name "U32"))
+		(ty-func @1.16-1.78 (effectful true)
+			(ty-type @1.16-1.19 (name "Str"))
+			(ty-type @1.21-1.24 (name "U32"))
 			(ty-record @1.28-1.78
 				(field (field "name")
-					(ty @1.37-1.40 (name "Str")))
+					(ty-type @1.37-1.40 (name "Str")))
 				(field (field "age")
-					(ty @1.48-1.51 (name "U32")))
+					(ty-type @1.48-1.51 (name "U32")))
 				(field (field "id")
-					(ty @1.58-1.61 (name "U64")))
+					(ty-type @1.58-1.61 (name "U64")))
 				(field (field "active")
-					(ty @1.72-1.76 (name "Bool")))))))
+					(ty-type @1.72-1.76 (name "Bool")))))))
 ~~~
 # TYPES
 ~~~clojure

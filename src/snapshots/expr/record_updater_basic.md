@@ -60,7 +60,7 @@ updated = {..person, age: 31}
 		(e-record @3.10-3.36
 			(fields
 				(field (name "name")
-					(e-string @3.18-3.25
+					(e-str @3.18-3.25
 						(e-literal @3.19-3.24 (string "Alice"))))
 				(field (name "age")
 					(e-int @3.32-3.34 (value "30"))))))
@@ -78,9 +78,9 @@ updated = {..person, age: 31}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.7 (type "{ name: Str, age: Num(*) }"))
-		(patt @4.1-4.8 (type "{ age: Num(*) }")))
+		(patt @3.1-3.36 (type "{ name: Str, age: Num(*) }"))
+		(patt @4.1-4.32 (type "{ age: Num(*) }")))
 	(expressions
-		(expr @3.10-3.36 (type "{ name: Str, age: Num(*) }"))
-		(expr @4.11-4.32 (type "{ age: Num(*) }"))))
+		(expr (type "{ name: Str, age: Num(*) }"))
+		(expr (type "{ age: Num(*) }"))))
 ~~~

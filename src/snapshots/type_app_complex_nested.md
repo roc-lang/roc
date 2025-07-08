@@ -293,32 +293,32 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(args
 				(p-assign @5.19-5.25 (ident "result")))
 			(e-match @6.5-9.6
-				(match @6.5-9.6
+				(match
 					(cond
 						(e-lookup-local @6.11-6.17
 							(p-assign @5.19-5.25 (ident "result"))))
 					(branches
-						(branch
+						(branch @7.26-7.28
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @7.9-7.22)))
 							(value
-								(e-empty_list @7.26-7.28)))
-						(branch
+								(e-empty-list @7.26-7.28)))
+						(branch @8.19-8.21
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @8.9-8.15)))
 							(value
-								(e-empty_list @8.19-8.21)))))))
+								(e-empty-list @8.19-8.21)))))))
 		(annotation @5.1-5.15
 			(declared-type
-				(ty-fn @4.18-4.72 (effectful false)
+				(ty-func @4.18-4.72 (effectful false)
 					(ty-apply @4.18-4.61 (symbol "Result")
 						(ty-apply @4.25-4.39 (symbol "List")
 							(ty-apply @4.30-4.38 (symbol "Maybe")
 								(ty-var @4.36-4.37 (name "a"))))
 						(ty-apply @4.41-4.60 (symbol "Dict")
-							(ty @4.46-4.49 (name "Str"))
+							(ty-type @4.46-4.49 (name "Str"))
 							(ty-apply @4.51-4.59 (symbol "Error")
 								(ty-var @4.57-4.58 (name "b")))))
 					(ty-apply @4.65-4.72 (symbol "List")
@@ -331,12 +331,12 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
 		(annotation @13.1-13.11
 			(declared-type
-				(ty-fn @12.14-12.55 (effectful false)
+				(ty-func @12.14-12.55 (effectful false)
 					(ty-apply @12.14-12.50 (symbol "Maybe")
 						(ty-apply @12.20-12.49 (symbol "Result")
 							(ty-apply @12.27-12.45 (symbol "List")
 								(ty-apply @12.32-12.44 (symbol "Dict")
-									(ty @12.37-12.40 (name "Str"))
+									(ty-type @12.37-12.40 (name "Str"))
 									(ty-var @12.42-12.43 (name "a"))))
 							(ty-var @12.47-12.48 (name "b"))))
 					(ty-var @12.54-12.55 (name "a"))))))
@@ -366,7 +366,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(ty-apply @16.33-16.41 (symbol "Maybe")
 					(ty-var @16.39-16.40 (name "a"))))
 			(ty-apply @16.44-16.63 (symbol "Dict")
-				(ty @16.49-16.52 (name "Str"))
+				(ty-type @16.49-16.52 (name "Str"))
 				(ty-apply @16.54-16.62 (symbol "Error")
 					(ty-var @16.60-16.61 (name "b")))))))
 ~~~
@@ -374,9 +374,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.15 (type "Error -> Error"))
-		(patt @13.1-13.11 (type "Error -> Error"))
-		(patt @18.1-18.6 (type "* -> Error")))
+		(patt @5.1-9.6 (type "Error -> Error"))
+		(patt @13.1-13.25 (type "Error -> Error"))
+		(patt @18.1-18.49 (type "* -> Error")))
 	(type_decls
 		(alias @16.1-16.64 (type "ComplexType(a, b)")
 			(ty-header @16.1-16.18 (name "ComplexType")
@@ -384,7 +384,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-var @16.13-16.14 (name "a"))
 					(ty-var @16.16-16.17 (name "b"))))))
 	(expressions
-		(expr @5.18-9.6 (type "Error -> Error"))
-		(expr @13.14-13.25 (type "Error -> Error"))
-		(expr @18.9-18.49 (type "* -> Error"))))
+		(expr (type "Error -> Error"))
+		(expr (type "Error -> Error"))
+		(expr (type "* -> Error"))))
 ~~~

@@ -47,10 +47,10 @@ NO CHANGE
 (can-ir
 	(s-alias-decl @3.1-3.15
 		(ty-header @3.1-3.9 (name "MyNumber"))
-		(ty @3.12-3.15 (name "U64")))
+		(ty-type @3.12-3.15 (name "U64")))
 	(s-alias-decl @4.1-4.15
 		(ty-header @4.1-4.9 (name "MyString"))
-		(ty @4.12-4.15 (name "Str"))))
+		(ty-type @4.12-4.15 (name "Str"))))
 ~~~
 # TYPES
 ~~~clojure

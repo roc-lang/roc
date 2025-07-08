@@ -287,11 +287,11 @@ main = |_| {
 		(e-dec-small @5.8-5.11 (numerator "42") (denominator-power-of-ten "1") (value "4.2")))
 	(d-let
 		(p-assign @6.1-6.4 (ident "str"))
-		(e-string @6.7-6.14
+		(e-str @6.7-6.14
 			(e-literal @6.8-6.13 (string "hello"))))
 	(d-let
 		(p-assign @7.1-7.14 (ident "my_empty_list"))
-		(e-empty_list @7.17-7.19))
+		(e-empty-list @7.17-7.19))
 	(d-let
 		(p-assign @8.1-8.17 (ident "my_nonempty_list"))
 		(e-list @8.20-8.31
@@ -362,7 +362,7 @@ main = |_| {
 				(p-assign @19.1-19.12 (ident "update_data")))
 			(e-lookup-local @23.27-23.40
 				(p-assign @15.1-15.14 (ident "str_container")))
-			(e-string @23.42-23.49
+			(e-str @23.42-23.49
 				(e-literal @23.43-23.48 (string "world")))))
 	(d-let
 		(p-assign @26.1-26.16 (ident "identity_record"))
@@ -385,7 +385,7 @@ main = |_| {
 		(e-call @30.14-30.37
 			(e-lookup-local @30.14-30.29
 				(p-assign @26.1-26.16 (ident "identity_record")))
-			(e-string @30.30-30.36
+			(e-str @30.30-30.36
 				(e-literal @30.31-30.35 (string "test")))))
 	(d-let
 		(p-assign @31.1-31.12 (ident "list_record"))
@@ -417,39 +417,39 @@ main = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Frac(*)"))
-		(patt @5.1-5.5 (type "Frac(*)"))
-		(patt @6.1-6.4 (type "Str"))
-		(patt @7.1-7.14 (type "List(*)"))
-		(patt @8.1-8.17 (type "List(Frac(*))"))
-		(patt @11.1-11.15 (type "* -> { data: *, count: Num(*) }"))
-		(patt @14.1-14.14 (type "{ data: *, count: Num(*) }"))
-		(patt @15.1-15.14 (type "{ data: *, count: Num(*) }"))
-		(patt @16.1-16.15 (type "{ data: *, count: Num(*) }"))
-		(patt @19.1-19.12 (type "*, * -> *"))
-		(patt @22.1-22.12 (type "*"))
-		(patt @23.1-23.12 (type "*"))
-		(patt @26.1-26.16 (type "* -> { value: * }"))
-		(patt @29.1-29.11 (type "{ value: * }"))
-		(patt @30.1-30.11 (type "{ value: * }"))
-		(patt @31.1-31.12 (type "{ value: * }"))
-		(patt @33.1-33.5 (type "* -> *")))
+		(patt @4.1-4.9 (type "Frac(*)"))
+		(patt @5.1-5.11 (type "Frac(*)"))
+		(patt @6.1-6.14 (type "Str"))
+		(patt @7.1-7.19 (type "List(*)"))
+		(patt @8.1-8.31 (type "List(Frac(*))"))
+		(patt @11.1-11.51 (type "* -> { data: *, count: Num(*) }"))
+		(patt @14.1-14.36 (type "{ data: *, count: Num(*) }"))
+		(patt @15.1-15.36 (type "{ data: *, count: Num(*) }"))
+		(patt @16.1-16.47 (type "{ data: *, count: Num(*) }"))
+		(patt @19.1-19.69 (type "*, * -> *"))
+		(patt @22.1-22.46 (type "*"))
+		(patt @23.1-23.50 (type "*"))
+		(patt @26.1-26.35 (type "* -> { value: * }"))
+		(patt @29.1-29.33 (type "{ value: * }"))
+		(patt @30.1-30.37 (type "{ value: * }"))
+		(patt @31.1-31.41 (type "{ value: * }"))
+		(patt @33.1-36.2 (type "* -> *")))
 	(expressions
-		(expr @4.7-4.9 (type "Frac(*)"))
-		(expr @5.8-5.11 (type "Frac(*)"))
-		(expr @6.7-6.14 (type "Str"))
-		(expr @7.17-7.19 (type "List(*)"))
-		(expr @8.20-8.31 (type "List(Frac(*))"))
-		(expr @11.18-11.51 (type "* -> { data: *, count: Num(*) }"))
-		(expr @14.17-14.36 (type "{ data: *, count: Num(*) }"))
-		(expr @15.17-15.36 (type "{ data: *, count: Num(*) }"))
-		(expr @16.18-16.47 (type "{ data: *, count: Num(*) }"))
-		(expr @19.15-19.69 (type "*, * -> *"))
-		(expr @22.15-22.46 (type "*"))
-		(expr @23.15-23.50 (type "*"))
-		(expr @26.19-26.35 (type "* -> { value: * }"))
-		(expr @29.14-29.33 (type "{ value: * }"))
-		(expr @30.14-30.37 (type "{ value: * }"))
-		(expr @31.15-31.41 (type "{ value: * }"))
-		(expr @33.8-36.2 (type "* -> *"))))
+		(expr (type "Frac(*)"))
+		(expr (type "Frac(*)"))
+		(expr (type "Str"))
+		(expr (type "List(*)"))
+		(expr (type "List(Frac(*))"))
+		(expr (type "* -> { data: *, count: Num(*) }"))
+		(expr (type "{ data: *, count: Num(*) }"))
+		(expr (type "{ data: *, count: Num(*) }"))
+		(expr (type "{ data: *, count: Num(*) }"))
+		(expr (type "*, * -> *"))
+		(expr (type "*"))
+		(expr (type "*"))
+		(expr (type "* -> { value: * }"))
+		(expr (type "{ value: * }"))
+		(expr (type "{ value: * }"))
+		(expr (type "{ value: * }"))
+		(expr (type "* -> *"))))
 ~~~

@@ -211,10 +211,10 @@ ain! = |_| getUser(900)
 				(if-branches
 					(if-branch
 						(e-runtime-error (tag "if_condition_not_canonicalized"))
-						(e-string @6.29-6.34
+						(e-str @6.29-6.34
 							(e-literal @6.30-6.33 (string "big")))))
 				(if-else
-					(e-string @6.40-6.43
+					(e-str @6.40-6.43
 						(e-literal @6.41-6.42 (string "l")))))))
 	(d-let
 		(p-assign @8.2-8.6 (ident "ain!"))
@@ -227,18 +227,18 @@ ain! = |_| getUser(900)
 				(e-int @8.21-8.24 (value "900")))))
 	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
-		(ty @3.10-3.13 (name "U64"))))
+		(ty-type @3.10-3.13 (name "U64"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "* -> Str"))
-		(patt @8.2-8.6 (type "* -> Str")))
+		(patt @1.1-1.1 (type "* -> Str"))
+		(patt @8.2-8.25 (type "* -> Str")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
-		(expr @1.1-1.1 (type "* -> Str"))
-		(expr @8.9-8.25 (type "* -> Str"))))
+		(expr (type "* -> Str"))
+		(expr (type "* -> Str"))))
 ~~~

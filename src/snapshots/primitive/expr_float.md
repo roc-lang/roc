@@ -43,7 +43,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.4 (type "Frac(*)")))
+		(patt @2.1-2.12 (type "Frac(*)")))
 	(expressions
-		(expr @2.7-2.12 (type "Frac(*)"))))
+		(expr (type "Frac(*)"))))
 ~~~

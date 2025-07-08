@@ -85,17 +85,17 @@ main! = |_| getName({name: "luke", age: 21})
 		(e-lambda @4.11-4.28
 			(args
 				(p-assign @4.12-4.19 (ident "_person")))
-			(e-string @4.21-4.28
+			(e-str @4.21-4.28
 				(e-literal @4.22-4.27 (string "hello"))))
 		(annotation @4.1-4.8
 			(declared-type
-				(ty-fn @3.11-3.41 (effectful false)
+				(ty-func @3.11-3.41 (effectful false)
 					(ty-record @3.11-3.34
 						(field (field "name")
-							(ty @3.19-3.22 (name "Str")))
+							(ty-type @3.19-3.22 (name "Str")))
 						(field (field "age")
-							(ty @3.29-3.32 (name "U64"))))
-					(ty @3.38-3.41 (name "Str"))))))
+							(ty-type @3.29-3.32 (name "U64"))))
+					(ty-type @3.38-3.41 (name "Str"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.44
@@ -107,7 +107,7 @@ main! = |_| getName({name: "luke", age: 21})
 				(e-record @6.21-6.43
 					(fields
 						(field (name "name")
-							(e-string @6.28-6.34
+							(e-str @6.28-6.34
 								(e-literal @6.29-6.33 (string "luke"))))
 						(field (name "age")
 							(e-int @6.40-6.42 (value "21")))))))))
@@ -116,9 +116,9 @@ main! = |_| getName({name: "luke", age: 21})
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "{ name: Str, age: U64 } -> Str"))
-		(patt @6.1-6.6 (type "* -> Str")))
+		(patt @4.1-4.28 (type "{ name: Str, age: U64 } -> Str"))
+		(patt @6.1-6.44 (type "* -> Str")))
 	(expressions
-		(expr @4.11-4.28 (type "{ name: Str, age: U64 } -> Str"))
-		(expr @6.9-6.44 (type "* -> Str"))))
+		(expr (type "{ name: Str, age: U64 } -> Str"))
+		(expr (type "* -> Str"))))
 ~~~

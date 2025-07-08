@@ -110,10 +110,10 @@ main! = |_| {}
 				(p-assign @5.10-5.11 (ident "x")))
 			(e-block @5.13-11.2
 				(s-type-anno @7.5-8.10 (name "inner")
-					(ty-fn @7.13-7.19 (effectful false)
+					(ty-func @7.13-7.19 (effectful false)
 						(ty-var @7.13-7.14 (name "a"))
 						(ty-var @7.18-7.19 (name "a"))))
-				(s-let @8.5-8.18
+				(s-var @8.5-8.18
 					(p-assign @8.5-8.10 (ident "inner"))
 					(e-lambda @8.13-8.18
 						(args
@@ -127,7 +127,7 @@ main! = |_| {}
 						(p-assign @5.10-5.11 (ident "x"))))))
 		(annotation @5.1-5.6
 			(declared-type
-				(ty-fn @4.9-4.15 (effectful false)
+				(ty-func @4.9-4.15 (effectful false)
 					(ty-var @4.9-4.10 (name "a"))
 					(ty-var @4.14-4.15 (name "a"))))))
 	(d-let
@@ -135,15 +135,15 @@ main! = |_| {}
 		(e-lambda @13.9-13.15
 			(args
 				(p-underscore @13.10-13.11))
-			(e-empty_record @13.13-13.15))))
+			(e-empty-record @13.13-13.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.6 (type "a -> a"))
-		(patt @13.1-13.6 (type "* -> {}")))
+		(patt @5.1-11.2 (type "a -> a"))
+		(patt @13.1-13.15 (type "* -> {}")))
 	(expressions
-		(expr @5.9-11.2 (type "a -> a"))
-		(expr @13.9-13.15 (type "* -> {}"))))
+		(expr (type "a -> a"))
+		(expr (type "* -> {}"))))
 ~~~

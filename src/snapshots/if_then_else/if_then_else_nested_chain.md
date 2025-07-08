@@ -103,7 +103,7 @@ NO CHANGE
 									(p-assign @3.16-3.19 (ident "num")))
 								(e-int @4.11-4.12 (value "0")))
 							(e-block @4.13-6.3
-								(e-string @5.3-5.13
+								(e-str @5.3-5.13
 									(e-literal @5.4-5.12 (string "negative")))))
 						(if-branch
 							(e-binop @6.12-6.22 (op "eq")
@@ -111,7 +111,7 @@ NO CHANGE
 									(p-assign @3.16-3.19 (ident "num")))
 								(e-int @6.19-6.20 (value "0")))
 							(e-block @6.21-8.3
-								(e-string @7.3-7.9
+								(e-str @7.3-7.9
 									(e-literal @7.4-7.8 (string "zero")))))
 						(if-branch
 							(e-binop @8.12-8.23 (op "gt")
@@ -119,18 +119,18 @@ NO CHANGE
 									(p-assign @3.16-3.19 (ident "num")))
 								(e-int @8.18-8.21 (value "100")))
 							(e-block @8.22-10.3
-								(e-string @9.3-9.10
+								(e-str @9.3-9.10
 									(e-literal @9.4-9.9 (string "large"))))))
 					(if-else
 						(e-block @10.9-12.3
-							(e-string @11.3-11.13
+							(e-str @11.3-11.13
 								(e-literal @11.4-11.12 (string "positive"))))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.12 (type "* -> Str")))
+		(patt @3.1-13.2 (type "* -> Str")))
 	(expressions
-		(expr @3.15-13.2 (type "* -> Str"))))
+		(expr (type "* -> Str"))))
 ~~~

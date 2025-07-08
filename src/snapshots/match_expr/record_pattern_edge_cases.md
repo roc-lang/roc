@@ -127,11 +127,11 @@ match ... {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-9.2
-	(match @1.1-9.2
+	(match
 		(cond
 			(e-not-implemented @1.7-1.10))
 		(branches
-			(branch
+			(branch @2.28-2.49
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @2.5-2.24
@@ -147,12 +147,12 @@ match ... {
 																(record-destruct @2.17-2.20 (label "c") (ident "c")
 																	(required))))))))))))))
 				(value
-					(e-string @2.28-2.49
+					(e-str @2.28-2.49
 						(e-literal @2.29-2.44 (string "deeply nested: "))
 						(e-lookup-local @2.46-2.47
 							(p-assign @2.17-2.20 (ident "c")))
 						(e-literal @2.48-2.48 (string "")))))
-			(branch
+			(branch @3.21-3.45
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @3.5-3.17
@@ -164,12 +164,12 @@ match ... {
 										(p-record-destructure @3.13-3.15
 											(destructs))))))))
 				(value
-					(e-string @3.21-3.45
+					(e-str @3.21-3.45
 						(e-literal @3.22-3.40 (string "mixed with empty: "))
 						(e-lookup-local @3.42-3.43
 							(p-assign @3.7-3.9 (ident "x")))
 						(e-literal @3.44-3.44 (string "")))))
-			(branch
+			(branch @4.37-4.68
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @4.5-4.33
@@ -183,7 +183,7 @@ match ... {
 								(record-destruct @4.25-4.33 (label "simple") (ident "simple")
 									(required))))))
 				(value
-					(e-string @4.37-4.68
+					(e-str @4.37-4.68
 						(e-literal @4.38-4.45 (string "mixed: "))
 						(e-lookup-local @4.47-4.52
 							(p-assign @4.16-4.23 (ident "inner")))
@@ -191,7 +191,7 @@ match ... {
 						(e-lookup-local @4.60-4.66
 							(p-assign @4.25-4.33 (ident "simple")))
 						(e-literal @4.67-4.67 (string "")))))
-			(branch
+			(branch @5.31-5.60
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @5.5-5.27
@@ -209,7 +209,7 @@ match ... {
 												(record-destruct @5.22-5.25 (label "d") (ident "d")
 													(required))))))))))
 				(value
-					(e-string @5.31-5.60
+					(e-str @5.31-5.60
 						(e-literal @5.32-5.49 (string "multiple nested: "))
 						(e-lookup-local @5.51-5.52
 							(p-assign @5.12-5.15 (ident "b")))
@@ -217,7 +217,7 @@ match ... {
 						(e-lookup-local @5.57-5.58
 							(p-assign @5.22-5.25 (ident "d")))
 						(e-literal @5.59-5.59 (string "")))))
-			(branch
+			(branch @6.20-6.35
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @6.5-6.16
@@ -226,12 +226,12 @@ match ... {
 									(sub-pattern
 										(p-assign @6.13-6.14 (ident "x"))))))))
 				(value
-					(e-string @6.20-6.35
+					(e-str @6.20-6.35
 						(e-literal @6.21-6.30 (string "renamed: "))
 						(e-lookup-local @6.32-6.33
 							(p-assign @6.13-6.14 (ident "x")))
 						(e-literal @6.34-6.34 (string "")))))
-			(branch
+			(branch @7.54-7.106
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @7.5-7.50
@@ -247,7 +247,7 @@ match ... {
 													(sub-pattern
 														(p-assign @7.39-7.46 (ident "userAge"))))))))))))
 				(value
-					(e-string @7.54-7.106
+					(e-str @7.54-7.106
 						(e-literal @7.55-7.71 (string "renamed nested: "))
 						(e-lookup-local @7.73-7.82
 							(p-assign @7.23-7.32 (ident "firstName")))
@@ -258,13 +258,13 @@ match ... {
 									(p-assign @7.39-7.46 (ident "userAge"))))
 							(args))
 						(e-literal @7.104-7.105 (string ")")))))
-			(branch
+			(branch @8.11-8.25
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @8.5-8.7
 							(destructs))))
 				(value
-					(e-string @8.11-8.25
+					(e-str @8.11-8.25
 						(e-literal @8.12-8.24 (string "empty record"))))))))
 ~~~
 # TYPES

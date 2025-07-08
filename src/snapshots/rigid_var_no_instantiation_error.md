@@ -296,7 +296,7 @@ main! = |_| {
 						(e-runtime-error (tag "ident_not_in_scope"))))))
 		(annotation @5.1-5.5
 			(declared-type
-				(ty-fn @4.8-4.24 (effectful false)
+				(ty-func @4.8-4.24 (effectful false)
 					(ty-tuple @4.8-4.14
 						(ty-var @4.9-4.10 (name "a"))
 						(ty-var @4.12-4.13 (name "b")))
@@ -309,7 +309,7 @@ main! = |_| {
 			(args
 				(p-underscore @11.10-11.11))
 			(e-block @11.13-24.2
-				(s-let @13.5-13.34
+				(s-var @13.5-13.34
 					(p-assign @13.5-13.12 (ident "result1"))
 					(e-call @13.15-13.34
 						(e-lookup-local @13.15-13.19
@@ -317,9 +317,9 @@ main! = |_| {
 						(e-tuple @13.20-13.33
 							(elems
 								(e-int @13.21-13.23 (value "42"))
-								(e-string @13.25-13.32
+								(e-str @13.25-13.32
 									(e-literal @13.26-13.31 (string "hello")))))))
-				(s-let @17.5-17.43
+				(s-var @17.5-17.43
 					(p-assign @17.5-17.12 (ident "result2"))
 					(e-call @17.15-17.43
 						(e-lookup-local @17.15-17.19
@@ -332,26 +332,26 @@ main! = |_| {
 										(e-int @17.33-17.34 (value "1"))
 										(e-int @17.36-17.37 (value "2"))
 										(e-int @17.39-17.40 (value "3"))))))))
-				(s-let @21.5-21.35
+				(s-var @21.5-21.35
 					(p-assign @21.5-21.12 (ident "result3"))
 					(e-call @21.15-21.35
 						(e-lookup-local @21.15-21.19
 							(p-assign @5.1-5.5 (ident "swap")))
 						(e-tuple @21.20-21.34
 							(elems
-								(e-string @21.21-21.26
+								(e-str @21.21-21.26
 									(e-literal @21.22-21.25 (string "foo")))
-								(e-string @21.28-21.33
+								(e-str @21.28-21.33
 									(e-literal @21.29-21.32 (string "bar")))))))
-				(e-empty_record @23.5-23.7)))))
+				(e-empty-record @23.5-23.7)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "(a, b) -> (Error, Error)"))
-		(patt @11.1-11.6 (type "* -> {}")))
+		(patt @5.1-8.2 (type "(a, b) -> (Error, Error)"))
+		(patt @11.1-24.2 (type "* -> {}")))
 	(expressions
-		(expr @5.8-8.2 (type "(a, b) -> (Error, Error)"))
-		(expr @11.9-24.2 (type "* -> {}"))))
+		(expr (type "(a, b) -> (Error, Error)"))
+		(expr (type "* -> {}"))))
 ~~~

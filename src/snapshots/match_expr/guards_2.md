@@ -456,11 +456,11 @@ match value {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-5.2
-	(match @1.1-5.2
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch
+			(branch @2.50-2.75
 				(patterns
 					(pattern (degenerate false)
 						(p-list @2.5-2.24
@@ -470,31 +470,31 @@ match value {
 								(p-assign @2.19-2.23 (ident "rest"))))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
+			(branch @2.75-2.80
 				(patterns
 					(pattern (degenerate false)
 						(p-runtime-error @2.51-2.77 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
+			(branch @2.87-2.92
 				(patterns
 					(pattern (degenerate false)
 						(p-assign @2.77-2.86 (ident "toStr"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
-			(branch
+			(branch @2.93-2.94
 				(patterns
 					(pattern (degenerate false)
 						(p-runtime-error @2.92-2.93 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
+			(branch @1.1-3.6
 				(patterns
 					(pattern (degenerate false)
 						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
+			(branch @3.25-3.48
 				(patterns
 					(pattern (degenerate false)
 						(p-list @3.5-3.11
@@ -503,36 +503,36 @@ match value {
 								(p-assign @3.9-3.10 (ident "y"))))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
+			(branch @3.48-3.53
 				(patterns
 					(pattern (degenerate false)
 						(p-runtime-error @3.26-3.50 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
+			(branch @3.60-3.61
 				(patterns
 					(pattern (degenerate false)
 						(p-assign @3.50-3.59 (ident "toStr"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
-			(branch
+			(branch @3.62-3.63
 				(patterns
 					(pattern (degenerate false)
 						(p-runtime-error @3.61-3.62 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
+			(branch @1.1-4.6
 				(patterns
 					(pattern (degenerate false)
 						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
+			(branch @4.10-4.17
 				(patterns
 					(pattern (degenerate false)
 						(p-underscore @4.5-4.6)))
 				(value
-					(e-string @4.10-4.17
+					(e-str @4.10-4.17
 						(e-literal @4.11-4.16 (string "other"))))))))
 ~~~
 # TYPES

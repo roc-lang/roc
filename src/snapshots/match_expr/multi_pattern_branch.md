@@ -62,11 +62,11 @@ match color {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-5.2
-	(match @1.1-5.2
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch
+			(branch @2.27-2.28
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @2.5-2.9))
@@ -76,13 +76,13 @@ match color {
 						(p-applied-tag @2.20-2.23)))
 				(value
 					(e-int @2.27-2.28 (value "1"))))
-			(branch
+			(branch @3.14-3.15
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @3.5-3.10)))
 				(value
 					(e-int @3.14-3.15 (value "2"))))
-			(branch
+			(branch @4.14-4.15
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @4.5-4.10)))

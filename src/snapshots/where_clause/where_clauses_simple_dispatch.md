@@ -66,25 +66,25 @@ NO CHANGE
 				(args)))
 		(annotation @4.1-4.10
 			(declared-type
-				(ty-fn @3.13-3.21 (effectful false)
+				(ty-func @3.13-3.21 (effectful false)
 					(ty-var @3.13-3.14 (name "a"))
-					(ty @3.18-3.21 (name "Str"))))))
+					(ty-type @3.18-3.21 (name "Str"))))))
 	(s-type-anno @1.1-1.1 (name "stringify")
-		(ty-fn @3.13-3.21 (effectful false)
+		(ty-func @3.13-3.21 (effectful false)
 			(ty-var @3.13-3.14 (name "a"))
-			(ty @3.18-3.21 (name "Str")))
+			(ty-type @3.18-3.21 (name "Str")))
 		(where
-			(method @1.1-1.1 (module-of "a") (ident "to_str")
+			(where-mod-method (module-of "a") (ident "to_str")
 				(args
 					(ty-var @3.47-3.48 (name "a")))
-				(ty @3.52-3.55 (name "Str")))))
-	(ext-decl @1.1-1.1 (ident "module(a).to_str") (kind "value")))
+				(ty-type @3.52-3.55 (name "Str")))))
+	(ext-decl (ident "module(a).to_str") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.10 (type "{ to_str: Str } -> Str")))
+		(patt @4.1-4.35 (type "{ to_str: Str } -> Str")))
 	(expressions
-		(expr @4.13-4.35 (type "{ to_str: Str } -> Str"))))
+		(expr (type "{ to_str: Str } -> Str"))))
 ~~~

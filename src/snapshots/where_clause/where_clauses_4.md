@@ -64,15 +64,15 @@ decodeThings : List(List(U8)) -> List(a)
 		(exposes
 			(exposed (name "Decode") (wildcard false))))
 	(s-type-anno @5.1-6.24 (name "decodeThings")
-		(ty-fn @5.16-5.41 (effectful false)
+		(ty-func @5.16-5.41 (effectful false)
 			(ty-apply @5.16-5.30 (symbol "List")
 				(ty-apply @5.21-5.29 (symbol "List")
-					(ty @5.26-5.28 (name "U8"))))
+					(ty-type @5.26-5.28 (name "U8"))))
 			(ty-apply @5.34-5.41 (symbol "List")
 				(ty-var @5.39-5.40 (name "a"))))
 		(where
-			(alias @6.8-6.24 (module-of "a") (ident "Decode"))))
-	(ext-decl @6.8-6.24 (ident "module(a).Decode") (kind "type")))
+			(where-mod-alias (module-of "a") (ident "Decode"))))
+	(ext-decl (ident "module(a).Decode") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

@@ -252,9 +252,9 @@ main! = |_| {
 			(e-not-implemented @5.20-5.23))
 		(annotation @5.1-5.13
 			(declared-type
-				(ty-fn @4.16-4.26 (effectful false)
-					(ty @4.16-4.19 (name "U64"))
-					(ty @4.23-4.26 (name "U64"))))))
+				(ty-func @4.16-4.26 (effectful false)
+					(ty-type @4.16-4.19 (name "U64"))
+					(ty-type @4.23-4.26 (name "U64"))))))
 	(d-let
 		(p-assign @9.1-9.10 (ident "testCrash"))
 		(e-lambda @9.13-9.24
@@ -263,9 +263,9 @@ main! = |_| {
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
 		(annotation @9.1-9.10
 			(declared-type
-				(ty-fn @8.13-8.23 (effectful false)
-					(ty @8.13-8.16 (name "U64"))
-					(ty @8.20-8.23 (name "U64"))))))
+				(ty-func @8.13-8.23 (effectful false)
+					(ty-type @8.13-8.16 (name "U64"))
+					(ty-type @8.20-8.23 (name "U64"))))))
 	(d-let
 		(p-assign @13.1-13.16 (ident "testCrashSimple"))
 		(e-lambda @13.19-13.30
@@ -274,46 +274,46 @@ main! = |_| {
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
 		(annotation @13.1-13.16
 			(declared-type
-				(ty-fn @12.19-12.29 (effectful false)
-					(ty @12.19-12.22 (name "U64"))
-					(ty @12.26-12.29 (name "U64"))))))
+				(ty-func @12.19-12.29 (effectful false)
+					(ty-type @12.19-12.22 (name "U64"))
+					(ty-type @12.26-12.29 (name "U64"))))))
 	(d-let
 		(p-assign @15.1-15.6 (ident "main!"))
 		(e-lambda @15.9-20.2
 			(args
 				(p-underscore @15.10-15.11))
 			(e-block @15.13-20.2
-				(s-let @16.5-16.31
+				(s-var @16.5-16.31
 					(p-assign @16.5-16.12 (ident "result1"))
 					(e-call @16.15-16.31
 						(e-lookup-local @16.15-16.27
 							(p-assign @5.1-5.13 (ident "testEllipsis")))
 						(e-int @16.28-16.30 (value "42"))))
-				(s-let @17.5-17.28
+				(s-var @17.5-17.28
 					(p-assign @17.5-17.12 (ident "result2"))
 					(e-call @17.15-17.28
 						(e-lookup-local @17.15-17.24
 							(p-assign @9.1-9.10 (ident "testCrash")))
 						(e-int @17.25-17.27 (value "42"))))
-				(s-let @18.5-18.34
+				(s-var @18.5-18.34
 					(p-assign @18.5-18.12 (ident "result3"))
 					(e-call @18.15-18.34
 						(e-lookup-local @18.15-18.30
 							(p-assign @13.1-13.16 (ident "testCrashSimple")))
 						(e-int @18.31-18.33 (value "42"))))
-				(e-empty_list @19.5-19.7)))))
+				(e-empty-list @19.5-19.7)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.13 (type "U64 -> U64"))
-		(patt @9.1-9.10 (type "U64 -> Error"))
-		(patt @13.1-13.16 (type "U64 -> Error"))
-		(patt @15.1-15.6 (type "* -> List(*)")))
+		(patt @5.1-5.23 (type "U64 -> U64"))
+		(patt @9.1-9.24 (type "U64 -> Error"))
+		(patt @13.1-13.30 (type "U64 -> Error"))
+		(patt @15.1-20.2 (type "* -> List(*)")))
 	(expressions
-		(expr @5.16-5.23 (type "U64 -> U64"))
-		(expr @9.13-9.24 (type "U64 -> Error"))
-		(expr @13.19-13.30 (type "U64 -> Error"))
-		(expr @15.9-20.2 (type "* -> List(*)"))))
+		(expr (type "U64 -> U64"))
+		(expr (type "U64 -> Error"))
+		(expr (type "U64 -> Error"))
+		(expr (type "* -> List(*)"))))
 ~~~

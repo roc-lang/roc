@@ -410,34 +410,6 @@ Is there an `import` or `exposing` missing up-top?
              ^^^^^^^^^^^^^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Color.md:20:20:20:22:**
-```roc
-rgba : U8, U8, U8, U8 -> Color
-```
-                   ^^
-
-It is of type:
-    _U8_
-
-But you are trying to use it as:
-    _{ to_frac: * }_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Color.md:26:7:26:10:**
-```roc
-hex : Str -> Result(Color, [InvalidHex(Str)])
-```
-      ^^^
-
-It is of type:
-    _Str_
-
-But you are trying to use it as:
-    _{ to_utf8: List(Num(*)) }_
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),Newline(1:1-1:1),
@@ -973,11 +945,11 @@ is_named_color = |str| {
 						(p-assign @18.14-18.15 (ident "b"))))))
 		(annotation @18.1-18.4
 			(declared-type
-				(ty-fn @17.7-17.26 (effectful false)
-					(ty @17.7-17.9 (name "U8"))
-					(ty @17.11-17.13 (name "U8"))
-					(ty @17.15-17.17 (name "U8"))
-					(ty @17.21-17.26 (name "Color"))))))
+				(ty-func @17.7-17.26 (effectful false)
+					(ty-type @17.7-17.9 (name "U8"))
+					(ty-type @17.11-17.13 (name "U8"))
+					(ty-type @17.15-17.17 (name "U8"))
+					(ty-type @17.21-17.26 (name "Color"))))))
 	(d-let
 		(p-assign @21.1-21.5 (ident "rgba"))
 		(e-lambda @21.8-24.2
@@ -987,7 +959,7 @@ is_named_color = |str| {
 				(p-assign @21.15-21.16 (ident "b"))
 				(p-assign @21.18-21.19 (ident "a")))
 			(e-block @21.21-24.2
-				(s-let @22.5-23.10
+				(s-var @22.5-23.10
 					(p-assign @22.5-22.12 (ident "rounded"))
 					(e-binop @22.15-23.10 (op "div")
 						(e-dot-access @22.15-22.28 (field "to_frac")
@@ -1008,26 +980,26 @@ is_named_color = |str| {
 							(p-assign @22.5-22.12 (ident "rounded")))))))
 		(annotation @21.1-21.5
 			(declared-type
-				(ty-fn @20.8-20.31 (effectful false)
-					(ty @20.8-20.10 (name "U8"))
-					(ty @20.12-20.14 (name "U8"))
-					(ty @20.16-20.18 (name "U8"))
-					(ty @20.20-20.22 (name "U8"))
-					(ty @20.26-20.31 (name "Color"))))))
+				(ty-func @20.8-20.31 (effectful false)
+					(ty-type @20.8-20.10 (name "U8"))
+					(ty-type @20.12-20.14 (name "U8"))
+					(ty-type @20.16-20.18 (name "U8"))
+					(ty-type @20.20-20.22 (name "U8"))
+					(ty-type @20.26-20.31 (name "Color"))))))
 	(d-let
 		(p-assign @27.1-27.4 (ident "hex"))
 		(e-lambda @27.7-46.2
 			(args
 				(p-assign @27.8-27.11 (ident "str")))
 			(e-block @27.13-46.2
-				(s-let @29.5-30.25
+				(s-var @29.5-30.25
 					(p-assign @29.5-29.10 (ident "bytes"))
 					(e-dot-access @29.13-30.25 (field "to_utf8")
 						(receiver
 							(e-lookup-local @29.13-29.16
 								(p-assign @27.8-27.11 (ident "str"))))
 						(args)))
-				(s-let @30.5-32.10
+				(s-var @30.5-32.10
 					(p-assign @30.5-30.25 (ident "is_char_in_hex_range"))
 					(e-lambda @30.28-32.10
 						(args
@@ -1062,12 +1034,12 @@ is_named_color = |str| {
 										(p-assign @30.29-30.30 (ident "b")))
 									(e-int @30.105-30.108 (value "70")))))))
 				(e-match @32.5-45.6
-					(match @32.5-45.6
+					(match
 						(cond
 							(e-lookup-local @32.11-32.16
 								(p-assign @29.5-29.10 (ident "bytes"))))
 						(branches
-							(branch
+							(branch @33.36-43.10
 								(patterns
 									(pattern (degenerate false)
 										(p-list @33.9-33.32
@@ -1081,7 +1053,7 @@ is_named_color = |str| {
 												(p-assign @33.30-33.31 (ident "f"))))))
 								(value
 									(e-block @33.36-43.10
-										(s-let @34.13-42.15
+										(s-var @34.13-42.15
 											(p-assign @34.13-34.21 (ident "is_valid"))
 											(e-binop @35.17-42.15 (op "and")
 												(e-binop @35.17-40.20 (op "and")
@@ -1134,12 +1106,12 @@ is_named_color = |str| {
 													(args
 														(e-tag @42.53-42.124 (name "InvalidHex")
 															(args
-																(e-string @42.64-42.123
+																(e-str @42.64-42.123
 																	(e-literal @42.65-42.116 (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
 																	(e-lookup-local @42.118-42.121
 																		(p-assign @27.8-27.11 (ident "str")))
 																	(e-literal @42.122-42.122 (string ""))))))))))))
-							(branch
+							(branch @44.14-44.100
 								(patterns
 									(pattern (degenerate false)
 										(p-underscore @44.9-44.10)))
@@ -1148,37 +1120,37 @@ is_named_color = |str| {
 										(args
 											(e-tag @44.18-44.99 (name "InvalidHex")
 												(args
-													(e-string @44.29-44.98
+													(e-str @44.29-44.98
 														(e-literal @44.30-44.91 (string "Expected Hex must start with # and be 7 characters long, got "))
 														(e-lookup-local @44.93-44.96
 															(p-assign @27.8-27.11 (ident "str")))
 														(e-literal @44.97-44.97 (string ""))))))))))))))
 		(annotation @27.1-27.4
 			(declared-type
-				(ty-fn @26.7-26.46 (effectful false)
-					(ty @26.7-26.10 (name "Str"))
+				(ty-func @26.7-26.46 (effectful false)
+					(ty-type @26.7-26.10 (name "Str"))
 					(ty-apply @26.14-26.46 (symbol "Result")
-						(ty @26.21-26.26 (name "Color"))
+						(ty-type @26.21-26.26 (name "Color"))
 						(ty-tag-union @26.28-26.45
 							(ty-apply @26.29-26.44 (symbol "InvalidHex")
-								(ty @26.40-26.43 (name "Str")))))))))
+								(ty-type @26.40-26.43 (name "Str")))))))))
 	(d-let
 		(p-assign @49.1-49.7 (ident "to_str"))
 		(e-lambda @49.10-54.2
 			(args
 				(p-assign @49.11-49.16 (ident "color")))
 			(e-match @49.18-54.2
-				(match @49.18-54.2
+				(match
 					(cond
 						(e-lookup-local @49.24-49.29
 							(p-assign @49.11-49.16 (ident "color"))))
 					(branches
-						(branch
+						(branch @50.27-50.86
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @50.5-50.23)))
 							(value
-								(e-string @50.27-50.86
+								(e-str @50.27-50.86
 									(e-literal @50.28-50.32 (string "rgb("))
 									(e-call @50.34-50.47
 										(e-lookup-local @50.34-50.44
@@ -1198,12 +1170,12 @@ is_named_color = |str| {
 										(e-lookup-local @50.81-50.82
 											(p-assign @50.21-50.22 (ident "b"))))
 									(e-literal @50.84-50.85 (string ")")))))
-						(branch
+						(branch @51.31-51.109
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @51.5-51.27)))
 							(value
-								(e-string @51.31-51.109
+								(e-str @51.31-51.109
 									(e-literal @51.32-51.37 (string "rgba("))
 									(e-call @51.39-51.52
 										(e-lookup-local @51.39-51.49
@@ -1229,14 +1201,14 @@ is_named_color = |str| {
 										(e-lookup-local @51.104-51.105
 											(p-assign @51.25-51.26 (ident "a"))))
 									(e-literal @51.107-51.108 (string ")")))))
-						(branch
+						(branch @52.27-52.32
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @52.5-52.23)))
 							(value
 								(e-lookup-local @52.27-52.32
 									(p-assign @52.17-52.22 (ident "inner")))))
-						(branch
+						(branch @53.25-53.30
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @53.5-53.21)))
@@ -1245,9 +1217,9 @@ is_named_color = |str| {
 									(p-assign @53.15-53.20 (ident "inner")))))))))
 		(annotation @49.1-49.7
 			(declared-type
-				(ty-fn @48.10-48.22 (effectful false)
-					(ty @48.10-48.15 (name "Color"))
-					(ty @48.19-48.22 (name "Str"))))))
+				(ty-func @48.10-48.22 (effectful false)
+					(ty-type @48.10-48.15 (name "Color"))
+					(ty-type @48.19-48.22 (name "Str"))))))
 	(d-let
 		(p-assign @61.1-61.6 (ident "named"))
 		(e-call @61.9-63.29
@@ -1260,30 +1232,30 @@ is_named_color = |str| {
 					(e-runtime-error (tag "ident_not_in_scope")))))
 		(annotation @61.1-61.6
 			(declared-type
-				(ty-fn @60.9-60.50 (effectful false)
-					(ty @60.9-60.12 (name "Str"))
+				(ty-func @60.9-60.50 (effectful false)
+					(ty-type @60.9-60.12 (name "Str"))
 					(ty-apply @60.16-60.50 (symbol "Result")
-						(ty @60.23-60.28 (name "Color"))
+						(ty-type @60.23-60.28 (name "Color"))
 						(ty-tag-union @60.30-60.49
 							(ty-apply @60.31-60.48 (symbol "UnknownColor")
-								(ty @60.44-60.47 (name "Str")))))))))
+								(ty-type @60.44-60.47 (name "Str")))))))))
 	(d-let
 		(p-assign @67.1-67.15 (ident "is_named_color"))
 		(e-lambda @67.18-71.2
 			(args
 				(p-assign @67.19-67.22 (ident "str")))
 			(e-block @67.23-71.2
-				(s-let @68.5-68.66
+				(s-var @68.5-68.66
 					(p-assign @68.5-68.11 (ident "colors"))
 					(e-call @68.14-68.66
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-list @68.28-68.65
 							(elems
-								(e-string @68.29-68.40
+								(e-str @68.29-68.40
 									(e-literal @68.30-68.39 (string "AliceBlue")))
-								(e-string @68.42-68.56
+								(e-str @68.42-68.56
 									(e-literal @68.43-68.55 (string "AntiqueWhite")))
-								(e-string @68.58-68.64
+								(e-str @68.58-68.64
 									(e-literal @68.59-68.63 (string "Aqua")))))))
 				(e-dot-access @70.5-71.2 (field "contains")
 					(receiver
@@ -1296,18 +1268,18 @@ is_named_color = |str| {
 		(ty-header @10.1-10.6 (name "Color"))
 		(ty-tag-union @10.10-15.2
 			(ty-apply @11.5-11.20 (symbol "RGB")
-				(ty @11.9-11.11 (name "U8"))
-				(ty @11.13-11.15 (name "U8"))
-				(ty @11.17-11.19 (name "U8")))
+				(ty-type @11.9-11.11 (name "U8"))
+				(ty-type @11.13-11.15 (name "U8"))
+				(ty-type @11.17-11.19 (name "U8")))
 			(ty-apply @12.5-12.26 (symbol "RGBA")
-				(ty @12.10-12.12 (name "U8"))
-				(ty @12.14-12.16 (name "U8"))
-				(ty @12.18-12.20 (name "U8"))
-				(ty @12.22-12.25 (name "Dec")))
+				(ty-type @12.10-12.12 (name "U8"))
+				(ty-type @12.14-12.16 (name "U8"))
+				(ty-type @12.18-12.20 (name "U8"))
+				(ty-type @12.22-12.25 (name "Dec")))
 			(ty-apply @13.5-13.15 (symbol "Named")
-				(ty @13.11-13.14 (name "Str")))
+				(ty-type @13.11-13.14 (name "Str")))
 			(ty-apply @14.5-14.13 (symbol "Hex")
-				(ty @14.9-14.12 (name "Str")))))
+				(ty-type @14.9-14.12 (name "Str")))))
 	(s-expect @1.1-1.1
 		(e-binop @1.1-1.1 (op "eq")
 			(e-dot-access @56.8-56.37 (field "to_str")
@@ -1319,7 +1291,7 @@ is_named_color = |str| {
 						(e-int @56.17-56.19 (value "56"))
 						(e-int @56.21-56.24 (value "245"))))
 				(args))
-			(e-string @56.38-56.57
+			(e-str @56.38-56.57
 				(e-literal @56.39-56.56 (string "rgb(124, 56, 245)")))))
 	(s-expect @1.1-1.1
 		(e-binop @1.1-1.1 (op "eq")
@@ -1333,7 +1305,7 @@ is_named_color = |str| {
 						(e-int @57.22-57.25 (value "245"))
 						(e-int @57.27-57.30 (value "255"))))
 				(args))
-			(e-string @57.44-57.69
+			(e-str @57.44-57.69
 				(e-literal @57.45-57.68 (string "rgba(124, 56, 245, 1.0)")))))
 	(s-expect @58.1-60.6
 		(e-binop @58.8-60.6 (op "eq")
@@ -1342,34 +1314,34 @@ is_named_color = |str| {
 					(e-call @58.8-58.22
 						(e-lookup-local @58.8-58.11
 							(p-assign @27.1-27.4 (ident "hex")))
-						(e-string @58.12-58.21
+						(e-str @58.12-58.21
 							(e-literal @58.13-58.20 (string "#ff00ff")))))
 				(args
 					(e-lookup-local @58.30-58.36
 						(p-assign @49.1-49.7 (ident "to_str")))))
 			(e-tag @58.41-58.54 (name "Ok")
 				(args
-					(e-string @58.44-58.53
+					(e-str @58.44-58.53
 						(e-literal @58.45-58.52 (string "#ff00ff"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.4 (type "U8, U8, U8 -> [RGB]*"))
-		(patt @21.1-21.5 (type "U8, U8, U8, Error -> [RGBA]*"))
-		(patt @27.1-27.4 (type "Error -> Error"))
-		(patt @49.1-49.7 (type "[Named, RGB, RGBA, Hex]* -> Str"))
-		(patt @61.1-61.6 (type "Error"))
-		(patt @67.1-67.15 (type "* -> *")))
+		(patt @18.1-18.35 (type "U8, U8, U8 -> [RGB]*"))
+		(patt @21.1-24.2 (type "U8, U8, U8, U8 -> [RGBA]*"))
+		(patt @27.1-46.2 (type "Str -> Error"))
+		(patt @49.1-54.2 (type "[Named, RGB, RGBA, Hex]* -> Str"))
+		(patt @61.1-63.29 (type "Error"))
+		(patt @67.1-71.2 (type "* -> *")))
 	(type_decls
 		(nominal @10.1-15.2 (type "Color")
 			(ty-header @10.1-10.6 (name "Color"))))
 	(expressions
-		(expr @18.7-18.35 (type "U8, U8, U8 -> [RGB]*"))
-		(expr @21.8-24.2 (type "U8, U8, U8, Error -> [RGBA]*"))
-		(expr @27.7-46.2 (type "Error -> Error"))
-		(expr @49.10-54.2 (type "[Named, RGB, RGBA, Hex]* -> Str"))
-		(expr @61.9-63.29 (type "Error"))
-		(expr @67.18-71.2 (type "* -> *"))))
+		(expr (type "U8, U8, U8 -> [RGB]*"))
+		(expr (type "U8, U8, U8, U8 -> [RGBA]*"))
+		(expr (type "Str -> Error"))
+		(expr (type "[Named, RGB, RGBA, Hex]* -> Str"))
+		(expr (type "Error"))
+		(expr (type "* -> *"))))
 ~~~

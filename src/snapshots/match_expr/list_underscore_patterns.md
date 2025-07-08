@@ -91,11 +91,11 @@ match items {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-8.2
-	(match @1.1-8.2
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch
+			(branch @2.12-2.13
 				(patterns
 					(pattern (degenerate false)
 						(p-list @2.5-2.8
@@ -103,7 +103,7 @@ match items {
 								(p-underscore @2.6-2.7)))))
 				(value
 					(e-int @2.12-2.13 (value "1"))))
-			(branch
+			(branch @3.19-3.23
 				(patterns
 					(pattern (degenerate false)
 						(p-list @3.5-3.15
@@ -113,7 +113,7 @@ match items {
 				(value
 					(e-lookup-local @3.19-3.23
 						(p-assign @3.10-3.14 (ident "last")))))
-			(branch
+			(branch @4.20-4.25
 				(patterns
 					(pattern (degenerate false)
 						(p-list @4.5-4.16
@@ -123,7 +123,7 @@ match items {
 				(value
 					(e-lookup-local @4.20-4.25
 						(p-assign @4.6-4.11 (ident "first")))))
-			(branch
+			(branch @5.22-5.27
 				(patterns
 					(pattern (degenerate false)
 						(p-list @5.5-5.18
@@ -134,7 +134,7 @@ match items {
 				(value
 					(e-lookup-local @5.22-5.27
 						(p-assign @5.12-5.17 (ident "third")))))
-			(branch
+			(branch @6.21-7.6
 				(patterns
 					(pattern (degenerate false)
 						(p-list @6.5-6.17
@@ -149,7 +149,7 @@ match items {
 							(p-assign @6.6-6.7 (ident "x")))
 						(e-lookup-local @6.25-6.26
 							(p-assign @6.15-6.16 (ident "y"))))))
-			(branch
+			(branch @7.11-7.12
 				(patterns
 					(pattern (degenerate false)
 						(p-list @7.5-7.7

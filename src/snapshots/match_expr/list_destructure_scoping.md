@@ -58,11 +58,11 @@ match list {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-4.2
-	(match @1.1-4.2
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch
+			(branch @2.16-2.21
 				(patterns
 					(pattern (degenerate false)
 						(p-list @2.5-2.12
@@ -71,7 +71,7 @@ match list {
 				(value
 					(e-lookup-local @2.16-2.21
 						(p-assign @2.6-2.11 (ident "first")))))
-			(branch
+			(branch @3.24-4.2
 				(patterns
 					(pattern (degenerate false)
 						(p-list @3.5-3.20

@@ -80,7 +80,7 @@ NO CHANGE
 						(p-assign @4.9-4.10 (ident "x"))))))
 		(annotation @4.1-4.5
 			(declared-type
-				(ty-fn @3.8-3.19 (effectful false)
+				(ty-func @3.8-3.19 (effectful false)
 					(ty-var @3.8-3.9 (name "a"))
 					(ty-tuple @3.13-3.19
 						(ty-var @3.14-3.15 (name "a"))
@@ -90,15 +90,15 @@ NO CHANGE
 		(e-lambda @6.9-6.15
 			(args
 				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+			(e-empty-record @6.13-6.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.5 (type "a -> (a, a)"))
-		(patt @6.1-6.6 (type "* -> {}")))
+		(patt @4.1-4.18 (type "a -> (a, a)"))
+		(patt @6.1-6.15 (type "* -> {}")))
 	(expressions
-		(expr @4.8-4.18 (type "a -> (a, a)"))
-		(expr @6.9-6.15 (type "* -> {}"))))
+		(expr (type "a -> (a, a)"))
+		(expr (type "* -> {}"))))
 ~~~

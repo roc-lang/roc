@@ -429,9 +429,9 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 	(s-expr @13.31-16.6
 		(e-tuple @13.31-13.55
 			(elems
-				(e-string @13.32-13.39
+				(e-str @13.32-13.39
 					(e-literal @13.33-13.38 (string "Alice")))
-				(e-string @13.41-13.48
+				(e-str @13.41-13.48
 					(e-literal @13.42-13.47 (string "fixed")))
 				(e-tag @13.50-13.54 (name "True")))))
 	(s-expr @16.5-16.20
@@ -447,9 +447,9 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 						(e-int @16.23-16.24 (value "1"))
 						(e-int @16.26-16.27 (value "2"))
 						(e-int @16.29-16.30 (value "3"))))
-				(e-string @16.33-16.40
+				(e-str @16.33-16.40
 					(e-literal @16.34-16.39 (string "hello"))))))
-	(e-empty_record @18.5-18.7))
+	(e-empty-record @18.5-18.7))
 ~~~
 # TYPES
 ~~~clojure

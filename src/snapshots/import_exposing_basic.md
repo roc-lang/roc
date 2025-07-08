@@ -87,27 +87,27 @@ main = {
 	(d-let
 		(p-assign @5.1-5.5 (ident "main"))
 		(e-block @5.8-10.2
-			(s-let @6.5-6.38
+			(s-var @6.5-6.38
 				(p-assign @6.5-6.9 (ident "data"))
 				(e-record @6.12-6.38
 					(fields
 						(field (name "name")
-							(e-string @6.20-6.27
+							(e-str @6.20-6.27
 								(e-literal @6.21-6.26 (string "Alice"))))
 						(field (name "age")
 							(e-int @6.34-6.36 (value "30"))))))
-			(s-let @7.5-7.27
+			(s-var @7.5-7.27
 				(p-assign @7.5-7.12 (ident "encoded"))
 				(e-call @7.15-7.27
 					(e-lookup-external
-						(ext-decl @7.15-7.21 (ident "json.Json.encode") (kind "value")))
+						(ext-decl (ident "json.Json.encode") (kind "value")))
 					(e-lookup-local @7.22-7.26
 						(p-assign @6.5-6.9 (ident "data")))))
-			(s-let @8.5-8.30
+			(s-var @8.5-8.30
 				(p-assign @8.5-8.12 (ident "decoded"))
 				(e-call @8.15-8.30
 					(e-lookup-external
-						(ext-decl @8.15-8.21 (ident "json.Json.decode") (kind "value")))
+						(ext-decl (ident "json.Json.decode") (kind "value")))
 					(e-lookup-local @8.22-8.29
 						(p-assign @7.5-7.12 (ident "encoded")))))
 			(e-lookup-local @9.5-9.12
@@ -116,14 +116,14 @@ main = {
 		(exposes
 			(exposed (name "decode") (wildcard false))
 			(exposed (name "encode") (wildcard false))))
-	(ext-decl @7.15-7.21 (ident "json.Json.encode") (kind "value"))
-	(ext-decl @8.15-8.21 (ident "json.Json.decode") (kind "value")))
+	(ext-decl (ident "json.Json.encode") (kind "value"))
+	(ext-decl (ident "json.Json.decode") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "*")))
+		(patt @5.1-10.2 (type "*")))
 	(expressions
-		(expr @5.8-10.2 (type "*"))))
+		(expr (type "*"))))
 ~~~

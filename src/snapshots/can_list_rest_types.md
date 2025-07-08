@@ -68,11 +68,11 @@ match numbers {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-4.2
-	(match @1.1-4.2
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch
+			(branch @2.32-2.40
 				(patterns
 					(pattern (degenerate false)
 						(p-list @2.5-2.28
@@ -83,13 +83,13 @@ match numbers {
 				(value
 					(e-lookup-local @2.32-2.40
 						(p-assign @2.19-2.27 (ident "restNums")))))
-			(branch
+			(branch @3.11-3.13
 				(patterns
 					(pattern (degenerate false)
 						(p-list @3.5-3.7
 							(patterns))))
 				(value
-					(e-empty_list @3.11-3.13))))))
+					(e-empty-list @3.11-3.13))))))
 ~~~
 # TYPES
 ~~~clojure

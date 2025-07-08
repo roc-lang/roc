@@ -115,11 +115,11 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 						(p-assign @4.18-4.20 (ident "fn"))))))
 		(annotation @4.1-4.8
 			(declared-type
-				(ty-fn @3.11-3.39 (effectful false)
+				(ty-func @3.11-3.39 (effectful false)
 					(ty-apply @3.11-3.18 (symbol "List")
 						(ty-var @3.16-3.17 (name "a")))
 					(ty-parens @3.20-3.28
-						(ty-fn @3.21-3.27 (effectful false)
+						(ty-func @3.21-3.27 (effectful false)
 							(ty-var @3.21-3.22 (name "a"))
 							(ty-var @3.26-3.27 (name "b"))))
 					(ty-apply @3.32-3.39 (symbol "List")
@@ -144,9 +144,9 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "Error"))
-		(patt @6.1-6.6 (type "* -> *")))
+		(patt @4.1-6.6 (type "Error"))
+		(patt @6.1-6.33 (type "* -> *")))
 	(expressions
-		(expr @4.11-6.6 (type "Error"))
-		(expr @6.9-6.33 (type "* -> *"))))
+		(expr (type "Error"))
+		(expr (type "* -> *"))))
 ~~~

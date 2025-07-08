@@ -338,16 +338,16 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 	(s-type-anno @3.5-3.25 (name "when")
 		(ty-malformed @3.11-3.25))
 	(s-expr @4.13-4.30
-		(e-string @4.13-4.29
+		(e-str @4.13-4.29
 			(e-literal @4.14-4.28 (string "test assertion"))))
 	(s-expr @5.13-5.27
-		(e-string @5.13-5.26
+		(e-str @5.13-5.26
 			(e-literal @5.14-5.25 (string "module load"))))
 	(s-expr @6.10-6.20
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr @7.9-7.20
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-empty_record @1.1-8.2))
+	(e-empty-record @1.1-8.2))
 ~~~
 # TYPES
 ~~~clojure

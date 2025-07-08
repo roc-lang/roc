@@ -203,7 +203,7 @@ main! = |_| {
 				(p-assign @5.13-5.14 (ident "x"))))
 		(annotation @5.1-5.9
 			(declared-type
-				(ty-fn @4.12-4.18 (effectful false)
+				(ty-func @4.12-4.18 (effectful false)
 					(ty-var @4.12-4.13 (name "a"))
 					(ty-var @4.17-4.18 (name "a"))))))
 	(d-let
@@ -220,7 +220,7 @@ main! = |_| {
 						(p-assign @9.19-9.25 (ident "second"))))))
 		(annotation @9.1-9.8
 			(declared-type
-				(ty-fn @8.11-8.25 (effectful false)
+				(ty-func @8.11-8.25 (effectful false)
 					(ty-var @8.11-8.12 (name "a"))
 					(ty-var @8.14-8.15 (name "b"))
 					(ty-tuple @8.19-8.25
@@ -237,29 +237,29 @@ main! = |_| {
 				(e-int @13.18-13.19 (value "1"))))
 		(annotation @13.1-13.7
 			(declared-type
-				(ty-fn @12.10-12.20 (effectful false)
-					(ty @12.10-12.13 (name "U64"))
-					(ty @12.17-12.20 (name "U64"))))))
+				(ty-func @12.10-12.20 (effectful false)
+					(ty-type @12.10-12.13 (name "U64"))
+					(ty-type @12.17-12.20 (name "U64"))))))
 	(d-let
 		(p-assign @15.1-15.6 (ident "main!"))
 		(e-lambda @15.9-27.2
 			(args
 				(p-underscore @15.10-15.11))
 			(e-block @15.13-27.2
-				(s-let @17.5-17.23
+				(s-var @17.5-17.23
 					(p-assign @17.5-17.8 (ident "num"))
 					(e-call @17.11-17.23
 						(e-lookup-local @17.11-17.19
 							(p-assign @5.1-5.9 (ident "identity")))
 						(e-int @17.20-17.22 (value "42"))))
-				(s-let @18.5-18.29
+				(s-var @18.5-18.29
 					(p-assign @18.5-18.9 (ident "text"))
 					(e-call @18.12-18.29
 						(e-lookup-local @18.12-18.20
 							(p-assign @5.1-5.9 (ident "identity")))
-						(e-string @18.21-18.28
+						(e-str @18.21-18.28
 							(e-literal @18.22-18.27 (string "hello")))))
-				(s-let @21.5-21.30
+				(s-var @21.5-21.30
 					(p-assign @21.5-21.9 (ident "pair"))
 					(e-call @21.12-21.30
 						(e-lookup-local @21.12-21.19
@@ -268,7 +268,7 @@ main! = |_| {
 							(p-assign @17.5-17.8 (ident "num")))
 						(e-lookup-local @21.25-21.29
 							(p-assign @18.5-18.9 (ident "text")))))
-				(s-let @24.5-24.23
+				(s-var @24.5-24.23
 					(p-assign @24.5-24.11 (ident "result"))
 					(e-call @24.14-24.23
 						(e-lookup-local @24.14-24.20
@@ -281,13 +281,13 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.9 (type "a -> a"))
-		(patt @9.1-9.8 (type "a, b -> (a, b)"))
-		(patt @13.1-13.7 (type "U64 -> U64"))
-		(patt @15.1-15.6 (type "* -> U64")))
+		(patt @5.1-5.17 (type "a -> a"))
+		(patt @9.1-9.42 (type "a, b -> (a, b)"))
+		(patt @13.1-15.6 (type "U64 -> U64"))
+		(patt @15.1-27.2 (type "* -> *")))
 	(expressions
-		(expr @5.12-5.17 (type "a -> a"))
-		(expr @9.11-9.42 (type "a, b -> (a, b)"))
-		(expr @13.10-15.6 (type "U64 -> U64"))
-		(expr @15.9-27.2 (type "* -> U64"))))
+		(expr (type "a -> a"))
+		(expr (type "a, b -> (a, b)"))
+		(expr (type "U64 -> U64"))
+		(expr (type "* -> *"))))
 ~~~

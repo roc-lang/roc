@@ -159,12 +159,12 @@ main! = |_| {}
 			(args
 				(p-assign @5.12-5.16 (ident "list")))
 			(e-block @5.18-14.2
-				(s-let @7.5-7.14
+				(s-var @7.5-7.14
 					(p-assign @7.5-7.9 (ident "elem"))
 					(e-int @7.12-7.14 (value "42")))
 				(s-type-anno @10.5-11.11 (name "result")
 					(ty-var @10.14-10.18 (name "elem")))
-				(s-let @11.5-11.30
+				(s-var @11.5-11.30
 					(p-assign @11.5-11.11 (ident "result"))
 					(e-call @11.14-11.30
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -179,7 +179,7 @@ main! = |_| {}
 					(p-assign @11.5-11.11 (ident "result")))))
 		(annotation @5.1-5.8
 			(declared-type
-				(ty-fn @4.11-4.29 (effectful false)
+				(ty-func @4.11-4.29 (effectful false)
 					(ty-apply @4.11-4.21 (symbol "List")
 						(ty-var @4.16-4.20 (name "elem")))
 					(ty-var @4.25-4.29 (name "elem"))))))
@@ -188,15 +188,15 @@ main! = |_| {}
 		(e-lambda @16.9-16.15
 			(args
 				(p-underscore @16.10-16.11))
-			(e-empty_record @16.13-16.15))))
+			(e-empty-record @16.13-16.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.8 (type "Error -> elem"))
-		(patt @16.1-16.6 (type "* -> {}")))
+		(patt @5.1-14.2 (type "Error -> elem"))
+		(patt @16.1-16.15 (type "* -> {}")))
 	(expressions
-		(expr @5.11-14.2 (type "Error -> elem"))
-		(expr @16.9-16.15 (type "* -> {}"))))
+		(expr (type "Error -> elem"))
+		(expr (type "* -> {}"))))
 ~~~

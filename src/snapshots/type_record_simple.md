@@ -85,27 +85,27 @@ main! = |_| {}
 						(p-assign @4.13-4.19 (ident "person"))))))
 		(annotation @4.1-4.9
 			(declared-type
-				(ty-fn @3.12-3.42 (effectful false)
+				(ty-func @3.12-3.42 (effectful false)
 					(ty-record @3.12-3.35
 						(field (field "name")
-							(ty @3.20-3.23 (name "Str")))
+							(ty-type @3.20-3.23 (name "Str")))
 						(field (field "age")
-							(ty @3.30-3.33 (name "U64"))))
-					(ty @3.39-3.42 (name "Str"))))))
+							(ty-type @3.30-3.33 (name "U64"))))
+					(ty-type @3.39-3.42 (name "Str"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
 			(args
 				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+			(e-empty-record @6.13-6.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.9 (type "{ name: Str, age: U64 } -> Str"))
-		(patt @6.1-6.6 (type "* -> {}")))
+		(patt @4.1-6.6 (type "{ name: Str, age: U64 } -> Str"))
+		(patt @6.1-6.15 (type "* -> {}")))
 	(expressions
-		(expr @4.12-6.6 (type "{ name: Str, age: U64 } -> Str"))
-		(expr @6.9-6.15 (type "* -> {}"))))
+		(expr (type "{ name: Str, age: U64 } -> Str"))
+		(expr (type "* -> {}"))))
 ~~~

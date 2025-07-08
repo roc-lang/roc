@@ -26,20 +26,7 @@ main! = |_| {
 # EXPECTED
 TYPE MISMATCH - type_multiple_aliases.md:16:16:16:20
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_multiple_aliases.md:16:16:16:20:**
-```roc
-	get_user_name(user)
-```
-               ^^^^
-
-It is of type:
-    _{ id: UserId, name: UserName, age: UserAge }_
-
-But you are trying to use it as:
-    _{ name: UserName }_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -171,11 +158,11 @@ NO CHANGE
 							(p-assign @9.26-9.29 (ident "age")))))))
 		(annotation @9.1-9.12
 			(declared-type
-				(ty-fn @8.15-8.48 (effectful false)
-					(ty @8.15-8.21 (name "UserId"))
-					(ty @8.23-8.31 (name "UserName"))
-					(ty @8.33-8.40 (name "UserAge"))
-					(ty @8.44-8.48 (name "User"))))))
+				(ty-func @8.15-8.48 (effectful false)
+					(ty-type @8.15-8.21 (name "UserId"))
+					(ty-type @8.23-8.31 (name "UserName"))
+					(ty-type @8.33-8.40 (name "UserAge"))
+					(ty-type @8.44-8.48 (name "User"))))))
 	(d-let
 		(p-assign @12.1-12.14 (ident "get_user_name"))
 		(e-lambda @12.17-14.6
@@ -187,22 +174,22 @@ NO CHANGE
 						(p-assign @12.18-12.22 (ident "user"))))))
 		(annotation @12.1-12.14
 			(declared-type
-				(ty-fn @11.17-11.33 (effectful false)
-					(ty @11.17-11.21 (name "User"))
-					(ty @11.25-11.33 (name "UserName"))))))
+				(ty-func @11.17-11.33 (effectful false)
+					(ty-type @11.17-11.21 (name "User"))
+					(ty-type @11.25-11.33 (name "UserName"))))))
 	(d-let
 		(p-assign @14.1-14.6 (ident "main!"))
 		(e-lambda @14.9-17.2
 			(args
 				(p-underscore @14.10-14.11))
 			(e-block @14.13-17.2
-				(s-let @15.2-15.38
+				(s-var @15.2-15.38
 					(p-assign @15.2-15.6 (ident "user"))
 					(e-call @15.9-15.38
 						(e-lookup-local @15.9-15.20
 							(p-assign @9.1-9.12 (ident "create_user")))
 						(e-int @15.21-15.24 (value "123"))
-						(e-string @15.26-15.33
+						(e-str @15.26-15.33
 							(e-literal @15.27-15.32 (string "Alice")))
 						(e-int @15.35-15.37 (value "25"))))
 				(e-call @16.2-16.21
@@ -212,30 +199,30 @@ NO CHANGE
 						(p-assign @15.2-15.6 (ident "user")))))))
 	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
-		(ty @3.10-3.13 (name "U64")))
+		(ty-type @3.10-3.13 (name "U64")))
 	(s-alias-decl @4.1-4.15
 		(ty-header @4.1-4.9 (name "UserName"))
-		(ty @4.12-4.15 (name "Str")))
+		(ty-type @4.12-4.15 (name "Str")))
 	(s-alias-decl @5.1-5.13
 		(ty-header @5.1-5.8 (name "UserAge"))
-		(ty @5.11-5.13 (name "U8")))
+		(ty-type @5.11-5.13 (name "U8")))
 	(s-alias-decl @6.1-6.55
 		(ty-header @6.1-6.5 (name "User"))
 		(ty-record @6.8-6.55
 			(field (field "id")
-				(ty @6.15-6.21 (name "UserId")))
+				(ty-type @6.15-6.21 (name "UserId")))
 			(field (field "name")
-				(ty @6.30-6.38 (name "UserName")))
+				(ty-type @6.30-6.38 (name "UserName")))
 			(field (field "age")
-				(ty @6.46-6.53 (name "UserAge"))))))
+				(ty-type @6.46-6.53 (name "UserAge"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> { id: UserId, name: UserName, age: UserAge }"))
-		(patt @12.1-12.14 (type "{ name: UserName } -> UserName"))
-		(patt @14.1-14.6 (type "* -> UserName")))
+		(patt @9.1-9.46 (type "UserId, UserName, UserAge -> { id: UserId, name: UserName, age: UserAge }"))
+		(patt @12.1-14.6 (type "{ name: UserName } -> UserName"))
+		(patt @14.1-17.2 (type "* -> UserName")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId")))
@@ -246,7 +233,7 @@ NO CHANGE
 		(alias @6.1-6.55 (type "User")
 			(ty-header @6.1-6.5 (name "User"))))
 	(expressions
-		(expr @9.15-9.46 (type "UserId, UserName, UserAge -> { id: UserId, name: UserName, age: UserAge }"))
-		(expr @12.17-14.6 (type "{ name: UserName } -> UserName"))
-		(expr @14.9-17.2 (type "* -> UserName"))))
+		(expr (type "UserId, UserName, UserAge -> { id: UserId, name: UserName, age: UserAge }"))
+		(expr (type "{ name: UserName } -> UserName"))
+		(expr (type "* -> UserName"))))
 ~~~

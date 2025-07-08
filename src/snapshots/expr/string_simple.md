@@ -26,7 +26,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.14
+(e-str @1.1-1.14
 	(e-literal @1.2-1.13 (string "hello world")))
 ~~~
 # TYPES

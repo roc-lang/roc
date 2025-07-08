@@ -26,7 +26,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.13
+(e-str @1.1-1.13
 	(e-literal @1.2-1.12 (string "\u(FFFFFF)")))
 ~~~
 # TYPES

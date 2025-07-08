@@ -98,19 +98,19 @@ main! = |_| processNested([])
 				(p-assign @4.18-4.23 (ident "_list")))
 			(e-list @4.25-4.38
 				(elems
-					(e-string @4.26-4.31
+					(e-str @4.26-4.31
 						(e-literal @4.27-4.30 (string "one")))
-					(e-string @4.32-4.37
+					(e-str @4.32-4.37
 						(e-literal @4.33-4.36 (string "two"))))))
 		(annotation @4.1-4.14
 			(declared-type
-				(ty-fn @3.17-3.52 (effectful false)
+				(ty-func @3.17-3.52 (effectful false)
 					(ty-apply @3.17-3.39 (symbol "List")
 						(ty-apply @3.22-3.38 (symbol "Result")
-							(ty @3.29-3.32 (name "Str"))
-							(ty @3.34-3.37 (name "Err"))))
+							(ty-type @3.29-3.32 (name "Str"))
+							(ty-type @3.34-3.37 (name "Err"))))
 					(ty-apply @3.43-3.52 (symbol "List")
-						(ty @3.48-3.51 (name "Str")))))))
+						(ty-type @3.48-3.51 (name "Str")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.30
@@ -119,15 +119,15 @@ main! = |_| processNested([])
 			(e-call @6.13-6.30
 				(e-lookup-local @6.13-6.26
 					(p-assign @4.1-4.14 (ident "processNested")))
-				(e-empty_list @6.27-6.29)))))
+				(e-empty-list @6.27-6.29)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.14 (type "Error -> Error"))
-		(patt @6.1-6.6 (type "* -> Error")))
+		(patt @4.1-4.38 (type "Error -> Error"))
+		(patt @6.1-6.30 (type "* -> Error")))
 	(expressions
-		(expr @4.17-4.38 (type "Error -> Error"))
-		(expr @6.9-6.30 (type "* -> Error"))))
+		(expr (type "Error -> Error"))
+		(expr (type "* -> Error"))))
 ~~~

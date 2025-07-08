@@ -95,7 +95,7 @@ main! = |_| {}
 			(e-block @4.16-8.2
 				(s-type-anno @5.5-6.10 (name "thing")
 					(ty-var @5.13-5.14 (name "a")))
-				(s-let @6.5-6.14
+				(s-var @6.5-6.14
 					(p-assign @6.5-6.10 (ident "thing"))
 					(e-lookup-local @6.13-6.14
 						(p-assign @4.13-4.14 (ident "x"))))
@@ -103,7 +103,7 @@ main! = |_| {}
 					(p-assign @6.5-6.10 (ident "thing")))))
 		(annotation @4.1-4.9
 			(declared-type
-				(ty-fn @3.12-3.18 (effectful false)
+				(ty-func @3.12-3.18 (effectful false)
 					(ty-var @3.12-3.13 (name "a"))
 					(ty-var @3.17-3.18 (name "a"))))))
 	(d-let
@@ -111,15 +111,15 @@ main! = |_| {}
 		(e-lambda @10.9-10.15
 			(args
 				(p-underscore @10.10-10.11))
-			(e-empty_record @10.13-10.15))))
+			(e-empty-record @10.13-10.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.9 (type "a -> a"))
-		(patt @10.1-10.6 (type "* -> {}")))
+		(patt @4.1-8.2 (type "a -> a"))
+		(patt @10.1-10.15 (type "* -> {}")))
 	(expressions
-		(expr @4.12-8.2 (type "a -> a"))
-		(expr @10.9-10.15 (type "* -> {}"))))
+		(expr (type "a -> a"))
+		(expr (type "* -> {}"))))
 ~~~

@@ -64,7 +64,7 @@ CloseSquare(5:1-5:2),EndOfFile(5:2-5:2),
 (e-list @1.1-5.2
 	(elems
 		(e-int @2.5-2.7 (value "42"))
-		(e-string @3.5-3.18
+		(e-str @3.5-3.18
 			(e-literal @3.6-3.17 (string "hello world")))
 		(e-int @4.5-4.8 (value "100"))))
 ~~~

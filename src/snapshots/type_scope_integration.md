@@ -102,16 +102,16 @@ NO CHANGE
 (can-ir
 	(s-alias-decl @4.1-4.10
 		(ty-header @4.1-4.4 (name "Foo"))
-		(ty @4.7-4.10 (name "U64")))
+		(ty-type @4.7-4.10 (name "U64")))
 	(s-alias-decl @7.1-7.10
 		(ty-header @7.1-7.4 (name "Foo"))
-		(ty @7.7-7.10 (name "Str")))
+		(ty-type @7.7-7.10 (name "Str")))
 	(s-alias-decl @10.1-10.25
 		(ty-header @10.1-10.4 (name "Bar"))
-		(ty @10.7-10.25 (name "SomeUndeclaredType")))
+		(ty-type @10.7-10.25 (name "SomeUndeclaredType")))
 	(s-alias-decl @13.1-13.10
 		(ty-header @13.1-13.4 (name "Baz"))
-		(ty @13.7-13.10 (name "Foo"))))
+		(ty-type @13.7-13.10 (name "Foo"))))
 ~~~
 # TYPES
 ~~~clojure

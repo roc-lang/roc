@@ -68,7 +68,7 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 	(e-record @1.32-1.103
 		(fields
 			(field (name "greeting")
-				(e-string @1.44-1.59
+				(e-str @1.44-1.59
 					(e-literal @1.45-1.51 (string "Hello "))
 					(e-lookup-local @1.53-1.57
 						(p-assign @1.4-1.9 (ident "name")))

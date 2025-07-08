@@ -64,32 +64,32 @@ NO CHANGE
 		(e-not-implemented @7.11-7.14)
 		(annotation @7.1-7.8
 			(declared-type
-				(ty-fn @3.11-3.20 (effectful false)
+				(ty-func @3.11-3.20 (effectful false)
 					(ty-var @3.11-3.12 (name "a"))
 					(ty-var @3.14-3.15 (name "b"))
 					(ty-var @3.19-3.20 (name "c"))))))
 	(s-type-anno @3.1-7.8 (name "process")
-		(ty-fn @3.11-3.20 (effectful false)
+		(ty-func @3.11-3.20 (effectful false)
 			(ty-var @3.11-3.12 (name "a"))
 			(ty-var @3.14-3.15 (name "b"))
 			(ty-var @3.19-3.20 (name "c")))
 		(where
-			(method @5.2-5.29 (module-of "a") (ident "convert")
+			(where-mod-method (module-of "a") (ident "convert")
 				(args
 					(ty-var @5.22-5.23 (name "a")))
 				(ty-var @5.27-5.28 (name "c")))
-			(method @6.2-6.31 (module-of "b") (ident "transform")
+			(where-mod-method (module-of "b") (ident "transform")
 				(args
 					(ty-var @6.24-6.25 (name "b")))
 				(ty-var @6.29-6.30 (name "c")))))
-	(ext-decl @5.2-5.29 (ident "module(a).convert") (kind "value"))
-	(ext-decl @6.2-6.31 (ident "module(b).transform") (kind "value")))
+	(ext-decl (ident "module(a).convert") (kind "value"))
+	(ext-decl (ident "module(b).transform") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.8 (type "a, b -> c")))
+		(patt @7.1-7.14 (type "a, b -> c")))
 	(expressions
-		(expr @7.11-7.14 (type "a, b -> c"))))
+		(expr (type "a, b -> c"))))
 ~~~

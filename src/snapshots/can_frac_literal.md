@@ -60,11 +60,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.2 (type "Frac(*)"))
-		(patt @4.1-4.2 (type "Frac(*)"))
-		(patt @5.1-5.2 (type "Frac(*)")))
+		(patt @3.1-3.9 (type "Frac(*)"))
+		(patt @4.1-4.12 (type "Frac(*)"))
+		(patt @5.1-5.8 (type "Frac(*)")))
 	(expressions
-		(expr @3.5-3.9 (type "Frac(*)"))
-		(expr @4.5-4.12 (type "Frac(*)"))
-		(expr @5.5-5.8 (type "Frac(*)"))))
+		(expr (type "Frac(*)"))
+		(expr (type "Frac(*)"))
+		(expr (type "Frac(*)"))))
 ~~~

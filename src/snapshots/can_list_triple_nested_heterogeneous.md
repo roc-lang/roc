@@ -55,19 +55,19 @@ NO CHANGE
 ~~~clojure
 (e-list @1.1-1.33
 	(elems
-		(e-empty_list @1.2-1.4)
+		(e-empty-list @1.2-1.4)
 		(e-list @1.6-1.15
 			(elems
-				(e-empty_list @1.7-1.9)
+				(e-empty-list @1.7-1.9)
 				(e-list @1.11-1.14
 					(elems
 						(e-int @1.12-1.13 (value "1"))))))
 		(e-list @1.17-1.32
 			(elems
-				(e-empty_list @1.18-1.20)
+				(e-empty-list @1.18-1.20)
 				(e-list @1.22-1.31
 					(elems
-						(e-string @1.23-1.30
+						(e-str @1.23-1.30
 							(e-literal @1.24-1.29 (string "hello")))))))))
 ~~~
 # TYPES

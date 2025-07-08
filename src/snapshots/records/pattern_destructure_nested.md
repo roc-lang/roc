@@ -73,11 +73,11 @@ match person {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-3.2
-	(match @1.1-3.2
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch
+			(branch @2.53-2.92
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @2.5-2.49
@@ -95,7 +95,7 @@ match person {
 												(record-destruct @2.38-2.47 (label "zipCode") (ident "zipCode")
 													(required))))))))))
 				(value
-					(e-string @2.53-2.92
+					(e-str @2.53-2.92
 						(e-literal @2.54-2.54 (string ""))
 						(e-lookup-local @2.56-2.60
 							(p-assign @2.7-2.12 (ident "name")))

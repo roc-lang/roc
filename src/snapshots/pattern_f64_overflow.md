@@ -134,44 +134,44 @@ match x {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-7.2
-	(match @1.1-7.2
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
-			(branch
+			(branch @2.14-2.33
 				(patterns
 					(pattern (degenerate false)
 						(p-runtime-error @2.5-2.10 (tag "f64_pattern_literal"))))
 				(value
-					(e-string @2.14-2.33
+					(e-str @2.14-2.33
 						(e-literal @2.15-2.32 (string "very large number")))))
-			(branch
+			(branch @3.14-3.33
 				(patterns
 					(pattern (degenerate false)
 						(p-runtime-error @3.5-3.10 (tag "f64_pattern_literal"))))
 				(value
-					(e-string @3.14-3.33
+					(e-str @3.14-3.33
 						(e-literal @3.15-3.32 (string "very small number")))))
-			(branch
+			(branch @4.31-4.45
 				(patterns
 					(pattern (degenerate false)
 						(p-runtime-error @4.5-4.27 (tag "f64_pattern_literal"))))
 				(value
-					(e-string @4.31-4.45
+					(e-str @4.31-4.45
 						(e-literal @4.32-4.44 (string "near f64 max")))))
-			(branch
+			(branch @5.12-5.18
 				(patterns
 					(pattern (degenerate false)
 						(p-small-dec @5.5-5.8)))
 				(value
-					(e-string @5.12-5.18
+					(e-str @5.12-5.18
 						(e-literal @5.13-5.17 (string "zero")))))
-			(branch
+			(branch @6.14-6.21
 				(patterns
 					(pattern (degenerate false)
 						(p-assign @6.5-6.10 (ident "value"))))
 				(value
-					(e-string @6.14-6.21
+					(e-str @6.14-6.21
 						(e-literal @6.15-6.20 (string "other"))))))))
 ~~~
 # TYPES

@@ -52,11 +52,11 @@ match [] {
 # CANONICALIZE
 ~~~clojure
 (e-match @1.1-3.2
-	(match @1.1-3.2
+	(match
 		(cond
-			(e-empty_list @1.7-1.9))
+			(e-empty-list @1.7-1.9))
 		(branches
-			(branch
+			(branch @2.14-2.70
 				(patterns
 					(pattern (degenerate false)
 						(p-assign @2.5-2.10 (ident "empty"))))
@@ -72,11 +72,11 @@ match [] {
 							(field (name "strs")
 								(e-list @2.39-2.54
 									(elems
-										(e-string @2.40-2.43
+										(e-str @2.40-2.43
 											(e-literal @2.41-2.42 (string "a")))
-										(e-string @2.45-2.48
+										(e-str @2.45-2.48
 											(e-literal @2.46-2.47 (string "b")))
-										(e-string @2.50-2.53
+										(e-str @2.50-2.53
 											(e-literal @2.51-2.52 (string "c"))))))
 							(field (name "empty")
 								(e-lookup-local @2.63-2.68
