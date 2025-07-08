@@ -19,11 +19,11 @@ can_ir: *CIR,
 parse_ir: *AST,
 scopes: std.ArrayListUnmanaged(Scope) = .{},
 /// Special scope for tracking exposed items from module header
-exposed_scope: ?Scope = null,
+exposed_scope: Scope = undefined,
 /// Track exposed identifiers by text to handle changing indices
-exposed_ident_texts: ?std.StringHashMapUnmanaged(Region) = null,
+exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track exposed types by text to handle changing indices
-exposed_type_texts: ?std.StringHashMapUnmanaged(Region) = null,
+exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.ArrayListUnmanaged(Region),
 /// Maps var patterns to the function region they were declared in
@@ -93,18 +93,12 @@ pub fn deinit(
 ) void {
     const gpa = self.can_ir.env.gpa;
 
-    // Deinit exposed_scope if it exists
-    if (self.exposed_scope) |*exposed| {
-        exposed.deinit(gpa);
-    }
+    // Deinit exposed_scope
+    self.exposed_scope.deinit(gpa);
 
-    // Deinit exposed text maps if they exist
-    if (self.exposed_ident_texts) |*texts| {
-        texts.deinit(gpa);
-    }
-    if (self.exposed_type_texts) |*texts| {
-        texts.deinit(gpa);
-    }
+    // Deinit exposed text maps
+    self.exposed_ident_texts.deinit(gpa);
+    self.exposed_type_texts.deinit(gpa);
 
     // First deinit individual scopes
     for (0..self.scopes.items.len) |i| {
@@ -143,6 +137,7 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
         .scratch_idents = base.Scratch(Ident.Idx).init(gpa),
         .scratch_record_fields = base.Scratch(types.RecordField).init(gpa),
         .scratch_seen_record_fields = base.Scratch(SeenRecordField).init(gpa),
+        .exposed_scope = Scope.init(false),
     };
 
     // Top-level scope is not a function boundary
@@ -516,10 +511,8 @@ pub fn canonicalizeFile(
                 self.scopeUpdateTypeDecl(type_header.name, type_decl_stmt_idx);
 
                 // Remove from exposed_type_texts since the type is now fully defined
-                if (self.exposed_type_texts) |*texts| {
-                    const type_text = self.can_ir.env.idents.getText(type_header.name);
-                    _ = texts.remove(type_text);
-                }
+                const type_text = self.can_ir.env.idents.getText(type_header.name);
+                _ = self.exposed_type_texts.remove(type_text);
             },
             else => {
                 // Skip non-type-declaration statements in first pass
@@ -568,21 +561,19 @@ pub fn canonicalizeFile(
 
                 // If this declaration successfully defined an exposed value, remove it from exposed_ident_texts
                 // and add it to exposed_nodes
-                if (self.exposed_ident_texts) |*texts| {
-                    const pattern = self.parse_ir.store.getPattern(decl.pattern);
-                    if (pattern == .ident) {
-                        const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
-                        const ident_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+                const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                if (pattern == .ident) {
+                    const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
+                    const ident_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
 
-                        // If this identifier is exposed, add it to exposed_nodes
-                        if (texts.contains(ident_text)) {
-                            // Store the def index as u16 in exposed_nodes
-                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                            self.can_ir.env.exposed_nodes.put(self.can_ir.env.gpa, ident_text, def_idx_u16) catch |err| exitOnOom(err);
-                        }
-
-                        _ = texts.remove(ident_text);
+                    // If this identifier is exposed, add it to exposed_nodes
+                    if (self.exposed_ident_texts.contains(ident_text)) {
+                        // Store the def index as u16 in exposed_nodes
+                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                        self.can_ir.env.exposed_nodes.put(self.can_ir.env.gpa, ident_text, def_idx_u16) catch |err| exitOnOom(err);
                     }
+
+                    _ = self.exposed_ident_texts.remove(ident_text);
                 }
             },
             .@"var" => |var_stmt| {
@@ -780,7 +771,8 @@ fn createExposedScope(
 ) std.mem.Allocator.Error!void {
     const gpa = self.can_ir.env.gpa;
 
-    // Initialize exposed_scope
+    // Reset exposed_scope (already initialized in init)
+    self.exposed_scope.deinit(gpa);
     self.exposed_scope = Scope.init(false);
 
     const collection = self.parse_ir.store.getCollection(exposes);
@@ -811,17 +803,14 @@ fn createExposedScope(
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
                     // Use a dummy pattern index - we just need to track that it's exposed
                     const dummy_idx = @as(CIR.Pattern.Idx, @enumFromInt(0));
-                    self.exposed_scope.?.put(gpa, .ident, ident_idx, dummy_idx);
+                    self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
                 }
 
                 // Store by text in a temporary hash map, since indices may change
-                if (self.exposed_ident_texts == null) {
-                    self.exposed_ident_texts = std.StringHashMapUnmanaged(Region){};
-                }
                 const region = self.parse_ir.tokenizedRegionToRegion(ident.region);
 
                 // Check if this identifier was already exposed
-                if (self.exposed_ident_texts.?.get(ident_text)) |original_region| {
+                if (self.exposed_ident_texts.get(ident_text)) |original_region| {
                     // Report redundant exposed entry error
                     if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
                         const diag = CIR.Diagnostic{ .redundant_exposed = .{
@@ -832,7 +821,7 @@ fn createExposedScope(
                         self.can_ir.pushDiagnostic(diag);
                     }
                 } else {
-                    self.exposed_ident_texts.?.put(gpa, ident_text, region) catch |err| collections.utils.exitOnOom(err);
+                    self.exposed_ident_texts.put(gpa, ident_text, region) catch |err| collections.utils.exitOnOom(err);
                 }
             },
             .upper_ident => |type_name| {
@@ -847,17 +836,14 @@ fn createExposedScope(
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(CIR.Statement.Idx, @enumFromInt(0));
-                    self.exposed_scope.?.put(gpa, .type_decl, ident_idx, dummy_idx);
+                    self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
                 }
 
                 // Store by text in a temporary hash map, since indices may change
-                if (self.exposed_type_texts == null) {
-                    self.exposed_type_texts = std.StringHashMapUnmanaged(Region){};
-                }
                 const region = self.parse_ir.tokenizedRegionToRegion(type_name.region);
 
                 // Check if this type was already exposed
-                if (self.exposed_type_texts.?.get(type_text)) |original_region| {
+                if (self.exposed_type_texts.get(type_text)) |original_region| {
                     // Report redundant exposed entry error
                     if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
                         const diag = CIR.Diagnostic{ .redundant_exposed = .{
@@ -868,7 +854,7 @@ fn createExposedScope(
                         self.can_ir.pushDiagnostic(diag);
                     }
                 } else {
-                    self.exposed_type_texts.?.put(gpa, type_text, region) catch |err| collections.utils.exitOnOom(err);
+                    self.exposed_type_texts.put(gpa, type_text, region) catch |err| collections.utils.exitOnOom(err);
                 }
             },
             .upper_ident_star => |type_with_constructors| {
@@ -883,17 +869,14 @@ fn createExposedScope(
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(CIR.Statement.Idx, @enumFromInt(0));
-                    self.exposed_scope.?.put(gpa, .type_decl, ident_idx, dummy_idx);
+                    self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
                 }
 
                 // Store by text in a temporary hash map, since indices may change
-                if (self.exposed_type_texts == null) {
-                    self.exposed_type_texts = std.StringHashMapUnmanaged(Region){};
-                }
                 const region = self.parse_ir.tokenizedRegionToRegion(type_with_constructors.region);
 
                 // Check if this type was already exposed
-                if (self.exposed_type_texts.?.get(type_text)) |original_region| {
+                if (self.exposed_type_texts.get(type_text)) |original_region| {
                     // Report redundant exposed entry error
                     if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
                         const diag = CIR.Diagnostic{ .redundant_exposed = .{
@@ -904,7 +887,7 @@ fn createExposedScope(
                         self.can_ir.pushDiagnostic(diag);
                     }
                 } else {
-                    self.exposed_type_texts.?.put(gpa, type_text, region) catch |err| collections.utils.exitOnOom(err);
+                    self.exposed_type_texts.put(gpa, type_text, region) catch |err| collections.utils.exitOnOom(err);
                 }
             },
             .malformed => |malformed| {
@@ -919,39 +902,34 @@ fn checkExposedButNotImplemented(self: *Self) void {
     const gpa = self.can_ir.env.gpa;
 
     // Check for remaining exposed identifiers
-    if (self.exposed_ident_texts) |*texts| {
-        var iter = texts.iterator();
-        while (iter.next()) |entry| {
-            const ident_text = entry.key_ptr.*;
-            const region = entry.value_ptr.*;
-            // Create an identifier for error reporting
-            const ident_idx = self.can_ir.env.idents.insert(gpa, base.Ident.for_text(ident_text), region);
+    var ident_iter = self.exposed_ident_texts.iterator();
+    while (ident_iter.next()) |entry| {
+        const ident_text = entry.key_ptr.*;
+        const region = entry.value_ptr.*;
+        // Create an identifier for error reporting
+        const ident_idx = self.can_ir.env.idents.insert(gpa, base.Ident.for_text(ident_text), region);
 
-            // Report error: exposed but not implemented
-            const diag = CIR.Diagnostic{ .exposed_but_not_implemented = .{
-                .ident = ident_idx,
-                .region = region,
-            } };
-            self.can_ir.pushDiagnostic(diag);
-        }
+        // Report error: exposed identifier but not implemented
+        const diag = CIR.Diagnostic{ .exposed_but_not_implemented = .{
+            .ident = ident_idx,
+            .region = region,
+        } };
+        self.can_ir.pushDiagnostic(diag);
     }
 
     // Check for remaining exposed types
-    if (self.exposed_type_texts) |*texts| {
-        var iter = texts.iterator();
-        while (iter.next()) |entry| {
-            const type_text = entry.key_ptr.*;
-            const region = entry.value_ptr.*;
-            // Create an identifier for error reporting
-            const ident_idx = self.can_ir.env.idents.insert(gpa, base.Ident.for_text(type_text), region);
+    var iter = self.exposed_type_texts.iterator();
+    while (iter.next()) |entry| {
+        const type_text = entry.key_ptr.*;
+        const region = entry.value_ptr.*;
+        // Create an identifier for error reporting
+        const ident_idx = self.can_ir.env.idents.insert(gpa, base.Ident.for_text(type_text), region);
 
-            // Report error: exposed type but not implemented
-            const diag = CIR.Diagnostic{ .exposed_but_not_implemented = .{
-                .ident = ident_idx,
-                .region = region,
-            } };
-            self.can_ir.pushDiagnostic(diag);
-        }
+        // Report error: exposed type but not implemented
+        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .exposed_but_not_implemented = .{
+            .ident = ident_idx,
+            .region = region,
+        } });
     }
 }
 
