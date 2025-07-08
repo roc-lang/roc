@@ -93,20 +93,15 @@ pub fn deinit(
 ) void {
     const gpa = self.can_ir.env.gpa;
 
-    // Deinit exposed_scope
     self.exposed_scope.deinit(gpa);
-
-    // Deinit exposed text maps
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_texts.deinit(gpa);
 
-    // First deinit individual scopes
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
         scope.deinit(gpa);
     }
 
-    // Then deinit the collections
     self.scopes.deinit(gpa);
     self.function_regions.deinit(gpa);
     self.var_function_regions.deinit(gpa);
