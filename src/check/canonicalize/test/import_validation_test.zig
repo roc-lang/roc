@@ -176,3 +176,194 @@ test "import validation - no module_envs provided" {
         }
     }
 }
+
+test "import interner - Import.Idx functionality" {
+    const allocator = testing.allocator;
+
+    // Parse source code with multiple imports, including duplicates
+    const source =
+        \\module [main]
+        \\
+        \\import List
+        \\import Dict
+        \\import List  # Duplicate - should get same Import.Idx
+        \\import Json.Decode
+        \\import Set
+        \\import Json.Decode  # Another duplicate
+        \\
+        \\main = "test"
+    ;
+
+    // Parse the source
+    var tokens = try parse.tokenize(allocator, source, .file);
+    defer tokens.deinit(allocator);
+    var parse_env = base.ModuleEnv.init(allocator);
+    defer parse_env.deinit();
+    try parse_env.calcLineStarts(source);
+    var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
+    defer ast.deinit();
+
+    // Canonicalize without module validation to focus on Import.Idx
+    var env = base.ModuleEnv.init(allocator);
+    defer env.deinit();
+    try env.calcLineStarts(source);
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
+    defer canonicalizer.deinit();
+
+    try canonicalizer.canonicalizeFile();
+
+    // Check that we have the correct number of unique imports
+    // Expected: List, Dict, Json.Decode, Set (4 unique)
+    try expectEqual(@as(usize, 4), cir.imports.imports.items.len);
+
+    // Verify each unique module has an Import.Idx
+    var found_list = false;
+    var found_dict = false;
+    var found_json_decode = false;
+    var found_set = false;
+
+    for (cir.imports.imports.items, 0..) |import, idx| {
+        const import_idx: CIR.Import.Idx = @enumFromInt(idx);
+        const module_name = import.module_name;
+
+        // Verify we can look up the module name from Import.Idx
+        const retrieved_name = cir.imports.getModuleName(import_idx);
+        try testing.expectEqualStrings(module_name, retrieved_name);
+
+        if (std.mem.eql(u8, module_name, "List")) {
+            found_list = true;
+        } else if (std.mem.eql(u8, module_name, "Dict")) {
+            found_dict = true;
+        } else if (std.mem.eql(u8, module_name, "Json.Decode")) {
+            found_json_decode = true;
+        } else if (std.mem.eql(u8, module_name, "Set")) {
+            found_set = true;
+        }
+    }
+
+    // Verify all expected modules were found
+    try expectEqual(true, found_list);
+    try expectEqual(true, found_dict);
+    try expectEqual(true, found_json_decode);
+    try expectEqual(true, found_set);
+
+    // Test the lookup functionality
+    // Get the Import.Idx for "List" (should be used twice)
+    var list_import_idx: ?CIR.Import.Idx = null;
+    for (canonicalizer.import_indices.iterator()) |entry| {
+        const module_name = entry.key_ptr.*;
+        if (std.mem.eql(u8, module_name, "List")) {
+            list_import_idx = entry.value_ptr.*;
+            break;
+        }
+    }
+
+    try testing.expect(list_import_idx != null);
+
+    // Verify we can retrieve the correct module name from the Import.Idx
+    const retrieved_list_name = cir.imports.getModuleName(list_import_idx.?);
+    try testing.expectEqualStrings("List", retrieved_list_name);
+}
+
+test "import interner - comprehensive usage example" {
+    const allocator = testing.allocator;
+
+    // Parse source with imports used in different contexts
+    const source =
+        \\module [process]
+        \\
+        \\import List exposing [map, filter]
+        \\import Dict
+        \\import Result exposing [Result, withDefault]
+        \\
+        \\process : List Str -> Dict Str Nat
+        \\process = \items ->
+        \\    items
+        \\    |> List.map Str.toLower
+        \\    |> List.filter \item -> Str.length item > 3
+        \\    |> List.foldl Dict.empty \dict, item ->
+        \\        Dict.update dict item \maybeCount ->
+        \\            when maybeCount is
+        \\                Present count -> Present (count + 1)
+        \\                Missing -> Present 1
+    ;
+
+    // Parse the source
+    var tokens = try parse.tokenize(allocator, source, .file);
+    defer tokens.deinit(allocator);
+    var parse_env = base.ModuleEnv.init(allocator);
+    defer parse_env.deinit();
+    try parse_env.calcLineStarts(source);
+    var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
+    defer ast.deinit();
+
+    // Canonicalize
+    var env = base.ModuleEnv.init(allocator);
+    defer env.deinit();
+    try env.calcLineStarts(source);
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
+    defer canonicalizer.deinit();
+
+    try canonicalizer.canonicalizeFile();
+
+    // Verify Import.Idx assignments
+    // Get Import.Idx values
+    const list_import = canonicalizer.getImportIdx("List");
+    const dict_import = canonicalizer.getImportIdx("Dict");
+    const result_import = canonicalizer.getImportIdx("Result");
+
+    // All should have Import.Idx values
+    try testing.expect(list_import != null);
+    try testing.expect(dict_import != null);
+    try testing.expect(result_import != null);
+
+    // They should all be different
+    try testing.expect(list_import.? != dict_import.?);
+    try testing.expect(list_import.? != result_import.?);
+    try testing.expect(dict_import.? != result_import.?);
+
+    // Verify we can look up module names from Import.Idx
+    const list_name = cir.imports.getModuleName(list_import.?);
+    const dict_name = cir.imports.getModuleName(dict_import.?);
+    const result_name = cir.imports.getModuleName(result_import.?);
+
+    try testing.expectEqualStrings("List", list_name);
+    try testing.expectEqualStrings("Dict", dict_name);
+    try testing.expectEqualStrings("Result", result_name);
+
+    // Verify total unique imports
+    try expectEqual(@as(usize, 3), cir.imports.imports.items.len);
+
+    // Demo: Print all imports with their indices
+    std.debug.print("\n=== Import Index Demo ===\n", .{});
+    for (cir.imports.imports.items, 0..) |import, idx| {
+        const import_idx: CIR.Import.Idx = @enumFromInt(idx);
+        const module_name_text = import.module_name;
+        std.debug.print("Import.Idx {} -> module '{}'\n", .{ @intFromEnum(import_idx), module_name_text });
+    }
+}
+
+test "Import.Idx is u16" {
+    // Verify that Import.Idx is indeed a u16 enum
+    const import_idx_type = @TypeOf(CIR.Import.Idx);
+    const type_info = @typeInfo(import_idx_type).Enum;
+
+    // The underlying type should be u16
+    try testing.expectEqual(u16, type_info.tag_type);
+
+    // Test that we can create valid Import.Idx values
+    const idx1: CIR.Import.Idx = @enumFromInt(0);
+    const idx2: CIR.Import.Idx = @enumFromInt(65535); // max u16 value
+
+    // Verify they are distinct
+    try testing.expect(idx1 != idx2);
+
+    // Verify the size in memory
+    try testing.expectEqual(@sizeOf(u16), @sizeOf(CIR.Import.Idx));
+}

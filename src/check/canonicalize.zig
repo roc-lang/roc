@@ -34,6 +34,8 @@ var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Map of module name strings to their ModuleEnv pointers for import validation
 module_envs: ?*const std.StringHashMap(*ModuleEnv),
+/// Map from module name string to Import.Idx for tracking unique imports
+import_indices: std.StringHashMapUnmanaged(CIR.Import.Idx),
 /// Scratch type variables
 scratch_vars: base.Scratch(TypeVar),
 /// Scratch ident
@@ -120,6 +122,7 @@ pub fn deinit(
     self.scratch_idents.deinit(gpa);
     self.scratch_record_fields.deinit(gpa);
     self.scratch_seen_record_fields.deinit(gpa);
+    self.import_indices.deinit(gpa);
 }
 
 pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*ModuleEnv)) std.mem.Allocator.Error!Self {
@@ -135,6 +138,7 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .module_envs = module_envs,
+        .import_indices = std.StringHashMapUnmanaged(CIR.Import.Idx){},
         .scratch_vars = base.Scratch(TypeVar).init(gpa),
         .scratch_idents = base.Scratch(Ident.Idx).init(gpa),
         .scratch_record_fields = base.Scratch(types.RecordField).init(gpa),
@@ -188,6 +192,11 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
     _ = try result.addBuiltinType(self, "Box");
 
     return result;
+}
+
+/// Get the Import.Idx for a module name, if it has been imported
+pub fn getImportIdx(self: *const Self, module_name: []const u8) ?CIR.Import.Idx {
+    return self.import_indices.get(module_name);
 }
 
 fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
@@ -994,18 +1003,25 @@ fn canonicalizeImportStatement(
     // 2. Determine the alias (either explicit or default to last part)
     const alias = self.resolveModuleAlias(import_stmt.alias_tok, module_name) orelse return null;
 
-    // 3. Add to scope: alias -> module_name mapping
+    // 3. Get or create Import.Idx for this module
+    const module_name_text = self.can_ir.env.idents.getText(module_name);
+    const module_import_idx = self.can_ir.imports.getOrPut(self.can_ir.env.gpa, module_name_text) catch |err| exitOnOom(err);
+
+    // 4. Add to scope: alias -> module_name mapping
     self.scopeIntroduceModuleAlias(alias, module_name);
 
     // Process type imports from this module
     self.processTypeImports(module_name, alias);
 
-    // 4. Convert exposed items and introduce them into scope
+    // 5. Convert exposed items and introduce them into scope
     const cir_exposes = self.convertASTExposesToCIR(import_stmt.exposes);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
     self.introduceExposedItemsIntoScope(cir_exposes, module_name, import_region);
 
-    // 5. Create CIR import statement
+    // 6. Store the mapping from module name to Import.Idx
+    self.import_indices.put(self.can_ir.env.gpa, module_name_text, module_import_idx) catch |err| exitOnOom(err);
+
+    // 7. Create CIR import statement
     const cir_import = CIR.Statement{
         .s_import = .{
             .module_name_tok = module_name,

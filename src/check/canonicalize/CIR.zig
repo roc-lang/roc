@@ -58,6 +58,8 @@ all_defs: Def.Span,
 all_statements: Statement.Span,
 /// All external declarations referenced in this module
 external_decls: std.ArrayList(ExternalDecl),
+/// Store for interned module imports
+imports: Import.Store,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -76,6 +78,7 @@ pub fn init(env: *ModuleEnv) CIR {
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = std.ArrayList(ExternalDecl).init(env.gpa),
+        .imports = Import.Store.init(),
     };
 }
 
@@ -83,6 +86,7 @@ pub fn init(env: *ModuleEnv) CIR {
 pub fn deinit(self: *CIR) void {
     self.store.deinit();
     self.external_decls.deinit();
+    self.imports.deinit(self.env.gpa);
 }
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
@@ -691,6 +695,60 @@ pub const ExposedItem = struct {
 
         return node;
     }
+};
+
+/// An imported module
+pub const Import = struct {
+    /// The full module name (e.g., "Json", "List", "Decode.Json")
+    module_name: []const u8,
+
+    pub const Idx = enum(u16) { _ };
+
+    /// A store for interning module imports
+    pub const Store = struct {
+        /// Map from module name string to Import.Idx
+        map: std.StringHashMapUnmanaged(Import.Idx) = .{},
+        /// List of imports indexed by Import.Idx
+        imports: std.ArrayListUnmanaged(Import) = .{},
+        /// Storage for module name strings
+        strings: std.ArrayListUnmanaged(u8) = .{},
+
+        pub fn init() Store {
+            return .{};
+        }
+
+        pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
+            self.map.deinit(gpa);
+            self.imports.deinit(gpa);
+            self.strings.deinit(gpa);
+        }
+
+        /// Get or create an Import.Idx for a module name
+        pub fn getOrPut(self: *Store, gpa: std.mem.Allocator, module_name: []const u8) !Import.Idx {
+            const gop = try self.map.getOrPut(gpa, module_name);
+            if (!gop.found_existing) {
+                // Store the string
+                const start = self.strings.items.len;
+                try self.strings.appendSlice(gpa, module_name);
+                const stored_name = self.strings.items[start..];
+
+                const import_idx: Import.Idx = @enumFromInt(self.imports.items.len);
+                try self.imports.append(gpa, Import{ .module_name = stored_name });
+                gop.value_ptr.* = import_idx;
+            }
+            return gop.value_ptr.*;
+        }
+
+        /// Get the module name for an Import.Idx
+        pub fn getModuleName(self: *const Store, idx: Import.Idx) []const u8 {
+            return self.imports.items[@intFromEnum(idx)].module_name;
+        }
+
+        /// Get the Import for an Import.Idx
+        pub fn get(self: *const Store, idx: Import.Idx) Import {
+            return self.imports.items[@intFromEnum(idx)];
+        }
+    };
 };
 
 /// A file of any type that has been ingested into a Roc module
