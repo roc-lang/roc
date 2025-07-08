@@ -78,7 +78,10 @@ NO CHANGE
 			(args
 				(p-assign @7.15-7.18 (ident "msg")))
 			(e-call @7.20-7.37
-				(e-lookup-external @7.20-7.32 (module-idx 0) (field "line!") (target-node-idx 0))
+				(e-lookup-external @7.20-7.32
+					(module-idx "0")
+					(field "line!")
+					(target-node-idx "0"))
 				(e-lookup-local @7.33-7.36
 					(pattern @7.15-7.18))))
 		(annotation @7.1-7.11
@@ -94,8 +97,7 @@ NO CHANGE
 			(e-string @9.20-9.35
 				(e-literal @9.21-9.34 (string "Hello, world!")))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
-		(exposes))
-	(ext-decl @7.20-7.32 (ident "pf.Stdout.line!") (kind "value")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

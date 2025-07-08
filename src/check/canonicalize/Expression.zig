@@ -634,12 +634,24 @@ pub const Expr = union(enum) {
 
                 tree.endNode(begin, attrs);
             },
-            .e_lookup_external => |external_idx| {
+            .e_lookup_external => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-lookup-external");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
                 const attrs = tree.beginNode();
 
-                ir.getExternalDecl(external_idx).pushToSExprTree(ir, tree);
+                // Add module index
+                var buf: [32]u8 = undefined;
+                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(e.module_idx)}) catch unreachable;
+                tree.pushStringPair("module-idx", module_idx_str);
+
+                // Add field name
+                tree.pushStringPair("field", ir.getIdentText(e.field_name));
+
+                // Add target node index
+                var buf2: [32]u8 = undefined;
+                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{e.target_node_idx}) catch unreachable;
+                tree.pushStringPair("target-node-idx", target_idx_str);
 
                 tree.endNode(begin, attrs);
             },
