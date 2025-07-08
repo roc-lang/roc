@@ -1130,6 +1130,14 @@ fn canonicalizeSingleQuote(
 
     // Resolve to a string slice from the source
     const token_text = self.parse_ir.resolve(token);
+
+    // Check if token is malformed (less than 2 characters means no closing quote)
+    if (token_text.len < 2) {
+        return self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+            .region = region,
+        } });
+    }
+
     const inner_text = token_text[1 .. token_text.len - 1];
 
     const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {

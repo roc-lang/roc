@@ -408,12 +408,26 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             const expr_var = CIR.varFrom(expr_idx);
             const expr_backing_var = CIR.varFrom(nominal.backing_expr);
 
-            // First, get the qualified variable and assert it's a nominal type
+            // First, get the qualified variable and check if it's a nominal type
             const nominal_var = CIR.varFrom(nominal.nominal_type_decl);
             const nominal_content = self.types.resolveVar(nominal_var).desc.content;
-            std.debug.assert(nominal_content == .structure);
-            std.debug.assert(nominal_content.structure == .nominal_type);
-            const nominal_type = nominal_content.structure.nominal_type;
+
+            // Handle cases where the nominal type is malformed or in an error state
+            const nominal_type = switch (nominal_content) {
+                .structure => |structure| switch (structure) {
+                    .nominal_type => |nt| nt,
+                    else => {
+                        // Nominal type is not actually a nominal type - set expr to error and continue
+                        try self.types.setVarContent(expr_var, .err);
+                        return false;
+                    },
+                },
+                else => {
+                    // Nominal type is in an error state - set expr to error and continue
+                    try self.types.setVarContent(expr_var, .err);
+                    return false;
+                },
+            };
 
             // Then, instantiate the nominal types backing var, for unification
             const nominal_backing_var = nominal_type.getBackingVar(nominal_var);
