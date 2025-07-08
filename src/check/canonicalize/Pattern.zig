@@ -27,6 +27,7 @@ const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
+const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
 const Expr = CIR.Expr;
 const IntValue = CIR.IntValue;
@@ -223,6 +224,25 @@ pub const Pattern = union(enum) {
                     },
                 }
             }
+
+            pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+                _ = ir;
+                switch (self.*) {
+                    .Required => {
+                        const begin = tree.beginNode();
+                        tree.pushStaticAtom("required");
+                        const attrs = tree.beginNode();
+                        tree.endNode(begin, attrs);
+                    },
+                    .Guard => {
+                        const begin = tree.beginNode();
+                        tree.pushStaticAtom("guard");
+                        tree.pushStringPair("pattern", "TODO");
+                        const attrs = tree.beginNode();
+                        tree.endNode(begin, attrs);
+                    },
+                }
+            }
         };
 
         pub fn toSExpr(self: *const @This(), ir: *const CIR, destruct_idx: RecordDestruct.Idx) SExpr {
@@ -240,6 +260,21 @@ pub const Pattern = union(enum) {
             node.appendNode(gpa, &kind_node);
 
             return node;
+        }
+
+        pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, destruct_idx: RecordDestruct.Idx) void {
+            const begin = tree.beginNode();
+            tree.pushStaticAtom("record-destruct");
+            ir.appendRegionInfoToSExprTree(tree, destruct_idx);
+
+            const label_text = ir.env.idents.getText(self.label);
+            const ident_text = ir.env.idents.getText(self.ident);
+            tree.pushStringPair("label", label_text);
+            tree.pushStringPair("ident", ident_text);
+
+            const attrs = tree.beginNode();
+            self.kind.pushToSExprTree(ir, tree);
+            tree.endNode(begin, attrs);
         }
     };
 
@@ -393,6 +428,201 @@ pub const Pattern = union(enum) {
 
                 node.appendStringAttr(gpa, "tag", @tagName(diagnostic));
                 return node;
+            },
+        }
+    }
+
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, pattern_idx: Pattern.Idx, degenerate: ?bool) void {
+        switch (self.*) {
+            .assign => |p| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("p-assign");
+                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+
+                const ident = ir.getIdentText(p.ident);
+                tree.pushStringPair("ident", ident);
+
+                if (degenerate) |d| {
+                    tree.pushBoolPair("degenerate", d);
+                }
+
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .as => |p| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("p-as");
+                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const ident = ir.getIdentText(p.ident);
+                tree.pushStringPair("as", ident);
+
+                if (degenerate) |d| {
+                    tree.pushBoolPair("degenerate", d);
+                }
+
+                const attrs = tree.beginNode();
+                ir.store.getPattern(p.pattern).pushToSExprTree(ir, tree, p.pattern, null);
+                tree.endNode(begin, attrs);
+            },
+            .applied_tag => {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("p-applied-tag");
+                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                if (degenerate) |d| {
+                    tree.pushBoolPair("degenerate", d);
+                }
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .record_destructure => |p| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("p-record-destructure");
+                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                if (degenerate) |d| {
+                    tree.pushBoolPair("degenerate", d);
+                }
+                const attrs = tree.beginNode();
+
+                const destructs_begin = tree.beginNode();
+                tree.pushStaticAtom("destructs");
+                const destructs_attrs = tree.beginNode();
+
+                for (ir.store.sliceRecordDestructs(p.destructs)) |destruct_idx| {
+                    const destruct = ir.store.getRecordDestruct(destruct_idx);
+                    destruct.pushToSExprTree(ir, tree, destruct_idx);
+                }
+                tree.endNode(destructs_begin, destructs_attrs);
+
+                tree.endNode(begin, attrs);
+            },
+            .list => |p| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("p-list");
+                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                if (degenerate) |d| {
+                    tree.pushBoolPair("degenerate", d);
+                }
+                const attrs = tree.beginNode();
+
+                const patterns_begin = tree.beginNode();
+                tree.pushStaticAtom("patterns");
+                const patterns_attrs = tree.beginNode();
+
+                for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
+                    ir.store.getPattern(patt_idx).pushToSExprTree(ir, tree, patt_idx, null);
+                }
+                tree.endNode(patterns_begin, patterns_attrs);
+
+                if (p.rest_info) |rest| {
+                    const rest_begin = tree.beginNode();
+                    tree.pushStaticAtom("rest-at");
+
+                    var index_buf: [32]u8 = undefined;
+                    const index_str = std.fmt.bufPrint(&index_buf, "{d}", .{rest.index}) catch "fmt_error";
+                    tree.pushDynamicAtomPair("index", index_str);
+
+                    const rest_attrs = tree.beginNode();
+                    if (rest.pattern) |rest_pattern_idx| {
+                        ir.store.getPattern(rest_pattern_idx).pushToSExprTree(ir, tree, rest_pattern_idx, null);
+                    }
+                    tree.endNode(rest_begin, rest_attrs);
+                }
+
+                tree.endNode(begin, attrs);
+            },
+            .tuple => |p| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("p-tuple");
+                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                if (degenerate) |d| {
+                    tree.pushBoolPair("degenerate", d);
+                }
+                const attrs = tree.beginNode();
+
+                const patterns_begin = tree.beginNode();
+                tree.pushStaticAtom("patterns");
+                const patterns_attrs = tree.beginNode();
+
+                for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
+                    ir.store.getPattern(patt_idx).pushToSExprTree(ir, tree, patt_idx, null);
+                }
+                tree.endNode(patterns_begin, patterns_attrs);
+
+                tree.endNode(begin, attrs);
+            },
+            .int_literal => |p| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("p-int");
+                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+
+                const value_i128: i128 = @bitCast(p.value.bytes);
+                var value_buf: [40]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
+                tree.pushStringPair("value", value_str);
+                if (degenerate) |d| {
+                    tree.pushBoolPair("degenerate", d);
+                }
+
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .small_dec_literal => {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("p-small-dec");
+                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                if (degenerate) |d| {
+                    tree.pushBoolPair("degenerate", d);
+                }
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .dec_literal => {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("p-dec");
+                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                if (degenerate) |d| {
+                    tree.pushBoolPair("degenerate", d);
+                }
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .str_literal => |p| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("p-str");
+                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+
+                const text = ir.env.strings.get(p.literal);
+                tree.pushStringPair("text", text);
+
+                if (degenerate) |d| {
+                    tree.pushBoolPair("degenerate", d);
+                }
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .underscore => {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("p-underscore");
+                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                if (degenerate) |d| {
+                    tree.pushBoolPair("degenerate", d);
+                }
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .runtime_error => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("p-runtime-error");
+                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+
+                const diagnostic = ir.store.getDiagnostic(e.diagnostic);
+                tree.pushStringPair("tag", @tagName(diagnostic));
+                if (degenerate) |d| {
+                    tree.pushBoolPair("degenerate", d);
+                }
+
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
             },
         }
     }

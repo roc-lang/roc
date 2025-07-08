@@ -181,6 +181,15 @@ pub fn pushDynamicAtom(self: *SExprTree, value: []const u8) void {
     self.stack.append(self.allocator, Node{ .DynamicAtom = .{ .begin = begin, .end = end } }) catch unreachable;
 }
 
+/// Push a dynamic atom key-value pair onto the stack
+pub fn pushDynamicAtomPair(self: *SExprTree, key: []const u8, value: []const u8) void {
+    const begin = self.beginNode();
+    self.pushStaticAtom(key);
+    self.pushDynamicAtom(value);
+    const attrs = self.beginNode();
+    self.endNode(begin, attrs);
+}
+
 /// Push a boolean node onto the stack
 pub fn pushBool(self: *SExprTree, value: bool) void {
     self.stack.append(self.allocator, Node{ .Boolean = value }) catch unreachable;

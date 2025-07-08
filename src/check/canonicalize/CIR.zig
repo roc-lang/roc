@@ -18,6 +18,7 @@ const ModuleImport = base.ModuleImport;
 const ModuleEnv = base.ModuleEnv;
 const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
+const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
 const NodeStore = @import("NodeStore.zig");
 
@@ -524,6 +525,15 @@ pub const RecordField = struct {
 
         return node;
     }
+
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("field");
+        tree.pushStringPair("name", ir.env.idents.getText(self.name));
+        const attrs = tree.beginNode();
+        ir.store.getExpr(self.value).pushToSExprTree(ir, tree);
+        tree.endNode(begin, attrs);
+    }
 };
 
 /// Canonical representation of where clauses in Roc.
@@ -611,6 +621,46 @@ pub const WhereClause = union(enum) {
         }
     }
 
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        switch (self.*) {
+            .mod_method => |mm| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("method");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, mm.region);
+                tree.pushStringPair("module-of", ir.env.idents.getText(mm.var_name));
+                tree.pushStringPair("ident", ir.env.idents.getText(mm.method_name));
+                const attrs = tree.beginNode();
+
+                const args_begin = tree.beginNode();
+                tree.pushStaticAtom("args");
+                const attrs2 = tree.beginNode();
+                for (ir.store.sliceTypeAnnos(mm.args)) |arg_idx| {
+                    ir.store.getTypeAnno(arg_idx).pushToSExprTree(ir, tree);
+                }
+                tree.endNode(args_begin, attrs2);
+
+                ir.store.getTypeAnno(mm.ret_anno).pushToSExprTree(ir, tree);
+                tree.endNode(begin, attrs);
+            },
+            .mod_alias => |ma| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("alias");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, ma.region);
+                tree.pushStringPair("module-of", ir.env.idents.getText(ma.var_name));
+                tree.pushStringPair("ident", ir.env.idents.getText(ma.alias_name));
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .malformed => |m| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("malformed");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, m.region);
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+        }
+    }
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 };
@@ -662,6 +712,26 @@ pub const TypeHeader = struct {
 
         return node;
     }
+
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("ty-header");
+        ir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
+        tree.pushStringPair("name", ir.env.idents.getText(self.name));
+        const attrs = tree.beginNode();
+
+        if (self.args.span.len > 0) {
+            const args_begin = tree.beginNode();
+            tree.pushStaticAtom("ty-args");
+            const attrs2 = tree.beginNode();
+            for (ir.store.sliceTypeAnnos(self.args)) |arg_idx| {
+                ir.store.getTypeAnno(arg_idx).pushToSExprTree(ir, tree);
+            }
+            tree.endNode(args_begin, attrs2);
+        }
+
+        tree.endNode(begin, attrs);
+    }
 };
 
 /// An item exposed from an imported module
@@ -695,6 +765,22 @@ pub const ExposedItem = struct {
 
         return node;
     }
+
+    pub fn pushToSExprTree(self: ExposedItem, env: *base.ModuleEnv, ir: *const CIR, tree: *SExprTree) void {
+        _ = ir; // Unused in this function, but could be used for more complex logic
+
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("exposed");
+        tree.pushStringPair("name", env.idents.getText(self.name));
+
+        if (self.alias) |alias_idx| {
+            tree.pushStringPair("alias", env.idents.getText(alias_idx));
+        }
+
+        tree.pushBoolPair("wildcard", self.is_wildcard);
+        const attrs = tree.beginNode();
+        tree.endNode(begin, attrs);
+    }
 };
 
 /// A file of any type that has been ingested into a Roc module
@@ -724,6 +810,18 @@ pub const IngestedFile = struct {
         var type_node = self.type.toSExpr(ir);
         node.appendNode(gpa, &type_node);
         return node;
+    }
+
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("ingested-file");
+        tree.pushStringPair("path", "TODO");
+        // tree.pushStringPair("path", env.strings.get(self.relative_path));
+        tree.pushStringPair("ident", ir.env.idents.getText(self.ident));
+
+        const attrs = tree.beginNode();
+        self.type.pushToSExprTree(ir, tree);
+        tree.endNode(begin, attrs);
     }
 };
 
@@ -817,6 +915,28 @@ pub const Def = struct {
 
         return node;
     }
+
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        const begin = tree.beginNode();
+        const name: []const u8 = switch (self.kind) {
+            .let => "d-let",
+            .stmt => "d-stmt",
+            .ignored => "d-ignored",
+        };
+        tree.pushStaticAtom(name);
+        const attrs = tree.beginNode();
+
+        ir.store.getPattern(self.pattern).pushToSExprTree(ir, tree, self.pattern, null);
+
+        ir.store.getExpr(self.expr).pushToSExprTree(ir, tree);
+
+        if (self.annotation) |anno_idx| {
+            const anno = ir.store.getAnnotation(anno_idx);
+            anno.pushToSExprTree(ir, tree);
+        }
+
+        tree.endNode(begin, attrs);
+    }
 };
 
 /// todo
@@ -846,6 +966,22 @@ pub const Annotation = struct {
         node.appendNode(gpa, &type_anno_node);
 
         return node;
+    }
+
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("annotation");
+        ir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
+        const attrs = tree.beginNode();
+
+        // Add the declared type annotation structure
+        const type_begin = tree.beginNode();
+        tree.pushStaticAtom("declared-type");
+        const type_attrs = tree.beginNode();
+        ir.store.getTypeAnno(self.type_anno).pushToSExprTree(ir, tree);
+        tree.endNode(type_begin, type_attrs);
+
+        tree.endNode(begin, attrs);
     }
 };
 
@@ -894,6 +1030,24 @@ pub const ExternalDecl = struct {
         }
 
         return node;
+    }
+
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("ext-decl");
+        ir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
+
+        // Add fully qualified name
+        tree.pushStringPair("ident", ir.env.idents.getText(self.qualified_name));
+
+        // Add kind
+        switch (self.kind) {
+            .value => tree.pushStringPair("kind", "value"),
+            .type => tree.pushStringPair("kind", "type"),
+        }
+
+        const attrs = tree.beginNode();
+        tree.endNode(begin, attrs);
     }
 };
 
@@ -1057,6 +1211,43 @@ pub fn toSExpr(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SExpr {
     }
 }
 
+pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: []const u8) void {
+    // Set temporary source for region info calculation during SExpr generation
+    ir.temp_source_for_sexpr = source;
+    defer ir.temp_source_for_sexpr = null;
+
+    if (maybe_expr_idx) |expr_idx| {
+        // Only output the given expression
+        ir.store.getExpr(expr_idx).pushToSExprTree(ir, tree);
+    } else {
+        const root_begin = tree.beginNode();
+        tree.pushStaticAtom("can-ir");
+
+        // Iterate over all the definitions in the file and convert each to an S-expression tree
+        const defs_slice = ir.store.sliceDefs(ir.all_defs);
+        const statements_slice = ir.store.sliceStatements(ir.all_statements);
+
+        if (defs_slice.len == 0 and statements_slice.len == 0 and ir.external_decls.items.len == 0) {
+            tree.pushBoolPair("empty", true);
+        }
+        const attrs = tree.beginNode();
+
+        for (defs_slice) |def_idx| {
+            ir.store.getDef(def_idx).pushToSExprTree(ir, tree);
+        }
+
+        for (statements_slice) |stmt_idx| {
+            ir.store.getStatement(stmt_idx).pushToSExprTree(ir, tree);
+        }
+
+        for (ir.external_decls.items) |*external_decl| {
+            external_decl.pushToSExprTree(ir, tree);
+        }
+
+        tree.endNode(root_begin, attrs);
+    }
+}
+
 /// Helper function to convert the entire Canonical IR to a string in S-expression format
 /// and write it to the given writer.
 ///
@@ -1117,6 +1308,22 @@ pub fn appendRegionInfoToSexprNodeFromRegion(ir: *const CIR, node: *SExpr, regio
         info,
         region.start.offset,
         region.end.offset,
+    );
+}
+
+/// Append region information to an S-expression node for a given index in the Canonical IR.
+pub fn appendRegionInfoToSExprTree(ir: *const CIR, tree: *SExprTree, idx: anytype) void {
+    const region = ir.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
+    ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+}
+
+/// Append region information to an S-expression node from a specific region.
+pub fn appendRegionInfoToSExprTreeFromRegion(ir: *const CIR, tree: *SExprTree, region: Region) void {
+    const info = ir.calcRegionInfo(region);
+    tree.pushBytesRange(
+        region.start.offset,
+        region.end.offset,
+        info,
     );
 }
 

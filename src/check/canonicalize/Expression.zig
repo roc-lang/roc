@@ -33,6 +33,7 @@ const Region = base.Region;
 const DataSpan = base.DataSpan;
 const CalledVia = base.CalledVia;
 const Ident = base.Ident;
+const SExprTree = base.SExprTree;
 const SExpr = base.SExpr;
 const Pattern = CIR.Pattern;
 const IntValue = CIR.IntValue;
@@ -828,6 +829,402 @@ pub const Expr = union(enum) {
         }
     }
 
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        switch (self.*) {
+            .e_int => |int_expr| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-int");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, int_expr.region);
+
+                const value_i128: i128 = @bitCast(int_expr.value.bytes);
+                var value_buf: [40]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
+                tree.pushStringPair("value", value_str);
+
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .e_frac_f64 => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-frac-f64");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+
+                var value_buf: [512]u8 = undefined;
+                const value_str = if (e.value == 0)
+                    "0.0"
+                else if (@abs(e.value) < 1e-10 or @abs(e.value) > 1e10)
+                    std.fmt.bufPrint(&value_buf, "{e}", .{e.value}) catch "fmt_error"
+                else
+                    std.fmt.bufPrint(&value_buf, "{d}", .{e.value}) catch "fmt_error";
+                tree.pushStringPair("value", value_str);
+
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .e_frac_dec => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-frac-dec");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+
+                const dec_value_f64: f64 = @as(f64, @floatFromInt(e.value.num)) / std.math.pow(f64, 10, 18);
+                var value_buf: [512]u8 = undefined;
+                const value_str = if (dec_value_f64 == 0)
+                    "0.0"
+                else if (@abs(dec_value_f64) < 1e-10 or @abs(dec_value_f64) > 1e10)
+                    std.fmt.bufPrint(&value_buf, "{e}", .{dec_value_f64}) catch "fmt_error"
+                else
+                    std.fmt.bufPrint(&value_buf, "{d}", .{dec_value_f64}) catch "fmt_error";
+                tree.pushStringPair("value", value_str);
+
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .e_dec_small => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-dec-small");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+
+                var num_buf: [32]u8 = undefined;
+                const num_str = std.fmt.bufPrint(&num_buf, "{}", .{e.numerator}) catch "fmt_error";
+                tree.pushStringPair("numerator", num_str);
+
+                var denom_buf: [32]u8 = undefined;
+                const denom_str = std.fmt.bufPrint(&denom_buf, "{}", .{e.denominator_power_of_ten}) catch "fmt_error";
+                tree.pushStringPair("denominator-power-of-ten", denom_str);
+
+                const numerator_f64: f64 = @floatFromInt(e.numerator);
+                const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.denominator_power_of_ten));
+                const value_f64 = numerator_f64 / denominator_f64;
+
+                var value_buf: [512]u8 = undefined;
+                const value_str = if (value_f64 == 0)
+                    "0.0"
+                else if (@abs(value_f64) < 1e-10 or @abs(value_f64) > 1e10)
+                    std.fmt.bufPrint(&value_buf, "{e}", .{value_f64}) catch "fmt_error"
+                else
+                    std.fmt.bufPrint(&value_buf, "{d}", .{value_f64}) catch "fmt_error";
+                tree.pushStringPair("value", value_str);
+
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .e_str_segment => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-literal");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+
+                const value = ir.env.strings.get(e.literal);
+                tree.pushStringPair("string", value);
+
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .e_str => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-string");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const attrs = tree.beginNode();
+
+                for (ir.store.sliceExpr(e.span)) |segment| {
+                    ir.store.getExpr(segment).pushToSExprTree(ir, tree);
+                }
+
+                tree.endNode(begin, attrs);
+            },
+            .e_list => |l| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-list");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, l.region);
+                const attrs = tree.beginNode();
+
+                const elems_begin = tree.beginNode();
+                tree.pushStaticAtom("elems");
+                const elems_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(l.elems)) |elem_idx| {
+                    ir.store.getExpr(elem_idx).pushToSExprTree(ir, tree);
+                }
+                tree.endNode(elems_begin, elems_attrs);
+
+                tree.endNode(begin, attrs);
+            },
+            .e_empty_list => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-empty_list");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .e_tuple => |t| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-tuple");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, t.region);
+                const attrs = tree.beginNode();
+
+                const elems_begin = tree.beginNode();
+                tree.pushStaticAtom("elems");
+                const elems_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(t.elems)) |elem_idx| {
+                    ir.store.getExpr(elem_idx).pushToSExprTree(ir, tree);
+                }
+                tree.endNode(elems_begin, elems_attrs);
+
+                tree.endNode(begin, attrs);
+            },
+            .e_lookup_local => |local| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-lookup-local");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, local.region);
+                const attrs = tree.beginNode();
+
+                const pattern_begin = tree.beginNode();
+                tree.pushStaticAtom("pattern");
+                ir.appendRegionInfoToSExprTree(tree, local.pattern_idx);
+                const pattern_attrs = tree.beginNode();
+                // TODO: this is missing in the old code:
+                // ir.store.getPattern(local.pattern_idx).pushToSExprTree(ir, tree, local.pattern_idx);
+                tree.endNode(pattern_begin, pattern_attrs);
+
+                tree.endNode(begin, attrs);
+            },
+            .e_lookup_external => |external_idx| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-lookup-external");
+                const attrs = tree.beginNode();
+
+                ir.getExternalDecl(external_idx).pushToSExprTree(ir, tree);
+
+                tree.endNode(begin, attrs);
+            },
+            .e_match => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-match");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const attrs = tree.beginNode();
+
+                e.pushToSExprTree(ir, tree);
+
+                tree.endNode(begin, attrs);
+            },
+            .e_if => |if_expr| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-if");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, if_expr.region);
+                const attrs = tree.beginNode();
+
+                const branches_begin = tree.beginNode();
+                tree.pushStaticAtom("if-branches");
+                const branches_attrs = tree.beginNode();
+                const branch_indices = ir.store.sliceIfBranches(if_expr.branches);
+                for (branch_indices) |branch_idx| {
+                    const branch = ir.store.getIfBranch(branch_idx);
+
+                    const branch_begin = tree.beginNode();
+                    tree.pushStaticAtom("if-branch");
+                    const branch_attrs = tree.beginNode();
+
+                    ir.store.getExpr(branch.cond).pushToSExprTree(ir, tree);
+                    ir.store.getExpr(branch.body).pushToSExprTree(ir, tree);
+
+                    tree.endNode(branch_begin, branch_attrs);
+                }
+                tree.endNode(branches_begin, branches_attrs);
+
+                const else_begin = tree.beginNode();
+                tree.pushStaticAtom("if-else");
+                const else_attrs = tree.beginNode();
+                ir.store.getExpr(if_expr.final_else).pushToSExprTree(ir, tree);
+                tree.endNode(else_begin, else_attrs);
+
+                tree.endNode(begin, attrs);
+            },
+            .e_call => |c| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-call");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, c.region);
+                const attrs = tree.beginNode();
+
+                const all_exprs = ir.store.exprSlice(c.args);
+
+                if (all_exprs.len > 0) {
+                    ir.store.getExpr(all_exprs[0]).pushToSExprTree(ir, tree);
+                }
+
+                if (all_exprs.len > 1) {
+                    for (all_exprs[1..]) |arg_idx| {
+                        ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree);
+                    }
+                }
+
+                tree.endNode(begin, attrs);
+            },
+            .e_record => |record_expr| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-record");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, record_expr.region);
+                const attrs = tree.beginNode();
+
+                if (record_expr.ext) |ext_idx| {
+                    const ext_begin = tree.beginNode();
+                    tree.pushStaticAtom("ext");
+                    const ext_attrs = tree.beginNode();
+                    ir.store.getExpr(ext_idx).pushToSExprTree(ir, tree);
+                    tree.endNode(ext_begin, ext_attrs);
+                }
+
+                const fields_begin = tree.beginNode();
+                tree.pushStaticAtom("fields");
+                const fields_attrs = tree.beginNode();
+                for (ir.store.sliceRecordFields(record_expr.fields)) |field_idx| {
+                    ir.store.getRecordField(field_idx).pushToSExprTree(ir, tree);
+                }
+                tree.endNode(fields_begin, fields_attrs);
+
+                tree.endNode(begin, attrs);
+            },
+            .e_empty_record => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-empty_record");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .e_block => |block_expr| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-block");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, block_expr.region);
+                const attrs = tree.beginNode();
+
+                for (ir.store.sliceStatements(block_expr.stmts)) |stmt_idx| {
+                    ir.store.getStatement(stmt_idx).pushToSExprTree(ir, tree);
+                }
+
+                ir.store.getExpr(block_expr.final_expr).pushToSExprTree(ir, tree);
+
+                tree.endNode(begin, attrs);
+            },
+            .e_tag => |tag_expr| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-tag");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, tag_expr.region);
+                tree.pushStringPair("name", ir.env.idents.getText(tag_expr.name));
+                const attrs = tree.beginNode();
+
+                if (tag_expr.args.span.len > 0) {
+                    const args_begin = tree.beginNode();
+                    tree.pushStaticAtom("args");
+                    const args_attrs = tree.beginNode();
+                    for (ir.store.sliceExpr(tag_expr.args)) |arg_idx| {
+                        ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree);
+                    }
+                    tree.endNode(args_begin, args_attrs);
+                }
+
+                tree.endNode(begin, attrs);
+            },
+            .e_nominal => |nominal_expr| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-nominal");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, nominal_expr.region);
+
+                const stmt = ir.store.getStatement(nominal_expr.nominal_type_decl);
+                std.debug.assert(stmt == .s_nominal_decl);
+                const decl = stmt.s_nominal_decl;
+                const header = ir.store.getTypeHeader(decl.header);
+                tree.pushStringPair("nominal", ir.env.idents.getText(header.name));
+
+                const attrs = tree.beginNode();
+
+                ir.store.getExpr(nominal_expr.backing_expr).pushToSExprTree(ir, tree);
+
+                tree.endNode(begin, attrs);
+            },
+            .e_zero_argument_tag => |tag_expr| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-zero-argument-tag");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, tag_expr.region);
+                tree.pushStringPair("closure", ir.getIdentText(tag_expr.closure_name));
+                tree.pushStringPair("name", ir.getIdentText(tag_expr.name));
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .e_lambda => |lambda_expr| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-lambda");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, lambda_expr.region);
+                const attrs = tree.beginNode();
+
+                const args_begin = tree.beginNode();
+                tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.slicePatterns(lambda_expr.args)) |arg_idx| {
+                    ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx, null);
+                }
+                tree.endNode(args_begin, args_attrs);
+
+                ir.store.getExpr(lambda_expr.body).pushToSExprTree(ir, tree);
+
+                tree.endNode(begin, attrs);
+            },
+            .e_binop => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-binop");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                tree.pushStringPair("op", @tagName(e.op));
+                const attrs = tree.beginNode();
+
+                ir.store.getExpr(e.lhs).pushToSExprTree(ir, tree);
+                ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree);
+
+                tree.endNode(begin, attrs);
+            },
+            .e_dot_access => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-dot-access");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                tree.pushStringPair("field", ir.getIdentText(e.field_name));
+                const attrs = tree.beginNode();
+
+                const receiver_begin = tree.beginNode();
+                tree.pushStaticAtom("receiver");
+                const receiver_attrs = tree.beginNode();
+                ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree);
+                tree.endNode(receiver_begin, receiver_attrs);
+
+                if (e.args) |args| {
+                    const args_begin = tree.beginNode();
+                    tree.pushStaticAtom("args");
+                    const args_attrs = tree.beginNode();
+                    for (ir.store.exprSlice(args)) |arg_idx| {
+                        ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree);
+                    }
+                    tree.endNode(args_begin, args_attrs);
+                }
+
+                tree.endNode(begin, attrs);
+            },
+            .e_runtime_error => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-runtime-error");
+
+                const diagnostic = ir.store.getDiagnostic(e.diagnostic);
+                const msg = std.fmt.allocPrint(ir.env.gpa, "{s}", .{@tagName(diagnostic)}) catch |err| exitOnOom(err);
+                defer ir.env.gpa.free(msg);
+
+                tree.pushStringPair("tag", msg);
+
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .e_ellipsis => |_| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-not-implemented");
+                // ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region); // TODO: missing in old code
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+        }
+    }
+
     /// Pattern matching expression that destructures values and executes different branches.
     /// Match expressions are exhaustive - they must handle all possible cases of the matched value.
     /// Each branch consists of one or more patterns, an optional guard condition, and a result expression.
@@ -909,6 +1306,39 @@ pub const Expr = union(enum) {
                 return node;
             }
 
+            pub fn pushToSExprTree(self: *const Match.Branch, ir: *const CIR, tree: *SExprTree) void {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("branch");
+                const attrs = tree.beginNode();
+
+                const patterns_begin = tree.beginNode();
+                tree.pushStaticAtom("patterns");
+                const patterns_attrs = tree.beginNode();
+                const patterns_slice = ir.store.sliceMatchBranchPatterns(self.patterns);
+                for (patterns_slice) |branch_pat_idx| {
+                    const branch_pat = ir.store.getMatchBranchPattern(branch_pat_idx);
+                    const pattern = ir.store.getPattern(branch_pat.pattern);
+                    pattern.pushToSExprTree(ir, tree, branch_pat.pattern, branch_pat.degenerate);
+                }
+                tree.endNode(patterns_begin, patterns_attrs);
+
+                const value_begin = tree.beginNode();
+                tree.pushStaticAtom("value");
+                const value_attrs = tree.beginNode();
+                ir.store.getExpr(self.value).pushToSExprTree(ir, tree);
+                tree.endNode(value_begin, value_attrs);
+
+                if (self.guard) |guard_idx| {
+                    const guard_begin = tree.beginNode();
+                    tree.pushStaticAtom("guard");
+                    const guard_attrs = tree.beginNode();
+                    ir.store.getExpr(guard_idx).pushToSExprTree(ir, tree);
+                    tree.endNode(guard_begin, guard_attrs);
+                }
+
+                tree.endNode(begin, attrs);
+            }
+
             pub const Idx = enum(u32) { _ };
             pub const Span = struct { span: DataSpan };
         };
@@ -965,6 +1395,29 @@ pub const Expr = union(enum) {
             node.appendNode(gpa, &branches_node);
 
             return node;
+        }
+
+        pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+            const begin = tree.beginNode();
+            tree.pushStaticAtom("match");
+            ir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
+            const attrs = tree.beginNode();
+
+            const cond_begin = tree.beginNode();
+            tree.pushStaticAtom("cond");
+            const cond_attrs = tree.beginNode();
+            ir.store.getExpr(self.cond).pushToSExprTree(ir, tree);
+            tree.endNode(cond_begin, cond_attrs);
+
+            const branches_begin = tree.beginNode();
+            tree.pushStaticAtom("branches");
+            const branches_attrs = tree.beginNode();
+            for (ir.store.matchBranchSlice(self.branches)) |branch_idx| {
+                ir.store.getMatchBranch(branch_idx).pushToSExprTree(ir, tree);
+            }
+            tree.endNode(branches_begin, branches_attrs);
+
+            tree.endNode(begin, attrs);
         }
     };
 };
