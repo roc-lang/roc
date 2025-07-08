@@ -778,17 +778,14 @@ pub const ExposedItem = struct {
 
 /// An imported module
 pub const Import = struct {
-    /// The full module name (e.g., "Json", "List", "Decode.Json")
-    module_name: []const u8,
-
     pub const Idx = enum(u16) { _ };
 
-    /// A store for interning module imports
+    /// A store for interning imported module names
     pub const Store = struct {
         /// Map from module name string to Import.Idx
         map: std.StringHashMapUnmanaged(Import.Idx) = .{},
         /// List of imports indexed by Import.Idx
-        imports: std.ArrayListUnmanaged(Import) = .{},
+        imports: std.ArrayListUnmanaged([]u8) = .{},
         /// Storage for module name strings
         strings: std.ArrayListUnmanaged(u8) = .{},
 
@@ -812,7 +809,7 @@ pub const Import = struct {
                 const stored_name = self.strings.items[start..];
 
                 const import_idx: Import.Idx = @enumFromInt(self.imports.items.len);
-                try self.imports.append(gpa, Import{ .module_name = stored_name });
+                try self.imports.append(gpa, stored_name);
                 gop.value_ptr.* = import_idx;
             }
             return gop.value_ptr.*;
@@ -820,11 +817,6 @@ pub const Import = struct {
 
         /// Get the module name for an Import.Idx
         pub fn getModuleName(self: *const Store, idx: Import.Idx) []const u8 {
-            return self.imports.items[@intFromEnum(idx)].module_name;
-        }
-
-        /// Get the Import for an Import.Idx
-        pub fn get(self: *const Store, idx: Import.Idx) Import {
             return self.imports.items[@intFromEnum(idx)];
         }
     };
