@@ -1500,6 +1500,207 @@ pub fn toSexprTypes(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SEx
     }
 }
 
+pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: []const u8) void {
+    // Set temporary source for region info calculation during SExpr generation
+    ir.temp_source_for_sexpr = source;
+    defer ir.temp_source_for_sexpr = null;
+
+    const gpa = ir.env.gpa;
+
+    // Create TypeWriter for converting types to strings
+    var type_string_buf = std.ArrayList(u8).init(gpa);
+    defer type_string_buf.deinit();
+
+    var type_writer = types.writers.TypeWriter.init(type_string_buf.writer(), ir.env);
+
+    if (maybe_expr_idx) |expr_idx| {
+        const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+        const expr_begin = tree.beginNode();
+        tree.pushStaticAtom("expr");
+
+        ir.appendRegionInfoToSExprTree(tree, expr_idx);
+
+        if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
+            const unknown_begin = tree.beginNode();
+            tree.pushStaticAtom("unknown");
+            const unknown_attrs = tree.beginNode();
+            tree.endNode(unknown_begin, unknown_attrs);
+        } else {
+            if (type_writer.writeVar(expr_var)) {
+                tree.pushStringPair("type", type_string_buf.items);
+            } else |err| {
+                exitOnOom(err);
+            }
+        }
+
+        const expr_attrs = tree.beginNode();
+        tree.endNode(expr_begin, expr_attrs);
+    } else {
+        const root_begin = tree.beginNode();
+        tree.pushStaticAtom("inferred-types");
+
+        const attrs = tree.beginNode();
+
+        // Collect definitions
+        const defs_begin = tree.beginNode();
+        tree.pushStaticAtom("defs");
+        const defs_attrs = tree.beginNode();
+
+        const all_defs = ir.store.sliceDefs(ir.all_defs);
+
+        for (all_defs) |def_idx| {
+            const def = ir.store.getDef(def_idx);
+
+            // Extract identifier name from the pattern (assuming it's an assign pattern)
+            const pattern = ir.store.getPattern(def.pattern);
+            switch (pattern) {
+                .assign => |_| {
+                    const patt_begin = tree.beginNode();
+                    tree.pushStaticAtom("patt");
+
+                    ir.appendRegionInfoToSExprTree(tree, def_idx);
+
+                    // Get the type variable for this definition
+                    const def_var = ir.idxToTypeVar(&ir.env.types, def_idx) catch |err| exitOnOom(err);
+
+                    // Clear the buffer and write the type
+                    type_string_buf.clearRetainingCapacity();
+                    type_writer.writeVar(def_var) catch |err| exitOnOom(err);
+                    tree.pushStringPair("type", type_string_buf.items);
+
+                    const patt_attrs = tree.beginNode();
+                    tree.endNode(patt_begin, patt_attrs);
+                },
+                else => {
+                    // For non-assign patterns, we could handle destructuring, but for now skip
+                    continue;
+                },
+            }
+        }
+
+        tree.endNode(defs_begin, defs_attrs);
+
+        const all_stmts = ir.store.sliceStatements(ir.all_statements);
+
+        var has_type_decl = false;
+        for (all_stmts) |stmt_idx| {
+            const stmt = ir.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .s_alias_decl => |_| {
+                    has_type_decl = true;
+                    break;
+                },
+                .s_nominal_decl => |_| {
+                    has_type_decl = true;
+                    break;
+                },
+
+                else => {
+                    // For non-assign patterns, we could handle destructuring, but for now skip
+                    continue;
+                },
+            }
+        }
+
+        // Collect statements
+        if (has_type_decl) {
+            const stmts_begin = tree.beginNode();
+            tree.pushStaticAtom("type_decls");
+            const stmts_attrs = tree.beginNode();
+
+            for (all_stmts) |stmt_idx| {
+                const stmt = ir.store.getStatement(stmt_idx);
+
+                // Get the type variable for this definition
+                const stmt_var = ir.idxToTypeVar(&ir.env.types, stmt_idx) catch |err| exitOnOom(err);
+
+                switch (stmt) {
+                    .s_alias_decl => |alias| {
+                        has_type_decl = true;
+
+                        const stmt_node_begin = tree.beginNode();
+                        tree.pushStaticAtom("alias");
+                        ir.appendRegionInfoToSExprTreeFromRegion(tree, alias.region);
+
+                        // Clear the buffer and write the type
+                        type_string_buf.clearRetainingCapacity();
+                        type_writer.writeVar(stmt_var) catch |err| exitOnOom(err);
+                        tree.pushStringPair("type", type_string_buf.items);
+                        const stmt_node_attrs = tree.beginNode();
+
+                        const header = ir.store.getTypeHeader(alias.header);
+                        header.pushToSExprTree(ir, tree);
+
+                        tree.endNode(stmt_node_begin, stmt_node_attrs);
+                    },
+                    .s_nominal_decl => |nominal| {
+                        has_type_decl = true;
+
+                        const stmt_node_begin = tree.beginNode();
+                        tree.pushStaticAtom("nominal");
+                        ir.appendRegionInfoToSExprTreeFromRegion(tree, nominal.region);
+
+                        // Clear the buffer and write the type
+                        type_string_buf.clearRetainingCapacity();
+                        type_writer.writeVar(stmt_var) catch |err| exitOnOom(err);
+                        tree.pushStringPair("type", type_string_buf.items);
+
+                        const stmt_node_attrs = tree.beginNode();
+
+                        const header = ir.store.getTypeHeader(nominal.header);
+                        header.pushToSExprTree(ir, tree);
+
+                        tree.endNode(stmt_node_begin, stmt_node_attrs);
+                    },
+
+                    else => {
+                        // For non-assign patterns, we could handle destructuring, but for now skip
+                        continue;
+                    },
+                }
+            }
+
+            tree.endNode(stmts_begin, stmts_attrs);
+        }
+
+        // Collect expression types (for significant expressions with regions)
+        const exprs_begin = tree.beginNode();
+        tree.pushStaticAtom("expressions");
+        const exprs_attrs = tree.beginNode();
+
+        for (all_defs) |def_idx| {
+            const def = ir.store.getDef(def_idx);
+
+            // Get the expression type
+            const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(def.expr)));
+
+            const expr_node_begin = tree.beginNode();
+            tree.pushStaticAtom("expr");
+            ir.appendRegionInfoToSExprTreeFromRegion(tree, def.expr_region);
+
+            if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
+                const unknown_begin = tree.beginNode();
+                tree.pushStaticAtom("unknown");
+                const unknown_attrs = tree.beginNode();
+                tree.endNode(unknown_begin, unknown_attrs);
+            } else {
+                // Clear the buffer and write the type
+                type_string_buf.clearRetainingCapacity();
+                type_writer.writeVar(expr_var) catch |err| exitOnOom(err);
+                tree.pushStringPair("type", type_string_buf.items);
+            }
+
+            const expr_node_attrs = tree.beginNode();
+            tree.endNode(expr_node_begin, expr_node_attrs);
+        }
+
+        tree.endNode(exprs_begin, exprs_attrs);
+
+        tree.endNode(root_begin, attrs);
+    }
+}
+
 /// Helper function to convert type information from the Canonical IR to a string
 /// in S-expression format for snapshot testing. Calls `toSexprTypes` and writes the result.
 pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {

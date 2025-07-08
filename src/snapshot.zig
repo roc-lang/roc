@@ -1278,19 +1278,20 @@ fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can
 
 /// Generate TYPES section for both markdown and HTML
 fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
-    var node = can_ir.toSexprTypes(maybe_expr_idx, content.source);
-    defer node.deinit(can_ir.env.gpa);
+    var tree = SExprTree.init(output.gpa);
+    defer tree.deinit();
+    can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree, content.source);
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
-    node.toStringPretty(output.md_writer.any());
+    tree.toStringPretty(output.md_writer.any());
     try output.md_writer.writeAll("\n");
 
     // HTML TYPES section
     try output.html_writer.writeAll(
         \\                <pre>
     );
-    node.toHtml(output.html_writer.any());
+    tree.toHtml(output.html_writer.any());
     try output.html_writer.writeAll(
         \\</pre>
         \\
