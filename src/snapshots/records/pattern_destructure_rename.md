@@ -11,8 +11,6 @@ match person {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - pattern_destructure_rename.md:1:7:1:13
-UNDEFINED VARIABLE - pattern_destructure_rename.md:2:49:2:57
-UNDEFINED VARIABLE - pattern_destructure_rename.md:2:64:2:71
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.

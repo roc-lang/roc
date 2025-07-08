@@ -207,8 +207,6 @@ pub const Pattern = union(enum) {
             /// { name, age } => ... # Both name and age are Required
             /// ```
             Required,
-            /// TODO Remove this, the syntax `{ name, age ? 0 }` is no longer valid in 0.1
-            Guard: Pattern.Idx,
             /// Nested pattern for record field destructuring.
             /// ```roc
             /// { address: { city } } => ... # address field has a SubPattern
@@ -220,13 +218,6 @@ pub const Pattern = union(enum) {
                     .Required => {
                         const begin = tree.beginNode();
                         tree.pushStaticAtom("required");
-                        const attrs = tree.beginNode();
-                        tree.endNode(begin, attrs);
-                    },
-                    .Guard => {
-                        const begin = tree.beginNode();
-                        tree.pushStaticAtom("guard");
-                        tree.pushStringPair("pattern", "TODO");
                         const attrs = tree.beginNode();
                         tree.endNode(begin, attrs);
                     },

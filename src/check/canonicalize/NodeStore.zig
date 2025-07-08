@@ -1532,21 +1532,12 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
         .Required => {
             // No extra data needed
         },
-        .Guard => |guard_pattern| {
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
 
-            // Store kind tag (1 for Guard)
-            store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
-            // Store guard pattern index
-            store.extra_data.append(store.gpa, @intFromEnum(guard_pattern)) catch |err| exitOnOom(err);
-
-            node.data_3 = extra_data_start;
-        },
         .SubPattern => |sub_pattern| {
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
 
-            // Store kind tag (2 for SubPattern)
-            store.extra_data.append(store.gpa, 2) catch |err| exitOnOom(err);
+            // Store kind tag (1 for SubPattern)
+            store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
             // Store sub-pattern index
             store.extra_data.append(store.gpa, @intFromEnum(sub_pattern)) catch |err| exitOnOom(err);
 
@@ -2000,8 +1991,7 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
 
         break :blk switch (kind_tag) {
             0 => CIR.Pattern.RecordDestruct.Kind.Required,
-            1 => CIR.Pattern.RecordDestruct.Kind{ .Guard = @enumFromInt(extra_data[1]) },
-            2 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
+            1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
             else => unreachable,
         };
     } else CIR.Pattern.RecordDestruct.Kind.Required;

@@ -14,9 +14,7 @@ match data {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - nested_patterns.md:1:7:1:11
-UNDEFINED VARIABLE - nested_patterns.md:2:53:2:54
 UNDEFINED VARIABLE - nested_patterns.md:2:57:2:65
-UNDEFINED VARIABLE - nested_patterns.md:2:66:2:70
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `data` in this scope.

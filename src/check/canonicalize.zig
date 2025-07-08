@@ -2471,7 +2471,7 @@ fn canonicalizePattern(
                         return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{
                             .invalid_top_level_statement = .{
                                 .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-                                .region = base.Region.zero(), // TODO can we get a better region here
+                                .region = region,
                             },
                         });
                     },
@@ -2751,7 +2751,7 @@ fn canonicalizePattern(
                                 const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{
                                     .invalid_top_level_statement = .{
                                         .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-                                        .region = base.Region.zero(), // TODO can we get a better region here
+                                        .region = field_region,
                                     },
                                 });
                                 return pattern_idx;
@@ -3340,7 +3340,7 @@ fn scopeIntroduceIdent(
             return self.can_ir.pushMalformed(T, CIR.Diagnostic{
                 .invalid_top_level_statement = .{
                     .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-                    .region = base.Region.zero(), // TODO can we get a better region here
+                    .region = region,
                 },
             });
         },
@@ -3389,7 +3389,7 @@ fn scopeIntroduceVar(
             return self.can_ir.pushMalformed(T, CIR.Diagnostic{
                 .invalid_top_level_statement = .{
                     .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-                    .region = base.Region.zero(), // TODO can we get a better region here
+                    .region = region,
                 },
             });
         },
