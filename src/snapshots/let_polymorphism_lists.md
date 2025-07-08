@@ -39,9 +39,9 @@ main = |_| {
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:12:26:12:41
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:41
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:45
-UNDEFINED VARIABLE - let_polymorphism_lists.md:25:12:25:20
-UNDEFINED VARIABLE - let_polymorphism_lists.md:26:12:26:20
-UNDEFINED VARIABLE - let_polymorphism_lists.md:27:12:27:20
+INVALID STATEMENT - let_polymorphism_lists.md:12:28:13:13
+INVALID STATEMENT - let_polymorphism_lists.md:13:28:14:15
+INVALID STATEMENT - let_polymorphism_lists.md:14:32:17:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+ my_empty_list** is not expected in an expression.
@@ -87,6 +87,13 @@ Check the spelling and make sure you're using a valid Roc operator.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**let_polymorphism_lists.md:12:28:13:13:**
+```roc
+all_int_list = int_list ++ my_empty_list
+all_str_list = str_list ++ my_empty_list
+```
+
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
@@ -95,6 +102,13 @@ Check the spelling and make sure you're using a valid Roc operator.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**let_polymorphism_lists.md:13:28:14:15:**
+```roc
+all_str_list = str_list ++ my_empty_list
+all_float_list = float_list ++ my_empty_list
+```
+
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
@@ -102,6 +116,15 @@ Check the spelling and make sure you're using a valid Roc operator.
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**let_polymorphism_lists.md:14:32:17:10:**
+```roc
+all_float_list = float_list ++ my_empty_list
+
+# Function returning empty list
+get_empty = |_| []
+```
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `len` in this scope.

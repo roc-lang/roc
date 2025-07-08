@@ -518,6 +518,17 @@ const Formatter = struct {
                 }
                 _ = try fmt.formatExpr(c.expr);
             },
+            .dbg => |d| {
+                try fmt.pushAll("dbg");
+                const body_region = fmt.nodeRegion(@intFromEnum(d.expr));
+                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(d.expr);
+            },
             .@"return" => |r| {
                 try fmt.pushAll("return");
                 const body_region = fmt.nodeRegion(@intFromEnum(r.expr));

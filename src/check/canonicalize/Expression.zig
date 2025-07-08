@@ -311,6 +311,38 @@ pub const Expr = union(enum) {
         diagnostic: Diagnostic.Idx,
         region: Region,
     },
+    /// A crash expression that terminates execution with a message.
+    /// This expression never returns and causes the program to crash at runtime.
+    ///
+    /// ```roc
+    /// crash "Something went wrong"
+    /// ```
+    e_crash: struct {
+        msg: StringLiteral.Idx,
+        region: Region,
+    },
+    /// A debug expression that prints the value of the inner expression.
+    /// This expression evaluates to the same value as the inner expression
+    /// but has the side effect of printing the value for debugging purposes.
+    ///
+    /// ```roc
+    /// dbg someValue
+    /// ```
+    e_dbg: struct {
+        expr: Expr.Idx,
+        region: Region,
+    },
+    /// An expect expression that performs a runtime assertion.
+    /// This expression evaluates to empty record {} but can fail at runtime.
+    /// Used for both top-level tests and inline assertions.
+    ///
+    /// ```roc
+    /// expect [1,2,3].len() == 3
+    /// ```
+    e_expect: struct {
+        body: Expr.Idx,
+        region: Region,
+    },
     /// Ellipsis placeholder expression (...).
     /// This is valid syntax that represents an unimplemented expression.
     /// It will crash at runtime if execution reaches this point.
@@ -434,7 +466,10 @@ pub const Expr = union(enum) {
             .e_block => |e| return e.region,
             .e_lambda => |e| return e.region,
             .e_runtime_error => |e| return e.region,
+            .e_crash => |e| return e.region,
+            .e_dbg => |e| return e.region,
             .e_ellipsis => |e| return e.region,
+            .e_expect => |e| return e.region,
         }
     }
 
@@ -832,6 +867,35 @@ pub const Expr = union(enum) {
                 tree.pushStaticAtom("e-not-implemented");
                 // ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region); // TODO: missing in old code
                 const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .e_crash => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-crash");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                tree.pushStringPair("msg", ir.env.strings.get(e.msg));
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .e_dbg => |e| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-dbg");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const attrs = tree.beginNode();
+
+                ir.store.getExpr(e.expr).pushToSExprTree(ir, tree);
+
+                tree.endNode(begin, attrs);
+            },
+            .e_expect => |expect_expr| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("e-expect");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, expect_expr.region);
+                const attrs = tree.beginNode();
+
+                // Add body expression
+                ir.store.getExpr(expect_expr.body).pushToSExprTree(ir, tree);
+
                 tree.endNode(begin, attrs);
             },
         }

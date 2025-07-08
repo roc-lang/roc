@@ -12,6 +12,8 @@ foo = "hello ${namF
 MISSING HEADER - fuzz_crash_017.md:1:1:1:5
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_017.md:1:4:1:7
 PARSE ERROR - fuzz_crash_017.md:2:7:2:14
+INVALID STATEMENT - fuzz_crash_017.md:1:4:1:7
+INVALID STATEMENT - fuzz_crash_017.md:1:1:1:1
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -57,9 +59,23 @@ foo = "hello ${namF
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**fuzz_crash_017.md:1:4:1:7:**
+```roc
+me = "luc"
+```
+   ^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_017.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!

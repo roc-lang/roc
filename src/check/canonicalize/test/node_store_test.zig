@@ -60,6 +60,13 @@ test "NodeStore round trip - Statements" {
     });
 
     try statements.append(CIR.Statement{
+        .s_dbg = .{
+            .expr = @enumFromInt(4567),
+            .region = from_raw_offsets(45, 67),
+        },
+    });
+
+    try statements.append(CIR.Statement{
         .s_expect = .{
             .body = @enumFromInt(565),
             .region = from_raw_offsets(67, 234),
@@ -314,8 +321,26 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(CIR.Expr{
+        .e_crash = .{
+            .msg = @enumFromInt(1234),
+            .region = from_raw_offsets(3000, 3100),
+        },
+    });
+    try expressions.append(CIR.Expr{
+        .e_dbg = .{
+            .expr = @enumFromInt(5678),
+            .region = from_raw_offsets(3200, 3300),
+        },
+    });
+    try expressions.append(CIR.Expr{
         .e_ellipsis = .{
             .region = from_raw_offsets(2890, 2900),
+        },
+    });
+    try expressions.append(CIR.Expr{
+        .e_expect = .{
+            .body = @enumFromInt(9999),
+            .region = from_raw_offsets(3400, 3500),
         },
     });
     for (expressions.items) |expr| {
@@ -367,6 +392,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
+        .crash_expects_string = .{
+            .region = from_raw_offsets(70, 80),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
         .ident_not_in_scope = .{
             .ident = @bitCast(@as(u32, 789)),
             .region = from_raw_offsets(70, 80),
@@ -376,6 +407,7 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(CIR.Diagnostic{
         .invalid_top_level_statement = .{
             .stmt = @enumFromInt(456),
+            .region = from_raw_offsets(80, 90),
         },
     });
 

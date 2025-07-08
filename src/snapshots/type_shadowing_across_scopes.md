@@ -25,6 +25,8 @@ UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:11:31
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:12:1:12:2
 TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
+INVALID STATEMENT - type_shadowing_across_scopes.md:1:1:1:1
+INVALID STATEMENT - type_shadowing_across_scopes.md:12:1:12:2
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_type_field_name`
@@ -111,9 +113,23 @@ processData = |data|
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**type_shadowing_across_scopes.md:1:1:1:1:**
+```roc
+
+```
+
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**type_shadowing_across_scopes.md:12:1:12:2:**
+```roc
+}
+```
+^
+
 
 # TOKENS
 ~~~zig

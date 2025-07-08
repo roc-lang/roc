@@ -93,6 +93,15 @@ UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:49:65:49
 UNUSED VARIABLE - Color.md:30:5:30:25
 UNUSED VARIABLE - Color.md:61:10:61:13
 UNDEFINED VARIABLE - Color.md:63:24:63:27
+INVALID STATEMENT - Color.md:1:1:1:1
+INVALID STATEMENT - Color.md:65:27:65:43
+INVALID STATEMENT - Color.md:65:41:65:46
+INVALID STATEMENT - Color.md:65:43:65:47
+INVALID STATEMENT - Color.md:65:46:65:47
+INVALID STATEMENT - Color.md:65:47:65:48
+INVALID STATEMENT - Color.md:65:47:65:49
+INVALID STATEMENT - Color.md:65:48:65:50
+INVALID STATEMENT - Color.md:1:1:1:1
 UNDEFINED VARIABLE - Color.md:68:14:68:27
 TYPE MISMATCH - Color.md:20:20:20:22
 TYPE MISMATCH - Color.md:26:7:26:10
@@ -265,18 +274,6 @@ The unused variable is declared here:
     ^^^^^^^^^^^^^^^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
-
 **INVALID LAMBDA**
 The body of this lambda expression is not valid.
 
@@ -307,37 +304,100 @@ Is there an `import` or `exposing` missing up-top?
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Color.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Color.md:65:27:65:43:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                          ^^^^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Color.md:65:41:65:46:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                        ^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Color.md:65:43:65:47:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                          ^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**Color.md:65:46:65:47:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                             ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**Color.md:65:47:65:48:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                              ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**Color.md:65:47:65:49:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                              ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**Color.md:65:48:65:50:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                               ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**Color.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `from_list` in this scope.
@@ -1241,7 +1301,50 @@ is_named_color = |str| {
 			(ty-apply @13.5-13.15 (symbol "Named")
 				(ty @13.11-13.14 (name "Str")))
 			(ty-apply @14.5-14.13 (symbol "Hex")
-				(ty @14.9-14.12 (name "Str"))))))
+				(ty @14.9-14.12 (name "Str")))))
+	(s-expect @1.1-1.1
+		(e-binop @1.1-1.1 (op "eq")
+			(e-dot-access @56.8-56.37 (field "to_str")
+				(receiver
+					(e-call @56.8-56.25
+						(e-lookup-local @56.8-56.11
+							(pattern @18.1-18.4))
+						(e-int @56.12-56.15 (value "124"))
+						(e-int @56.17-56.19 (value "56"))
+						(e-int @56.21-56.24 (value "245"))))
+				(args))
+			(e-string @56.38-56.57
+				(e-literal @56.39-56.56 (string "rgb(124, 56, 245)")))))
+	(s-expect @1.1-1.1
+		(e-binop @1.1-1.1 (op "eq")
+			(e-dot-access @57.8-57.43 (field "to_str")
+				(receiver
+					(e-call @57.8-57.31
+						(e-lookup-local @57.8-57.12
+							(pattern @21.1-21.5))
+						(e-int @57.13-57.16 (value "124"))
+						(e-int @57.18-57.20 (value "56"))
+						(e-int @57.22-57.25 (value "245"))
+						(e-int @57.27-57.30 (value "255"))))
+				(args))
+			(e-string @57.44-57.69
+				(e-literal @57.45-57.68 (string "rgba(124, 56, 245, 1.0)")))))
+	(s-expect @58.1-60.6
+		(e-binop @58.8-60.6 (op "eq")
+			(e-dot-access @58.8-58.40 (field "map_ok")
+				(receiver
+					(e-call @58.8-58.22
+						(e-lookup-local @58.8-58.11
+							(pattern @27.1-27.4))
+						(e-string @58.12-58.21
+							(e-literal @58.13-58.20 (string "#ff00ff")))))
+				(args
+					(e-lookup-local @58.30-58.36
+						(pattern @49.1-49.7))))
+			(e-tag @58.41-58.54 (name "Ok")
+				(args
+					(e-string @58.44-58.53
+						(e-literal @58.45-58.52 (string "#ff00ff"))))))))
 ~~~
 # TYPES
 ~~~clojure
