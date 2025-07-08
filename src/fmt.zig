@@ -1102,6 +1102,10 @@ const Formatter = struct {
                 region = s.region;
                 _ = try fmt.formatExpr(s.expr);
             },
+            .single_quote => |sq| {
+                region = sq.region;
+                try fmt.formatIdent(sq.token, null);
+            },
             .int => |n| {
                 region = n.region;
                 try fmt.formatIdent(n.number_tok, null);

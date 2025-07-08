@@ -1721,9 +1721,9 @@ main! = |_| { # Yeah Ie
 							(patterns
 								(p-list @70.22-70.43 (degenerate false)
 									(patterns
-										(p-int @70.23-70.24)
-										(p-int @70.26-70.27)
-										(p-int @70.29-70.30))
+										(p-int @70.23-70.24 (value "1"))
+										(p-int @70.26-70.27 (value "2"))
+										(p-int @70.29-70.30 (value "3")))
 									(rest-at (index 3)
 										(p-assign @70.38-70.42 (ident "rest")))))
 							(value
@@ -1732,9 +1732,9 @@ main! = |_| { # Yeah Ie
 							(patterns
 								(p-list @74.3-74.28 (degenerate false)
 									(patterns
-										(p-int @74.4-74.5)
+										(p-int @74.4-74.5 (value "1"))
 										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-										(p-int @74.14-74.15))
+										(p-int @74.14-74.15 (value "3")))
 									(rest-at (index 3)
 										(p-assign @74.23-74.27 (ident "rest")))))
 							(value
@@ -1760,18 +1760,18 @@ main! = |_| { # Yeah Ie
 							(patterns
 								(p-tuple @80.3-80.12 (degenerate false)
 									(patterns
-										(p-int @80.4-80.5)
-										(p-int @80.7-80.8)
-										(p-int @80.10-80.11))))
+										(p-int @80.4-80.5 (value "1"))
+										(p-int @80.7-80.8 (value "2"))
+										(p-int @80.10-80.11 (value "3")))))
 							(value
 								(e-int @80.16-80.19 (value "123"))))
 						(branch
 							(patterns
 								(p-tuple @81.3-81.16 (degenerate false)
 									(patterns
-										(p-int @81.4-81.5)
+										(p-int @81.4-81.5 (value "1"))
 										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-										(p-int @81.14-81.15))))
+										(p-int @81.14-81.15 (value "3")))))
 							(value
 								(e-int @81.20-81.23 (value "123"))))
 						(branch

@@ -1339,6 +1339,13 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
             .StringStart => {
                 pattern = self.parseStringPattern();
             },
+            .SingleQuote => {
+                pattern = self.store.addPattern(.{ .single_quote = .{
+                    .token = start,
+                    .region = .{ .start = start, .end = start },
+                } });
+                self.advance();
+            },
             .Int => {
                 pattern = self.store.addPattern(.{ .int = .{
                     .region = .{ .start = start, .end = self.pos },

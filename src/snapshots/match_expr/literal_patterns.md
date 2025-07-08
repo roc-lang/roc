@@ -122,7 +122,7 @@ match Answer {
 					(e-int @4.17-4.18 (value "3"))))
 			(branch
 				(patterns
-					(p-int @5.5-5.7 (degenerate false)))
+					(p-int @5.5-5.7 (value "10") (degenerate false)))
 				(value
 					(e-int @5.11-5.12 (value "4")))))))
 ~~~
