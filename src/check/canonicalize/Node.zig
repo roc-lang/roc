@@ -103,7 +103,6 @@ pub const Tag = enum {
     pattern_f64_literal,
     pattern_small_dec_literal,
     pattern_str_literal,
-    pattern_char_literal,
     pattern_underscore,
     // Definitions
     def,

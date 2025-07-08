@@ -105,7 +105,7 @@ pub const CIR_STATEMENT_NODE_COUNT = 12;
 /// Count of the type annotation nodes in the CIR
 pub const CIR_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the pattern nodes in the CIR
-pub const CIR_PATTERN_NODE_COUNT = 13;
+pub const CIR_PATTERN_NODE_COUNT = 12;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
@@ -886,23 +886,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         .pattern_str_literal => return CIR.Pattern{ .str_literal = .{
             .literal = @enumFromInt(node.data_1),
         } },
-        .pattern_char_literal => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
 
-            const value = extra_data[0];
-            const num_var = @as(types.Var, @enumFromInt(extra_data[1]));
-            const sign_needed = extra_data[2] != 0;
-            const bits_needed = @as(types.Num.Int.BitsNeeded, @enumFromInt(extra_data[3]));
-
-            return CIR.Pattern{
-                .char_literal = .{
-                    .num_var = num_var,
-                    .requirements = .{ .sign_needed = sign_needed, .bits_needed = bits_needed },
-                    .value = value,
-                },
-            };
-        },
         .pattern_underscore => return CIR.Pattern{ .underscore = {} },
         .malformed => {
             return CIR.Pattern{ .runtime_error = .{
@@ -1722,17 +1706,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.tag = .pattern_str_literal;
             node.data_1 = @intFromEnum(p.literal);
         },
-        .char_literal => |p| {
-            node.tag = .pattern_char_literal;
 
-            // Store char literal data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, p.value);
-            try store.extra_data.append(store.gpa, @intFromEnum(p.num_var));
-            try store.extra_data.append(store.gpa, if (p.requirements.sign_needed) 1 else 0);
-            try store.extra_data.append(store.gpa, @intFromEnum(p.requirements.bits_needed));
-            node.data_1 = extra_data_start;
-        },
         .underscore => {
             node.tag = .pattern_underscore;
         },

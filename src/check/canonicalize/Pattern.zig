@@ -164,20 +164,7 @@ pub const Pattern = union(enum) {
     str_literal: struct {
         literal: StringLiteral.Idx,
     },
-    /// Pattern that matches a specific unicode character literal exactly.
-    ///
-    /// ```roc
-    /// match firstChar {
-    ///     'A' => "starts with A"
-    ///     'a' => "starts with lowercase a"
-    ///     c => "starts with other character"
-    /// }
-    /// ```
-    char_literal: struct {
-        num_var: TypeVar,
-        requirements: types.Num.Int.Requirements,
-        value: u32,
-    },
+
     /// Wildcard pattern that matches anything without binding to a variable.
     /// Used when you need to match a value but don't care about its contents.
     ///
@@ -388,16 +375,7 @@ pub const Pattern = union(enum) {
 
                 return node;
             },
-            .char_literal => |p| {
-                var node = SExpr.init(gpa, "p-char");
-                ir.appendRegionInfoToSexprNode(&node, pattern_idx);
 
-                const char_str = std.fmt.allocPrint(gpa, "'\\u({d})'", .{p.value}) catch "<oom>";
-                defer gpa.free(char_str);
-                node.appendStringAttr(gpa, "byte", char_str);
-
-                return node;
-            },
             .underscore => {
                 var node = SExpr.init(gpa, "p-underscore");
                 ir.appendRegionInfoToSexprNode(&node, pattern_idx);
