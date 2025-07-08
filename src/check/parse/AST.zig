@@ -966,6 +966,10 @@ pub const Pattern = union(enum) {
         region: TokenizedRegion,
         expr: Expr.Idx,
     },
+    single_quote: struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+    },
     record: struct {
         fields: PatternRecordField.Span,
         region: TokenizedRegion,
@@ -1009,6 +1013,7 @@ pub const Pattern = union(enum) {
             .int => |p| p.region,
             .frac => |p| p.region,
             .string => |p| p.region,
+            .single_quote => |p| p.region,
             .record => |p| p.region,
             .list => |p| p.region,
             .list_rest => |p| p.region,
@@ -1062,6 +1067,12 @@ pub const Pattern = union(enum) {
                 var node = SExpr.init(env.gpa, "p-string");
                 ast.appendRegionInfoToSexprNode(env, &node, str.region);
                 node.appendStringAttr(env.gpa, "raw", ast.resolve(str.string_tok));
+                return node;
+            },
+            .single_quote => |sq| {
+                var node = SExpr.init(env.gpa, "p-single-quote");
+                ast.appendRegionInfoToSexprNode(env, &node, sq.region);
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(sq.token));
                 return node;
             },
             .record => |rec| {

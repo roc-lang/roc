@@ -1035,6 +1035,77 @@ fn canonicalizeDeclWithAnnotation(
     return def_idx;
 }
 
+fn canonicalizeSingleQuote(
+    self: *Self,
+    token_region: AST.TokenizedRegion,
+    token: Token.Idx,
+    comptime Idx: type,
+) if (Idx == CIR.Pattern.Idx) std.mem.Allocator.Error!?Idx else Idx {
+    const region = self.parse_ir.tokenizedRegionToRegion(token_region);
+
+    // Resolve to a string slice from the source
+    const token_text = self.parse_ir.resolve(token);
+    const inner_text = token_text[1 .. token_text.len - 1];
+
+    const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
+        error.InvalidUtf8 => {
+            return self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+                .region = region,
+            } });
+        },
+    };
+
+    var iterator = view.iterator();
+    const firstEndpoint = iterator.nextCodepoint();
+    const secondEndpoint = iterator.nextCodepoint();
+
+    if (secondEndpoint != null) {
+        // TODO: Handle escape sequences
+        return self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .too_long_single_quote = .{
+            .region = region,
+        } });
+    }
+
+    if (firstEndpoint) |u21_val| {
+        const int_val = CIR.IntValue{
+            .bytes = @bitCast(@as(u128, @intCast(u21_val))),
+            .kind = .u128,
+        };
+
+        const int_requirements = types.Num.IntRequirements{
+            .sign_needed = false,
+            .bits_needed = @intCast(@sizeOf(@TypeOf(u21_val))),
+        };
+
+        const type_content = Content{ .structure = .{ .num = .{ .num_unbound = int_requirements } } };
+
+        if (Idx == CIR.Expr.Idx) {
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                .e_int = .{
+                    .value = int_val,
+                    .region = region,
+                },
+            });
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, type_content);
+            return expr_idx;
+        } else if (Idx == CIR.Pattern.Idx) {
+            const pat_idx = try self.can_ir.store.addPattern(CIR.Pattern{
+                .int_literal = .{
+                    .value = int_val,
+                },
+            }, region);
+            _ = self.can_ir.setTypeVarAtPat(pat_idx, type_content);
+            return pat_idx;
+        } else {
+            @compileError("Unsupported Idx type");
+        }
+    } else {
+        return self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .empty_single_quote = .{
+            .region = region,
+        } });
+    }
+}
+
 fn canonicalizeRecordField(
     self: *Self,
     ast_field_idx: AST.RecordField.Idx,
@@ -1440,59 +1511,7 @@ pub fn canonicalizeExpr(
             return expr_idx;
         },
         .single_quote => |e| {
-            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-
-            // Resolve to a string slice from the source
-            const token_text = self.parse_ir.resolve(e.token);
-            const inner_text = token_text[1 .. token_text.len - 1];
-
-            const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
-                error.InvalidUtf8 => {
-                    const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-                        .region = region,
-                    } });
-                    return expr_idx;
-                },
-            };
-
-            var iterator = view.iterator();
-            const firstEndpoint = iterator.nextCodepoint();
-            const secondEndpoint = iterator.nextCodepoint();
-
-            if (secondEndpoint != null) {
-                // TODO: Handle escape sequences
-                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .too_long_single_quote = .{
-                    .region = region,
-                } });
-                return expr_idx;
-            }
-
-            if (firstEndpoint) |u21_val| {
-                // Add the expression
-                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                    .e_int = .{
-                        .value = .{ .bytes = @bitCast(@as(u128, @intCast(u21_val))), .kind = .u128 },
-                        .region = region,
-                    },
-                });
-
-                const int_requirements = types.Num.IntRequirements{
-                    .sign_needed = false,
-                    .bits_needed = @intCast(@sizeOf(@TypeOf(u21_val))),
-                };
-
-                // Insert concrete type variable
-                const type_content = Content{ .structure = .{ .num = .{ .num_unbound = int_requirements } } };
-                _ = self.can_ir.setTypeVarAtExpr(expr_idx, type_content);
-
-                return expr_idx;
-            } else {
-                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .empty_single_quote = .{
-                    .region = region,
-                } });
-
-                return expr_idx;
-            }
+            return self.canonicalizeSingleQuote(e.region, e.token, CIR.Expr.Idx);
         },
         .string => |e| {
             // Get all the string parts
@@ -2507,6 +2526,9 @@ fn canonicalizePattern(
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{ .structure = .str });
 
             return pattern_idx;
+        },
+        .single_quote => |e| {
+            return try self.canonicalizeSingleQuote(e.region, e.token, CIR.Pattern.Idx);
         },
         .tag => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.tag_tok)) |tag_name| {

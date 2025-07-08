@@ -88,7 +88,7 @@ match sequence {
 				(patterns
 					(p-list @2.5-2.15 (degenerate false)
 						(patterns
-							(p-int @2.6-2.7)
+							(p-int @2.6-2.7 (value "0"))
 							(p-assign @2.9-2.14 (ident "count")))))
 				(value
 					(e-lookup-local @2.19-2.24
@@ -97,9 +97,9 @@ match sequence {
 				(patterns
 					(p-list @3.5-3.14 (degenerate false)
 						(patterns
-							(p-int @3.6-3.7)
+							(p-int @3.6-3.7 (value "1"))
 							(p-assign @3.9-3.10 (ident "x"))
-							(p-int @3.12-3.13))))
+							(p-int @3.12-3.13 (value "3")))))
 				(value
 					(e-lookup-local @3.18-3.19
 						(pattern @3.9-3.10))))
@@ -107,7 +107,7 @@ match sequence {
 				(patterns
 					(p-list @4.5-4.16 (degenerate false)
 						(patterns
-							(p-int @4.6-4.8)
+							(p-int @4.6-4.8 (value "42"))
 							(p-assign @4.10-4.15 (ident "value")))))
 				(value
 					(e-lookup-local @4.20-4.25
@@ -117,7 +117,7 @@ match sequence {
 					(p-list @5.5-5.16 (degenerate false)
 						(patterns
 							(p-assign @5.6-5.11 (ident "first"))
-							(p-int @5.13-5.15))))
+							(p-int @5.13-5.15 (value "99")))))
 				(value
 					(e-lookup-local @5.20-5.25
 						(pattern @5.6-5.11))))

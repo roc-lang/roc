@@ -1351,16 +1351,16 @@ expect {
 							(patterns
 								(p-list @58.17-58.22 (degenerate false)
 									(patterns
-										(p-int @58.18-58.19))))
+										(p-int @58.18-58.19 (value "1")))))
 							(value
 								(e-runtime-error (tag "ident_not_in_scope"))))
 						(branch
 							(patterns
 								(p-list @60.3-60.16 (degenerate false)
 									(patterns
-										(p-int @60.4-60.5)
-										(p-int @60.7-60.8)
-										(p-int @60.10-60.11)
+										(p-int @60.4-60.5 (value "1"))
+										(p-int @60.7-60.8 (value "2"))
+										(p-int @60.10-60.11 (value "3"))
 										(p-assign @60.12-60.15 (ident "est")))))
 							(value
 								(e-int @60.16-60.19 (value "123"))))
@@ -1384,16 +1384,16 @@ expect {
 							(patterns
 								(p-tuple @65.3-65.8 (degenerate false)
 									(patterns
-										(p-int @65.4-65.5))))
+										(p-int @65.4-65.5 (value "1")))))
 							(value
 								(e-int @65.12-65.15 (value "123"))))
 						(branch
 							(patterns
 								(p-tuple @66.3-66.12 (degenerate false)
 									(patterns
-										(p-int @66.4-66.5)
-										(p-int @66.7-66.8)
-										(p-int @66.10-66.11))))
+										(p-int @66.4-66.5 (value "1"))
+										(p-int @66.7-66.8 (value "2"))
+										(p-int @66.10-66.11 (value "3")))))
 							(value
 								(e-int @66.12-66.15 (value "123"))))
 						(branch
