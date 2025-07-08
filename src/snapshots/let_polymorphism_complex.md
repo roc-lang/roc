@@ -235,11 +235,11 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 	(app @1.1-1.56
 		(provides @1.6-1.11
 			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf")
+		(record-field @1.14-1.56 (name "pf") (optional false)
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf")
+			(record-field @1.14-1.56 (name "pf") (optional false)
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -737,23 +737,23 @@ main = |_| {
 		(e-list @19.16-19.52
 			(elems
 				(e-lookup-local @19.17-19.27
-					(pattern @10.1-10.11))
+					(p-assign @10.1-10.11 (ident "empty_list")))
 				(e-lookup-local @19.29-19.39
-					(pattern @10.1-10.11))
+					(p-assign @10.1-10.11 (ident "empty_list")))
 				(e-lookup-local @19.41-19.51
-					(pattern @10.1-10.11)))))
+					(p-assign @10.1-10.11 (ident "empty_list"))))))
 	(d-let
 		(p-assign @20.1-20.13 (ident "mixed_nested"))
 		(e-list @20.16-20.56
 			(elems
 				(e-lookup-local @20.17-20.27
-					(pattern @10.1-10.11))
+					(p-assign @10.1-10.11 (ident "empty_list")))
 				(e-list @20.29-20.35
 					(elems
 						(e-int @20.30-20.31 (value "1"))
 						(e-int @20.33-20.34 (value "2"))))
 				(e-lookup-local @20.37-20.47
-					(pattern @10.1-10.11))
+					(p-assign @10.1-10.11 (ident "empty_list")))
 				(e-list @20.49-20.55
 					(elems
 						(e-int @20.50-20.51 (value "3"))
@@ -764,7 +764,7 @@ main = |_| {
 			(fields
 				(field (name "items")
 					(e-lookup-local @23.24-23.34
-						(pattern @10.1-10.11)))
+						(p-assign @10.1-10.11 (ident "empty_list"))))
 				(field (name "count")
 					(e-int @23.43-23.44 (value "0"))))))
 	(d-let
@@ -800,19 +800,19 @@ main = |_| {
 			(fields
 				(field (name "data")
 					(e-lookup-local @29.11-29.21
-						(pattern @10.1-10.11)))
+						(p-assign @10.1-10.11 (ident "empty_list"))))
 				(field (name "metadata")
 					(e-record @30.15-34.6
 						(fields
 							(field (name "version")
 								(e-lookup-local @31.18-31.21
-									(pattern @4.1-4.4)))
+									(p-assign @4.1-4.4 (ident "num"))))
 							(field (name "ratio")
 								(e-lookup-local @32.16-32.20
-									(pattern @5.1-5.5)))
+									(p-assign @5.1-5.5 (ident "frac"))))
 							(field (name "description")
 								(e-lookup-local @33.22-33.25
-									(pattern @6.1-6.4)))))))))
+									(p-assign @6.1-6.4 (ident "str"))))))))))
 	(d-let
 		(p-assign @38.1-38.8 (ident "config1"))
 		(e-record @38.11-46.2
@@ -830,13 +830,13 @@ main = |_| {
 						(fields
 							(field (name "version")
 								(e-lookup-local @41.18-41.21
-									(pattern @4.1-4.4)))
+									(p-assign @4.1-4.4 (ident "num"))))
 							(field (name "ratio")
 								(e-lookup-local @42.16-42.20
-									(pattern @5.1-5.5)))
+									(p-assign @5.1-5.5 (ident "frac"))))
 							(field (name "description")
 								(e-lookup-local @43.22-43.25
-									(pattern @6.1-6.4))))))
+									(p-assign @6.1-6.4 (ident "str")))))))
 				(field (name "name")
 					(e-string @45.11-45.21
 						(e-literal @45.12-45.20 (string "integers")))))))
@@ -858,13 +858,13 @@ main = |_| {
 						(fields
 							(field (name "version")
 								(e-lookup-local @51.18-51.21
-									(pattern @4.1-4.4)))
+									(p-assign @4.1-4.4 (ident "num"))))
 							(field (name "ratio")
 								(e-lookup-local @52.16-52.20
-									(pattern @5.1-5.5)))
+									(p-assign @5.1-5.5 (ident "frac"))))
 							(field (name "description")
 								(e-lookup-local @53.22-53.25
-									(pattern @6.1-6.4))))))
+									(p-assign @6.1-6.4 (ident "str")))))))
 				(field (name "name")
 					(e-string @55.11-55.19
 						(e-literal @55.12-55.18 (string "fruits")))))))
@@ -877,33 +877,33 @@ main = |_| {
 				(fields
 					(field (name "value")
 						(e-lookup-local @59.33-59.36
-							(pattern @59.19-59.22)))
+							(p-assign @59.19-59.22 (ident "val"))))
 					(field (name "wrapper")
 						(e-list @59.47-59.52
 							(elems
 								(e-lookup-local @59.48-59.51
-									(pattern @59.19-59.22)))))))))
+									(p-assign @59.19-59.22 (ident "val"))))))))))
 	(d-let
 		(p-assign @60.1-60.11 (ident "container1"))
 		(e-call @60.14-60.33
 			(e-lookup-local @60.14-60.28
-				(pattern @59.1-59.15))
+				(p-assign @59.1-59.15 (ident "make_container")))
 			(e-lookup-local @60.29-60.32
-				(pattern @4.1-4.4))))
+				(p-assign @4.1-4.4 (ident "num")))))
 	(d-let
 		(p-assign @61.1-61.11 (ident "container2"))
 		(e-call @61.14-61.33
 			(e-lookup-local @61.14-61.28
-				(pattern @59.1-59.15))
+				(p-assign @59.1-59.15 (ident "make_container")))
 			(e-lookup-local @61.29-61.32
-				(pattern @6.1-6.4))))
+				(p-assign @6.1-6.4 (ident "str")))))
 	(d-let
 		(p-assign @62.1-62.11 (ident "container3"))
 		(e-call @62.14-62.34
 			(e-lookup-local @62.14-62.28
-				(pattern @59.1-59.15))
+				(p-assign @59.1-59.15 (ident "make_container")))
 			(e-lookup-local @62.29-62.33
-				(pattern @5.1-5.5))))
+				(p-assign @5.1-5.5 (ident "frac")))))
 	(d-let
 		(p-assign @65.1-65.5 (ident "deep"))
 		(e-record @65.8-81.2
@@ -919,26 +919,26 @@ main = |_| {
 												(fields
 													(field (name "data")
 														(e-lookup-local @69.23-69.33
-															(pattern @10.1-10.11)))
+															(p-assign @10.1-10.11 (ident "empty_list"))))
 													(field (name "value")
 														(e-lookup-local @70.24-70.27
-															(pattern @4.1-4.4))))))
+															(p-assign @4.1-4.4 (ident "num")))))))
 										(field (name "items")
 											(e-list @72.20-72.43
 												(elems
 													(e-lookup-local @72.21-72.24
-														(pattern @4.1-4.4))
+														(p-assign @4.1-4.4 (ident "num")))
 													(e-binop @72.26-72.34 (op "mul")
 														(e-lookup-local @72.26-72.29
-															(pattern @4.1-4.4))
+															(p-assign @4.1-4.4 (ident "num")))
 														(e-int @72.32-72.33 (value "2")))
 													(e-binop @72.35-72.43 (op "mul")
 														(e-lookup-local @72.35-72.38
-															(pattern @4.1-4.4))
+															(p-assign @4.1-4.4 (ident "num")))
 														(e-int @72.41-72.42 (value "3")))))))))
 							(field (name "collection")
 								(e-lookup-local @74.21-74.31
-									(pattern @10.1-10.11))))))
+									(p-assign @10.1-10.11 (ident "empty_list")))))))
 				(field (name "results")
 					(e-list @76.14-80.6
 						(elems
@@ -976,41 +976,41 @@ main = |_| {
 		(p-assign @84.1-84.9 (ident "compute1"))
 		(e-binop @84.12-85.9 (op "add")
 			(e-lookup-local @84.12-84.15
-				(pattern @4.1-4.4))
+				(p-assign @4.1-4.4 (ident "num")))
 			(e-int @84.18-84.20 (value "10"))))
 	(d-let
 		(p-assign @85.1-85.9 (ident "compute2"))
 		(e-binop @85.12-86.9 (op "mul")
 			(e-lookup-local @85.12-85.15
-				(pattern @4.1-4.4))
+				(p-assign @4.1-4.4 (ident "num")))
 			(e-int @85.18-85.19 (value "2"))))
 	(d-let
 		(p-assign @86.1-86.9 (ident "compute3"))
 		(e-list @86.12-86.22
 			(elems
 				(e-lookup-local @86.13-86.16
-					(pattern @4.1-4.4))
+					(p-assign @4.1-4.4 (ident "num")))
 				(e-lookup-local @86.18-86.21
-					(pattern @4.1-4.4)))))
+					(p-assign @4.1-4.4 (ident "num"))))))
 	(d-let
 		(p-assign @87.1-87.9 (ident "compute4"))
 		(e-record @87.12-87.59
 			(fields
 				(field (name "base")
 					(e-lookup-local @87.20-87.23
-						(pattern @4.1-4.4)))
+						(p-assign @4.1-4.4 (ident "num"))))
 				(field (name "derived")
 					(e-list @87.34-87.57
 						(elems
 							(e-lookup-local @87.35-87.38
-								(pattern @4.1-4.4))
+								(p-assign @4.1-4.4 (ident "num")))
 							(e-binop @87.40-87.48 (op "add")
 								(e-lookup-local @87.40-87.43
-									(pattern @4.1-4.4))
+									(p-assign @4.1-4.4 (ident "num")))
 								(e-int @87.46-87.47 (value "1")))
 							(e-binop @87.49-87.57 (op "add")
 								(e-lookup-local @87.49-87.52
-									(pattern @4.1-4.4))
+									(p-assign @4.1-4.4 (ident "num")))
 								(e-int @87.55-87.56 (value "2")))))))))
 	(d-let
 		(p-assign @90.1-90.6 (ident "mixed"))
@@ -1021,69 +1021,69 @@ main = |_| {
 						(fields
 							(field (name "value")
 								(e-lookup-local @91.23-91.26
-									(pattern @4.1-4.4)))
+									(p-assign @4.1-4.4 (ident "num"))))
 							(field (name "list")
 								(e-list @91.34-91.44
 									(elems
 										(e-lookup-local @91.35-91.38
-											(pattern @4.1-4.4))
+											(p-assign @4.1-4.4 (ident "num")))
 										(e-lookup-local @91.40-91.43
-											(pattern @4.1-4.4)))))
+											(p-assign @4.1-4.4 (ident "num"))))))
 							(field (name "float")
 								(e-lookup-local @91.53-91.57
-									(pattern @5.1-5.5))))))
+									(p-assign @5.1-5.5 (ident "frac")))))))
 				(field (name "strings")
 					(e-record @92.14-92.46
 						(fields
 							(field (name "value")
 								(e-lookup-local @92.23-92.26
-									(pattern @6.1-6.4)))
+									(p-assign @6.1-6.4 (ident "str"))))
 							(field (name "list")
 								(e-list @92.34-92.44
 									(elems
 										(e-lookup-local @92.35-92.38
-											(pattern @6.1-6.4))
+											(p-assign @6.1-6.4 (ident "str")))
 										(e-lookup-local @92.40-92.43
-											(pattern @6.1-6.4))))))))
+											(p-assign @6.1-6.4 (ident "str")))))))))
 				(field (name "empty_lists")
 					(e-record @93.18-97.6
 						(fields
 							(field (name "raw")
 								(e-lookup-local @94.14-94.24
-									(pattern @10.1-10.11)))
+									(p-assign @10.1-10.11 (ident "empty_list"))))
 							(field (name "in_list")
 								(e-list @95.18-95.30
 									(elems
 										(e-lookup-local @95.19-95.29
-											(pattern @10.1-10.11)))))
+											(p-assign @10.1-10.11 (ident "empty_list"))))))
 							(field (name "in_record")
 								(e-record @96.20-96.40
 									(fields
 										(field (name "data")
 											(e-lookup-local @96.28-96.38
-												(pattern @10.1-10.11)))))))))
+												(p-assign @10.1-10.11 (ident "empty_list"))))))))))
 				(field (name "computations")
 					(e-record @98.19-102.6
 						(fields
 							(field (name "from_num")
 								(e-binop @99.19-99.29 (op "mul")
 									(e-lookup-local @99.19-99.22
-										(pattern @4.1-4.4))
+										(p-assign @4.1-4.4 (ident "num")))
 									(e-int @99.25-99.28 (value "100"))))
 							(field (name "from_frac")
 								(e-binop @100.20-100.32 (op "mul")
 									(e-lookup-local @100.20-100.24
-										(pattern @5.1-5.5))
+										(p-assign @5.1-5.5 (ident "frac")))
 									(e-dec-small @100.27-100.31 (numerator "100") (denominator-power-of-ten "1") (value "10"))))
 							(field (name "list_from_num")
 								(e-list @101.24-101.39
 									(elems
 										(e-lookup-local @101.25-101.28
-											(pattern @4.1-4.4))
+											(p-assign @4.1-4.4 (ident "num")))
 										(e-lookup-local @101.30-101.33
-											(pattern @4.1-4.4))
+											(p-assign @4.1-4.4 (ident "num")))
 										(e-lookup-local @101.35-101.38
-											(pattern @4.1-4.4)))))))))))
+											(p-assign @4.1-4.4 (ident "num"))))))))))))
 	(d-let
 		(p-assign @105.1-105.5 (ident "main"))
 		(e-lambda @105.8-108.2
@@ -1094,7 +1094,7 @@ main = |_| {
 					(e-dot-access @107.5-107.23 (field "value")
 						(receiver
 							(e-lookup-local @107.5-107.15
-								(pattern @60.1-60.11))))
+								(p-assign @60.1-60.11 (ident "container1")))))
 					(e-int @107.24-107.26 (value "10")))))))
 ~~~
 # TYPES

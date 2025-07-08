@@ -461,7 +461,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(e-call @9.26-9.51
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @9.42-9.50
-					(pattern @9.16-9.24))))
+					(p-assign @9.16-9.24 (ident "settings")))))
 		(annotation @9.1-9.12
 			(declared-type
 				(ty-fn @8.15-8.37 (effectful false)
@@ -477,9 +477,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(e-call @13.29-13.55
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @13.44-13.48
-					(pattern @13.17-13.21))
+					(p-assign @13.17-13.21 (ident "user")))
 				(e-lookup-local @13.50-13.54
-					(pattern @13.23-13.27))))
+					(p-assign @13.23-13.27 (ident "pass")))))
 		(annotation @13.1-13.13
 			(declared-type
 				(ty-fn @12.16-12.42 (effectful false)
@@ -496,9 +496,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(e-call @18.5-18.60
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @18.38-18.52
-					(pattern @17.16-17.30))
+					(p-assign @17.16-17.30 (ident "advancedConfig")))
 				(e-lookup-local @18.54-18.59
-					(pattern @17.32-17.37))))
+					(p-assign @17.32-17.37 (ident "input")))))
 		(annotation @17.1-17.12
 			(declared-type
 				(ty-fn @16.15-16.78 (effectful false)
@@ -517,7 +517,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(e-call @22.23-22.59
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @22.31-22.35
-					(pattern @22.17-22.21))
+					(p-assign @22.17-22.21 (ident "text")))
 				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation @22.1-22.13
 			(declared-type
@@ -532,7 +532,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(e-call @26.24-26.48
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @26.42-26.47
-					(pattern @26.17-26.22))))
+					(p-assign @26.17-26.22 (ident "creds")))))
 		(annotation @26.1-26.13
 			(declared-type
 				(ty-fn @25.16-25.78 (effectful false)

@@ -142,15 +142,15 @@ outerFunc = |_| {
 							(p-assign @12.9-12.10 (ident "z"))
 							(e-binop @12.13-13.10 (op "add")
 								(e-lookup-local @12.13-12.14
-									(pattern @9.5-9.6))
+									(p-assign @9.5-9.6 (ident "x")))
 								(e-lookup-local @12.17-12.18
-									(pattern @5.1-5.2))))
+									(p-assign @5.1-5.2 (ident "y")))))
 						(e-binop @13.9-14.6 (op "add")
 							(e-lookup-local @13.9-13.10
-								(pattern @12.9-12.10))
+								(p-assign @12.9-12.10 (ident "z")))
 							(e-int @13.13-13.14 (value "1")))))
 				(e-lookup-local @15.5-15.16
-					(pattern @10.5-10.16))))))
+					(p-assign @10.5-10.16 (ident "innerResult")))))))
 ~~~
 # TYPES
 ~~~clojure

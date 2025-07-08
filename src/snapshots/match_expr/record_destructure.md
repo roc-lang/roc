@@ -114,24 +114,27 @@ match person {
 		(branches
 			(branch
 				(patterns
-					(p-record-destructure @2.5-2.18 (degenerate false)
-						(destructs
-							(record-destruct @2.7-2.12 (label "name") (ident "name")
-								(required))
-							(record-destruct @2.13-2.18 (label "age") (ident "age")
-								(required)))))
+					(pattern (degenerate false)
+						(p-record-destructure @2.5-2.18
+							(destructs
+								(record-destruct @2.7-2.12 (label "name") (ident "name")
+									(required))
+								(record-destruct @2.13-2.18 (label "age") (ident "age")
+									(required))))))
 				(value
 					(e-lookup-local @2.22-2.26
-						(pattern @2.7-2.12))))
+						(p-assign @2.7-2.12 (ident "name")))))
 			(branch
 				(patterns
-					(p-runtime-error @3.13-3.32 (tag "not_implemented") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @3.13-3.32 (tag "not_implemented"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
 				(patterns
-					(p-record-destructure @4.5-4.7 (degenerate false)
-						(destructs)))
+					(pattern (degenerate false)
+						(p-record-destructure @4.5-4.7
+							(destructs))))
 				(value
 					(e-string @4.11-4.18
 						(e-literal @4.12-4.17 (string "empty"))))))))

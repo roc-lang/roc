@@ -58,7 +58,8 @@ match [] {
 		(branches
 			(branch
 				(patterns
-					(p-assign @2.5-2.10 (ident "empty") (degenerate false)))
+					(pattern (degenerate false)
+						(p-assign @2.5-2.10 (ident "empty"))))
 				(value
 					(e-record @2.14-2.70
 						(fields
@@ -79,7 +80,7 @@ match [] {
 											(e-literal @2.51-2.52 (string "c"))))))
 							(field (name "empty")
 								(e-lookup-local @2.63-2.68
-									(pattern @2.5-2.10))))))))))
+									(p-assign @2.5-2.10 (ident "empty")))))))))))
 ~~~
 # TYPES
 ~~~clojure

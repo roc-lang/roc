@@ -98,11 +98,11 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(record-field @1.15-1.57 (name "pf") (optional false)
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.57 (name "pf") (optional false)
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -167,7 +167,7 @@ main! = |_| {}
 							(e-runtime-error (tag "ident_not_in_scope")))))
 				(s-expr @6.23-7.6
 					(e-lookup-local @6.23-6.27
-						(pattern @5.9-5.13)))
+						(p-assign @5.9-5.13 (ident "pair"))))
 				(e-tuple @7.5-7.20
 					(elems
 						(e-runtime-error (tag "ident_not_in_scope"))

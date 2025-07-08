@@ -306,7 +306,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(elems
 				(e-call @14.11-14.21
 					(e-lookup-local @14.11-14.18
-						(pattern @3.5-3.12))
+						(p-assign @3.5-3.12 (ident "add_one")))
 					(e-int @14.19-14.20 (value "5")))
 				(e-string @14.23-14.30
 					(e-literal @14.24-14.29 (string "world")))
@@ -320,11 +320,11 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(e-tuple @15.14-15.23
 			(elems
 				(e-lookup-local @15.15-15.16
-					(pattern @4.5-4.6))
+					(p-assign @4.5-4.6 (ident "x")))
 				(e-lookup-local @15.18-15.19
-					(pattern @5.5-5.6))
+					(p-assign @5.5-5.6 (ident "y")))
 				(e-lookup-local @15.21-15.22
-					(pattern @6.5-6.6)))))
+					(p-assign @6.5-6.6 (ident "z"))))))
 	(s-let @16.2-16.31
 		(p-assign @16.2-16.13 (ident "with_lambda"))
 		(e-tuple @16.16-16.31
@@ -334,11 +334,11 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 						(p-assign @16.18-16.19 (ident "n")))
 					(e-binop @16.21-16.27 (op "add")
 						(e-lookup-local @16.21-16.22
-							(pattern @16.18-16.19))
+							(p-assign @16.18-16.19 (ident "n")))
 						(e-int @16.25-16.26 (value "1"))))
 				(e-int @16.28-16.30 (value "42")))))
 	(e-lookup-local @18.2-18.7
-		(pattern @9.2-9.7)))
+		(p-assign @9.2-9.7 (ident "empty"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -83,35 +83,39 @@ match result {
 		(branches
 			(branch
 				(patterns
-					(p-applied-tag @2.5-2.14 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @2.5-2.14)))
 				(value
 					(e-binop @2.18-3.8 (op "add")
 						(e-lookup-local @2.18-2.23
-							(pattern @2.8-2.13))
+							(p-assign @2.8-2.13 (ident "value")))
 						(e-int @2.26-2.27 (value "1")))))
 			(branch
 				(patterns
-					(p-applied-tag @3.5-3.15 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @3.5-3.15)))
 				(value
 					(e-binop @3.19-4.7 (op "sub")
 						(e-lookup-local @3.19-3.24
-							(pattern @3.9-3.14))
+							(p-assign @3.9-3.14 (ident "value")))
 						(e-int @3.27-3.28 (value "1")))))
 			(branch
 				(patterns
-					(p-applied-tag @4.5-4.18 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @4.5-4.18)))
 				(value
 					(e-binop @4.22-5.8 (op "mul")
 						(e-lookup-local @4.22-4.31
-							(pattern @4.8-4.17))
+							(p-assign @4.8-4.17 (ident "different")))
 						(e-int @4.34-4.35 (value "2")))))
 			(branch
 				(patterns
-					(p-applied-tag @5.5-5.19 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @5.5-5.19)))
 				(value
 					(e-binop @5.23-6.2 (op "div")
 						(e-lookup-local @5.23-5.32
-							(pattern @5.9-5.18))
+							(p-assign @5.9-5.18 (ident "different")))
 						(e-int @5.35-5.36 (value "2"))))))))
 ~~~
 # TYPES

@@ -79,12 +79,12 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 			(e-tuple @3.19-3.25
 				(elems
 					(e-lookup-local @3.20-3.21
-						(pattern @3.13-3.14))
+						(p-assign @3.13-3.14 (ident "x")))
 					(e-lookup-local @3.23-3.24
-						(pattern @3.16-3.17))))))
+						(p-assign @3.16-3.17 (ident "y")))))))
 	(e-call @5.5-5.22
 		(e-lookup-local @5.5-5.9
-			(pattern @3.5-3.9))
+			(p-assign @3.5-3.9 (ident "pair")))
 		(e-int @5.10-5.12 (value "42"))
 		(e-string @5.14-5.21
 			(e-literal @5.15-5.20 (string "hello")))))

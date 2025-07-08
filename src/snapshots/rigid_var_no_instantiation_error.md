@@ -177,11 +177,11 @@ CloseCurly(24:1-24:2),EndOfFile(24:2-24:2),
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(record-field @1.15-1.57 (name "pf") (optional false)
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.57 (name "pf") (optional false)
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -289,7 +289,7 @@ main! = |_| {
 							(e-runtime-error (tag "ident_not_in_scope")))))
 				(s-expr @6.14-7.6
 					(e-lookup-local @6.14-6.18
-						(pattern @5.9-5.13)))
+						(p-assign @5.9-5.13 (ident "pair"))))
 				(e-tuple @7.5-7.11
 					(elems
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -313,7 +313,7 @@ main! = |_| {
 					(p-assign @13.5-13.12 (ident "result1"))
 					(e-call @13.15-13.34
 						(e-lookup-local @13.15-13.19
-							(pattern @5.1-5.5))
+							(p-assign @5.1-5.5 (ident "swap")))
 						(e-tuple @13.20-13.33
 							(elems
 								(e-int @13.21-13.23 (value "42"))
@@ -323,7 +323,7 @@ main! = |_| {
 					(p-assign @17.5-17.12 (ident "result2"))
 					(e-call @17.15-17.43
 						(e-lookup-local @17.15-17.19
-							(pattern @5.1-5.5))
+							(p-assign @5.1-5.5 (ident "swap")))
 						(e-tuple @17.20-17.42
 							(elems
 								(e-runtime-error (tag "ident_not_in_scope"))
@@ -336,7 +336,7 @@ main! = |_| {
 					(p-assign @21.5-21.12 (ident "result3"))
 					(e-call @21.15-21.35
 						(e-lookup-local @21.15-21.19
-							(pattern @5.1-5.5))
+							(p-assign @5.1-5.5 (ident "swap")))
 						(e-tuple @21.20-21.34
 							(elems
 								(e-string @21.21-21.26

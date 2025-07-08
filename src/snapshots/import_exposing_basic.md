@@ -102,16 +102,16 @@ main = {
 					(e-lookup-external
 						(ext-decl @7.15-7.21 (ident "json.Json.encode") (kind "value")))
 					(e-lookup-local @7.22-7.26
-						(pattern @6.5-6.9))))
+						(p-assign @6.5-6.9 (ident "data")))))
 			(s-let @8.5-8.30
 				(p-assign @8.5-8.12 (ident "decoded"))
 				(e-call @8.15-8.30
 					(e-lookup-external
 						(ext-decl @8.15-8.21 (ident "json.Json.decode") (kind "value")))
 					(e-lookup-local @8.22-8.29
-						(pattern @7.5-7.12))))
+						(p-assign @7.5-7.12 (ident "encoded")))))
 			(e-lookup-local @9.5-9.12
-				(pattern @8.5-8.12))))
+				(p-assign @8.5-8.12 (ident "decoded")))))
 	(s-import @3.1-3.43 (module "json.Json") (qualifier "json")
 		(exposes
 			(exposed (name "decode") (wildcard false))

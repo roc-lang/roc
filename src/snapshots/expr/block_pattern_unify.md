@@ -77,10 +77,10 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 		(p-assign @4.5-4.11 (ident "result"))
 		(e-binop @4.14-5.11 (op "add")
 			(e-lookup-local @4.14-4.15
-				(pattern @2.5-2.6))
+				(p-assign @2.5-2.6 (ident "x")))
 			(e-int @4.18-4.19 (value "5"))))
 	(e-lookup-local @5.5-5.11
-		(pattern @4.5-4.11)))
+		(p-assign @4.5-4.11 (ident "result"))))
 ~~~
 # TYPES
 ~~~clojure

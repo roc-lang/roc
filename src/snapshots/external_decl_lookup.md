@@ -39,11 +39,11 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(record-field @1.15-1.57 (name "pf") (optional false)
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.57 (name "pf") (optional false)
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -99,7 +99,7 @@ main! = |_| {
 					(e-lookup-external
 						(ext-decl @9.5-9.17 (ident "pf.Stdout.line!") (kind "value")))
 					(e-lookup-local @9.18-9.24
-						(pattern @8.5-8.11))))))
+						(p-assign @8.5-8.11 (ident "result")))))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes))
 	(s-import @4.1-4.17 (module "json.Json") (qualifier "json")

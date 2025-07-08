@@ -31,11 +31,11 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(record-field @1.15-1.53 (name "pf") (optional false)
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.53 (name "pf") (optional false)
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -103,7 +103,7 @@ main! = |_| getName({name: "luke", age: 21})
 				(p-underscore @6.10-6.11))
 			(e-call @6.13-6.44
 				(e-lookup-local @6.13-6.20
-					(pattern @4.1-4.8))
+					(p-assign @4.1-4.8 (ident "getName")))
 				(e-record @6.21-6.43
 					(fields
 						(field (name "name")

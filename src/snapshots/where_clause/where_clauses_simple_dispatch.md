@@ -62,7 +62,7 @@ NO CHANGE
 			(e-dot-access @4.21-4.35 (field "to_str")
 				(receiver
 					(e-lookup-local @4.21-4.26
-						(pattern @4.14-4.19)))
+						(p-assign @4.14-4.19 (ident "value"))))
 				(args)))
 		(annotation @4.1-4.10
 			(declared-type

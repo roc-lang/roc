@@ -72,17 +72,20 @@ match color {
 		(branches
 			(branch
 				(patterns
-					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @1.1-1.1 (tag "not_implemented"))))
 				(value
 					(e-int @2.27-2.28 (value "1"))))
 			(branch
 				(patterns
-					(p-applied-tag @3.5-3.10 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @3.5-3.10)))
 				(value
 					(e-int @3.14-3.15 (value "2"))))
 			(branch
 				(patterns
-					(p-applied-tag @4.5-4.10 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @4.5-4.10)))
 				(value
 					(e-int @4.14-4.15 (value "3")))))))
 ~~~

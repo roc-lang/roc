@@ -151,13 +151,13 @@ NO CHANGE
 					(p-assign @5.2-6.5 (ident "count_"))
 					(e-binop @9.11-10.8 (op "add")
 						(e-lookup-local @9.11-9.17
-							(pattern @5.2-6.5))
+							(p-assign @5.2-6.5 (ident "count_")))
 						(e-int @9.20-9.21 (value "1"))))
 				(s-reassign @10.2-10.8
 					(p-assign @6.2-9.8 (ident "total_"))
 					(e-binop @10.11-13.12 (op "add")
 						(e-lookup-local @10.11-10.17
-							(pattern @6.2-9.8))
+							(p-assign @6.2-9.8 (ident "total_")))
 						(e-int @10.20-10.22 (value "10"))))
 				(s-let @13.2-17.3
 					(p-assign @13.2-13.12 (ident "nestedFunc"))
@@ -172,18 +172,18 @@ NO CHANGE
 								(p-assign @6.2-9.8 (ident "total_"))
 								(e-runtime-error (tag "var_across_function_boundary")))
 							(e-lookup-local @16.3-16.9
-								(pattern @5.2-6.5)))))
+								(p-assign @5.2-6.5 (ident "count_"))))))
 				(s-let @19.2-19.25
 					(p-assign @19.2-19.8 (ident "result"))
 					(e-call @19.11-19.25
 						(e-lookup-local @19.11-19.21
-							(pattern @13.2-13.12))
+							(p-assign @13.2-13.12 (ident "nestedFunc")))
 						(e-empty_record @19.22-19.24)))
 				(e-binop @20.2-21.2 (op "add")
 					(e-lookup-local @20.2-20.8
-						(pattern @6.2-9.8))
+						(p-assign @6.2-9.8 (ident "total_")))
 					(e-lookup-local @20.11-20.17
-						(pattern @19.2-19.8)))))))
+						(p-assign @19.2-19.8 (ident "result"))))))))
 ~~~
 # TYPES
 ~~~clojure

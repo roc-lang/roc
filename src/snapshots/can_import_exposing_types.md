@@ -824,7 +824,7 @@ combineResults = |jsonResult, httpStatus|
 				(e-lookup-external
 					(ext-decl @9.21-9.31 (ident "json.Json.parse") (kind "value")))
 				(e-lookup-local @9.32-9.37
-					(pattern @9.14-9.19))))
+					(p-assign @9.14-9.19 (ident "input")))))
 		(annotation @9.1-9.10
 			(declared-type
 				(ty-fn @8.13-8.40 (effectful false)
@@ -846,31 +846,33 @@ combineResults = |jsonResult, httpStatus|
 						(e-dot-access @14.26-14.35 (field "body")
 							(receiver
 								(e-lookup-local @14.26-14.29
-									(pattern @13.18-13.21))))))
+									(p-assign @13.18-13.21 (ident "req")))))))
 				(e-match @15.5-18.6
 					(match @15.5-18.6
 						(cond
 							(e-lookup-local @15.11-15.17
-								(pattern @14.5-14.11)))
+								(p-assign @14.5-14.11 (ident "result"))))
 						(branches
 							(branch
 								(patterns
-									(p-applied-tag @16.9-16.18 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @16.9-16.18)))
 								(value
 									(e-call @16.22-16.36
 										(e-lookup-external
 											(ext-decl @16.22-16.29 (ident "http.Client.ok") (kind "value")))
 										(e-lookup-local @16.30-16.35
-											(pattern @16.12-16.17)))))
+											(p-assign @16.12-16.17 (ident "value"))))))
 							(branch
 								(patterns
-									(p-applied-tag @17.9-17.19 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @17.9-17.19)))
 								(value
 									(e-call @17.23-17.45
 										(e-lookup-external
 											(ext-decl @17.23-17.38 (ident "http.Client.badRequest") (kind "value")))
 										(e-lookup-local @17.39-17.44
-											(pattern @17.13-17.18))))))))))
+											(p-assign @17.13-17.18 (ident "error")))))))))))
 		(annotation @13.1-13.14
 			(declared-type
 				(ty-fn @12.17-12.36 (effectful false)
@@ -885,7 +887,7 @@ combineResults = |jsonResult, httpStatus|
 			(e-call @24.5-27.6
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @25.9-25.15
-					(pattern @23.24-23.30))
+					(p-assign @23.24-23.30 (ident "values")))
 				(e-lambda @26.9-26.41
 					(args
 						(p-assign @26.10-26.11 (ident "v")))
@@ -893,9 +895,9 @@ combineResults = |jsonResult, httpStatus|
 						(e-lookup-external
 							(ext-decl @26.13-26.30 (ident "json.Json.validateWith") (kind "value")))
 						(e-lookup-local @26.31-26.37
-							(pattern @23.16-23.22))
+							(p-assign @23.16-23.22 (ident "config")))
 						(e-lookup-local @26.39-26.40
-							(pattern @26.10-26.11))))))
+							(p-assign @26.10-26.11 (ident "v")))))))
 		(annotation @23.1-23.12
 			(declared-type
 				(ty-fn @22.15-22.64 (effectful false)
@@ -915,7 +917,7 @@ combineResults = |jsonResult, httpStatus|
 				(e-lookup-external
 					(ext-decl @38.25-38.40 (ident "http.Client.clientWith") (kind "value")))
 				(e-lookup-local @38.41-38.47
-					(pattern @38.17-38.23))))
+					(p-assign @38.17-38.23 (ident "config")))))
 		(annotation @38.1-38.13
 			(declared-type
 				(ty-fn @37.16-37.37 (effectful false)
@@ -933,25 +935,27 @@ combineResults = |jsonResult, httpStatus|
 						(e-dot-access @43.11-43.28 (field "status")
 							(receiver
 								(e-lookup-local @43.11-43.19
-									(pattern @42.19-42.27)))))
+									(p-assign @42.19-42.27 (ident "response"))))))
 					(branches
 						(branch
 							(patterns
-								(p-applied-tag @44.9-44.19 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @44.9-44.19)))
 							(value
 								(e-call @44.23-44.50
 									(e-lookup-external
 										(ext-decl @44.23-44.42 (ident "http.Client.statusToString") (kind "value")))
 									(e-lookup-local @44.43-44.49
-										(pattern @44.12-44.18)))))
+										(p-assign @44.12-44.18 (ident "status"))))))
 						(branch
 							(patterns
-								(p-applied-tag @45.9-45.19 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @45.9-45.19)))
 							(value
 								(e-call @45.23-45.44
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @45.38-45.43
-										(pattern @45.13-45.18)))))))))
+										(p-assign @45.13-45.18 (ident "error"))))))))))
 		(annotation @42.1-42.15
 			(declared-type
 				(ty-fn @41.18-41.33 (effectful false)
@@ -967,31 +971,35 @@ combineResults = |jsonResult, httpStatus|
 				(match @51.5-54.6
 					(cond
 						(e-lookup-local @51.11-51.21
-							(pattern @50.19-50.29)))
+							(p-assign @50.19-50.29 (ident "jsonResult"))))
 					(branches
 						(branch
 							(patterns
-								(p-applied-tag @52.9-52.18 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @52.9-52.18)))
 							(value
 								(e-runtime-error (tag "expr_not_canonicalized"))))
 						(branch
 							(patterns
-								(p-assign @52.60-52.70 (ident "httpStatus") (degenerate false)))
+								(pattern (degenerate false)
+									(p-assign @52.60-52.70 (ident "httpStatus"))))
 							(value
 								(e-runtime-error (tag "expr_not_canonicalized"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized") (degenerate false)))
+								(pattern (degenerate false)
+									(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 							(value
 								(e-runtime-error (tag "expr_not_canonicalized"))))
 						(branch
 							(patterns
-								(p-applied-tag @53.9-53.19 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @53.9-53.19)))
 							(value
 								(e-tag @53.23-53.33 (name "Err")
 									(args
 										(e-lookup-local @53.27-53.32
-											(pattern @53.13-53.18))))))))))
+											(p-assign @53.13-53.18 (ident "error")))))))))))
 		(annotation @50.1-50.15
 			(declared-type
 				(ty-fn @49.18-49.73 (effectful false)

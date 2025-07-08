@@ -50,28 +50,31 @@ NO CHANGE
 (e-match @1.1-5.2
 	(match @1.1-5.2
 		(cond
-			(e-not-implemented))
+			(e-not-implemented @1.7-1.10))
 		(branches
 			(branch
 				(patterns
-					(p-list @2.2-2.7 (degenerate false)
-						(patterns
-							(p-int @2.3-2.6 (value "35")))))
+					(pattern (degenerate false)
+						(p-list @2.2-2.7
+							(patterns
+								(p-int @2.3-2.6 (value "35"))))))
 				(value
-					(e-not-implemented)))
+					(e-not-implemented @2.11-2.14)))
 			(branch
 				(patterns
-					(p-list @3.2-3.12 (degenerate false)
-						(patterns
-							(p-int @3.3-3.6 (value "97"))
-							(p-int @3.8-3.11 (value "98")))))
+					(pattern (degenerate false)
+						(p-list @3.2-3.12
+							(patterns
+								(p-int @3.3-3.6 (value "97"))
+								(p-int @3.8-3.11 (value "98"))))))
 				(value
-					(e-not-implemented)))
+					(e-not-implemented @3.16-3.19)))
 			(branch
 				(patterns
-					(p-underscore @4.2-4.3 (degenerate false)))
+					(pattern (degenerate false)
+						(p-underscore @4.2-4.3)))
 				(value
-					(e-not-implemented))))))
+					(e-not-implemented @4.7-4.10))))))
 ~~~
 # TYPES
 ~~~clojure

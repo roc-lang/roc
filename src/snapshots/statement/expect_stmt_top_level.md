@@ -56,7 +56,7 @@ expect foo != False
 	(s-expect @5.1-5.25
 		(e-binop @5.8-5.25 (op "ne")
 			(e-lookup-local @5.8-5.11
-				(pattern @3.1-3.4))
+				(p-assign @3.1-3.4 (ident "foo")))
 			(e-nominal @5.15-5.19 (nominal "Bool")
 				(e-tag @5.15-5.25 (name "False"))))))
 ~~~

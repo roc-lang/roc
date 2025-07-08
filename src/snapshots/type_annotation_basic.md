@@ -84,11 +84,11 @@ CloseCurly(27:1-27:2),EndOfFile(27:2-27:2),
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(record-field @1.15-1.53 (name "pf") (optional false)
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.53 (name "pf") (optional false)
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -200,7 +200,7 @@ main! = |_| {
 			(args
 				(p-assign @5.13-5.14 (ident "x")))
 			(e-lookup-local @5.16-5.17
-				(pattern @5.13-5.14)))
+				(p-assign @5.13-5.14 (ident "x"))))
 		(annotation @5.1-5.9
 			(declared-type
 				(ty-fn @4.12-4.18 (effectful false)
@@ -215,9 +215,9 @@ main! = |_| {
 			(e-tuple @9.27-9.42
 				(elems
 					(e-lookup-local @9.28-9.33
-						(pattern @9.12-9.17))
+						(p-assign @9.12-9.17 (ident "first")))
 					(e-lookup-local @9.35-9.41
-						(pattern @9.19-9.25)))))
+						(p-assign @9.19-9.25 (ident "second"))))))
 		(annotation @9.1-9.8
 			(declared-type
 				(ty-fn @8.11-8.25 (effectful false)
@@ -233,7 +233,7 @@ main! = |_| {
 				(p-assign @13.11-13.12 (ident "n")))
 			(e-binop @13.14-15.6 (op "add")
 				(e-lookup-local @13.14-13.15
-					(pattern @13.11-13.12))
+					(p-assign @13.11-13.12 (ident "n")))
 				(e-int @13.18-13.19 (value "1"))))
 		(annotation @13.1-13.7
 			(declared-type
@@ -250,32 +250,32 @@ main! = |_| {
 					(p-assign @17.5-17.8 (ident "num"))
 					(e-call @17.11-17.23
 						(e-lookup-local @17.11-17.19
-							(pattern @5.1-5.9))
+							(p-assign @5.1-5.9 (ident "identity")))
 						(e-int @17.20-17.22 (value "42"))))
 				(s-let @18.5-18.29
 					(p-assign @18.5-18.9 (ident "text"))
 					(e-call @18.12-18.29
 						(e-lookup-local @18.12-18.20
-							(pattern @5.1-5.9))
+							(p-assign @5.1-5.9 (ident "identity")))
 						(e-string @18.21-18.28
 							(e-literal @18.22-18.27 (string "hello")))))
 				(s-let @21.5-21.30
 					(p-assign @21.5-21.9 (ident "pair"))
 					(e-call @21.12-21.30
 						(e-lookup-local @21.12-21.19
-							(pattern @9.1-9.8))
+							(p-assign @9.1-9.8 (ident "combine")))
 						(e-lookup-local @21.20-21.23
-							(pattern @17.5-17.8))
+							(p-assign @17.5-17.8 (ident "num")))
 						(e-lookup-local @21.25-21.29
-							(pattern @18.5-18.9))))
+							(p-assign @18.5-18.9 (ident "text")))))
 				(s-let @24.5-24.23
 					(p-assign @24.5-24.11 (ident "result"))
 					(e-call @24.14-24.23
 						(e-lookup-local @24.14-24.20
-							(pattern @13.1-13.7))
+							(p-assign @13.1-13.7 (ident "addOne")))
 						(e-int @24.21-24.22 (value "5"))))
 				(e-lookup-local @26.5-26.11
-					(pattern @24.5-24.11))))))
+					(p-assign @24.5-24.11 (ident "result")))))))
 ~~~
 # TYPES
 ~~~clojure

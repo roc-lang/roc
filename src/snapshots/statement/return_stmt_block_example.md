@@ -132,7 +132,7 @@ foo = |num| {
 							(if-branch
 								(e-binop @5.15-5.24 (op "gt")
 									(e-lookup-local @5.15-5.18
-										(pattern @4.8-4.11))
+										(p-assign @4.8-4.11 (ident "num")))
 									(e-int @5.21-5.23 (value "10")))
 								(e-block @5.25-7.6
 									(s-return @6.9-7.6
@@ -149,7 +149,7 @@ foo = |num| {
 				(e-tag @10.5-10.12 (name "Ok")
 					(args
 						(e-lookup-local @10.8-10.11
-							(pattern @5.5-5.8))))))
+							(p-assign @5.5-5.8 (ident "str")))))))
 		(annotation @4.1-4.4
 			(declared-type
 				(ty-fn @3.7-3.35 (effectful false)

@@ -100,7 +100,7 @@ NO CHANGE
 						(if-branch
 							(e-binop @4.5-4.14 (op "lt")
 								(e-lookup-local @4.5-4.8
-									(pattern @3.16-3.19))
+									(p-assign @3.16-3.19 (ident "num")))
 								(e-int @4.11-4.12 (value "0")))
 							(e-block @4.13-6.3
 								(e-string @5.3-5.13
@@ -108,7 +108,7 @@ NO CHANGE
 						(if-branch
 							(e-binop @6.12-6.22 (op "eq")
 								(e-lookup-local @6.12-6.15
-									(pattern @3.16-3.19))
+									(p-assign @3.16-3.19 (ident "num")))
 								(e-int @6.19-6.20 (value "0")))
 							(e-block @6.21-8.3
 								(e-string @7.3-7.9
@@ -116,7 +116,7 @@ NO CHANGE
 						(if-branch
 							(e-binop @8.12-8.23 (op "gt")
 								(e-lookup-local @8.12-8.15
-									(pattern @3.16-3.19))
+									(p-assign @3.16-3.19 (ident "num")))
 								(e-int @8.18-8.21 (value "100")))
 							(e-block @8.22-10.3
 								(e-string @9.3-9.10

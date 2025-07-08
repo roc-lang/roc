@@ -72,15 +72,15 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 				(p-assign @3.11-3.12 (ident "x")))
 			(e-binop @3.14-4.9 (op "add")
 				(e-lookup-local @3.14-3.15
-					(pattern @3.11-3.12))
+					(p-assign @3.11-3.12 (ident "x")))
 				(e-int @3.18-3.19 (value "1")))))
 	(e-dot-access @4.5-5.2 (field "map")
 		(receiver
 			(e-lookup-local @4.5-4.9
-				(pattern @2.5-2.9)))
+				(p-assign @2.5-2.9 (ident "list"))))
 		(args
 			(e-lookup-local @4.14-4.16
-				(pattern @3.5-3.7)))))
+				(p-assign @3.5-3.7 (ident "fn"))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -86,11 +86,11 @@ LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(record-field @1.15-1.57 (name "pf") (optional false)
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.57 (name "pf") (optional false)
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -169,14 +169,14 @@ main! = |_| {}
 					(e-call @11.14-11.30
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11.25-11.29
-							(pattern @5.12-5.16))))
+							(p-assign @5.12-5.16 (ident "list")))))
 				(s-expr @11.34-13.11
 					(e-call @11.34-11.58
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11.53-11.57
-							(pattern @7.5-7.9))))
+							(p-assign @7.5-7.9 (ident "elem")))))
 				(e-lookup-local @13.5-13.11
-					(pattern @11.5-11.11))))
+					(p-assign @11.5-11.11 (ident "result")))))
 		(annotation @5.1-5.8
 			(declared-type
 				(ty-fn @4.11-4.29 (effectful false)

@@ -71,7 +71,7 @@ CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
 		(exposes @11.3-13.4
 			(exposed-lower-ident (text "foo")))
 		(packages @15.3-17.4
-			(record-field @16.4-16.32 (name "some_pkg")
+			(record-field @16.4-16.32 (name "some_pkg") (optional false)
 				(e-string @16.14-16.31
 					(e-string-part @16.15-16.30 (raw "../some_pkg.roc")))))
 		(provides @19.3-21.4

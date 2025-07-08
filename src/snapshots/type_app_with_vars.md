@@ -44,11 +44,11 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(record-field @1.15-1.53 (name "pf") (optional false)
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.53 (name "pf") (optional false)
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -109,10 +109,10 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 			(e-dot-access @4.22-6.6 (field "map")
 				(receiver
 					(e-lookup-local @4.22-4.26
-						(pattern @4.12-4.16)))
+						(p-assign @4.12-4.16 (ident "list"))))
 				(args
 					(e-lookup-local @4.31-4.33
-						(pattern @4.18-4.20)))))
+						(p-assign @4.18-4.20 (ident "fn"))))))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.39 (effectful false)
@@ -131,7 +131,7 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 				(p-underscore @6.10-6.11))
 			(e-call @6.13-6.33
 				(e-lookup-local @6.13-6.20
-					(pattern @4.1-4.8))
+					(p-assign @4.1-4.8 (ident "mapList")))
 				(e-list @6.21-6.32
 					(elems
 						(e-int @6.22-6.23 (value "1"))

@@ -81,11 +81,11 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(record-field @1.15-1.53 (name "pf") (optional false)
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.53 (name "pf") (optional false)
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -164,10 +164,10 @@ main! = |_| {
 					(p-assign @17.5-17.11 (ident "result"))
 					(e-binop @17.14-18.11 (op "add")
 						(e-lookup-local @17.14-17.22
-							(pattern @8.5-8.13))
+							(p-assign @8.5-8.13 (ident "used_var")))
 						(e-int @17.25-17.27 (value "10"))))
 				(e-lookup-local @18.5-18.11
-					(pattern @17.5-17.11))))))
+					(p-assign @17.5-17.11 (ident "result")))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -33,11 +33,11 @@ LowerIdent(7:1-7:6),OpAssign(7:7-7:8),OpBar(7:9-7:10),Underscore(7:10-7:11),OpBa
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(record-field @1.15-1.57 (name "pf") (optional false)
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.57 (name "pf") (optional false)
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -71,7 +71,7 @@ NO CHANGE
 			(args
 				(p-assign @5.13-5.14 (ident "a")))
 			(e-lookup-local @5.16-5.17
-				(pattern @5.13-5.14)))
+				(p-assign @5.13-5.14 (ident "a"))))
 		(annotation @5.1-5.9
 			(declared-type
 				(ty-fn @4.12-4.18 (effectful false)

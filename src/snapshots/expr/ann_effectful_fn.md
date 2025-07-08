@@ -73,10 +73,10 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 			(args
 				(p-record-destructure @3.23-3.25
 					(destructs)))
-			(e-not-implemented)))
+			(e-not-implemented @3.27-3.30)))
 	(e-call @5.5-5.23
 		(e-lookup-local @5.5-5.19
-			(pattern @3.5-3.19))
+			(p-assign @3.5-3.19 (ident "launchTheNukes")))
 		(e-empty_record @5.20-5.22)))
 ~~~
 # TYPES

@@ -94,12 +94,13 @@ match person {
 		(branches
 			(branch
 				(patterns
-					(p-runtime-error @2.13-2.49 (tag "not_implemented") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @2.13-2.49 (tag "not_implemented"))))
 				(value
 					(e-string @2.53-2.92
 						(e-literal @2.54-2.54 (string ""))
 						(e-lookup-local @2.56-2.60
-							(pattern @2.7-2.12))
+							(p-assign @2.7-2.12 (ident "name")))
 						(e-literal @2.61-2.71 (string " lives on "))
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-literal @2.80-2.84 (string " in "))

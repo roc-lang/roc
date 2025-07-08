@@ -57,7 +57,7 @@ NO CHANGE
 		(p-assign @3.2-3.7 (ident "apple"))
 		(e-tag @3.10-3.15 (name "Apple")))
 	(e-lookup-local @5.2-5.7
-		(pattern @3.2-3.7)))
+		(p-assign @3.2-3.7 (ident "apple"))))
 ~~~
 # TYPES
 ~~~clojure

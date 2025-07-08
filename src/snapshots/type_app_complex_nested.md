@@ -166,11 +166,11 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(record-field @1.15-1.53 (name "pf") (optional false)
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.53 (name "pf") (optional false)
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -296,16 +296,18 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(match @6.5-9.6
 					(cond
 						(e-lookup-local @6.11-6.17
-							(pattern @5.19-5.25)))
+							(p-assign @5.19-5.25 (ident "result"))))
 					(branches
 						(branch
 							(patterns
-								(p-applied-tag @7.9-7.22 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @7.9-7.22)))
 							(value
 								(e-empty_list @7.26-7.28)))
 						(branch
 							(patterns
-								(p-applied-tag @8.9-8.15 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @8.9-8.15)))
 							(value
 								(e-empty_list @8.19-8.21)))))))
 		(annotation @5.1-5.15
@@ -345,7 +347,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(p-underscore @18.10-18.11))
 			(e-call @18.13-18.49
 				(e-lookup-local @18.13-18.27
-					(pattern @5.1-5.15))
+					(p-assign @5.1-5.15 (ident "processComplex")))
 				(e-tag @18.28-18.48 (name "Ok")
 					(args
 						(e-list @18.31-18.47

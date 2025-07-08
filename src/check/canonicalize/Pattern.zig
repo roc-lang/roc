@@ -246,7 +246,7 @@ pub const Pattern = union(enum) {
         }
     };
 
-    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, pattern_idx: Pattern.Idx, degenerate: ?bool) void {
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, pattern_idx: Pattern.Idx) void {
         switch (self.*) {
             .assign => |p| {
                 const begin = tree.beginNode();
@@ -255,10 +255,6 @@ pub const Pattern = union(enum) {
 
                 const ident = ir.getIdentText(p.ident);
                 tree.pushStringPair("ident", ident);
-
-                if (degenerate) |d| {
-                    tree.pushBoolPair("degenerate", d);
-                }
 
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
@@ -270,21 +266,14 @@ pub const Pattern = union(enum) {
                 const ident = ir.getIdentText(p.ident);
                 tree.pushStringPair("as", ident);
 
-                if (degenerate) |d| {
-                    tree.pushBoolPair("degenerate", d);
-                }
-
                 const attrs = tree.beginNode();
-                ir.store.getPattern(p.pattern).pushToSExprTree(ir, tree, p.pattern, null);
+                ir.store.getPattern(p.pattern).pushToSExprTree(ir, tree, p.pattern);
                 tree.endNode(begin, attrs);
             },
             .applied_tag => {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("p-applied-tag");
                 ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                if (degenerate) |d| {
-                    tree.pushBoolPair("degenerate", d);
-                }
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
@@ -292,9 +281,6 @@ pub const Pattern = union(enum) {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("p-record-destructure");
                 ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                if (degenerate) |d| {
-                    tree.pushBoolPair("degenerate", d);
-                }
                 const attrs = tree.beginNode();
 
                 const destructs_begin = tree.beginNode();
@@ -313,9 +299,6 @@ pub const Pattern = union(enum) {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("p-list");
                 ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                if (degenerate) |d| {
-                    tree.pushBoolPair("degenerate", d);
-                }
                 const attrs = tree.beginNode();
 
                 const patterns_begin = tree.beginNode();
@@ -323,7 +306,7 @@ pub const Pattern = union(enum) {
                 const patterns_attrs = tree.beginNode();
 
                 for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
-                    ir.store.getPattern(patt_idx).pushToSExprTree(ir, tree, patt_idx, null);
+                    ir.store.getPattern(patt_idx).pushToSExprTree(ir, tree, patt_idx);
                 }
                 tree.endNode(patterns_begin, patterns_attrs);
 
@@ -337,7 +320,7 @@ pub const Pattern = union(enum) {
 
                     const rest_attrs = tree.beginNode();
                     if (rest.pattern) |rest_pattern_idx| {
-                        ir.store.getPattern(rest_pattern_idx).pushToSExprTree(ir, tree, rest_pattern_idx, null);
+                        ir.store.getPattern(rest_pattern_idx).pushToSExprTree(ir, tree, rest_pattern_idx);
                     }
                     tree.endNode(rest_begin, rest_attrs);
                 }
@@ -348,9 +331,6 @@ pub const Pattern = union(enum) {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("p-tuple");
                 ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                if (degenerate) |d| {
-                    tree.pushBoolPair("degenerate", d);
-                }
                 const attrs = tree.beginNode();
 
                 const patterns_begin = tree.beginNode();
@@ -358,7 +338,7 @@ pub const Pattern = union(enum) {
                 const patterns_attrs = tree.beginNode();
 
                 for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
-                    ir.store.getPattern(patt_idx).pushToSExprTree(ir, tree, patt_idx, null);
+                    ir.store.getPattern(patt_idx).pushToSExprTree(ir, tree, patt_idx);
                 }
                 tree.endNode(patterns_begin, patterns_attrs);
 
@@ -373,9 +353,6 @@ pub const Pattern = union(enum) {
                 var value_buf: [40]u8 = undefined;
                 const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
                 tree.pushStringPair("value", value_str);
-                if (degenerate) |d| {
-                    tree.pushBoolPair("degenerate", d);
-                }
 
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
@@ -384,9 +361,6 @@ pub const Pattern = union(enum) {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("p-small-dec");
                 ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                if (degenerate) |d| {
-                    tree.pushBoolPair("degenerate", d);
-                }
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
@@ -394,9 +368,6 @@ pub const Pattern = union(enum) {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("p-dec");
                 ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                if (degenerate) |d| {
-                    tree.pushBoolPair("degenerate", d);
-                }
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
@@ -408,9 +379,6 @@ pub const Pattern = union(enum) {
                 const text = ir.env.strings.get(p.literal);
                 tree.pushStringPair("text", text);
 
-                if (degenerate) |d| {
-                    tree.pushBoolPair("degenerate", d);
-                }
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
@@ -418,9 +386,6 @@ pub const Pattern = union(enum) {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("p-underscore");
                 ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                if (degenerate) |d| {
-                    tree.pushBoolPair("degenerate", d);
-                }
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
@@ -431,9 +396,6 @@ pub const Pattern = union(enum) {
 
                 const diagnostic = ir.store.getDiagnostic(e.diagnostic);
                 tree.pushStringPair("tag", @tagName(diagnostic));
-                if (degenerate) |d| {
-                    tree.pushBoolPair("degenerate", d);
-                }
 
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);

@@ -61,7 +61,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @7.1-7.8 (ident "process"))
-		(e-not-implemented)
+		(e-not-implemented @7.11-7.14)
 		(annotation @7.1-7.8
 			(declared-type
 				(ty-fn @3.11-3.20 (effectful false)

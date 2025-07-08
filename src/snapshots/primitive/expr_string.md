@@ -53,7 +53,7 @@ NO CHANGE
 		(e-string @3.7-3.22
 			(e-literal @3.8-3.14 (string "hello "))
 			(e-lookup-local @3.16-3.20
-				(pattern @2.1-2.5))
+				(p-assign @2.1-2.5 (ident "name")))
 			(e-literal @3.21-3.21 (string "")))))
 ~~~
 # TYPES

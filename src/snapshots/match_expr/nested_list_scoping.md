@@ -81,48 +81,51 @@ match nestedList {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.15 (degenerate false)
-						(patterns
-							(p-list @2.6-2.9
-								(patterns
-									(p-assign @2.7-2.8 (ident "x"))))
-							(p-list @2.11-2.14
-								(patterns
-									(p-assign @2.12-2.13 (ident "y")))))))
+					(pattern (degenerate false)
+						(p-list @2.5-2.15
+							(patterns
+								(p-list @2.6-2.9
+									(patterns
+										(p-assign @2.7-2.8 (ident "x"))))
+								(p-list @2.11-2.14
+									(patterns
+										(p-assign @2.12-2.13 (ident "y"))))))))
 				(value
 					(e-binop @2.19-3.6 (op "add")
 						(e-lookup-local @2.19-2.20
-							(pattern @2.7-2.8))
+							(p-assign @2.7-2.8 (ident "x")))
 						(e-lookup-local @2.23-2.24
-							(pattern @2.12-2.13)))))
+							(p-assign @2.12-2.13 (ident "y"))))))
 			(branch
 				(patterns
-					(p-list @3.5-3.13 (degenerate false)
-						(patterns
-							(p-list @3.6-3.12
-								(patterns
-									(p-assign @3.7-3.8 (ident "x"))
-									(p-assign @3.10-3.11 (ident "y")))))))
+					(pattern (degenerate false)
+						(p-list @3.5-3.13
+							(patterns
+								(p-list @3.6-3.12
+									(patterns
+										(p-assign @3.7-3.8 (ident "x"))
+										(p-assign @3.10-3.11 (ident "y"))))))))
 				(value
 					(e-binop @3.17-4.6 (op "sub")
 						(e-lookup-local @3.17-3.18
-							(pattern @3.7-3.8))
+							(p-assign @3.7-3.8 (ident "x")))
 						(e-lookup-local @3.21-3.22
-							(pattern @3.10-3.11)))))
+							(p-assign @3.10-3.11 (ident "y"))))))
 			(branch
 				(patterns
-					(p-list @4.5-4.13 (degenerate false)
-						(patterns
-							(p-assign @4.6-4.7 (ident "x"))
-							(p-list @4.9-4.12
-								(patterns
-									(p-assign @4.10-4.11 (ident "y")))))))
+					(pattern (degenerate false)
+						(p-list @4.5-4.13
+							(patterns
+								(p-assign @4.6-4.7 (ident "x"))
+								(p-list @4.9-4.12
+									(patterns
+										(p-assign @4.10-4.11 (ident "y"))))))))
 				(value
 					(e-binop @4.17-5.2 (op "mul")
 						(e-lookup-local @4.17-4.18
-							(pattern @4.6-4.7))
+							(p-assign @4.6-4.7 (ident "x")))
 						(e-lookup-local @4.21-4.22
-							(pattern @4.10-4.11))))))))
+							(p-assign @4.10-4.11 (ident "y")))))))))
 ~~~
 # TYPES
 ~~~clojure

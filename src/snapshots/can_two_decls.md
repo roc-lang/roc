@@ -27,11 +27,11 @@ LowerIdent(4:1-4:2),OpAssign(4:3-4:4),LowerIdent(4:5-4:6),OpPlus(4:7-4:8),Int(4:
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(record-field @1.15-1.57 (name "pf") (optional false)
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.57 (name "pf") (optional false)
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -58,7 +58,7 @@ NO CHANGE
 		(p-assign @4.1-4.2 (ident "b"))
 		(e-binop @4.5-4.10 (op "add")
 			(e-lookup-local @4.5-4.6
-				(pattern @3.1-3.2))
+				(p-assign @3.1-3.2 (ident "a")))
 			(e-int @4.9-4.10 (value "1")))))
 ~~~
 # TYPES

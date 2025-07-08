@@ -52,7 +52,7 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 				(args
 					(p-record-destructure @3.23-3.25
 						(destructs)))
-				(e-not-implemented)))))
+				(e-not-implemented @3.27-3.30)))))
 ~~~
 # TYPES
 ~~~clojure

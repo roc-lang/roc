@@ -1005,7 +1005,7 @@ pub const Statement = union(enum) {
             .@"for" => |a| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("s-for");
-                // ast.appendRegionInfoToSexprTree(env, tree, a.region); // TODO: missing in old code
+                ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
                 // pattern
@@ -2589,6 +2589,7 @@ pub const RecordField = struct {
         tree.pushString(ast.resolve(self.name));
         const attrs2 = tree.beginNode();
         tree.endNode(name, attrs2);
+        tree.pushBoolPair("optional", self.optional);
         const attrs = tree.beginNode();
 
         if (self.value) |idx| {
@@ -2596,7 +2597,6 @@ pub const RecordField = struct {
             value.pushToSExprTree(env, ast, tree);
         }
 
-        // tree.pushBool(self.optional); // TODO: this seems to be missing in the old code?
         tree.endNode(begin, attrs);
     }
 };

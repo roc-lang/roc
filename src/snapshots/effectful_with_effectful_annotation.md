@@ -37,11 +37,11 @@ LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:19),NoSpaceOpenRound(9:19
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(record-field @1.15-1.57 (name "pf") (optional false)
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.57 (name "pf") (optional false)
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -81,7 +81,7 @@ NO CHANGE
 				(e-lookup-external
 					(ext-decl @7.20-7.32 (ident "pf.Stdout.line!") (kind "value")))
 				(e-lookup-local @7.33-7.36
-					(pattern @7.15-7.18))))
+					(p-assign @7.15-7.18 (ident "msg")))))
 		(annotation @7.1-7.11
 			(declared-type
 				(ty-fn @6.14-6.23 (effectful true)
@@ -91,7 +91,7 @@ NO CHANGE
 		(p-assign @9.1-9.6 (ident "main!"))
 		(e-call @9.9-9.36
 			(e-lookup-local @9.9-9.19
-				(pattern @7.1-7.11))
+				(p-assign @7.1-7.11 (ident "print_msg!")))
 			(e-string @9.20-9.35
 				(e-literal @9.21-9.34 (string "Hello, world!")))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")

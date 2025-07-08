@@ -711,8 +711,7 @@ pub const IngestedFile = struct {
     pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
         const begin = tree.beginNode();
         tree.pushStaticAtom("ingested-file");
-        tree.pushStringPair("path", "TODO");
-        // tree.pushStringPair("path", env.strings.get(self.relative_path));
+        tree.pushStringPair("path", ir.env.strings.get(self.relative_path));
         tree.pushStringPair("ident", ir.env.idents.getText(self.ident));
 
         const attrs = tree.beginNode();
@@ -797,7 +796,7 @@ pub const Def = struct {
         tree.pushStaticAtom(name);
         const attrs = tree.beginNode();
 
-        ir.store.getPattern(self.pattern).pushToSExprTree(ir, tree, self.pattern, null);
+        ir.store.getPattern(self.pattern).pushToSExprTree(ir, tree, self.pattern);
 
         ir.store.getExpr(self.expr).pushToSExprTree(ir, tree);
 
@@ -1044,17 +1043,6 @@ pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, so
         tree.endNode(root_begin, attrs);
     }
 }
-
-// /// Helper function to convert the entire Canonical IR to a string in S-expression format
-// /// and write it to the given writer.
-// ///
-// /// If a single expression is provided we only print that expression
-// pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
-//     const gpa = ir.env.gpa;
-//     var node = toSExpr(ir, env, maybe_expr_idx, source);
-//     defer node.deinit(gpa);
-//     node.toStringPretty(writer);
-// }
 
 test "NodeStore - init and deinit" {
     var store = CIR.NodeStore.init(testing.allocator);

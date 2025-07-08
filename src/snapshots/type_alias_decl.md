@@ -363,11 +363,11 @@ CloseCurly(39:1-39:2),EndOfFile(39:2-39:2),
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(record-field @1.15-1.53 (name "pf") (optional false)
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.53 (name "pf") (optional false)
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -548,7 +548,7 @@ main! = |_| {
 					(p-assign @36.5-36.10 (ident "color"))
 					(e-tag @36.13-36.16 (name "Red")))
 				(e-lookup-local @38.5-38.11
-					(pattern @30.5-30.11)))))
+					(p-assign @30.5-30.11 (ident "userId"))))))
 	(s-alias-decl @4.1-4.13
 		(ty-header @4.1-4.7 (name "UserId"))
 		(ty @4.10-4.13 (name "U64")))

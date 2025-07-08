@@ -66,11 +66,11 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(record-field @1.15-1.53 (name "pf") (optional false)
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.53 (name "pf") (optional false)
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -133,11 +133,11 @@ main! = |_| {}
 						(p-assign @4.19-4.20 (ident "y")))
 					(e-call @4.22-4.30
 						(e-lookup-local @4.22-4.24
-							(pattern @4.10-4.12))
+							(p-assign @4.10-4.12 (ident "fn")))
 						(e-lookup-local @4.25-4.26
-							(pattern @4.15-4.16))
+							(p-assign @4.15-4.16 (ident "x")))
 						(e-lookup-local @4.28-4.29
-							(pattern @4.19-4.20)))))))
+							(p-assign @4.19-4.20 (ident "y"))))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15

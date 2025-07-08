@@ -205,7 +205,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(p-assign @10.16-10.17 (ident "x")))
 				(e-binop @10.19-10.25 (op "add")
 					(e-lookup-local @10.19-10.20
-						(pattern @10.16-10.17))
+						(p-assign @10.16-10.17 (ident "x")))
 					(e-int @10.23-10.24 (value "1")))))
 		(field (name "nested")
 			(e-record @11.13-14.6

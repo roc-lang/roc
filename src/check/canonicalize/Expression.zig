@@ -623,13 +623,7 @@ pub const Expr = union(enum) {
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, local.region);
                 const attrs = tree.beginNode();
 
-                const pattern_begin = tree.beginNode();
-                tree.pushStaticAtom("pattern");
-                ir.appendRegionInfoToSExprTree(tree, local.pattern_idx);
-                const pattern_attrs = tree.beginNode();
-                // TODO: this is missing in the old code:
-                // ir.store.getPattern(local.pattern_idx).pushToSExprTree(ir, tree, local.pattern_idx);
-                tree.endNode(pattern_begin, pattern_attrs);
+                ir.store.getPattern(local.pattern_idx).pushToSExprTree(ir, tree, local.pattern_idx);
 
                 tree.endNode(begin, attrs);
             },
@@ -804,7 +798,7 @@ pub const Expr = union(enum) {
                 tree.pushStaticAtom("args");
                 const args_attrs = tree.beginNode();
                 for (ir.store.slicePatterns(lambda_expr.args)) |arg_idx| {
-                    ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx, null);
+                    ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
                 tree.endNode(args_begin, args_attrs);
 
@@ -862,10 +856,10 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
-            .e_ellipsis => |_| {
+            .e_ellipsis => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-not-implemented");
-                // ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region); // TODO: missing in old code
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
@@ -960,8 +954,13 @@ pub const Expr = union(enum) {
                 const patterns_slice = ir.store.sliceMatchBranchPatterns(self.patterns);
                 for (patterns_slice) |branch_pat_idx| {
                     const branch_pat = ir.store.getMatchBranchPattern(branch_pat_idx);
+                    const pattern_begin = tree.beginNode();
+                    tree.pushStaticAtom("pattern");
+                    tree.pushBoolPair("degenerate", branch_pat.degenerate);
+                    const pattern_attrs = tree.beginNode();
                     const pattern = ir.store.getPattern(branch_pat.pattern);
-                    pattern.pushToSExprTree(ir, tree, branch_pat.pattern, branch_pat.degenerate);
+                    pattern.pushToSExprTree(ir, tree, branch_pat.pattern);
+                    tree.endNode(pattern_begin, pattern_attrs);
                 }
                 tree.endNode(patterns_begin, patterns_attrs);
 

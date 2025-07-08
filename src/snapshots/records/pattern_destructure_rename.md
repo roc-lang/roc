@@ -93,7 +93,8 @@ match person {
 		(branches
 			(branch
 				(patterns
-					(p-runtime-error @2.7-2.22 (tag "not_implemented") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @2.7-2.22 (tag "not_implemented"))))
 				(value
 					(e-string @2.41-2.92
 						(e-literal @2.42-2.47 (string "User "))

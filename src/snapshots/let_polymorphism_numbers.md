@@ -77,11 +77,11 @@ CloseCurly(29:1-29:2),EndOfFile(29:2-29:2),
 	(app @1.1-1.56
 		(provides @1.6-1.11
 			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf")
+		(record-field @1.14-1.56 (name "pf") (optional false)
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf")
+			(record-field @1.14-1.56 (name "pf") (optional false)
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -190,34 +190,34 @@ main = |_| {
 	(d-let
 		(p-assign @8.1-8.8 (ident "int_use"))
 		(e-lookup-local @8.11-8.14
-			(pattern @4.1-4.4)))
+			(p-assign @4.1-4.4 (ident "num"))))
 	(d-let
 		(p-assign @9.1-9.10 (ident "float_use"))
 		(e-lookup-local @9.13-9.17
-			(pattern @5.1-5.5)))
+			(p-assign @5.1-5.5 (ident "frac"))))
 	(d-let
 		(p-assign @12.1-12.8 (ident "int_add"))
 		(e-binop @12.11-13.13 (op "add")
 			(e-lookup-local @12.11-12.14
-				(pattern @4.1-4.4))
+				(p-assign @4.1-4.4 (ident "num")))
 			(e-int @12.17-12.19 (value "10"))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "int_multiply"))
 		(e-binop @13.16-16.10 (op "mul")
 			(e-lookup-local @13.16-13.19
-				(pattern @4.1-4.4))
+				(p-assign @4.1-4.4 (ident "num")))
 			(e-int @13.22-13.23 (value "2"))))
 	(d-let
 		(p-assign @16.1-16.10 (ident "float_add"))
 		(e-binop @16.13-17.15 (op "add")
 			(e-lookup-local @16.13-16.16
-				(pattern @4.1-4.4))
+				(p-assign @4.1-4.4 (ident "num")))
 			(e-dec-small @16.19-16.23 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
 	(d-let
 		(p-assign @17.1-17.15 (ident "float_multiply"))
 		(e-binop @17.18-20.7 (op "mul")
 			(e-lookup-local @17.18-17.21
-				(pattern @4.1-4.4))
+				(p-assign @4.1-4.4 (ident "num")))
 			(e-dec-small @17.24-17.27 (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
 	(d-let
 		(p-assign @20.1-20.7 (ident "double"))
@@ -226,19 +226,19 @@ main = |_| {
 				(p-assign @20.11-20.12 (ident "x")))
 			(e-binop @20.14-23.12 (op "mul")
 				(e-lookup-local @20.14-20.15
-					(pattern @20.11-20.12))
+					(p-assign @20.11-20.12 (ident "x")))
 				(e-int @20.18-20.19 (value "2")))))
 	(d-let
 		(p-assign @23.1-23.12 (ident "int_doubled"))
 		(e-call @23.15-23.24
 			(e-lookup-local @23.15-23.21
-				(pattern @20.1-20.7))
+				(p-assign @20.1-20.7 (ident "double")))
 			(e-int @23.22-23.23 (value "5"))))
 	(d-let
 		(p-assign @24.1-24.14 (ident "float_doubled"))
 		(e-call @24.17-24.28
 			(e-lookup-local @24.17-24.23
-				(pattern @20.1-20.7))
+				(p-assign @20.1-20.7 (ident "double")))
 			(e-dec-small @24.24-24.27 (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
 	(d-let
 		(p-assign @26.1-26.5 (ident "main"))
@@ -248,9 +248,9 @@ main = |_| {
 			(e-block @26.12-29.2
 				(e-binop @28.5-29.2 (op "add")
 					(e-lookup-local @28.5-28.12
-						(pattern @12.1-12.8))
+						(p-assign @12.1-12.8 (ident "int_add")))
 					(e-lookup-local @28.15-28.27
-						(pattern @13.1-13.13)))))))
+						(p-assign @13.1-13.13 (ident "int_multiply"))))))))
 ~~~
 # TYPES
 ~~~clojure
