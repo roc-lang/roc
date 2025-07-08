@@ -245,6 +245,11 @@ pub const Tag = enum {
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
+    single_quote_patt,
+    /// DESCRIPTION
+    /// Example: EXAMPLE
+    /// * lhs - LHS DESCRIPTION
+    /// * rhs - RHS DESCRIPTION
     record_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE

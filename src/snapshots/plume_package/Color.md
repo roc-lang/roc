@@ -78,7 +78,6 @@ is_named_color = |str|{
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN PATTERN - Color.md:33:10:33:14
 PARSE ERROR - Color.md:63:9:63:12
 UNEXPECTED TOKEN IN EXPRESSION - Color.md:64:5:64:5
 PARSE ERROR - Color.md:65:13:65:26
@@ -98,18 +97,6 @@ UNDEFINED VARIABLE - Color.md:68:14:68:27
 TYPE MISMATCH - Color.md:20:20:20:22
 TYPE MISMATCH - Color.md:26:7:26:10
 # PROBLEMS
-**UNEXPECTED TOKEN IN PATTERN**
-The token **'#',** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**Color.md:33:10:33:14:**
-```roc
-        ['#', a, b, c, d, e, f] => {
-```
-         ^^^^
-
-
 **PARSE ERROR**
 A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
@@ -266,9 +253,6 @@ Here is the problematic code:
                                                 
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
 **UNUSED VARIABLE**
 Variable ``is_char_in_hex_range`` is not used anywhere in your code.
 
@@ -392,7 +376,7 @@ It is of type:
     _Str_
 
 But you are trying to use it as:
-    _{ to_utf8: List(*) }_
+    _{ to_utf8: List(Num(*)) }_
 
 # TOKENS
 ~~~zig
@@ -612,7 +596,7 @@ EndOfFile(72:1-72:1),
 							(branches
 								(branch @33.9-44.10
 									(p-list @33.9-33.32
-										(p-malformed @33.10-33.14 (tag "pattern_unexpected_token"))
+										(p-single-quote @33.10-33.13 (raw "'#'"))
 										(p-ident @33.15-33.16 (raw "a"))
 										(p-ident @33.18-33.19 (raw "b"))
 										(p-ident @33.21-33.22 (raw "c"))
@@ -868,7 +852,7 @@ hex = |str| {
 	is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
 
 	match bytes {
-		[, a, b, c, d, e, f] => {
+		['#', a, b, c, d, e, f] => {
 			is_valid = 
 				a.is_char_in_hex_range()
 					and b.is_char_in_hex_range()
@@ -1027,7 +1011,7 @@ is_named_color = |str| {
 								(patterns
 									(p-list @33.9-33.32 (degenerate false)
 										(patterns
-											(p-runtime-error @33.10-33.14 (tag "pattern_not_canonicalized"))
+											(p-int @33.10-33.13 (value "35"))
 											(p-assign @33.15-33.16 (ident "a"))
 											(p-assign @33.18-33.19 (ident "b"))
 											(p-assign @33.21-33.22 (ident "c"))

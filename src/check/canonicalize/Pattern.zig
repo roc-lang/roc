@@ -355,9 +355,16 @@ pub const Pattern = union(enum) {
 
                 return node;
             },
-            .int_literal => |_| {
+            .int_literal => |p| {
                 var node = SExpr.init(gpa, "p-int");
                 ir.appendRegionInfoToSexprNode(&node, pattern_idx);
+
+                // Add value
+                const value_i128: i128 = @bitCast(p.value.bytes);
+                var value_buf: [40]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
+                node.appendStringAttr(gpa, "value", value_str);
+
                 return node;
             },
             .small_dec_literal => |_| {
