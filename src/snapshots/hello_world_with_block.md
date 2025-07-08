@@ -13,26 +13,15 @@ app [main!] { pf: platform "../basic-cli/platform.roc" }
 import pf.Stdout
 
 main! = |_| {
-	world = "World"
+	name = "World"
 	# Hello
-	Stdout.line!("Hello, world!")
+	Stdout.line!("Hello, ${name}!")
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable ``world`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_world` to suppress this warning.
-The unused variable is declared here:
-**hello_world_with_block.md:9:2:9:7:**
-```roc
-	world = "World"
-```
- ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 Newline(1:2-1:15),
@@ -43,9 +32,9 @@ Newline(1:1-1:1),
 KwImport(6:1-6:7),LowerIdent(6:8-6:10),NoSpaceDotUpperIdent(6:10-6:17),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBar(8:11-8:12),OpenCurly(8:13-8:14),Newline(1:1-1:1),
-LowerIdent(9:2-9:7),OpAssign(9:8-9:9),StringStart(9:10-9:11),StringPart(9:11-9:16),StringEnd(9:16-9:17),Newline(1:1-1:1),
+LowerIdent(9:2-9:6),OpAssign(9:7-9:8),StringStart(9:9-9:10),StringPart(9:10-9:15),StringEnd(9:15-9:16),Newline(1:1-1:1),
 Newline(10:3-10:9),
-UpperIdent(11:2-11:8),NoSpaceDotLowerIdent(11:8-11:14),NoSpaceOpenRound(11:14-11:15),StringStart(11:15-11:16),StringPart(11:16-11:29),StringEnd(11:29-11:30),CloseRound(11:30-11:31),Newline(1:1-1:1),
+UpperIdent(11:2-11:8),NoSpaceDotLowerIdent(11:8-11:14),NoSpaceOpenRound(11:14-11:15),StringStart(11:15-11:16),StringPart(11:16-11:23),OpenStringInterpolation(11:23-11:25),LowerIdent(11:25-11:29),CloseStringInterpolation(11:29-11:30),StringPart(11:30-11:31),StringEnd(11:31-11:32),CloseRound(11:32-11:33),Newline(1:1-1:1),
 CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # PARSE
@@ -70,14 +59,16 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 					(p-underscore))
 				(e-block @8.13-12.2
 					(statements
-						(s-decl @9.2-9.17
-							(p-ident @9.2-9.7 (raw "world"))
-							(e-string @9.10-9.17
-								(e-string-part @9.11-9.16 (raw "World"))))
-						(e-apply @11.2-11.31
+						(s-decl @9.2-9.16
+							(p-ident @9.2-9.6 (raw "name"))
+							(e-string @9.9-9.16
+								(e-string-part @9.10-9.15 (raw "World"))))
+						(e-apply @11.2-11.33
 							(e-ident @11.2-11.14 (raw "Stdout.line!"))
-							(e-string @11.15-11.30
-								(e-string-part @11.16-11.29 (raw "Hello, world!"))))))))))
+							(e-string @11.15-11.32
+								(e-string-part @11.16-11.23 (raw "Hello, "))
+								(e-ident @11.25-11.29 (raw "name"))
+								(e-string-part @11.30-11.31 (raw "!"))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -92,15 +83,18 @@ NO CHANGE
 			(args
 				(p-underscore @8.10-8.11))
 			(e-block @8.13-12.2
-				(s-let @9.2-9.17
-					(p-assign @9.2-9.7 (ident "world"))
-					(e-string @9.10-9.17
-						(e-literal @9.11-9.16 (string "World"))))
-				(e-call @11.2-11.31
+				(s-let @9.2-9.16
+					(p-assign @9.2-9.6 (ident "name"))
+					(e-string @9.9-9.16
+						(e-literal @9.10-9.15 (string "World"))))
+				(e-call @11.2-11.33
 					(e-lookup-external
 						(ext-decl @11.2-11.14 (ident "pf.Stdout.line!") (kind "value")))
-					(e-string @11.15-11.30
-						(e-literal @11.16-11.29 (string "Hello, world!")))))))
+					(e-string @11.15-11.32
+						(e-literal @11.16-11.23 (string "Hello, "))
+						(e-lookup-local @11.25-11.29
+							(p-assign @9.2-9.6 (ident "name")))
+						(e-literal @11.30-11.31 (string "!")))))))
 	(s-import @6.1-6.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes))
 	(ext-decl @11.2-11.14 (ident "pf.Stdout.line!") (kind "value")))

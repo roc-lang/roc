@@ -358,10 +358,6 @@ The unused variable is declared here:
            ^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
 **UNDEFINED VARIABLE**
 Nothing is named `nt` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -1445,7 +1441,9 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-runtime-error @1.1-1.1 (tag "not_implemented"))))
+									(p-small-dec @64.3-64.7))
+								(pattern (degenerate false)
+									(p-small-dec @64.10-64.14)))
 							(value
 								(e-int @64.18-64.21 (value "314"))))
 						(branch
