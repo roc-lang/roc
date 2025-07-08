@@ -553,11 +553,20 @@ pub fn canonicalizeFile(
                 last_type_anno = null; // Clear after successful use
 
                 // If this declaration successfully defined an exposed value, remove it from exposed_ident_texts
+                // and add it to exposed_nodes
                 if (self.exposed_ident_texts) |*texts| {
                     const pattern = self.parse_ir.store.getPattern(decl.pattern);
                     if (pattern == .ident) {
                         const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
                         const ident_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+
+                        // If this identifier is exposed, add it to exposed_nodes
+                        if (texts.contains(ident_text)) {
+                            // Store the def index as u16 in exposed_nodes
+                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                            self.can_ir.env.exposed_nodes.put(self.can_ir.env.gpa, ident_text, def_idx_u16) catch |err| exitOnOom(err);
+                        }
+
                         _ = texts.remove(ident_text);
                     }
                 }
@@ -1444,10 +1453,21 @@ pub fn canonicalizeExpr(
                                 } });
                             };
 
+                            // Look up the target node index in the module's exposed_nodes
+                            const field_text = self.can_ir.env.idents.getText(ident);
+                            const target_node_idx = if (self.module_envs) |envs_map| blk: {
+                                if (envs_map.get(module_text)) |module_env| {
+                                    break :blk module_env.exposed_nodes.get(field_text) orelse 0;
+                                } else {
+                                    break :blk 0;
+                                }
+                            } else 0;
+
                             // Create the e_lookup_external expression with Import.Idx
                             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = .{
                                 .module_idx = import_idx,
                                 .field_name = ident,
+                                .target_node_idx = target_node_idx,
                                 .region = region,
                             } });
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
@@ -1487,10 +1507,21 @@ pub fn canonicalizeExpr(
                                 } });
                             };
 
+                            // Look up the target node index in the module's exposed_nodes
+                            const field_text = self.can_ir.env.idents.getText(exposed_info.original_name);
+                            const target_node_idx = if (self.module_envs) |envs_map| blk: {
+                                if (envs_map.get(module_text)) |module_env| {
+                                    break :blk module_env.exposed_nodes.get(field_text) orelse 0;
+                                } else {
+                                    break :blk 0;
+                                }
+                            } else 0;
+
                             // Create the e_lookup_external expression with Import.Idx
                             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = .{
                                 .module_idx = import_idx,
                                 .field_name = exposed_info.original_name,
+                                .target_node_idx = target_node_idx,
                                 .region = region,
                             } });
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
@@ -5399,10 +5430,21 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
 
     const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
 
+    // Look up the target node index in the module's exposed_nodes
+    const field_text = self.can_ir.env.idents.getText(field_name);
+    const target_node_idx = if (self.module_envs) |envs_map| blk: {
+        if (envs_map.get(module_text)) |module_env| {
+            break :blk module_env.exposed_nodes.get(field_text) orelse 0;
+        } else {
+            break :blk 0;
+        }
+    } else 0;
+
     // Create the e_lookup_external expression with Import.Idx
     const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = .{
         .module_idx = import_idx,
         .field_name = field_name,
+        .target_node_idx = target_node_idx,
         .region = region,
     } });
     _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });

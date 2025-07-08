@@ -519,3 +519,145 @@ test "module-qualified lookups with e_lookup_external" {
     try expectEqual(true, found_dict_insert);
     try expectEqual(true, found_dict_empty);
 }
+
+test "exposed_nodes - tracking CIR node indices for exposed items" {
+    const allocator = testing.allocator;
+
+    // Create module environments with exposed items
+    var module_envs = std.StringHashMap(*base.ModuleEnv).init(allocator);
+    defer module_envs.deinit();
+
+    // Create a "MathUtils" module with some exposed definitions
+    var math_env = base.ModuleEnv.init(allocator);
+    defer math_env.deinit();
+
+    // Add exposed items
+    try math_env.exposed_by_str.put(allocator, "add", {});
+    try math_env.exposed_by_str.put(allocator, "multiply", {});
+    try math_env.exposed_by_str.put(allocator, "PI", {});
+
+    // Simulate having CIR node indices for these exposed items
+    // In real usage, these would be set during canonicalization of MathUtils
+    try math_env.exposed_nodes.put(allocator, "add", 100);
+    try math_env.exposed_nodes.put(allocator, "multiply", 200);
+    try math_env.exposed_nodes.put(allocator, "PI", 300);
+
+    try module_envs.put("MathUtils", &math_env);
+
+    // Parse source that uses these exposed items
+    const source =
+        \\module [calculate]
+        \\
+        \\import MathUtils exposing [add, multiply, PI]
+        \\
+        \\calculate = \x, y ->
+        \\    sum = add x y
+        \\    product = multiply x y
+        \\    circumference = multiply (multiply 2 PI) x
+        \\    { sum, product, circumference }
+    ;
+
+    // Parse the source
+    var tokens = try parse.tokenize(allocator, source, .file);
+    defer tokens.deinit(allocator);
+    var parse_env = base.ModuleEnv.init(allocator);
+    defer parse_env.deinit();
+    try parse_env.calcLineStarts(source);
+    var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
+    defer ast.deinit();
+
+    // Canonicalize with module environments
+    var env = base.ModuleEnv.init(allocator);
+    defer env.deinit();
+    try env.calcLineStarts(source);
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var canonicalizer = try canonicalize.init(&cir, &ast, &module_envs);
+    defer canonicalizer.deinit();
+
+    try canonicalizer.canonicalizeFile();
+
+    // Verify that e_lookup_external expressions have the correct target_node_idx values
+    var found_add_with_idx_100 = false;
+    var found_multiply_with_idx_200 = false;
+    var found_pi_with_idx_300 = false;
+
+    const all_exprs = cir.store.expr_buffer.items;
+    for (all_exprs) |node| {
+        if (node.tag == .expr_external_lookup) {
+            const module_idx: CIR.Import.Idx = @enumFromInt(node.data_1);
+            const field_name_idx: base.Ident.Idx = @bitCast(node.data_2);
+            const target_node_idx: u16 = @intCast(node.data_3);
+
+            const module_name = cir.imports.getModuleName(module_idx);
+            const field_name = env.idents.getText(field_name_idx);
+
+            if (std.mem.eql(u8, module_name, "MathUtils")) {
+                if (std.mem.eql(u8, field_name, "add") and target_node_idx == 100) {
+                    found_add_with_idx_100 = true;
+                } else if (std.mem.eql(u8, field_name, "multiply") and target_node_idx == 200) {
+                    found_multiply_with_idx_200 = true;
+                } else if (std.mem.eql(u8, field_name, "PI") and target_node_idx == 300) {
+                    found_pi_with_idx_300 = true;
+                }
+            }
+        }
+    }
+
+    // Verify all lookups have the correct target node indices
+    try expectEqual(true, found_add_with_idx_100);
+    try expectEqual(true, found_multiply_with_idx_200);
+    try expectEqual(true, found_pi_with_idx_300);
+
+    // Test case where exposed_nodes is not populated (should get 0)
+    var empty_env = base.ModuleEnv.init(allocator);
+    defer empty_env.deinit();
+    try empty_env.exposed_by_str.put(allocator, "undefined", {});
+    // Don't add to exposed_nodes - should default to 0
+    try module_envs.put("EmptyModule", &empty_env);
+
+    const source2 =
+        \\module [test]
+        \\
+        \\import EmptyModule exposing [undefined]
+        \\
+        \\test = undefined
+    ;
+
+    var tokens2 = try parse.tokenize(allocator, source2, .file);
+    defer tokens2.deinit(allocator);
+    var parse_env2 = base.ModuleEnv.init(allocator);
+    defer parse_env2.deinit();
+    try parse_env2.calcLineStarts(source2);
+    var ast2 = try parse.parse(&parse_env2, &tokens2, allocator, .file);
+    defer ast2.deinit();
+
+    var env2 = base.ModuleEnv.init(allocator);
+    defer env2.deinit();
+    try env2.calcLineStarts(source2);
+    var cir2 = CIR.init(&env2);
+    defer cir2.deinit();
+
+    var canonicalizer2 = try canonicalize.init(&cir2, &ast2, &module_envs);
+    defer canonicalizer2.deinit();
+
+    try canonicalizer2.canonicalizeFile();
+
+    // Verify that undefined gets target_node_idx = 0 (not found)
+    var found_undefined_with_idx_0 = false;
+    const all_exprs2 = cir2.store.expr_buffer.items;
+    for (all_exprs2) |node| {
+        if (node.tag == .expr_external_lookup) {
+            const field_name_idx: base.Ident.Idx = @bitCast(node.data_2);
+            const target_node_idx: u16 = @intCast(node.data_3);
+            const field_name = env2.idents.getText(field_name_idx);
+
+            if (std.mem.eql(u8, field_name, "undefined") and target_node_idx == 0) {
+                found_undefined_with_idx_0 = true;
+            }
+        }
+    }
+
+    try expectEqual(true, found_undefined_with_idx_0);
+}

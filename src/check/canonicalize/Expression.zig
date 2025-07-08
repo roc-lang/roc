@@ -125,6 +125,7 @@ pub const Expr = union(enum) {
     e_lookup_external: struct {
         module_idx: CIR.Import.Idx,
         field_name: Ident.Idx,
+        target_node_idx: u16,
         region: Region,
     },
     /// A sequence of zero or more elements of the same type
@@ -596,6 +597,11 @@ pub const Expr = union(enum) {
 
                 // Add field name
                 node.appendStringAttr(gpa, "field", ir.getIdentText(e.field_name));
+
+                // Add target node index
+                var buf2: [32]u8 = undefined;
+                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{e.target_node_idx}) catch unreachable;
+                node.appendRawAttr(gpa, "target-node-idx", target_idx_str);
 
                 return node;
             },
