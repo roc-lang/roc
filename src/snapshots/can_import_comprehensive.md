@@ -220,21 +220,21 @@ main = {
 			(e-tuple @25.5-34.6
 				(elems
 					(e-lookup-local @26.9-26.15
-						(pattern @8.5-8.11))
+						(p-assign @8.5-8.11 (ident "client")))
 					(e-lookup-local @27.9-27.15
-						(pattern @9.5-9.11))
+						(p-assign @9.5-9.11 (ident "parser")))
 					(e-lookup-local @28.9-28.15
-						(pattern @10.5-10.11))
+						(p-assign @10.5-10.11 (ident "helper")))
 					(e-lookup-local @29.9-29.16
-						(pattern @13.5-13.12))
+						(p-assign @13.5-13.12 (ident "result1")))
 					(e-lookup-local @30.9-30.16
-						(pattern @16.5-16.12))
+						(p-assign @16.5-16.12 (ident "result2")))
 					(e-lookup-local @31.9-31.16
-						(pattern @19.5-19.12))
+						(p-assign @19.5-19.12 (ident "result3")))
 					(e-lookup-local @32.9-32.16
-						(pattern @20.5-20.12))
+						(p-assign @20.5-20.12 (ident "result4")))
 					(e-lookup-local @33.9-33.17
-						(pattern @23.5-23.13))))))
+						(p-assign @23.5-23.13 (ident "combined")))))))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.48 (module "http.Client") (qualifier "http") (alias "Http")

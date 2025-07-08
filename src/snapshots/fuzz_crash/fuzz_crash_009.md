@@ -66,7 +66,7 @@ StringStart(6:5-6:6),StringPart(6:6-6:12),EndOfFile(6:12-6:12),
 	(malformed-header @1.2-1.4 (tag "missing_header"))
 	(statements
 		(e-record @1.3-2.7
-			(field (field "o") (optional false)))
+			(field (field "o")))
 		(s-decl @4.1-6.12
 			(p-ident @4.1-4.4 (raw "foo"))
 			(e-string @6.5-6.12

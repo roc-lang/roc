@@ -141,7 +141,7 @@ red = ...
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "red"))
-		(e-not-implemented)
+		(e-not-implemented @6.7-6.10)
 		(annotation @6.1-6.4
 			(declared-type
 				(ty @5.7-5.9 (name "CE")))))

@@ -101,7 +101,7 @@ main! = |_| {
 						(module-idx "0")
 						(target-node-idx "0"))
 					(e-lookup-local @9.18-9.24
-						(pattern @8.5-8.11))))))
+						(p-assign @8.5-8.11 (ident "result")))))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes))
 	(s-import @4.1-4.17 (module "json.Json") (qualifier "json")

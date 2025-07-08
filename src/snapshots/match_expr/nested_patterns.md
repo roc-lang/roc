@@ -14,9 +14,7 @@ match data {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - nested_patterns.md:1:7:1:11
-UNDEFINED VARIABLE - nested_patterns.md:2:53:2:54
 UNDEFINED VARIABLE - nested_patterns.md:2:57:2:65
-UNDEFINED VARIABLE - nested_patterns.md:2:66:2:70
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `data` in this scope.
@@ -29,21 +27,6 @@ match data {
       ^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nested_patterns.md:2:53:2:54:**
-```roc
-    Container({ items: [First(x), .. as rest] }) => x + List.len(rest)
-```
-                                                    ^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `len` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -54,21 +37,6 @@ Is there an `import` or `exposing` missing up-top?
 ```
                                                         ^^^^^^^^
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `rest` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nested_patterns.md:2:66:2:70:**
-```roc
-    Container({ items: [First(x), .. as rest] }) => x + List.len(rest)
-```
-                                                                 ^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
 
 # TOKENS
 ~~~zig
@@ -136,33 +104,39 @@ match data {
 		(branches
 			(branch
 				(patterns
-					(p-applied-tag @2.5-2.49 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @2.5-2.49)))
 				(value
 					(e-binop @2.53-3.14 (op "add")
-						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-lookup-local @2.53-2.54
+							(p-assign @2.31-2.32 (ident "x")))
 						(e-call @2.57-2.71
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-runtime-error (tag "ident_not_in_scope"))))))
+							(e-lookup-local @2.66-2.70
+								(p-assign @2.41-2.45 (ident "rest")))))))
 			(branch
 				(patterns
-					(p-applied-tag @3.5-3.29 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @3.5-3.29)))
 				(value
 					(e-int @3.33-3.34 (value "0"))))
 			(branch
 				(patterns
-					(p-applied-tag @4.5-4.36 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @4.5-4.36)))
 				(value
 					(e-binop @4.40-5.11 (op "add")
 						(e-lookup-local @4.40-4.45
-							(pattern @4.18-4.23))
+							(p-assign @4.18-4.23 (ident "value")))
 						(e-lookup-local @4.48-4.49
-							(pattern @4.32-4.33)))))
+							(p-assign @4.32-4.33 (ident "y"))))))
 			(branch
 				(patterns
-					(p-applied-tag @5.5-5.14 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @5.5-5.14)))
 				(value
 					(e-lookup-local @5.18-5.19
-						(pattern @5.12-5.13)))))))
+						(p-assign @5.12-5.13 (ident "x"))))))))
 ~~~
 # TYPES
 ~~~clojure

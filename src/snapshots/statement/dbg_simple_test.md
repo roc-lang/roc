@@ -63,7 +63,7 @@ test = {
 				(e-int @4.9-4.11 (value "42")))
 			(e-dbg @5.5-6.2
 				(e-lookup-local @5.9-5.10
-					(pattern @4.5-4.6))))))
+					(p-assign @4.5-4.6 (ident "x")))))))
 ~~~
 # TYPES
 ~~~clojure

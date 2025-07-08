@@ -148,23 +148,26 @@ processColor = |color| {
 					(match @11.5-15.6
 						(cond
 							(e-lookup-local @11.11-11.16
-								(pattern @6.17-6.22)))
+								(p-assign @6.17-6.22 (ident "color"))))
 						(branches
 							(branch
 								(patterns
-									(p-applied-tag @12.9-12.16 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @12.9-12.16)))
 								(value
 									(e-nominal @12.20-12.31 (nominal "LocalStatus")
 										(e-tag @12.20-12.39 (name "Pending")))))
 							(branch
 								(patterns
-									(p-applied-tag @13.9-13.18 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @13.9-13.18)))
 								(value
 									(e-nominal @13.22-13.33 (nominal "LocalStatus")
 										(e-tag @13.22-13.42 (name "Complete")))))
 							(branch
 								(patterns
-									(p-applied-tag @14.9-14.17 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @14.9-14.17)))
 								(value
 									(e-nominal @14.21-14.32 (nominal "LocalStatus")
 										(e-tag @14.21-14.40 (name "Pending"))))))))))

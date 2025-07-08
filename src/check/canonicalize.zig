@@ -1403,6 +1403,14 @@ fn canonicalizeSingleQuote(
 
     // Resolve to a string slice from the source
     const token_text = self.parse_ir.resolve(token);
+
+    // Check if token is malformed (less than 2 characters means no closing quote)
+    if (token_text.len < 2) {
+        return self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+            .region = region,
+        } });
+    }
+
     const inner_text = token_text[1 .. token_text.len - 1];
 
     const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
@@ -2477,29 +2485,59 @@ pub fn canonicalizeExpr(
                 // Mark the start of the scratch match branch patterns
                 const branch_pat_scratch_top = self.can_ir.store.scratchMatchBranchPatternTop();
 
-                // Canonicalized the branch pattern
-
-                // TODO: Using scratch is overkill rn, but using it will make updating
-                // this to handle more than 1 branches (once parse AST is updated) easier
+                // Canonicalized the branch pattern(s)
+                // Handle alternatives patterns by flattening them into multiple BranchPattern entries
                 {
                     const pattern = self.parse_ir.store.getPattern(ast_branch.pattern);
-                    const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
-                    const pattern_idx = blk: {
-                        if (try self.canonicalizePattern(ast_branch.pattern)) |pattern_idx| {
-                            break :blk pattern_idx;
-                        } else {
-                            const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
+
+                    switch (pattern) {
+                        .alternatives => |alt| {
+                            // Handle alternatives patterns by creating multiple BranchPattern entries
+                            const alt_patterns = self.parse_ir.store.patternSlice(alt.patterns);
+                            for (alt_patterns) |alt_pattern_idx| {
+                                const alt_pattern = self.parse_ir.store.getPattern(alt_pattern_idx);
+                                const alt_pattern_region = self.parse_ir.tokenizedRegionToRegion(alt_pattern.to_tokenized_region());
+
+                                const pattern_idx = blk: {
+                                    if (try self.canonicalizePattern(alt_pattern_idx)) |pattern_idx| {
+                                        break :blk pattern_idx;
+                                    } else {
+                                        const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
+                                            .region = alt_pattern_region,
+                                        } });
+                                        break :blk malformed_idx;
+                                    }
+                                };
+
+                                const branch_pattern_idx = self.can_ir.store.addMatchBranchPattern(CIR.Expr.Match.BranchPattern{
+                                    .pattern = pattern_idx,
+                                    .degenerate = false,
+                                    .region = alt_pattern_region,
+                                });
+                                self.can_ir.store.addScratchMatchBranchPattern(branch_pattern_idx);
+                            }
+                        },
+                        else => {
+                            // Single pattern case
+                            const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
+                            const pattern_idx = blk: {
+                                if (try self.canonicalizePattern(ast_branch.pattern)) |pattern_idx| {
+                                    break :blk pattern_idx;
+                                } else {
+                                    const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
+                                        .region = pattern_region,
+                                    } });
+                                    break :blk malformed_idx;
+                                }
+                            };
+                            const branch_pattern_idx = self.can_ir.store.addMatchBranchPattern(CIR.Expr.Match.BranchPattern{
+                                .pattern = pattern_idx,
+                                .degenerate = false,
                                 .region = pattern_region,
-                            } });
-                            break :blk malformed_idx;
-                        }
-                    };
-                    const branch_pattern_idx = self.can_ir.store.addMatchBranchPattern(CIR.Expr.Match.BranchPattern{
-                        .pattern = pattern_idx,
-                        .degenerate = false,
-                        .region = pattern_region,
-                    });
-                    self.can_ir.store.addScratchMatchBranchPattern(branch_pattern_idx);
+                            });
+                            self.can_ir.store.addScratchMatchBranchPattern(branch_pattern_idx);
+                        },
+                    }
                 }
 
                 // Get the pattern span
@@ -2757,7 +2795,7 @@ fn canonicalizePattern(
                         return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{
                             .invalid_top_level_statement = .{
                                 .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-                                .region = base.Region.zero(), // TODO can we get a better region here
+                                .region = region,
                             },
                         });
                     },
@@ -2986,60 +3024,70 @@ fn canonicalizePattern(
                 // Resolve the field name
                 if (self.parse_ir.tokens.resolveIdentifier(field.name)) |field_name_ident| {
                     // For simple destructuring like `{ name, age }`, both label and ident are the same
-                    if (field.value) |_| {
-                        // TODO: For patterns like `{ name: x }`, we'd need the value pattern, but that's not implemented yet
-                        // TODO: Handle patterns like `{ name: x }` where there's a sub-pattern
-                        const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "record pattern with sub-patterns");
-                        const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
-                            .feature = feature,
-                            .region = field_region,
-                        } });
-                        return pattern_idx;
-                    }
-
-                    // Create the RecordDestruct for this field
-                    const record_destruct = CIR.Pattern.RecordDestruct{
-                        .label = field_name_ident,
-                        .ident = field_name_ident,
-                        .kind = .Required,
-                    };
-
-                    const destruct_idx = self.can_ir.store.addRecordDestruct(record_destruct, field_region);
-                    self.can_ir.store.addScratchRecordDestruct(destruct_idx);
-
-                    // Create an assign pattern for this identifier and introduce it into scope
-                    const assign_pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
-                        .ident = field_name_ident,
-                    } }, field_region);
-                    _ = self.can_ir.setTypeVarAtPat(assign_pattern_idx, .{ .flex_var = null });
-
-                    // Introduce the identifier into scope
-                    switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, field_name_ident, assign_pattern_idx, false, true)) {
-                        .success => {},
-                        .shadowing_warning => |shadowed_pattern_idx| {
-                            const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
-                            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
-                                .ident = field_name_ident,
-                                .region = field_region,
-                                .original_region = original_region,
-                            } });
-                        },
-                        .top_level_var_error => {
-                            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{
-                                .invalid_top_level_statement = .{
-                                    .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-                                    .region = base.Region.zero(), // TODO can we get a better region here
-                                },
-                            });
-                            return pattern_idx;
-                        },
-                        .var_across_function_boundary => {
-                            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_already_in_scope = .{
-                                .ident = field_name_ident,
+                    if (field.value) |sub_pattern_idx| {
+                        // Handle patterns like `{ name: x }` or `{ address: { city } }` where there's a sub-pattern
+                        const canonicalized_sub_pattern = try self.canonicalizePattern(sub_pattern_idx) orelse {
+                            // If sub-pattern canonicalization fails, return malformed pattern
+                            const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
                                 .region = field_region,
                             } });
-                            return pattern_idx;
-                        },
+                            return malformed_idx;
+                        };
+
+                        // Create the RecordDestruct with sub-pattern
+                        const record_destruct = CIR.Pattern.RecordDestruct{
+                            .label = field_name_ident,
+                            .ident = field_name_ident,
+                            .kind = .{ .SubPattern = canonicalized_sub_pattern },
+                        };
+
+                        const destruct_idx = self.can_ir.store.addRecordDestruct(record_destruct, field_region);
+                        self.can_ir.store.addScratchRecordDestruct(destruct_idx);
+                    } else {
+                        // Simple case: Create the RecordDestruct for this field
+                        const record_destruct = CIR.Pattern.RecordDestruct{
+                            .label = field_name_ident,
+                            .ident = field_name_ident,
+                            .kind = .Required,
+                        };
+
+                        const destruct_idx = self.can_ir.store.addRecordDestruct(record_destruct, field_region);
+                        self.can_ir.store.addScratchRecordDestruct(destruct_idx);
+
+                        // Create an assign pattern for this identifier and introduce it into scope
+                        const assign_pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
+                            .ident = field_name_ident,
+                        } }, field_region);
+                        _ = self.can_ir.setTypeVarAtPat(assign_pattern_idx, .{ .flex_var = null });
+
+                        // Introduce the identifier into scope
+                        switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, field_name_ident, assign_pattern_idx, false, true)) {
+                            .success => {},
+                            .shadowing_warning => |shadowed_pattern_idx| {
+                                const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
+                                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
+                                    .ident = field_name_ident,
+                                    .region = field_region,
+                                    .original_region = original_region,
+                                } });
+                            },
+                            .top_level_var_error => {
+                                const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{
+                                    .invalid_top_level_statement = .{
+                                        .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
+                                        .region = field_region,
+                                    },
+                                });
+                                return pattern_idx;
+                            },
+                            .var_across_function_boundary => {
+                                const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_already_in_scope = .{
+                                    .ident = field_name_ident,
+                                    .region = field_region,
+                                } });
+                                return pattern_idx;
+                            },
+                        }
                     }
                 } else {
                     const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "report an error when unable to resolve field identifier");
@@ -3238,20 +3286,79 @@ fn canonicalizePattern(
             return pattern_idx;
         },
         .alternatives => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize alternatives pattern");
+            // Alternatives patterns should only appear in match expressions and are handled there
+            // If we encounter one here, it's likely a parser error or misplaced pattern
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "alternatives pattern outside match expression");
             const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
             return pattern_idx;
         },
-        .as => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize alternatives pattern");
-            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
-            return pattern_idx;
+        .as => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            // Canonicalize the inner pattern
+            const inner_pattern = try self.canonicalizePattern(e.pattern) orelse {
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize as pattern with malformed inner pattern");
+                const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = region,
+                } });
+                return pattern_idx;
+            };
+
+            // Resolve the identifier name
+            if (self.parse_ir.tokens.resolveIdentifier(e.name)) |ident_idx| {
+                // Create the as pattern
+                const as_pattern = CIR.Pattern{
+                    .as = .{
+                        .pattern = inner_pattern,
+                        .ident = ident_idx,
+                    },
+                };
+
+                const pattern_idx = try self.can_ir.store.addPattern(as_pattern, region);
+
+                // Set type variable for the pattern
+                _ = self.can_ir.setTypeVarAtPat(pattern_idx, .{ .flex_var = null });
+
+                // Introduce the identifier into scope
+                switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true)) {
+                    .success => {},
+                    .shadowing_warning => |shadowed_pattern_idx| {
+                        const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
+                        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
+                            .ident = ident_idx,
+                            .region = region,
+                            .original_region = original_region,
+                        } });
+                    },
+                    .top_level_var_error => {
+                        return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{
+                            .invalid_top_level_statement = .{
+                                .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
+                                .region = region,
+                            },
+                        });
+                    },
+                    .var_across_function_boundary => {
+                        return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_already_in_scope = .{
+                            .ident = ident_idx,
+                            .region = region,
+                        } });
+                    },
+                }
+
+                return pattern_idx;
+            } else {
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "report an error when unable to resolve as pattern identifier");
+                const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = region,
+                } });
+                return pattern_idx;
+            }
         },
         .malformed => |malformed| {
             // We won't touch this since it's already a parse error.
@@ -3617,7 +3724,7 @@ fn scopeIntroduceIdent(
             return self.can_ir.pushMalformed(T, CIR.Diagnostic{
                 .invalid_top_level_statement = .{
                     .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-                    .region = base.Region.zero(), // TODO can we get a better region here
+                    .region = region,
                 },
             });
         },
@@ -3666,7 +3773,7 @@ fn scopeIntroduceVar(
             return self.can_ir.pushMalformed(T, CIR.Diagnostic{
                 .invalid_top_level_statement = .{
                     .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-                    .region = base.Region.zero(), // TODO can we get a better region here
+                    .region = region,
                 },
             });
         },

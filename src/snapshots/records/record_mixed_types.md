@@ -28,19 +28,19 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 # PARSE
 ~~~clojure
 (e-record @1.1-1.86
-	(field (field "name") (optional false)
+	(field (field "name")
 		(e-string @1.9-1.16
 			(e-string-part @1.10-1.15 (raw "Alice"))))
-	(field (field "age") (optional false)
+	(field (field "age")
 		(e-int @1.23-1.25 (raw "30")))
-	(field (field "active") (optional false)
+	(field (field "active")
 		(e-ident @1.35-1.44 (raw "Bool.true")))
-	(field (field "scores") (optional false)
+	(field (field "scores")
 		(e-list @1.54-1.66
 			(e-int @1.55-1.57 (raw "95"))
 			(e-int @1.59-1.61 (raw "87"))
 			(e-int @1.63-1.65 (raw "92"))))
-	(field (field "balance") (optional false)
+	(field (field "balance")
 		(e-frac @1.77-1.84 (raw "1250.75"))))
 ~~~
 # FORMATTED

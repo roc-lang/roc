@@ -82,7 +82,7 @@ NO CHANGE
 					(module-idx "0")
 					(target-node-idx "0"))
 				(e-lookup-local @7.35-7.38
-					(pattern @7.17-7.20))))
+					(p-assign @7.17-7.20 (ident "msg")))))
 		(annotation @7.1-7.13
 			(declared-type
 				(ty-fn @6.16-6.25 (effectful false)
@@ -92,7 +92,7 @@ NO CHANGE
 		(p-assign @9.1-9.6 (ident "main!"))
 		(e-call @9.9-9.41
 			(e-lookup-local @9.9-9.21
-				(pattern @7.1-7.13))
+				(p-assign @7.1-7.13 (ident "bad_function")))
 			(e-string @9.22-9.40
 				(e-literal @9.23-9.39 (string "This should fail")))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")

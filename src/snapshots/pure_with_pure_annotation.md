@@ -62,9 +62,9 @@ LowerIdent(11:1-11:6),OpAssign(11:7-11:8),LowerIdent(11:9-11:12),NoSpaceOpenRoun
 					(p-ident @5.11-5.12 (raw "y")))
 				(e-field-access @5.14-8.7
 					(e-record @5.14-5.28
-						(field (field "x") (optional false)
+						(field (field "x")
 							(e-ident @5.19-5.20 (raw "x")))
-						(field (field "y") (optional false)
+						(field (field "y")
 							(e-ident @5.25-5.26 (raw "y"))))
 					(e-ident @5.28-5.30 (raw "x")))))
 		(s-type-anno @1.1-1.1 (name "double")
@@ -116,10 +116,10 @@ main! = add(1, 2)
 						(fields
 							(field (name "x")
 								(e-lookup-local @5.19-5.20
-									(pattern @5.8-5.9)))
+									(p-assign @5.8-5.9 (ident "x"))))
 							(field (name "y")
 								(e-lookup-local @5.25-5.26
-									(pattern @5.11-5.12))))))))
+									(p-assign @5.11-5.12 (ident "y")))))))))
 		(annotation @5.1-5.4
 			(declared-type
 				(ty-fn @4.7-4.22 (effectful false)
@@ -133,11 +133,11 @@ main! = add(1, 2)
 				(p-assign @9.11-9.12 (ident "x")))
 			(e-call @9.14-9.23
 				(e-lookup-local @9.14-9.17
-					(pattern @5.1-5.4))
+					(p-assign @5.1-5.4 (ident "add")))
 				(e-lookup-local @9.18-9.19
-					(pattern @9.11-9.12))
+					(p-assign @9.11-9.12 (ident "x")))
 				(e-lookup-local @9.21-9.22
-					(pattern @9.11-9.12))))
+					(p-assign @9.11-9.12 (ident "x")))))
 		(annotation @9.1-9.7
 			(declared-type
 				(ty-fn @8.10-8.20 (effectful false)
@@ -147,7 +147,7 @@ main! = add(1, 2)
 		(p-assign @11.1-11.6 (ident "main!"))
 		(e-call @11.9-11.18
 			(e-lookup-local @11.9-11.12
-				(pattern @5.1-5.4))
+				(p-assign @5.1-5.4 (ident "add")))
 			(e-int @11.13-11.14 (value "1"))
 			(e-int @11.16-11.17 (value "2")))))
 ~~~

@@ -69,7 +69,7 @@ NO CHANGE
 			(args
 				(p-assign @4.13-4.14 (ident "x")))
 			(e-lookup-local @4.16-4.17
-				(pattern @4.13-4.14)))
+				(p-assign @4.13-4.14 (ident "x"))))
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.18 (effectful false)

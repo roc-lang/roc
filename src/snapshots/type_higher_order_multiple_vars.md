@@ -178,12 +178,12 @@ main! = |_| {}
 					(p-assign @4.19-4.20 (ident "x")))
 				(e-call @4.22-4.29
 					(e-lookup-local @4.22-4.23
-						(pattern @4.12-4.13))
+						(p-assign @4.12-4.13 (ident "f")))
 					(e-call @4.24-4.28
 						(e-lookup-local @4.24-4.25
-							(pattern @4.15-4.16))
+							(p-assign @4.15-4.16 (ident "g")))
 						(e-lookup-local @4.26-4.27
-							(pattern @4.19-4.20)))))))
+							(p-assign @4.19-4.20 (ident "x"))))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15

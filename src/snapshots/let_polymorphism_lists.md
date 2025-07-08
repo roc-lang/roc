@@ -354,19 +354,19 @@ main = |_| {
 		(p-assign @12.1-12.13 (ident "all_int_list"))
 		(e-binop @12.16-12.41 (op "add")
 			(e-lookup-local @12.16-12.24
-				(pattern @7.1-7.9))
+				(p-assign @7.1-7.9 (ident "int_list")))
 			(e-runtime-error (tag "expr_not_canonicalized"))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "all_str_list"))
 		(e-binop @13.16-13.41 (op "add")
 			(e-lookup-local @13.16-13.24
-				(pattern @8.1-8.9))
+				(p-assign @8.1-8.9 (ident "str_list")))
 			(e-runtime-error (tag "expr_not_canonicalized"))))
 	(d-let
 		(p-assign @14.1-14.15 (ident "all_float_list"))
 		(e-binop @14.18-14.45 (op "add")
 			(e-lookup-local @14.18-14.28
-				(pattern @9.1-9.11))
+				(p-assign @9.1-9.11 (ident "float_list")))
 			(e-runtime-error (tag "expr_not_canonicalized"))))
 	(d-let
 		(p-assign @17.1-17.10 (ident "get_empty"))
@@ -378,13 +378,13 @@ main = |_| {
 		(p-assign @20.1-20.15 (ident "empty_int_list"))
 		(e-call @20.18-20.31
 			(e-lookup-local @20.18-20.27
-				(pattern @17.1-17.10))
+				(p-assign @17.1-17.10 (ident "get_empty")))
 			(e-int @20.28-20.30 (value "42"))))
 	(d-let
 		(p-assign @21.1-21.15 (ident "empty_str_list"))
 		(e-call @21.18-21.35
 			(e-lookup-local @21.18-21.27
-				(pattern @17.1-17.10))
+				(p-assign @17.1-17.10 (ident "get_empty")))
 			(e-string @21.28-21.34
 				(e-literal @21.29-21.33 (string "test")))))
 	(d-let
@@ -398,27 +398,27 @@ main = |_| {
 					(e-call @25.12-25.34
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @25.21-25.33
-							(pattern @12.1-12.13))))
+							(p-assign @12.1-12.13 (ident "all_int_list")))))
 				(s-let @26.5-26.34
 					(p-assign @26.5-26.9 (ident "len2"))
 					(e-call @26.12-26.34
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @26.21-26.33
-							(pattern @13.1-13.13))))
+							(p-assign @13.1-13.13 (ident "all_str_list")))))
 				(s-let @27.5-27.36
 					(p-assign @27.5-27.9 (ident "len3"))
 					(e-call @27.12-27.36
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @27.21-27.35
-							(pattern @14.1-14.15))))
+							(p-assign @14.1-14.15 (ident "all_float_list")))))
 				(e-binop @28.5-29.2 (op "add")
 					(e-lookup-local @28.5-28.9
-						(pattern @25.5-25.9))
+						(p-assign @25.5-25.9 (ident "len1")))
 					(e-binop @28.12-29.2 (op "add")
 						(e-lookup-local @28.12-28.16
-							(pattern @26.5-26.9))
+							(p-assign @26.5-26.9 (ident "len2")))
 						(e-lookup-local @28.19-28.23
-							(pattern @27.5-27.9))))))))
+							(p-assign @27.5-27.9 (ident "len3")))))))))
 ~~~
 # TYPES
 ~~~clojure

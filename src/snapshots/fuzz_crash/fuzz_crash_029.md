@@ -327,10 +327,10 @@ CloseRound(17:3-17:4),EndOfFile(17:4-17:4),
 		(e-malformed @10.2-10.15 (reason "expr_unexpected_token"))
 		(e-ident @11.3-11.8 (raw "vides"))
 		(e-record @12.3-13.20
-			(field (field "pkg") (optional false)
+			(field (field "pkg")
 				(e-string @13.6-13.11
 					(e-string-part @13.7-13.10 (raw "..l"))))
-			(field (field "mmen") (optional false)))
+			(field (field "mmen")))
 		(e-malformed @14.2-14.15 (reason "expr_unexpected_token"))
 		(e-malformed @17.4-17.4 (reason "expected_expr_close_square_or_comma"))))
 ~~~

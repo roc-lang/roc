@@ -72,12 +72,13 @@ match numbers {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.21 (degenerate false)
-						(patterns
-							(p-assign @2.10-2.16 (ident "middle")))
-						(rest-at (index 0))))
+					(pattern (degenerate false)
+						(p-list @2.5-2.21
+							(patterns
+								(p-assign @2.10-2.16 (ident "middle")))
+							(rest-at (index 0)))))
 				(value
-					(e-not-implemented))))))
+					(e-not-implemented @2.25-2.28))))))
 ~~~
 # TYPES
 ~~~clojure

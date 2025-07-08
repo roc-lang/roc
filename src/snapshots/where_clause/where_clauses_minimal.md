@@ -54,7 +54,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.11 (ident "convert_me"))
-		(e-not-implemented)
+		(e-not-implemented @6.14-6.17)
 		(annotation @6.1-6.11
 			(declared-type
 				(ty-fn @3.14-3.20 (effectful false)

@@ -69,9 +69,9 @@ LowerIdent(14:1-14:7),OpAssign(14:8-14:9),LowerIdent(14:10-14:18),NoSpaceOpenRou
 				(args
 					(p-ident @6.16-6.17 (raw "x")))
 				(e-record @6.19-6.44
-					(field (field "value") (optional false)
+					(field (field "value")
 						(e-ident @6.28-6.29 (raw "x")))
-					(field (field "tag") (optional false)
+					(field (field "tag")
 						(e-string @6.36-6.42
 							(e-string-part @6.37-6.41 (raw "data")))))))
 		(s-type-anno @8.1-9.10 (name "get_value")
@@ -142,7 +142,7 @@ answer = composed([42])
 				(fields
 					(field (name "value")
 						(e-lookup-local @6.28-6.29
-							(pattern @6.16-6.17)))
+							(p-assign @6.16-6.17 (ident "x"))))
 					(field (name "tag")
 						(e-string @6.36-6.42
 							(e-literal @6.37-6.41 (string "data")))))))
@@ -163,7 +163,7 @@ answer = composed([42])
 			(e-dot-access @9.17-11.9 (field "value")
 				(receiver
 					(e-lookup-local @9.17-9.18
-						(pattern @9.14-9.15)))))
+						(p-assign @9.14-9.15 (ident "r"))))))
 		(annotation @9.1-9.10
 			(declared-type
 				(ty-fn @8.13-8.40 (effectful false)
@@ -180,12 +180,12 @@ answer = composed([42])
 				(p-assign @12.13-12.14 (ident "n")))
 			(e-call @12.16-12.41
 				(e-lookup-local @12.16-12.25
-					(pattern @9.1-9.10))
+					(p-assign @9.1-9.10 (ident "get_value")))
 				(e-call @12.26-12.40
 					(e-lookup-local @12.26-12.37
-						(pattern @6.1-6.12))
+						(p-assign @6.1-6.12 (ident "make_record")))
 					(e-lookup-local @12.38-12.39
-						(pattern @12.13-12.14)))))
+						(p-assign @12.13-12.14 (ident "n"))))))
 		(annotation @12.1-12.9
 			(declared-type
 				(ty-fn @11.12-11.26 (effectful false)
@@ -196,7 +196,7 @@ answer = composed([42])
 		(p-assign @14.1-14.7 (ident "answer"))
 		(e-call @14.10-14.24
 			(e-lookup-local @14.10-14.18
-				(pattern @12.1-12.9))
+				(p-assign @12.1-12.9 (ident "composed")))
 			(e-list @14.19-14.23
 				(elems
 					(e-int @14.20-14.22 (value "42")))))))

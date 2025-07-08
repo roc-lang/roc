@@ -120,17 +120,19 @@ handleResult = |result| {
 					(match @7.5-10.6
 						(cond
 							(e-lookup-local @7.11-7.17
-								(pattern @6.17-6.23)))
+								(p-assign @6.17-6.23 (ident "result"))))
 						(branches
 							(branch
 								(patterns
-									(p-applied-tag @8.9-8.46 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @8.9-8.46)))
 								(value
 									(e-lookup-local @8.50-8.55
-										(pattern @8.40-8.45))))
+										(p-assign @8.40-8.45 (ident "value")))))
 							(branch
 								(patterns
-									(p-applied-tag @9.9-9.46 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @9.9-9.46)))
 								(value
 									(e-string @9.50-9.74
 										(e-literal @9.51-9.73 (string "Error: $(code.toStr())"))))))))))

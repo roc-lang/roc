@@ -79,11 +79,11 @@ foo = |num| {
 					(e-dot-access @5.9-8.8 (field "to_str")
 						(receiver
 							(e-lookup-local @5.9-5.12
-								(pattern @3.8-3.11)))
+								(p-assign @3.8-3.11 (ident "num"))))
 						(args)))
 				(e-dbg @8.5-9.2
 					(e-lookup-local @8.9-8.12
-						(pattern @3.8-3.11)))))))
+						(p-assign @3.8-3.11 (ident "num"))))))))
 ~~~
 # TYPES
 ~~~clojure

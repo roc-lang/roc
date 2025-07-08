@@ -179,7 +179,7 @@ pub const Statement = union(enum) {
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, d.region);
                 const attrs = tree.beginNode();
 
-                ir.store.getPattern(d.pattern).pushToSExprTree(ir, tree, d.pattern, null);
+                ir.store.getPattern(d.pattern).pushToSExprTree(ir, tree, d.pattern);
                 ir.store.getExpr(d.expr).pushToSExprTree(ir, tree);
 
                 tree.endNode(begin, attrs);
@@ -190,7 +190,7 @@ pub const Statement = union(enum) {
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, v.region);
                 const attrs = tree.beginNode();
 
-                ir.store.getPattern(v.pattern_idx).pushToSExprTree(ir, tree, v.pattern_idx, null);
+                ir.store.getPattern(v.pattern_idx).pushToSExprTree(ir, tree, v.pattern_idx);
                 ir.store.getExpr(v.expr).pushToSExprTree(ir, tree);
 
                 tree.endNode(begin, attrs);
@@ -201,7 +201,7 @@ pub const Statement = union(enum) {
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, r.region);
                 const attrs = tree.beginNode();
 
-                ir.store.getPattern(r.pattern_idx).pushToSExprTree(ir, tree, r.pattern_idx, null);
+                ir.store.getPattern(r.pattern_idx).pushToSExprTree(ir, tree, r.pattern_idx);
                 ir.store.getExpr(r.expr).pushToSExprTree(ir, tree);
 
                 tree.endNode(begin, attrs);
@@ -250,7 +250,7 @@ pub const Statement = union(enum) {
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, s.region);
                 const attrs = tree.beginNode();
 
-                ir.store.getPattern(s.patt).pushToSExprTree(ir, tree, s.patt, null);
+                ir.store.getPattern(s.patt).pushToSExprTree(ir, tree, s.patt);
                 ir.store.getExpr(s.expr).pushToSExprTree(ir, tree);
                 ir.store.getExpr(s.body).pushToSExprTree(ir, tree);
 

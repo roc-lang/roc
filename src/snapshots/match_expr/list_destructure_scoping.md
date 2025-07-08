@@ -64,24 +64,26 @@ match list {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.12 (degenerate false)
-						(patterns
-							(p-assign @2.6-2.11 (ident "first")))))
+					(pattern (degenerate false)
+						(p-list @2.5-2.12
+							(patterns
+								(p-assign @2.6-2.11 (ident "first"))))))
 				(value
 					(e-lookup-local @2.16-2.21
-						(pattern @2.6-2.11))))
+						(p-assign @2.6-2.11 (ident "first")))))
 			(branch
 				(patterns
-					(p-list @3.5-3.20 (degenerate false)
-						(patterns
-							(p-assign @3.6-3.11 (ident "first"))
-							(p-assign @3.13-3.19 (ident "second")))))
+					(pattern (degenerate false)
+						(p-list @3.5-3.20
+							(patterns
+								(p-assign @3.6-3.11 (ident "first"))
+								(p-assign @3.13-3.19 (ident "second"))))))
 				(value
 					(e-binop @3.24-4.2 (op "add")
 						(e-lookup-local @3.24-3.29
-							(pattern @3.6-3.11))
+							(p-assign @3.6-3.11 (ident "first")))
 						(e-lookup-local @3.32-3.38
-							(pattern @3.13-3.19))))))))
+							(p-assign @3.13-3.19 (ident "second")))))))))
 ~~~
 # TYPES
 ~~~clojure

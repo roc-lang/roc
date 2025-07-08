@@ -705,9 +705,6 @@ pub fn addRecordField(store: *NodeStore, field: AST.RecordField) AST.RecordField
     if (field.value) |v| {
         node.data.lhs = @intFromEnum(v);
     }
-    if (field.optional) {
-        node.data.rhs = 1;
-    }
 
     const nid = store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
@@ -1459,13 +1456,11 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
 pub fn getRecordField(store: *NodeStore, field_idx: AST.RecordField.Idx) AST.RecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(field_idx)));
     const name = node.main_token;
-    const value: ?AST.Expr.Idx = if (node.data.lhs > 0) @enumFromInt(node.data.lhs) else null;
-    const optional = node.data.rhs == 1;
+    const value: ?AST.Expr.Idx = if (node.tag == .malformed) null else if (node.data.lhs > 0) @enumFromInt(node.data.lhs) else null;
 
     return .{
         .name = name,
         .value = value,
-        .optional = optional,
         .region = node.region,
     };
 }

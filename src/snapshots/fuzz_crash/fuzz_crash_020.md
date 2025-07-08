@@ -358,10 +358,6 @@ The unused variable is declared here:
            ^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
 **UNDEFINED VARIABLE**
 Nothing is named `nt` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -1077,7 +1073,7 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 									(e-ident @89.7-89.9 (raw "er")))
 								(e-int @89.16-89.19 (raw "456"))
 								(e-int @90.1-90.2 (raw "9"))))
-						(s-for
+						(s-for @92.2-96.4
 							(p-ident @92.6-92.7 (raw "n"))
 							(e-ident @92.11-92.15 (raw "list"))
 							(e-block @92.16-95.3
@@ -1096,18 +1092,18 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 						(s-decl @96.2-96.59
 							(p-ident @96.2-96.4 (raw "rd"))
 							(e-record @96.7-96.59
-								(field (field "foo") (optional false)
+								(field (field "foo")
 									(e-int @96.14-96.17 (raw "123")))
-								(field (field "bar") (optional false)
+								(field (field "bar")
 									(e-string @96.24-96.27
 										(e-string-part @96.25-96.26 (raw "H"))))
-								(field (field "baz") (optional false)
+								(field (field "baz")
 									(e-ident @96.34-96.37 (raw "tag")))
-								(field (field "qux") (optional false)
+								(field (field "qux")
 									(e-apply @96.44-96.53
 										(e-tag @96.44-96.46 (raw "Ok"))
 										(e-ident @96.47-96.52 (raw "world"))))
-								(field (field "ned") (optional false))))
+								(field (field "ned"))))
 						(s-decl @97.2-97.48
 							(p-ident @97.2-97.3 (raw "t"))
 							(e-tuple @97.6-97.48
@@ -1348,7 +1344,7 @@ expect {
 				(if-branches
 					(if-branch
 						(e-lookup-local @35.16-35.19
-							(pattern @35.8-35.11))
+							(p-assign @35.8-35.11 (ident "num")))
 						(e-int @35.20-35.21 (value "2"))))
 				(if-else
 					(e-int @35.27-35.28 (value "5"))))))
@@ -1382,88 +1378,103 @@ expect {
 				(match @52.2-69.3
 					(cond
 						(e-lookup-local @52.8-52.9
-							(pattern @50.2-50.3)))
+							(p-assign @50.2-50.3 (ident "a"))))
 					(branches
 						(branch
 							(patterns
-								(p-assign @52.11-52.14 (ident "lue") (degenerate false)))
+								(pattern (degenerate false)
+									(p-assign @52.11-52.14 (ident "lue"))))
 							(value
 								(e-block @52.16-54.4
 									(e-runtime-error (tag "ident_not_in_scope")))))
 						(branch
 							(patterns
-								(p-applied-tag @55.3-55.7 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @55.3-55.7)))
 							(value
 								(e-block @55.10-56.5
 									(e-runtime-error (tag "ident_not_in_scope")))))
 						(branch
 							(patterns
-								(p-assign @57.2-57.4 (ident "er") (degenerate false)))
+								(pattern (degenerate false)
+									(p-assign @57.2-57.4 (ident "er"))))
 							(value
 								(e-int @58.4-58.5 (value "1"))))
 						(branch
 							(patterns
-								(p-str @58.6-58.7 (text """) (degenerate false)))
+								(pattern (degenerate false)
+									(p-str @58.6-58.7 (text """))))
 							(value
 								(e-int @58.15-58.17 (value "20"))))
 						(branch
 							(patterns
-								(p-list @58.17-58.22 (degenerate false)
-									(patterns
-										(p-int @58.18-58.19 (value "1")))))
+								(pattern (degenerate false)
+									(p-list @58.17-58.22
+										(patterns
+											(p-int @58.18-58.19 (value "1"))))))
 							(value
 								(e-runtime-error (tag "ident_not_in_scope"))))
 						(branch
 							(patterns
-								(p-list @60.3-60.16 (degenerate false)
-									(patterns
-										(p-int @60.4-60.5 (value "1"))
-										(p-int @60.7-60.8 (value "2"))
-										(p-int @60.10-60.11 (value "3"))
-										(p-assign @60.12-60.15 (ident "est")))))
+								(pattern (degenerate false)
+									(p-list @60.3-60.16
+										(patterns
+											(p-int @60.4-60.5 (value "1"))
+											(p-int @60.7-60.8 (value "2"))
+											(p-int @60.10-60.11 (value "3"))
+											(p-assign @60.12-60.15 (ident "est"))))))
 							(value
 								(e-int @60.16-60.19 (value "123"))))
 						(branch
 							(patterns
-								(p-list @61.3-62.4 (degenerate false)
-									(patterns)))
+								(pattern (degenerate false)
+									(p-list @61.3-62.4
+										(patterns))))
 							(value
 								(e-int @62.5-62.7 (value "23"))))
 						(branch
 							(patterns
-								(p-small-dec @63.3-63.6 (degenerate false)))
+								(pattern (degenerate false)
+									(p-small-dec @63.3-63.6)))
 							(value
 								(e-int @63.7-63.10 (value "314"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-small-dec @64.3-64.7))
+								(pattern (degenerate false)
+									(p-small-dec @64.10-64.14)))
 							(value
 								(e-int @64.18-64.21 (value "314"))))
 						(branch
 							(patterns
-								(p-tuple @65.3-65.8 (degenerate false)
-									(patterns
-										(p-int @65.4-65.5 (value "1")))))
+								(pattern (degenerate false)
+									(p-tuple @65.3-65.8
+										(patterns
+											(p-int @65.4-65.5 (value "1"))))))
 							(value
 								(e-int @65.12-65.15 (value "123"))))
 						(branch
 							(patterns
-								(p-tuple @66.3-66.12 (degenerate false)
-									(patterns
-										(p-int @66.4-66.5 (value "1"))
-										(p-int @66.7-66.8 (value "2"))
-										(p-int @66.10-66.11 (value "3")))))
+								(pattern (degenerate false)
+									(p-tuple @66.3-66.12
+										(patterns
+											(p-int @66.4-66.5 (value "1"))
+											(p-int @66.7-66.8 (value "2"))
+											(p-int @66.10-66.11 (value "3"))))))
 							(value
 								(e-int @66.12-66.15 (value "123"))))
 						(branch
 							(patterns
-								(p-record-destructure @67.3-67.7 (degenerate false)
-									(destructs)))
+								(pattern (degenerate false)
+									(p-record-destructure @67.3-67.7
+										(destructs))))
 							(value
 								(e-int @67.11-67.13 (value "12"))))
 						(branch
 							(patterns
-								(p-applied-tag @68.3-68.10 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @68.3-68.10)))
 							(value
 								(e-int @68.14-68.16 (value "12")))))))))
 	(d-let
@@ -1486,12 +1497,12 @@ expect {
 				(s-return @79.2-83.5
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(s-expr @83.2-84.4
-					(e-not-implemented))
+					(e-not-implemented @83.2-83.5))
 				(s-expr @84.2-86.8
 					(e-call @84.2-86.3
 						(e-lookup-local @84.2-84.4
-							(pattern @49.1-49.3))
-						(e-not-implemented)))
+							(p-assign @49.1-49.3 (ident "me")))
+						(e-not-implemented @85.3-85.6)))
 				(s-expr @86.11-86.20
 					(e-string @86.11-86.17
 						(e-literal @86.12-86.16 (string "Unr!"))))
@@ -1508,7 +1519,7 @@ expect {
 							(e-call @89.3-89.14
 								(e-runtime-error (tag "ident_not_in_scope"))
 								(e-lookup-local @89.7-89.9
-									(pattern @77.2-78.8)))
+									(p-assign @77.2-78.8 (ident "er"))))
 							(e-int @89.16-89.19 (value "456"))
 							(e-int @90.1-90.2 (value "9")))))
 				(s-let @96.2-96.59
@@ -1541,7 +1552,7 @@ expect {
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @97.34-97.35
-										(pattern @97.2-97.3))))
+										(p-assign @97.2-97.3 (ident "t")))))
 							(e-list @97.38-97.47
 								(elems
 									(e-int @97.39-97.40 (value "1"))

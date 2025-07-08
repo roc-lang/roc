@@ -193,7 +193,7 @@ main! = |_| {
 			(args
 				(p-assign @7.20-7.26 (ident "_value")))
 			(e-lookup-local @7.28-7.34
-				(pattern @7.20-7.26))))
+				(p-assign @7.20-7.26 (ident "_value")))))
 	(d-let
 		(p-assign @10.1-10.18 (ident "unused_underscore"))
 		(e-lambda @10.21-10.35
@@ -207,7 +207,7 @@ main! = |_| {
 				(p-assign @13.17-13.23 (ident "number")))
 			(e-binop @13.25-15.6 (op "add")
 				(e-lookup-local @13.25-13.31
-					(pattern @13.17-13.23))
+					(p-assign @13.17-13.23 (ident "number")))
 				(e-int @13.34-13.35 (value "1")))))
 	(d-let
 		(p-assign @15.1-15.6 (ident "main!"))
@@ -219,37 +219,37 @@ main! = |_| {
 					(p-assign @16.5-16.6 (ident "a"))
 					(e-call @16.9-16.26
 						(e-lookup-local @16.9-16.23
-							(pattern @4.1-4.15))
+							(p-assign @4.1-4.15 (ident "unused_regular")))
 						(e-int @16.24-16.25 (value "5"))))
 				(s-let @17.5-17.28
 					(p-assign @17.5-17.6 (ident "b"))
 					(e-call @17.9-17.28
 						(e-lookup-local @17.9-17.24
-							(pattern @7.1-7.16))
+							(p-assign @7.1-7.16 (ident "used_underscore")))
 						(e-int @17.25-17.27 (value "10"))))
 				(s-let @18.5-18.30
 					(p-assign @18.5-18.6 (ident "c"))
 					(e-call @18.9-18.30
 						(e-lookup-local @18.9-18.26
-							(pattern @10.1-10.18))
+							(p-assign @10.1-10.18 (ident "unused_underscore")))
 						(e-int @18.27-18.29 (value "15"))))
 				(s-let @19.5-19.25
 					(p-assign @19.5-19.6 (ident "d"))
 					(e-call @19.9-19.25
 						(e-lookup-local @19.9-19.21
-							(pattern @13.1-13.13))
+							(p-assign @13.1-13.13 (ident "used_regular")))
 						(e-int @19.22-19.24 (value "20"))))
 				(e-binop @20.5-21.2 (op "add")
 					(e-lookup-local @20.5-20.6
-						(pattern @16.5-16.6))
+						(p-assign @16.5-16.6 (ident "a")))
 					(e-binop @20.9-21.2 (op "add")
 						(e-lookup-local @20.9-20.10
-							(pattern @17.5-17.6))
+							(p-assign @17.5-17.6 (ident "b")))
 						(e-binop @20.13-21.2 (op "add")
 							(e-lookup-local @20.13-20.14
-								(pattern @18.5-18.6))
+								(p-assign @18.5-18.6 (ident "c")))
 							(e-lookup-local @20.17-20.18
-								(pattern @19.5-19.6)))))))))
+								(p-assign @19.5-19.6 (ident "d"))))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -51,10 +51,10 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 					(s-decl @6.5-6.38
 						(p-ident @6.5-6.9 (raw "data"))
 						(e-record @6.12-6.38
-							(field (field "name") (optional false)
+							(field (field "name")
 								(e-string @6.20-6.27
 									(e-string-part @6.21-6.26 (raw "Alice"))))
-							(field (field "age") (optional false)
+							(field (field "age")
 								(e-int @6.34-6.36 (raw "30")))))
 					(s-decl @7.5-7.27
 						(p-ident @7.5-7.12 (raw "encoded"))
@@ -103,7 +103,7 @@ main = {
 						(module-idx "0")
 						(target-node-idx "0"))
 					(e-lookup-local @7.22-7.26
-						(pattern @6.5-6.9))))
+						(p-assign @6.5-6.9 (ident "data")))))
 			(s-let @8.5-8.30
 				(p-assign @8.5-8.12 (ident "decoded"))
 				(e-call @8.15-8.30
@@ -111,9 +111,9 @@ main = {
 						(module-idx "0")
 						(target-node-idx "0"))
 					(e-lookup-local @8.22-8.29
-						(pattern @7.5-7.12))))
+						(p-assign @7.5-7.12 (ident "encoded")))))
 			(e-lookup-local @9.5-9.12
-				(pattern @8.5-8.12))))
+				(p-assign @8.5-8.12 (ident "decoded")))))
 	(s-import @3.1-3.43 (module "json.Json") (qualifier "json")
 		(exposes
 			(exposed (name "decode") (wildcard false))

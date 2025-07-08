@@ -439,7 +439,7 @@ combineResults = |result1, result2|
 					(module-idx "1")
 					(target-node-idx "0"))
 				(e-lookup-local @11.32-11.37
-					(pattern @11.14-11.19))))
+					(p-assign @11.14-11.19 (ident "input")))))
 		(annotation @11.1-11.10
 			(declared-type
 				(ty-fn @10.13-10.30 (effectful false)
@@ -461,31 +461,34 @@ combineResults = |result1, result2|
 						(e-dot-access @15.26-15.39 (field "body")
 							(receiver
 								(e-lookup-local @15.26-15.33
-									(pattern @14.14-14.21))))))
+									(p-assign @14.14-14.21 (ident "request")))))))
 				(e-match @16.5-19.6
 					(match @16.5-19.6
 						(cond
 							(e-lookup-local @16.11-16.17
-								(pattern @15.5-15.11)))
+								(p-assign @15.5-15.11 (ident "result"))))
 						(branches
 							(branch
 								(patterns
-									(p-applied-tag @17.9-17.17 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @17.9-17.17)))
 								(value
 									(e-runtime-error (tag "expr_not_canonicalized"))))
 							(branch
 								(patterns
-									(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized") (degenerate false)))
+									(pattern (degenerate false)
+										(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 								(value
 									(e-runtime-error (tag "expr_not_canonicalized"))))
 							(branch
 								(patterns
-									(p-applied-tag @18.9-18.17 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @18.9-18.17)))
 								(value
 									(e-tag @18.21-18.29 (name "Err")
 										(args
 											(e-lookup-local @18.25-18.28
-												(pattern @18.13-18.16)))))))))))
+												(p-assign @18.13-18.16 (ident "err"))))))))))))
 		(annotation @14.1-14.10
 			(declared-type
 				(ty-fn @13.13-13.62 (effectful false)
@@ -516,9 +519,9 @@ combineResults = |result1, result2|
 					(module-idx "1")
 					(target-node-idx "0"))
 				(e-lookup-local @27.62-27.74
-					(pattern @27.19-27.31))
+					(p-assign @27.19-27.31 (ident "parserConfig")))
 				(e-lookup-local @27.76-27.81
-					(pattern @27.33-27.38))))
+					(p-assign @27.33-27.38 (ident "input")))))
 		(annotation @27.1-27.15
 			(declared-type
 				(ty-fn @26.18-26.82 (effectful false)
@@ -540,46 +543,50 @@ combineResults = |result1, result2|
 				(match @32.5-39.6
 					(cond
 						(e-lookup-local @32.11-32.18
-							(pattern @31.19-31.26)))
+							(p-assign @31.19-31.26 (ident "result1"))))
 					(branches
 						(branch
 							(patterns
-								(p-applied-tag @33.9-33.19 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @33.9-33.19)))
 							(value
 								(e-match @34.13-37.14
 									(match @34.13-37.14
 										(cond
 											(e-lookup-local @34.19-34.26
-												(pattern @31.28-31.35)))
+												(p-assign @31.28-31.35 (ident "result2"))))
 										(branches
 											(branch
 												(patterns
-													(p-applied-tag @35.17-35.27 (degenerate false)))
+													(pattern (degenerate false)
+														(p-applied-tag @35.17-35.27)))
 												(value
 													(e-tag @35.31-35.51 (name "Ok")
 														(args
 															(e-tuple @35.34-35.50
 																(elems
 																	(e-lookup-local @35.35-35.41
-																		(pattern @33.12-33.18))
+																		(p-assign @33.12-33.18 (ident "value1")))
 																	(e-lookup-local @35.43-35.49
-																		(pattern @35.20-35.26))))))))
+																		(p-assign @35.20-35.26 (ident "value2")))))))))
 											(branch
 												(patterns
-													(p-applied-tag @36.17-36.25 (degenerate false)))
+													(pattern (degenerate false)
+														(p-applied-tag @36.17-36.25)))
 												(value
 													(e-tag @36.29-36.37 (name "Err")
 														(args
 															(e-lookup-local @36.33-36.36
-																(pattern @36.21-36.24)))))))))))
+																(p-assign @36.21-36.24 (ident "err"))))))))))))
 						(branch
 							(patterns
-								(p-applied-tag @38.9-38.17 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @38.9-38.17)))
 							(value
 								(e-tag @38.21-38.29 (name "Err")
 									(args
 										(e-lookup-local @38.25-38.28
-											(pattern @38.13-38.16))))))))))
+											(p-assign @38.13-38.16 (ident "err")))))))))))
 		(annotation @31.1-31.15
 			(declared-type
 				(ty-fn @30.18-30.71 (effectful false)

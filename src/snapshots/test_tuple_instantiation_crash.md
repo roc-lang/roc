@@ -101,9 +101,9 @@ NO CHANGE
 			(e-tuple @5.17-5.23
 				(elems
 					(e-lookup-local @5.18-5.19
-						(pattern @5.13-5.14))
+						(p-assign @5.13-5.14 (ident "y")))
 					(e-lookup-local @5.21-5.22
-						(pattern @5.10-5.11)))))
+						(p-assign @5.10-5.11 (ident "x"))))))
 		(annotation @5.1-5.5
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)
@@ -117,7 +117,7 @@ NO CHANGE
 		(p-assign @9.1-9.5 (ident "main"))
 		(e-call @9.8-9.18
 			(e-lookup-local @9.8-9.12
-				(pattern @5.1-5.5))
+				(p-assign @5.1-5.5 (ident "swap")))
 			(e-int @9.13-9.14 (value "1"))
 			(e-int @9.16-9.17 (value "2")))))
 ~~~

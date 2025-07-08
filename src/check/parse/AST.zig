@@ -1005,7 +1005,7 @@ pub const Statement = union(enum) {
             .@"for" => |a| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("s-for");
-                // ast.appendRegionInfoToSexprTree(env, tree, a.region); // TODO: missing in old code
+                ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
                 // pattern
@@ -2353,7 +2353,6 @@ pub const Expr = union(enum) {
                     const field_node = tree.beginNode();
                     tree.pushStaticAtom("field");
                     tree.pushStringPair("field", ast.resolve(record_field.name));
-                    tree.pushBoolPair("optional", record_field.optional);
                     const attrs2 = tree.beginNode();
                     if (record_field.value) |value_id| {
                         ast.store.getExpr(value_id).pushToSExprTree(env, ast, tree);
@@ -2574,7 +2573,6 @@ pub const PatternRecordField = struct {
 pub const RecordField = struct {
     name: Token.Idx,
     value: ?Expr.Idx,
-    optional: bool,
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
@@ -2596,7 +2594,6 @@ pub const RecordField = struct {
             value.pushToSExprTree(env, ast, tree);
         }
 
-        // tree.pushBool(self.optional); // TODO: this seems to be missing in the old code?
         tree.endNode(begin, attrs);
     }
 };
