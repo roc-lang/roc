@@ -20,6 +20,9 @@ idents: Ident.Store = .{},
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 types: types_mod.Store,
+/// Map of exposed items by their string representation (not interned)
+/// This is built during canonicalization and preserved for later use
+exposed_by_str: std.StringHashMapUnmanaged(void) = .{},
 
 /// Line starts for error reporting. We retain only start and offset positions in the IR
 /// and then use these line starts to calculate the line number and column number as required.
@@ -47,6 +50,7 @@ pub fn deinit(self: *Self) void {
     self.strings.deinit(self.gpa);
     self.types.deinit();
     self.line_starts.deinit();
+    self.exposed_by_str.deinit(self.gpa);
 }
 
 /// Calculate and store line starts from the source text

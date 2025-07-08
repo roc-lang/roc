@@ -346,3 +346,107 @@ test "complex case with redundant, shadowing, and not implemented" {
     try testing.expect(found_a_shadowing);
     try testing.expect(found_not_implemented);
 }
+
+test "exposed_by_str is populated correctly" {
+    const allocator = testing.allocator;
+
+    var env = base.ModuleEnv.init(allocator);
+    defer env.deinit();
+
+    const source =
+        \\module [foo, bar, MyType, foo]
+        \\
+        \\foo = 42
+        \\bar = "hello"
+        \\MyType : [A, B]
+    ;
+
+    var ast = parse.parse(&env, source);
+    defer ast.deinit(allocator);
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var canonicalizer = try canonicalize.init(&cir, &ast);
+    defer canonicalizer.deinit();
+
+    try canonicalizer.canonicalizeFile();
+
+    // Check that exposed_by_str contains all exposed items
+    try testing.expect(env.exposed_by_str.contains("foo"));
+    try testing.expect(env.exposed_by_str.contains("bar"));
+    try testing.expect(env.exposed_by_str.contains("MyType"));
+
+    // Should have exactly 3 entries (duplicates not stored)
+    try testing.expectEqual(@as(usize, 3), env.exposed_by_str.count());
+}
+
+test "exposed_by_str persists after canonicalization" {
+    const allocator = testing.allocator;
+
+    var env = base.ModuleEnv.init(allocator);
+    defer env.deinit();
+
+    const source =
+        \\module [x, y, z]
+        \\
+        \\x = 1
+        \\y = 2
+        \\# z is not defined
+    ;
+
+    var ast = parse.parse(&env, source);
+    defer ast.deinit(allocator);
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var canonicalizer = try canonicalize.init(&cir, &ast);
+    defer canonicalizer.deinit();
+
+    try canonicalizer.canonicalizeFile();
+
+    // All exposed items should be in exposed_by_str, even those not implemented
+    try testing.expect(env.exposed_by_str.contains("x"));
+    try testing.expect(env.exposed_by_str.contains("y"));
+    try testing.expect(env.exposed_by_str.contains("z"));
+
+    // Verify the map persists in env after canonicalization is complete
+    try testing.expectEqual(@as(usize, 3), env.exposed_by_str.count());
+}
+
+test "exposed_by_str never has entries removed" {
+    const allocator = testing.allocator;
+
+    var env = base.ModuleEnv.init(allocator);
+    defer env.deinit();
+
+    const source =
+        \\module [foo, bar, foo, baz]
+        \\
+        \\foo = 42
+        \\bar = "hello"
+        \\# baz is not implemented
+    ;
+
+    var ast = parse.parse(&env, source);
+    defer ast.deinit(allocator);
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var canonicalizer = try canonicalize.init(&cir, &ast);
+    defer canonicalizer.deinit();
+
+    try canonicalizer.canonicalizeFile();
+
+    // All exposed items should remain in exposed_by_str
+    // Even though foo appears twice and baz is not implemented,
+    // exposed_by_str should have all unique exposed identifiers
+    try testing.expect(env.exposed_by_str.contains("foo"));
+    try testing.expect(env.exposed_by_str.contains("bar"));
+    try testing.expect(env.exposed_by_str.contains("baz"));
+
+    // Should have exactly 3 unique entries
+    try testing.expectEqual(@as(usize, 3), env.exposed_by_str.count());
+}

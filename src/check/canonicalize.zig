@@ -674,6 +674,9 @@ fn createExposedScope(
 ) std.mem.Allocator.Error!void {
     const gpa = self.can_ir.env.gpa;
 
+    // Initialize exposed_scope
+    self.exposed_scope = Scope.init(false);
+
     const collection = self.parse_ir.store.getCollection(exposes);
     const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
 
@@ -684,6 +687,17 @@ fn createExposedScope(
                 // Get the text of the identifier token to use as key
                 const token_region = self.parse_ir.tokens.resolve(@intCast(ident.ident));
                 const ident_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+
+                // Add to exposed_by_str for permanent storage (unconditionally)
+                self.can_ir.env.exposed_by_str.put(gpa, ident_text, {}) catch |err| collections.utils.exitOnOom(err);
+
+                // Also build exposed_scope with proper identifiers
+                if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
+                    // Use a dummy pattern index - we just need to track that it's exposed
+                    const dummy_idx = @as(CIR.Pattern.Idx, @enumFromInt(0));
+                    self.exposed_scope.?.put(gpa, .ident, ident_idx, dummy_idx);
+                }
+
                 // Store by text in a temporary hash map, since indices may change
                 if (self.exposed_ident_texts == null) {
                     self.exposed_ident_texts = std.StringHashMapUnmanaged(Region){};
@@ -709,6 +723,17 @@ fn createExposedScope(
                 // Get the text of the identifier token to use as key
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_name.ident));
                 const type_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+
+                // Add to exposed_by_str for permanent storage (unconditionally)
+                self.can_ir.env.exposed_by_str.put(gpa, type_text, {}) catch |err| collections.utils.exitOnOom(err);
+
+                // Also build exposed_scope with proper identifiers
+                if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
+                    // Use a dummy statement index - we just need to track that it's exposed
+                    const dummy_idx = @as(CIR.Statement.Idx, @enumFromInt(0));
+                    self.exposed_scope.?.put(gpa, .type_decl, ident_idx, dummy_idx);
+                }
+
                 // Store by text in a temporary hash map, since indices may change
                 if (self.exposed_type_texts == null) {
                     self.exposed_type_texts = std.StringHashMapUnmanaged(Region){};
@@ -734,6 +759,17 @@ fn createExposedScope(
                 // Get the text of the identifier token to use as key
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_with_constructors.ident));
                 const type_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+
+                // Add to exposed_by_str for permanent storage (unconditionally)
+                self.can_ir.env.exposed_by_str.put(gpa, type_text, {}) catch |err| collections.utils.exitOnOom(err);
+
+                // Also build exposed_scope with proper identifiers
+                if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
+                    // Use a dummy statement index - we just need to track that it's exposed
+                    const dummy_idx = @as(CIR.Statement.Idx, @enumFromInt(0));
+                    self.exposed_scope.?.put(gpa, .type_decl, ident_idx, dummy_idx);
+                }
+
                 // Store by text in a temporary hash map, since indices may change
                 if (self.exposed_type_texts == null) {
                     self.exposed_type_texts = std.StringHashMapUnmanaged(Region){};
