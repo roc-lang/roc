@@ -25,10 +25,6 @@ match color {
       ^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),
@@ -72,7 +68,9 @@ match color {
 		(branches
 			(branch
 				(patterns
-					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+					(p-applied-tag @2.5-2.9 (degenerate false))
+					(p-applied-tag @2.12-2.17 (degenerate false))
+					(p-applied-tag @2.20-2.23 (degenerate false)))
 				(value
 					(e-int @2.27-2.28 (value "1"))))
 			(branch

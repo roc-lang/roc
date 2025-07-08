@@ -640,10 +640,6 @@ Is there an `import` or `exposing` missing up-top?
    ^^^^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
@@ -677,10 +673,6 @@ The unused variable is declared here:
   ^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
 **UNUSED VARIABLE**
 Variable ``rest`` is not used anywhere in your code.
 
@@ -694,7 +686,7 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -710,7 +702,7 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -726,11 +718,7 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
@@ -762,11 +750,11 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -2070,7 +2058,9 @@ expect {
 					(branches
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-applied-tag @85.3-85.7 (degenerate false))
+								(p-applied-tag @85.10-85.15 (degenerate false))
+								(p-applied-tag @85.18-85.21 (degenerate false)))
 							(value
 								(e-block @85.25-88.4
 									(s-let @86.4-86.10
@@ -2120,7 +2110,8 @@ expect {
 								(e-int @100.4-100.7 (value "100"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-str @101.3-101.4 (text """) (degenerate false))
+								(p-str @101.11-101.12 (text """) (degenerate false)))
 							(value
 								(e-int @101.20-101.23 (value "200"))))
 						(branch
@@ -2163,7 +2154,8 @@ expect {
 								(e-int @117.11-117.14 (value "314"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-small-dec @118.3-118.7 (degenerate false))
+								(p-small-dec @118.10-118.14 (degenerate false)))
 							(value
 								(e-int @118.18-118.21 (value "314"))))
 						(branch

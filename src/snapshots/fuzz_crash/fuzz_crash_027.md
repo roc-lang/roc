@@ -494,10 +494,6 @@ I am part way through parsing this tuple, but it is empty:
 
 If you want to represent nothing, try using an empty record: `{}`.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -520,9 +516,17 @@ Is there an `import` or `exposing` missing up-top?
      ^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
+**UNUSED VARIABLE**
+Variable ``lue`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:64:11:64:14:**
+```roc
+	match a {lue | Red => {
+```
+          ^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `ment` in this scope.
@@ -548,7 +552,7 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -576,11 +580,7 @@ ist
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
@@ -604,7 +604,7 @@ This feature is not yet implemented or doesn't have a proper error report yet: r
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -857,6 +857,54 @@ It is of type:
 
 But you are trying to use it as:
     _Bool_
+
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern in the third branch of this `match` differs from previous ones:
+**fuzz_crash_027.md:64:2:**
+```roc
+	match a {lue | Red => {
+			x x
+		}
+		Blue		=> 1
+		"foo" => # ent
+00
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
+			=> ment
+
+
+		[1, 2 | 5, 3, .. as rest] => 123
+		[
+ist
+		] => 123
+		3.14 => 314
+		3.14 | 6.28 => 314
+		(1, 2, 3) => 123
+		(1, 2 | 5, 3) => 123
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ # Afrd open
+			foo #
+				: #ue
+					1, # Aftd field
+			bar: 2,
+			..} => 12
+		{ foo: 1, bar: 2 | 7 } => 12
+		{
+			foo: 1,
+			} => 12
+		Ok(123) => 121000
+	}
+```
+  ^
+
+The third pattern has this type:
+    _Str_
+
+But all the previous patterns have this type: 
+    _[Red, Blue]*_
+
+All patterns in an `match` must have compatible types.
+
+
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1714,7 +1762,8 @@ main! = |_| { # Yeah Ie
 					(branches
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-assign @64.11-64.14 (ident "lue") (degenerate false))
+								(p-applied-tag @64.17-64.20 (degenerate false)))
 							(value
 								(e-block @64.24-66.4
 									(s-expr @65.4-65.7
@@ -1732,7 +1781,8 @@ main! = |_| { # Yeah Ie
 								(e-int @69.1-69.3 (value "0"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-str @70.3-70.4 (text """) (degenerate false))
+								(p-str @70.11-70.12 (text """) (degenerate false)))
 							(value
 								(e-int @70.20-70.22 (value "20"))))
 						(branch
@@ -1771,7 +1821,8 @@ main! = |_| { # Yeah Ie
 								(e-int @78.11-78.14 (value "314"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-small-dec @79.3-79.7 (degenerate false))
+								(p-small-dec @79.10-79.14 (degenerate false)))
 							(value
 								(e-int @79.18-79.21 (value "314"))))
 						(branch
