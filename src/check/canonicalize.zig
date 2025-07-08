@@ -701,6 +701,16 @@ fn createExposedScope(
     const collection = self.parse_ir.store.getCollection(exposes);
     const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
 
+    // Check if we have too many exports (>= maxInt(u16) to reserve 0 as potential sentinel)
+    if (exposed_items.len >= std.math.maxInt(u16)) {
+        const region = self.parse_ir.tokenizedRegionToRegion(collection.region);
+        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .too_many_exports = .{
+            .count = @intCast(exposed_items.len),
+            .region = region,
+        } });
+        return;
+    }
+
     for (exposed_items) |exposed_idx| {
         const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
         switch (exposed) {

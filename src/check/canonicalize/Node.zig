@@ -159,6 +159,7 @@ pub const Tag = enum {
     diag_value_not_exposed,
     diag_type_not_exposed,
     diag_module_not_imported,
+    diag_too_many_exports,
     diag_nominal_type_redeclared,
     diag_type_shadowed_warning,
     diag_type_parameter_conflict,

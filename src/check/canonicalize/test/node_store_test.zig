@@ -617,6 +617,13 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(CIR.Diagnostic{
+        .too_many_exports = .{
+            .count = 65536,
+            .region = from_raw_offsets(830, 840),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = store.addDiagnostic(diagnostic);

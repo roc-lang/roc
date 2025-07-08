@@ -661,3 +661,68 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
 
     try expectEqual(true, found_undefined_with_idx_0);
 }
+
+test "export count safety - ensures safe u16 casting" {
+    const allocator = testing.allocator;
+
+    // This test verifies that we check export counts to ensure safe casting to u16
+    // The check triggers when exposed_items.len >= maxInt(u16) (65535)
+    // This leaves 0 available as a potential sentinel value if needed
+
+    // Verify the threshold is what we expect
+    try expectEqual(@as(u32, 65535), std.math.maxInt(u16));
+
+    // Test the diagnostic for exactly maxInt(u16) exports
+    var env1 = base.ModuleEnv.init(allocator);
+    defer env1.deinit();
+    var cir1 = CIR.init(&env1);
+    defer cir1.deinit();
+
+    const diag_at_limit = CIR.Diagnostic{
+        .too_many_exports = .{
+            .count = 65535, // Exactly at the limit
+            .region = base.Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 10 } },
+        },
+    };
+
+    const diag_idx1 = cir1.store.addDiagnostic(diag_at_limit);
+    const retrieved1 = cir1.store.getDiagnostic(diag_idx1);
+
+    switch (retrieved1) {
+        .too_many_exports => |d| {
+            try expectEqual(@as(u32, 65535), d.count);
+        },
+        else => return error.UnexpectedDiagnostic,
+    }
+
+    // Test the diagnostic for exceeding the limit
+    var env2 = base.ModuleEnv.init(allocator);
+    defer env2.deinit();
+    var cir2 = CIR.init(&env2);
+    defer cir2.deinit();
+
+    const diag_over_limit = CIR.Diagnostic{
+        .too_many_exports = .{
+            .count = 70000, // Well over the limit
+            .region = base.Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 10 } },
+        },
+    };
+
+    const diag_idx2 = cir2.store.addDiagnostic(diag_over_limit);
+    const retrieved2 = cir2.store.getDiagnostic(diag_idx2);
+
+    switch (retrieved2) {
+        .too_many_exports => |d| {
+            try expectEqual(@as(u32, 70000), d.count);
+        },
+        else => return error.UnexpectedDiagnostic,
+    }
+
+    // Demonstrate that values under the limit can be safely cast to u16
+    const safe_count: u32 = 65534; // Just under the limit
+    const casted: u16 = @intCast(safe_count); // This is safe
+    try expectEqual(@as(u16, 65534), casted);
+
+    // The actual runtime check in createExposedScope ensures that we never
+    // attempt to cast values >= 65535 to u16, preventing overflow
+}

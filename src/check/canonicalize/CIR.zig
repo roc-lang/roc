@@ -309,6 +309,15 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
+        .too_many_exports => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildTooManyExportsReport(
+                allocator,
+                data.count,
+                region_info,
+                filename,
+            );
+        },
         .undeclared_type => |data| blk: {
             const type_name = self.env.idents.getText(data.name);
             const region_info = self.calcRegionInfo(data.region);

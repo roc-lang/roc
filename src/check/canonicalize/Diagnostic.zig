@@ -116,6 +116,10 @@ pub const Diagnostic = union(enum) {
         module_name: Ident.Idx,
         region: Region,
     },
+    too_many_exports: struct {
+        count: u32,
+        region: Region,
+    },
     undeclared_type: struct {
         name: Ident.Idx,
         region: Region,
@@ -194,6 +198,7 @@ pub const Diagnostic = union(enum) {
             .value_not_exposed => |d| d.region,
             .type_not_exposed => |d| d.region,
             .module_not_imported => |d| d.region,
+            .too_many_exports => |d| d.region,
             .undeclared_type => |d| d.region,
             .undeclared_type_var => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,
@@ -1101,6 +1106,38 @@ pub const Diagnostic = union(enum) {
         try report.document.addKeyword("import");
         try report.document.addText(" ");
         try report.document.addAnnotated(owned_module, .module_name);
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "too many exports" diagnostic
+    pub fn buildTooManyExportsReport(
+        allocator: Allocator,
+        count: u32,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "TOO MANY EXPORTS", .runtime_error);
+
+        const max_exports = std.math.maxInt(u16);
+
+        try report.document.addText("This module has ");
+        const count_str = try std.fmt.allocPrint(allocator, "{}", .{count});
+        defer allocator.free(count_str);
+        try report.document.addAnnotated(count_str, .emphasized);
+        try report.document.addText(" exports, but the maximum allowed is ");
+        const max_str = try std.fmt.allocPrint(allocator, "{}", .{max_exports});
+        defer allocator.free(max_str);
+        try report.document.addAnnotated(max_str, .emphasized);
+        try report.document.addText(".");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Consider splitting this module into smaller modules with fewer exports.");
 
         try report.document.addSourceRegion(
             region_info,

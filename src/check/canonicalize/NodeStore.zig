@@ -97,7 +97,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 39;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 40;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 25;
 /// Count of the statement nodes in the CIR
@@ -2673,6 +2673,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             region = r.region;
             node.data_1 = @as(u32, @bitCast(r.module_name));
         },
+        .too_many_exports => |r| {
+            node.tag = .diag_too_many_exports;
+            region = r.region;
+            node.data_1 = r.count;
+        },
         .nominal_type_redeclared => |r| {
             node.tag = .diag_nominal_type_redeclared;
             region = r.redeclared_region;
@@ -2881,6 +2886,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_module_not_imported => return CIR.Diagnostic{ .module_not_imported = .{
             .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_too_many_exports => return CIR.Diagnostic{ .too_many_exports = .{
+            .count = node.data_1,
             .region = store.getRegionAt(node_idx),
         } },
         .diag_undeclared_type_var => return CIR.Diagnostic{ .undeclared_type_var = .{
