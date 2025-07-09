@@ -225,12 +225,8 @@ test "import interner - Import.Idx functionality" {
     var found_json_decode = false;
     var found_set = false;
 
-    for (cir.imports.imports.items, 0..) |import, idx| {
-        const import_idx: CIR.Import.Idx = @enumFromInt(idx);
+    for (cir.imports.imports.items) |import| {
         const module_name = import.module_name;
-
-        // Import.Idx now directly represents the module index
-        _ = import_idx;
 
         if (std.mem.eql(u8, module_name, "List")) {
             found_list = true;
@@ -328,10 +324,9 @@ test "import interner - comprehensive usage example" {
 
     // Demo: Print all imports with their indices
     std.debug.print("\n=== Import Index Demo ===\n", .{});
-    for (cir.imports.imports.items, 0..) |import, idx| {
-        const import_idx: CIR.Import.Idx = @enumFromInt(idx);
+    for (cir.imports.imports.items) |import| {
         const module_name_text = import.module_name;
-        std.debug.print("Import.Idx {} -> module '{}'\n", .{ @intFromEnum(import_idx), module_name_text });
+        std.debug.print("Module '{}'\n", .{module_name_text});
     }
 }
 
