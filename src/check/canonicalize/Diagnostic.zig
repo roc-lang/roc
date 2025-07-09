@@ -68,6 +68,9 @@ pub const Diagnostic = union(enum) {
     can_lambda_not_implemented: struct {
         region: Region,
     },
+    too_many_errors: struct {
+        region: Region,
+    },
     lambda_body_not_canonicalized: struct {
         region: Region,
     },
@@ -192,6 +195,7 @@ pub const Diagnostic = union(enum) {
             .pattern_arg_invalid => |d| d.region,
             .pattern_not_canonicalized => |d| d.region,
             .can_lambda_not_implemented => |d| d.region,
+            .too_many_errors => |d| d.region,
             .lambda_body_not_canonicalized => |d| d.region,
             .if_condition_not_canonicalized => |d| d.region,
             .if_then_not_canonicalized => |d| d.region,
@@ -420,6 +424,17 @@ pub const Diagnostic = union(enum) {
     pub fn buildCanLambdaNotImplementedReport(allocator: Allocator) !Report {
         var report = Report.init(allocator, "NOT IMPLEMENTED", .runtime_error);
         try report.document.addReflowingText("Lambda expressions are not yet fully implemented.");
+        return report;
+    }
+
+    /// Build a report for "too many errors" diagnostic
+    pub fn buildTooManyErrorsReport(allocator: Allocator) !Report {
+        var report = Report.init(allocator, "TOO MANY ERRORS", .runtime_error);
+        try report.document.addReflowingText("Too many compilation errors occurred in this file.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("To reduce memory usage, some errors are no longer being tracked individually.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Please fix the errors shown above and recompile.");
         return report;
     }
 

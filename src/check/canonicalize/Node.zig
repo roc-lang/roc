@@ -145,6 +145,7 @@ pub const Tag = enum {
     diag_pattern_arg_invalid,
     diag_pattern_not_canonicalized,
     diag_can_lambda_not_implemented,
+    diag_too_many_errors,
     diag_lambda_body_not_canonicalized,
     diag_if_condition_not_canonicalized,
     diag_if_then_not_canonicalized,

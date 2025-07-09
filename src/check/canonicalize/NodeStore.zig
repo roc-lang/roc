@@ -17,6 +17,18 @@ const Ident = base.Ident;
 
 const exitOnOom = collections.exitOnOom;
 
+/// This prevents memory explosion when processing files with many compilation errors.
+/// Instead of creating unlimited malformed nodes (which can consume gigabytes of memory),
+/// the system creates up to a configurable limit, then reuses a single fallback node.
+fn getMaxMalformedNodes() usize {
+    if (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_MAX_MALFORMED_NODES")) |env_value| {
+        defer std.heap.page_allocator.free(env_value);
+        return std.fmt.parseInt(usize, env_value, 10) catch 1000;
+    } else |_| {
+        return 1000; // Default value
+    }
+}
+
 const NodeStore = @This();
 
 gpa: std.mem.Allocator,
@@ -38,6 +50,12 @@ scratch_anno_record_fields: base.Scratch(CIR.TypeAnno.RecordField.Idx),
 scratch_exposed_items: base.Scratch(CIR.ExposedItem.Idx),
 scratch_defs: base.Scratch(CIR.Def.Idx),
 scratch_diagnostics: base.Scratch(CIR.Diagnostic.Idx),
+
+/// Counter for malformed nodes created
+malformed_count: usize,
+
+/// Fallback malformed node to reuse after hitting the limit
+fallback_malformed_node: ?Node.Idx,
 
 /// Initializes the NodeStore
 pub fn init(gpa: std.mem.Allocator) NodeStore {
@@ -68,6 +86,8 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         .scratch_defs = base.Scratch(CIR.Def.Idx).init(gpa),
         .scratch_where_clauses = base.Scratch(CIR.WhereClause.Idx).init(gpa),
         .scratch_diagnostics = base.Scratch(CIR.Diagnostic.Idx).init(gpa),
+        .malformed_count = 0,
+        .fallback_malformed_node = null,
     };
 }
 
@@ -97,7 +117,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 42;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 43;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 28;
 /// Count of the statement nodes in the CIR
@@ -1276,6 +1296,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) CIR.Expr.
             node.data_2 = @bitCast(e.field_name);
             if (e.args) |args| {
                 // Use PackedDataSpan for efficient storage - FunctionArgs config is good for method call args
+
                 std.debug.assert(PackedDataSpan.FunctionArgs.canFit(args.span));
                 const packed_span = PackedDataSpan.FunctionArgs.fromDataSpanUnchecked(args.span);
                 node.data_3 = packed_span.toU32();
@@ -2320,6 +2341,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.tag = .diag_can_lambda_not_implemented;
             region = r.region;
         },
+        .too_many_errors => |r| {
+            node.tag = .diag_too_many_errors;
+            region = r.region;
+        },
         .lambda_body_not_canonicalized => |r| {
             node.tag = .diag_lambda_body_not_canonicalized;
             region = r.region;
@@ -2481,10 +2506,17 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
 /// The malformed node will generate a runtime_error in the CIR that properly
 /// references the diagnostic index.
 pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic) t {
-    // First create the diagnostic node
+    // If we've hit the limit, reuse the fallback node
+    const max_malformed_nodes = getMaxMalformedNodes();
+    if (store.malformed_count >= max_malformed_nodes) {
+        if (store.fallback_malformed_node) |fallback_idx| {
+            return @enumFromInt(@intFromEnum(fallback_idx));
+        }
+    }
+
+    // Create new malformed node
     const diagnostic_idx = store.addDiagnostic(reason);
 
-    // Then create a malformed node that references the diagnostic
     const malformed_node = Node{
         .data_1 = @intFromEnum(diagnostic_idx),
         .data_2 = 0,
@@ -2494,6 +2526,30 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
 
     const malformed_nid = @intFromEnum(store.nodes.append(store.gpa, malformed_node));
     _ = store.regions.append(store.gpa, reason.toRegion());
+
+    store.malformed_count += 1;
+
+    // If this is the limit, create and store a fallback node for future use
+    if (store.malformed_count == max_malformed_nodes) {
+
+        // Create a generic "too many errors" diagnostic
+        const fallback_diagnostic = CIR.Diagnostic{ .too_many_errors = .{
+            .region = reason.toRegion(),
+        } };
+        const fallback_diagnostic_idx = store.addDiagnostic(fallback_diagnostic);
+
+        const fallback_node = Node{
+            .data_1 = @intFromEnum(fallback_diagnostic_idx),
+            .data_2 = 0,
+            .data_3 = 0,
+            .tag = .malformed,
+        };
+
+        const fallback_nid = @intFromEnum(store.nodes.append(store.gpa, fallback_node));
+        _ = store.regions.append(store.gpa, fallback_diagnostic.toRegion());
+        store.fallback_malformed_node = @enumFromInt(fallback_nid);
+    }
+
     return @enumFromInt(malformed_nid);
 }
 
@@ -2567,6 +2623,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_can_lambda_not_implemented => return CIR.Diagnostic{ .can_lambda_not_implemented = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_too_many_errors => return CIR.Diagnostic{ .too_many_errors = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_lambda_body_not_canonicalized => return CIR.Diagnostic{ .lambda_body_not_canonicalized = .{
@@ -2878,5 +2937,7 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
         .scratch_defs = base.Scratch(CIR.Def.Idx){ .items = .{} },
         .scratch_diagnostics = base.Scratch(CIR.Diagnostic.Idx){ .items = .{} },
         .scratch_record_destructs = base.Scratch(CIR.Pattern.RecordDestruct.Idx){ .items = .{} },
+        .malformed_count = 0,
+        .fallback_malformed_node = null,
     };
 }

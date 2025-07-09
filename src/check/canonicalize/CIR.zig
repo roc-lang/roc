@@ -242,6 +242,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .pattern_arg_invalid => Diagnostic.buildPatternArgInvalidReport(allocator),
         .pattern_not_canonicalized => Diagnostic.buildPatternNotCanonicalizedReport(allocator),
         .can_lambda_not_implemented => Diagnostic.buildCanLambdaNotImplementedReport(allocator),
+        .too_many_errors => Diagnostic.buildTooManyErrorsReport(allocator),
         .lambda_body_not_canonicalized => Diagnostic.buildLambdaBodyNotCanonicalizedReport(allocator),
         .if_condition_not_canonicalized => Diagnostic.buildIfConditionNotCanonicalizedReport(allocator),
         .if_then_not_canonicalized => Diagnostic.buildIfThenNotCanonicalizedReport(allocator),
