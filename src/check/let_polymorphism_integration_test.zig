@@ -401,6 +401,25 @@ test "let-polymorphism error - incompatible list elements" {
     try testing.expect(result.has_type_errors);
 }
 
+test "match expression with empty list followed by rest pattern - regression test for segfault" {
+    const source =
+        \\let
+        \\    last = |l|
+        \\        match l {
+        \\            [] => Err(EmptyList),
+        \\            [.., e] => Ok(e),
+        \\        }
+        \\in
+        \\    last
+    ;
+
+    const result = try typeCheckExpr(test_allocator, source);
+    defer cleanup(result, test_allocator);
+
+    // This should not segfault and should type check correctly
+    try testing.expect(!result.has_type_errors);
+}
+
 test "let-polymorphism error - over-generalization attempt" {
     const source =
         \\[1, 2, 3, "hello"]
