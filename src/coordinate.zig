@@ -25,9 +25,9 @@ const Region = base.Region;
 const Package = base.Package;
 const PackageUrl = base.PackageUrl;
 const ModuleWork = base.ModuleWork;
-const ModuleWorkIdx = base.ModuleWorkIdx;
 const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
+const Node = can.Node;
 
 const DEFAULT_MAIN_FILENAME: []const u8 = "main.roc";
 const BUILTIN_FILENAMES: []const []const u8 = &.{};
@@ -40,9 +40,9 @@ pub const TypecheckResult = union(enum) {
     /// Data returned on the successful typechecking of a module.
     pub const Success = struct {
         packages: Package.Store,
-        main_module_idx: ModuleWorkIdx,
-        can_irs: ModuleWork(can.CIR).Store,
-        resolve_irs: ModuleWork(resolve.IR).Store,
+        main_module_idx: u32,
+        can_irs: std.ArrayList(ModuleWork(can.CIR)),
+        resolve_irs: std.ArrayList(ModuleWork(resolve.IR)),
     };
 
     /// Failure to typecheck a module.
@@ -106,7 +106,7 @@ pub fn typecheckModule(
     defer sccs.groups.deinit();
 
     const can_irs = switch (module_graph.putModulesInCompilationOrder(&sccs, gpa)) {
-        .ordered => |modules| modules,
+        .ordered => |store| store.items,
         .found_cycle => |cycle| {
             return .{ .err = .{ .found_cycle = .{
                 .packages = packages,
@@ -115,13 +115,16 @@ pub fn typecheckModule(
         },
     };
 
-    var main_module_idx: ?ModuleWorkIdx = null;
-    var index_iter = can_irs.iterIndices();
-    while (index_iter.next()) |idx| {
-        const module = can_irs.getModule(idx, &packages);
+    // Update all e_lookup_external nodes to use the correct module indices
+    updateExternalLookupIndices(can_irs, &module_graph);
+
+    var main_module_idx: ?u32 = null;
+    for (can_irs.items, 0..) |module_work, idx| {
+        const package = packages.packages.get(module_work.package_idx);
+        const module = package.modules.get(module_work.module_idx);
 
         if (std.mem.eql(u8, module.filepath_relative_to_package_root, root.entry_relative_path)) {
-            main_module_idx = idx;
+            main_module_idx = @intCast(idx);
         }
     }
 
@@ -129,10 +132,18 @@ pub fn typecheckModule(
         return .{ .err = .could_not_find_root_module };
     }
 
-    const resolve_irs = ModuleWork(resolve.IR).Store.initFromCanIrs(gpa, &can_irs);
-    index_iter = resolve_irs.iterIndices();
-    while (index_iter.next()) |idx| {
-        resolve.resolveImports(resolve_irs.getWork(idx), can_irs.getWork(idx), &resolve_irs);
+    var resolve_irs = std.ArrayList(ModuleWork(resolve.IR)).init(gpa);
+    resolve_irs.ensureTotalCapacity(can_irs.items.len) catch |err| exitOnOom(err);
+    for (can_irs.items) |can_work| {
+        resolve_irs.appendAssumeCapacity(.{
+            .package_idx = can_work.package_idx,
+            .module_idx = can_work.module_idx,
+            .work = resolve.IR.init(&can_work.work.env),
+        });
+    }
+
+    for (resolve_irs.items, can_irs.items) |*resolve_work, can_work| {
+        resolve.resolveImports(&resolve_work.work, &can_work.work, &resolve_irs);
     }
 
     // TODO
@@ -160,9 +171,9 @@ pub const BuildResult = union(enum) {
     /// The data returned on a successful attempt to prepare a module for codegen.
     pub const Success = struct {
         packages: Package.Store,
-        main_module_idx: ModuleWorkIdx,
-        can_irs: ModuleWork(can.IR).Store,
-        refcount_irs: ModuleWork(refcount.IR).Store,
+        main_module_idx: u32,
+        can_irs: std.ArrayList(ModuleWork(can.CIR)),
+        refcount_irs: std.ArrayList(ModuleWork(refcount.IR)),
     };
 };
 
@@ -182,52 +193,100 @@ pub fn prepareModuleForCodegen(
     const main_module_idx = typecheck_result.main_module_idx;
     const can_irs = typecheck_result.can_irs;
     const resolve_irs = typecheck_result.resolve_irs;
-    const type_stores = typecheck_result.type_stores;
+    _ = typecheck_result.type_stores;
 
-    const all_type_speced = ModuleWork(type_spec.IR).Store.initFromCanIrs(gpa, &can_irs);
-    var index_iter = all_type_speced.iterIndices();
-    while (index_iter.next()) |idx| {
+    var all_type_speced = std.ArrayList(ModuleWork(type_spec.IR)).init(gpa);
+    all_type_speced.ensureTotalCapacity(can_irs.items.len) catch |err| exitOnOom(err);
+    for (can_irs.items) |can_work| {
+        all_type_speced.appendAssumeCapacity(.{
+            .package_idx = can_work.package_idx,
+            .module_idx = can_work.module_idx,
+            .work = type_spec.IR.init(&can_work.work.env),
+        });
+    }
+
+    for (all_type_speced.items, resolve_irs.items, can_irs.items) |*type_spec_work, resolve_work, can_work| {
         type_spec.specializeTypes(
-            all_type_speced.getWork(idx),
-            resolve_irs.getWork(idx),
-            type_stores.getWork(idx),
+            &type_spec_work.work,
+            &resolve_work.work,
+            &can_work.work.env.types,
             &all_type_speced,
         );
     }
 
-    const all_func_lifted = ModuleWork(func_lift.IR).Store.initFromCanIrs(gpa, &can_irs);
-    index_iter = all_func_lifted.iterIndices();
-    while (index_iter.next()) |idx| {
-        func_lift.liftFunctions(all_func_lifted.getWork(idx), all_type_speced.getWork(idx), &all_func_lifted);
+    var all_func_lifted = std.ArrayList(ModuleWork(func_lift.IR)).init(gpa);
+    all_func_lifted.ensureTotalCapacity(can_irs.items.len) catch |err| exitOnOom(err);
+    for (can_irs.items) |can_work| {
+        all_func_lifted.appendAssumeCapacity(.{
+            .package_idx = can_work.package_idx,
+            .module_idx = can_work.module_idx,
+            .work = func_lift.IR.init(&can_work.work.env),
+        });
     }
 
-    const all_func_solved = ModuleWork(func_solve.IR).Store.initFromCanIrs(gpa, &can_irs);
-    index_iter = all_func_solved.iterIndices();
-    while (index_iter.next()) |idx| {
-        func_solve.solveFunctions(all_func_solved.getWork(idx), all_func_lifted.getWork(idx), &all_func_solved);
+    for (all_func_lifted.items, all_type_speced.items) |*func_lift_work, type_spec_work| {
+        func_lift.liftFunctions(&func_lift_work.work, &type_spec_work.work, &all_func_lifted);
     }
 
-    const all_func_speced = ModuleWork(func_spec.IR).Store.initFromCanIrs(gpa, &can_irs);
-    index_iter = all_func_speced.iterIndices();
-    while (index_iter.next()) |idx| {
+    var all_func_solved = std.ArrayList(ModuleWork(func_solve.IR)).init(gpa);
+    all_func_solved.ensureTotalCapacity(can_irs.items.len) catch |err| exitOnOom(err);
+    for (can_irs.items) |can_work| {
+        all_func_solved.appendAssumeCapacity(.{
+            .package_idx = can_work.package_idx,
+            .module_idx = can_work.module_idx,
+            .work = func_solve.IR.init(&can_work.work.env),
+        });
+    }
+
+    for (all_func_solved.items, all_func_lifted.items) |*func_solve_work, func_lift_work| {
+        func_solve.solveFunctions(&func_solve_work.work, &func_lift_work.work, &all_func_solved);
+    }
+
+    var all_func_speced = std.ArrayList(ModuleWork(func_spec.IR)).init(gpa);
+    all_func_speced.ensureTotalCapacity(can_irs.items.len) catch |err| exitOnOom(err);
+    for (can_irs.items) |can_work| {
+        all_func_speced.appendAssumeCapacity(.{
+            .package_idx = can_work.package_idx,
+            .module_idx = can_work.module_idx,
+            .work = func_spec.IR.init(&can_work.work.env),
+        });
+    }
+
+    for (all_func_speced.items, all_func_lifted.items, all_func_solved.items) |*func_spec_work, func_lift_work, func_solve_work| {
         func_spec.specializeFunctions(
-            all_func_speced.getWork(idx),
-            all_func_lifted.getWork(idx),
-            all_func_solved.getWork(idx),
+            &func_spec_work.work,
+            &func_lift_work.work,
+            &func_solve_work.work,
             &all_func_speced,
         );
     }
 
-    const all_lowered = ModuleWork(lower.IR).Store.initFromCanIrs(gpa, &can_irs);
-    index_iter = all_lowered.iterIndices();
-    while (index_iter.next()) |idx| {
-        lower.lowerStatements(all_lowered.getWork(idx), all_func_speced.getWork(idx), &all_lowered);
+    var all_lowered = std.ArrayList(ModuleWork(lower.IR)).init(gpa);
+    all_lowered.ensureTotalCapacity(can_irs.items.len) catch |err| exitOnOom(err);
+    for (can_irs.items) |can_work| {
+        all_lowered.appendAssumeCapacity(.{
+            .package_idx = can_work.package_idx,
+            .module_idx = can_work.module_idx,
+            .work = lower.IR.init(&can_work.work.env),
+        });
     }
 
-    const all_refcounted = ModuleWork(refcount.IR).Store.initFromCanIrs(gpa, &can_irs);
-    index_iter = all_refcounted.iterIndices();
-    while (index_iter.next()) |idx| {
-        refcount.referenceCount(all_refcounted.getWork(idx), all_lowered.getWork(idx), &all_refcounted);
+    for (all_lowered.items, all_func_speced.items) |*lower_work, func_spec_work| {
+        lower.lowerStatements(&lower_work.work, &func_spec_work.work, &all_lowered);
+    }
+
+    var all_refcounted = std.ArrayList(ModuleWork(refcount.IR)).init(gpa);
+    all_refcounted.ensureTotalCapacity(can_irs.items.len) catch |err| exitOnOom(err);
+    for (can_irs.items) |can_work| {
+        all_refcounted.appendAssumeCapacity(.{
+            .package_idx = can_work.package_idx,
+            .module_idx = can_work.module_idx,
+            .work = refcount.IR.init(&can_work.work.env),
+        });
+    }
+
+    for (all_refcounted.items, all_lowered.items) |*refcount_work, lower_work| {
+        refcount.referenceCount(&refcount_work.work, &lower_work.work, &all_refcounted);
     }
 
     return .{ .success = .{
@@ -236,6 +295,46 @@ pub fn prepareModuleForCodegen(
         .can_irs = can_irs,
         .refcount_irs = all_refcounted,
     } };
+}
+
+/// Update all e_lookup_external nodes to use the correct module indices after ordering
+fn updateExternalLookupIndices(
+    can_irs: std.ArrayList(ModuleWork(can.CIR)),
+    module_graph: *const ModuleGraph,
+) void {
+    // Create a map from (package_idx, module_idx) to the position in can_irs
+    var module_index_map = std.AutoHashMap(struct { Package.Idx, Package.Module.Idx }, u32).init(module_graph.gpa);
+    defer module_index_map.deinit();
+
+    // Build the map
+    for (can_irs.items, 0..) |module_work, idx| {
+        module_index_map.put(.{ module_work.package_idx, module_work.module_idx }, @intCast(idx)) catch |err| exitOnOom(err);
+    }
+
+    // Now update all e_lookup_external nodes in each module
+    for (can_irs.items) |*module_work| {
+        const cir = &module_work.work;
+
+        // Iterate through all nodes in the module
+        for (cir.store.nodes.items.items) |*node| {
+            if (node.tag == .expr_external_lookup) {
+                // Get the Import.Idx from the node
+                const import_idx: can.CIR.Import.Idx = @enumFromInt(node.data_1);
+
+                // Get the import info
+                const import = &cir.imports.imports.items.items[@intFromEnum(import_idx)];
+
+                // If the import has been resolved, update the node
+                if (import.resolved) |resolved| {
+                    // Find the position of this module in the ordered list
+                    if (module_index_map.get(.{ resolved.package_idx, resolved.module_idx })) |new_idx| {
+                        // Update the node to use the new module index
+                        node.data_1 = new_idx;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// The result of an attempt to discover all modules in all packages for compilation.

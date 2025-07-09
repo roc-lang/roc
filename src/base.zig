@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const parse = @import("check/parse.zig");
-const module_work = @import("base/module_work.zig");
 
 pub const SExprTree = @import("base/SExprTree.zig");
 pub const Ident = @import("base/Ident.zig");
@@ -14,8 +13,14 @@ pub const StringLiteral = @import("base/StringLiteral.zig");
 pub const RegionInfo = @import("base/RegionInfo.zig");
 pub const Scratch = @import("base/Scratch.zig").Scratch;
 
-pub const ModuleWork = module_work.ModuleWork;
-pub const ModuleWorkIdx = module_work.ModuleWorkIdx;
+/// The work done by a compiler stage for a module in a package, usually an IR.
+pub fn ModuleWork(comptime Work: type) type {
+    return struct {
+        package_idx: Package.Idx,
+        module_idx: Package.Module.Idx,
+        work: Work,
+    };
+}
 
 /// Whether a function calls itself.
 pub const Recursive = enum {

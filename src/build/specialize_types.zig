@@ -21,7 +21,7 @@ pub fn specializeTypes(
     ir: *IR,
     resolve_ir: *const resolve.IR,
     type_store: *const Type.Store,
-    other_modules: *const ModuleWork(IR).Store,
+    other_modules: *const std.ArrayList(ModuleWork(IR)),
 ) void {
     _ = ir;
     _ = resolve_ir;

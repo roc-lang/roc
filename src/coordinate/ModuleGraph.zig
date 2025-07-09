@@ -16,7 +16,6 @@ const types = @import("../types.zig");
 const Package = base.Package;
 const ModuleImport = base.ModuleImport;
 const ModuleWork = base.ModuleWork;
-const ModuleWorkIdx = base.ModuleWorkIdx;
 const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
@@ -198,7 +197,7 @@ pub const Sccs = struct {
 
 /// The result of an attempt to put modules in compilation order.
 pub const OrderingResult = union(enum) {
-    ordered: ModuleWork(Can.CIR).Store,
+    ordered: std.ArrayList(ModuleWork(Can.CIR)),
     found_cycle: std.ArrayList(ModuleWork(void)),
 };
 
@@ -240,7 +239,7 @@ pub fn putModulesInCompilationOrder(
         }
     }
 
-    return .{ .ordered = ModuleWork(Can.CIR).Store.fromCanIrs(gpa, modules.items) };
+    return .{ .ordered = modules };
 }
 
 /// Find the SCCs for a [ModuleGraph] to facilitate ordering modules in a dependency-first

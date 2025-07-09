@@ -18,7 +18,7 @@ pub const IR = @import("./lift_functions/IR.zig");
 pub fn liftFunctions(
     ir: *IR,
     type_spec_ir: *const type_spec.IR,
-    other_modules: *const ModuleWork(IR).Store,
+    other_modules: *const std.ArrayList(ModuleWork(IR)),
 ) void {
     _ = ir;
     _ = type_spec_ir;

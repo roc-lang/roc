@@ -13,7 +13,6 @@ const CIR = can.CIR;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
 const ModuleWork = base.ModuleWork;
-const ModuleWorkIdx = base.ModuleWorkIdx;
 const Ident = base.Ident;
 
 test "cross-module type checking - monomorphic function" {
@@ -83,7 +82,9 @@ test "cross-module type checking - monomorphic function" {
         .work = module_b_cir,
     });
 
-    const other_modules = ModuleWork(CIR).Store{ .items = module_works };
+    var other_modules = std.ArrayList(ModuleWork(CIR)).init(allocator);
+    defer other_modules.deinit();
+    try other_modules.appendSlice(module_works.items);
 
     // Type check module B
     var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
@@ -181,7 +182,9 @@ test "cross-module type checking - polymorphic function" {
         .work = module_b_cir,
     });
 
-    const other_modules = ModuleWork(CIR).Store{ .items = module_works };
+    var other_modules = std.ArrayList(ModuleWork(CIR)).init(allocator);
+    defer other_modules.deinit();
+    try other_modules.appendSlice(module_works.items);
 
     // Type check module B
     var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
@@ -293,7 +296,9 @@ test "cross-module type checking - record type" {
         .work = module_b_cir,
     });
 
-    const other_modules = ModuleWork(CIR).Store{ .items = module_works };
+    var other_modules = std.ArrayList(ModuleWork(CIR)).init(allocator);
+    defer other_modules.deinit();
+    try other_modules.appendSlice(module_works.items);
 
     // Type check module B
     var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
@@ -404,7 +409,9 @@ test "cross-module type checking - type mismatch error" {
         .work = module_b_cir,
     });
 
-    const other_modules = ModuleWork(CIR).Store{ .items = module_works };
+    var other_modules = std.ArrayList(ModuleWork(CIR)).init(allocator);
+    defer other_modules.deinit();
+    try other_modules.appendSlice(module_works.items);
 
     // Type check module B
     var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
@@ -502,7 +509,9 @@ test "cross-module type checking - polymorphic instantiation" {
         .work = module_b_cir,
     });
 
-    const other_modules = ModuleWork(CIR).Store{ .items = module_works };
+    var other_modules = std.ArrayList(ModuleWork(CIR)).init(allocator);
+    defer other_modules.deinit();
+    try other_modules.appendSlice(module_works.items);
 
     // Type check module B
     var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
@@ -600,7 +609,9 @@ test "cross-module type checking - preserves module A types" {
         .work = module_b_cir,
     });
 
-    const other_modules = ModuleWork(CIR).Store{ .items = module_works };
+    var other_modules = std.ArrayList(ModuleWork(CIR)).init(allocator);
+    defer other_modules.deinit();
+    try other_modules.appendSlice(module_works.items);
 
     // Type check module B
     var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
@@ -714,7 +725,9 @@ test "cross-module type checking - three module chain monomorphic" {
         .work = module_c_cir,
     });
 
-    const other_modules = ModuleWork(CIR).Store{ .items = module_works };
+    var other_modules = std.ArrayList(ModuleWork(CIR)).init(allocator);
+    defer other_modules.deinit();
+    try other_modules.appendSlice(module_works.items);
 
     // Type check module B
     var checker_b = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
@@ -837,7 +850,9 @@ test "cross-module type checking - three module chain polymorphic" {
         .work = module_c_cir,
     });
 
-    const other_modules = ModuleWork(CIR).Store{ .items = module_works };
+    var other_modules = std.ArrayList(ModuleWork(CIR)).init(allocator);
+    defer other_modules.deinit();
+    try other_modules.appendSlice(module_works.items);
 
     // Type check module B
     var checker_b = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
@@ -1001,7 +1016,9 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
         .work = module_c_cir,
     });
 
-    const other_modules = ModuleWork(CIR).Store{ .items = module_works };
+    var other_modules = std.ArrayList(ModuleWork(CIR)).init(allocator);
+    defer other_modules.deinit();
+    try other_modules.appendSlice(module_works.items);
 
     // Type check module B
     var checker_b = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
@@ -1172,7 +1189,9 @@ test "cross-module type checking - record type chain" {
         .work = module_c_cir,
     });
 
-    const other_modules = ModuleWork(CIR).Store{ .items = module_works };
+    var other_modules = std.ArrayList(ModuleWork(CIR)).init(allocator);
+    defer other_modules.deinit();
+    try other_modules.appendSlice(module_works.items);
 
     // Type check module B
     var checker_b = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
@@ -1352,7 +1371,9 @@ test "cross-module type checking - polymorphic record chain" {
         .work = module_c_cir,
     });
 
-    const other_modules = ModuleWork(CIR).Store{ .items = module_works };
+    var other_modules = std.ArrayList(ModuleWork(CIR)).init(allocator);
+    defer other_modules.deinit();
+    try other_modules.appendSlice(module_works.items);
 
     // Type check module B
     var checker_b = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
@@ -1536,7 +1557,9 @@ test "cross-module type checking - complex polymorphic chain with unification" {
         .work = module_c_cir,
     });
 
-    const other_modules = ModuleWork(CIR).Store{ .items = module_works };
+    var other_modules = std.ArrayList(ModuleWork(CIR)).init(allocator);
+    defer other_modules.deinit();
+    try other_modules.appendSlice(module_works.items);
 
     // Type check module B
     var checker_b = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);

@@ -13,7 +13,7 @@ pub const IR = @import("./reference_count/IR.zig");
 pub fn referenceCount(
     ir: *IR,
     lower_ir: *const lower.IR,
-    other_modules: *const ModuleWork(IR).Store,
+    other_modules: *const std.ArrayList(ModuleWork(IR)),
 ) void {
     _ = ir;
     _ = lower_ir;

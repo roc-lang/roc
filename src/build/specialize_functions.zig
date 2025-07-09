@@ -19,7 +19,7 @@ pub fn specializeFunctions(
     ir: *IR,
     func_lift_ir: *const func_lift.IR,
     function_sets: *const func_solve.IR,
-    other_modules: *const ModuleWork(IR).Store,
+    other_modules: *const std.ArrayList(ModuleWork(IR)),
 ) void {
     _ = ir;
     _ = func_lift_ir;

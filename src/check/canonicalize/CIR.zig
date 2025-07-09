@@ -814,11 +814,6 @@ pub const Import = struct {
             }
             return gop.value_ptr.*;
         }
-
-        /// Get the module name for an Import.Idx
-        pub fn getModuleName(self: *const Store, idx: Import.Idx) []const u8 {
-            return self.imports.items[@intFromEnum(idx)];
-        }
     };
 };
 
