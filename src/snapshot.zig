@@ -1609,11 +1609,11 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
         original_tree.toStringPretty(original_sexpr.writer().any());
 
         // Create and serialize MmapCache
-        const cache_data = try cache.Cache.create(gpa, &module_env, &can_ir);
+        const cache_data = try cache.CacheModule.create(gpa, &module_env, &can_ir);
         defer gpa.free(cache_data);
 
         // Deserialize back
-        var loaded_cache = try cache.Cache.fromMappedMemory(cache_data);
+        var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
 
         // Restore ModuleEnv and CIR
         const restored = try loaded_cache.restore(gpa);

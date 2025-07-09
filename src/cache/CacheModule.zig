@@ -95,7 +95,7 @@ pub const Header = struct {
 };
 
 /// Memory-mapped cache that can be read directly from disk
-pub const Cache = struct {
+pub const CacheModule = struct {
     header: *const Header,
     data: []align(SERIALIZATION_ALIGNMENT) const u8,
 
@@ -219,7 +219,7 @@ pub const Cache = struct {
     }
 
     /// Load a cache from memory-mapped data
-    pub fn fromMappedMemory(mapped_data: []align(SERIALIZATION_ALIGNMENT) const u8) !Cache {
+    pub fn fromMappedMemory(mapped_data: []align(SERIALIZATION_ALIGNMENT) const u8) !CacheModule {
         if (mapped_data.len < @sizeOf(Header)) {
             return error.BufferTooSmall;
         }
@@ -242,7 +242,7 @@ pub const Cache = struct {
         const calculated_checksum = std.hash.Crc32.hash(data);
         if (header.checksum != calculated_checksum) return error.ChecksumMismatch;
 
-        return Cache{
+        return CacheModule{
             .header = header,
             .data = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(data)),
         };
@@ -255,7 +255,7 @@ pub const Cache = struct {
     };
 
     /// Restore ModuleEnv and CIR from the cached data
-    pub fn restore(self: *const Cache, allocator: Allocator) !RestoredData {
+    pub fn restore(self: *const CacheModule, allocator: Allocator) !RestoredData {
         // Deserialize each component
         const node_store = try NodeStore.deserializeFrom(
             @as([]align(@alignOf(Node)) const u8, @alignCast(self.getComponentData(.node_store))),
@@ -316,7 +316,7 @@ pub const Cache = struct {
     }
 
     /// Get the raw data for a specific component
-    pub fn getComponentData(self: *const Cache, comptime component: ComponentType) []const u8 {
+    pub fn getComponentData(self: *const CacheModule, comptime component: ComponentType) []const u8 {
         const info = switch (component) {
             .node_store => self.header.node_store,
             .string_store => self.header.string_store,
@@ -332,7 +332,7 @@ pub const Cache = struct {
     }
 
     /// Get diagnostic information about the cache
-    pub fn getDiagnostics(self: *const Cache) Diagnostics {
+    pub fn getDiagnostics(self: *const CacheModule) Diagnostics {
         return Diagnostics{
             .total_size = @sizeOf(Header) + self.header.data_size,
             .header_size = @sizeOf(Header),
@@ -353,7 +353,7 @@ pub const Cache = struct {
     }
 
     /// Validate the cache structure and integrity
-    pub fn validate(self: *const Cache) !void {
+    pub fn validate(self: *const CacheModule) !void {
         // Validate component offsets are within bounds
         inline for (std.meta.fields(ComponentType)) |field| {
             const component = @field(ComponentType, field.name);
@@ -372,6 +372,141 @@ pub const Cache = struct {
             if (info.offset + info.length > self.header.data_size) {
                 return error.ComponentOutOfBounds;
             }
+        }
+    }
+
+    /// Convenience functions for reading/writing cache files
+    pub fn writeToFile(
+        allocator: Allocator,
+        cache_data: []const u8,
+        file_path: []const u8,
+        filesystem: anytype,
+    ) !void {
+        _ = allocator;
+        try filesystem.writeFile(file_path, cache_data);
+    }
+
+    /// Convenience function for reading cache files
+    pub fn readFromFile(
+        allocator: Allocator,
+        file_path: []const u8,
+        filesystem: anytype,
+    ) ![]align(SERIALIZATION_ALIGNMENT) u8 {
+        const file_data = try filesystem.readFile(file_path, allocator);
+        defer allocator.free(file_data);
+
+        const buffer = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, file_data.len);
+        @memcpy(buffer, file_data);
+
+        return buffer;
+    }
+
+    /// Tagged union to represent cache data that can be either memory-mapped or heap-allocated
+    pub const CacheData = union(enum) {
+        mapped: struct {
+            ptr: [*]align(SERIALIZATION_ALIGNMENT) const u8,
+            len: usize,
+            unaligned_ptr: [*]const u8,
+            unaligned_len: usize,
+        },
+        allocated: []align(SERIALIZATION_ALIGNMENT) const u8,
+
+        pub fn data(self: CacheData) []align(SERIALIZATION_ALIGNMENT) const u8 {
+            return switch (self) {
+                .mapped => |m| m.ptr[0..m.len],
+                .allocated => |a| a,
+            };
+        }
+
+        pub fn deinit(self: CacheData, allocator: Allocator) void {
+            switch (self) {
+                .mapped => |m| {
+                    // Use the unaligned pointer for munmap
+                    const page_aligned_ptr = @as([*]align(std.heap.page_size_min) const u8, @alignCast(m.unaligned_ptr));
+                    std.posix.munmap(page_aligned_ptr[0..m.unaligned_len]);
+                },
+                .allocated => |a| allocator.free(a),
+            }
+        }
+    };
+
+    /// Read cache file using memory mapping for better performance when available
+    pub fn readFromFileMapped(
+        allocator: Allocator,
+        file_path: []const u8,
+        filesystem: anytype,
+    ) !CacheData {
+        // Try to use memory mapping on supported platforms
+        if (comptime @hasDecl(std.posix, "mmap")) {
+            // Open the file
+            const file = std.fs.cwd().openFile(file_path, .{ .mode = .read_only }) catch {
+                // Fall back to regular reading on open error
+                const data = try readFromFile(allocator, file_path, filesystem);
+                return CacheData{ .allocated = data };
+            };
+            defer file.close();
+
+            // Get file size
+            const stat = try file.stat();
+            const file_size = stat.size;
+
+            // Memory map the file
+            const mapped_memory = if (comptime @import("builtin").target.os.tag == .macos or
+                @import("builtin").target.os.tag == .ios or
+                @import("builtin").target.os.tag == .tvos or
+                @import("builtin").target.os.tag == .watchos)
+                std.posix.mmap(
+                    null,
+                    file_size,
+                    std.posix.PROT.READ,
+                    .{ .TYPE = .PRIVATE },
+                    file.handle,
+                    0,
+                )
+            else
+                std.posix.mmap(
+                    null,
+                    file_size,
+                    std.posix.PROT.READ,
+                    std.posix.MAP.PRIVATE,
+                    file.handle,
+                    0,
+                );
+
+            const result = mapped_memory catch {
+                // Fall back to regular reading on mmap error
+                const data = try readFromFile(allocator, file_path, filesystem);
+                return CacheData{ .allocated = data };
+            };
+
+            // Find the aligned portion within the mapped memory
+            const unaligned_ptr = @as([*]const u8, @ptrCast(result.ptr));
+            const addr = @intFromPtr(unaligned_ptr);
+            const aligned_addr = std.mem.alignForward(usize, addr, SERIALIZATION_ALIGNMENT);
+            const offset = aligned_addr - addr;
+
+            if (offset >= file_size) {
+                // File is too small to contain aligned data
+                std.posix.munmap(result);
+                const data = try readFromFile(allocator, file_path, filesystem);
+                return CacheData{ .allocated = data };
+            }
+
+            const aligned_ptr = @as([*]align(SERIALIZATION_ALIGNMENT) const u8, @ptrFromInt(aligned_addr));
+            const aligned_len = file_size - offset;
+
+            return CacheData{
+                .mapped = .{
+                    .ptr = aligned_ptr,
+                    .len = aligned_len,
+                    .unaligned_ptr = unaligned_ptr,
+                    .unaligned_len = file_size,
+                },
+            };
+        } else {
+            // Platform doesn't support mmap, use regular file reading
+            const data = try readFromFile(allocator, file_path, filesystem);
+            return CacheData{ .allocated = data };
         }
     }
 };
@@ -407,32 +542,6 @@ pub const Diagnostics = struct {
         external_decls: u32,
     },
 };
-
-/// Convenience functions for reading/writing cache files
-pub fn writeToFile(
-    allocator: Allocator,
-    cache_data: []const u8,
-    file_path: []const u8,
-    filesystem: anytype,
-) !void {
-    _ = allocator;
-    try filesystem.writeFile(file_path, cache_data);
-}
-
-/// Convenience function for reading cache files
-pub fn readFromFile(
-    allocator: Allocator,
-    file_path: []const u8,
-    filesystem: anytype,
-) ![]align(SERIALIZATION_ALIGNMENT) u8 {
-    const file_data = try filesystem.readFile(file_path, allocator);
-    defer allocator.free(file_data);
-
-    const buffer = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, file_data.len);
-    @memcpy(buffer, file_data);
-
-    return buffer;
-}
 
 test "Header alignment" {
     // Verify the header is properly aligned
@@ -479,11 +588,11 @@ test "create and restore cache" {
     original_tree.toStringPretty(original_sexpr.writer().any());
 
     // Create cache from real data
-    const cache_data = try Cache.create(gpa, &module_env, &cir);
+    const cache_data = try CacheModule.create(gpa, &module_env, &cir);
     defer gpa.free(cache_data);
 
     // Load cache
-    var cache = try Cache.fromMappedMemory(cache_data);
+    var cache = try CacheModule.fromMappedMemory(cache_data);
 
     // Validate cache
     try cache.validate();
@@ -554,7 +663,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     original_tree.toStringPretty(original_sexpr.writer().any());
 
     // Create cache from real data
-    const cache_data = try Cache.create(gpa, &module_env, &cir);
+    const cache_data = try CacheModule.create(gpa, &module_env, &cir);
     defer gpa.free(cache_data);
 
     // In-memory file storage for comprehensive mock filesystem
@@ -613,20 +722,20 @@ test "cache filesystem roundtrip with in-memory storage" {
 
     // Test full roundtrip: write cache to mock filesystem
     const test_path = "comprehensive_test_cache.bin";
-    try writeToFile(gpa, cache_data, test_path, filesystem);
+    try CacheModule.writeToFile(gpa, cache_data, test_path, filesystem);
 
     // Verify the data was stored
     try std.testing.expect(file_storage.contains(test_path));
 
     // Read the cache back from mock filesystem
-    const read_cache_data = try readFromFile(gpa, test_path, filesystem);
+    const read_cache_data = try CacheModule.readFromFile(gpa, test_path, filesystem);
     defer gpa.free(read_cache_data);
 
     // Verify the read data matches the original
     try std.testing.expectEqualSlices(u8, cache_data, read_cache_data);
 
     // Load and validate the cache from the roundtrip data
-    var roundtrip_cache = try Cache.fromMappedMemory(read_cache_data);
+    var roundtrip_cache = try CacheModule.fromMappedMemory(read_cache_data);
     try roundtrip_cache.validate();
 
     // Restore from the roundtrip cache

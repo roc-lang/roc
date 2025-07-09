@@ -5,7 +5,7 @@ test {
     testing.refAllDeclsRecursive(@import("main.zig"));
     testing.refAllDeclsRecursive(@import("builtins/main.zig"));
     testing.refAllDeclsRecursive(@import("cache/mod.zig"));
-    testing.refAllDeclsRecursive(@import("cache/Cache.zig"));
+    testing.refAllDeclsRecursive(@import("cache/CacheModule.zig"));
     testing.refAllDeclsRecursive(@import("serialization/mod.zig"));
 
     // TODO: Remove after hooking up

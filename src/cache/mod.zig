@@ -6,13 +6,16 @@
 const std = @import("std");
 
 // Re-export the unified cache
-pub const Cache = @import("Cache.zig").Cache;
-pub const Header = @import("Cache.zig").Header;
-pub const Diagnostics = @import("Cache.zig").Diagnostics;
+pub const CacheModule = @import("CacheModule.zig").CacheModule;
+pub const Header = @import("CacheModule.zig").Header;
+pub const Diagnostics = @import("CacheModule.zig").Diagnostics;
 
-// Re-export convenience functions
-pub const writeToFile = @import("Cache.zig").writeToFile;
-pub const readFromFile = @import("Cache.zig").readFromFile;
+// Re-export new cache management components
+pub const CacheManager = @import("CacheManager.zig").CacheManager;
+pub const CacheResult = @import("CacheManager.zig").CacheResult;
+pub const CacheKey = @import("CacheKey.zig").CacheKey;
+pub const CacheConfig = @import("CacheConfig.zig").CacheConfig;
+pub const CacheStats = @import("CacheConfig.zig").CacheStats;
 
 /// Cache configuration constants
 pub const Config = struct {
@@ -84,7 +87,7 @@ test "cache module" {
     const allocator = std.testing.allocator;
 
     // Test that we can access the main types
-    _ = Cache;
+    _ = CacheModule;
     _ = Header;
     _ = Diagnostics;
 
