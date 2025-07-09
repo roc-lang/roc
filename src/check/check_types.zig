@@ -36,6 +36,9 @@ problems: problem.Store,
 unify_scratch: unifier.Scratch,
 occurs_scratch: occurs.Scratch,
 instantiate_subs: instantiate.VarSubstitution,
+// Temporary import resolution mapping until proper import resolution is implemented
+// Maps from CIR.Import.Idx to ModuleWorkIdx
+import_to_module_map: ?std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx),
 
 /// Init type solver
 /// Does *not* own types_store or can_ir, but *does* own other fields
@@ -55,6 +58,7 @@ pub fn init(
         .unify_scratch = unifier.Scratch.init(gpa),
         .occurs_scratch = occurs.Scratch.init(gpa),
         .instantiate_subs = instantiate.VarSubstitution.init(gpa),
+        .import_to_module_map = null,
     };
 }
 
@@ -65,6 +69,23 @@ pub fn deinit(self: *Self) void {
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
     self.instantiate_subs.deinit();
+    if (self.import_to_module_map) |*map| {
+        map.deinit();
+    }
+}
+
+/// Set up temporary import resolution mapping for testing
+/// This is a temporary solution until proper import resolution is implemented
+pub fn setImportMapping(self: *Self, mapping: *const std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx)) !void {
+    if (self.import_to_module_map) |*old_map| {
+        old_map.deinit();
+    }
+    var new_map = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(self.gpa);
+    var iter = mapping.iterator();
+    while (iter.next()) |entry| {
+        try new_map.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
+    self.import_to_module_map = new_map;
 }
 
 /// Unify two types
@@ -210,36 +231,42 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
             // Check if we have access to other modules
             if (self.other_modules) |other_modules| {
-                // TODO: In a real implementation, e.module_idx would be a CIR.Import.Idx
-                // and we would need to resolve it to a ModuleWorkIdx through import resolution.
-                // For now, we expect e.module_idx to be cast directly to a ModuleWorkIdx.
-                const module_work_idx = @as(base.ModuleWorkIdx, @enumFromInt(@intFromEnum(e.module_idx)));
+                // Import resolution is not yet implemented in the compiler.
+                // For testing purposes, we support a temporary import mapping.
+                const module_idx = if (self.import_to_module_map) |mapping|
+                    mapping.get(e.module_idx)
+                else
+                    null;
 
-                const other_module_cir = other_modules.getWork(module_work_idx);
-                const other_module_env = &other_module_cir.env;
+                if (module_idx) |mod_idx| {
+                    const other_module_cir = other_modules.getWork(mod_idx);
+                    const other_module_env = &other_module_cir.env;
 
-                // The target_node_idx points to an expression in the other module
-                // We need to get the type variable associated with that expression
-                const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(e.target_node_idx));
-                const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
+                    // The target_node_idx points to an expression in the other module
+                    const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(e.target_node_idx));
+                    const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
 
-                // Copy the type from the imported module to our module
-                const copied_var = try copy_import.copyImportedType(
-                    &other_module_env.*.types,
-                    self.types,
-                    imported_var,
-                    self.gpa,
-                );
+                    // Copy the type from the imported module to our module
+                    const copied_var = try copy_import.copyImportedType(
+                        &other_module_env.*.types,
+                        self.types,
+                        imported_var,
+                        self.gpa,
+                    );
 
-                // Unify our expression with the copied type
-                const result = self.unify(expr_var, copied_var);
-                if (result.isProblem()) {
-                    // Handle the unification problem
-                    const problem_idx = result.problem;
-                    _ = problem_idx; // TODO: properly handle cross-module type errors
+                    // Unify our expression with the copied type
+                    const result = self.unify(expr_var, copied_var);
+                    if (result.isProblem()) {
+                        // Handle the unification problem
+                        const problem_idx = result.problem;
+                        _ = problem_idx; // TODO: properly handle cross-module type errors
+                    }
+                } else {
+                    // Import not found in mapping
+                    try self.types.setVarContent(expr_var, .err);
                 }
             } else {
-                // No other modules available, set to error
+                // No other modules available
                 try self.types.setVarContent(expr_var, .err);
             }
         },

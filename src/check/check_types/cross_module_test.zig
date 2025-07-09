@@ -62,14 +62,13 @@ test "cross-module type checking - monomorphic function" {
     var module_b_cir = CIR.init(&module_b_env);
     defer module_b_cir.deinit();
 
-    // Register the import of module A (for future use when import resolution is implemented)
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    // Register the import of module A
+    const module_a_import_idx = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    // Module A is at index 0 in the module_works list
     const external_lookup_expr = module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // ModuleWorkIdx for module A
+            .module_idx = module_a_import_idx,
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -86,6 +85,12 @@ test "cross-module type checking - monomorphic function" {
     // Type check module B
     var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
     defer checker.deinit();
+
+    // Set up import mapping for testing (temporary until import resolution is implemented)
+    var import_map = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map.deinit();
+    try import_map.put(module_a_import_idx, @enumFromInt(0)); // ModuleA maps to module at index 0
+    try checker.setImportMapping(&import_map);
 
     _ = try checker.checkExpr(external_lookup_expr);
 
@@ -159,14 +164,13 @@ test "cross-module type checking - polymorphic function" {
     var module_b_cir = CIR.init(&module_b_env);
     defer module_b_cir.deinit();
 
-    // Register the import of module A (for future use when import resolution is implemented)
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    // Register the import of module A
+    const module_a_import_idx = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    // Module A is at index 0 in the module_works list
     const external_lookup_expr = module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // ModuleWorkIdx for module A
+            .module_idx = module_a_import_idx,
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -183,6 +187,12 @@ test "cross-module type checking - polymorphic function" {
     // Type check module B
     var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
     defer checker.deinit();
+
+    // Set up import mapping for testing
+    var import_map = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map.deinit();
+    try import_map.put(module_a_import_idx, @enumFromInt(0));
+    try checker.setImportMapping(&import_map);
 
     _ = try checker.checkExpr(external_lookup_expr);
 
@@ -270,14 +280,13 @@ test "cross-module type checking - record type" {
     var module_b_cir = CIR.init(&module_b_env);
     defer module_b_cir.deinit();
 
-    // Register the import of module A (for future use when import resolution is implemented)
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    // Register the import of module A
+    const module_a_import_idx = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    // Module A is at index 0 in the module_works list
     const external_lookup_expr = module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // ModuleWorkIdx for module A
+            .module_idx = module_a_import_idx,
             .target_node_idx = @intCast(@intFromEnum(record_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -294,6 +303,12 @@ test "cross-module type checking - record type" {
     // Type check module B
     var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
     defer checker.deinit();
+
+    // Set up import mapping for testing
+    var import_map = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map.deinit();
+    try import_map.put(module_a_import_idx, @enumFromInt(0));
+    try checker.setImportMapping(&import_map);
 
     _ = try checker.checkExpr(external_lookup_expr);
 
@@ -354,14 +369,13 @@ test "cross-module type checking - type mismatch error" {
     var module_b_cir = CIR.init(&module_b_env);
     defer module_b_cir.deinit();
 
-    // Register the import of module A (for future use when import resolution is implemented)
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    // Register the import of module A
+    const module_a_import_idx = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    // Module A is at index 0 in the module_works list
     const external_lookup_expr = module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // ModuleWorkIdx for module A
+            .module_idx = module_a_import_idx,
             .target_node_idx = @intCast(@intFromEnum(i32_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -404,6 +418,12 @@ test "cross-module type checking - type mismatch error" {
     // Type check module B
     var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
     defer checker.deinit();
+
+    // Set up import mapping for testing
+    var import_map = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map.deinit();
+    try import_map.put(module_a_import_idx, @enumFromInt(0));
+    try checker.setImportMapping(&import_map);
 
     _ = try checker.checkExpr(external_lookup_expr);
     _ = try checker.checkExpr(str_expr);
@@ -450,14 +470,13 @@ test "cross-module type checking - polymorphic instantiation" {
     var module_b_cir = CIR.init(&module_b_env);
     defer module_b_cir.deinit();
 
-    // Register the import of module A (for future use when import resolution is implemented)
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    // Register the import of module A
+    const module_a_import_idx = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    // Module A is at index 0 in the module_works list
     const external_lookup_expr = module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // ModuleWorkIdx for module A
+            .module_idx = module_a_import_idx,
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -501,6 +520,12 @@ test "cross-module type checking - polymorphic instantiation" {
     // Type check module B
     var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
     defer checker.deinit();
+
+    // Set up import mapping for testing
+    var import_map = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map.deinit();
+    try import_map.put(module_a_import_idx, @enumFromInt(0));
+    try checker.setImportMapping(&import_map);
 
     _ = try checker.checkExpr(external_lookup_expr);
     _ = try checker.checkExpr(list_expr);
@@ -557,14 +582,13 @@ test "cross-module type checking - preserves module A types" {
     var module_b_cir = CIR.init(&module_b_env);
     defer module_b_cir.deinit();
 
-    // Register the import of module A (for future use when import resolution is implemented)
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    // Register the import of module A
+    const module_a_import_idx = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    // Module A is at index 0 in the module_works list
     const external_lookup_expr = module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // ModuleWorkIdx for module A
+            .module_idx = module_a_import_idx,
             .target_node_idx = @intCast(@intFromEnum(flex_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -598,6 +622,12 @@ test "cross-module type checking - preserves module A types" {
     // Type check module B
     var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
     defer checker.deinit();
+
+    // Set up import mapping for testing
+    var import_map = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map.deinit();
+    try import_map.put(module_a_import_idx, @enumFromInt(0));
+    try checker.setImportMapping(&import_map);
 
     _ = try checker.checkExpr(external_lookup_expr);
     _ = try checker.checkExpr(i32_expr);
@@ -655,12 +685,11 @@ test "cross-module type checking - three module chain monomorphic" {
     var module_b_cir = CIR.init(&module_b_env);
     defer module_b_cir.deinit();
 
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    const module_a_import_idx = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
-    // Module A is at index 0 in the module_works list
     const b_lookup_expr = module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // ModuleWorkIdx for module A
+            .module_idx = module_a_import_idx,
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -673,12 +702,11 @@ test "cross-module type checking - three module chain monomorphic" {
     var module_c_cir = CIR.init(&module_c_env);
     defer module_c_cir.deinit();
 
-    _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
+    const module_b_import_idx = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
 
-    // Module B is at index 1 in the module_works list
     const c_lookup_expr = module_c_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(1), // ModuleWorkIdx for module B
+            .module_idx = module_b_import_idx,
             .target_node_idx = @intCast(@intFromEnum(b_lookup_expr)),
             .region = base.Region.zero(),
         },
@@ -712,11 +740,23 @@ test "cross-module type checking - three module chain monomorphic" {
     var checker_b = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
     defer checker_b.deinit();
 
+    // Set up import mapping for module B
+    var import_map_b = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map_b.deinit();
+    try import_map_b.put(module_a_import_idx, @enumFromInt(0));
+    try checker_b.setImportMapping(&import_map_b);
+
     _ = try checker_b.checkExpr(b_lookup_expr);
 
     // Type check module C
     var checker_c = try check_types.init(allocator, &module_c_env.types, &module_c_cir, &other_modules);
     defer checker_c.deinit();
+
+    // Set up import mapping for module C
+    var import_map_c = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map_c.deinit();
+    try import_map_c.put(module_b_import_idx, @enumFromInt(1));
+    try checker_c.setImportMapping(&import_map_c);
 
     _ = try checker_c.checkExpr(c_lookup_expr);
 
@@ -777,12 +817,11 @@ test "cross-module type checking - three module chain polymorphic" {
     var module_b_cir = CIR.init(&module_b_env);
     defer module_b_cir.deinit();
 
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    const module_a_import_idx = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
-    // Module A is at index 0 in the module_works list
     const b_lookup_expr = module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // ModuleWorkIdx for module A
+            .module_idx = module_a_import_idx,
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -795,12 +834,11 @@ test "cross-module type checking - three module chain polymorphic" {
     var module_c_cir = CIR.init(&module_c_env);
     defer module_c_cir.deinit();
 
-    _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
+    const module_b_import_idx = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
 
-    // Module B is at index 1 in the module_works list
     const c_lookup_expr = module_c_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(1), // ModuleWorkIdx for module B
+            .module_idx = module_b_import_idx,
             .target_node_idx = @intCast(@intFromEnum(b_lookup_expr)),
             .region = base.Region.zero(),
         },
@@ -834,11 +872,23 @@ test "cross-module type checking - three module chain polymorphic" {
     var checker_b = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
     defer checker_b.deinit();
 
+    // Set up import mapping for module B
+    var import_map_b = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map_b.deinit();
+    try import_map_b.put(module_a_import_idx, @enumFromInt(0));
+    try checker_b.setImportMapping(&import_map_b);
+
     _ = try checker_b.checkExpr(b_lookup_expr);
 
     // Type check module C
     var checker_c = try check_types.init(allocator, &module_c_env.types, &module_c_cir, &other_modules);
     defer checker_c.deinit();
+
+    // Set up import mapping for module C
+    var import_map_c = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map_c.deinit();
+    try import_map_c.put(module_b_import_idx, @enumFromInt(1));
+    try checker_c.setImportMapping(&import_map_c);
 
     _ = try checker_c.checkExpr(c_lookup_expr);
 
@@ -908,12 +958,11 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     var module_b_cir = CIR.init(&module_b_env);
     defer module_b_cir.deinit();
 
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    const module_a_import_idx = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
-    // Module A is at index 0 in the module_works list
     const b_lookup_expr = module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // ModuleWorkIdx for module A
+            .module_idx = module_a_import_idx,
             .target_node_idx = @intCast(@intFromEnum(map_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -958,12 +1007,11 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     var module_c_cir = CIR.init(&module_c_env);
     defer module_c_cir.deinit();
 
-    _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
+    const module_b_import_idx = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
 
-    // Module B is at index 1 in the module_works list
     const c_lookup_expr = module_c_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(1), // ModuleWorkIdx for module B
+            .module_idx = module_b_import_idx,
             .target_node_idx = @intCast(@intFromEnum(map_i32_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -997,12 +1045,24 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     var checker_b = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
     defer checker_b.deinit();
 
+    // Set up import mapping for module B
+    var import_map_b = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map_b.deinit();
+    try import_map_b.put(module_a_import_idx, @enumFromInt(0));
+    try checker_b.setImportMapping(&import_map_b);
+
     _ = try checker_b.checkExpr(b_lookup_expr);
     _ = try checker_b.checkExpr(map_i32_expr_idx);
 
     // Type check module C
     var checker_c = try check_types.init(allocator, &module_c_env.types, &module_c_cir, &other_modules);
     defer checker_c.deinit();
+
+    // Set up import mapping for module C
+    var import_map_c = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map_c.deinit();
+    try import_map_c.put(module_b_import_idx, @enumFromInt(1));
+    try checker_c.setImportMapping(&import_map_c);
 
     _ = try checker_c.checkExpr(c_lookup_expr);
 
@@ -1110,12 +1170,11 @@ test "cross-module type checking - record type chain" {
     var module_b_cir = CIR.init(&module_b_env);
     defer module_b_cir.deinit();
 
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    const module_a_import_idx = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
-    // Module A is at index 0 in the module_works list
     const b_lookup_expr = module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // ModuleWorkIdx for module A
+            .module_idx = module_a_import_idx,
             .target_node_idx = @intCast(@intFromEnum(record_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -1128,12 +1187,11 @@ test "cross-module type checking - record type chain" {
     var module_c_cir = CIR.init(&module_c_env);
     defer module_c_cir.deinit();
 
-    _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
+    const module_b_import_idx = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
 
-    // Module B is at index 1 in the module_works list
     const c_lookup_expr = module_c_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(1), // ModuleWorkIdx for module B
+            .module_idx = module_b_import_idx,
             .target_node_idx = @intCast(@intFromEnum(b_lookup_expr)),
             .region = base.Region.zero(),
         },
@@ -1167,11 +1225,23 @@ test "cross-module type checking - record type chain" {
     var checker_b = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
     defer checker_b.deinit();
 
+    // Set up import mapping for module B
+    var import_map_b = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map_b.deinit();
+    try import_map_b.put(module_a_import_idx, @enumFromInt(0));
+    try checker_b.setImportMapping(&import_map_b);
+
     _ = try checker_b.checkExpr(b_lookup_expr);
 
     // Type check module C
     var checker_c = try check_types.init(allocator, &module_c_env.types, &module_c_cir, &other_modules);
     defer checker_c.deinit();
+
+    // Set up import mapping for module C
+    var import_map_c = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map_c.deinit();
+    try import_map_c.put(module_b_import_idx, @enumFromInt(1));
+    try checker_c.setImportMapping(&import_map_c);
 
     _ = try checker_c.checkExpr(c_lookup_expr);
 
@@ -1253,12 +1323,11 @@ test "cross-module type checking - polymorphic record chain" {
     var module_b_cir = CIR.init(&module_b_env);
     defer module_b_cir.deinit();
 
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    const module_a_import_idx = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
-    // Module A is at index 0 in the module_works list
     const b_lookup_expr = module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // ModuleWorkIdx for module A
+            .module_idx = module_a_import_idx,
             .target_node_idx = @intCast(@intFromEnum(record_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -1307,12 +1376,11 @@ test "cross-module type checking - polymorphic record chain" {
     var module_c_cir = CIR.init(&module_c_env);
     defer module_c_cir.deinit();
 
-    _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
+    const module_b_import_idx = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
 
-    // Module B is at index 1 in the module_works list
     const c_lookup_expr = module_c_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(1), // ModuleWorkIdx for module B
+            .module_idx = module_b_import_idx,
             .target_node_idx = @intCast(@intFromEnum(str_record_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -1346,12 +1414,24 @@ test "cross-module type checking - polymorphic record chain" {
     var checker_b = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
     defer checker_b.deinit();
 
+    // Set up import mapping for module B
+    var import_map_b = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map_b.deinit();
+    try import_map_b.put(module_a_import_idx, @enumFromInt(0));
+    try checker_b.setImportMapping(&import_map_b);
+
     _ = try checker_b.checkExpr(b_lookup_expr);
     _ = try checker_b.checkExpr(str_record_expr_idx);
 
     // Type check module C
     var checker_c = try check_types.init(allocator, &module_c_env.types, &module_c_cir, &other_modules);
     defer checker_c.deinit();
+
+    // Set up import mapping for module C
+    var import_map_c = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map_c.deinit();
+    try import_map_c.put(module_b_import_idx, @enumFromInt(1));
+    try checker_c.setImportMapping(&import_map_c);
 
     _ = try checker_c.checkExpr(c_lookup_expr);
 
@@ -1436,12 +1516,11 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     var module_b_cir = CIR.init(&module_b_env);
     defer module_b_cir.deinit();
 
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    const module_a_import_idx = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
-    // Module A is at index 0 in the module_works list
     const b_lookup_expr = module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // ModuleWorkIdx for module A
+            .module_idx = module_a_import_idx,
             .target_node_idx = @intCast(@intFromEnum(compose_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -1490,12 +1569,11 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     var module_c_cir = CIR.init(&module_c_env);
     defer module_c_cir.deinit();
 
-    _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
+    const module_b_import_idx = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
 
-    // Module B is at index 1 in the module_works list
     const c_lookup_expr = module_c_cir.store.addExpr(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(1), // ModuleWorkIdx for module B
+            .module_idx = module_b_import_idx,
             .target_node_idx = @intCast(@intFromEnum(compose_str_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -1529,12 +1607,24 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     var checker_b = try check_types.init(allocator, &module_b_env.types, &module_b_cir, &other_modules);
     defer checker_b.deinit();
 
+    // Set up import mapping for module B
+    var import_map_b = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map_b.deinit();
+    try import_map_b.put(module_a_import_idx, @enumFromInt(0));
+    try checker_b.setImportMapping(&import_map_b);
+
     _ = try checker_b.checkExpr(b_lookup_expr);
     _ = try checker_b.checkExpr(compose_str_expr_idx);
 
     // Type check module C
     var checker_c = try check_types.init(allocator, &module_c_env.types, &module_c_cir, &other_modules);
     defer checker_c.deinit();
+
+    // Set up import mapping for module C
+    var import_map_c = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(allocator);
+    defer import_map_c.deinit();
+    try import_map_c.put(module_b_import_idx, @enumFromInt(1));
+    try checker_c.setImportMapping(&import_map_c);
 
     _ = try checker_c.checkExpr(c_lookup_expr);
 
