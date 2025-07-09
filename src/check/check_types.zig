@@ -25,10 +25,9 @@ const exitOnOom = collections.utils.exitOnOom;
 const Self = @This();
 
 gpa: std.mem.Allocator,
-// not owned
 types: *types_mod.Store,
 can_ir: *CIR,
-// owned
+other_modules: ?*const base.ModuleWork(CIR).Store,
 snapshots: snapshot.Store,
 problems: problem.Store,
 unify_scratch: unifier.Scratch,
@@ -41,11 +40,13 @@ pub fn init(
     gpa: std.mem.Allocator,
     types: *types_mod.Store,
     can_ir: *CIR,
+    other_modules: ?*const base.ModuleWork(CIR).Store,
 ) std.mem.Allocator.Error!Self {
     return .{
         .gpa = gpa,
         .types = types,
         .can_ir = can_ir,
+        .other_modules = other_modules,
         .snapshots = snapshot.Store.initCapacity(gpa, 512),
         .problems = problem.Store.initCapacity(gpa, 64),
         .unify_scratch = unifier.Scratch.init(gpa),
@@ -202,9 +203,60 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             _ = self.unify(lookup_var, pattern_var);
         },
         .e_lookup_external => |e| {
-            // TODO: Handle type checking for external lookups
-            // For now, just skip type checking
-            _ = e;
+            const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+            // Check if we have access to other modules
+            if (self.other_modules) |other_modules| {
+                // Find the module in other_modules
+                // For now, we'll assume the first module is the one we want
+                // In a real implementation, we'd match by module name or path
+                var found_module: ?base.ModuleWorkIdx = null;
+                var iter = other_modules.iterIndices();
+                while (iter.next()) |idx| {
+                    const other_cir = other_modules.getWork(idx);
+                    // Check if this module has enough nodes to contain our target
+                    if (e.target_node_idx < other_cir.store.nodes.len()) {
+                        found_module = idx;
+                        break;
+                    }
+                }
+
+                if (found_module) |module_idx| {
+                    const other_module_cir = other_modules.getWork(module_idx);
+                    const other_module_env = &other_module_cir.env;
+
+                    // The target_node_idx points to a node in the other module
+                    // We need to get the type variable associated with that node
+                    // For expressions, the node index is also the variable index
+                    const imported_var = @as(Var, @enumFromInt(e.target_node_idx));
+
+                    // Use unifyPreserve to ensure we don't modify the imported module's types
+                    const result = unifier.unifyPreserve(
+                        other_module_env,
+                        &other_module_env.types, // const store (preserved)
+                        self.types, // our mutable store
+                        &self.problems,
+                        &self.snapshots,
+                        &self.unify_scratch,
+                        &self.occurs_scratch,
+                        imported_var, // type from imported module (preserved)
+                        expr_var, // our expression's type (updated)
+                    );
+
+                    if (result.isProblem()) {
+                        // Handle the unification problem
+                        const problem_idx = result.problem;
+                        _ = problem_idx; // TODO: properly handle cross-module type errors
+                    }
+                } else {
+                    // Module not found, set to error
+                    try self.types.setVarContent(expr_var, .err);
+                }
+            } else {
+                // No other modules available, create a fresh type variable
+                const external_type_var = self.types.fresh();
+                _ = self.unify(expr_var, external_type_var);
+            }
         },
         .e_list => |list| {
             const elem_var = @as(Var, @enumFromInt(@intFromEnum(list.elem_var)));
@@ -1157,7 +1209,7 @@ test "lambda with record field access infers correct type" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir);
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, null);
     defer solver.deinit();
 
     // Create type variables for the lambda parameters
@@ -1261,7 +1313,7 @@ test "dot access properly unifies field types with parameters" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir);
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, null);
     defer solver.deinit();
 
     // Create a parameter type variable
@@ -1368,7 +1420,7 @@ test "call site unification order matters for concrete vs flexible types" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir);
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, null);
     defer solver.deinit();
 
     // First, verify basic number unification works as expected
@@ -1503,4 +1555,8 @@ test "call site unification order matters for concrete vs flexible types" {
             else => return error.TestUnexpectedResult,
         }
     }
+}
+
+test {
+    _ = @import("check_types/cross_module_test.zig");
 }

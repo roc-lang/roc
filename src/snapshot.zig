@@ -383,7 +383,7 @@ fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []con
     };
 
     // Types (ONCE)
-    var solver = Solver.init(allocator, &can_ir.env.types, &can_ir) catch |err| {
+    var solver = Solver.init(allocator, &can_ir.env.types, &can_ir, null) catch |err| {
         warn("Type solver init failed: {}", .{err});
         return;
     };
@@ -1586,7 +1586,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     }
 
     // Types (ONCE)
-    var solver = try Solver.init(gpa, &can_ir.env.types, &can_ir);
+    var solver = try Solver.init(gpa, &can_ir.env.types, &can_ir, null);
     defer solver.deinit();
 
     if (maybe_expr_idx) |expr_idx| {
