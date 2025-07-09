@@ -24,9 +24,15 @@ pub const CacheConfig = struct {
     /// - macOS: ~/Library/Caches/roc
     /// - Windows: %LOCALAPPDATA%\roc\cache
     pub fn getDefaultCacheDir(allocator: Allocator) ![]u8 {
-        const home_dir = std.posix.getenv("HOME") orelse {
+        const env_var = switch (@import("builtin").target.os.tag) {
+            .windows => "USERPROFILE",
+            else => "HOME",
+        };
+
+        const home_dir = std.process.getEnvVarOwned(allocator, env_var) catch {
             return error.NoHomeDirectory;
         };
+        defer allocator.free(home_dir);
 
         const cache_subdir = switch (@import("builtin").target.os.tag) {
             .linux => ".cache/roc",

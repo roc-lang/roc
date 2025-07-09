@@ -438,7 +438,7 @@ pub const CacheModule = struct {
         filesystem: anytype,
     ) !CacheData {
         // Try to use memory mapping on supported platforms
-        if (comptime @hasDecl(std.posix, "mmap")) {
+        if (comptime @hasDecl(std.posix, "mmap") and @import("builtin").target.os.tag != .windows) {
             // Open the file
             const file = std.fs.cwd().openFile(file_path, .{ .mode = .read_only }) catch {
                 // Fall back to regular reading on open error
