@@ -144,8 +144,14 @@ pub fn unify(
     );
 }
 
-/// How we should unify
 /// Unify two type variables with bidirectional mode
+///
+/// This function:
+/// * Resolves type variables & compresses paths
+/// * Compares variable contents for equality
+/// * Merges unified variables so 1 is "root" and the other is "redirect"
+///
+/// In bidirectional mode, both types are merged together.
 pub fn unifyBidirectional(
     module_env: *const base.ModuleEnv,
     types: *types_root_mod.Store,
@@ -311,6 +317,14 @@ pub fn unifyBidirectional(
 }
 
 /// Unify two type variables with preserve_a mode
+///
+/// This function:
+/// * Resolves type variables & compresses paths
+/// * Compares variable contents for equality
+/// * Merges unified variables so 1 is "root" and the other is "redirect"
+///
+/// In preserve_a mode, the left type (from types_a) is untouched and
+/// unification results are only applied to the right type (in types_b).
 pub fn unifyPreserve(
     module_env: *const base.ModuleEnv,
     types_a: *const types_root_mod.Store,
