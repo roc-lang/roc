@@ -146,8 +146,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     var result = (if (args.time)
         coordinate_simple.processFileWithTiming(gpa, Filesystem.default(), args.path)
     else
-        coordinate_simple.processFile(gpa, Filesystem.default(), args.path)
-    ) catch |err| {
+        coordinate_simple.processFile(gpa, Filesystem.default(), args.path)) catch |err| {
         stderr.print("Failed to check {s}: ", .{args.path}) catch {};
         switch (err) {
             error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
@@ -196,7 +195,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         }) catch {};
         formatElapsedTime(stderr, elapsed) catch {};
         stderr.print(" for {s}.\n", .{args.path}) catch {};
-        
+
         // Print timing breakdown if requested
         if (args.time and result.timing != null) {
             const timing = result.timing.?;
@@ -207,7 +206,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         stdout.print("No errors found in ", .{}) catch {};
         formatElapsedTime(stdout, elapsed) catch {};
         stdout.print(" for {s}\n", .{args.path}) catch {};
-        
+
         // Print timing breakdown if requested
         if (args.time and result.timing != null) {
             const timing = result.timing.?;
@@ -227,10 +226,10 @@ fn printTimingBreakdown(writer: anytype, timing: anytype) void {
     writer.print("  can diagnostics:      ", .{}) catch {};
     formatElapsedTime(writer, timing.canonicalize_diagnostics_ns) catch {};
     writer.print("\n", .{}) catch {};
-    writer.print("  checkDefs:            ", .{}) catch {};
-    formatElapsedTime(writer, timing.check_defs_ns) catch {};
+    writer.print("  type checking:            ", .{}) catch {};
+    formatElapsedTime(writer, timing.type_checking_ns) catch {};
     writer.print("\n", .{}) catch {};
-    writer.print("  check diagnostics:    ", .{}) catch {};
+    writer.print("  type checking diagnostics:    ", .{}) catch {};
     formatElapsedTime(writer, timing.check_diagnostics_ns) catch {};
     writer.print("\n", .{}) catch {};
 }

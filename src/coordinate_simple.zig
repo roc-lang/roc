@@ -18,7 +18,7 @@ pub const TimingInfo = struct {
     tokenize_parse_ns: u64,
     canonicalize_ns: u64,
     canonicalize_diagnostics_ns: u64,
-    check_defs_ns: u64,
+    type_checking_ns: u64,
     check_diagnostics_ns: u64,
 };
 
@@ -132,14 +132,14 @@ fn processSourceInternal(
 
     var timing_info: ?TimingInfo = null;
     var timer: ?std.time.Timer = null;
-    
+
     if (collect_timing) {
         timer = std.time.Timer.start() catch null;
         timing_info = TimingInfo{
             .tokenize_parse_ns = 0,
             .canonicalize_ns = 0,
             .canonicalize_diagnostics_ns = 0,
-            .check_defs_ns = 0,
+            .type_checking_ns = 0,
             .check_diagnostics_ns = 0,
         };
     }
@@ -155,11 +155,6 @@ fn processSourceInternal(
     var parse_ast = parse.parse(&module_env, source);
     defer parse_ast.deinit(gpa);
 
-    if (collect_timing and timer != null and timing_info != null) {
-        timing_info.?.tokenize_parse_ns = timer.?.read();
-        timer.?.reset();
-    }
-
     // Create an arraylist for capturing diagnostic reports.
     var reports = std.ArrayList(reporting.Report).init(gpa);
     defer reports.deinit();
@@ -174,6 +169,11 @@ fn processSourceInternal(
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
         const report = parse_ast.parseDiagnosticToReport(diagnostic, gpa, "<source>") catch continue;
         reports.append(report) catch continue;
+    }
+
+    if (collect_timing and timer != null and timing_info != null) {
+        timing_info.?.tokenize_parse_ns = timer.?.read();
+        timer.?.reset();
     }
 
     // Initialize the Can IR (heap-allocated)
@@ -212,7 +212,7 @@ fn processSourceInternal(
     try solver.checkDefs();
 
     if (collect_timing and timer != null and timing_info != null) {
-        timing_info.?.check_defs_ns = timer.?.read();
+        timing_info.?.type_checking_ns = timer.?.read();
         timer.?.reset();
     }
 
