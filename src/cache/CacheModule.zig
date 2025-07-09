@@ -423,8 +423,10 @@ pub const CacheModule = struct {
             switch (self) {
                 .mapped => |m| {
                     // Use the unaligned pointer for munmap
-                    const page_aligned_ptr = @as([*]align(std.heap.page_size_min) const u8, @alignCast(m.unaligned_ptr));
-                    std.posix.munmap(page_aligned_ptr[0..m.unaligned_len]);
+                    if (comptime @hasDecl(std.posix, "munmap") and @import("builtin").target.os.tag != .windows) {
+                        const page_aligned_ptr = @as([*]align(std.heap.page_size_min) const u8, @alignCast(m.unaligned_ptr));
+                        std.posix.munmap(page_aligned_ptr[0..m.unaligned_len]);
+                    }
                 },
                 .allocated => |a| allocator.free(a),
             }
@@ -497,7 +499,9 @@ pub const CacheModule = struct {
 
             if (offset >= file_size_usize) {
                 // File is too small to contain aligned data
-                std.posix.munmap(result);
+                if (comptime @hasDecl(std.posix, "munmap") and @import("builtin").target.os.tag != .windows) {
+                    std.posix.munmap(result);
+                }
                 const data = try readFromFile(allocator, file_path, filesystem);
                 return CacheData{ .allocated = data };
             }
