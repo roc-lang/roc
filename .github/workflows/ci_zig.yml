@@ -78,7 +78,7 @@ jobs:
           zig build test -Dllvm -Dfuzz -Dsystem-afl=false
 
       - name: zig snapshot tests
-        run: zig build snapshot
+        run: zig build snapshot -- --debug
 
       - name: Check for snapshot changes
         run: |
@@ -102,7 +102,7 @@ jobs:
         run: |
           sudo apt install -y valgrind
           valgrind --version
-          valgrind --leak-check=full --error-exitcode=1 --errors-for-leak-kinds=definite,possible ./zig-out/bin/snapshot
+          valgrind --leak-check=full --error-exitcode=1 --errors-for-leak-kinds=definite,possible ./zig-out/bin/snapshot --debug
 
       - name: check if statically linked (ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
