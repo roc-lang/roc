@@ -419,12 +419,13 @@ pub fn writeToFile(
     try filesystem.writeFile(file_path, cache_data);
 }
 
+/// Convenience function for reading cache files
 pub fn readFromFile(
     allocator: Allocator,
     file_path: []const u8,
     filesystem: anytype,
 ) ![]align(SERIALIZATION_ALIGNMENT) u8 {
-    const file_data = try filesystem.readFileAlloc(file_path, allocator, std.math.maxInt(usize));
+    const file_data = try filesystem.readFile(file_path, allocator);
     defer allocator.free(file_data);
 
     const buffer = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, file_data.len);
@@ -514,5 +515,146 @@ test "create and restore cache" {
 
     // Get diagnostics
     const diagnostics = cache.getDiagnostics();
+    try std.testing.expect(diagnostics.total_size > 0);
+}
+
+test "cache filesystem roundtrip with in-memory storage" {
+    const gpa = std.testing.allocator;
+
+    // Real Roc module source for comprehensive testing
+    const source =
+        \\module [foo]
+        \\
+        \\foo : U64 -> Str
+        \\foo = |num| num.to_str()
+    ;
+
+    // Parse the source
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var cir = CIR.init(&module_env);
+    defer cir.deinit();
+
+    // Parse and canonicalize
+    var ast = parse(&module_env, source);
+    defer ast.deinit(gpa);
+
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
+    defer canonicalizer.deinit();
+    try canonicalizer.canonicalizeFile();
+
+    // Generate original S-expression for comparison
+    var original_tree = SExprTree.init(gpa);
+    defer original_tree.deinit();
+    CIR.pushToSExprTree(&cir, null, &original_tree, source);
+
+    var original_sexpr = std.ArrayList(u8).init(gpa);
+    defer original_sexpr.deinit();
+    original_tree.toStringPretty(original_sexpr.writer().any());
+
+    // Create cache from real data
+    const cache_data = try Cache.create(gpa, &module_env, &cir);
+    defer gpa.free(cache_data);
+
+    // In-memory file storage for comprehensive mock filesystem
+    var file_storage = std.StringHashMap([]const u8).init(gpa);
+    defer {
+        var iterator = file_storage.iterator();
+        while (iterator.next()) |entry| {
+            gpa.free(entry.value_ptr.*);
+        }
+        file_storage.deinit();
+    }
+
+    // Create comprehensive mock filesystem with proper storage using static variables
+    var filesystem = Filesystem.testing();
+
+    const MockFS = struct {
+        var storage: ?*std.StringHashMap([]const u8) = null;
+        var allocator: ?Allocator = null;
+
+        fn writeFile(path: []const u8, contents: []const u8) Filesystem.WriteError!void {
+            const store = storage orelse return error.SystemResources;
+            const alloc = allocator orelse return error.SystemResources;
+
+            // Store a copy of the contents in our storage
+            const stored_contents = alloc.dupe(u8, contents) catch return error.SystemResources;
+
+            // Free existing content if path already exists
+            if (store.get(path)) |existing| {
+                alloc.free(existing);
+            }
+
+            // Store the new content
+            store.put(path, stored_contents) catch {
+                alloc.free(stored_contents);
+                return error.SystemResources;
+            };
+        }
+
+        fn readFile(path: []const u8, alloc: Allocator) Filesystem.ReadError![]const u8 {
+            const store = storage orelse return error.FileNotFound;
+
+            if (store.get(path)) |contents| {
+                return alloc.dupe(u8, contents) catch return error.OutOfMemory;
+            } else {
+                return error.FileNotFound;
+            }
+        }
+    };
+
+    // Initialize the static variables
+    MockFS.storage = &file_storage;
+    MockFS.allocator = gpa;
+
+    filesystem.writeFile = MockFS.writeFile;
+    filesystem.readFile = MockFS.readFile;
+
+    // Test full roundtrip: write cache to mock filesystem
+    const test_path = "comprehensive_test_cache.bin";
+    try writeToFile(gpa, cache_data, test_path, filesystem);
+
+    // Verify the data was stored
+    try std.testing.expect(file_storage.contains(test_path));
+
+    // Read the cache back from mock filesystem
+    const read_cache_data = try readFromFile(gpa, test_path, filesystem);
+    defer gpa.free(read_cache_data);
+
+    // Verify the read data matches the original
+    try std.testing.expectEqualSlices(u8, cache_data, read_cache_data);
+
+    // Load and validate the cache from the roundtrip data
+    var roundtrip_cache = try Cache.fromMappedMemory(read_cache_data);
+    try roundtrip_cache.validate();
+
+    // Restore from the roundtrip cache
+    const restored = try roundtrip_cache.restore(gpa);
+
+    var restored_module_env = restored.module_env;
+    defer restored_module_env.deinit();
+    var restored_cir = restored.cir;
+    defer restored_cir.deinit();
+
+    // Fix env pointer after struct move
+    restored_cir.env = &restored_module_env;
+
+    // Generate S-expression from restored CIR
+    var restored_tree = SExprTree.init(gpa);
+    defer restored_tree.deinit();
+
+    CIR.pushToSExprTree(&restored_cir, null, &restored_tree, source);
+
+    var restored_sexpr = std.ArrayList(u8).init(gpa);
+    defer restored_sexpr.deinit();
+
+    restored_tree.toStringPretty(restored_sexpr.writer().any());
+
+    // Verify complete roundtrip integrity
+    try std.testing.expect(std.mem.eql(u8, original_sexpr.items, restored_sexpr.items));
+
+    // Get diagnostics to ensure they're preserved
+    const diagnostics = roundtrip_cache.getDiagnostics();
     try std.testing.expect(diagnostics.total_size > 0);
 }
