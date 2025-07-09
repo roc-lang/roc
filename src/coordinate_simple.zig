@@ -47,9 +47,11 @@ pub const ProcessResult = struct {
         gpa.free(self.reports);
         gpa.free(self.source);
 
-        // Clean up the heap-allocated ModuleEnv
-        self.cir.env.deinit();
-        gpa.destroy(self.cir.env);
+        // Clean up the heap-allocated ModuleEnv (only when loaded from cache)
+        if (self.was_cached) {
+            self.cir.env.deinit();
+            gpa.destroy(self.cir.env);
+        }
 
         self.cir.deinit();
         gpa.destroy(self.cir);
@@ -90,15 +92,13 @@ pub fn processFile(
             .hit => |cached_result| {
                 // Cache hit! Free the source we just read since cached result has its own
                 gpa.free(source);
-                std.log.debug("Cache hit for {s}", .{filepath});
+
                 return cached_result;
             },
             .miss => {
-                std.log.debug("Cache miss for {s}", .{filepath});
                 // Fall through to normal processing
             },
             .invalid => {
-                std.log.debug("Cache invalid for {s}", .{filepath});
                 // Fall through to normal processing
             },
         }

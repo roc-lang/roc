@@ -108,10 +108,6 @@ pub const CacheManager = struct {
 
         self.stats.recordHit(mapped_cache.data().len, @as(u64, @intCast(time_saved)));
 
-        if (self.config.verbose) {
-            std.log.debug("Cache hit for {s} ({})", .{ cache_path, key });
-        }
-
         return CacheResult{ .hit = result };
     }
 
@@ -271,28 +267,19 @@ pub const CacheManager = struct {
 
         // Reports are not cached - they need to be recomputed if needed
         // Users can use --no-cache to see diagnostic reports
-        const reports = if (self.config.verbose) blk: {
-            var report_list = std.ArrayList(reporting.Report).init(self.allocator);
-            errdefer report_list.deinit();
-
-            const notice = reporting.Report.init(
-                self.allocator,
-                "Loaded from cache - diagnostic reports not shown. Use --no-cache to see full diagnostics.",
-                .warning,
-            );
-            try report_list.append(notice);
-            break :blk try report_list.toOwnedSlice();
-        } else try self.allocator.alloc(reporting.Report, 0);
+        std.log.info("Loaded from cache - diagnostic reports not shown. Use --no-cache to see Errors and Warnings for this module.", .{});
+        const reports = try self.allocator.alloc(reporting.Report, 0);
 
         // Allocate and copy ModuleEnv to heap for ownership
         const module_env = try self.allocator.create(ModuleEnv);
         module_env.* = restored.module_env;
 
-        // Allocate and copy CIR to heap for ownership
+        // Allocate CIR to heap for ownership
         const cir = try self.allocator.create(CIR);
-        cir.* = restored.cir;
 
-        // Fix env pointer to point to our heap-allocated module_env
+        // Copy CIR but don't copy the invalid env pointer
+        cir.* = restored.cir;
+        // Immediately fix env pointer to point to our heap-allocated module_env
         cir.env = module_env;
 
         // Re-read the source file - we need it for any potential error reporting
