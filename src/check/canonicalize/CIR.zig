@@ -8,6 +8,7 @@ const tracy = @import("../../tracy.zig");
 const types = @import("../../types.zig");
 const collections = @import("../../collections.zig");
 const reporting = @import("../../reporting.zig");
+const serialization = @import("../../serialization/mod.zig");
 const exitOnOom = collections.utils.exitOnOom;
 const SExpr = base.SExpr;
 const Scratch = base.Scratch;
@@ -20,10 +21,10 @@ const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
-const NodeStore = @import("NodeStore.zig");
 
 pub const RocDec = @import("../../builtins/dec.zig").RocDec;
 pub const Node = @import("Node.zig");
+pub const NodeStore = @import("NodeStore.zig");
 pub const Expr = @import("Expression.zig").Expr;
 pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
@@ -58,7 +59,7 @@ all_defs: Def.Span,
 /// All the top-level statements in the module, populated by calling `canonicalize_file`
 all_statements: Statement.Span,
 /// All external declarations referenced in this module
-external_decls: std.ArrayList(ExternalDecl),
+external_decls: ExternalDecl.SafeList,
 /// Store for interned module imports
 imports: Import.Store,
 /// The module's name as a string
@@ -81,7 +82,20 @@ pub fn init(env: *ModuleEnv) CIR {
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
-        .external_decls = std.ArrayList(ExternalDecl).init(env.gpa),
+        .external_decls = ExternalDecl.SafeList.initCapacity(env.gpa, 16),
+        .imports = Import.Store.init(),
+    };
+}
+
+/// Create a CIR from cached data, completely rehydrating from cache
+pub fn fromCache(env: *ModuleEnv, cached_store: NodeStore, all_defs: Def.Span, all_statements: Statement.Span) CIR {
+    return CIR{
+        .env = env,
+        .store = cached_store,
+        .temp_source_for_sexpr = null,
+        .all_defs = all_defs,
+        .all_statements = all_statements,
+        .external_decls = ExternalDecl.SafeList.initCapacity(env.gpa, 16),
         .imports = Import.Store.init(),
         .module_name = "",
     };
@@ -90,7 +104,7 @@ pub fn init(env: *ModuleEnv) CIR {
 /// Deinit the IR's memory.
 pub fn deinit(self: *CIR) void {
     self.store.deinit();
-    self.external_decls.deinit();
+    self.external_decls.deinit(self.env.gpa);
     self.imports.deinit(self.env.gpa);
 }
 
@@ -556,28 +570,29 @@ pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.
 
 /// Adds an external declaration to the CIR and returns its index
 pub fn pushExternalDecl(self: *CIR, decl: ExternalDecl) ExternalDecl.Idx {
-    const idx = @as(u32, @intCast(self.external_decls.items.len));
-    self.external_decls.append(decl) catch |err| exitOnOom(err);
+    const idx = @as(u32, @intCast(self.external_decls.len()));
+    _ = self.external_decls.append(self.env.gpa, decl);
     return @enumFromInt(idx);
 }
 
 /// Retrieves an external declaration by its index
 pub fn getExternalDecl(self: *const CIR, idx: ExternalDecl.Idx) *const ExternalDecl {
-    return &self.external_decls.items[@intFromEnum(idx)];
+    return self.external_decls.get(@as(ExternalDecl.SafeList.Idx, @enumFromInt(@intFromEnum(idx))));
 }
 
 /// Adds multiple external declarations and returns a span
 pub fn pushExternalDecls(self: *CIR, decls: []const ExternalDecl) ExternalDecl.Span {
-    const start = @as(u32, @intCast(self.external_decls.items.len));
+    const start = @as(u32, @intCast(self.external_decls.len()));
     for (decls) |decl| {
-        self.external_decls.append(decl) catch |err| exitOnOom(err);
+        _ = self.external_decls.append(self.env.gpa, decl);
     }
-    return .{ .span = .{ .start = start, .len = @as(u32, @intCast(decls.len)) } };
+    return ExternalDecl.Span{ .span = .{ .start = start, .len = @as(u32, @intCast(decls.len)) } };
 }
 
 /// Gets a slice of external declarations from a span
 pub fn sliceExternalDecls(self: *const CIR, span: ExternalDecl.Span) []const ExternalDecl {
-    return self.external_decls.items[span.span.start .. span.span.start + span.span.len];
+    const range = ExternalDecl.SafeList.Range{ .start = @enumFromInt(span.span.start), .end = @enumFromInt(span.span.start + span.span.len) };
+    return self.external_decls.rangeToSlice(range);
 }
 
 /// Retrieves the text of an identifier by its index
@@ -593,7 +608,108 @@ fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: Pattern.Idx) SExpr 
 }
 
 test "Node is 16 bytes" {
-    try testing.expectEqual(16, @sizeOf(Node));
+    try std.testing.expectEqual(16, @sizeOf(Node));
+}
+
+test "ExternalDecl serialization round-trip" {
+    const gpa = std.testing.allocator;
+
+    // Create original external declaration
+    const original = ExternalDecl{
+        .qualified_name = @bitCast(@as(u32, 123)),
+        .module_name = @bitCast(@as(u32, 456)),
+        .local_name = @bitCast(@as(u32, 789)),
+        .type_var = @enumFromInt(999),
+        .kind = .value,
+        .region = Region{
+            .start = .{ .offset = 10 },
+            .end = .{ .offset = 20 },
+        },
+    };
+
+    // Serialize
+    const serialized_size = original.serializedSize();
+    const buffer = try gpa.alloc(u8, serialized_size);
+    defer gpa.free(buffer);
+
+    const serialized = try original.serializeInto(buffer);
+    try std.testing.expectEqual(serialized_size, serialized.len);
+
+    // Deserialize
+    const restored = try ExternalDecl.deserializeFrom(serialized);
+
+    // Verify all fields are identical
+    try std.testing.expectEqual(original.qualified_name, restored.qualified_name);
+    try std.testing.expectEqual(original.module_name, restored.module_name);
+    try std.testing.expectEqual(original.local_name, restored.local_name);
+    try std.testing.expectEqual(original.type_var, restored.type_var);
+    try std.testing.expectEqual(original.kind, restored.kind);
+    try std.testing.expectEqual(original.region.start.offset, restored.region.start.offset);
+    try std.testing.expectEqual(original.region.end.offset, restored.region.end.offset);
+}
+
+test "ExternalDecl serialization comprehensive" {
+    const gpa = std.testing.allocator;
+
+    // Test various external declarations including edge cases
+    const decl1 = ExternalDecl{
+        .qualified_name = @bitCast(@as(u32, 0)), // minimum value
+        .module_name = @bitCast(@as(u32, 1)),
+        .local_name = @bitCast(@as(u32, 2)),
+        .type_var = @enumFromInt(0),
+        .kind = .value,
+        .region = Region{
+            .start = .{ .offset = 0 },
+            .end = .{ .offset = 1 },
+        },
+    };
+
+    const decl2 = ExternalDecl{
+        .qualified_name = @bitCast(@as(u32, 0xFFFFFFFF)), // maximum value
+        .module_name = @bitCast(@as(u32, 0xFFFFFFFE)),
+        .local_name = @bitCast(@as(u32, 0xFFFFFFFD)),
+        .type_var = @enumFromInt(0xFFFFFFFF),
+        .kind = .type,
+        .region = Region{
+            .start = .{ .offset = 0xFFFFFFFF },
+            .end = .{ .offset = 0xFFFFFFFE },
+        },
+    };
+
+    // Test serialization using the testing framework
+    try serialization.testing.testSerialization(ExternalDecl, &decl1, gpa);
+    try serialization.testing.testSerialization(ExternalDecl, &decl2, gpa);
+}
+
+test "ExternalDecl different kinds serialization" {
+    const gpa = std.testing.allocator;
+
+    const value_decl = ExternalDecl{
+        .qualified_name = @bitCast(@as(u32, 100)),
+        .module_name = @bitCast(@as(u32, 200)),
+        .local_name = @bitCast(@as(u32, 300)),
+        .type_var = @enumFromInt(400),
+        .kind = .value,
+        .region = Region{
+            .start = .{ .offset = 50 },
+            .end = .{ .offset = 75 },
+        },
+    };
+
+    const type_decl = ExternalDecl{
+        .qualified_name = @bitCast(@as(u32, 100)),
+        .module_name = @bitCast(@as(u32, 200)),
+        .local_name = @bitCast(@as(u32, 300)),
+        .type_var = @enumFromInt(400),
+        .kind = .type,
+        .region = Region{
+            .start = .{ .offset = 50 },
+            .end = .{ .offset = 75 },
+        },
+    };
+
+    try serialization.testing.testSerialization(ExternalDecl, &value_decl, gpa);
+    try serialization.testing.testSerialization(ExternalDecl, &type_decl, gpa);
 }
 
 /// A working representation of a record field
@@ -988,6 +1104,9 @@ pub const ExternalDecl = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
+    /// A safe list of external declarations
+    pub const SafeList = collections.SafeList(ExternalDecl);
+
     pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
         const begin = tree.beginNode();
         tree.pushStaticAtom("ext-decl");
@@ -1022,6 +1141,103 @@ pub const ExternalDecl = struct {
 
         const attrs = tree.beginNode();
         tree.endNode(begin, attrs);
+    }
+
+    /// Calculate the serialized size of this external declaration
+    pub fn serializedSize(self: *const @This()) usize {
+        _ = self;
+        return @sizeOf(u32) + // qualified_name
+            @sizeOf(u32) + // module_name
+            @sizeOf(u32) + // local_name
+            @sizeOf(u32) + // type_var
+            @sizeOf(u8) + // kind (enum)
+            @sizeOf(u32) + // region.start.offset
+            @sizeOf(u32); // region.end.offset
+    }
+
+    /// Serialize this external declaration into the provided buffer
+    pub fn serializeInto(self: *const @This(), buffer: []u8) ![]const u8 {
+        const size = self.serializedSize();
+        if (buffer.len < size) return error.BufferTooSmall;
+
+        var offset: usize = 0;
+
+        // Serialize qualified_name
+        std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], @bitCast(self.qualified_name), .little);
+        offset += 4;
+
+        // Serialize module_name
+        std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], @bitCast(self.module_name), .little);
+        offset += 4;
+
+        // Serialize local_name
+        std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], @bitCast(self.local_name), .little);
+        offset += 4;
+
+        // Serialize type_var
+        std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], @intFromEnum(self.type_var), .little);
+        offset += 4;
+
+        // Serialize kind
+        buffer[offset] = switch (self.kind) {
+            .value => 0,
+            .type => 1,
+        };
+        offset += 1;
+
+        // Serialize region
+        std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], self.region.start.offset, .little);
+        offset += 4;
+        std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], self.region.end.offset, .little);
+        offset += 4;
+
+        return buffer[0..offset];
+    }
+
+    /// Deserialize an external declaration from the provided buffer
+    pub fn deserializeFrom(buffer: []const u8) !@This() {
+        var offset: usize = 0;
+        const needed_size = @sizeOf(u32) * 6 + @sizeOf(u8);
+        if (buffer.len < needed_size) return error.BufferTooSmall;
+
+        const qualified_name: Ident.Idx = @bitCast(std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little));
+        offset += 4;
+
+        const module_name: Ident.Idx = @bitCast(std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little));
+        offset += 4;
+
+        const local_name: Ident.Idx = @bitCast(std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little));
+        offset += 4;
+
+        const type_var: TypeVar = @enumFromInt(std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little));
+        offset += 4;
+
+        const kind_byte = buffer[offset];
+        offset += 1;
+        const kind: @TypeOf(@as(@This(), undefined).kind) = switch (kind_byte) {
+            0 => .value,
+            1 => .type,
+            else => return error.InvalidKind,
+        };
+
+        const start_offset = std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little);
+        offset += 4;
+        const end_offset = std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little);
+        offset += 4;
+
+        const region = Region{
+            .start = .{ .offset = start_offset },
+            .end = .{ .offset = end_offset },
+        };
+
+        return @This(){
+            .qualified_name = qualified_name,
+            .module_name = module_name,
+            .local_name = local_name,
+            .type_var = type_var,
+            .kind = kind,
+            .region = region,
+        };
     }
 };
 
@@ -1162,7 +1378,7 @@ pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, so
         const defs_slice = ir.store.sliceDefs(ir.all_defs);
         const statements_slice = ir.store.sliceStatements(ir.all_statements);
 
-        if (defs_slice.len == 0 and statements_slice.len == 0 and ir.external_decls.items.len == 0) {
+        if (defs_slice.len == 0 and statements_slice.len == 0 and ir.external_decls.len() == 0) {
             tree.pushBoolPair("empty", true);
         }
         const attrs = tree.beginNode();
@@ -1175,7 +1391,8 @@ pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, so
             ir.store.getStatement(stmt_idx).pushToSExprTree(ir, tree, stmt_idx);
         }
 
-        for (ir.external_decls.items) |*external_decl| {
+        for (0..ir.external_decls.len()) |i| {
+            const external_decl = ir.external_decls.get(@enumFromInt(i));
             external_decl.pushToSExprTree(ir, tree);
         }
 
@@ -1210,7 +1427,7 @@ pub fn calcRegionInfo(self: *const CIR, region: Region) base.RegionInfo {
         return empty;
     };
 
-    const info = base.RegionInfo.position(source, self.env.line_starts.items, region.start.offset, region.end.offset) catch {
+    const info = base.RegionInfo.position(source, self.env.line_starts.items.items, region.start.offset, region.end.offset) catch {
         // Return a zero position if we can't calculate it
         return empty;
     };
@@ -1281,7 +1498,7 @@ pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTre
 
         ir.appendRegionInfoToSExprTree(tree, expr_idx);
 
-        if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
+        if (@intFromEnum(expr_var) > ir.env.types.slots.backing.len()) {
             const unknown_begin = tree.beginNode();
             tree.pushStaticAtom("unknown");
             const unknown_attrs = tree.beginNode();
@@ -1446,7 +1663,7 @@ pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTre
             const expr_region = ir.store.getExprRegion(def.expr);
             ir.appendRegionInfoToSExprTreeFromRegion(tree, expr_region);
 
-            if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
+            if (@intFromEnum(expr_var) > ir.env.types.slots.backing.len()) {
                 const unknown_begin = tree.beginNode();
                 tree.pushStaticAtom("unknown");
                 const unknown_attrs = tree.beginNode();

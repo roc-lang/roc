@@ -13,6 +13,9 @@ const coordinate_simple = @import("coordinate_simple.zig");
 const tracy = @import("tracy.zig");
 const Filesystem = @import("fs/Filesystem.zig");
 const cli_args = @import("cli_args.zig");
+const cache_mod = @import("cache/mod.zig");
+const CacheManager = cache_mod.CacheManager;
+const CacheConfig = cache_mod.CacheConfig;
 
 const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
@@ -142,8 +145,27 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     var timer = try std.time.Timer.start();
 
+    // Initialize cache if enabled
+    var cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = args.verbose,
+    };
+
+    var cache_manager = if (cache_config.enabled) blk: {
+        var manager = CacheManager.init(gpa, cache_config, Filesystem.default());
+        manager.ensureCacheDir() catch |err| {
+            if (args.verbose) {
+                std.log.debug("Failed to create cache directory: {}", .{err});
+            }
+            // Continue without cache if directory creation fails
+            cache_config.enabled = false;
+            break :blk null;
+        };
+        break :blk manager;
+    } else null;
+
     // Process the file and get Reports
-    var result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path) catch |err| {
+    var result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path, if (cache_manager) |*cm| cm else null) catch |err| {
         stderr.print("Failed to check {s}: ", .{args.path}) catch {};
         switch (err) {
             error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
@@ -156,6 +178,13 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     defer result.deinit(gpa);
 
     const elapsed = timer.read();
+
+    // Print cache statistics if verbose
+    if (cache_manager) |*cm| {
+        if (args.verbose) {
+            cm.printStats();
+        }
+    }
 
     // Process reports and render them using the reporting system
     if (result.reports.len > 0) {

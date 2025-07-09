@@ -378,7 +378,7 @@ pub const ReportBuilder = struct {
 
         const overall_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             overall_start_offset,
             overall_end_offset,
         ) catch return report;
@@ -386,14 +386,14 @@ pub const ReportBuilder = struct {
         // Get region info for both elements
         const actual_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             actual_region.start.offset,
             actual_region.end.offset,
         ) catch return report;
 
         const expected_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             expected_region.start.offset,
             expected_region.end.offset,
         ) catch return report;
@@ -488,7 +488,7 @@ pub const ReportBuilder = struct {
         const actual_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.actual_var)));
         const actual_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             actual_region.start.offset,
             actual_region.end.offset,
         ) catch return report;
@@ -600,7 +600,7 @@ pub const ReportBuilder = struct {
 
         const overall_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             overall_start_offset,
             overall_end_offset,
         ) catch return report;
@@ -608,7 +608,7 @@ pub const ReportBuilder = struct {
         // Get region info for invalid branch
         const actual_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             actual_region.start.offset,
             actual_region.end.offset,
         ) catch return report;
@@ -735,7 +735,7 @@ pub const ReportBuilder = struct {
         const match_expr_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.match_expr)));
         const overall_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             match_expr_region.start.offset,
             match_expr_region.end.offset,
         ) catch return report;
@@ -744,7 +744,7 @@ pub const ReportBuilder = struct {
         const invalid_var_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.actual_var)));
         const invalid_var_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             invalid_var_region.start.offset,
             invalid_var_region.end.offset,
         ) catch return report;
@@ -857,7 +857,7 @@ pub const ReportBuilder = struct {
 
         const overall_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             overall_start_offset,
             overall_end_offset,
         ) catch return report;
@@ -876,7 +876,7 @@ pub const ReportBuilder = struct {
         // Create underline regions
         const this_branch_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             this_branch_region.start.offset,
             this_branch_region.end.offset,
         ) catch return report;
@@ -959,7 +959,7 @@ pub const ReportBuilder = struct {
 
         const overall_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             overall_start_offset,
             overall_end_offset,
         ) catch return report;
@@ -978,7 +978,7 @@ pub const ReportBuilder = struct {
         // Create underline regions
         const this_branch_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             problem_side_region.start.offset,
             problem_side_region.end.offset,
         ) catch return report;
@@ -1057,7 +1057,7 @@ pub const ReportBuilder = struct {
 
         const overall_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             overall_start_offset,
             overall_end_offset,
         ) catch return report;
@@ -1076,7 +1076,7 @@ pub const ReportBuilder = struct {
         // Create underline regions
         const this_branch_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             problem_side_region.start.offset,
             problem_side_region.end.offset,
         ) catch return report;

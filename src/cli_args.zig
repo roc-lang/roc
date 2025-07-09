@@ -68,6 +68,8 @@ pub const RunArgs = struct {
 pub const CheckArgs = struct {
     path: []const u8, // the path of the roc file to be checked
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolved dependencies
+    no_cache: bool = false, // disable cache
+    verbose: bool = false, // enable verbose output
 };
 
 /// Arguments for `roc build`
@@ -145,6 +147,8 @@ const main_help =
 fn parseCheck(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var main: ?[]const u8 = null;
+    var no_cache: bool = false;
+    var verbose: bool = false;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
@@ -157,6 +161,8 @@ fn parseCheck(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --main=<main>  The .roc file of the main app/package module to resolve dependencies from
+            \\      --no-cache     Disable caching
+            \\      --verbose      Enable verbose output including cache statistics
             \\  -h, --help         Print help
             \\
         };
@@ -166,6 +172,10 @@ fn parseCheck(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--main" } } };
             }
+        } else if (mem.eql(u8, arg, "--no-cache")) {
+            no_cache = true;
+        } else if (mem.eql(u8, arg, "--verbose")) {
+            verbose = true;
         } else {
             if (path != null) {
                 return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "check", .arg = arg } } };
@@ -173,7 +183,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main } };
+    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .no_cache = no_cache, .verbose = verbose } };
 }
 
 fn parseBuild(args: []const []const u8) CliArgs {

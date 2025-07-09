@@ -3098,7 +3098,7 @@ fn canonicalizePattern(
 
             // Process all patterns, tracking rest position and canonicalizing non-rest patterns
             const patterns_slice = self.parse_ir.store.patternSlice(e.patterns);
-            for (patterns_slice, 0..) |pattern_idx, i| {
+            for (patterns_slice) |pattern_idx| {
                 const ast_pattern = self.parse_ir.store.getPattern(pattern_idx);
 
                 if (ast_pattern == .list_rest) {
@@ -3161,7 +3161,9 @@ fn canonicalizePattern(
                     // For unnamed rest patterns, current_rest_pattern remains null
 
                     // Store rest information
-                    rest_index = @intCast(i);
+                    // The rest_index should be the number of patterns canonicalized so far
+                    const patterns_so_far = self.can_ir.store.scratch_patterns.items.items.len - scratch_top;
+                    rest_index = @intCast(patterns_so_far);
                     rest_pattern = current_rest_pattern;
                 } else {
                     // Regular pattern - canonicalize it and add to scratch patterns

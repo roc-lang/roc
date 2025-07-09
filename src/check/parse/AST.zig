@@ -83,7 +83,7 @@ pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const 
 pub fn appendRegionInfoToSexprTree(self: *AST, env: *base.ModuleEnv, tree: *SExprTree, region: TokenizedRegion) void {
     const start = self.tokens.resolve(region.start);
     const end = self.tokens.resolve(region.end);
-    const info: base.RegionInfo = base.RegionInfo.position(self.source, env.line_starts.items, start.start.offset, end.end.offset) catch .{
+    const info: base.RegionInfo = base.RegionInfo.position(self.source, env.line_starts.items.items, start.start.offset, end.end.offset) catch .{
         .start_line_idx = 0,
         .start_col_idx = 0,
         .end_line_idx = 0,
@@ -531,18 +531,18 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
     // Add source context if we have a valid region
     if (region.start.offset <= region.end.offset and region.end.offset <= self.source.len) {
         // Compute line_starts from source for proper region info calculation
-        var line_starts = std.ArrayList(u32).init(allocator);
-        defer line_starts.deinit();
+        var line_starts = collections.SafeList(u32).initCapacity(allocator, 256);
+        defer line_starts.deinit(allocator);
 
-        try line_starts.append(0); // First line starts at 0
+        _ = line_starts.append(allocator, 0); // First line starts at 0
         for (self.source, 0..) |char, i| {
             if (char == '\n') {
-                try line_starts.append(@intCast(i + 1));
+                _ = line_starts.append(allocator, @intCast(i + 1));
             }
         }
 
         // Use proper region info calculation with converted region
-        const region_info = base.RegionInfo.position(self.source, line_starts.items, region.start.offset, region.end.offset) catch {
+        const region_info = base.RegionInfo.position(self.source, line_starts.items.items, region.start.offset, region.end.offset) catch {
             return report; // Return report without source context if region calculation fails
         };
 

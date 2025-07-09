@@ -18,6 +18,8 @@ dirName: *const fn (absolute_path: []const u8) ?[]const u8,
 baseName: *const fn (absolute_path: []const u8) ?[]const u8,
 canonicalize: *const fn (relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8,
 makePath: *const fn (path: []const u8) MakePathError!void,
+rename: *const fn (old_path: []const u8, new_path: []const u8) RenameError!void,
+getFileInfo: *const fn (path: []const u8) GetFileInfoError!FileInfo,
 
 // TODO: replace this with a method that gets the right
 // filesystem manager for the current context.
@@ -34,6 +36,8 @@ pub fn default() Self {
         .baseName = &baseNameDefault,
         .canonicalize = &canonicalizeDefault,
         .makePath = &makePathDefault,
+        .rename = &renameDefault,
+        .getFileInfo = &getFileInfoDefault,
     };
 }
 
@@ -51,6 +55,8 @@ pub fn testing() Self {
         .baseName = &baseNameTesting,
         .canonicalize = &canonicalizeTesting,
         .makePath = &makePathTesting,
+        .rename = &renameTesting,
+        .getFileInfo = &getFileInfoTesting,
     };
 }
 
@@ -72,6 +78,20 @@ pub const OpenError = std.fs.File.OpenError || std.fs.Dir.AccessError;
 
 /// All errors that can occur when canonicalizing a filepath.
 pub const CanonicalizeError = error{ FileNotFound, Unknown, OutOfMemory } || std.posix.RealPathError;
+
+/// All errors that can occur when renaming a file.
+pub const RenameError = std.fs.Dir.RenameError || std.posix.RenameError;
+
+/// All errors that can occur when getting file information.
+pub const GetFileInfoError = std.fs.File.OpenError || std.fs.File.StatError;
+
+/// File information structure containing metadata.
+pub const FileInfo = struct {
+    /// File modification time in nanoseconds since Unix epoch
+    mtime_ns: i128,
+    /// File size in bytes
+    size: u64,
+};
 
 /// An abstracted directory handle.
 pub const Dir = struct {
@@ -219,6 +239,24 @@ fn makePathDefault(path: []const u8) MakePathError!void {
     try std.fs.cwd().makePath(path);
 }
 
+/// Renames a file or directory from old_path to new_path.
+fn renameDefault(old_path: []const u8, new_path: []const u8) RenameError!void {
+    try std.fs.cwd().rename(old_path, new_path);
+}
+
+/// Gets file information including modification time and size.
+fn getFileInfoDefault(path: []const u8) GetFileInfoError!FileInfo {
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    const stat = try file.stat();
+
+    return FileInfo{
+        .mtime_ns = stat.mtime,
+        .size = stat.size,
+    };
+}
+
 /// Writes contents to a file at the given path.
 /// Creates the file if it doesn't exist or truncates it if it does.
 fn writeFileDefault(path: []const u8, contents: []const u8) WriteError!void {
@@ -277,4 +315,26 @@ fn canonicalizeTesting(root_relative_path: []const u8, allocator: Allocator) Can
 fn makePathTesting(path: []const u8) MakePathError!void {
     _ = path;
     @panic("makePath should not be called in this test");
+}
+
+fn renameTesting(old_path: []const u8, new_path: []const u8) RenameError!void {
+    _ = old_path;
+    _ = new_path;
+    @panic("rename should not be called in this test");
+}
+
+fn getFileInfoTesting(path: []const u8) GetFileInfoError!FileInfo {
+    // Return deterministic file info for testing
+    // Hash the path to get consistent results
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(path);
+    const hash = hasher.finalResult();
+
+    const mtime_ns = @as(i128, @bitCast(@as(u128, @bitCast(hash[0..16].*)) & 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF));
+    const size = @as(u64, @bitCast(hash[16..24].*)) & 0xFFFFFF; // Limit size for testing
+
+    return FileInfo{
+        .mtime_ns = mtime_ns,
+        .size = size,
+    };
 }

@@ -167,12 +167,12 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
     // compute offsets of each line, looping over bytes of the input
-    var line_offsets = std.ArrayList(u32).init(gpa);
-    defer line_offsets.deinit();
-    try line_offsets.append(0);
+    var line_offsets = @import("collections.zig").SafeList(u32).initCapacity(gpa, 256);
+    defer line_offsets.deinit(gpa);
+    _ = line_offsets.append(gpa, 0);
     for (source, 0..) |c, i| {
         if (c == '\n') {
-            try line_offsets.append(@intCast(i));
+            _ = line_offsets.append(gpa, @intCast(i));
         }
     }
 
@@ -180,8 +180,8 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
-        const line = binarySearch(line_offsets.items, region.start.offset) orelse unreachable;
-        const column = region.start.offset - line_offsets.items[line];
+        const line = binarySearch(line_offsets.items.items, region.start.offset) orelse unreachable;
+        const column = region.start.offset - line_offsets.items.items[line];
         const token = parse_ast.tokens.tokens.items(.tag)[err.region.start];
         // TODO: pretty print the parse failures.
         try stderr.print("\t{s}, at token {s} at {d}:{d}\n", .{ @tagName(err.tag), @tagName(token), line + 1, column });
