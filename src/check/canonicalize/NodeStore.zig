@@ -583,8 +583,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_dot_access => {
             const args_span = if (node.data_3 != 0) blk: {
-                const packed_span = PackedDataSpan.FunctionArgs.fromU32(node.data_3);
-                const data_span = packed_span.toDataSpan();
+                const extra_start = node.data_3;
+                const data_span = DataSpan{
+                    .start = @intCast(store.extra_data.items[extra_start]),
+                    .len = @intCast(store.extra_data.items[extra_start + 1]),
+                };
                 break :blk CIR.Expr.Span{ .span = data_span };
             } else null;
 
@@ -1276,10 +1279,13 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) CIR.Expr.
             node.data_1 = @intFromEnum(e.receiver);
             node.data_2 = @bitCast(e.field_name);
             if (e.args) |args| {
-                // Use PackedDataSpan for efficient storage - FunctionArgs config is good for method call args
-                std.debug.assert(PackedDataSpan.FunctionArgs.canFit(args.span));
-                const packed_span = PackedDataSpan.FunctionArgs.fromDataSpanUnchecked(args.span);
-                node.data_3 = packed_span.toU32();
+                // Store DataSpan directly in extra_data
+                const extra_start = store.extra_data.items.len;
+                store.extra_data.appendSlice(store.gpa, &[_]u32{
+                    @intCast(args.span.start),
+                    @intCast(args.span.len),
+                }) catch |err| exitOnOom(err);
+                node.data_3 = @intCast(extra_start);
             } else {
                 node.data_3 = 0; // No args
             }

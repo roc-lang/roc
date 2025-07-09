@@ -38,6 +38,10 @@ root_node_idx: u32 = 0,
 tokenize_diagnostics: std.ArrayListUnmanaged(tokenize.Diagnostic),
 parse_diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 
+/// Limit the number of debug warnings we print to avoid spamming the console
+warning_counter: usize = 0,
+const MAX_WARNINGS: usize = 25;
+
 /// Calculate whether this region is - or will be - multiline
 pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
     var i = region.start;
@@ -148,11 +152,19 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
             const start_idx = @min(tokenized_region.start, token_count - 1);
             const end_idx = @min(tokenized_region.end, token_count - 1);
 
-            if (start_idx < token_count and tags[start_idx] == .Newline) {
-                std.log.info("WARNING: Diagnostic region starts with Newline token at index {}", .{start_idx});
+            if (start_idx < token_count and tags[start_idx] == .Newline and self.warning_counter < MAX_WARNINGS) {
+                std.log.warn("Diagnostic region starts with Newline token at index {}", .{start_idx});
+                self.warning_counter += 1;
+                if (self.warning_counter == MAX_WARNINGS) {
+                    std.log.info("Maximum number {} warnings reached, suppressing further messages.", .{self.warning_counter});
+                }
             }
-            if (end_idx < token_count and tags[end_idx] == .Newline) {
-                std.log.info("WARNING: Diagnostic region ends with Newline token at index {}", .{end_idx});
+            if (end_idx < token_count and tags[end_idx] == .Newline and self.warning_counter < MAX_WARNINGS) {
+                std.log.warn("Diagnostic region ends with Newline token at index {}", .{end_idx});
+                self.warning_counter += 1;
+                if (self.warning_counter == MAX_WARNINGS) {
+                    std.log.info("Maximum number {} warnings reached, suppressing further messages.", .{self.warning_counter});
+                }
             }
         },
         else => {},
