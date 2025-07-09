@@ -210,91 +210,33 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
             // Check if we have access to other modules
             if (self.other_modules) |other_modules| {
-                // For test scenarios, we need to map import indices to module indices.
-                // The tests follow specific patterns:
-                // - Module B imports "ModuleA" (index 0)
-                // - Module C imports "ModuleB" (index 1)
-                // Since import index is always 0 in tests but means different modules,
-                // we use a heuristic based on checking which module has the target expression.
+                // TODO: In a real implementation, e.module_idx would be a CIR.Import.Idx
+                // and we would need to resolve it to a ModuleWorkIdx through import resolution.
+                // For now, we expect e.module_idx to be cast directly to a ModuleWorkIdx.
+                const module_work_idx = @as(base.ModuleWorkIdx, @enumFromInt(@intFromEnum(e.module_idx)));
 
-                // Count total modules
-                var total_modules: u32 = 0;
-                var iter = other_modules.iterIndices();
-                while (iter.next()) |_| {
-                    total_modules += 1;
-                }
+                const other_module_cir = other_modules.getWork(module_work_idx);
+                const other_module_env = &other_module_cir.env;
 
-                var found_module: ?base.ModuleWorkIdx = null;
+                // The target_node_idx points to an expression in the other module
+                // We need to get the type variable associated with that expression
                 const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(e.target_node_idx));
                 const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
 
-                // For 3-module scenarios, check both possible modules
-                if (total_modules >= 3 and @intFromEnum(e.module_idx) == 0) {
-                    // Could be B importing from A (module 0) or C importing from B (module 1)
-                    // Check module 1 first (B), then fall back to module 0 (A)
-                    const modules_to_check = [_]u32{ 1, 0 };
-                    for (modules_to_check) |target_idx| {
-                        iter = other_modules.iterIndices();
-                        var counter: u32 = 0;
-                        while (iter.next()) |idx| {
-                            if (counter == target_idx) {
-                                const other_module_cir = other_modules.getWork(idx);
-                                const other_module_env = &other_module_cir.env;
-                                const resolved = other_module_env.*.types.resolveVar(imported_var);
+                // Copy the type from the imported module to our module
+                const copied_var = try copy_import.copyImportedType(
+                    &other_module_env.*.types,
+                    self.types,
+                    imported_var,
+                    self.gpa,
+                );
 
-                                // Check if this module has the expression with actual content
-                                if (resolved.desc.content != .flex_var or resolved.desc.content.flex_var != null) {
-                                    found_module = idx;
-                                    break;
-                                }
-                            }
-                            counter += 1;
-                        }
-                        if (found_module != null) break;
-                    }
-                } else {
-                    // Standard case: import index maps to module index
-                    iter = other_modules.iterIndices();
-                    var counter: u32 = 0;
-                    while (iter.next()) |idx| {
-                        if (counter == @intFromEnum(e.module_idx)) {
-                            found_module = idx;
-                            break;
-                        }
-                        counter += 1;
-                    }
-                }
-
-                if (found_module) |module_idx| {
-                    const other_module_cir = other_modules.getWork(module_idx);
-                    const other_module_env = &other_module_cir.env;
-
-                    // The target_node_idx points to an expression in the other module
-                    // We need to get the type variable associated with that expression
-                    // Use already declared target_expr_idx and imported_var
-
-                    // Get the actual type variable for this expression
-                    // Expressions get their type variables during type checking
-                    // Use already declared imported_var
-
-                    // Copy the type from the imported module to our module
-                    const copied_var = try copy_import.copyImportedType(
-                        &other_module_env.*.types,
-                        self.types,
-                        imported_var,
-                        self.gpa,
-                    );
-
-                    // Unify our expression with the copied type
-                    const result = self.unify(expr_var, copied_var);
-                    if (result.isProblem()) {
-                        // Handle the unification problem
-                        const problem_idx = result.problem;
-                        _ = problem_idx; // TODO: properly handle cross-module type errors
-                    }
-                } else {
-                    // Module not found, set to error
-                    try self.types.setVarContent(expr_var, .err);
+                // Unify our expression with the copied type
+                const result = self.unify(expr_var, copied_var);
+                if (result.isProblem()) {
+                    // Handle the unification problem
+                    const problem_idx = result.problem;
+                    _ = problem_idx; // TODO: properly handle cross-module type errors
                 }
             } else {
                 // No other modules available, set to error
