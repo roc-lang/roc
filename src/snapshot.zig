@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
+const parallel = base.parallel;
 const canonicalize = @import("check/canonicalize.zig");
 const types_mod = @import("types.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
@@ -107,6 +108,7 @@ pub fn main() !void {
     var expect_fuzz_corpus_path: bool = false;
     var generate_html: bool = false;
     var debug_mode: bool = false;
+    var single_thread: bool = false;
 
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--verbose")) {
@@ -115,6 +117,8 @@ pub fn main() !void {
             generate_html = true;
         } else if (std.mem.eql(u8, arg, "--debug")) {
             debug_mode = true;
+        } else if (std.mem.eql(u8, arg, "--singlethread")) {
+            single_thread = true;
         } else if (std.mem.eql(u8, arg, "--fuzz-corpus")) {
             if (maybe_fuzz_corpus_path != null) {
                 std.log.err("`--fuzz-corpus` should only be specified once.", .{});
@@ -132,6 +136,7 @@ pub fn main() !void {
                 \\  --verbose       Enable verbose logging
                 \\  --html          Generate HTML output files
                 \\  --debug         Use GeneralPurposeAllocator for debugging (default: c_allocator)
+                \\  --singlethread  Process snapshots in single-threaded mode. Implied with --debug.
                 \\  --fuzz-corpus <path>  Specify the path to the fuzz corpus
                 \\
                 \\Arguments:
@@ -164,28 +169,40 @@ pub fn main() !void {
         log("copying SOURCE from snapshots to: {s}", .{maybe_fuzz_corpus_path.?});
         try std.fs.cwd().makePath(maybe_fuzz_corpus_path.?);
     }
-
     const snapshots_dir = "src/snapshots";
-    var total_success: usize = 0;
-    var total_failed: usize = 0;
     var timer = std.time.Timer.start() catch unreachable;
+
+    // Stage 1: Collect work items
+    var work_list = WorkList.init(gpa);
+    defer {
+        // Clean up any remaining work items
+        for (work_list.items) |work_item| {
+            gpa.free(work_item.path);
+        }
+        work_list.deinit();
+    }
 
     if (snapshot_paths.items.len > 0) {
         for (snapshot_paths.items) |path| {
-            const result = try processPath(snapshot_allocator, path, maybe_fuzz_corpus_path, generate_html);
-            total_success += result.success;
-            total_failed += result.failed;
+            try collectWorkItems(snapshot_allocator, path, &work_list, maybe_fuzz_corpus_path, generate_html);
         }
     } else {
         // process all files in snapshots_dir
-        const result = try processPath(snapshot_allocator, snapshots_dir, maybe_fuzz_corpus_path, generate_html);
-        total_success = result.success;
-        total_failed = result.failed;
+        try collectWorkItems(gpa, snapshots_dir, &work_list, maybe_fuzz_corpus_path, generate_html);
     }
+
+    const collect_duration_ms = timer.read() / std.time.ns_per_ms;
+    log("collected {d} work items in {d} ms", .{ work_list.items.len, collect_duration_ms });
+
+    // Stage 2: Process work items (in parallel or single-threaded)
+    const result = try processWorkItems(snapshot_allocator, work_list, single_thread or debug_mode);
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
 
-    std.log.info("processed {d} snapshots in {d} ms.", .{ total_success, duration_ms });
+    std.log.info(
+        "collected {d} items in {d} ms, processed {d} snapshots in {d} ms.",
+        .{ work_list.items.len, collect_duration_ms, result.success, duration_ms },
+    );
 }
 
 /// Check if a file has a valid snapshot extension
@@ -540,13 +557,63 @@ const ProcessResult = struct {
     failed: usize,
 };
 
-fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]const u8, generate_html: bool) !ProcessResult {
-    var processed_count: usize = 0;
-    var failed_count: usize = 0;
+const WorkItem = struct {
+    path: []const u8,
+    kind: enum {
+        snapshot_file,
+        multi_file_snapshot,
+    },
+    maybe_fuzz_corpus_path: ?[]const u8,
+    generate_html: bool,
+};
 
+const WorkList = std.ArrayList(WorkItem);
+
+/// Worker function that processes a single work item
+fn processWorkItem(allocator: Allocator, work_item: WorkItem) bool {
+    const success = switch (work_item.kind) {
+        .snapshot_file => processSnapshotFile(allocator, work_item.path, work_item.maybe_fuzz_corpus_path, work_item.generate_html) catch false,
+        .multi_file_snapshot => blk: {
+            processMultiFileSnapshot(allocator, work_item.path, work_item.generate_html) catch {
+                break :blk false;
+            };
+            break :blk true;
+        },
+    };
+
+    return success;
+}
+
+/// Stage 2: Process work items in parallel using the parallel utility
+fn processWorkItems(gpa: Allocator, work_list: WorkList, single_thread: bool) !ProcessResult {
+    if (work_list.items.len == 0) {
+        return ProcessResult{ .success = 0, .failed = 0 };
+    }
+
+    const config = parallel.ParallelConfig{
+        .single_threaded = single_thread,
+        .max_threads = 0, // Auto-detect
+    };
+
+    const result = try parallel.processParallel(
+        WorkItem,
+        gpa,
+        work_list.items,
+        processWorkItem,
+        config,
+    );
+
+    return ProcessResult{
+        .success = result.success,
+        .failed = result.failed,
+    };
+}
+
+/// Stage 1: Walk directory tree and collect work items
+fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList, maybe_fuzz_corpus_path: ?[]const u8, generate_html: bool) !void {
     const canonical_path = std.fs.cwd().realpathAlloc(gpa, path) catch |err| {
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
-        return .{ .success = 0, .failed = 1 };
+        return;
     };
     defer gpa.free(canonical_path);
 
@@ -557,9 +624,13 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
 
         // It's a directory
         if (isMultiFileSnapshot(canonical_path)) {
-            try processMultiFileSnapshot(gpa, canonical_path, generate_html);
-            processed_count += 1;
-            return .{ .success = processed_count, .failed = failed_count };
+            const path_copy = try gpa.dupe(u8, canonical_path);
+            try work_list.append(WorkItem{
+                .path = path_copy,
+                .kind = .multi_file_snapshot,
+                .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
+                .generate_html = generate_html,
+            });
         } else {
             var dir_iterator = dir.iterate();
             while (try dir_iterator.next()) |entry| {
@@ -570,16 +641,15 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
                 defer gpa.free(full_path);
 
                 if (entry.kind == .directory) {
-                    const result = try processPath(gpa, full_path, maybe_fuzz_corpus_path, generate_html);
-                    processed_count += result.success;
-                    failed_count += result.failed;
+                    try collectWorkItems(gpa, full_path, work_list, maybe_fuzz_corpus_path, generate_html);
                 } else if (entry.kind == .file and isSnapshotFile(entry.name)) {
-                    if (try processSnapshotFile(gpa, full_path, maybe_fuzz_corpus_path, generate_html)) {
-                        processed_count += 1;
-                    } else {
-                        log("skipped file (not a valid snapshot): {s}", .{full_path});
-                        failed_count += 1;
-                    }
+                    const path_copy = try gpa.dupe(u8, full_path);
+                    try work_list.append(WorkItem{
+                        .path = path_copy,
+                        .kind = .snapshot_file,
+                        .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
+                        .generate_html = generate_html,
+                    });
                 }
             }
         }
@@ -587,23 +657,20 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
         // Not a directory, try as file
         if (dir_err == error.NotDir) {
             if (isSnapshotFile(canonical_path)) {
-                if (try processSnapshotFile(gpa, canonical_path, maybe_fuzz_corpus_path, generate_html)) {
-                    processed_count += 1;
-                } else {
-                    std.log.err("failed to process snapshot file: {s}", .{canonical_path});
-                    std.log.err("make sure the file starts with '~~~META' and has valid snapshot format", .{});
-                    failed_count += 1;
-                }
+                const path_copy = try gpa.dupe(u8, canonical_path);
+                try work_list.append(WorkItem{
+                    .path = path_copy,
+                    .kind = .snapshot_file,
+                    .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
+                    .generate_html = generate_html,
+                });
             } else {
                 std.log.err("file '{s}' is not a snapshot file (must end with .md)", .{canonical_path});
             }
         } else {
             std.log.err("failed to access path '{s}': {s}", .{ canonical_path, @errorName(dir_err) });
-            return .{ .success = 0, .failed = 1 };
         }
     }
-
-    return .{ .success = processed_count, .failed = failed_count };
 }
 
 /// Represents the different sections of a snapshot file.
