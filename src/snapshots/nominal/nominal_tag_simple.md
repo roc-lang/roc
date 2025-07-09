@@ -88,14 +88,14 @@ yellow = Yellow
 (can-ir
 	(d-let
 		(p-assign @6.1-6.5 (ident "blue"))
-		(e-nominal @6.8-6.13 (nominal "Color")
+		(e-nominal @6.8-6.18 (nominal "Color")
 			(e-tag @6.8-6.18 (name "Blue")))
 		(annotation @6.1-6.5
 			(declared-type
 				(ty @5.8-5.13 (name "Color")))))
 	(d-let
 		(p-assign @9.1-9.7 (ident "yellow"))
-		(e-nominal @9.10-9.15 (nominal "Color")
+		(e-nominal @9.10-9.22 (nominal "Color")
 			(e-tag @9.10-9.22 (name "Yellow")))
 		(annotation @9.1-9.7
 			(declared-type

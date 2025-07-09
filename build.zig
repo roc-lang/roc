@@ -116,6 +116,12 @@ pub fn build(b: *std.Build) void {
         const run_builtins_tests = b.addRunArtifact(builtins_tests);
         builtins_test_step.dependOn(&run_builtins_tests.step);
         test_step.dependOn(&run_builtins_tests.step);
+
+        // Add success message after all tests complete
+        const tests_passed_step = b.addSystemCommand(&.{ "echo", "All tests passed!" });
+        tests_passed_step.step.dependOn(&run_tests.step);
+        tests_passed_step.step.dependOn(&run_builtins_tests.step);
+        test_step.dependOn(&tests_passed_step.step);
     }
 
     // Fmt zig code.

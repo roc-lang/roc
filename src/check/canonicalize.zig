@@ -207,14 +207,12 @@ fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8) std.mem.Allocato
     const header_idx = ir.store.addTypeHeader(.{
         .name = type_ident,
         .args = .{ .span = .{ .start = 0, .len = 0 } }, // No type parameters for built-ins
-        .region = Region.zero(),
-    });
+    }, Region.zero());
 
     // Create a type annotation that refers to itself (built-in types are primitive)
     const anno_idx = ir.store.addTypeAnno(.{ .ty = .{
         .symbol = type_ident,
-        .region = Region.zero(),
-    } });
+    } }, Region.zero());
     const anno_var = try ir.pushFreshTypeVar(@enumFromInt(@intFromEnum(header_idx)), Region.zero());
 
     // Create the type declaration statement
@@ -224,11 +222,10 @@ fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8) std.mem.Allocato
             .anno = anno_idx,
             .anno_var = anno_var,
             .where = null,
-            .region = Region.zero(),
         },
     };
 
-    const type_decl_idx = ir.store.addStatement(type_decl_stmt);
+    const type_decl_idx = ir.store.addStatement(type_decl_stmt, Region.zero());
     const type_decl_node_idx = CIR.nodeIdxFrom(type_decl_idx);
     _ = ir.setTypeVarAt(
         type_decl_node_idx,
@@ -256,15 +253,13 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
     const header_idx = ir.store.addTypeHeader(.{
         .name = type_ident,
         .args = .{ .span = .{ .start = 0, .len = 0 } }, // No type parameters for built-ins
-        .region = Region.zero(),
-    });
+    }, Region.zero());
     const header_node_idx = CIR.nodeIdxFrom(header_idx);
 
     // Create a type annotation that refers to itself (built-in types are primitive)
     const anno_idx = ir.store.addTypeAnno(.{ .ty = .{
         .symbol = type_ident,
-        .region = Region.zero(),
-    } });
+    } }, Region.zero());
     const ext_var = try ir.pushTypeVar(Content{ .structure = .empty_tag_union }, header_node_idx, Region.zero());
     const anno_var = try ir.pushTypeVar(ir.env.types.mkBool(gpa, &ir.env.idents, ext_var), header_node_idx, Region.zero());
 
@@ -275,11 +270,10 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
             .anno = anno_idx,
             .anno_var = anno_var,
             .where = null,
-            .region = Region.zero(),
         },
     };
 
-    const type_decl_idx = ir.store.addStatement(type_decl_stmt);
+    const type_decl_idx = ir.store.addStatement(type_decl_stmt, Region.zero());
     const type_decl_node_idx = CIR.nodeIdxFrom(type_decl_idx);
     _ = ir.setTypeVarAt(
         type_decl_node_idx,
@@ -368,7 +362,6 @@ pub fn canonicalizeFile(
                             .anno = @enumFromInt(0), // placeholder - will be replaced
                             .anno_var = @enumFromInt(0), // placeholder - will be replaced
                             .where = null,
-                            .region = region,
                         },
                     },
                     .nominal => CIR.Statement{
@@ -377,12 +370,11 @@ pub fn canonicalizeFile(
                             .anno = @enumFromInt(0), // placeholder - will be replaced
                             .anno_var = @enumFromInt(0), // placeholder - will be replaced
                             .where = null,
-                            .region = region,
                         },
                     },
                 };
 
-                const placeholder_type_decl_idx = self.can_ir.store.addStatement(placeholder_cir_type_decl);
+                const placeholder_type_decl_idx = self.can_ir.store.addStatement(placeholder_cir_type_decl, region);
 
                 // Introduce the type name into scope early to support recursive references
                 self.scopeIntroduceTypeDecl(type_header.name, placeholder_type_decl_idx, region);
@@ -447,7 +439,6 @@ pub fn canonicalizeFile(
                                         .anno = anno_idx,
                                         .anno_var = anno_var,
                                         .where = where_clauses,
-                                        .region = region,
                                     },
                                 },
                                 Content{ .alias = types.Alias{
@@ -461,13 +452,12 @@ pub fn canonicalizeFile(
                                 CIR.Statement{
                                     .s_nominal_decl = .{
                                         .header = header_idx,
-                                        .anno_var = anno_var,
                                         .anno = anno_idx,
+                                        .anno_var = anno_var,
                                         .where = where_clauses,
-                                        .region = region,
                                     },
                                 },
-                                Content{ .structure = FlatType{ .nominal_type = types.NominalType{
+                                Content{ .structure = .{ .nominal_type = types.NominalType{
                                     .ident = type_ident,
                                     .num_args = num_args,
                                 } } },
@@ -477,7 +467,7 @@ pub fn canonicalizeFile(
                 };
 
                 // Create the real statement and add it to scratch statements
-                const type_decl_stmt_idx = self.can_ir.store.addStatement(real_cir_type_decl);
+                const type_decl_stmt_idx = self.can_ir.store.addStatement(real_cir_type_decl, region);
                 self.can_ir.store.addScratchStatement(type_decl_stmt_idx);
 
                 // Set the root type variable
@@ -618,9 +608,8 @@ pub fn canonicalizeFile(
                     } });
                     const expect_stmt = CIR.Statement{ .s_expect = .{
                         .body = malformed,
-                        .region = region,
                     } };
-                    const expect_stmt_idx = self.can_ir.store.addStatement(expect_stmt);
+                    const expect_stmt_idx = self.can_ir.store.addStatement(expect_stmt, region);
                     self.can_ir.store.addScratchStatement(expect_stmt_idx);
                     last_type_anno = null; // Clear on non-annotation statement
                     continue;
@@ -629,9 +618,8 @@ pub fn canonicalizeFile(
                 // Create expect statement
                 const expect_stmt = CIR.Statement{ .s_expect = .{
                     .body = expect_expr,
-                    .region = region,
                 } };
-                const expect_stmt_idx = self.can_ir.store.addStatement(expect_stmt);
+                const expect_stmt_idx = self.can_ir.store.addStatement(expect_stmt, region);
                 self.can_ir.store.addScratchStatement(expect_stmt_idx);
 
                 last_type_anno = null; // Clear on non-annotation statement
@@ -692,9 +680,8 @@ pub fn canonicalizeFile(
                         const dummy_anno = self.can_ir.store.addTypeAnno(.{
                             .ty_var = .{
                                 .name = type_var,
-                                .region = region, // TODO we may want to use the region for the type_var instead of the whole annotation
                             },
-                        });
+                        }, region); // TODO we may want to use the region for the type_var instead of the whole annotation
                         self.scopeIntroduceTypeVar(type_var, dummy_anno);
                     }
                     // Shrink the scratch vars list to the original size
@@ -724,10 +711,9 @@ pub fn canonicalizeFile(
                             .name = name_ident,
                             .anno = type_anno_idx,
                             .where = where_clauses,
-                            .region = region,
                         },
                     };
-                    const type_anno_stmt_idx = self.can_ir.store.addStatement(type_anno_stmt);
+                    const type_anno_stmt_idx = self.can_ir.store.addStatement(type_anno_stmt, region);
                     self.can_ir.store.addScratchStatement(type_anno_stmt_idx);
                 }
 
@@ -1100,11 +1086,10 @@ fn canonicalizeImportStatement(
             .qualifier_tok = if (import_stmt.qualifier_tok) |q_tok| self.parse_ir.tokens.resolveIdentifier(q_tok) else null,
             .alias_tok = if (import_stmt.alias_tok) |a_tok| self.parse_ir.tokens.resolveIdentifier(a_tok) else null,
             .exposes = cir_exposes,
-            .region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region),
         },
     };
 
-    const import_idx = self.can_ir.store.addStatement(cir_import);
+    const import_idx = self.can_ir.store.addStatement(cir_import, self.parse_ir.tokenizedRegionToRegion(import_stmt.region));
     self.can_ir.store.addScratchStatement(import_idx);
 
     // 8. Add the module to the current scope so it can be used in qualified lookups
@@ -1216,7 +1201,11 @@ fn convertASTExposesToCIR(
             };
         };
 
-        const cir_exposed_idx = self.can_ir.store.addExposedItem(cir_exposed);
+        const tokenized_region = switch (ast_exposed) {
+            inline else => |payload| payload.region,
+        };
+        const region = self.parse_ir.tokenizedRegionToRegion(tokenized_region);
+        const cir_exposed_idx = self.can_ir.store.addExposedItem(cir_exposed, region);
         self.can_ir.store.addScratchExposedItem(cir_exposed_idx);
     }
 
@@ -1333,14 +1322,13 @@ fn canonicalizeDeclWithAnnotation(
     };
 
     // Create the def entry
+    const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
     const def_idx = self.can_ir.store.addDef(.{
         .pattern = pattern_idx,
-        .pattern_region = pattern_region,
         .expr = expr_idx,
-        .expr_region = expr_region,
         .annotation = annotation,
         .kind = .let,
-    });
+    }, region);
 
     // Set def type variable to a flex var
     //
@@ -1417,9 +1405,8 @@ fn canonicalizeSingleQuote(
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_int = .{
                     .value = int_val,
-                    .region = region,
                 },
-            });
+            }, region);
             _ = self.can_ir.setTypeVarAtExpr(expr_idx, type_content);
             return expr_idx;
         } else if (Idx == CIR.Pattern.Idx) {
@@ -1477,7 +1464,7 @@ fn canonicalizeRecordField(
         .value = value,
     };
 
-    return self.can_ir.store.addRecordField(cir_field);
+    return self.can_ir.store.addRecordField(cir_field, self.parse_ir.tokenizedRegionToRegion(field.region));
 }
 
 /// Canonicalize an expression.
@@ -1519,9 +1506,8 @@ pub fn canonicalizeExpr(
                         .e_tag = .{
                             .name = tag_name,
                             .args = args_span,
-                            .region = region,
                         },
-                    });
+                    }, region);
 
                     // Create a single tag, open tag union for this variable
                     const ext_var = self.can_ir.pushFreshTypeVar(CIR.nodeIdxFrom(expr_idx), region) catch |err| exitOnOom(err);
@@ -1565,9 +1551,8 @@ pub fn canonicalizeExpr(
                 .e_call = .{
                     .args = args_span,
                     .called_via = CalledVia.apply,
-                    .region = region,
                 },
-            });
+            }, region);
             // Insert flex type variable
             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
 
@@ -1610,7 +1595,7 @@ pub fn canonicalizeExpr(
                                 .module_idx = import_idx,
                                 .target_node_idx = target_node_idx,
                                 .region = region,
-                            } });
+                            } }, region);
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                             return expr_idx;
                         }
@@ -1630,8 +1615,7 @@ pub fn canonicalizeExpr(
                         const expr_idx =
                             self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_local = .{
                                 .pattern_idx = pattern_idx,
-                                .region = region,
-                            } });
+                            } }, region);
                         _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                         return expr_idx;
                     },
@@ -1663,7 +1647,7 @@ pub fn canonicalizeExpr(
                                 .module_idx = import_idx,
                                 .target_node_idx = target_node_idx,
                                 .region = region,
-                            } });
+                            } }, region);
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                             return expr_idx;
                         }
@@ -1787,9 +1771,8 @@ pub fn canonicalizeExpr(
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_int = .{
                     .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 },
-                    .region = region,
                 },
-            });
+            }, region);
 
             // Insert concrete type variable
             const type_content = if (is_non_decimal)
@@ -1832,24 +1815,21 @@ pub fn canonicalizeExpr(
                     .e_dec_small = .{
                         .numerator = small_info.numerator,
                         .denominator_power_of_ten = small_info.denominator_power_of_ten,
-                        .region = region,
                     },
                 },
                 .dec => |dec_info| CIR.Expr{
                     .e_frac_dec = .{
                         .value = dec_info.value,
-                        .region = region,
                     },
                 },
                 .f64 => |f64_info| CIR.Expr{
                     .e_frac_f64 = .{
                         .value = f64_info.value,
-                        .region = region,
                     },
                 },
             };
 
-            const expr_idx = self.can_ir.store.addExpr(cir_expr);
+            const expr_idx = self.can_ir.store.addExpr(cir_expr, region);
 
             // Insert concrete type variable
             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } });
@@ -1872,8 +1852,7 @@ pub fn canonicalizeExpr(
 
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_str = .{
                 .span = str_segments_span,
-                .region = self.parse_ir.tokenizedRegionToRegion(e.region),
-            } });
+            } }, self.parse_ir.tokenizedRegionToRegion(e.region));
 
             // Insert concrete type variable
             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .str });
@@ -1888,10 +1867,8 @@ pub fn canonicalizeExpr(
             if (items_slice.len == 0) {
                 // Empty list - use e_empty_list
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                    .e_empty_list = .{
-                        .region = region,
-                    },
-                });
+                    .e_empty_list = .{},
+                }, region);
 
                 // Insert concrete type variable as list_unbound
                 _ = self.can_ir.setTypeVarAtExpr(
@@ -1920,10 +1897,8 @@ pub fn canonicalizeExpr(
             if (elems_span.span.len == 0) {
                 // All elements failed to canonicalize - create empty list
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                    .e_empty_list = .{
-                        .region = region,
-                    },
-                });
+                    .e_empty_list = .{},
+                }, region);
 
                 // Insert concrete type variable as list_unbound
                 _ = self.can_ir.setTypeVarAtExpr(
@@ -1940,11 +1915,10 @@ pub fn canonicalizeExpr(
             const elem_type_var = @as(TypeVar, @enumFromInt(@intFromEnum(first_elem_idx)));
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_list = .{
-                    .elems = elems_span,
                     .elem_var = elem_type_var,
-                    .region = region,
+                    .elems = elems_span,
                 },
-            });
+            }, region);
 
             // Insert concrete type variable
             _ = self.can_ir.setTypeVarAtExpr(
@@ -1962,9 +1936,8 @@ pub fn canonicalizeExpr(
                     .e_tag = .{
                         .name = tag_name,
                         .args = .{ .span = .{ .start = 0, .len = 0 } }, // empty arguments
-                        .region = region,
                     },
-                });
+                }, region);
 
                 // Create a single tag, open tag union for this variable
                 const ext_var = self.can_ir.pushFreshTypeVar(CIR.nodeIdxFrom(tag_expr_idx), region) catch |err| exitOnOom(err);
@@ -2011,9 +1984,8 @@ pub fn canonicalizeExpr(
                             .nominal_type_decl = nominal_type_decl,
                             .backing_expr = tag_expr_idx,
                             .backing_type = .tag,
-                            .region = last_tok_region,
                         },
-                    });
+                    }, region);
 
                     // Initially set the root expr to be a flex var
                     // In type checking, this will be unified with the nominal
@@ -2101,9 +2073,8 @@ pub fn canonicalizeExpr(
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                     .e_tuple = .{
                         .elems = elems_span,
-                        .region = region,
                     },
-                });
+                }, region);
 
                 // Insert tuple type for tuple literals
                 _ = self.can_ir.setTypeVarAtExpr(
@@ -2128,10 +2099,8 @@ pub fn canonicalizeExpr(
             const fields_slice = self.parse_ir.store.recordFieldSlice(e.fields);
             if (fields_slice.len == 0) {
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                    .e_empty_record = .{
-                        .region = region,
-                    },
-                });
+                    .e_empty_record = .{},
+                }, region);
 
                 _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .empty_record });
 
@@ -2202,9 +2171,8 @@ pub fn canonicalizeExpr(
                 .e_record = .{
                     .fields = fields_span,
                     .ext = ext_expr,
-                    .region = region,
                 },
-            });
+            }, region);
 
             // Create fresh type variables for each record field
             // The type checker will unify these with the field expression types
@@ -2281,9 +2249,8 @@ pub fn canonicalizeExpr(
                 .e_lambda = .{
                     .args = args_span,
                     .body = body_idx,
-                    .region = region,
                 },
-            });
+            }, region);
 
             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
             return expr_idx;
@@ -2374,8 +2341,8 @@ pub fn canonicalizeExpr(
             };
 
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .e_binop = CIR.Expr.Binop.init(op, lhs, rhs, region),
-            });
+                .e_binop = CIR.Expr.Binop.init(op, lhs, rhs),
+            }, region);
 
             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
 
@@ -2416,9 +2383,8 @@ pub fn canonicalizeExpr(
                 .e_if = .{
                     .branches = branches_span,
                     .final_else = final_else,
-                    .region = region,
                 },
-            });
+            }, region);
 
             // Immediately redirect the if expression's type variable to the first branch's body
             const first_branch = self.can_ir.store.getIfBranch(branches[0]);
@@ -2444,7 +2410,6 @@ pub fn canonicalizeExpr(
             const branches_slice = self.parse_ir.store.matchBranchSlice(m.branches);
             for (branches_slice, 0..) |ast_branch_idx, index| {
                 const ast_branch = self.parse_ir.store.getBranch(ast_branch_idx);
-                const branch_region = self.parse_ir.tokenizedRegionToRegion(ast_branch.region);
 
                 // Enter a new scope for this branch so pattern variables are isolated
                 self.scopeEnter(self.can_ir.env.gpa, false);
@@ -2480,8 +2445,7 @@ pub fn canonicalizeExpr(
                                 const branch_pattern_idx = self.can_ir.store.addMatchBranchPattern(CIR.Expr.Match.BranchPattern{
                                     .pattern = pattern_idx,
                                     .degenerate = false,
-                                    .region = alt_pattern_region,
-                                });
+                                }, alt_pattern_region);
                                 self.can_ir.store.addScratchMatchBranchPattern(branch_pattern_idx);
                             }
                         },
@@ -2501,8 +2465,7 @@ pub fn canonicalizeExpr(
                             const branch_pattern_idx = self.can_ir.store.addMatchBranchPattern(CIR.Expr.Match.BranchPattern{
                                 .pattern = pattern_idx,
                                 .degenerate = false,
-                                .region = pattern_region,
-                            });
+                            }, pattern_region);
                             self.can_ir.store.addScratchMatchBranchPattern(branch_pattern_idx);
                         },
                     }
@@ -2512,12 +2475,12 @@ pub fn canonicalizeExpr(
                 const branch_pat_span = self.can_ir.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
 
                 // Canonicalize the branch's body
+                const body = self.parse_ir.store.getExpr(ast_branch.body);
+                const body_region = self.parse_ir.tokenizedRegionToRegion(body.to_tokenized_region());
                 const value_idx = blk: {
                     if (try self.canonicalizeExpr(ast_branch.body)) |body_idx| {
                         break :blk body_idx;
                     } else {
-                        const body = self.parse_ir.store.getExpr(ast_branch.body);
-                        const body_region = self.parse_ir.tokenizedRegionToRegion(body.to_tokenized_region());
                         const malformed_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .expr_not_canonicalized = .{
                             .region = body_region,
                         } });
@@ -2530,8 +2493,7 @@ pub fn canonicalizeExpr(
                     .value = value_idx,
                     .guard = null,
                     .redundant = @enumFromInt(0), // TODO
-                    .region = branch_region,
-                });
+                }, body_region);
 
                 // Set the branch var
                 if (index == 0) {
@@ -2549,10 +2511,9 @@ pub fn canonicalizeExpr(
                 .cond = cond_expr,
                 .branches = branches_span,
                 .exhaustive = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
-                .region = region,
             };
 
-            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_match = match_expr });
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
             // If there is at least 1 branch, then set the root expr to redirect
             // to the type of the match branch
@@ -2573,8 +2534,7 @@ pub fn canonicalizeExpr(
             // Create debug expression
             const dbg_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_dbg = .{
                 .expr = inner_expr,
-                .region = region,
-            } });
+            } }, region);
 
             _ = self.can_ir.setTypeVarAtExpr(dbg_expr, Content{ .flex_var = null });
 
@@ -2590,9 +2550,7 @@ pub fn canonicalizeExpr(
         },
         .ellipsis => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            const ellipsis_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_ellipsis = .{
-                .region = region,
-            } });
+            const ellipsis_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_ellipsis = .{} }, region);
             _ = self.can_ir.setTypeVarAtExpr(ellipsis_expr, Content{ .flex_var = null });
             return ellipsis_expr;
         },
@@ -2628,8 +2586,7 @@ pub fn canonicalizeExpr(
                             // Create debug expression
                             const dbg_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_dbg = .{
                                 .expr = inner_expr,
-                                .region = debug_region,
-                            } });
+                            } }, debug_region);
                             _ = self.can_ir.setTypeVarAtExpr(dbg_expr, Content{ .flex_var = null });
                             last_expr = dbg_expr;
                         },
@@ -2650,8 +2607,8 @@ pub fn canonicalizeExpr(
             } else blk: {
                 // Empty block - create empty record
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                    .e_empty_record = .{ .region = region },
-                });
+                    .e_empty_record = .{},
+                }, region);
                 _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .empty_record });
                 break :blk expr_idx;
             };
@@ -2665,10 +2622,9 @@ pub fn canonicalizeExpr(
                 .e_block = .{
                     .stmts = stmt_span,
                     .final_expr = final_expr,
-                    .region = region,
                 },
             };
-            const block_idx = self.can_ir.store.addExpr(block_expr);
+            const block_idx = self.can_ir.store.addExpr(block_expr, region);
             const block_var = @as(TypeVar, @enumFromInt(@intFromEnum(block_idx)));
 
             // Set the root block expr to redirect to the final expr var
@@ -2702,8 +2658,7 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
                 // create a node for the string literal
                 const str_expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_str_segment = .{
                     .literal = string_idx,
-                    .region = self.parse_ir.tokenizedRegionToRegion(part_node.to_tokenized_region()),
-                } });
+                } }, self.parse_ir.tokenizedRegionToRegion(part_node.to_tokenized_region()));
 
                 // add the node idx to our scratch expr stack
                 self.can_ir.store.addScratchExpr(str_expr_idx);
@@ -3642,9 +3597,10 @@ fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) std.mem.Alloca
     const if_branch = CIR.Expr.IfBranch{
         .cond = cond_idx,
         .body = then_idx,
-        .region = self.parse_ir.tokenizedRegionToRegion(if_expr.region),
     };
-    self.can_ir.store.addScratchIfBranch(if_branch);
+    const region = self.parse_ir.tokenizedRegionToRegion(if_expr.region);
+    const if_branch_idx = self.can_ir.store.addIfBranch(if_branch, region);
+    self.can_ir.store.addScratchIfBranch(if_branch_idx);
 
     // Check if the else clause is another if-then-else that we should flatten
     const else_expr = self.parse_ir.store.getExpr(if_expr.@"else");
@@ -3776,8 +3732,7 @@ fn canonicalizeTagVariant(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
 
             return self.can_ir.store.addTypeAnno(.{ .ty = .{
                 .symbol = ident_idx,
-                .region = region,
-            } });
+            } }, region);
         },
         .apply => |apply| {
             // For tags with arguments like `Some(Str)`, validate the arguments but not the tag name
@@ -3812,8 +3767,7 @@ fn canonicalizeTagVariant(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
             return self.can_ir.store.addTypeAnno(.{ .apply = .{
                 .symbol = type_name,
                 .args = args,
-                .region = region,
-            } });
+            } }, region);
         },
         else => {
             return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{
@@ -3862,8 +3816,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
                     return self.can_ir.store.addTypeAnno(.{ .apply = .{
                         .symbol = external_decl.qualified_name,
                         .args = args,
-                        .region = region,
-                    } });
+                    } }, region);
                 },
                 else => return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{ .region = region } }),
             };
@@ -3881,8 +3834,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
             return self.can_ir.store.addTypeAnno(.{ .apply = .{
                 .symbol = type_symbol,
                 .args = args,
-                .region = region,
-            } });
+            } }, region);
         },
         .ty_var => |ty_var| {
             const region = self.parse_ir.tokenizedRegionToRegion(ty_var.region);
@@ -3904,8 +3856,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
 
             return self.can_ir.store.addTypeAnno(.{ .ty_var = .{
                 .name = name_ident,
-                .region = region,
-            } });
+            } }, region);
         },
         .ty => |ty| {
             const region = self.parse_ir.tokenizedRegionToRegion(ty.region);
@@ -3928,11 +3879,12 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
                 const qualified_name_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(type_name_text), region);
 
                 // Create external declaration for the qualified type
+                const external_type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err);
                 const external_decl = CIR.ExternalDecl{
                     .qualified_name = qualified_name_ident,
                     .module_name = module_name,
                     .local_name = local_name,
-                    .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
+                    .type_var = external_type_var,
                     .kind = .type,
                     .region = region,
                 };
@@ -3941,8 +3893,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
 
                 return self.can_ir.store.addTypeAnno(.{ .ty_lookup_external = .{
                     .external_decl = external_idx,
-                    .region = region,
-                } });
+                } }, region);
             } else {
                 // Unqualified type - check if this type is declared in scope
                 const ident_idx = if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |ident|
@@ -3963,22 +3914,18 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
 
                 return self.can_ir.store.addTypeAnno(.{ .ty = .{
                     .symbol = ident_idx,
-                    .region = region,
-                } });
+                } }, region);
             }
         },
         .mod_ty => |mod_ty| {
             const region = self.parse_ir.tokenizedRegionToRegion(mod_ty.region);
             return self.can_ir.store.addTypeAnno(.{ .ty = .{
                 .symbol = mod_ty.ty_ident,
-                .region = region,
-            } });
+            } }, region);
         },
         .underscore => |underscore| {
             const region = self.parse_ir.tokenizedRegionToRegion(underscore.region);
-            return self.can_ir.store.addTypeAnno(.{ .underscore = .{
-                .region = region,
-            } });
+            return self.can_ir.store.addTypeAnno(.{ .underscore = {} }, region);
         },
         .tuple => |tuple| {
             const region = self.parse_ir.tokenizedRegionToRegion(tuple.region);
@@ -3994,8 +3941,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
             const annos = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
             return self.can_ir.store.addTypeAnno(.{ .tuple = .{
                 .elems = annos,
-                .region = region,
-            } });
+            } }, region);
         },
         .record => |record| {
             const region = self.parse_ir.tokenizedRegionToRegion(record.region);
@@ -4018,36 +3964,31 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
                     const malformed_field_ident = Ident.for_text("malformed_field");
                     const malformed_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, malformed_field_ident, Region.zero());
                     const canonicalized_ty = self.canonicalizeTypeAnno(ast_field.ty);
-                    const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
 
                     const cir_field = CIR.TypeAnno.RecordField{
                         .name = malformed_ident,
                         .ty = canonicalized_ty,
-                        .region = field_region,
                     };
-                    const field_cir_idx = self.can_ir.store.addAnnoRecordField(cir_field);
+                    const field_cir_idx = self.can_ir.store.addAnnoRecordField(cir_field, self.parse_ir.tokenizedRegionToRegion(ast_field.region));
                     self.can_ir.store.addScratchAnnoRecordField(field_cir_idx);
                     continue;
                 };
 
                 // Canonicalize field type
                 const canonicalized_ty = self.canonicalizeTypeAnno(ast_field.ty);
-                const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
-
+                // Create CIR field
                 const cir_field = CIR.TypeAnno.RecordField{
                     .name = field_name,
                     .ty = canonicalized_ty,
-                    .region = field_region,
                 };
-                const field_cir_idx = self.can_ir.store.addAnnoRecordField(cir_field);
+                const field_cir_idx = self.can_ir.store.addAnnoRecordField(cir_field, self.parse_ir.tokenizedRegionToRegion(ast_field.region));
                 self.can_ir.store.addScratchAnnoRecordField(field_cir_idx);
             }
 
             const fields = self.can_ir.store.annoRecordFieldSpanFrom(scratch_top);
             return self.can_ir.store.addTypeAnno(.{ .record = .{
                 .fields = fields,
-                .region = region,
-            } });
+            } }, region);
         },
         .tag_union => |tag_union| {
             const region = self.parse_ir.tokenizedRegionToRegion(tag_union.region);
@@ -4072,8 +4013,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
             return self.can_ir.store.addTypeAnno(.{ .tag_union = .{
                 .tags = tags,
                 .ext = ext,
-                .region = region,
-            } });
+            } }, region);
         },
         .@"fn" => |fn_anno| {
             const region = self.parse_ir.tokenizedRegionToRegion(fn_anno.region);
@@ -4091,21 +4031,18 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
 
             // Canonicalize return type
             const ret = self.canonicalizeTypeAnno(fn_anno.ret);
-
             return self.can_ir.store.addTypeAnno(.{ .@"fn" = .{
                 .args = args,
                 .ret = ret,
                 .effectful = fn_anno.effectful,
-                .region = region,
-            } });
+            } }, region);
         },
         .parens => |parens| {
             const region = self.parse_ir.tokenizedRegionToRegion(parens.region);
             const inner_anno = self.canonicalizeTypeAnno(parens.anno);
             return self.can_ir.store.addTypeAnno(.{ .parens = .{
                 .anno = inner_anno,
-                .region = region,
-            } });
+            } }, region);
         },
         .malformed => |malformed| {
             const region = self.parse_ir.tokenizedRegionToRegion(malformed.region);
@@ -4128,8 +4065,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.TypeH
         return self.can_ir.store.addTypeHeader(.{
             .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
             .args = .{ .span = .{ .start = 0, .len = 0 } },
-            .region = region,
-        });
+        }, region);
     }
 
     const ast_header = self.parse_ir.store.getTypeHeader(header_idx);
@@ -4141,8 +4077,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.TypeH
         return self.can_ir.store.addTypeHeader(.{
             .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
             .args = .{ .span = .{ .start = 0, .len = 0 } },
-            .region = region,
-        });
+        }, region);
     };
 
     // Canonicalize type arguments - these are parameter declarations, not references
@@ -4166,8 +4101,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.TypeH
                 // Create type variable annotation for this parameter
                 const param_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
                     .name = param_ident,
-                    .region = param_region,
-                } });
+                } }, param_region);
                 self.can_ir.store.addScratchTypeAnno(param_anno);
             },
             else => {
@@ -4183,8 +4117,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.TypeH
     return self.can_ir.store.addTypeHeader(.{
         .name = name_ident,
         .args = args,
-        .region = region,
-    });
+    }, region);
 }
 
 /// Canonicalize a statement in the canonical IR.
@@ -4217,9 +4150,8 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                                 const reassign_stmt = CIR.Statement{ .s_reassign = .{
                                     .pattern_idx = existing_pattern_idx,
                                     .expr = error_expr,
-                                    .region = region,
                                 } };
-                                const reassign_idx = self.can_ir.store.addStatement(reassign_stmt);
+                                const reassign_idx = self.can_ir.store.addStatement(reassign_stmt, region);
                                 self.can_ir.store.addScratchStatement(reassign_idx);
 
                                 return error_expr;
@@ -4234,9 +4166,8 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                                 const reassign_stmt = CIR.Statement{ .s_reassign = .{
                                     .pattern_idx = existing_pattern_idx,
                                     .expr = expr_idx,
-                                    .region = region,
                                 } };
-                                const reassign_idx = self.can_ir.store.addStatement(reassign_stmt);
+                                const reassign_idx = self.can_ir.store.addStatement(reassign_stmt, region);
                                 self.can_ir.store.addScratchStatement(reassign_idx);
 
                                 return expr_idx;
@@ -4254,13 +4185,13 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             const expr_idx = try self.canonicalizeExpr(d.body) orelse return null;
 
             // Create a declaration statement
-            const decl_stmt = CIR.Statement{ .s_decl = .{
+            const var_stmt = CIR.Statement{ .s_decl = .{
                 .pattern = pattern_idx,
                 .expr = expr_idx,
-                .region = self.parse_ir.tokenizedRegionToRegion(d.region),
             } };
-            const decl_idx = self.can_ir.store.addStatement(decl_stmt);
-            self.can_ir.store.addScratchStatement(decl_idx);
+            const region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getStatement(stmt_idx).decl.region);
+            const var_stmt_idx = self.can_ir.store.addStatement(var_stmt, region);
+            self.can_ir.store.addScratchStatement(var_stmt_idx);
 
             return expr_idx;
         },
@@ -4282,9 +4213,8 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             const var_stmt = CIR.Statement{ .s_var = .{
                 .pattern_idx = pattern_idx,
                 .expr = init_expr_idx,
-                .region = region,
             } };
-            const var_idx = self.can_ir.store.addStatement(var_stmt);
+            const var_idx = self.can_ir.store.addStatement(var_stmt, region);
             self.can_ir.store.addScratchStatement(var_idx);
 
             return init_expr_idx;
@@ -4296,9 +4226,9 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             // Create expression statement
             const expr_stmt = CIR.Statement{ .s_expr = .{
                 .expr = expr_idx,
-                .region = self.parse_ir.tokenizedRegionToRegion(e.region),
             } };
-            const expr_stmt_idx = self.can_ir.store.addStatement(expr_stmt);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+            const expr_stmt_idx = self.can_ir.store.addStatement(expr_stmt, region);
             self.can_ir.store.addScratchStatement(expr_stmt_idx);
 
             return expr_idx;
@@ -4337,16 +4267,14 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             // Create crash statement
             const crash_stmt = CIR.Statement{ .s_crash = .{
                 .msg = msg_literal,
-                .region = region,
             } };
-            const crash_stmt_idx = self.can_ir.store.addStatement(crash_stmt);
+            const crash_stmt_idx = self.can_ir.store.addStatement(crash_stmt, region);
             self.can_ir.store.addScratchStatement(crash_stmt_idx);
 
             // Create a crash expression that represents the runtime behavior
             const crash_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_crash = .{
                 .msg = msg_literal,
-                .region = region,
-            } });
+            } }, region);
             _ = self.can_ir.setTypeVarAtExpr(crash_expr, Content{ .flex_var = null });
             return crash_expr;
         },
@@ -4357,12 +4285,11 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             // Canonicalize the debug expression
             const dbg_expr = try self.canonicalizeExpr(d.expr) orelse return null;
 
-            // Create debug statement
+            // Create dbg statement
             const dbg_stmt = CIR.Statement{ .s_dbg = .{
                 .expr = dbg_expr,
-                .region = region,
             } };
-            const dbg_stmt_idx = self.can_ir.store.addStatement(dbg_stmt);
+            const dbg_stmt_idx = self.can_ir.store.addStatement(dbg_stmt, region);
             self.can_ir.store.addScratchStatement(dbg_stmt_idx);
 
             // Return the debug expression value (dbg returns the value of its expression)
@@ -4379,15 +4306,13 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             // Create expect statement
             const expect_stmt = CIR.Statement{ .s_expect = .{
                 .body = expect_expr,
-                .region = region,
             } };
-            const expect_stmt_idx = self.can_ir.store.addStatement(expect_stmt);
+            const expect_stmt_idx = self.can_ir.store.addStatement(expect_stmt, region);
             self.can_ir.store.addScratchStatement(expect_stmt_idx);
 
             const expect_expr_node = self.can_ir.store.addExpr(CIR.Expr{ .e_expect = .{
                 .body = expect_expr,
-                .region = region,
-            } });
+            } }, region);
             _ = self.can_ir.setTypeVarAtExpr(expect_expr_node, Content{ .flex_var = null });
             return expect_expr_node;
         },
@@ -4401,9 +4326,8 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             // Create return statement
             const return_stmt = CIR.Statement{ .s_return = .{
                 .expr = return_expr,
-                .region = region,
             } };
-            const return_stmt_idx = self.can_ir.store.addStatement(return_stmt);
+            const return_stmt_idx = self.can_ir.store.addStatement(return_stmt, region);
             self.can_ir.store.addScratchStatement(return_stmt_idx);
 
             // Return the return expression value
@@ -4444,11 +4368,9 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             if (self.scratch_idents.top() > type_vars_top) {
                 for (self.scratch_idents.sliceFromStart(type_vars_top)) |type_var| {
                     // Get the proper region for this type variable from the AST
-                    const type_var_region = self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region;
                     const type_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
                         .name = type_var,
-                        .region = type_var_region,
-                    } });
+                    } }, self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region);
                     self.scopeIntroduceTypeVar(type_var, type_var_anno);
                 }
                 // Shrink the scratch vars list to the original size
@@ -4477,10 +4399,9 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                     .name = name_ident,
                     .anno = type_anno_idx,
                     .where = where_clauses,
-                    .region = region,
                 },
             };
-            const type_anno_stmt_idx = self.can_ir.store.addStatement(type_anno_stmt);
+            const type_anno_stmt_idx = self.can_ir.store.addStatement(type_anno_stmt, region);
             self.can_ir.store.addScratchStatement(type_anno_stmt_idx);
 
             // Type annotations don't produce runtime values, so return a unit expression
@@ -4488,8 +4409,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             const empty_span = CIR.Expr.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
             const unit_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_tuple = .{
                 .elems = empty_span,
-                .region = region,
-            } });
+            } }, region);
             _ = self.can_ir.setTypeVarAtExpr(unit_expr, Content{ .flex_var = null });
             return unit_expr;
         },
@@ -4501,8 +4421,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             const empty_span = CIR.Expr.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
             const unit_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_tuple = .{
                 .elems = empty_span,
-                .region = region,
-            } });
+            } }, region);
             _ = self.can_ir.setTypeVarAtExpr(unit_expr, Content{ .flex_var = null });
             return unit_expr;
         },
@@ -4638,11 +4557,10 @@ fn scopeIntroduceTypeVar(self: *Self, name: Ident.Idx, type_var_anno: CIR.TypeAn
         .success => {},
         .shadowing_warning => |shadowed_type_var_idx| {
             // Type variable shadowing is allowed but should produce warning
-            const shadowed_type_var = self.can_ir.store.getTypeAnno(shadowed_type_var_idx);
-            const original_region = shadowed_type_var.toRegion();
+            const original_region = self.can_ir.store.getTypeAnnoRegion(shadowed_type_var_idx);
             self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
                 .ident = name,
-                .region = self.can_ir.store.getTypeAnno(type_var_anno).toRegion(),
+                .region = self.can_ir.store.getTypeAnnoRegion(type_var_anno),
                 .original_region = original_region,
             } });
         },
@@ -5013,8 +4931,7 @@ fn scopeIntroduceTypeDecl(
         .success => {
             // Check if we're shadowing a type in a parent scope
             if (shadowed_in_parent) |shadowed_stmt| {
-                const shadowed_statement = self.can_ir.store.getStatement(shadowed_stmt);
-                const original_region = shadowed_statement.toRegion();
+                const original_region = self.can_ir.store.getStatementRegion(shadowed_stmt);
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{
                     .shadowing_warning = .{
                         .ident = name_ident,
@@ -5027,8 +4944,7 @@ fn scopeIntroduceTypeDecl(
         .shadowing_warning => |shadowed_stmt| {
             // This shouldn't happen since we're not passing a parent lookup function
             // but handle it just in case the Scope implementation changes
-            const shadowed_statement = self.can_ir.store.getStatement(shadowed_stmt);
-            const original_region = shadowed_statement.toRegion();
+            const original_region = self.can_ir.store.getStatementRegion(shadowed_stmt);
             self.can_ir.pushDiagnostic(CIR.Diagnostic{
                 .shadowing_warning = .{
                     .ident = name_ident,
@@ -5039,8 +4955,7 @@ fn scopeIntroduceTypeDecl(
         },
         .redeclared_error => |original_stmt| {
             // Extract region information from the original statement
-            const original_statement = self.can_ir.store.getStatement(original_stmt);
-            const original_region = original_statement.toRegion();
+            const original_region = self.can_ir.store.getStatementRegion(original_stmt);
             self.can_ir.pushDiagnostic(CIR.Diagnostic{
                 .type_redeclared = .{
                     .original_region = original_region,
@@ -5050,8 +4965,7 @@ fn scopeIntroduceTypeDecl(
             });
         },
         .type_alias_redeclared => |original_stmt| {
-            const original_statement = self.can_ir.store.getStatement(original_stmt);
-            const original_region = original_statement.toRegion();
+            const original_region = self.can_ir.store.getStatementRegion(original_stmt);
             self.can_ir.pushDiagnostic(CIR.Diagnostic{
                 .type_alias_redeclared = .{
                     .name = name_ident,
@@ -5061,8 +4975,7 @@ fn scopeIntroduceTypeDecl(
             });
         },
         .nominal_type_redeclared => |original_stmt| {
-            const original_statement = self.can_ir.store.getStatement(original_stmt);
-            const original_region = original_statement.toRegion();
+            const original_region = self.can_ir.store.getStatementRegion(original_stmt);
             self.can_ir.pushDiagnostic(CIR.Diagnostic{
                 .nominal_type_redeclared = .{
                     .name = name_ident,
@@ -5072,8 +4985,7 @@ fn scopeIntroduceTypeDecl(
             });
         },
         .cross_scope_shadowing => |shadowed_stmt| {
-            const shadowed_statement = self.can_ir.store.getStatement(shadowed_stmt);
-            const original_region = shadowed_statement.toRegion();
+            const original_region = self.can_ir.store.getStatementRegion(shadowed_stmt);
             self.can_ir.pushDiagnostic(CIR.Diagnostic{
                 .type_shadowed_warning = .{
                     .name = name_ident,
@@ -5084,8 +4996,7 @@ fn scopeIntroduceTypeDecl(
             });
         },
         .parameter_conflict => |conflict| {
-            const original_statement = self.can_ir.store.getStatement(conflict.original_stmt);
-            const original_region = original_statement.toRegion();
+            const original_region = self.can_ir.store.getStatementRegion(conflict.original_stmt);
             self.can_ir.pushDiagnostic(CIR.Diagnostic{
                 .type_parameter_conflict = .{
                     .name = name_ident,
@@ -5315,7 +5226,7 @@ fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) Ident.Idx {
 fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) std.mem.Allocator.Error!TypeVar {
     const type_anno_node_idx = CIR.nodeIdxFrom(type_anno_idx);
     const type_anno = self.can_ir.store.getTypeAnno(type_anno_idx);
-    const region = type_anno.toRegion();
+    const region = self.can_ir.store.getTypeAnnoRegion(type_anno_idx);
 
     switch (type_anno) {
         .ty_var => |tv| {
@@ -5333,7 +5244,7 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) s
                     const fresh_var = try self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, type_anno_node_idx, region);
 
                     // Create a basic type annotation for the scope
-                    const ty_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{ .name = tv.name, .region = region } });
+                    const ty_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{ .name = tv.name } }, region);
 
                     // Add to scope (simplified - ignoring result for now)
                     // TODO: Handle scope result and possible error
@@ -5457,8 +5368,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx) CIR.
                 .args = args_span,
                 .ret_anno = ret_anno,
                 .external_decl = external_decl,
-                .region = region,
-            } });
+            } }, region);
         },
         .mod_alias => |ma| {
             const region = self.parse_ir.tokenizedRegionToRegion(ma.region);
@@ -5500,8 +5410,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx) CIR.
                 .var_name = var_ident,
                 .alias_name = alias_ident,
                 .external_decl = external_decl,
-                .region = region,
-            } });
+            } }, region);
         },
         .malformed => |m| {
             const region = self.parse_ir.tokenizedRegionToRegion(m.region);
@@ -5510,8 +5419,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx) CIR.
             } });
             return self.can_ir.store.addWhereClause(CIR.WhereClause{ .malformed = .{
                 .diagnostic = diagnostic,
-                .region = region,
-            } });
+            } }, region);
         },
     }
 }
@@ -5817,11 +5725,10 @@ fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _:
     const annotation = CIR.Annotation{
         .type_anno = type_anno_idx,
         .signature = signature,
-        .region = region,
     };
 
     // Add to NodeStore and return the index
-    const annotation_idx = self.can_ir.store.addAnnotation(annotation);
+    const annotation_idx = self.can_ir.store.addAnnotation(annotation, region);
 
     return annotation_idx;
 }
@@ -5896,7 +5803,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
         .module_idx = import_idx,
         .target_node_idx = target_node_idx,
         .region = region,
-    } });
+    } }, region);
     _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
     return expr_idx;
 }
@@ -5922,11 +5829,10 @@ fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) std.mem.
             .receiver = receiver_idx,
             .field_name = field_name,
             .args = args,
-            .region = self.parse_ir.tokenizedRegionToRegion(field_access.region),
         },
     };
 
-    const expr_idx = self.can_ir.store.addExpr(dot_access_expr);
+    const expr_idx = self.can_ir.store.addExpr(dot_access_expr, self.parse_ir.tokenizedRegionToRegion(field_access.region));
     _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
     return expr_idx;
 }

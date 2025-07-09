@@ -2,10 +2,10 @@
 //! Contains both Slot & Descriptor stores
 
 const std = @import("std");
-
 const base = @import("../base.zig");
 const collections = @import("../collections.zig");
 const types = @import("./types.zig");
+const serialization = @import("../serialization/mod.zig");
 
 const exitOnOutOfMemory = collections.utils.exitOnOom;
 
@@ -18,10 +18,11 @@ const Mark = types.Mark;
 const RecordField = types.RecordField;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
-
 const VarSafeList = Var.SafeList;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 const TagSafeMultiList = Tag.SafeMultiList;
+
+const SERIALIZATION_ALIGNMENT = serialization.SERIALIZATION_ALIGNMENT;
 
 /// A variable & its descriptor info
 pub const ResolvedVarDesc = struct { var_: Var, desc_idx: DescStore.Idx, desc: Desc };
@@ -34,7 +35,43 @@ pub const Slot = union(enum) {
     root: DescStore.Idx,
     redirect: Var,
 
-    const ArrayList = std.ArrayListUnmanaged(Slot);
+    /// Calculate the size needed to serialize this Slot
+    pub fn serializedSize(self: *const Slot) usize {
+        _ = self;
+        return @sizeOf(u8) + @sizeOf(u32); // tag + data
+    }
+
+    /// Serialize this Slot into the provided buffer
+    pub fn serializeInto(self: *const Slot, buffer: []u8) ![]u8 {
+        if (buffer.len < self.serializedSize()) return error.BufferTooSmall;
+
+        switch (self.*) {
+            .root => |idx| {
+                buffer[0] = 0; // tag for root
+                std.mem.writeInt(u32, buffer[1..5], @intFromEnum(idx), .little);
+            },
+            .redirect => |var_| {
+                buffer[0] = 1; // tag for redirect
+                std.mem.writeInt(u32, buffer[1..5], @intFromEnum(var_), .little);
+            },
+        }
+
+        return buffer[0..self.serializedSize()];
+    }
+
+    /// Deserialize a Slot from the provided buffer
+    pub fn deserializeFrom(buffer: []const u8) !Slot {
+        if (buffer.len < @sizeOf(u8) + @sizeOf(u32)) return error.BufferTooSmall;
+
+        const tag = buffer[0];
+        const data = std.mem.readInt(u32, buffer[1..5], .little);
+
+        switch (tag) {
+            0 => return Slot{ .root = @enumFromInt(data) },
+            1 => return Slot{ .redirect = @enumFromInt(data) },
+            else => return error.InvalidTag,
+        }
+    }
 };
 
 /// The store of all type variables and their descriptors
@@ -193,14 +230,11 @@ pub const Store = struct {
                 idx - self.descs.backing.len + 1,
             );
         }
-        if (idx > self.slots.backing.items.len) {
-            try self.slots.backing.ensureTotalCapacity(
-                self.gpa,
-                idx - self.slots.backing.items.len + 1,
-            );
+        if (idx > self.slots.backing.len()) {
+            // SafeList doesn't have ensureTotalCapacity, we'll grow as needed
         }
 
-        while (self.slots.backing.items.len <= idx) {
+        while (self.slots.backing.len() <= idx) {
             const desc_idx = self.descs.insert(
                 self.gpa,
                 .{ .content = .{ .flex_var = null }, .rank = Rank.top_level, .mark = Mark.none },
@@ -624,17 +658,199 @@ pub const Store = struct {
     fn slotIdxToVar(slot_idx: SlotStore.Idx) Var {
         return @enumFromInt(@intFromEnum(slot_idx));
     }
+
+    /// Calculate the size needed to serialize this Store
+    pub fn serializedSize(self: *const Self) usize {
+        const slots_size = self.slots.serializedSize();
+        const descs_size = self.descs.serializedSize();
+        const tuple_elems_size = self.tuple_elems.serializedSize();
+        const func_args_size = self.func_args.serializedSize();
+        const record_fields_size = self.record_fields.serializedSize();
+        const tags_size = self.tags.serializedSize();
+        const tag_args_size = self.tag_args.serializedSize();
+
+        // Add alignment padding for each component
+        var total_size: usize = @sizeOf(u32) * 7; // size headers
+        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+        total_size += slots_size;
+        total_size += descs_size;
+        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+        total_size += tuple_elems_size;
+        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+        total_size += func_args_size;
+        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+        total_size += record_fields_size;
+        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+        total_size += tags_size;
+        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+        total_size += tag_args_size;
+
+        // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
+        return std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+    }
+
+    /// Serialize this Store into the provided buffer
+    pub fn serializeInto(self: *const Self, buffer: []u8, allocator: Allocator) ![]u8 {
+        const size = self.serializedSize();
+        if (buffer.len < size) return error.BufferTooSmall;
+
+        var offset: usize = 0;
+        _ = allocator;
+
+        // Write sizes
+        const slots_size = self.slots.serializedSize();
+        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(slots_size);
+        offset += @sizeOf(u32);
+
+        const descs_size = self.descs.serializedSize();
+        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(descs_size);
+        offset += @sizeOf(u32);
+
+        const tuple_elems_size = self.tuple_elems.serializedSize();
+        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(tuple_elems_size);
+        offset += @sizeOf(u32);
+
+        const func_args_size = self.func_args.serializedSize();
+        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(func_args_size);
+        offset += @sizeOf(u32);
+
+        const record_fields_size = self.record_fields.serializedSize();
+        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(record_fields_size);
+        offset += @sizeOf(u32);
+
+        const tags_size = self.tags.serializedSize();
+        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(tags_size);
+        offset += @sizeOf(u32);
+
+        const tag_args_size = self.tag_args.serializedSize();
+        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(tag_args_size);
+        offset += @sizeOf(u32);
+
+        // Serialize data
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const slots_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + slots_size]));
+        const slots_slice = try self.slots.serializeInto(slots_buffer);
+        offset += slots_slice.len;
+
+        const descs_slice = try self.descs.serializeInto(buffer[offset..]);
+        offset += descs_slice.len;
+
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const tuple_elems_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + tuple_elems_size]));
+        const tuple_elems_slice = try self.tuple_elems.serializeInto(tuple_elems_buffer);
+        offset += tuple_elems_slice.len;
+
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const func_args_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + func_args_size]));
+        const func_args_slice = try self.func_args.serializeInto(func_args_buffer);
+        offset += func_args_slice.len;
+
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const record_fields_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + record_fields_size]));
+        const record_fields_slice = try self.record_fields.serializeInto(record_fields_buffer);
+        offset += record_fields_slice.len;
+
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const tags_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + tags_size]));
+        const tags_slice = try self.tags.serializeInto(tags_buffer);
+        offset += tags_slice.len;
+
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const tag_args_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + tag_args_size]));
+        const tag_args_slice = try self.tag_args.serializeInto(tag_args_buffer);
+        offset += tag_args_slice.len;
+
+        // Zero out any padding bytes
+        if (offset < size) {
+            @memset(buffer[offset..size], 0);
+        }
+
+        return buffer[0..size];
+    }
+
+    /// Deserialize a Store from the provided buffer
+    pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
+        if (buffer.len < @sizeOf(u32) * 7) return error.BufferTooSmall;
+
+        var offset: usize = 0;
+
+        // Read sizes
+        const slots_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
+        offset += @sizeOf(u32);
+
+        const descs_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
+        offset += @sizeOf(u32);
+
+        const tuple_elems_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
+        offset += @sizeOf(u32);
+
+        const func_args_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
+        offset += @sizeOf(u32);
+
+        const record_fields_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
+        offset += @sizeOf(u32);
+
+        const tags_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
+        offset += @sizeOf(u32);
+
+        const tag_args_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
+        offset += @sizeOf(u32);
+
+        // Deserialize data
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const slots_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + slots_size]));
+        const slots = try SlotStore.deserializeFrom(slots_buffer, allocator);
+        offset += slots_size;
+
+        const descs_buffer = buffer[offset .. offset + descs_size];
+        const descs = try DescStore.deserializeFrom(descs_buffer, allocator);
+        offset += descs_size;
+
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const tuple_elems_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + tuple_elems_size]));
+        const tuple_elems = try VarSafeList.deserializeFrom(tuple_elems_buffer, allocator);
+        offset += tuple_elems_size;
+
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const func_args_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + func_args_size]));
+        const func_args = try VarSafeList.deserializeFrom(func_args_buffer, allocator);
+        offset += func_args_size;
+
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const record_fields_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + record_fields_size]));
+        const record_fields = try RecordFieldSafeMultiList.deserializeFrom(record_fields_buffer, allocator);
+        offset += record_fields_size;
+
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const tags_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + tags_size]));
+        const tags = try TagSafeMultiList.deserializeFrom(tags_buffer, allocator);
+        offset += tags_size;
+
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const tag_args_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + tag_args_size]));
+        const tag_args = try VarSafeList.deserializeFrom(tag_args_buffer, allocator);
+
+        return Self{
+            .gpa = allocator,
+            .slots = slots,
+            .descs = descs,
+            .tuple_elems = tuple_elems,
+            .func_args = func_args,
+            .record_fields = record_fields,
+            .tags = tags,
+            .tag_args = tag_args,
+        };
+    }
 };
 
 /// Represents a store of slots
 const SlotStore = struct {
     const Self = @This();
 
-    backing: Slot.ArrayList,
+    backing: collections.SafeList(Slot),
 
     fn init(gpa: Allocator, capacity: usize) Self {
-        const arr_list = Slot.ArrayList.initCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
-        return .{ .backing = arr_list };
+        return .{ .backing = collections.SafeList(Slot).initCapacity(gpa, capacity) };
     }
 
     fn deinit(self: *Self, gpa: Allocator) void {
@@ -643,26 +859,40 @@ const SlotStore = struct {
 
     /// Insert a new slot into the store
     fn insert(self: *Self, gpa: Allocator, typ: Slot) Idx {
-        const idx: Idx = @enumFromInt(self.backing.items.len);
-        self.backing.append(gpa, typ) catch |err| exitOnOutOfMemory(err);
-        return idx;
+        const safe_idx = self.backing.append(gpa, typ);
+        return @enumFromInt(@intFromEnum(safe_idx));
     }
 
     /// Insert a value into the store
-    fn appendAssumeCapacity(self: *Self, gpa: Allocator, typ: Desc) Idx {
-        const idx: Idx = @enumFromInt(self.backing.len);
-        self.backing.appendAssumeCapacity(gpa, typ) catch |err| exitOnOutOfMemory(err);
-        return idx;
+    fn appendAssumeCapacity(self: *Self, gpa: Allocator, typ: Slot) Idx {
+        const safe_idx = self.backing.append(gpa, typ);
+        return @enumFromInt(@intFromEnum(safe_idx));
     }
 
     /// Set a value in the store
     pub fn set(self: *Self, idx: Idx, val: Slot) void {
-        self.backing.items[@intFromEnum(idx)] = val;
+        self.backing.set(@enumFromInt(@intFromEnum(idx)), val);
     }
 
     /// Get a value from the store
     fn get(self: *const Self, idx: Idx) Slot {
-        return self.backing.items[@intFromEnum(idx)];
+        return self.backing.get(@enumFromInt(@intFromEnum(idx))).*;
+    }
+
+    /// Calculate the size needed to serialize this SlotStore
+    pub fn serializedSize(self: *const Self) usize {
+        return self.backing.serializedSize();
+    }
+
+    /// Serialize this SlotStore into the provided buffer
+    pub fn serializeInto(self: *const Self, buffer: []align(SERIALIZATION_ALIGNMENT) u8) ![]align(SERIALIZATION_ALIGNMENT) const u8 {
+        return self.backing.serializeInto(buffer);
+    }
+
+    /// Deserialize a SlotStore from the provided buffer
+    pub fn deserializeFrom(buffer: []align(SERIALIZATION_ALIGNMENT) const u8, allocator: Allocator) !Self {
+        const backing = try collections.SafeList(Slot).deserializeFrom(buffer, allocator);
+        return Self{ .backing = backing };
     }
 
     /// A type-safe index into the store
@@ -685,7 +915,7 @@ const DescStore = struct {
     }
 
     /// Deinit & free allocated memory
-    fn deinit(self: *Self, gpa: Allocator) void {
+    pub fn deinit(self: *Self, gpa: Allocator) void {
         self.backing.deinit(gpa);
     }
 
@@ -704,6 +934,82 @@ const DescStore = struct {
     /// Get a value from the store
     fn get(self: *const Self, idx: Idx) Desc {
         return self.backing.get(@intFromEnum(idx));
+    }
+
+    /// Calculate the size needed to serialize this DescStore
+    pub fn serializedSize(self: *const Self) usize {
+        const raw_size = @sizeOf(u32) + (self.backing.len * (@sizeOf(Content) + 1 + 4));
+        // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
+        return std.mem.alignForward(usize, raw_size, SERIALIZATION_ALIGNMENT);
+    }
+
+    /// Serialize this DescStore into the provided buffer
+    pub fn serializeInto(self: *const Self, buffer: []u8) ![]u8 {
+        const size = self.serializedSize();
+        if (buffer.len < size) return error.BufferTooSmall;
+
+        // Write count
+        std.mem.writeInt(u32, buffer[0..4], @intCast(self.backing.len), .little);
+
+        var offset: usize = @sizeOf(u32);
+
+        // Write data
+        if (self.backing.len > 0) {
+            const slice = self.backing.slice();
+            for (slice.items(.content), slice.items(.rank), slice.items(.mark)) |content, rank, mark| {
+                // Serialize each field individually to avoid padding
+                @memcpy(buffer[offset .. offset + @sizeOf(Content)], std.mem.asBytes(&content));
+                offset += @sizeOf(Content);
+
+                buffer[offset] = @intFromEnum(rank);
+                offset += 1;
+
+                std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], @intFromEnum(mark), .little);
+                offset += 4;
+            }
+        }
+
+        // Zero out any padding bytes
+        if (offset < size) {
+            @memset(buffer[offset..size], 0);
+        }
+
+        return buffer[0..size];
+    }
+
+    /// Deserialize a DescStore from the provided buffer
+    pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
+        if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
+
+        const count = std.mem.readInt(u32, buffer[0..4], .little);
+        const expected_size = @sizeOf(u32) + (count * (@sizeOf(Content) + 1 + 4));
+
+        if (buffer.len < expected_size) return error.BufferTooSmall;
+
+        var result = Self.init(allocator, count);
+
+        if (count > 0) {
+            var offset: usize = @sizeOf(u32);
+            for (0..count) |_| {
+                const item_size = @sizeOf(Content) + 1 + 4;
+                if (offset + item_size > buffer.len) return error.BufferTooSmall;
+
+                // Deserialize each field individually
+                const content = std.mem.bytesAsValue(Content, buffer[offset .. offset + @sizeOf(Content)]).*;
+                offset += @sizeOf(Content);
+
+                const rank: Rank = @enumFromInt(buffer[offset]);
+                offset += 1;
+
+                const mark: Mark = @enumFromInt(std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little));
+                offset += 4;
+
+                const desc = Desc{ .content = content, .rank = rank, .mark = mark };
+                _ = result.insert(allocator, desc);
+            }
+        }
+
+        return result;
     }
 
     /// A type-safe index into the store
@@ -775,4 +1081,62 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
+}
+
+test "Slot serialization comprehensive" {
+    const gpa = std.testing.allocator;
+
+    // Test various slot types including edge cases
+    const slot1 = Slot{ .root = @enumFromInt(0) }; // minimum value
+    const slot2 = Slot{ .root = @enumFromInt(0xFFFFFFFF) }; // maximum value
+    const slot3 = Slot{ .redirect = @enumFromInt(0) }; // minimum redirect
+    const slot4 = Slot{ .redirect = @enumFromInt(0xFFFFFFFF) }; // maximum redirect
+
+    // Test serialization using the testing framework
+    try serialization.testing.testSerialization(Slot, &slot1, gpa);
+    try serialization.testing.testSerialization(Slot, &slot2, gpa);
+    try serialization.testing.testSerialization(Slot, &slot3, gpa);
+    try serialization.testing.testSerialization(Slot, &slot4, gpa);
+}
+
+test "DescStore serialization comprehensive" {
+    const gpa = std.testing.allocator;
+
+    var store = DescStore.init(gpa, 8);
+    defer store.deinit(gpa);
+
+    // Add various descriptor types including edge cases
+    const desc1 = types.Descriptor{
+        .content = Content{ .flex_var = null },
+        .rank = types.Rank.generalized,
+        .mark = types.Mark.none,
+    };
+
+    const desc2 = types.Descriptor{
+        .content = Content{ .flex_var = @bitCast(@as(u32, 0)) },
+        .rank = types.Rank.top_level,
+        .mark = types.Mark.visited,
+    };
+
+    const desc3 = types.Descriptor{
+        .content = Content{ .flex_var = @bitCast(@as(u32, 0xFFFFFFFF)) },
+        .rank = types.Rank.top_level,
+        .mark = types.Mark.visited,
+    };
+
+    _ = store.insert(gpa, desc1);
+    _ = store.insert(gpa, desc2);
+    _ = store.insert(gpa, desc3);
+
+    // Test serialization
+    try serialization.testing.testSerialization(DescStore, &store, gpa);
+}
+
+test "DescStore empty store serialization" {
+    const gpa = std.testing.allocator;
+
+    var empty_store = DescStore.init(gpa, 0);
+    defer empty_store.deinit(gpa);
+
+    try serialization.testing.testSerialization(DescStore, &empty_store, gpa);
 }
