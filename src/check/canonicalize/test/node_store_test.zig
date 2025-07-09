@@ -407,6 +407,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
+        .too_many_errors = .{
+            .region = from_raw_offsets(180, 190),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
         .lambda_body_not_canonicalized = .{
             .region = from_raw_offsets(190, 200),
         },
