@@ -57,7 +57,12 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
-    checker.* = try check_types.init(allocator, &module_env.types, cir, null);
+
+    // Create an empty module store since we don't have other modules
+    const empty_modules = std.MultiArrayList(base.ModuleWork(CIR)){};
+    const empty_store = base.ModuleWork(CIR).Store{ .items = empty_modules };
+
+    checker.* = try check_types.init(allocator, &module_env.types, cir, &empty_store);
 
     // For expressions, check the expression directly
     if (canon_expr_idx) |expr_idx| {
@@ -130,7 +135,12 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
-    checker.* = try check_types.init(allocator, &module_env.types, cir, null);
+
+    // Create an empty module store since we don't have other modules
+    const empty_modules = std.MultiArrayList(base.ModuleWork(CIR)){};
+    const empty_store = base.ModuleWork(CIR).Store{ .items = empty_modules };
+
+    checker.* = try check_types.init(allocator, &module_env.types, cir, &empty_store);
 
     try checker.checkDefs();
 
@@ -192,7 +202,12 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
-    checker.* = try check_types.init(allocator, &module_env.types, cir, null);
+
+    // Create an empty module store since we don't have other modules
+    const empty_modules = std.MultiArrayList(base.ModuleWork(CIR)){};
+    const empty_store = base.ModuleWork(CIR).Store{ .items = empty_modules };
+
+    checker.* = try check_types.init(allocator, &module_env.types, cir, &empty_store);
 
     // Check if we have any defs to check
     if (cir.all_defs.span.len > 0) {

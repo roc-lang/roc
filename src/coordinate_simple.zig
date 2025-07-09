@@ -11,6 +11,7 @@ const reporting = @import("reporting.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
 
 const ModuleEnv = base.ModuleEnv;
+const ModuleWork = base.ModuleWork;
 const CIR = canonicalize.CIR;
 
 /// Result of processing source code, containing both CIR and Reports
@@ -141,7 +142,9 @@ fn processSourceInternal(
     }
 
     // Type checking
-    var solver = try Solver.init(gpa, &module_env.types, cir, null);
+    const empty_modules = std.MultiArrayList(ModuleWork(CIR)){};
+    const empty_store = ModuleWork(CIR).Store{ .items = empty_modules };
+    var solver = try Solver.init(gpa, &module_env.types, cir, &empty_store);
     defer solver.deinit();
 
     // Check for type errors

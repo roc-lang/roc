@@ -29,7 +29,7 @@ gpa: std.mem.Allocator,
 // not owned
 types: *types_mod.Store,
 can_ir: *CIR,
-other_modules: ?*const base.ModuleWork(CIR).Store,
+other_modules: *const base.ModuleWork(CIR).Store,
 // owned
 snapshots: snapshot.Store,
 problems: problem.Store,
@@ -43,7 +43,7 @@ pub fn init(
     gpa: std.mem.Allocator,
     types: *types_mod.Store,
     can_ir: *CIR,
-    other_modules: ?*const base.ModuleWork(CIR).Store,
+    other_modules: *const base.ModuleWork(CIR).Store,
 ) std.mem.Allocator.Error!Self {
     return .{
         .gpa = gpa,
@@ -208,53 +208,47 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
         .e_lookup_external => |e| {
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 
-            // Check if we have access to other modules
-            if (self.other_modules) |other_modules| {
-                // Get the import name from the import index
-                const import_name = self.can_ir.imports.getModuleName(e.module_idx);
+            // Get the import name from the import index
+            const import_name = self.can_ir.imports.getModuleName(e.module_idx);
 
-                // Find the module with matching name
-                var found_module_idx: ?base.ModuleWorkIdx = null;
-                var iter = other_modules.iterIndices();
-                while (iter.next()) |idx| {
-                    const other_cir = other_modules.getWork(idx);
-                    // Get the module's name and check if it matches
-                    const module_name = other_cir.env.idents.getText(other_cir.module_name_ident);
-                    if (std.mem.eql(u8, import_name, module_name)) {
-                        found_module_idx = idx;
-                        break;
-                    }
+            // Find the module with matching name
+            var found_module_idx: ?base.ModuleWorkIdx = null;
+            var iter = self.other_modules.iterIndices();
+            while (iter.next()) |idx| {
+                const other_cir = self.other_modules.getWork(idx);
+                // Get the module's name and check if it matches
+                const module_name = other_cir.env.idents.getText(other_cir.module_name_ident);
+                if (std.mem.eql(u8, import_name, module_name)) {
+                    found_module_idx = idx;
+                    break;
                 }
+            }
 
-                if (found_module_idx) |module_idx| {
-                    const other_module_cir = other_modules.getWork(module_idx);
-                    const other_module_env = &other_module_cir.env;
+            if (found_module_idx) |module_idx| {
+                const other_module_cir = self.other_modules.getWork(module_idx);
+                const other_module_env = &other_module_cir.env;
 
-                    // The target_node_idx points to an expression in the other module
-                    const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(e.target_node_idx));
-                    const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
+                // The target_node_idx points to an expression in the other module
+                const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(e.target_node_idx));
+                const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
 
-                    // Copy the type from the imported module to our module
-                    const copied_var = try copy_import.copyImportedType(
-                        &other_module_env.*.types,
-                        self.types,
-                        imported_var,
-                        self.gpa,
-                    );
+                // Copy the type from the imported module to our module
+                const copied_var = try copy_import.copyImportedType(
+                    &other_module_env.*.types,
+                    self.types,
+                    imported_var,
+                    self.gpa,
+                );
 
-                    // Unify our expression with the copied type
-                    const result = self.unify(expr_var, copied_var);
-                    if (result.isProblem()) {
-                        // Handle the unification problem
-                        const problem_idx = result.problem;
-                        _ = problem_idx; // TODO: properly handle cross-module type errors
-                    }
-                } else {
-                    // Import not found
-                    try self.types.setVarContent(expr_var, .err);
+                // Unify our expression with the copied type
+                const result = self.unify(expr_var, copied_var);
+                if (result.isProblem()) {
+                    // Handle the unification problem
+                    const problem_idx = result.problem;
+                    _ = problem_idx; // TODO: properly handle cross-module type errors
                 }
             } else {
-                // No other modules available
+                // Import not found
                 try self.types.setVarContent(expr_var, .err);
             }
         },
@@ -1209,7 +1203,9 @@ test "lambda with record field access infers correct type" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir, null);
+    const empty_modules = std.MultiArrayList(base.ModuleWork(CIR)){};
+    const empty_store = base.ModuleWork(CIR).Store{ .items = empty_modules };
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, &empty_store);
     defer solver.deinit();
 
     // Create type variables for the lambda parameters
@@ -1313,7 +1309,9 @@ test "dot access properly unifies field types with parameters" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir, null);
+    const empty_modules = std.MultiArrayList(base.ModuleWork(CIR)){};
+    const empty_store = base.ModuleWork(CIR).Store{ .items = empty_modules };
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, &empty_store);
     defer solver.deinit();
 
     // Create a parameter type variable
@@ -1420,7 +1418,9 @@ test "call site unification order matters for concrete vs flexible types" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir, null);
+    const empty_modules = std.MultiArrayList(base.ModuleWork(CIR)){};
+    const empty_store = base.ModuleWork(CIR).Store{ .items = empty_modules };
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, &empty_store);
     defer solver.deinit();
 
     // First, verify basic number unification works as expected
