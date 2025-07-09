@@ -223,6 +223,7 @@ fn processSourceInternal(
         &solver.snapshots,
         owned_source,
         filename,
+        empty_modules,
     );
     defer report_builder.deinit();
 

@@ -237,6 +237,7 @@ pub const Store = struct {
         return SnapshotNominalType{
             .ident = nominal_type.ident,
             .args = args_range,
+            .origin_module = nominal_type.origin_module,
         };
     }
 
@@ -468,6 +469,7 @@ pub const SnapshotNum = union(enum) {
 pub const SnapshotNominalType = struct {
     ident: types.TypeIdent,
     args: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.nominal_type_args
+    origin_module: Ident.Idx,
 };
 
 /// TODO
@@ -509,9 +511,37 @@ pub const SnapshotWriter = struct {
     writer: std.ArrayList(u8).Writer,
     snapshots: *const Store,
     idents: *const Ident.Store,
+    current_module_name: ?[]const u8,
+    can_ir: ?*const @import("../canonicalize/CIR.zig"),
+    other_modules: ?[]const *const @import("../canonicalize/CIR.zig"),
 
     pub fn init(writer: std.ArrayList(u8).Writer, snapshots: *const Store, idents: *const Ident.Store) Self {
-        return .{ .writer = writer, .snapshots = snapshots, .idents = idents };
+        return .{
+            .writer = writer,
+            .snapshots = snapshots,
+            .idents = idents,
+            .current_module_name = null,
+            .can_ir = null,
+            .other_modules = null,
+        };
+    }
+
+    pub fn initWithContext(
+        writer: std.ArrayList(u8).Writer,
+        snapshots: *const Store,
+        idents: *const Ident.Store,
+        current_module_name: []const u8,
+        can_ir: *const @import("../canonicalize/CIR.zig"),
+        other_modules: []const *const @import("../canonicalize/CIR.zig"),
+    ) Self {
+        return .{
+            .writer = writer,
+            .snapshots = snapshots,
+            .idents = idents,
+            .current_module_name = current_module_name,
+            .can_ir = can_ir,
+            .other_modules = other_modules,
+        };
     }
 
     /// Convert a content to a type string
@@ -640,6 +670,18 @@ pub const SnapshotWriter = struct {
                 try self.write(arg);
             }
             _ = try self.writer.write(")");
+        }
+
+        // Add origin information if it's from a different module
+        if (self.current_module_name) |current_module| {
+            const origin_module_name = self.idents.getText(nominal_type.origin_module);
+
+            // Only show origin if it's different from the current module
+            if (!std.mem.eql(u8, origin_module_name, current_module)) {
+                _ = try self.writer.write(" (from ");
+                _ = try self.writer.write(origin_module_name);
+                _ = try self.writer.write(")");
+            }
         }
     }
 

@@ -160,6 +160,7 @@ pub const ReportBuilder = struct {
     snapshots: *const snapshot.Store,
     source: []const u8,
     filename: []const u8,
+    other_modules: []const *const can.CIR,
 
     /// Init report builder
     /// Only owned field is `buf`
@@ -170,6 +171,7 @@ pub const ReportBuilder = struct {
         snapshots: *const snapshot.Store,
         source: []const u8,
         filename: []const u8,
+        other_modules: []const *const can.CIR,
     ) Self {
         return .{
             .gpa = gpa,
@@ -179,6 +181,7 @@ pub const ReportBuilder = struct {
             .snapshots = snapshots,
             .source = source,
             .filename = filename,
+            .other_modules = other_modules,
         };
     }
 
@@ -196,10 +199,13 @@ pub const ReportBuilder = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        var snapshot_writer = snapshot.SnapshotWriter.init(
+        var snapshot_writer = snapshot.SnapshotWriter.initWithContext(
             self.buf.writer(),
             self.snapshots,
             &self.module_env.idents,
+            self.can_ir.module_name,
+            self.can_ir,
+            self.other_modules,
         );
 
         switch (problem) {

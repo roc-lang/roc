@@ -520,7 +520,8 @@ pub const Document = struct {
 
     /// Render the document to the specified writer and target format.
     pub fn render(self: *const Document, writer: anytype, target: RenderTarget, config: ReportingConfig) !void {
-        try renderer.renderDocument(self, writer, target, config);
+        _ = config; // TODO: Pass config to renderer when it supports it
+        try renderer.renderDocument(self, writer, target);
     }
 };
 
