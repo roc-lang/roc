@@ -61,6 +61,9 @@ all_statements: Statement.Span,
 external_decls: std.ArrayList(ExternalDecl),
 /// Store for interned module imports
 imports: Import.Store,
+/// The identifier for this module's name
+/// This is needed for import resolution to match import names to modules
+module_name_ident: Ident.Idx,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -80,6 +83,7 @@ pub fn init(env: *ModuleEnv) CIR {
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = std.ArrayList(ExternalDecl).init(env.gpa),
         .imports = Import.Store.init(),
+        .module_name_ident = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
     };
 }
 

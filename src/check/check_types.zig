@@ -36,9 +36,6 @@ problems: problem.Store,
 unify_scratch: unifier.Scratch,
 occurs_scratch: occurs.Scratch,
 instantiate_subs: instantiate.VarSubstitution,
-// Temporary import resolution mapping until proper import resolution is implemented
-// Maps from CIR.Import.Idx to ModuleWorkIdx
-import_to_module_map: ?std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx),
 
 /// Init type solver
 /// Does *not* own types_store or can_ir, but *does* own other fields
@@ -58,7 +55,6 @@ pub fn init(
         .unify_scratch = unifier.Scratch.init(gpa),
         .occurs_scratch = occurs.Scratch.init(gpa),
         .instantiate_subs = instantiate.VarSubstitution.init(gpa),
-        .import_to_module_map = null,
     };
 }
 
@@ -69,23 +65,6 @@ pub fn deinit(self: *Self) void {
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
     self.instantiate_subs.deinit();
-    if (self.import_to_module_map) |*map| {
-        map.deinit();
-    }
-}
-
-/// Set up temporary import resolution mapping for testing
-/// This is a temporary solution until proper import resolution is implemented
-pub fn setImportMapping(self: *Self, mapping: *const std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx)) !void {
-    if (self.import_to_module_map) |*old_map| {
-        old_map.deinit();
-    }
-    var new_map = std.AutoHashMap(CIR.Import.Idx, base.ModuleWorkIdx).init(self.gpa);
-    var iter = mapping.iterator();
-    while (iter.next()) |entry| {
-        try new_map.put(entry.key_ptr.*, entry.value_ptr.*);
-    }
-    self.import_to_module_map = new_map;
 }
 
 /// Unify two types
@@ -231,15 +210,24 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
             // Check if we have access to other modules
             if (self.other_modules) |other_modules| {
-                // Import resolution is not yet implemented in the compiler.
-                // For testing purposes, we support a temporary import mapping.
-                const module_idx = if (self.import_to_module_map) |mapping|
-                    mapping.get(e.module_idx)
-                else
-                    null;
+                // Get the import name from the import index
+                const import_name = self.can_ir.imports.getModuleName(e.module_idx);
 
-                if (module_idx) |mod_idx| {
-                    const other_module_cir = other_modules.getWork(mod_idx);
+                // Find the module with matching name
+                var found_module_idx: ?base.ModuleWorkIdx = null;
+                var iter = other_modules.iterIndices();
+                while (iter.next()) |idx| {
+                    const other_cir = other_modules.getWork(idx);
+                    // Get the module's name and check if it matches
+                    const module_name = other_cir.env.idents.getText(other_cir.module_name_ident);
+                    if (std.mem.eql(u8, import_name, module_name)) {
+                        found_module_idx = idx;
+                        break;
+                    }
+                }
+
+                if (found_module_idx) |module_idx| {
+                    const other_module_cir = other_modules.getWork(module_idx);
                     const other_module_env = &other_module_cir.env;
 
                     // The target_node_idx points to an expression in the other module
@@ -262,7 +250,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         _ = problem_idx; // TODO: properly handle cross-module type errors
                     }
                 } else {
-                    // Import not found in mapping
+                    // Import not found
                     try self.types.setVarContent(expr_var, .err);
                 }
             } else {
