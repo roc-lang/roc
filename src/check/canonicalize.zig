@@ -1010,12 +1010,10 @@ fn convertASTExposesToCIR(
             };
         };
 
-        const region = switch (ast_exposed) {
-            .lower_ident => |ident| self.parse_ir.tokenizedRegionToRegion(ident.region),
-            .upper_ident => |ident| self.parse_ir.tokenizedRegionToRegion(ident.region),
-            .upper_ident_star => |star_ident| self.parse_ir.tokenizedRegionToRegion(star_ident.region),
-            .malformed => unreachable,
+        const tokenized_region = switch (ast_exposed) {
+            inline else => |payload| payload.region,
         };
+        const region = self.parse_ir.tokenizedRegionToRegion(tokenized_region);
         const cir_exposed_idx = self.can_ir.store.addExposedItem(cir_exposed, region);
         self.can_ir.store.addScratchExposedItem(cir_exposed_idx);
     }

@@ -999,7 +999,7 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Re
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .tag = @enumFromInt(0),
+        .tag = undefined,
     };
 
     switch (statement) {
