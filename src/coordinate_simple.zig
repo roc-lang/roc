@@ -13,6 +13,15 @@ const Filesystem = @import("coordinate/Filesystem.zig");
 const ModuleEnv = base.ModuleEnv;
 const CIR = canonicalize.CIR;
 
+/// Timing information for different compilation phases
+pub const TimingInfo = struct {
+    tokenize_parse_ns: u64,
+    canonicalize_ns: u64,
+    canonicalize_diagnostics_ns: u64,
+    check_defs_ns: u64,
+    check_diagnostics_ns: u64,
+};
+
 /// Result of processing source code, containing both CIR and Reports
 /// for proper diagnostic reporting.
 ///
@@ -27,6 +36,7 @@ pub const ProcessResult = struct {
     cir: *CIR,
     reports: []reporting.Report,
     source: []const u8,
+    timing: ?TimingInfo = null,
 
     pub fn deinit(self: *ProcessResult, gpa: std.mem.Allocator) void {
         for (self.reports) |*report| {
@@ -60,7 +70,27 @@ pub fn processFile(
     };
 
     // Note: We transfer ownership of source to ProcessResult, avoiding an unnecessary copy
-    return try processSourceInternal(gpa, source, filepath, true);
+    return try processSourceInternal(gpa, source, filepath, true, false);
+}
+
+/// Process a single file with timing information.
+pub fn processFileWithTiming(
+    gpa: std.mem.Allocator,
+    fs: Filesystem,
+    filepath: []const u8,
+) !ProcessResult {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Read the file content
+    const source = fs.readFile(filepath, gpa) catch |err| switch (err) {
+        error.FileNotFound => return error.FileNotFound,
+        error.AccessDenied => return error.AccessDenied,
+        else => return error.FileReadError,
+    };
+
+    // Note: We transfer ownership of source to ProcessResult, avoiding an unnecessary copy
+    return try processSourceInternal(gpa, source, filepath, true, true);
 }
 
 /// Process source code directly and return both CIR and reports for proper reporting.
@@ -75,7 +105,7 @@ pub fn processSource(
     source: []const u8,
     filename: []const u8,
 ) !ProcessResult {
-    return try processSourceInternal(gpa, source, filename, false);
+    return try processSourceInternal(gpa, source, filename, false, false);
 }
 
 /// Internal helper that processes source code and produces a ProcessResult.
@@ -84,6 +114,10 @@ pub fn processSource(
 /// - true: Transfer ownership of 'source' to ProcessResult (no allocation)
 /// - false: Clone 'source' so ProcessResult has its own copy
 ///
+/// The collect_timing parameter controls whether to collect timing information:
+/// - true: Collect timing information for each compilation phase
+/// - false: Skip timing collection for faster processing
+///
 /// This design allows processFile to avoid an unnecessary copy while
 /// processSource can safely work with borrowed memory.
 fn processSourceInternal(
@@ -91,9 +125,24 @@ fn processSourceInternal(
     source: []const u8,
     filename: []const u8,
     take_ownership: bool,
+    collect_timing: bool,
 ) !ProcessResult {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    var timing_info: ?TimingInfo = null;
+    var timer: ?std.time.Timer = null;
+    
+    if (collect_timing) {
+        timer = std.time.Timer.start() catch null;
+        timing_info = TimingInfo{
+            .tokenize_parse_ns = 0,
+            .canonicalize_ns = 0,
+            .canonicalize_diagnostics_ns = 0,
+            .check_defs_ns = 0,
+            .check_diagnostics_ns = 0,
+        };
+    }
 
     // Initialize the ModuleEnv
     var module_env = ModuleEnv.init(gpa);
@@ -105,6 +154,11 @@ fn processSourceInternal(
     // Parse the source code
     var parse_ast = parse.parse(&module_env, source);
     defer parse_ast.deinit(gpa);
+
+    if (collect_timing and timer != null and timing_info != null) {
+        timing_info.?.tokenize_parse_ns = timer.?.read();
+        timer.?.reset();
+    }
 
     // Create an arraylist for capturing diagnostic reports.
     var reports = std.ArrayList(reporting.Report).init(gpa);
@@ -132,6 +186,11 @@ fn processSourceInternal(
     defer canonicalizer.deinit();
     try canonicalizer.canonicalizeFile();
 
+    if (collect_timing and timer != null and timing_info != null) {
+        timing_info.?.canonicalize_ns = timer.?.read();
+        timer.?.reset();
+    }
+
     // Get diagnostic Reports from CIR
     const diagnostics = cir.getDiagnostics();
     defer gpa.free(diagnostics);
@@ -140,12 +199,22 @@ fn processSourceInternal(
         reports.append(report) catch continue;
     }
 
+    if (collect_timing and timer != null and timing_info != null) {
+        timing_info.?.canonicalize_diagnostics_ns = timer.?.read();
+        timer.?.reset();
+    }
+
     // Type checking
     var solver = try Solver.init(gpa, &module_env.types, cir);
     defer solver.deinit();
 
     // Check for type errors
     try solver.checkDefs();
+
+    if (collect_timing and timer != null and timing_info != null) {
+        timing_info.?.check_defs_ns = timer.?.read();
+        timer.?.reset();
+    }
 
     // Ensure ProcessResult owns the source
     // We have two cases:
@@ -175,9 +244,14 @@ fn processSourceInternal(
         reports.append(report) catch continue;
     }
 
+    if (collect_timing and timer != null and timing_info != null) {
+        timing_info.?.check_diagnostics_ns = timer.?.read();
+    }
+
     return ProcessResult{
         .cir = cir,
         .reports = reports.toOwnedSlice() catch return error.OutOfMemory,
         .source = owned_source,
+        .timing = timing_info,
     };
 }

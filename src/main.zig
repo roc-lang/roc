@@ -143,7 +143,11 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     var timer = try std.time.Timer.start();
 
     // Process the file and get Reports
-    var result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path) catch |err| {
+    var result = (if (args.time)
+        coordinate_simple.processFileWithTiming(gpa, Filesystem.default(), args.path)
+    else
+        coordinate_simple.processFile(gpa, Filesystem.default(), args.path)
+    ) catch |err| {
         stderr.print("Failed to check {s}: ", .{args.path}) catch {};
         switch (err) {
             error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
@@ -165,7 +169,6 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
         // Render each report
         for (result.reports) |*report| {
-
             // Render the diagnostic report to stderr
             reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
                 stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
@@ -193,12 +196,43 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         }) catch {};
         formatElapsedTime(stderr, elapsed) catch {};
         stderr.print(" for {s}.\n", .{args.path}) catch {};
+        
+        // Print timing breakdown if requested
+        if (args.time and result.timing != null) {
+            const timing = result.timing.?;
+            printTimingBreakdown(stderr, timing);
+        }
         std.process.exit(1);
     } else {
         stdout.print("No errors found in ", .{}) catch {};
         formatElapsedTime(stdout, elapsed) catch {};
         stdout.print(" for {s}\n", .{args.path}) catch {};
+        
+        // Print timing breakdown if requested
+        if (args.time and result.timing != null) {
+            const timing = result.timing.?;
+            printTimingBreakdown(stdout, timing);
+        }
     }
+}
+
+fn printTimingBreakdown(writer: anytype, timing: anytype) void {
+    writer.print("\nTiming breakdown:\n", .{}) catch {};
+    writer.print("  tokenize + parse:     ", .{}) catch {};
+    formatElapsedTime(writer, timing.tokenize_parse_ns) catch {};
+    writer.print("\n", .{}) catch {};
+    writer.print("  canonicalize:         ", .{}) catch {};
+    formatElapsedTime(writer, timing.canonicalize_ns) catch {};
+    writer.print("\n", .{}) catch {};
+    writer.print("  can diagnostics:      ", .{}) catch {};
+    formatElapsedTime(writer, timing.canonicalize_diagnostics_ns) catch {};
+    writer.print("\n", .{}) catch {};
+    writer.print("  checkDefs:            ", .{}) catch {};
+    formatElapsedTime(writer, timing.check_defs_ns) catch {};
+    writer.print("\n", .{}) catch {};
+    writer.print("  check diagnostics:    ", .{}) catch {};
+    formatElapsedTime(writer, timing.check_diagnostics_ns) catch {};
+    writer.print("\n", .{}) catch {};
 }
 
 fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
