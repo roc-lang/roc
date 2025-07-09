@@ -468,7 +468,7 @@ pub const CacheModule = struct {
                     null,
                     file_size,
                     std.posix.PROT.READ,
-                    std.posix.MAP.PRIVATE,
+                    .{ .TYPE = .PRIVATE },
                     file.handle,
                     0,
                 );
