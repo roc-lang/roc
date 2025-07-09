@@ -54,9 +54,10 @@ pub const Descriptor = struct { content: Content, rank: Rank, mark: Mark };
 /// ```
 /// foo = 3
 ///
-/// plus_five = |arg|
+/// plus_five = |arg| {
 ///    x = 5
 ///    arg + x
+/// }
 /// ```
 /// Here the rank of `foo` is 1 because it is at the top level and the rank of `x` is 2 because it is under or inside `plus_five`.
 ///
