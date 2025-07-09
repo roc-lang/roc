@@ -217,16 +217,16 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
 fn printTimingBreakdown(writer: anytype, timing: anytype) void {
     writer.print("\nTiming breakdown:\n", .{}) catch {};
-    writer.print("  tokenize + parse:     ", .{}) catch {};
+    writer.print("  tokenize + parse:             ", .{}) catch {};
     formatElapsedTime(writer, timing.tokenize_parse_ns) catch {};
     writer.print("\n", .{}) catch {};
-    writer.print("  canonicalize:         ", .{}) catch {};
+    writer.print("  canonicalize:                 ", .{}) catch {};
     formatElapsedTime(writer, timing.canonicalize_ns) catch {};
     writer.print("\n", .{}) catch {};
-    writer.print("  can diagnostics:      ", .{}) catch {};
+    writer.print("  can diagnostics:              ", .{}) catch {};
     formatElapsedTime(writer, timing.canonicalize_diagnostics_ns) catch {};
     writer.print("\n", .{}) catch {};
-    writer.print("  type checking:            ", .{}) catch {};
+    writer.print("  type checking:                ", .{}) catch {};
     formatElapsedTime(writer, timing.type_checking_ns) catch {};
     writer.print("\n", .{}) catch {};
     writer.print("  type checking diagnostics:    ", .{}) catch {};
