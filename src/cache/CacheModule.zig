@@ -451,6 +451,15 @@ pub const CacheModule = struct {
             const stat = try file.stat();
             const file_size = stat.size;
 
+            // Check if file size exceeds usize limits on 32-bit systems
+            if (file_size > std.math.maxInt(usize)) {
+                // Fall back to regular reading for very large files
+                const data = try readFromFile(allocator, file_path, filesystem);
+                return CacheData{ .allocated = data };
+            }
+
+            const file_size_usize = @as(usize, @intCast(file_size));
+
             // Memory map the file
             const mapped_memory = if (comptime @import("builtin").target.os.tag == .macos or
                 @import("builtin").target.os.tag == .ios or
@@ -458,7 +467,7 @@ pub const CacheModule = struct {
                 @import("builtin").target.os.tag == .watchos)
                 std.posix.mmap(
                     null,
-                    file_size,
+                    file_size_usize,
                     std.posix.PROT.READ,
                     .{ .TYPE = .PRIVATE },
                     file.handle,
@@ -467,7 +476,7 @@ pub const CacheModule = struct {
             else
                 std.posix.mmap(
                     null,
-                    file_size,
+                    file_size_usize,
                     std.posix.PROT.READ,
                     .{ .TYPE = .PRIVATE },
                     file.handle,
@@ -486,7 +495,7 @@ pub const CacheModule = struct {
             const aligned_addr = std.mem.alignForward(usize, addr, SERIALIZATION_ALIGNMENT);
             const offset = aligned_addr - addr;
 
-            if (offset >= file_size) {
+            if (offset >= file_size_usize) {
                 // File is too small to contain aligned data
                 std.posix.munmap(result);
                 const data = try readFromFile(allocator, file_path, filesystem);
@@ -494,14 +503,14 @@ pub const CacheModule = struct {
             }
 
             const aligned_ptr = @as([*]align(SERIALIZATION_ALIGNMENT) const u8, @ptrFromInt(aligned_addr));
-            const aligned_len = file_size - offset;
+            const aligned_len = file_size_usize - offset;
 
             return CacheData{
                 .mapped = .{
                     .ptr = aligned_ptr,
                     .len = aligned_len,
                     .unaligned_ptr = unaligned_ptr,
-                    .unaligned_len = file_size,
+                    .unaligned_len = file_size_usize,
                 },
             };
         } else {
