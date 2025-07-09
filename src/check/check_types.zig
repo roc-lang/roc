@@ -230,7 +230,15 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 if (result.isProblem()) {
                     // Handle the unification problem
                     const problem_idx = result.problem;
-                    _ = problem_idx; // TODO: properly handle cross-module type errors
+                    self.setProblemTypeMismatchDetail(problem_idx, .{
+                        .cross_module_import = .{
+                            .import_region = expr_idx,
+                            .module_idx = e.module_idx,
+                        },
+                    });
+
+                    // Set the expression to an error type
+                    try self.types.setVarContent(expr_var, .err);
                 }
             } else {
                 // Import not found

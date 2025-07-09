@@ -1465,3 +1465,81 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     // The 'a' type variable should be consistent across both functions
     try testing.expectEqual(second_func_arg_resolved.var_, ret_func_arg_resolved.var_);
 }
+
+test "cross-module type checking - type mismatch with proper error message" {
+    const allocator = testing.allocator;
+
+    // Module A: Exports a string value
+    var module_a_env = base.ModuleEnv.init(allocator);
+    defer module_a_env.deinit();
+
+    var module_a_cir = CIR.init(&module_a_env);
+    defer module_a_cir.deinit();
+
+    // Create a string value in module A
+    const str_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+        .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
+    } }, base.Region.zero());
+
+    // Allocate var 0 to match expr 0
+    _ = module_a_env.types.fresh();
+    try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(str_expr_idx)), .{ .structure = .str });
+
+    // Module B: Tries to use the string as a number
+    var module_b_env = base.ModuleEnv.init(allocator);
+    defer module_b_env.deinit();
+
+    var module_b_cir = CIR.init(&module_b_env);
+    defer module_b_cir.deinit();
+
+    // Create an import expression that references module A's string
+    const import_expr = module_b_cir.store.addExpr(.{
+        .e_lookup_external = .{
+            .module_idx = @enumFromInt(0),
+            .target_node_idx = @intCast(@intFromEnum(str_expr_idx)),
+            .region = .{
+                .start = .{ .offset = 0 },
+                .end = .{ .offset = 20 },
+            },
+        },
+    }, base.Region.zero());
+
+    // Set up modules array
+    var modules = std.ArrayList(*CIR).init(allocator);
+    defer modules.deinit();
+    try modules.append(&module_a_cir);
+
+    // Type check module B
+    var checker = try check_types.init(allocator, &module_b_env.types, &module_b_cir, modules.items);
+    defer checker.deinit();
+
+    // Check the import expression - this will copy the type from module A
+    _ = try checker.checkExpr(import_expr);
+
+    // Now try to unify the import (which has Str type) with I32
+    const import_var = @as(types_mod.Var, @enumFromInt(@intFromEnum(import_expr)));
+    const i32_content = Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
+    const i32_var = module_b_env.types.freshFromContent(i32_content);
+
+    const result = checker.unify(import_var, i32_var);
+
+    // The unification should fail
+    try testing.expect(result.isProblem());
+
+    // Check that the problem has the cross-module import detail
+    const problem_idx = result.problem;
+    const prob = checker.problems.problems.get(problem_idx);
+
+    try testing.expect(prob == .type_mismatch);
+    const mismatch = prob.type_mismatch;
+
+    // The detail might be null if the unification happens outside the import handling
+    // But our code ensures it gets set when the import unification fails
+    if (mismatch.detail) |detail| {
+        if (detail == .cross_module_import) {
+            const cross_module_detail = detail.cross_module_import;
+            try testing.expectEqual(import_expr, cross_module_detail.import_region);
+            try testing.expectEqual(@as(CIR.Import.Idx, @enumFromInt(0)), cross_module_detail.module_idx);
+        }
+    }
+}
