@@ -59,6 +59,8 @@ all_defs: Def.Span,
 all_statements: Statement.Span,
 /// All external declarations referenced in this module
 external_decls: std.ArrayList(ExternalDecl),
+/// Store for interned module imports
+imports: Import.Store,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -77,6 +79,7 @@ pub fn init(env: *ModuleEnv) CIR {
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = std.ArrayList(ExternalDecl).init(env.gpa),
+        .imports = Import.Store.init(),
     };
 }
 
@@ -84,6 +87,7 @@ pub fn init(env: *ModuleEnv) CIR {
 pub fn deinit(self: *CIR) void {
     self.store.deinit();
     self.external_decls.deinit();
+    self.imports.deinit(self.env.gpa);
 }
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
@@ -158,6 +162,28 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .not_implemented => |data| blk: {
             const feature_text = self.env.strings.get(data.feature);
             break :blk Diagnostic.buildNotImplementedReport(allocator, feature_text);
+        },
+        .exposed_but_not_implemented => |data| blk: {
+            const ident_name = self.env.idents.getText(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildExposedButNotImplementedReport(
+                allocator,
+                ident_name,
+                region_info,
+                filename,
+            );
+        },
+        .redundant_exposed => |data| blk: {
+            const ident_name = self.env.idents.getText(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            break :blk Diagnostic.buildRedundantExposedReport(
+                allocator,
+                ident_name,
+                region_info,
+                original_region_info,
+                filename,
+            );
         },
         .invalid_num_literal => |data| blk: {
             break :blk Diagnostic.buildInvalidNumLiteralReport(
@@ -248,6 +274,59 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             );
         },
         .tuple_elem_not_canonicalized => Diagnostic.buildTupleElemNotCanonicalizedReport(allocator),
+        .module_not_found => |data| blk: {
+            const module_name = self.env.idents.getText(data.module_name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildModuleNotFoundReport(
+                allocator,
+                module_name,
+                region_info,
+                filename,
+            );
+        },
+        .value_not_exposed => |data| blk: {
+            const module_name = self.env.idents.getText(data.module_name);
+            const value_name = self.env.idents.getText(data.value_name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildValueNotExposedReport(
+                allocator,
+                module_name,
+                value_name,
+                region_info,
+                filename,
+            );
+        },
+        .type_not_exposed => |data| blk: {
+            const module_name = self.env.idents.getText(data.module_name);
+            const type_name = self.env.idents.getText(data.type_name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildTypeNotExposedReport(
+                allocator,
+                module_name,
+                type_name,
+                region_info,
+                filename,
+            );
+        },
+        .module_not_imported => |data| blk: {
+            const module_name = self.env.idents.getText(data.module_name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildModuleNotImportedReport(
+                allocator,
+                module_name,
+                region_info,
+                filename,
+            );
+        },
+        .too_many_exports => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildTooManyExportsReport(
+                allocator,
+                data.count,
+                region_info,
+                filename,
+            );
+        },
         .undeclared_type => |data| blk: {
             const type_name = self.env.idents.getText(data.name);
             const region_info = self.calcRegionInfo(data.region);
@@ -691,6 +770,52 @@ pub const ExposedItem = struct {
         const attrs = tree.beginNode();
         tree.endNode(begin, attrs);
     }
+};
+
+/// An imported module
+pub const Import = struct {
+    pub const Idx = enum(u16) { _ };
+
+    /// A store for interning imported module names
+    pub const Store = struct {
+        /// Map from module name string to Import.Idx
+        map: std.StringHashMapUnmanaged(Import.Idx) = .{},
+        /// List of imports indexed by Import.Idx
+        imports: std.ArrayListUnmanaged([]u8) = .{},
+        /// Storage for module name strings
+        strings: std.ArrayListUnmanaged(u8) = .{},
+
+        pub fn init() Store {
+            return .{};
+        }
+
+        pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
+            self.map.deinit(gpa);
+            self.imports.deinit(gpa);
+            self.strings.deinit(gpa);
+        }
+
+        /// Get or create an Import.Idx for a module name
+        pub fn getOrPut(self: *Store, gpa: std.mem.Allocator, module_name: []const u8) !Import.Idx {
+            const gop = try self.map.getOrPut(gpa, module_name);
+            if (!gop.found_existing) {
+                // Store the string
+                const start = self.strings.items.len;
+                try self.strings.appendSlice(gpa, module_name);
+                const stored_name = self.strings.items[start..];
+
+                const import_idx: Import.Idx = @enumFromInt(self.imports.items.len);
+                try self.imports.append(gpa, stored_name);
+                gop.value_ptr.* = import_idx;
+            }
+            return gop.value_ptr.*;
+        }
+
+        /// Get the module name for an Import.Idx
+        pub fn getModuleName(self: *const Store, idx: Import.Idx) []const u8 {
+            return self.imports.items[@intFromEnum(idx)];
+        }
+    };
 };
 
 /// A file of any type that has been ingested into a Roc module

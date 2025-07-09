@@ -83,6 +83,26 @@ Some(a) : { foo : Ok(a), bar : Something }
                   ^^^^^
 
 
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``main!`` is exposed, but it is not defined anywhere in this module.
+
+**type_declarations.md:1:51:1:56:**
+```roc
+module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
+```
+                                                  ^^^^^
+You can fix this by either defining ``main!`` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``add_one`` is exposed, but it is not defined anywhere in this module.
+
+**type_declarations.md:1:42:1:49:**
+```roc
+module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
+```
+                                         ^^^^^^^
+You can fix this by either defining ``add_one`` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:23),Comma(1:23-1:24),UpperIdent(1:25-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:49),Comma(1:49-1:50),LowerIdent(1:51-1:56),CloseSquare(1:56-1:57),Newline(1:1-1:1),

@@ -162,16 +162,18 @@ parser = Json.create
 (can-ir
 	(d-let
 		(p-assign @7.1-7.5 (ident "main"))
-		(e-lookup-external
-			(ext-decl @7.8-7.31 (ident "json.Json.method") (kind "value"))))
+		(e-lookup-external @7.8-7.31
+			(module-idx "0")
+			(target-node-idx "0")))
 	(d-let
 		(p-assign @11.1-11.10 (ident "parseData"))
 		(e-lambda @11.13-11.40
 			(args
 				(p-assign @11.14-11.18 (ident "data")))
 			(e-call @11.20-11.40
-				(e-lookup-external
-					(ext-decl @11.20-11.34 (ident "json.Json.stringify") (kind "value")))
+				(e-lookup-external @11.20-11.34
+					(module-idx "0")
+					(target-node-idx "0"))
 				(e-lookup-local @11.35-11.39
 					(p-assign @11.14-11.18 (ident "data")))))
 		(annotation @11.1-11.10
@@ -185,8 +187,9 @@ parser = Json.create
 		(e-lambda @15.18-15.51
 			(args
 				(p-assign @15.19-15.22 (ident "req")))
-			(e-lookup-external
-				(ext-decl @15.24-15.51 (ident "http.Client.defaultResponse") (kind "value"))))
+			(e-lookup-external @15.24-15.51
+				(module-idx "1")
+				(target-node-idx "0")))
 		(annotation @15.1-15.15
 			(declared-type
 				(ty-fn @14.18-14.61 (effectful false)
@@ -197,8 +200,9 @@ parser = Json.create
 	(d-let
 		(p-assign @18.1-18.7 (ident "result"))
 		(e-call @18.10-18.28
-			(e-lookup-external
-				(ext-decl @18.10-18.20 (ident "json.Json.prase") (kind "value")))
+			(e-lookup-external @18.10-18.20
+				(module-idx "0")
+				(target-node-idx "0"))
 			(e-string @18.21-18.27
 				(e-literal @18.22-18.26 (string "test")))))
 	(d-let
@@ -207,25 +211,21 @@ parser = Json.create
 			(p-assign @21.1-21.7 (ident "config"))))
 	(d-let
 		(p-assign @24.1-24.7 (ident "client"))
-		(e-lookup-external
-			(ext-decl @24.10-24.28 (ident "http.Client.invalidMethod") (kind "value"))))
+		(e-lookup-external @24.10-24.28
+			(module-idx "1")
+			(target-node-idx "0")))
 	(d-let
 		(p-assign @27.1-27.7 (ident "parser"))
-		(e-lookup-external
-			(ext-decl @27.10-27.49 (ident "json.Json.create") (kind "value"))))
+		(e-lookup-external @27.10-27.49
+			(module-idx "0")
+			(target-node-idx "0")))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.27 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes))
-	(ext-decl @7.8-7.31 (ident "json.Json.method") (kind "value"))
 	(ext-decl @10.13-10.29 (ident "Json.InvalidType") (kind "type"))
-	(ext-decl @11.20-11.34 (ident "json.Json.stringify") (kind "value"))
 	(ext-decl @14.18-14.37 (ident "Http.Server.Request") (kind "type"))
-	(ext-decl @14.41-14.61 (ident "Http.Server.Response") (kind "type"))
-	(ext-decl @15.24-15.51 (ident "http.Client.defaultResponse") (kind "value"))
-	(ext-decl @18.10-18.20 (ident "json.Json.prase") (kind "value"))
-	(ext-decl @24.10-24.28 (ident "http.Client.invalidMethod") (kind "value"))
-	(ext-decl @27.10-27.49 (ident "json.Json.create") (kind "value")))
+	(ext-decl @14.41-14.61 (ident "Http.Server.Response") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

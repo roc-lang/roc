@@ -99,15 +99,17 @@ main = {
 			(s-let @7.2-7.24
 				(p-assign @7.2-7.9 (ident "encoded"))
 				(e-call @7.12-7.24
-					(e-lookup-external
-						(ext-decl @7.12-7.18 (ident "json.Json.encode") (kind "value")))
+					(e-lookup-external @7.12-7.18
+						(module-idx "0")
+						(target-node-idx "0"))
 					(e-lookup-local @7.19-7.23
 						(p-assign @6.2-6.6 (ident "data")))))
 			(s-let @8.2-8.29
 				(p-assign @8.2-8.9 (ident "decoded"))
 				(e-call @8.12-8.29
-					(e-lookup-external
-						(ext-decl @8.12-8.20 (ident "json.Json.decode") (kind "value")))
+					(e-lookup-external @8.12-8.20
+						(module-idx "0")
+						(target-node-idx "0"))
 					(e-lookup-local @8.21-8.28
 						(p-assign @7.2-7.9 (ident "encoded")))))
 			(e-lookup-local @9.2-9.9
@@ -115,9 +117,7 @@ main = {
 	(s-import @3.1-3.65 (module "json.Json") (qualifier "json")
 		(exposes
 			(exposed (name "decode") (alias "fromJson") (wildcard false))
-			(exposed (name "encode") (alias "toJson") (wildcard false))))
-	(ext-decl @7.12-7.18 (ident "json.Json.encode") (kind "value"))
-	(ext-decl @8.12-8.20 (ident "json.Json.decode") (kind "value")))
+			(exposed (name "encode") (alias "toJson") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

@@ -114,8 +114,9 @@ NO CHANGE
 			(args
 				(p-assign @9.18-9.19 (ident "n")))
 			(e-call @9.21-9.36
-				(e-lookup-external
-					(ext-decl @9.21-9.33 (ident "pf.Stdout.line!") (kind "value")))
+				(e-lookup-external @9.21-9.33
+					(module-idx "0")
+					(target-node-idx "0"))
 				(e-lookup-local @9.34-9.35
 					(p-assign @9.18-9.19 (ident "n"))))))
 	(d-let
@@ -139,8 +140,7 @@ NO CHANGE
 				(p-assign @12.1-12.9 (ident "process!")))
 			(e-int @14.18-14.20 (value "42"))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
-		(exposes))
-	(ext-decl @9.21-9.33 (ident "pf.Stdout.line!") (kind "value")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
