@@ -323,8 +323,6 @@ test "import interner - comprehensive usage example" {
     try testing.expect(list_import.? != result_import.?);
     try testing.expect(dict_import.? != result_import.?);
 
-    // Import.Idx values are now used differently, no need to check names
-
     // Verify total unique imports
     try expectEqual(@as(usize, 3), cir.imports.imports.items.len);
 
@@ -486,8 +484,6 @@ test "module-qualified lookups with e_lookup_external" {
             // Get the external lookup data
             const module_idx: CIR.Import.Idx = @enumFromInt(node.data_1);
             const field_name_idx: base.Ident.Idx = @bitCast(node.data_2);
-
-            // Get the module name from the import store for testing
             const import = &cir.imports.imports.items.items[@intFromEnum(module_idx)];
             const module_name = import.name;
             const field_name = env.idents.getText(field_name_idx);
@@ -579,8 +575,6 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
             const module_idx: CIR.Import.Idx = @enumFromInt(node.data_1);
             const field_name_idx: base.Ident.Idx = @bitCast(node.data_2);
             const target_node_idx: u16 = @intCast(node.data_3);
-
-            // Get the module name from the import store for testing
             const import = &cir.imports.imports.items.items[@intFromEnum(module_idx)];
             const module_name = import.name;
             const field_name = env.idents.getText(field_name_idx);
