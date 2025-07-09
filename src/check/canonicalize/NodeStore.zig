@@ -23,9 +23,9 @@ const exitOnOom = collections.exitOnOom;
 fn getMaxMalformedNodes() usize {
     if (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_MAX_MALFORMED_NODES")) |env_value| {
         defer std.heap.page_allocator.free(env_value);
-        return std.fmt.parseInt(usize, env_value, 10) catch 1000;
+        return std.fmt.parseInt(usize, env_value, 10) catch 100;
     } else |_| {
-        return 1000; // Default value
+        return 100; // Default value
     }
 }
 
@@ -54,8 +54,15 @@ scratch_diagnostics: base.Scratch(CIR.Diagnostic.Idx),
 /// Counter for malformed nodes created
 malformed_count: usize,
 
-/// Fallback malformed node to reuse after hitting the limit
-fallback_malformed_node: ?Node.Idx,
+/// Fallback malformed nodes to reuse after hitting the limit (one per type)
+fallback_malformed_nodes: struct {
+    expr: ?CIR.Expr.Idx = null,
+    pattern: ?CIR.Pattern.Idx = null,
+    statement: ?CIR.Statement.Idx = null,
+    type_anno: ?CIR.TypeAnno.Idx = null,
+    where_clause: ?CIR.WhereClause.Idx = null,
+    def: ?CIR.Def.Idx = null,
+},
 
 /// Initializes the NodeStore
 pub fn init(gpa: std.mem.Allocator) NodeStore {
@@ -87,7 +94,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         .scratch_where_clauses = base.Scratch(CIR.WhereClause.Idx).init(gpa),
         .scratch_diagnostics = base.Scratch(CIR.Diagnostic.Idx).init(gpa),
         .malformed_count = 0,
-        .fallback_malformed_node = null,
+        .fallback_malformed_nodes = .{},
     };
 }
 
@@ -2511,11 +2518,22 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
 /// The malformed node will generate a runtime_error in the CIR that properly
 /// references the diagnostic index.
 pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic) t {
-    // If we've hit the limit, reuse the fallback node
+    // If we've hit the limit, reuse the type-specific fallback node
     const max_malformed_nodes = getMaxMalformedNodes();
     if (store.malformed_count >= max_malformed_nodes) {
-        if (store.fallback_malformed_node) |fallback_idx| {
-            return @enumFromInt(@intFromEnum(fallback_idx));
+        // Check if we have a fallback node for this specific type
+        if (t == CIR.Expr.Idx) {
+            if (store.fallback_malformed_nodes.expr) |fallback| return fallback;
+        } else if (t == CIR.Pattern.Idx) {
+            if (store.fallback_malformed_nodes.pattern) |fallback| return fallback;
+        } else if (t == CIR.Statement.Idx) {
+            if (store.fallback_malformed_nodes.statement) |fallback| return fallback;
+        } else if (t == CIR.TypeAnno.Idx) {
+            if (store.fallback_malformed_nodes.type_anno) |fallback| return fallback;
+        } else if (t == CIR.WhereClause.Idx) {
+            if (store.fallback_malformed_nodes.where_clause) |fallback| return fallback;
+        } else if (t == CIR.Def.Idx) {
+            if (store.fallback_malformed_nodes.def) |fallback| return fallback;
         }
     }
 
@@ -2534,7 +2552,7 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
 
     store.malformed_count += 1;
 
-    // If this is the limit, create and store a fallback node for future use
+    // If this is the limit, create and store a type-specific fallback node for future use
     if (store.malformed_count == max_malformed_nodes) {
 
         // Create a generic "too many errors" diagnostic
@@ -2552,7 +2570,21 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
 
         const fallback_nid = @intFromEnum(store.nodes.append(store.gpa, fallback_node));
         _ = store.regions.append(store.gpa, fallback_diagnostic.toRegion());
-        store.fallback_malformed_node = @enumFromInt(fallback_nid);
+
+        // Store the fallback node for the specific type
+        if (t == CIR.Expr.Idx) {
+            store.fallback_malformed_nodes.expr = @enumFromInt(fallback_nid);
+        } else if (t == CIR.Pattern.Idx) {
+            store.fallback_malformed_nodes.pattern = @enumFromInt(fallback_nid);
+        } else if (t == CIR.Statement.Idx) {
+            store.fallback_malformed_nodes.statement = @enumFromInt(fallback_nid);
+        } else if (t == CIR.TypeAnno.Idx) {
+            store.fallback_malformed_nodes.type_anno = @enumFromInt(fallback_nid);
+        } else if (t == CIR.WhereClause.Idx) {
+            store.fallback_malformed_nodes.where_clause = @enumFromInt(fallback_nid);
+        } else if (t == CIR.Def.Idx) {
+            store.fallback_malformed_nodes.def = @enumFromInt(fallback_nid);
+        }
     }
 
     return @enumFromInt(malformed_nid);
@@ -2943,6 +2975,6 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
         .scratch_diagnostics = base.Scratch(CIR.Diagnostic.Idx){ .items = .{} },
         .scratch_record_destructs = base.Scratch(CIR.Pattern.RecordDestruct.Idx){ .items = .{} },
         .malformed_count = 0,
-        .fallback_malformed_node = null,
+        .fallback_malformed_nodes = .{},
     };
 }
