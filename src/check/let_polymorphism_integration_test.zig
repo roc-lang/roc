@@ -57,8 +57,6 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
-
-    // Create an empty module array since we don't have other modules
     const empty_modules: []const *CIR = &.{};
 
     checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules);
@@ -134,8 +132,6 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
-
-    // Create an empty module array since we don't have other modules
     const empty_modules: []const *CIR = &.{};
 
     checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules);
@@ -200,8 +196,6 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
-
-    // Create an empty module array since we don't have other modules
     const empty_modules: []const *CIR = &.{};
 
     checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules);
