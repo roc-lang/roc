@@ -24,6 +24,40 @@ const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
 
+/// Key for the import cache: module index + expression index in that module
+const ImportCacheKey = struct {
+    module_idx: CIR.Import.Idx,
+    expr_idx: CIR.Expr.Idx,
+};
+
+/// Cache for imported types to avoid repeated copying
+///
+/// When we import a type from another module, we need to copy it into our module's
+/// type store because type variables are module-specific. However, since we use
+/// "preserve" mode unification with imported types (meaning the imported type is
+/// read-only and never modified), we can safely cache these copies and reuse them.
+///
+/// Benefits:
+/// - Reduces memory usage by avoiding duplicate copies of the same imported type
+/// - Improves performance by avoiding redundant copying operations
+/// - Particularly beneficial for commonly imported values/functions
+///
+/// Example: If a module imports `List.map` and uses it 10 times, without caching
+/// we would create 10 separate copies of the `List.map` type. With caching, we
+/// create just one copy and reuse it.
+const ImportCache = std.HashMapUnmanaged(ImportCacheKey, Var, struct {
+    pub fn hash(_: @This(), key: ImportCacheKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(std.mem.asBytes(&key.module_idx));
+        hasher.update(std.mem.asBytes(&key.expr_idx));
+        return hasher.final();
+    }
+
+    pub fn eql(_: @This(), a: ImportCacheKey, b: ImportCacheKey) bool {
+        return a.module_idx == b.module_idx and a.expr_idx == b.expr_idx;
+    }
+}, 80);
+
 gpa: std.mem.Allocator,
 // not owned
 types: *types_mod.Store,
@@ -35,6 +69,9 @@ problems: problem.Store,
 unify_scratch: unifier.Scratch,
 occurs_scratch: occurs.Scratch,
 instantiate_subs: instantiate.VarSubstitution,
+/// Cache for imported types. This cache lives for the entire type-checking session
+/// of a module, so the same imported type can be reused across the entire module.
+import_cache: ImportCache,
 
 /// Init type solver
 /// Does *not* own types_store or can_ir, but *does* own other fields
@@ -54,6 +91,7 @@ pub fn init(
         .unify_scratch = unifier.Scratch.init(gpa),
         .occurs_scratch = occurs.Scratch.init(gpa),
         .instantiate_subs = instantiate.VarSubstitution.init(gpa),
+        .import_cache = ImportCache{},
     };
 }
 
@@ -64,6 +102,7 @@ pub fn deinit(self: *Self) void {
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
     self.instantiate_subs.deinit();
+    self.import_cache.deinit(self.gpa);
 }
 
 /// Unify two types
@@ -215,17 +254,34 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
                 // The target_node_idx points to an expression in the other module
                 const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(e.target_node_idx));
-                const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
 
-                // Copy the type from the imported module to our module
-                const copied_var = try copy_import.copyImportedType(
-                    &other_module_env.*.types,
-                    self.types,
-                    imported_var,
-                    self.gpa,
-                );
+                // Check if we've already copied this import
+                const cache_key = ImportCacheKey{
+                    .module_idx = e.module_idx,
+                    .expr_idx = target_expr_idx,
+                };
+
+                const copied_var = if (self.import_cache.get(cache_key)) |cached_var|
+                    // Reuse the previously copied type.
+                    // This is safe because imported types are never modified (preserve mode)
+                    cached_var
+                else blk: {
+                    // First time importing this type - copy it and cache the result
+                    const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
+                    const new_copy = try copy_import.copyImportedType(
+                        &other_module_env.*.types,
+                        self.types,
+                        imported_var,
+                        self.gpa,
+                    );
+                    try self.import_cache.put(self.gpa, cache_key, new_copy);
+                    break :blk new_copy;
+                };
 
                 // Unify our expression with the copied type
+                // Note: This unification uses "preserve" mode internally (via copy_import),
+                // which means the imported type (copied_var) is read-only. This is why
+                // we can safely cache and reuse copied_var for multiple imports.
                 const result = self.unify(expr_var, copied_var);
                 if (result.isProblem()) {
                     // Handle the unification problem
