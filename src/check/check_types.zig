@@ -234,8 +234,9 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     _ = problem_idx; // TODO: properly handle cross-module type errors
                 }
             } else {
-                // Import not found
-                try self.types.setVarContent(expr_var, .err);
+                // Module not found - leave the type unresolved
+                // This allows for better error messages and type inference later
+                // (The type will remain as * instead of Error)
             }
         },
         .e_list => |list| {

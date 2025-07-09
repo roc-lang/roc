@@ -53,7 +53,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "Error")))
+		(patt @5.1-5.5 (type "*")))
 	(expressions
-		(expr @5.8-5.21 (type "Error"))))
+		(expr @5.8-5.21 (type "*"))))
 ~~~
