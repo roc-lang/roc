@@ -27,7 +27,7 @@ pub const SExprWriter = struct {
         var root_node = SExpr.init(gpa, "types_store");
         defer root_node.deinit(gpa);
 
-        if (env.types.slots.backing.items.len == 0) {
+        if (env.types.slots.backing.len() == 0) {
             root_node.appendStringAttr(gpa, "vars", "empty");
         }
 
@@ -36,7 +36,7 @@ pub const SExprWriter = struct {
 
         var type_writer = TypeWriter.init(buffer.writer(), env);
 
-        for (0..env.types.slots.backing.items.len) |slot_idx| {
+        for (0..env.types.slots.backing.len()) |slot_idx| {
             const var_: Var = @enumFromInt(slot_idx);
 
             var var_node = SExpr.init(gpa, "var");
@@ -80,7 +80,7 @@ pub const TypeWriter = struct {
     /// Convert a var to a type string
     pub fn writeVar(self: *Self, var_: types.Var) Allocator.Error!void {
         // Debug assert that the variable is in bounds - if not, we have a bug in type checking
-        std.debug.assert(@intFromEnum(var_) < self.env.types.slots.backing.items.len);
+        std.debug.assert(@intFromEnum(var_) < self.env.types.slots.backing.len());
 
         const resolved = self.env.types.resolveVar(var_);
 

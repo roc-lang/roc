@@ -12,6 +12,11 @@ const Filesystem = @import("coordinate/Filesystem.zig");
 
 const ModuleEnv = base.ModuleEnv;
 const CIR = canonicalize.CIR;
+const cache_mod = @import("cache/mod.zig");
+const CacheManager = cache_mod.CacheManager;
+const CacheConfig = cache_mod.CacheConfig;
+const CacheKey = cache_mod.CacheKey;
+const CacheResult = cache_mod.CacheResult;
 
 /// Result of processing source code, containing both CIR and Reports
 /// for proper diagnostic reporting.
@@ -27,13 +32,27 @@ pub const ProcessResult = struct {
     cir: *CIR,
     reports: []reporting.Report,
     source: []const u8,
+    cache_key: ?CacheKey = null,
+    was_cached: bool = false,
 
     pub fn deinit(self: *ProcessResult, gpa: std.mem.Allocator) void {
+        // Clean up cache key if present
+        if (self.cache_key) |*key| {
+            key.deinit(gpa);
+        }
+
         for (self.reports) |*report| {
             report.deinit();
         }
         gpa.free(self.reports);
         gpa.free(self.source);
+
+        // Clean up the heap-allocated ModuleEnv (only when loaded from cache)
+        if (self.was_cached) {
+            self.cir.env.deinit();
+            gpa.destroy(self.cir.env);
+        }
+
         self.cir.deinit();
         gpa.destroy(self.cir);
     }
@@ -48,6 +67,7 @@ pub fn processFile(
     gpa: std.mem.Allocator,
     fs: Filesystem,
     filepath: []const u8,
+    cache_manager: ?*CacheManager,
 ) !ProcessResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -59,7 +79,44 @@ pub fn processFile(
         else => return error.FileReadError,
     };
 
-    // Note: We transfer ownership of source to ProcessResult, avoiding an unnecessary copy
+    // If caching is enabled, try cache first
+    if (cache_manager) |cache| {
+        const cache_key = CacheKey.generate(source, filepath, fs, gpa) catch |err| {
+            // Log cache key generation failure, continue without cache
+            std.log.debug("Failed to generate cache key for {s}: {}", .{ filepath, err });
+            return try processSourceInternal(gpa, source, filepath, true);
+        };
+
+        // Check cache
+        switch (cache.lookup(cache_key) catch .miss) {
+            .hit => |cached_result| {
+                // Cache hit! Free the source we just read since cached result has its own
+                gpa.free(source);
+
+                return cached_result;
+            },
+            .miss => {
+                // Fall through to normal processing
+            },
+            .invalid => {
+                // Fall through to normal processing
+            },
+        }
+
+        // Cache miss - process normally and store result
+        var result = try processSourceInternal(gpa, source, filepath, true);
+        result.cache_key = cache_key;
+        result.was_cached = false;
+
+        // Store in cache (don't fail compilation if cache store fails)
+        cache.store(cache_key, &result) catch |err| {
+            std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
+        };
+
+        return result;
+    }
+
+    // No caching - process normally
     return try processSourceInternal(gpa, source, filepath, true);
 }
 
@@ -95,15 +152,15 @@ fn processSourceInternal(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Initialize the ModuleEnv
-    var module_env = ModuleEnv.init(gpa);
-    defer module_env.deinit();
+    // Initialize the ModuleEnv (heap-allocated for ownership transfer)
+    var module_env = try gpa.create(ModuleEnv);
+    module_env.* = ModuleEnv.init(gpa);
 
     // Calculate line starts for region info
-    try module_env.calcLineStarts(source);
+    try module_env.*.calcLineStarts(source);
 
     // Parse the source code
-    var parse_ast = parse.parse(&module_env, source);
+    var parse_ast = parse.parse(module_env, source);
     defer parse_ast.deinit(gpa);
 
     // Create an arraylist for capturing diagnostic reports.
@@ -124,7 +181,7 @@ fn processSourceInternal(
 
     // Initialize the Can IR (heap-allocated)
     var cir = try gpa.create(CIR);
-    cir.* = CIR.init(&module_env);
+    cir.* = CIR.init(module_env);
 
     // Create scope for semantic analysis
     // Canonicalize the AST
@@ -160,7 +217,7 @@ fn processSourceInternal(
     // Get type checking diagnostic Reports
     var report_builder = types_problem_mod.ReportBuilder.init(
         gpa,
-        &module_env,
+        module_env,
         cir,
         &solver.snapshots,
         owned_source,
@@ -179,5 +236,7 @@ fn processSourceInternal(
         .cir = cir,
         .reports = reports.toOwnedSlice() catch return error.OutOfMemory,
         .source = owned_source,
+        .cache_key = null,
+        .was_cached = false,
     };
 }

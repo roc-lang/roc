@@ -12,6 +12,8 @@ pub const SafeList = @import("collections/safe_list.zig").SafeList;
 
 pub const SafeMultiList = @import("collections/safe_list.zig").SafeMultiList;
 
+pub const SafeStringHashMap = @import("collections/safe_hash_map.zig").SafeStringHashMap;
+
 /// A range that must have at least one element
 pub const NonEmptyRange = struct {
     /// Starting index (inclusive)
