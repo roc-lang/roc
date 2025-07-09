@@ -40,7 +40,7 @@ const repl = {
     },
     {
       match: (input) => input.replace(/ /g, "").match(/^name="/i),
-      show: '<p>This created a new <a href="https://www.roc-lang.org/tutorial#defs">definition</a>&mdash;<code>name</code> is now defined to be equal to the <a href="/tutorial#strings-and-numbers">string</a> you entered.</p><p>Try using this definition by entering <code>"Hi, \$(name)!"</code></p>',
+      show: '<p>This created a new <a href="https://www.roc-lang.org/tutorial#defs">definition</a>&mdash;<code>name</code> is now defined to be equal to the <a href="/tutorial#strings-and-numbers">string</a> you entered.</p><p>Try using this definition by entering <code>"Hi, \${name}!"</code></p>',
     },
     {
       match: (input) => input.match(/^"[^\$]+\$\(name\)/i),
