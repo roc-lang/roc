@@ -900,7 +900,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         .ty_var => return CIR.TypeAnno{ .ty_var = .{
             .name = @bitCast(node.data_1),
         } },
-        .ty_underscore => return CIR.TypeAnno{ .underscore = .{} },
+        .ty_underscore => return CIR.TypeAnno{ .underscore = {} },
         .ty_ident => return CIR.TypeAnno{ .ty = .{
             .symbol = @bitCast(node.data_1),
         } },

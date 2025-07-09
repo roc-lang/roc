@@ -3923,7 +3923,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
         },
         .underscore => |underscore| {
             const region = self.parse_ir.tokenizedRegionToRegion(underscore.region);
-            return self.can_ir.store.addTypeAnno(.{ .underscore = .{} }, region);
+            return self.can_ir.store.addTypeAnno(.{ .underscore = {} }, region);
         },
         .tuple => |tuple| {
             const region = self.parse_ir.tokenizedRegionToRegion(tuple.region);

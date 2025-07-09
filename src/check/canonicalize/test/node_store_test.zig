@@ -665,7 +665,7 @@ test "NodeStore round trip - TypeAnno" {
     });
 
     try type_annos.append(CIR.TypeAnno{
-        .underscore = .{},
+        .underscore = {},
     });
 
     try type_annos.append(CIR.TypeAnno{

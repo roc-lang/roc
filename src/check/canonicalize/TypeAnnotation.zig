@@ -36,7 +36,7 @@ pub const TypeAnno = union(enum) {
         name: Ident.Idx, // The variable name (e.g., "a", "b")
     },
     /// Inferred type `_`
-    underscore: struct {},
+    underscore: void,
     /// Basic type identifier: a concrete type name without arguments.
     ///
     /// Examples: `Str`, `U64`, `Bool`
