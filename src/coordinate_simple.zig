@@ -8,10 +8,9 @@ const canonicalize = @import("check/canonicalize.zig");
 const Solver = @import("check/check_types.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const reporting = @import("reporting.zig");
-const Filesystem = @import("coordinate/Filesystem.zig");
+const Filesystem = @import("fs/Filesystem.zig");
 
 const ModuleEnv = base.ModuleEnv;
-const ModuleWork = base.ModuleWork;
 const CIR = canonicalize.CIR;
 
 /// Result of processing source code, containing both CIR and Reports
@@ -142,9 +141,9 @@ fn processSourceInternal(
     }
 
     // Type checking
-    const empty_modules = std.MultiArrayList(ModuleWork(CIR)){};
-    const empty_store = ModuleWork(CIR).Store{ .items = empty_modules };
-    var solver = try Solver.init(gpa, &module_env.types, cir, &empty_store);
+    var empty_modules = std.ArrayList(base.ModuleWork(CIR)).init(gpa);
+    defer empty_modules.deinit();
+    var solver = try Solver.init(gpa, &module_env.types, cir, &empty_modules);
     defer solver.deinit();
 
     // Check for type errors

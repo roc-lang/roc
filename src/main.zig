@@ -11,7 +11,7 @@ const reporting = @import("reporting.zig");
 const coordinate_simple = @import("coordinate_simple.zig");
 
 const tracy = @import("tracy.zig");
-const Filesystem = @import("coordinate/Filesystem.zig");
+const Filesystem = @import("fs/Filesystem.zig");
 const cli_args = @import("cli_args.zig");
 
 const Allocator = std.mem.Allocator;

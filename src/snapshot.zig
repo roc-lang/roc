@@ -383,9 +383,9 @@ fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []con
     };
 
     // Types (ONCE)
-    const empty_modules = std.MultiArrayList(base.ModuleWork(CIR)){};
-    const empty_store = base.ModuleWork(CIR).Store{ .items = empty_modules };
-    var solver = Solver.init(allocator, &can_ir.env.types, &can_ir, &empty_store) catch |err| {
+    var empty_modules = std.ArrayList(base.ModuleWork(CIR)).init(allocator);
+    defer empty_modules.deinit();
+    var solver = Solver.init(allocator, &can_ir.env.types, &can_ir, &empty_modules) catch |err| {
         warn("Type solver init failed: {}", .{err});
         return;
     };
@@ -1588,9 +1588,9 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     }
 
     // Types (ONCE)
-    const empty_modules2 = std.MultiArrayList(base.ModuleWork(CIR)){};
-    const empty_store2 = base.ModuleWork(CIR).Store{ .items = empty_modules2 };
-    var solver = try Solver.init(gpa, &can_ir.env.types, &can_ir, &empty_store2);
+    var empty_modules2 = std.ArrayList(base.ModuleWork(CIR)).init(gpa);
+    defer empty_modules2.deinit();
+    var solver = try Solver.init(gpa, &can_ir.env.types, &can_ir, &empty_modules2);
     defer solver.deinit();
 
     if (maybe_expr_idx) |expr_idx| {

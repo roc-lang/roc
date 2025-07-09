@@ -8,7 +8,7 @@ const builtin = @import("builtin");
 const base = @import("base.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const assert = std.debug.assert;
-const Filesystem = @import("coordinate/Filesystem.zig");
+const Filesystem = @import("fs/Filesystem.zig");
 const Package = base.Package;
 const Allocator = std.mem.Allocator;
 
