@@ -26,9 +26,11 @@ const exitOnOom = collections.utils.exitOnOom;
 const Self = @This();
 
 gpa: std.mem.Allocator,
+// not owned
 types: *types_mod.Store,
 can_ir: *CIR,
 other_modules: ?*const base.ModuleWork(CIR).Store,
+// owned
 snapshots: snapshot.Store,
 problems: problem.Store,
 unify_scratch: unifier.Scratch,
