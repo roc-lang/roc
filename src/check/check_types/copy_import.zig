@@ -32,12 +32,14 @@ pub fn copyImportedType(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_var: Var,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Var {
     var var_mapping = VarMapping.init(allocator);
     defer var_mapping.deinit();
 
-    return copyVar(source_store, dest_store, source_var, &var_mapping);
+    return copyVar(source_store, dest_store, source_var, &var_mapping, source_idents, dest_idents, allocator);
 }
 
 fn copyVar(
@@ -45,6 +47,9 @@ fn copyVar(
     dest_store: *TypesStore,
     source_var: Var,
     var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Var {
     // Check if we've already copied this variable
     if (var_mapping.get(source_var)) |dest_var| {
@@ -56,46 +61,48 @@ fn copyVar(
     // Create a placeholder variable first to break cycles
     const placeholder_var = dest_store.fresh();
 
-    // Remember this mapping BEFORE recursing to prevent infinite loops
+    // Record the mapping immediately to handle recursive types
     try var_mapping.put(source_var, placeholder_var);
 
     // Now copy the content (which may recursively reference this variable)
-    const dest_content = try copyContent(source_store, dest_store, resolved.desc.content, var_mapping);
+    const dest_content = try copyContent(source_store, dest_store, resolved.desc.content, var_mapping, source_idents, dest_idents, allocator);
 
     // Update the placeholder with the actual content
     try dest_store.setVarContent(placeholder_var, dest_content);
 
-    const dest_var = placeholder_var;
-
-    // If this is an alias, we need to handle its special memory layout requirements
+    // If this is an alias type, we need to ensure the argument variables follow immediately after
     if (resolved.desc.content == .alias) {
         const alias = resolved.desc.content.alias;
+        const dest_var = placeholder_var;
 
-        // Copy backing var (at source_var + 1)
-        const source_backing_var = @as(Var, @enumFromInt(@intFromEnum(source_var) + 1));
-        const dest_backing_var = try copyVar(source_store, dest_store, source_backing_var, var_mapping);
-
-        // The backing var should be at dest_var + 1
-        const expected_backing_var = @as(Var, @enumFromInt(@intFromEnum(dest_var) + 1));
-        if (dest_backing_var != expected_backing_var) {
-            // This is a problem - aliases expect their backing var at a specific offset
-            // For now we continue, but this may cause issues
+        // Debug assertion: make sure the backing variable immediately follows the alias var
+        if (std.debug.runtime_safety) {
+            const backing_var = alias.getBackingVar(source_var);
+            const dest_backing_var = try copyVar(source_store, dest_store, backing_var, var_mapping, source_idents, dest_idents, allocator);
+            const expected_backing_var = @as(Var, @enumFromInt(@intFromEnum(dest_var) + 1));
+            std.debug.assert(dest_backing_var == expected_backing_var);
         }
 
-        // Copy all argument vars
+        // Copy argument variables
+        var i: u32 = 0;
+        var dest_args: [16]Var = undefined;
+        std.debug.assert(alias.num_args <= 16);
+
         var arg_iter = alias.argIterator(source_var);
         var arg_offset: u32 = 2;
         while (arg_iter.next()) |source_arg_var| {
-            const dest_arg_var = try copyVar(source_store, dest_store, source_arg_var, var_mapping);
+            const dest_arg_var = try copyVar(source_store, dest_store, source_arg_var, var_mapping, source_idents, dest_idents, allocator);
             const expected_arg_var = @as(Var, @enumFromInt(@intFromEnum(dest_var) + arg_offset));
             if (dest_arg_var != expected_arg_var) {
                 // Continue anyway
             }
+            dest_args[i] = dest_arg_var;
+            i += 1;
             arg_offset += 1;
         }
     }
 
-    return dest_var;
+    return placeholder_var;
 }
 
 fn copyContent(
@@ -103,12 +110,15 @@ fn copyContent(
     dest_store: *TypesStore,
     content: Content,
     var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Content {
     return switch (content) {
         .flex_var => |maybe_ident| Content{ .flex_var = maybe_ident },
         .rigid_var => |ident| Content{ .rigid_var = ident },
         .alias => |alias| Content{ .alias = alias }, // The alias itself is just metadata
-        .structure => |flat_type| Content{ .structure = try copyFlatType(source_store, dest_store, flat_type, var_mapping) },
+        .structure => |flat_type| Content{ .structure = try copyFlatType(source_store, dest_store, flat_type, var_mapping, source_idents, dest_idents, allocator) },
         .err => Content.err,
     };
 }
@@ -118,27 +128,30 @@ fn copyFlatType(
     dest_store: *TypesStore,
     flat_type: FlatType,
     var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!FlatType {
     return switch (flat_type) {
         .str => FlatType.str,
-        .box => |box_var| FlatType{ .box = try copyVar(source_store, dest_store, box_var, var_mapping) },
-        .list => |list_var| FlatType{ .list = try copyVar(source_store, dest_store, list_var, var_mapping) },
+        .box => |box_var| FlatType{ .box = try copyVar(source_store, dest_store, box_var, var_mapping, source_idents, dest_idents, allocator) },
+        .list => |list_var| FlatType{ .list = try copyVar(source_store, dest_store, list_var, var_mapping, source_idents, dest_idents, allocator) },
         .list_unbound => FlatType.list_unbound,
-        .tuple => |tuple| FlatType{ .tuple = try copyTuple(source_store, dest_store, tuple, var_mapping) },
-        .num => |num| FlatType{ .num = try copyNum(source_store, dest_store, num, var_mapping) },
-        .nominal_type => |nominal| FlatType{ .nominal_type = nominal }, // Nominal types are references
-        .fn_pure => |func| FlatType{ .fn_pure = try copyFunc(source_store, dest_store, func, var_mapping) },
-        .fn_effectful => |func| FlatType{ .fn_effectful = try copyFunc(source_store, dest_store, func, var_mapping) },
-        .fn_unbound => |func| FlatType{ .fn_unbound = try copyFunc(source_store, dest_store, func, var_mapping) },
-        .record => |record| FlatType{ .record = try copyRecord(source_store, dest_store, record, var_mapping) },
-        .record_unbound => |fields| FlatType{ .record_unbound = try copyRecordFields(source_store, dest_store, fields, var_mapping) },
+        .tuple => |tuple| FlatType{ .tuple = try copyTuple(source_store, dest_store, tuple, var_mapping, source_idents, dest_idents, allocator) },
+        .num => |num| FlatType{ .num = try copyNum(source_store, dest_store, num, var_mapping, source_idents, dest_idents, allocator) },
+        .nominal_type => |nominal| FlatType{ .nominal_type = try copyNominalType(source_store, dest_store, nominal, var_mapping, source_idents, dest_idents, allocator) },
+        .fn_pure => |func| FlatType{ .fn_pure = try copyFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
+        .fn_effectful => |func| FlatType{ .fn_effectful = try copyFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
+        .fn_unbound => |func| FlatType{ .fn_unbound = try copyFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
+        .record => |record| FlatType{ .record = try copyRecord(source_store, dest_store, record, var_mapping, source_idents, dest_idents, allocator) },
+        .tag_union => |tag_union| FlatType{ .tag_union = try copyTagUnion(source_store, dest_store, tag_union, var_mapping, source_idents, dest_idents, allocator) },
+        .record_unbound => |fields| FlatType{ .record_unbound = try copyRecordFields(source_store, dest_store, fields, var_mapping, source_idents, dest_idents, allocator) },
         .record_poly => |poly| blk: {
-            const dest_record = try copyRecord(source_store, dest_store, poly.record, var_mapping);
-            const dest_var = try copyVar(source_store, dest_store, poly.var_, var_mapping);
+            const dest_record = try copyRecord(source_store, dest_store, poly.record, var_mapping, source_idents, dest_idents, allocator);
+            const dest_var = try copyVar(source_store, dest_store, poly.var_, var_mapping, source_idents, dest_idents, allocator);
             break :blk FlatType{ .record_poly = .{ .record = dest_record, .var_ = dest_var } };
         },
         .empty_record => FlatType.empty_record,
-        .tag_union => |tag_union| FlatType{ .tag_union = try copyTagUnion(source_store, dest_store, tag_union, var_mapping) },
         .empty_tag_union => FlatType.empty_tag_union,
     };
 }
@@ -148,6 +161,9 @@ fn copyTuple(
     dest_store: *TypesStore,
     tuple: types_mod.Tuple,
     var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!types_mod.Tuple {
     const elems_slice = source_store.getTupleElemsSlice(tuple.elems);
 
@@ -155,7 +171,7 @@ fn copyTuple(
     defer dest_elems.deinit();
 
     for (elems_slice) |elem_var| {
-        const dest_elem = try copyVar(source_store, dest_store, elem_var, var_mapping);
+        const dest_elem = try copyVar(source_store, dest_store, elem_var, var_mapping, source_idents, dest_idents, allocator);
         try dest_elems.append(dest_elem);
     }
 
@@ -168,17 +184,19 @@ fn copyNum(
     dest_store: *TypesStore,
     num: Num,
     var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Num {
     return switch (num) {
-        .num_poly => |poly| Num{ .num_poly = .{ .var_ = try copyVar(source_store, dest_store, poly.var_, var_mapping), .requirements = poly.requirements } },
-        .int_poly => |poly| Num{ .int_poly = .{ .var_ = try copyVar(source_store, dest_store, poly.var_, var_mapping), .requirements = poly.requirements } },
-        .frac_poly => |poly| Num{ .frac_poly = .{ .var_ = try copyVar(source_store, dest_store, poly.var_, var_mapping), .requirements = poly.requirements } },
-        // Concrete types remain unchanged
-        .int_precision => |precision| Num{ .int_precision = precision },
-        .frac_precision => |precision| Num{ .frac_precision = precision },
+        .num_poly => |poly| Num{ .num_poly = .{ .var_ = try copyVar(source_store, dest_store, poly.var_, var_mapping, source_idents, dest_idents, allocator), .requirements = poly.requirements } },
+        .int_poly => |poly| Num{ .int_poly = .{ .var_ = try copyVar(source_store, dest_store, poly.var_, var_mapping, source_idents, dest_idents, allocator), .requirements = poly.requirements } },
+        .frac_poly => |poly| Num{ .frac_poly = .{ .var_ = try copyVar(source_store, dest_store, poly.var_, var_mapping, source_idents, dest_idents, allocator), .requirements = poly.requirements } },
         .num_unbound => |unbound| Num{ .num_unbound = unbound },
         .int_unbound => |unbound| Num{ .int_unbound = unbound },
         .frac_unbound => |unbound| Num{ .frac_unbound = unbound },
+        .int_precision => |precision| Num{ .int_precision = precision },
+        .frac_precision => |precision| Num{ .frac_precision = precision },
         .num_compact => |compact| Num{ .num_compact = compact },
     };
 }
@@ -188,6 +206,9 @@ fn copyFunc(
     dest_store: *TypesStore,
     func: Func,
     var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Func {
     const args_slice = source_store.getFuncArgsSlice(func.args);
 
@@ -195,11 +216,11 @@ fn copyFunc(
     defer dest_args.deinit();
 
     for (args_slice) |arg_var| {
-        const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping);
+        const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping, source_idents, dest_idents, allocator);
         try dest_args.append(dest_arg);
     }
 
-    const dest_ret = try copyVar(source_store, dest_store, func.ret, var_mapping);
+    const dest_ret = try copyVar(source_store, dest_store, func.ret, var_mapping, source_idents, dest_idents, allocator);
 
     const dest_args_range = dest_store.appendFuncArgs(dest_args.items);
     return Func{
@@ -212,22 +233,24 @@ fn copyFunc(
 fn copyRecordFields(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
-    fields: RecordField.SafeMultiList.Range,
+    fields_range: types_mod.RecordField.SafeMultiList.Range,
     var_mapping: *VarMapping,
-) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
-    const fields_slice = source_store.getRecordFieldsSlice(fields);
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!types_mod.RecordField.SafeMultiList.Range {
+    const source_fields = source_store.getRecordFieldsSlice(fields_range);
 
     const fields_start = @as(RecordField.SafeMultiList.Idx, @enumFromInt(dest_store.record_fields.len()));
 
-    for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
-        const dest_type = try copyVar(source_store, dest_store, type_var, var_mapping);
-        _ = dest_store.record_fields.append(dest_store.gpa, RecordField{
-            .name = name,
-            .var_ = dest_type,
+    for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
+        _ = dest_store.record_fields.append(dest_store.gpa, .{
+            .name = name, // Field names are local to the record type
+            .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
     }
 
-    return RecordField.SafeMultiList.Range{
+    return .{
         .start = fields_start,
         .end = @enumFromInt(dest_store.record_fields.len()),
     };
@@ -238,25 +261,29 @@ fn copyRecord(
     dest_store: *TypesStore,
     record: Record,
     var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Record {
     const fields_slice = source_store.getRecordFieldsSlice(record.fields);
 
     const fields_start = @as(RecordField.SafeMultiList.Idx, @enumFromInt(dest_store.record_fields.len()));
 
-    for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
-        const dest_type = try copyVar(source_store, dest_store, type_var, var_mapping);
-        _ = dest_store.record_fields.append(dest_store.gpa, RecordField{
-            .name = name,
-            .var_ = dest_type,
+    for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
+        _ = dest_store.record_fields.append(dest_store.gpa, .{
+            .name = name, // Field names are local to the record type
+            .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
     }
 
+    const fields_range = types_mod.RecordField.SafeMultiList.Range{
+        .start = fields_start,
+        .end = @enumFromInt(dest_store.record_fields.len()),
+    };
+
     return Record{
-        .fields = RecordField.SafeMultiList.Range{
-            .start = fields_start,
-            .end = @enumFromInt(dest_store.record_fields.len()),
-        },
-        .ext = try copyVar(source_store, dest_store, record.ext, var_mapping),
+        .fields = fields_range,
+        .ext = try copyVar(source_store, dest_store, record.ext, var_mapping, source_idents, dest_idents, allocator),
     };
 }
 
@@ -265,6 +292,9 @@ fn copyTagUnion(
     dest_store: *TypesStore,
     tag_union: TagUnion,
     var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!TagUnion {
     const tags_slice = source_store.getTagsSlice(tag_union.tags);
 
@@ -277,24 +307,53 @@ fn copyTagUnion(
         defer dest_args.deinit();
 
         for (args_slice) |arg_var| {
-            const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping);
+            const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping, source_idents, dest_idents, allocator);
             try dest_args.append(dest_arg);
         }
 
         const dest_args_range = dest_store.appendTagArgs(dest_args.items);
-        _ = dest_store.tags.append(dest_store.gpa, Tag{
-            .name = name,
+
+        _ = dest_store.tags.append(dest_store.gpa, .{
+            .name = name, // Tag names are local to the union type
             .args = dest_args_range,
         });
     }
 
-    const tags_range = Tag.SafeMultiList.Range{
+    const tags_range = types_mod.Tag.SafeMultiList.Range{
         .start = tags_start,
         .end = @enumFromInt(dest_store.tags.len()),
     };
 
     return TagUnion{
         .tags = tags_range,
-        .ext = try copyVar(source_store, dest_store, tag_union.ext, var_mapping),
+        .ext = try copyVar(source_store, dest_store, tag_union.ext, var_mapping, source_idents, dest_idents, allocator),
+    };
+}
+
+fn copyNominalType(
+    source_store: *const TypesStore,
+    dest_store: *TypesStore,
+    source_nominal: NominalType,
+    var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!NominalType {
+    _ = var_mapping; // Nominal types don't contain vars that need mapping
+    _ = source_store;
+    _ = dest_store;
+
+    // Translate the type name ident
+    const type_name_str = source_idents.getText(source_nominal.ident.ident_idx);
+    const translated_ident = dest_idents.insert(allocator, base.Ident.for_text(type_name_str), base.Region.zero());
+
+    // Translate the origin module ident
+    const origin_str = source_idents.getText(source_nominal.origin_module);
+    const translated_origin = dest_idents.insert(allocator, base.Ident.for_text(origin_str), base.Region.zero());
+
+    return NominalType{
+        .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
+        .num_args = source_nominal.num_args,
+        .origin_module = translated_origin,
     };
 }

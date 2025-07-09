@@ -647,6 +647,7 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     try types_store.setRootVarContent(nominal_type, .{ .structure = .{ .nominal_type = NominalType{
         .ident = undefined,
         .num_args = 0,
+        .origin_module = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
     } } });
 
     try types_store.setRootVarContent(backing_var, .{ .structure = .{ .tag_union = TagUnion{ .tags = tags, .ext = ext } } });
@@ -714,6 +715,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try types_store.setRootVarContent(type_b_nominal, .{ .structure = .{ .nominal_type = NominalType{
         .ident = undefined,
         .num_args = 0,
+        .origin_module = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
     } } });
     try types_store.setRootVarContent(type_b_backing, .{ .structure = .{ .tag_union = TagUnion{ .tags = tags, .ext = ext } } });
 
@@ -721,6 +723,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try types_store.setRootVarContent(type_a_nominal, .{ .structure = .{ .nominal_type = NominalType{
         .ident = undefined,
         .num_args = 0,
+        .origin_module = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
     } } });
 
     // Set up TypeA's backing var to redirect to TypeB

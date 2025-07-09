@@ -3232,6 +3232,7 @@ const TestEnv = struct {
         return Content{ .structure = .{ .nominal_type = .{
             .ident = self.mkTypeIdent(name),
             .num_args = @intCast(args.len),
+            .origin_module = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
         } } };
     }
 

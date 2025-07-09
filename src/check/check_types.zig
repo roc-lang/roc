@@ -272,6 +272,8 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         &other_module_env.*.types,
                         self.types,
                         imported_var,
+                        &other_module_env.*.idents,
+                        &self.can_ir.env.idents,
                         self.gpa,
                     );
                     try self.import_cache.put(self.gpa, cache_key, new_copy);
@@ -620,6 +622,115 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // Handle different receiver types
             switch (resolved_receiver.desc.content) {
                 .structure => |structure| switch (structure) {
+                    .nominal_type => |nominal| {
+                        // This is a static dispatch on a nominal type
+                        if (dot_access.args) |args_span| {
+                            // Method call with arguments
+                            // Get the origin module path
+                            const origin_module_path = self.can_ir.env.idents.getText(nominal.origin_module);
+
+                            // Find which imported module matches this path
+                            var origin_module_idx: ?CIR.Import.Idx = null;
+                            var origin_module: ?*const CIR = null;
+
+                            // Check if it's the current module
+                            const current_module_ident = self.can_ir.env.idents.insert(self.gpa, base.Ident.for_text(self.can_ir.module_name), base.Region.zero());
+                            if (std.mem.eql(u8, origin_module_path, self.can_ir.env.idents.getText(current_module_ident))) {
+                                origin_module = self.can_ir;
+                            } else {
+                                // Search through imported modules
+                                for (self.other_modules, 0..) |other_module, idx| {
+                                    const other_module_ident = other_module.env.idents.insert(self.gpa, base.Ident.for_text(other_module.module_name), base.Region.zero());
+                                    const other_path = other_module.env.idents.getText(other_module_ident);
+                                    if (std.mem.eql(u8, origin_module_path, other_path)) {
+                                        origin_module_idx = @enumFromInt(idx);
+                                        origin_module = other_module;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (origin_module) |module| {
+                                // Look up the method in the origin module's exports
+                                const method_name_str = self.can_ir.env.idents.getText(dot_access.field_name);
+
+                                // Search through the module's exposed nodes
+                                if (module.env.exposed_nodes.get(method_name_str)) |node_idx| {
+                                    // Found the method!
+                                    const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(node_idx));
+
+                                    // Check if we've already copied this import
+                                    const cache_key = ImportCacheKey{
+                                        .module_idx = origin_module_idx orelse @enumFromInt(0), // Current module
+                                        .expr_idx = target_expr_idx,
+                                    };
+
+                                    const method_var = if (self.import_cache.get(cache_key)) |cached_var|
+                                        cached_var
+                                    else blk: {
+                                        // Copy the method's type from the origin module to our type store
+                                        const source_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
+                                        const new_copy = try copy_import.copyImportedType(
+                                            &module.env.types,
+                                            self.types,
+                                            source_var,
+                                            &module.env.idents,
+                                            &self.can_ir.env.idents,
+                                            self.gpa,
+                                        );
+                                        try self.import_cache.put(self.gpa, cache_key, new_copy);
+                                        break :blk new_copy;
+                                    };
+
+                                    // Check all arguments
+                                    var i: u32 = 0;
+                                    while (i < args_span.span.len) : (i += 1) {
+                                        const arg_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(args_span.span.start + i));
+                                        does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
+                                    }
+
+                                    // Create argument list for the function call
+                                    var args = std.ArrayList(Var).init(self.gpa);
+                                    defer args.deinit();
+
+                                    // Add the receiver (the nominal type) as the first argument
+                                    try args.append(receiver_var);
+
+                                    // Add the remaining arguments
+                                    i = 0;
+                                    while (i < args_span.span.len) : (i += 1) {
+                                        const arg_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(args_span.span.start + i));
+                                        const arg_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
+                                        try args.append(arg_var);
+                                    }
+
+                                    // Create a function type for the method call
+                                    const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+                                    const func_content = self.types.mkFuncUnbound(args.items, dot_access_var);
+                                    const expected_func_var = self.types.freshFromContent(func_content);
+
+                                    // Unify with the imported method type
+                                    _ = self.unify(expected_func_var, method_var);
+
+                                    // Store the resolved method info for code generation
+                                    // This will be used by the code generator to emit the correct function call
+                                    // For now, the type information in the expression variable is sufficient
+                                } else {
+                                    // Method not found in origin module
+                                    // TODO: Add a proper error type for method not found on nominal type
+                                    try self.types.setVarContent(@enumFromInt(@intFromEnum(expr_idx)), .err);
+                                }
+                            } else {
+                                // Origin module not found
+                                // TODO: Add a proper error type for origin module not found
+                                try self.types.setVarContent(@enumFromInt(@intFromEnum(expr_idx)), .err);
+                            }
+                        } else {
+                            // No arguments - this might be a field access on a nominal type's backing type
+                            // TODO: Handle field access on nominal types
+                            try self.types.setVarContent(@enumFromInt(@intFromEnum(expr_idx)), .err);
+                        }
+                    },
                     .record => |record| {
                         // Receiver is already a record, find the field
                         const fields = self.types.getRecordFieldsSlice(record.fields);
