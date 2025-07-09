@@ -101,7 +101,7 @@ pub const Store = struct {
         type_store: *const types_store.Store,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
-        const capacity = type_store.slots.backing.items.len;
+        const capacity = type_store.slots.backing.len();
         const layouts_by_var = try collections.ArrayListMap(Var, Idx).init(env.gpa, capacity);
 
         var layouts = collections.SafeMultiList(Layout){};

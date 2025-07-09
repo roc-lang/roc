@@ -5,6 +5,8 @@ const base = @import("base.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const types_mod = @import("types.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
+const cache = @import("cache/mod.zig");
+
 const Solver = @import("check/check_types.zig");
 const CIR = canonicalize.CIR;
 const parse = @import("check/parse.zig");
@@ -1593,6 +1595,54 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
         _ = try solver.checkExpr(expr_idx);
     } else {
         try solver.checkDefs();
+    }
+
+    // Cache round-trip validation - ensure ModuleCache serialization/deserialization works
+    {
+        // Generate original S-expression for comparison
+        var original_tree = SExprTree.init(gpa);
+        defer original_tree.deinit();
+        CIR.pushToSExprTree(&can_ir, null, &original_tree, content.source);
+
+        var original_sexpr = std.ArrayList(u8).init(gpa);
+        defer original_sexpr.deinit();
+        original_tree.toStringPretty(original_sexpr.writer().any());
+
+        // Create and serialize MmapCache
+        const cache_data = try cache.Cache.create(gpa, &module_env, &can_ir);
+        defer gpa.free(cache_data);
+
+        // Deserialize back
+        var loaded_cache = try cache.Cache.fromMappedMemory(cache_data);
+
+        // Restore ModuleEnv and CIR
+        const restored = try loaded_cache.restore(gpa);
+        var restored_module_env = restored.module_env;
+        defer restored_module_env.deinit();
+        var restored_cir = restored.cir;
+        defer restored_cir.deinit();
+
+        // Fix env pointer after struct move
+        restored_cir.env = &restored_module_env;
+
+        // Generate S-expression from restored CIR
+        var restored_tree = SExprTree.init(gpa);
+        defer restored_tree.deinit();
+        CIR.pushToSExprTree(&restored_cir, null, &restored_tree, content.source);
+
+        var restored_sexpr = std.ArrayList(u8).init(gpa);
+        defer restored_sexpr.deinit();
+        restored_tree.toStringPretty(restored_sexpr.writer().any());
+
+        // Compare S-expressions - crash if they don't match
+        if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
+            std.log.err("Cache round-trip validation failed for snapshot: {s}", .{snapshot_path});
+            std.log.err("Original and restored CIR S-expressions don't match!", .{});
+            std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
+            std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
+            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
+            return false;
+        }
     }
 
     // Buffer all output in memory before writing files

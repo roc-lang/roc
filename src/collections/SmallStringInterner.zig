@@ -104,16 +104,17 @@ pub fn getRegion(self: *const Self, idx: Idx) Region {
     return self.regions.items[@as(usize, @intFromEnum(idx))];
 }
 
-const StringIdx = enum(u32) {
+/// TODO
+pub const StringIdx = enum(u32) {
     _,
 
     // This uses an unmanaged hash map due to context management requirements.
     // It enables us to ensure that an update context is always used with the newest pointer to the underlying bytes allocation.
-    const Table = std.HashMapUnmanaged(StringIdx, void, TableContext, std.hash_map.default_max_load_percentage);
+    pub const Table = std.HashMapUnmanaged(StringIdx, void, TableContext, std.hash_map.default_max_load_percentage);
 
     /// These are copied straight out of the zig standard library.
     /// They are simply modified to give us control over the hash function and bytes allocation.
-    const TableContext = struct {
+    pub const TableContext = struct {
         bytes: *const std.ArrayListUnmanaged(u8),
 
         pub fn eql(_: @This(), a: StringIdx, b: StringIdx) bool {
@@ -125,7 +126,7 @@ const StringIdx = enum(u32) {
         }
     };
 
-    const TableAdapter = struct {
+    pub const TableAdapter = struct {
         bytes: *const std.ArrayListUnmanaged(u8),
 
         pub fn eql(ctx: @This(), a: []const u8, b: StringIdx) bool {
