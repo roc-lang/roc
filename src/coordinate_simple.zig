@@ -141,9 +141,8 @@ fn processSourceInternal(
     }
 
     // Type checking
-    var empty_modules = std.ArrayList(base.ModuleWork(CIR)).init(gpa);
-    defer empty_modules.deinit();
-    var solver = try Solver.init(gpa, &module_env.types, cir, &empty_modules);
+    const empty_modules: []const *CIR = &.{};
+    var solver = try Solver.init(gpa, &module_env.types, cir, empty_modules);
     defer solver.deinit();
 
     // Check for type errors

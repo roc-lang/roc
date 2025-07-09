@@ -13,15 +13,6 @@ pub const StringLiteral = @import("base/StringLiteral.zig");
 pub const RegionInfo = @import("base/RegionInfo.zig");
 pub const Scratch = @import("base/Scratch.zig").Scratch;
 
-/// The work done by a compiler stage for a module in a package, usually an IR.
-pub fn ModuleWork(comptime Work: type) type {
-    return struct {
-        package_idx: Package.Idx,
-        module_idx: Package.Module.Idx,
-        work: Work,
-    };
-}
-
 /// Whether a function calls itself.
 pub const Recursive = enum {
     NotRecursive,

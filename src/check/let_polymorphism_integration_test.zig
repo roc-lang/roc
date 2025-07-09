@@ -58,11 +58,10 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
 
-    // Create an empty module store since we don't have other modules
-    var empty_modules = std.ArrayList(base.ModuleWork(CIR)).init(allocator);
-    defer empty_modules.deinit();
+    // Create an empty module array since we don't have other modules
+    const empty_modules: []const *CIR = &.{};
 
-    checker.* = try check_types.init(allocator, &module_env.types, cir, &empty_modules);
+    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules);
 
     // For expressions, check the expression directly
     if (canon_expr_idx) |expr_idx| {
@@ -136,11 +135,10 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
 
-    // Create an empty module store since we don't have other modules
-    var empty_modules = std.ArrayList(base.ModuleWork(CIR)).init(allocator);
-    defer empty_modules.deinit();
+    // Create an empty module array since we don't have other modules
+    const empty_modules: []const *CIR = &.{};
 
-    checker.* = try check_types.init(allocator, &module_env.types, cir, &empty_modules);
+    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules);
 
     try checker.checkDefs();
 
@@ -203,11 +201,10 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
 
-    // Create an empty module store since we don't have other modules
-    var empty_modules = std.ArrayList(base.ModuleWork(CIR)).init(allocator);
-    defer empty_modules.deinit();
+    // Create an empty module array since we don't have other modules
+    const empty_modules: []const *CIR = &.{};
 
-    checker.* = try check_types.init(allocator, &module_env.types, cir, &empty_modules);
+    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules);
 
     // Check if we have any defs to check
     if (cir.all_defs.span.len > 0) {

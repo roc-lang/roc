@@ -17,7 +17,6 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;
-const ModuleWork = base.ModuleWork;
 const Func = types_mod.Func;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
@@ -29,7 +28,7 @@ gpa: std.mem.Allocator,
 // not owned
 types: *types_mod.Store,
 can_ir: *CIR,
-other_modules: *const std.ArrayList(base.ModuleWork(CIR)),
+other_modules: []const *CIR,
 // owned
 snapshots: snapshot.Store,
 problems: problem.Store,
@@ -43,7 +42,7 @@ pub fn init(
     gpa: std.mem.Allocator,
     types: *types_mod.Store,
     can_ir: *CIR,
-    other_modules: *const std.ArrayList(base.ModuleWork(CIR)),
+    other_modules: []const *CIR,
 ) std.mem.Allocator.Error!Self {
     return .{
         .gpa = gpa,
@@ -210,8 +209,8 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
             // Use the module index directly
             const module_idx = @intFromEnum(e.module_idx);
-            if (module_idx < self.other_modules.items.len) {
-                const other_module_cir = &self.other_modules.items[module_idx].work;
+            if (module_idx < self.other_modules.len) {
+                const other_module_cir = self.other_modules[module_idx];
                 const other_module_env = &other_module_cir.env;
 
                 // The target_node_idx points to an expression in the other module
@@ -1189,9 +1188,8 @@ test "lambda with record field access infers correct type" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var empty_modules = std.ArrayList(base.ModuleWork(CIR)).init(gpa);
-    defer empty_modules.deinit();
-    var solver = try Self.init(gpa, &module_env.types, &can_ir, &empty_modules);
+    const empty_modules: []const *CIR = &.{};
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, empty_modules);
     defer solver.deinit();
 
     // Create type variables for the lambda parameters
@@ -1295,9 +1293,8 @@ test "dot access properly unifies field types with parameters" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var empty_modules = std.ArrayList(base.ModuleWork(CIR)).init(gpa);
-    defer empty_modules.deinit();
-    var solver = try Self.init(gpa, &module_env.types, &can_ir, &empty_modules);
+    const empty_modules: []const *CIR = &.{};
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, empty_modules);
     defer solver.deinit();
 
     // Create a parameter type variable
@@ -1404,9 +1401,8 @@ test "call site unification order matters for concrete vs flexible types" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var empty_modules = std.ArrayList(base.ModuleWork(CIR)).init(gpa);
-    defer empty_modules.deinit();
-    var solver = try Self.init(gpa, &module_env.types, &can_ir, &empty_modules);
+    const empty_modules: []const *CIR = &.{};
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, empty_modules);
     defer solver.deinit();
 
     // First, verify basic number unification works as expected
