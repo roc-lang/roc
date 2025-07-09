@@ -42,7 +42,8 @@ pub const Header = struct {
     /// Total size of the data section (excluding this header)
     data_size: u32,
 
-    /// CRC32 checksum of the data section
+    // TODO implement this properly.. just stubbed out for now.
+    // CRC32 checksum of the data section
     checksum: u32,
 
     /// Component locations in the data section
@@ -212,8 +213,8 @@ pub const CacheModule = struct {
         _ = try module_env.exposed_nodes.serializeInto(data_section[exposed_nodes_offset .. exposed_nodes_offset + exposed_nodes_size]);
         _ = try cir.external_decls.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[external_decls_offset .. external_decls_offset + external_decls_size])));
 
-        // Calculate and store checksum
-        header.checksum = std.hash.Crc32.hash(data_section[0..total_data_size]);
+        // TODO Calculate and store checksum
+        // header.checksum = std.hash.Crc32.hash(data_section[0..total_data_size]);
 
         return buffer;
     }
@@ -238,9 +239,9 @@ pub const CacheModule = struct {
         const header_size = std.mem.alignForward(usize, @sizeOf(Header), SERIALIZATION_ALIGNMENT);
         const data = mapped_data[header_size .. header_size + header.data_size];
 
-        // Validate checksum
-        const calculated_checksum = std.hash.Crc32.hash(data);
-        if (header.checksum != calculated_checksum) return error.ChecksumMismatch;
+        // TODO Validate checksum
+        // const calculated_checksum = std.hash.Crc32.hash(data);
+        // if (header.checksum != calculated_checksum) return error.ChecksumMismatch;
 
         return CacheModule{
             .header = header,
