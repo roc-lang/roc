@@ -117,9 +117,9 @@ pub fn unifyPreserveA(self: *Self, a: Var, b: Var) unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return unifier.unifyMode(
-        .preserve_a,
+    return unifier.unifyPreserve(
         self.can_ir.env,
+        self.types,
         self.types,
         &self.problems,
         &self.snapshots,
