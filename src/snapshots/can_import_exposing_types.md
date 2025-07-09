@@ -821,8 +821,9 @@ combineResults = |jsonResult, httpStatus|
 			(args
 				(p-assign @9.14-9.19 (ident "input")))
 			(e-call @9.21-9.38
-				(e-lookup-external
-					(ext-decl @9.21-9.31 (ident "json.Json.parse") (kind "value")))
+				(e-lookup-external @9.21-9.31
+					(module-idx "0")
+					(target-node-idx "0"))
 				(e-lookup-local @9.32-9.37
 					(p-assign @9.14-9.19 (ident "input")))))
 		(annotation @9.1-9.10
@@ -841,8 +842,9 @@ combineResults = |jsonResult, httpStatus|
 				(s-let @14.5-14.35
 					(p-assign @14.5-14.11 (ident "result"))
 					(e-call @14.14-14.35
-						(e-lookup-external
-							(ext-decl @14.14-14.25 (ident "json.Json.decode") (kind "value")))
+						(e-lookup-external @14.14-14.25
+							(module-idx "0")
+							(target-node-idx "0"))
 						(e-dot-access @14.26-14.35 (field "body")
 							(receiver
 								(e-lookup-local @14.26-14.29
@@ -859,8 +861,9 @@ combineResults = |jsonResult, httpStatus|
 										(p-applied-tag @16.9-16.18)))
 								(value
 									(e-call @16.22-16.36
-										(e-lookup-external
-											(ext-decl @16.22-16.29 (ident "http.Client.ok") (kind "value")))
+										(e-lookup-external @16.22-16.29
+											(module-idx "1")
+											(target-node-idx "0"))
 										(e-lookup-local @16.30-16.35
 											(p-assign @16.12-16.17 (ident "value"))))))
 							(branch
@@ -869,8 +872,9 @@ combineResults = |jsonResult, httpStatus|
 										(p-applied-tag @17.9-17.19)))
 								(value
 									(e-call @17.23-17.45
-										(e-lookup-external
-											(ext-decl @17.23-17.38 (ident "http.Client.badRequest") (kind "value")))
+										(e-lookup-external @17.23-17.38
+											(module-idx "1")
+											(target-node-idx "0"))
 										(e-lookup-local @17.39-17.44
 											(p-assign @17.13-17.18 (ident "error")))))))))))
 		(annotation @13.1-13.14
@@ -892,8 +896,9 @@ combineResults = |jsonResult, httpStatus|
 					(args
 						(p-assign @26.10-26.11 (ident "v")))
 					(e-call @26.13-26.41
-						(e-lookup-external
-							(ext-decl @26.13-26.30 (ident "json.Json.validateWith") (kind "value")))
+						(e-lookup-external @26.13-26.30
+							(module-idx "0")
+							(target-node-idx "0"))
 						(e-lookup-local @26.31-26.37
 							(p-assign @23.16-23.22 (ident "config")))
 						(e-lookup-local @26.39-26.40
@@ -914,8 +919,9 @@ combineResults = |jsonResult, httpStatus|
 			(args
 				(p-assign @38.17-38.23 (ident "config")))
 			(e-call @38.25-38.48
-				(e-lookup-external
-					(ext-decl @38.25-38.40 (ident "http.Client.clientWith") (kind "value")))
+				(e-lookup-external @38.25-38.40
+					(module-idx "1")
+					(target-node-idx "0"))
 				(e-lookup-local @38.41-38.47
 					(p-assign @38.17-38.23 (ident "config")))))
 		(annotation @38.1-38.13
@@ -943,8 +949,9 @@ combineResults = |jsonResult, httpStatus|
 									(p-applied-tag @44.9-44.19)))
 							(value
 								(e-call @44.23-44.50
-									(e-lookup-external
-										(ext-decl @44.23-44.42 (ident "http.Client.statusToString") (kind "value")))
+									(e-lookup-external @44.23-44.42
+										(module-idx "1")
+										(target-node-idx "0"))
 									(e-lookup-local @44.43-44.49
 										(p-assign @44.12-44.18 (ident "status"))))))
 						(branch
@@ -1032,14 +1039,7 @@ combineResults = |jsonResult, httpStatus|
 	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
 		(exposes
 			(exposed (name "Result") (wildcard false))))
-	(ext-decl @9.21-9.31 (ident "json.Json.parse") (kind "value"))
-	(ext-decl @14.14-14.25 (ident "json.Json.decode") (kind "value"))
-	(ext-decl @16.22-16.29 (ident "http.Client.ok") (kind "value"))
-	(ext-decl @17.23-17.38 (ident "http.Client.badRequest") (kind "value"))
-	(ext-decl @26.13-26.30 (ident "json.Json.validateWith") (kind "value"))
-	(ext-decl @37.26-37.37 (ident "Http.Client") (kind "type"))
-	(ext-decl @38.25-38.40 (ident "http.Client.clientWith") (kind "value"))
-	(ext-decl @44.23-44.42 (ident "http.Client.statusToString") (kind "value")))
+	(ext-decl @37.26-37.37 (ident "Http.Client") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

@@ -112,6 +112,26 @@ olor = |color| { import Color.RGB
                         ^^^^^
 
 
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``r`` is exposed, but it is not defined anywhere in this module.
+
+**fuzz_crash_032.md:1:13:1:14:**
+```roc
+module [tus,r]
+```
+            ^
+You can fix this by either defining ``r`` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``tus`` is exposed, but it is not defined anywhere in this module.
+
+**fuzz_crash_032.md:1:9:1:12:**
+```roc
+module [tus,r]
+```
+        ^^^
+You can fix this by either defining ``tus`` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:13-1:14),CloseSquare(1:14-1:15),Newline(1:1-1:1),

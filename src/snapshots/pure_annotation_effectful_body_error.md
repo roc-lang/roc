@@ -78,8 +78,9 @@ NO CHANGE
 			(args
 				(p-assign @7.17-7.20 (ident "msg")))
 			(e-call @7.22-7.39
-				(e-lookup-external
-					(ext-decl @7.22-7.34 (ident "pf.Stdout.line!") (kind "value")))
+				(e-lookup-external @7.22-7.34
+					(module-idx "0")
+					(target-node-idx "0"))
 				(e-lookup-local @7.35-7.38
 					(p-assign @7.17-7.20 (ident "msg")))))
 		(annotation @7.1-7.13
@@ -95,8 +96,7 @@ NO CHANGE
 			(e-string @9.22-9.40
 				(e-literal @9.23-9.39 (string "This should fail")))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
-		(exposes))
-	(ext-decl @7.22-7.34 (ident "pf.Stdout.line!") (kind "value")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

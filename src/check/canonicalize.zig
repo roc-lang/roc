@@ -18,6 +18,12 @@ const Token = tokenize.Token;
 can_ir: *CIR,
 parse_ir: *AST,
 scopes: std.ArrayListUnmanaged(Scope) = .{},
+/// Special scope for tracking exposed items from module header
+exposed_scope: Scope = undefined,
+/// Track exposed identifiers by text to handle changing indices
+exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
+/// Track exposed types by text to handle changing indices
+exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.ArrayListUnmanaged(Region),
 /// Maps var patterns to the function region they were declared in
@@ -26,6 +32,10 @@ var_function_regions: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region),
 var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Map of module name strings to their ModuleEnv pointers for import validation
+module_envs: ?*const std.StringHashMap(*ModuleEnv),
+/// Map from module name string to Import.Idx for tracking unique imports
+import_indices: std.StringHashMapUnmanaged(CIR.Import.Idx),
 /// Scratch type variables
 scratch_vars: base.Scratch(TypeVar),
 /// Scratch ident
@@ -83,13 +93,15 @@ pub fn deinit(
 ) void {
     const gpa = self.can_ir.env.gpa;
 
-    // First deinit individual scopes
+    self.exposed_scope.deinit(gpa);
+    self.exposed_ident_texts.deinit(gpa);
+    self.exposed_type_texts.deinit(gpa);
+
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
         scope.deinit(gpa);
     }
 
-    // Then deinit the collections
     self.scopes.deinit(gpa);
     self.function_regions.deinit(gpa);
     self.var_function_regions.deinit(gpa);
@@ -99,9 +111,10 @@ pub fn deinit(
     self.scratch_idents.deinit(gpa);
     self.scratch_record_fields.deinit(gpa);
     self.scratch_seen_record_fields.deinit(gpa);
+    self.import_indices.deinit(gpa);
 }
 
-pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
+pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*ModuleEnv)) std.mem.Allocator.Error!Self {
     const gpa = self.env.gpa;
 
     // Create the canonicalizer with scopes
@@ -113,10 +126,13 @@ pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
         .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
+        .module_envs = module_envs,
+        .import_indices = std.StringHashMapUnmanaged(CIR.Import.Idx){},
         .scratch_vars = base.Scratch(TypeVar).init(gpa),
         .scratch_idents = base.Scratch(Ident.Idx).init(gpa),
         .scratch_record_fields = base.Scratch(types.RecordField).init(gpa),
         .scratch_seen_record_fields = base.Scratch(SeenRecordField).init(gpa),
+        .exposed_scope = Scope.init(false),
     };
 
     // Top-level scope is not a function boundary
@@ -311,6 +327,22 @@ pub fn canonicalizeFile(
 
     // canonicalize_header_packages();
 
+    // First, process the header to create exposed_scope
+    const header = self.parse_ir.store.getHeader(file.header);
+    switch (header) {
+        .module => |h| try self.createExposedScope(h.exposes),
+        .package => |h| try self.createExposedScope(h.exposes),
+        .platform => |h| try self.createExposedScope(h.exposes),
+        .hosted => |h| try self.createExposedScope(h.exposes),
+        .app => {
+            // App headers have 'provides' instead of 'exposes'
+            // TODO: Handle app provides differently
+        },
+        .malformed => {
+            // Skip malformed headers
+        },
+    }
+
     // Track the start of scratch defs and statements
     const scratch_defs_start = self.can_ir.store.scratchDefTop();
     const scratch_statements_start = self.can_ir.store.scratch_statements.top();
@@ -325,7 +357,7 @@ pub fn canonicalizeFile(
                 const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
 
                 // Extract the type name from the header to introduce it into scope early
-                const header = self.can_ir.store.getTypeHeader(header_idx);
+                const type_header = self.can_ir.store.getTypeHeader(header_idx);
 
                 // Create a placeholder type declaration statement to introduce the type name into scope
                 // This allows recursive type references to work during annotation canonicalization
@@ -353,7 +385,7 @@ pub fn canonicalizeFile(
                 const placeholder_type_decl_idx = self.can_ir.store.addStatement(placeholder_cir_type_decl);
 
                 // Introduce the type name into scope early to support recursive references
-                self.scopeIntroduceTypeDecl(header.name, placeholder_type_decl_idx, region);
+                self.scopeIntroduceTypeDecl(type_header.name, placeholder_type_decl_idx, region);
 
                 // Process type parameters and annotation in a separate scope
                 const anno_idx = blk: {
@@ -379,14 +411,14 @@ pub fn canonicalizeFile(
 
                 // Create types for each arg annotation
                 const scratch_anno_start = self.scratch_vars.top();
-                for (self.can_ir.store.sliceTypeAnnos(header.args)) |arg_anno_idx| {
+                for (self.can_ir.store.sliceTypeAnnos(type_header.args)) |arg_anno_idx| {
                     const arg_anno_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
                     self.scratch_vars.append(self.can_ir.env.gpa, arg_anno_var);
                 }
                 const arg_anno_slice = self.scratch_vars.slice(scratch_anno_start, self.scratch_vars.top());
 
                 // The identified of the type
-                const type_ident = types.TypeIdent{ .ident_idx = header.name };
+                const type_ident = types.TypeIdent{ .ident_idx = type_header.name };
 
                 // The number of args for the alias/nominal type
                 const num_args = @as(u32, @intCast(arg_anno_slice.len));
@@ -466,7 +498,11 @@ pub fn canonicalizeFile(
                 self.scratch_vars.clearFrom(scratch_anno_start);
 
                 // Update the scope to point to the real statement instead of the placeholder
-                self.scopeUpdateTypeDecl(header.name, type_decl_stmt_idx);
+                self.scopeUpdateTypeDecl(type_header.name, type_decl_stmt_idx);
+
+                // Remove from exposed_type_texts since the type is now fully defined
+                const type_text = self.can_ir.env.idents.getText(type_header.name);
+                _ = self.exposed_type_texts.remove(type_text);
             },
             else => {
                 // Skip non-type-declaration statements in first pass
@@ -512,6 +548,23 @@ pub fn canonicalizeFile(
                 const def_idx = try self.canonicalizeDeclWithAnnotation(decl, annotation_idx);
                 self.can_ir.store.addScratchDef(def_idx);
                 last_type_anno = null; // Clear after successful use
+
+                // If this declaration successfully defined an exposed value, remove it from exposed_ident_texts
+                // and add it to exposed_nodes
+                const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                if (pattern == .ident) {
+                    const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
+                    const ident_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+
+                    // If this identifier is exposed, add it to exposed_nodes
+                    if (self.exposed_ident_texts.contains(ident_text)) {
+                        // Store the def index as u16 in exposed_nodes
+                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                        self.can_ir.env.exposed_nodes.put(self.can_ir.env.gpa, ident_text, def_idx_u16) catch |err| exitOnOom(err);
+                    }
+
+                    _ = self.exposed_ident_texts.remove(ident_text);
+                }
             },
             .@"var" => |var_stmt| {
                 // Not valid at top-level
@@ -694,54 +747,179 @@ pub fn canonicalizeFile(
         }
     }
 
-    // Get the header and canonicalize exposes based on header type
-    const header = self.parse_ir.store.getHeader(file.header);
-    switch (header) {
-        .module => |h| self.canonicalizeHeaderExposes(h.exposes),
-        .package => |h| self.canonicalizeHeaderExposes(h.exposes),
-        .platform => |h| self.canonicalizeHeaderExposes(h.exposes),
-        .hosted => |h| self.canonicalizeHeaderExposes(h.exposes),
-        .app => {
-            // App headers have 'provides' instead of 'exposes'
-            // TODO: Handle app provides differently
-        },
-        .malformed => {
-            // Skip malformed headers
-        },
-    }
+    // Check for exposed but not implemented items
+    self.checkExposedButNotImplemented();
 
     // Create the span of all top-level defs and statements
     self.can_ir.all_defs = self.can_ir.store.defSpanFrom(scratch_defs_start);
     self.can_ir.all_statements = self.can_ir.store.statementSpanFrom(scratch_statements_start);
 }
 
-fn canonicalizeHeaderExposes(
+fn createExposedScope(
     self: *Self,
     exposes: AST.Collection.Idx,
-) void {
+) std.mem.Allocator.Error!void {
+    const gpa = self.can_ir.env.gpa;
+
+    // Reset exposed_scope (already initialized in init)
+    self.exposed_scope.deinit(gpa);
+    self.exposed_scope = Scope.init(false);
+
     const collection = self.parse_ir.store.getCollection(exposes);
     const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
+
+    // Check if we have too many exports (>= maxInt(u16) to reserve 0 as potential sentinel)
+    if (exposed_items.len >= std.math.maxInt(u16)) {
+        const region = self.parse_ir.tokenizedRegionToRegion(collection.region);
+        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .too_many_exports = .{
+            .count = @intCast(exposed_items.len),
+            .region = region,
+        } });
+        return;
+    }
 
     for (exposed_items) |exposed_idx| {
         const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
         switch (exposed) {
             .lower_ident => |ident| {
-                // TODO -- do we need a Pattern for "exposed_lower" identifiers?
-                _ = ident;
+                // Get the text of the identifier token to use as key
+                const token_region = self.parse_ir.tokens.resolve(@intCast(ident.ident));
+                const ident_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+
+                // Add to exposed_by_str for permanent storage (unconditionally)
+                self.can_ir.env.exposed_by_str.put(gpa, ident_text, {}) catch |err| collections.utils.exitOnOom(err);
+
+                // Also build exposed_scope with proper identifiers
+                if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
+                    // Use a dummy pattern index - we just need to track that it's exposed
+                    const dummy_idx = @as(CIR.Pattern.Idx, @enumFromInt(0));
+                    self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
+                }
+
+                // Store by text in a temporary hash map, since indices may change
+                const region = self.parse_ir.tokenizedRegionToRegion(ident.region);
+
+                // Check if this identifier was already exposed
+                if (self.exposed_ident_texts.get(ident_text)) |original_region| {
+                    // Report redundant exposed entry error
+                    if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
+                        const diag = CIR.Diagnostic{ .redundant_exposed = .{
+                            .ident = ident_idx,
+                            .region = region,
+                            .original_region = original_region,
+                        } };
+                        self.can_ir.pushDiagnostic(diag);
+                    }
+                } else {
+                    self.exposed_ident_texts.put(gpa, ident_text, region) catch |err| collections.utils.exitOnOom(err);
+                }
             },
             .upper_ident => |type_name| {
-                // TODO -- do we need a Pattern for "exposed_upper" identifiers?
-                _ = type_name;
+                // Get the text of the identifier token to use as key
+                const token_region = self.parse_ir.tokens.resolve(@intCast(type_name.ident));
+                const type_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+
+                // Add to exposed_by_str for permanent storage (unconditionally)
+                self.can_ir.env.exposed_by_str.put(gpa, type_text, {}) catch |err| collections.utils.exitOnOom(err);
+
+                // Also build exposed_scope with proper identifiers
+                if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
+                    // Use a dummy statement index - we just need to track that it's exposed
+                    const dummy_idx = @as(CIR.Statement.Idx, @enumFromInt(0));
+                    self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
+                }
+
+                // Store by text in a temporary hash map, since indices may change
+                const region = self.parse_ir.tokenizedRegionToRegion(type_name.region);
+
+                // Check if this type was already exposed
+                if (self.exposed_type_texts.get(type_text)) |original_region| {
+                    // Report redundant exposed entry error
+                    if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
+                        const diag = CIR.Diagnostic{ .redundant_exposed = .{
+                            .ident = ident_idx,
+                            .region = region,
+                            .original_region = original_region,
+                        } };
+                        self.can_ir.pushDiagnostic(diag);
+                    }
+                } else {
+                    self.exposed_type_texts.put(gpa, type_text, region) catch |err| collections.utils.exitOnOom(err);
+                }
             },
             .upper_ident_star => |type_with_constructors| {
-                // TODO -- do we need a Pattern for "exposed_upper_star" identifiers?
-                _ = type_with_constructors;
+                // Get the text of the identifier token to use as key
+                const token_region = self.parse_ir.tokens.resolve(@intCast(type_with_constructors.ident));
+                const type_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+
+                // Add to exposed_by_str for permanent storage (unconditionally)
+                self.can_ir.env.exposed_by_str.put(gpa, type_text, {}) catch |err| collections.utils.exitOnOom(err);
+
+                // Also build exposed_scope with proper identifiers
+                if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
+                    // Use a dummy statement index - we just need to track that it's exposed
+                    const dummy_idx = @as(CIR.Statement.Idx, @enumFromInt(0));
+                    self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
+                }
+
+                // Store by text in a temporary hash map, since indices may change
+                const region = self.parse_ir.tokenizedRegionToRegion(type_with_constructors.region);
+
+                // Check if this type was already exposed
+                if (self.exposed_type_texts.get(type_text)) |original_region| {
+                    // Report redundant exposed entry error
+                    if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
+                        const diag = CIR.Diagnostic{ .redundant_exposed = .{
+                            .ident = ident_idx,
+                            .region = region,
+                            .original_region = original_region,
+                        } };
+                        self.can_ir.pushDiagnostic(diag);
+                    }
+                } else {
+                    self.exposed_type_texts.put(gpa, type_text, region) catch |err| collections.utils.exitOnOom(err);
+                }
             },
             .malformed => |malformed| {
                 // Malformed exposed items are already captured as diagnostics during parsing
                 _ = malformed;
             },
         }
+    }
+}
+
+fn checkExposedButNotImplemented(self: *Self) void {
+    const gpa = self.can_ir.env.gpa;
+
+    // Check for remaining exposed identifiers
+    var ident_iter = self.exposed_ident_texts.iterator();
+    while (ident_iter.next()) |entry| {
+        const ident_text = entry.key_ptr.*;
+        const region = entry.value_ptr.*;
+        // Create an identifier for error reporting
+        const ident_idx = self.can_ir.env.idents.insert(gpa, base.Ident.for_text(ident_text), region);
+
+        // Report error: exposed identifier but not implemented
+        const diag = CIR.Diagnostic{ .exposed_but_not_implemented = .{
+            .ident = ident_idx,
+            .region = region,
+        } };
+        self.can_ir.pushDiagnostic(diag);
+    }
+
+    // Check for remaining exposed types
+    var iter = self.exposed_type_texts.iterator();
+    while (iter.next()) |entry| {
+        const type_text = entry.key_ptr.*;
+        const region = entry.value_ptr.*;
+        // Create an identifier for error reporting
+        const ident_idx = self.can_ir.env.idents.insert(gpa, base.Ident.for_text(type_text), region);
+
+        // Report error: exposed type but not implemented
+        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .exposed_but_not_implemented = .{
+            .ident = ident_idx,
+            .region = region,
+        } });
     }
 }
 
@@ -897,17 +1075,25 @@ fn canonicalizeImportStatement(
     // 2. Determine the alias (either explicit or default to last part)
     const alias = self.resolveModuleAlias(import_stmt.alias_tok, module_name) orelse return null;
 
-    // 3. Add to scope: alias -> module_name mapping
+    // 3. Get or create Import.Idx for this module
+    const module_name_text = self.can_ir.env.idents.getText(module_name);
+    const module_import_idx = self.can_ir.imports.getOrPut(self.can_ir.env.gpa, module_name_text) catch |err| exitOnOom(err);
+
+    // 4. Add to scope: alias -> module_name mapping
     self.scopeIntroduceModuleAlias(alias, module_name);
 
     // Process type imports from this module
     self.processTypeImports(module_name, alias);
 
-    // 4. Convert exposed items and introduce them into scope
+    // 5. Convert exposed items and introduce them into scope
     const cir_exposes = self.convertASTExposesToCIR(import_stmt.exposes);
-    self.introduceExposedItemsIntoScope(cir_exposes, module_name);
+    const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
+    self.introduceExposedItemsIntoScope(cir_exposes, module_name, import_region);
 
-    // 5. Create CIR import statement
+    // 6. Store the mapping from module name to Import.Idx
+    self.import_indices.put(self.can_ir.env.gpa, module_name_text, module_import_idx) catch |err| exitOnOom(err);
+
+    // 7. Create CIR import statement
     const cir_import = CIR.Statement{
         .s_import = .{
             .module_name_tok = module_name,
@@ -920,6 +1106,11 @@ fn canonicalizeImportStatement(
 
     const import_idx = self.can_ir.store.addStatement(cir_import);
     self.can_ir.store.addScratchStatement(import_idx);
+
+    // 8. Add the module to the current scope so it can be used in qualified lookups
+    const current_scope = self.currentScope();
+    _ = current_scope.introduceImportedModule(self.can_ir.env.gpa, module_name_text, module_import_idx);
+
     return import_idx;
 }
 
@@ -1037,24 +1228,74 @@ fn introduceExposedItemsIntoScope(
     self: *Self,
     exposed_items_span: CIR.ExposedItem.Span,
     module_name: Ident.Idx,
+    import_region: Region,
 ) void {
     const exposed_items_slice = self.can_ir.store.sliceExposedItems(exposed_items_span);
 
-    for (exposed_items_slice) |exposed_item_idx| {
-        const exposed_item = self.can_ir.store.getExposedItem(exposed_item_idx);
+    // If we have module_envs, validate the imports
+    if (self.module_envs) |envs_map| {
+        const module_name_text = self.can_ir.env.idents.getText(module_name);
 
-        // Use the alias if provided, otherwise use the original name for the local lookup
-        const item_name = exposed_item.alias orelse exposed_item.name;
+        // Check if the module exists
+        if (!envs_map.contains(module_name_text)) {
+            // Module not found - create diagnostic
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .module_not_found = .{
+                .module_name = module_name,
+                .region = import_region,
+            } });
+            return;
+        }
 
-        // Create the exposed item info with module name and original name
-        const item_info = Scope.ExposedItemInfo{
-            .module_name = module_name,
-            .original_name = exposed_item.name, // Always use the original name for module lookup
-        };
+        // Get the module's exposed_by_str map
+        const module_env = envs_map.get(module_name_text).?;
 
-        // Introduce the exposed item into scope
-        // This allows `decode` to resolve to `json.Json.decode`
-        self.scopeIntroduceExposedItem(item_name, item_info);
+        // Validate each exposed item
+        for (exposed_items_slice) |exposed_item_idx| {
+            const exposed_item = self.can_ir.store.getExposedItem(exposed_item_idx);
+            const item_name_text = self.can_ir.env.idents.getText(exposed_item.name);
+
+            // Check if the item is exposed by the module
+            if (!module_env.exposed_by_str.contains(item_name_text)) {
+                // Determine if it's a type or value based on capitalization
+                const first_char = item_name_text[0];
+
+                if (first_char >= 'A' and first_char <= 'Z') {
+                    // Type not exposed
+                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .type_not_exposed = .{
+                        .module_name = module_name,
+                        .type_name = exposed_item.name,
+                        .region = import_region,
+                    } });
+                } else {
+                    // Value not exposed
+                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .value_not_exposed = .{
+                        .module_name = module_name,
+                        .value_name = exposed_item.name,
+                        .region = import_region,
+                    } });
+                }
+                continue; // Skip introducing this item to scope
+            }
+
+            // Item is valid, introduce it to scope
+            const item_name = exposed_item.alias orelse exposed_item.name;
+            const item_info = Scope.ExposedItemInfo{
+                .module_name = module_name,
+                .original_name = exposed_item.name,
+            };
+            self.scopeIntroduceExposedItem(item_name, item_info);
+        }
+    } else {
+        // No module_envs provided, introduce all items without validation
+        for (exposed_items_slice) |exposed_item_idx| {
+            const exposed_item = self.can_ir.store.getExposedItem(exposed_item_idx);
+            const item_name = exposed_item.alias orelse exposed_item.name;
+            const item_info = Scope.ExposedItemInfo{
+                .module_name = module_name,
+                .original_name = exposed_item.name,
+            };
+            self.scopeIntroduceExposedItem(item_name, item_info);
+        }
     }
 }
 
@@ -1343,30 +1584,33 @@ pub fn canonicalizeExpr(
                         // Check if this is a module alias
                         if (self.scopeLookupModule(module_alias)) |module_name| {
                             // This is a module-qualified lookup
-                            // Create qualified name for external declaration
                             const module_text = self.can_ir.env.idents.getText(module_name);
-                            const field_text = self.can_ir.env.idents.getText(ident);
 
-                            // Allocate space for qualified name
-                            const qualified_text = std.fmt.allocPrint(self.can_ir.env.gpa, "{s}.{s}", .{ module_text, field_text }) catch |err| collections.utils.exitOnOom(err);
-                            defer self.can_ir.env.gpa.free(qualified_text);
-
-                            const qualified_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(qualified_text), Region.zero());
-
-                            // Create external declaration
-                            const external_decl = CIR.ExternalDecl{
-                                .qualified_name = qualified_name,
-                                .module_name = module_name,
-                                .local_name = ident,
-                                .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
-                                .kind = .value,
-                                .region = region,
+                            // Check if this module is imported in the current scope
+                            const import_idx = self.scopeLookupImportedModule(module_text) orelse {
+                                // Module not imported in current scope
+                                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .module_not_imported = .{
+                                    .module_name = module_name,
+                                    .region = region,
+                                } });
                             };
 
-                            const external_idx = self.can_ir.pushExternalDecl(external_decl);
+                            // Look up the target node index in the module's exposed_nodes
+                            const field_text = self.can_ir.env.idents.getText(ident);
+                            const target_node_idx = if (self.module_envs) |envs_map| blk: {
+                                if (envs_map.get(module_text)) |module_env| {
+                                    break :blk module_env.exposed_nodes.get(field_text) orelse 0;
+                                } else {
+                                    break :blk 0;
+                                }
+                            } else 0;
 
-                            // Create lookup expression for external declaration
-                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = external_idx });
+                            // Create the e_lookup_external expression with Import.Idx
+                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                .module_idx = import_idx,
+                                .target_node_idx = target_node_idx,
+                                .region = region,
+                            } });
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                             return expr_idx;
                         }
@@ -1394,23 +1638,32 @@ pub fn canonicalizeExpr(
                     .not_found => {
                         // Check if this identifier is an exposed item from an import
                         if (self.scopeLookupExposedItem(ident)) |exposed_info| {
-                            // Create qualified name using the original name, not the alias
-                            const qualified_name = self.createQualifiedName(exposed_info.module_name, exposed_info.original_name);
-
-                            // Create external declaration for the exposed item
-                            const external_decl = CIR.ExternalDecl{
-                                .qualified_name = qualified_name,
-                                .module_name = exposed_info.module_name,
-                                .local_name = ident,
-                                .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
-                                .kind = .value,
-                                .region = region,
+                            // Get the Import.Idx for the module this item comes from
+                            const module_text = self.can_ir.env.idents.getText(exposed_info.module_name);
+                            const import_idx = self.scopeLookupImportedModule(module_text) orelse {
+                                // This shouldn't happen if imports are properly tracked, but handle it gracefully
+                                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .module_not_imported = .{
+                                    .module_name = exposed_info.module_name,
+                                    .region = region,
+                                } });
                             };
 
-                            const external_idx = self.can_ir.pushExternalDecl(external_decl);
+                            // Look up the target node index in the module's exposed_nodes
+                            const field_text = self.can_ir.env.idents.getText(exposed_info.original_name);
+                            const target_node_idx = if (self.module_envs) |envs_map| blk: {
+                                if (envs_map.get(module_text)) |module_env| {
+                                    break :blk module_env.exposed_nodes.get(field_text) orelse 0;
+                                } else {
+                                    break :blk 0;
+                                }
+                            } else 0;
 
-                            // Create lookup expression for external declaration
-                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = external_idx });
+                            // Create the e_lookup_external expression with Import.Idx
+                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                .module_idx = import_idx,
+                                .target_node_idx = target_node_idx,
+                                .region = region,
+                            } });
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                             return expr_idx;
                         }
@@ -2488,14 +2741,15 @@ fn canonicalizePattern(
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
-                // Push a Pattern node for our identifier
-                const assign_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
+                // Create a Pattern node for our identifier
+                const pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
                     .ident = ident_idx,
                 } }, region);
-                _ = self.can_ir.setTypeVarAtPat(assign_idx, .{ .flex_var = null });
+
+                _ = self.can_ir.setTypeVarAtPat(pattern_idx, .{ .flex_var = null });
 
                 // Introduce the identifier into scope mapping to this pattern node
-                switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
+                switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true)) {
                     .success => {},
                     .shadowing_warning => |shadowed_pattern_idx| {
                         const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
@@ -2521,7 +2775,7 @@ fn canonicalizePattern(
                     },
                 }
 
-                return assign_idx;
+                return pattern_idx;
             } else {
                 const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "report an error when unable to resolve identifier");
                 const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
@@ -3350,6 +3604,7 @@ test {
     _ = @import("canonicalize/test/int_test.zig");
     _ = @import("canonicalize/test/frac_test.zig");
     _ = @import("canonicalize/test/node_store_test.zig");
+    _ = @import("canonicalize/test/exposed_shadowing_test.zig");
     _ = @import("let_polymorphism_integration_test.zig");
 }
 
@@ -5023,6 +5278,23 @@ fn scopeLookupExposedItemInParentScopes(self: *const Self, item_name: Ident.Idx)
     return null;
 }
 
+/// Look up an imported module in the scope hierarchy
+fn scopeLookupImportedModule(self: *const Self, module_name: []const u8) ?CIR.Import.Idx {
+    // Search from innermost to outermost scope
+    var i = self.scopes.items.len;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+
+        switch (scope.lookupImportedModule(module_name)) {
+            .found => |import_idx| return import_idx,
+            .not_found => continue,
+        }
+    }
+
+    return null;
+}
+
 /// Extract the module name from a full qualified name (e.g., "Json" from "json.Json")
 fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) Ident.Idx {
     const module_text = self.can_ir.env.idents.getText(module_name_ident);
@@ -5585,6 +5857,18 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
 
     // Check if this is a module alias
     const module_name = self.scopeLookupModule(module_alias) orelse return null;
+    const module_text = self.can_ir.env.idents.getText(module_name);
+
+    // Check if this module is imported in the current scope
+    const import_idx = self.scopeLookupImportedModule(module_text) orelse {
+        // Module not imported in current scope
+        const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
+        _ = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .module_not_imported = .{
+            .module_name = module_name,
+            .region = region,
+        } });
+        return null;
+    };
 
     // This is a module-qualified lookup
     const right_expr = self.parse_ir.store.getExpr(field_access.right);
@@ -5593,45 +5877,24 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
     const right_ident = right_expr.ident;
     const field_name = self.parse_ir.tokens.resolveIdentifier(right_ident.token) orelse return null;
 
-    // Create qualified name by slicing from original source text
-    // The field_access region covers the entire "Module.field" span
     const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
-    const source_text = self.parse_ir.source[region.start.offset..region.end.offset];
 
-    const qualified_name = if (base.Ident.from_bytes(source_text)) |valid_ident|
-        self.can_ir.env.idents.insert(self.can_ir.env.gpa, valid_ident, region)
-    else |err| blk: {
-        // Invalid qualified name - create diagnostic and use placeholder
-        const error_msg = switch (err) {
-            base.Ident.Error.EmptyText => "malformed qualified name is empty",
-            base.Ident.Error.ContainsNullByte => "malformed qualified name contains null bytes",
-            base.Ident.Error.ContainsControlCharacters => "malformed qualified name contains invalid control characters",
-        };
-        const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, error_msg);
-        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-            .feature = feature,
-            .region = region,
-        } });
+    // Look up the target node index in the module's exposed_nodes
+    const field_text = self.can_ir.env.idents.getText(field_name);
+    const target_node_idx = if (self.module_envs) |envs_map| blk: {
+        if (envs_map.get(module_text)) |module_env| {
+            break :blk module_env.exposed_nodes.get(field_text) orelse 0;
+        } else {
+            break :blk 0;
+        }
+    } else 0;
 
-        // Use a placeholder identifier instead
-        const placeholder_text = "MALFORMED_QUALIFIED_NAME";
-        break :blk self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(placeholder_text), region);
-    };
-
-    // Create external declaration
-    const external_decl = CIR.ExternalDecl{
-        .qualified_name = qualified_name,
-        .module_name = module_name,
-        .local_name = field_name,
-        .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
-        .kind = .value,
+    // Create the e_lookup_external expression with Import.Idx
+    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = .{
+        .module_idx = import_idx,
+        .target_node_idx = target_node_idx,
         .region = region,
-    };
-
-    const external_idx = self.can_ir.pushExternalDecl(external_decl);
-
-    // Create lookup expression for external declaration
-    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = external_idx });
+    } });
     _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
     return expr_idx;
 }
@@ -5772,7 +6035,7 @@ const ScopeTestContext = struct {
         cir.* = CIR.init(env);
 
         return ScopeTestContext{
-            .self = try Self.init(cir, undefined),
+            .self = try Self.init(cir, undefined, null),
             .cir = cir,
             .env = env,
             .gpa = gpa,
@@ -6087,7 +6350,7 @@ test "hexadecimal integer literals" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try init(&cir, &ast);
+        var can = try init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6177,7 +6440,7 @@ test "binary integer literals" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try init(&cir, &ast);
+        var can = try init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6267,7 +6530,7 @@ test "octal integer literals" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try init(&cir, &ast);
+        var can = try init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6357,7 +6620,7 @@ test "integer literals with uppercase base prefixes" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try init(&cir, &ast);
+        var can = try init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6749,7 +7012,7 @@ test "record literal uses record_unbound" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try Self.init(&cir, &ast);
+        var can = try Self.init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6785,7 +7048,7 @@ test "record literal uses record_unbound" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try Self.init(&cir, &ast);
+        var can = try Self.init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6820,7 +7083,7 @@ test "record literal uses record_unbound" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = try Self.init(&cir, &ast);
+        var can = try Self.init(&cir, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6864,7 +7127,7 @@ test "record_unbound basic functionality" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var can = try Self.init(&cir, &ast);
+    var can = try Self.init(&cir, &ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6907,7 +7170,7 @@ test "record_unbound with multiple fields" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var can = try Self.init(&cir, &ast);
+    var can = try Self.init(&cir, &ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);

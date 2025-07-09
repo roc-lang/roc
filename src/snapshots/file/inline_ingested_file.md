@@ -13,9 +13,18 @@ import Json
 foo = Json.parse(data)
 ~~~
 # EXPECTED
-NIL
+EXPOSED BUT NOT DEFINED - inline_ingested_file.md:1:9:1:12
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``foo`` is exposed, but it is not defined anywhere in this module.
+
+**inline_ingested_file.md:1:9:1:12:**
+```roc
+module [foo]
+```
+        ^^^
+You can fix this by either defining ``foo`` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),

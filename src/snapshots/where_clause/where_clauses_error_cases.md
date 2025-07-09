@@ -100,6 +100,36 @@ This type variable is referenced here:
                             ^
 
 
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``broken_fn1`` is exposed, but it is not defined anywhere in this module.
+
+**where_clauses_error_cases.md:1:9:1:19:**
+```roc
+module [broken_fn1, broken_fn2, broken_fn3]
+```
+        ^^^^^^^^^^
+You can fix this by either defining ``broken_fn1`` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``broken_fn2`` is exposed, but it is not defined anywhere in this module.
+
+**where_clauses_error_cases.md:1:21:1:31:**
+```roc
+module [broken_fn1, broken_fn2, broken_fn3]
+```
+                    ^^^^^^^^^^
+You can fix this by either defining ``broken_fn2`` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``broken_fn3`` is exposed, but it is not defined anywhere in this module.
+
+**where_clauses_error_cases.md:1:33:1:43:**
+```roc
+module [broken_fn1, broken_fn2, broken_fn3]
+```
+                                ^^^^^^^^^^
+You can fix this by either defining ``broken_fn3`` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:31),Comma(1:31-1:32),LowerIdent(1:33-1:43),CloseSquare(1:43-1:44),Newline(1:1-1:1),

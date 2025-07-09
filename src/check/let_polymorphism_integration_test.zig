@@ -46,7 +46,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
     cir.* = CIR.init(module_env);
 
     const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(cir, parse_ast);
+    can.* = try canonicalize.init(cir, parse_ast, null);
 
     // Run canonicalization - for expressions
     var canon_expr_idx: ?CIR.Expr.Idx = null;
@@ -111,7 +111,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
     cir.* = CIR.init(module_env);
 
     const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(cir, parse_ast);
+    can.* = try canonicalize.init(cir, parse_ast, null);
 
     // Run canonicalization - for files
     // Check if we have a valid file structure first
@@ -181,7 +181,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
     cir.* = CIR.init(module_env);
 
     const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(cir, parse_ast);
+    can.* = try canonicalize.init(cir, parse_ast, null);
 
     // Run canonicalization - for statements
     var canon_result: ?CIR.Expr.Idx = null;

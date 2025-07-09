@@ -203,7 +203,11 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(CIR.Expr{
-        .e_lookup_external = @enumFromInt(345),
+        .e_lookup_external = .{
+            .module_idx = @enumFromInt(0),
+            .target_node_idx = 42,
+            .region = from_raw_offsets(200, 210),
+        },
     });
     try expressions.append(CIR.Expr{
         .e_list = .{
@@ -602,6 +606,58 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(CIR.Diagnostic{
         .empty_tuple = .{
             .region = from_raw_offsets(750, 760),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .exposed_but_not_implemented = .{
+            .ident = @bitCast(@as(u32, 321)),
+            .region = from_raw_offsets(760, 770),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .redundant_exposed = .{
+            .ident = @bitCast(@as(u32, 432)),
+            .region = from_raw_offsets(770, 780),
+            .original_region = from_raw_offsets(780, 790),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .module_not_found = .{
+            .module_name = @bitCast(@as(u32, 543)),
+            .region = from_raw_offsets(790, 800),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .value_not_exposed = .{
+            .module_name = @bitCast(@as(u32, 654)),
+            .value_name = @bitCast(@as(u32, 655)),
+            .region = from_raw_offsets(800, 810),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .type_not_exposed = .{
+            .module_name = @bitCast(@as(u32, 765)),
+            .type_name = @bitCast(@as(u32, 766)),
+            .region = from_raw_offsets(810, 820),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .module_not_imported = .{
+            .module_name = @bitCast(@as(u32, 876)),
+            .region = from_raw_offsets(820, 830),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .too_many_exports = .{
+            .count = 65536,
+            .region = from_raw_offsets(830, 840),
         },
     });
 

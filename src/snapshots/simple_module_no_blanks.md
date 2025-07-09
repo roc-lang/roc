@@ -51,8 +51,9 @@ NO CHANGE
 	(d-let
 		(p-assign @3.1-3.7 (ident "hello!"))
 		(e-call @3.10-3.31
-			(e-lookup-external
-				(ext-decl @3.10-3.22 (ident "pf.Stdout.line!") (kind "value")))
+			(e-lookup-external @3.10-3.22
+				(module-idx "0")
+				(target-node-idx "0"))
 			(e-string @3.23-3.30
 				(e-literal @3.24-3.29 (string "Hello")))))
 	(d-let
@@ -60,8 +61,7 @@ NO CHANGE
 		(e-string @4.9-4.16
 			(e-literal @4.10-4.15 (string "World"))))
 	(s-import @2.1-2.17 (module "pf.Stdout") (qualifier "pf")
-		(exposes))
-	(ext-decl @3.10-3.22 (ident "pf.Stdout.line!") (kind "value")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

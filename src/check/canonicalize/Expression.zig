@@ -123,7 +123,11 @@ pub const Expr = union(enum) {
     /// import json.Utf8
     /// foo = Utf8.encode("hello") # "Utf8.encode" is defined in another module
     /// ```
-    e_lookup_external: ExternalDecl.Idx,
+    e_lookup_external: struct {
+        module_idx: CIR.Import.Idx,
+        target_node_idx: u16,
+        region: Region,
+    },
     /// A sequence of zero or more elements of the same type
     /// ```roc
     /// ["one", "two", "three"]
@@ -444,11 +448,7 @@ pub const Expr = union(enum) {
             .e_str_segment => |e| return e.region,
             .e_str => |e| return e.region,
             .e_lookup_local => |e| return e.region,
-            .e_lookup_external => {
-                // External lookups don't have a direct region access from Expr context
-                // The region should be handled where the CIR context is available
-                return null;
-            },
+            .e_lookup_external => |e| return e.region,
             .e_list => |e| return e.region,
             .e_tuple => |e| return e.region,
             .e_match => |e| return e.region,
@@ -627,12 +627,21 @@ pub const Expr = union(enum) {
 
                 tree.endNode(begin, attrs);
             },
-            .e_lookup_external => |external_idx| {
+            .e_lookup_external => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-lookup-external");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
                 const attrs = tree.beginNode();
 
-                ir.getExternalDecl(external_idx).pushToSExprTree(ir, tree);
+                // Add module index
+                var buf: [32]u8 = undefined;
+                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(e.module_idx)}) catch unreachable;
+                tree.pushStringPair("module-idx", module_idx_str);
+
+                // Add target node index
+                var buf2: [32]u8 = undefined;
+                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{e.target_node_idx}) catch unreachable;
+                tree.pushStringPair("target-node-idx", target_idx_str);
 
                 tree.endNode(begin, attrs);
             },

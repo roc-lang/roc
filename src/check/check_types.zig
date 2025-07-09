@@ -201,12 +201,10 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             const pattern_var = @as(Var, @enumFromInt(@intFromEnum(local.pattern_idx)));
             _ = self.unify(lookup_var, pattern_var);
         },
-        .e_lookup_external => |external_idx| {
-            // For lookups, we need to connect the lookup expression to the actual variable
-            // For external lookups, connect to the external declaration's type
-            const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-            const external_decl = self.can_ir.external_decls.items[@intFromEnum(external_idx)];
-            _ = self.unify(lookup_var, external_decl.type_var);
+        .e_lookup_external => |e| {
+            // TODO: Handle type checking for external lookups
+            // For now, just skip type checking
+            _ = e;
         },
         .e_list => |list| {
             const elem_var = @as(Var, @enumFromInt(@intFromEnum(list.elem_var)));

@@ -10,9 +10,28 @@ package
 	{ somePkg: "../main.roc", }
 ~~~
 # EXPECTED
-NIL
+EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_3.md:2:3:2:12
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``something`` is exposed, but it is not defined anywhere in this module.
+
+**package_header_nonempty_multiline_3.md:2:3:2:12:**
+```roc
+	[something, SomeType,]
+```
+  ^^^^^^^^^
+You can fix this by either defining ``something`` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``SomeType`` is exposed, but it is not defined anywhere in this module.
+
+**package_header_nonempty_multiline_3.md:2:14:2:22:**
+```roc
+	[something, SomeType,]
+```
+             ^^^^^^^^
+You can fix this by either defining ``SomeType`` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwPackage(1:1-1:8),Newline(1:1-1:1),

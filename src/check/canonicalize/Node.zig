@@ -158,6 +158,11 @@ pub const Tag = enum {
     diag_undeclared_type_var,
     diag_type_alias_redeclared,
     diag_tuple_elem_not_canonicalized,
+    diag_module_not_found,
+    diag_value_not_exposed,
+    diag_type_not_exposed,
+    diag_module_not_imported,
+    diag_too_many_exports,
     diag_nominal_type_redeclared,
     diag_type_shadowed_warning,
     diag_type_parameter_conflict,
@@ -166,4 +171,6 @@ pub const Tag = enum {
     diag_duplicate_record_field,
     diag_crash_expects_string,
     diag_f64_pattern_literal,
+    diagnostic_exposed_but_not_implemented,
+    diag_redundant_exposed,
 };
