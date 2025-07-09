@@ -78,5 +78,5 @@ red = Red
 	(defs
 		(patt @6.1-6.4 (type "Error")))
 	(expressions
-		(expr @6.7-6.20 (type "Error"))))
+		(expr @6.12-6.16 (type "Error"))))
 ~~~

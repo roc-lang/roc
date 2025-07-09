@@ -44,8 +44,7 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
             .can = can,
             .expr_idx = cir.store.addExpr(CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
-                .region = base.Region.zero(),
-            } }),
+            } }, base.Region.zero()),
         };
     };
 

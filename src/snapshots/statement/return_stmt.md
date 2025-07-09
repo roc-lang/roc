@@ -28,7 +28,7 @@ return True
 ~~~clojure
 (can-ir
 	(s-return @1.1-1.17
-		(e-nominal @1.8-1.12 (nominal "Bool")
+		(e-nominal @1.8-1.17 (nominal "Bool")
 			(e-tag @1.8-1.17 (name "True")))))
 ~~~
 # TYPES

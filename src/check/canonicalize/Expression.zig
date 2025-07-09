@@ -57,7 +57,6 @@ pub const Expr = union(enum) {
     /// ```
     e_int: struct {
         value: IntValue,
-        region: Region,
     },
     /// A 64-bit floating-point literal.
     /// Used for approximate decimal representations when F64 type is explicitly required for increased performance.
@@ -68,7 +67,6 @@ pub const Expr = union(enum) {
     /// ```
     e_frac_f64: struct {
         value: f64,
-        region: Region,
     },
     /// A high-precision decimal literal.
     /// Used for exact decimal arithmetic without floating-point precision issues.
@@ -80,7 +78,6 @@ pub const Expr = union(enum) {
     /// ```
     e_frac_dec: struct {
         value: RocDec,
-        region: Region,
     },
     /// A small decimal literal stored as a rational number (numerator/10^denominator).
     /// Memory-efficient representation for common decimal values.
@@ -94,20 +91,17 @@ pub const Expr = union(enum) {
     e_dec_small: struct {
         numerator: i16,
         denominator_power_of_ten: u8,
-        region: Region,
     },
     // A single segment of a string literal
     // a single string may be made up of a span sequential segments
     // for example if it was split across multiple lines
     e_str_segment: struct {
         literal: StringLiteral.Idx,
-        region: Region,
     },
     // A string is combined of one or more segments, some of which may be interpolated
     // An interpolated string contains one or more non-string_segment's in the span
     e_str: struct {
         span: Expr.Span,
-        region: Region,
     },
     /// Lookup defined in this module
     /// ```roc
@@ -116,7 +110,6 @@ pub const Expr = union(enum) {
     /// ```
     e_lookup_local: struct {
         pattern_idx: Pattern.Idx,
-        region: Region,
     },
     /// Lookup defined in another module
     /// ```roc
@@ -135,19 +128,15 @@ pub const Expr = union(enum) {
     e_list: struct {
         elem_var: TypeVar,
         elems: Expr.Span,
-        region: Region,
     },
     /// Empty list constant `[]`
-    e_empty_list: struct {
-        region: Region,
-    },
+    e_empty_list: struct {},
     /// Tuple expression zero or more elements of arbitrary type
     /// ```roc
     /// (1, "two", True)
     /// ```
     e_tuple: struct {
         elems: Expr.Span,
-        region: Region,
     },
     /// Match expression with one or more branches
     /// ```roc
@@ -168,14 +157,12 @@ pub const Expr = union(enum) {
     e_if: struct {
         branches: IfBranch.Span,
         final_else: Expr.Idx,
-        region: Region,
     },
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     e_call: struct {
         args: Expr.Span,
         called_via: CalledVia,
-        region: Region,
     },
     /// Record literal with zero or more fields.
     /// Records are Roc's primary data structure for grouping related values.
@@ -189,12 +176,9 @@ pub const Expr = union(enum) {
     e_record: struct {
         fields: RecordField.Span,
         ext: ?Expr.Idx,
-        region: Region,
     },
     /// Empty record constant
-    e_empty_record: struct {
-        region: Region,
-    },
+    e_empty_record: struct {},
     /// Block expression containing statements followed by a final expression.
     /// Blocks create a new scope and execute statements sequentially.
     /// The final expression determines the block's value and type.
@@ -211,7 +195,6 @@ pub const Expr = union(enum) {
         stmts: Statement.Span,
         /// Final expression that produces the block's value
         final_expr: Expr.Idx,
-        region: Region,
     },
     /// Tag constructor with arguments (payload).
     /// Tags are used to create values of tag union types.
@@ -226,7 +209,6 @@ pub const Expr = union(enum) {
     e_tag: struct {
         name: Ident.Idx,
         args: Expr.Span,
-        region: Region,
     },
     /// A qualified, nominal type
     ///
@@ -240,7 +222,6 @@ pub const Expr = union(enum) {
         nominal_type_decl: Statement.Idx,
         backing_expr: Expr.Idx,
         backing_type: NominalBackingType,
-        region: Region,
     },
     /// Tag constructor with no arguments.
     /// Represents constant values in tag union types.
@@ -257,7 +238,6 @@ pub const Expr = union(enum) {
         variant_var: TypeVar,
         ext_var: TypeVar,
         name: Ident.Idx,
-        region: Region,
     },
     /// Lambda (anonymous function) expression.
     /// Creates a closure that captures definitions from the parent scope.
@@ -272,7 +252,6 @@ pub const Expr = union(enum) {
     e_lambda: struct {
         args: Pattern.Span,
         body: Expr.Idx,
-        region: Region,
     },
     /// Binary operation between two expressions.
     /// Includes arithmetic, comparison, logical, and pipe operators.
@@ -297,7 +276,6 @@ pub const Expr = union(enum) {
         receiver: Expr.Idx, // Expression before the dot (e.g., `list` in `list.map`)
         field_name: Ident.Idx, // Identifier after the dot (e.g., `map` in `list.map`)
         args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
-        region: Region,
     },
     /// Runtime error expression that crashes when executed.
     /// These are inserted during canonicalization when the compiler encounters
@@ -313,7 +291,6 @@ pub const Expr = union(enum) {
     /// ```
     e_runtime_error: struct {
         diagnostic: Diagnostic.Idx,
-        region: Region,
     },
     /// A crash expression that terminates execution with a message.
     /// This expression never returns and causes the program to crash at runtime.
@@ -323,7 +300,6 @@ pub const Expr = union(enum) {
     /// ```
     e_crash: struct {
         msg: StringLiteral.Idx,
-        region: Region,
     },
     /// A debug expression that prints the value of the inner expression.
     /// This expression evaluates to the same value as the inner expression
@@ -334,7 +310,6 @@ pub const Expr = union(enum) {
     /// ```
     e_dbg: struct {
         expr: Expr.Idx,
-        region: Region,
     },
     /// An expect expression that performs a runtime assertion.
     /// This expression evaluates to empty record {} but can fail at runtime.
@@ -345,7 +320,6 @@ pub const Expr = union(enum) {
     /// ```
     e_expect: struct {
         body: Expr.Idx,
-        region: Region,
     },
     /// Ellipsis placeholder expression (...).
     /// This is valid syntax that represents an unimplemented expression.
@@ -354,9 +328,7 @@ pub const Expr = union(enum) {
     /// ```roc
     /// launchTheNukes: |{}| ...
     /// ```
-    e_ellipsis: struct {
-        region: Region,
-    },
+    e_ellipsis: struct {},
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
@@ -374,26 +346,23 @@ pub const Expr = union(enum) {
     pub const IfBranch = struct {
         cond: Expr.Idx,
         body: Expr.Idx,
-        region: Region,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = struct { span: base.DataSpan };
     };
 
-    pub fn initStr(expr_span: Expr.Span, region: Region) Expr {
+    pub fn initStr(expr_span: Expr.Span) Expr {
         return CIR.Expr{
             .e_str = .{
                 .span = expr_span,
-                .region = region,
             },
         };
     }
 
-    pub fn initStrSegment(literal: StringLiteral.Idx, region: Region) Expr {
+    pub fn initStrSegment(literal: StringLiteral.Idx) Expr {
         return CIR.Expr{
             .e_str_segment = .{
                 .literal = literal,
-                .region = region,
             },
         };
     }
@@ -411,7 +380,6 @@ pub const Expr = union(enum) {
         op: Op,
         lhs: Expr.Idx,
         rhs: Expr.Idx,
-        region: Region,
 
         /// Binary operators available in Roc.
         pub const Op = enum {
@@ -434,8 +402,8 @@ pub const Expr = union(enum) {
             null_coalesce, // ?
         };
 
-        pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx, region: Region) Binop {
-            return Binop{ .op = op, .lhs = lhs, .rhs = rhs, .region = region };
+        pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx) Binop {
+            return Binop{ .op = op, .lhs = lhs, .rhs = rhs };
         }
     };
 
@@ -476,12 +444,13 @@ pub const Expr = union(enum) {
     /// The type inside a nominal var
     pub const NominalBackingType = enum { tag, record, tuple, value };
 
-    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, expr_idx: CIR.Expr.Idx) void {
         switch (self.*) {
             .e_int => |int_expr| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-int");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, int_expr.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 const value_i128: i128 = @bitCast(int_expr.value.bytes);
                 var value_buf: [40]u8 = undefined;
@@ -494,7 +463,8 @@ pub const Expr = union(enum) {
             .e_frac_f64 => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-frac-f64");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 var value_buf: [512]u8 = undefined;
                 const value_str = if (e.value == 0)
@@ -511,7 +481,8 @@ pub const Expr = union(enum) {
             .e_frac_dec => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-frac-dec");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 const dec_value_f64: f64 = @as(f64, @floatFromInt(e.value.num)) / std.math.pow(f64, 10, 18);
                 var value_buf: [512]u8 = undefined;
@@ -529,7 +500,8 @@ pub const Expr = union(enum) {
             .e_dec_small => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-dec-small");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 var num_buf: [32]u8 = undefined;
                 const num_str = std.fmt.bufPrint(&num_buf, "{}", .{e.numerator}) catch "fmt_error";
@@ -558,7 +530,8 @@ pub const Expr = union(enum) {
             .e_str_segment => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-literal");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 const value = ir.env.strings.get(e.literal);
                 tree.pushStringPair("string", value);
@@ -569,11 +542,12 @@ pub const Expr = union(enum) {
             .e_str => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-string");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
                 for (ir.store.sliceExpr(e.span)) |segment| {
-                    ir.store.getExpr(segment).pushToSExprTree(ir, tree);
+                    ir.store.getExpr(segment).pushToSExprTree(ir, tree, segment);
                 }
 
                 tree.endNode(begin, attrs);
@@ -581,37 +555,40 @@ pub const Expr = union(enum) {
             .e_list => |l| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-list");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, l.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
                 const elems_begin = tree.beginNode();
                 tree.pushStaticAtom("elems");
                 const elems_attrs = tree.beginNode();
                 for (ir.store.sliceExpr(l.elems)) |elem_idx| {
-                    ir.store.getExpr(elem_idx).pushToSExprTree(ir, tree);
+                    ir.store.getExpr(elem_idx).pushToSExprTree(ir, tree, elem_idx);
                 }
                 tree.endNode(elems_begin, elems_attrs);
 
                 tree.endNode(begin, attrs);
             },
-            .e_empty_list => |e| {
+            .e_empty_list => |_| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-empty_list");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
             .e_tuple => |t| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-tuple");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, t.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
                 const elems_begin = tree.beginNode();
                 tree.pushStaticAtom("elems");
                 const elems_attrs = tree.beginNode();
                 for (ir.store.sliceExpr(t.elems)) |elem_idx| {
-                    ir.store.getExpr(elem_idx).pushToSExprTree(ir, tree);
+                    ir.store.getExpr(elem_idx).pushToSExprTree(ir, tree, elem_idx);
                 }
                 tree.endNode(elems_begin, elems_attrs);
 
@@ -620,7 +597,8 @@ pub const Expr = union(enum) {
             .e_lookup_local => |local| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-lookup-local");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, local.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
                 ir.store.getPattern(local.pattern_idx).pushToSExprTree(ir, tree, local.pattern_idx);
@@ -648,17 +626,19 @@ pub const Expr = union(enum) {
             .e_match => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-match");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
-                e.pushToSExprTree(ir, tree);
+                e.pushToSExprTree(ir, tree, region);
 
                 tree.endNode(begin, attrs);
             },
             .e_if => |if_expr| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-if");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, if_expr.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
                 const branches_begin = tree.beginNode();
@@ -672,8 +652,8 @@ pub const Expr = union(enum) {
                     tree.pushStaticAtom("if-branch");
                     const branch_attrs = tree.beginNode();
 
-                    ir.store.getExpr(branch.cond).pushToSExprTree(ir, tree);
-                    ir.store.getExpr(branch.body).pushToSExprTree(ir, tree);
+                    ir.store.getExpr(branch.cond).pushToSExprTree(ir, tree, branch.cond);
+                    ir.store.getExpr(branch.body).pushToSExprTree(ir, tree, branch.body);
 
                     tree.endNode(branch_begin, branch_attrs);
                 }
@@ -682,7 +662,7 @@ pub const Expr = union(enum) {
                 const else_begin = tree.beginNode();
                 tree.pushStaticAtom("if-else");
                 const else_attrs = tree.beginNode();
-                ir.store.getExpr(if_expr.final_else).pushToSExprTree(ir, tree);
+                ir.store.getExpr(if_expr.final_else).pushToSExprTree(ir, tree, if_expr.final_else);
                 tree.endNode(else_begin, else_attrs);
 
                 tree.endNode(begin, attrs);
@@ -690,18 +670,19 @@ pub const Expr = union(enum) {
             .e_call => |c| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-call");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, c.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
                 const all_exprs = ir.store.exprSlice(c.args);
 
                 if (all_exprs.len > 0) {
-                    ir.store.getExpr(all_exprs[0]).pushToSExprTree(ir, tree);
+                    ir.store.getExpr(all_exprs[0]).pushToSExprTree(ir, tree, all_exprs[0]);
                 }
 
                 if (all_exprs.len > 1) {
                     for (all_exprs[1..]) |arg_idx| {
-                        ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree);
+                        ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                     }
                 }
 
@@ -710,14 +691,15 @@ pub const Expr = union(enum) {
             .e_record => |record_expr| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-record");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, record_expr.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
                 if (record_expr.ext) |ext_idx| {
                     const ext_begin = tree.beginNode();
                     tree.pushStaticAtom("ext");
                     const ext_attrs = tree.beginNode();
-                    ir.store.getExpr(ext_idx).pushToSExprTree(ir, tree);
+                    ir.store.getExpr(ext_idx).pushToSExprTree(ir, tree, ext_idx);
                     tree.endNode(ext_begin, ext_attrs);
                 }
 
@@ -731,31 +713,35 @@ pub const Expr = union(enum) {
 
                 tree.endNode(begin, attrs);
             },
-            .e_empty_record => |e| {
+            .e_empty_record => |_| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-empty_record");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
+
             .e_block => |block_expr| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-block");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, block_expr.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
                 for (ir.store.sliceStatements(block_expr.stmts)) |stmt_idx| {
-                    ir.store.getStatement(stmt_idx).pushToSExprTree(ir, tree);
+                    ir.store.getStatement(stmt_idx).pushToSExprTree(ir, tree, stmt_idx);
                 }
 
-                ir.store.getExpr(block_expr.final_expr).pushToSExprTree(ir, tree);
+                ir.store.getExpr(block_expr.final_expr).pushToSExprTree(ir, tree, block_expr.final_expr);
 
                 tree.endNode(begin, attrs);
             },
             .e_tag => |tag_expr| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-tag");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, tag_expr.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 tree.pushStringPair("name", ir.env.idents.getText(tag_expr.name));
                 const attrs = tree.beginNode();
 
@@ -764,7 +750,7 @@ pub const Expr = union(enum) {
                     tree.pushStaticAtom("args");
                     const args_attrs = tree.beginNode();
                     for (ir.store.sliceExpr(tag_expr.args)) |arg_idx| {
-                        ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree);
+                        ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                     }
                     tree.endNode(args_begin, args_attrs);
                 }
@@ -774,7 +760,8 @@ pub const Expr = union(enum) {
             .e_nominal => |nominal_expr| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-nominal");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, nominal_expr.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 const stmt = ir.store.getStatement(nominal_expr.nominal_type_decl);
                 switch (stmt) {
@@ -790,23 +777,25 @@ pub const Expr = union(enum) {
 
                 const attrs = tree.beginNode();
 
-                ir.store.getExpr(nominal_expr.backing_expr).pushToSExprTree(ir, tree);
+                ir.store.getExpr(nominal_expr.backing_expr).pushToSExprTree(ir, tree, nominal_expr.backing_expr);
 
                 tree.endNode(begin, attrs);
             },
-            .e_zero_argument_tag => |tag_expr| {
+            .e_zero_argument_tag => |zero_arg_tag_expr| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-zero-argument-tag");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, tag_expr.region);
-                tree.pushStringPair("closure", ir.getIdentText(tag_expr.closure_name));
-                tree.pushStringPair("name", ir.getIdentText(tag_expr.name));
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                tree.pushStringPair("closure", ir.getIdentText(zero_arg_tag_expr.closure_name));
+                tree.pushStringPair("name", ir.getIdentText(zero_arg_tag_expr.name));
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
             .e_lambda => |lambda_expr| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-lambda");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, lambda_expr.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
                 const args_begin = tree.beginNode();
@@ -817,33 +806,35 @@ pub const Expr = union(enum) {
                 }
                 tree.endNode(args_begin, args_attrs);
 
-                ir.store.getExpr(lambda_expr.body).pushToSExprTree(ir, tree);
+                ir.store.getExpr(lambda_expr.body).pushToSExprTree(ir, tree, lambda_expr.body);
 
                 tree.endNode(begin, attrs);
             },
             .e_binop => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-binop");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 tree.pushStringPair("op", @tagName(e.op));
                 const attrs = tree.beginNode();
 
-                ir.store.getExpr(e.lhs).pushToSExprTree(ir, tree);
-                ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree);
+                ir.store.getExpr(e.lhs).pushToSExprTree(ir, tree, e.lhs);
+                ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree, e.rhs);
 
                 tree.endNode(begin, attrs);
             },
             .e_dot_access => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-dot-access");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 tree.pushStringPair("field", ir.getIdentText(e.field_name));
                 const attrs = tree.beginNode();
 
                 const receiver_begin = tree.beginNode();
                 tree.pushStaticAtom("receiver");
                 const receiver_attrs = tree.beginNode();
-                ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree);
+                ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
                 tree.endNode(receiver_begin, receiver_attrs);
 
                 if (e.args) |args| {
@@ -851,7 +842,7 @@ pub const Expr = union(enum) {
                     tree.pushStaticAtom("args");
                     const args_attrs = tree.beginNode();
                     for (ir.store.exprSlice(args)) |arg_idx| {
-                        ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree);
+                        ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                     }
                     tree.endNode(args_begin, args_attrs);
                 }
@@ -871,17 +862,19 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
-            .e_ellipsis => |e| {
+            .e_ellipsis => |_| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-not-implemented");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
             },
             .e_crash => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-crash");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 tree.pushStringPair("msg", ir.env.strings.get(e.msg));
                 const attrs = tree.beginNode();
                 tree.endNode(begin, attrs);
@@ -889,21 +882,23 @@ pub const Expr = union(enum) {
             .e_dbg => |e| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-dbg");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
-                ir.store.getExpr(e.expr).pushToSExprTree(ir, tree);
+                ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);
 
                 tree.endNode(begin, attrs);
             },
             .e_expect => |expect_expr| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("e-expect");
-                ir.appendRegionInfoToSExprTreeFromRegion(tree, expect_expr.region);
+                const region = ir.store.getExprRegion(expr_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
                 // Add body expression
-                ir.store.getExpr(expect_expr.body).pushToSExprTree(ir, tree);
+                ir.store.getExpr(expect_expr.body).pushToSExprTree(ir, tree, expect_expr.body);
 
                 tree.endNode(begin, attrs);
             },
@@ -934,7 +929,6 @@ pub const Expr = union(enum) {
         branches: Branch.Span,
         /// Marks whether a match expression is exhaustive using a variable.
         exhaustive: TypeVar,
-        region: Region,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = struct { span: base.DataSpan };
@@ -956,9 +950,8 @@ pub const Expr = union(enum) {
             guard: ?Expr.Idx,
             /// Marks whether a match branch is redundant using a variable.
             redundant: TypeVar,
-            region: Region,
 
-            pub fn pushToSExprTree(self: *const Match.Branch, ir: *const CIR, tree: *SExprTree) void {
+            pub fn pushToSExprTree(self: *const Match.Branch, ir: *const CIR, tree: *SExprTree, _: Match.Branch.Idx) void {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("branch");
                 const attrs = tree.beginNode();
@@ -982,14 +975,14 @@ pub const Expr = union(enum) {
                 const value_begin = tree.beginNode();
                 tree.pushStaticAtom("value");
                 const value_attrs = tree.beginNode();
-                ir.store.getExpr(self.value).pushToSExprTree(ir, tree);
+                ir.store.getExpr(self.value).pushToSExprTree(ir, tree, self.value);
                 tree.endNode(value_begin, value_attrs);
 
                 if (self.guard) |guard_idx| {
                     const guard_begin = tree.beginNode();
                     tree.pushStaticAtom("guard");
                     const guard_attrs = tree.beginNode();
-                    ir.store.getExpr(guard_idx).pushToSExprTree(ir, tree);
+                    ir.store.getExpr(guard_idx).pushToSExprTree(ir, tree, guard_idx);
                     tree.endNode(guard_begin, guard_attrs);
                 }
 
@@ -1018,29 +1011,28 @@ pub const Expr = union(enum) {
             /// needs. For example, in `A x | B y -> x`, the `B y` pattern is degenerate.
             /// Degenerate patterns emit a runtime error if reached in a program.
             degenerate: bool,
-            region: Region,
 
             pub const Idx = enum(u32) { _ };
             pub const Span = struct { span: base.DataSpan };
         };
 
-        pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, region: Region) void {
             const begin = tree.beginNode();
             tree.pushStaticAtom("match");
-            ir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
+            ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
             const attrs = tree.beginNode();
 
             const cond_begin = tree.beginNode();
             tree.pushStaticAtom("cond");
             const cond_attrs = tree.beginNode();
-            ir.store.getExpr(self.cond).pushToSExprTree(ir, tree);
+            ir.store.getExpr(self.cond).pushToSExprTree(ir, tree, self.cond);
             tree.endNode(cond_begin, cond_attrs);
 
             const branches_begin = tree.beginNode();
             tree.pushStaticAtom("branches");
             const branches_attrs = tree.beginNode();
             for (ir.store.matchBranchSlice(self.branches)) |branch_idx| {
-                ir.store.getMatchBranch(branch_idx).pushToSExprTree(ir, tree);
+                ir.store.getMatchBranch(branch_idx).pushToSExprTree(ir, tree, branch_idx);
             }
             tree.endNode(branches_begin, branches_attrs);
 

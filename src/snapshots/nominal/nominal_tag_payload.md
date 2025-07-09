@@ -104,7 +104,7 @@ none = None
 						(ty-var @5.19-5.20 (name "a")))))))
 	(d-let
 		(p-assign @9.1-9.5 (ident "none"))
-		(e-nominal @9.8-9.13 (nominal "Maybe")
+		(e-nominal @9.8-9.18 (nominal "Maybe")
 			(e-tag @9.8-9.18 (name "None")))
 		(annotation @9.1-9.5
 			(declared-type
