@@ -9,14 +9,16 @@ const Solver = @import("check/check_types.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const reporting = @import("reporting.zig");
 const Filesystem = @import("fs/Filesystem.zig");
+const build_options = @import("build_options");
 
 const ModuleEnv = base.ModuleEnv;
 const CIR = canonicalize.CIR;
 const cache_mod = @import("cache/mod.zig");
 const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
-const CacheKey = cache_mod.CacheKey;
+
 const CacheResult = cache_mod.CacheResult;
+const CacheHit = cache_mod.CacheHit;
 
 /// Result of processing source code, containing both CIR and Reports
 /// for proper diagnostic reporting.
@@ -32,15 +34,11 @@ pub const ProcessResult = struct {
     cir: *CIR,
     reports: []reporting.Report,
     source: []const u8,
-    cache_key: ?CacheKey = null,
+    error_count: u32 = 0,
+    warning_count: u32 = 0,
     was_cached: bool = false,
 
     pub fn deinit(self: *ProcessResult, gpa: std.mem.Allocator) void {
-        // Clean up cache key if present
-        if (self.cache_key) |*key| {
-            key.deinit(gpa);
-        }
-
         for (self.reports) |*report| {
             report.deinit();
         }
@@ -81,19 +79,19 @@ pub fn processFile(
 
     // If caching is enabled, try cache first
     if (cache_manager) |cache| {
-        const cache_key = CacheKey.generate(source, filepath, fs, gpa) catch |err| {
-            // Log cache key generation failure, continue without cache
-            std.log.debug("Failed to generate cache key for {s}: {}", .{ filepath, err });
-            return try processSourceInternal(gpa, source, filepath, true);
-        };
+        const compiler_version = getCompilerVersion();
 
         // Check cache
-        switch (cache.lookup(cache_key) catch .miss) {
-            .hit => |cached_result| {
+        switch (cache.lookup(source, compiler_version) catch .miss) {
+            .hit => |cache_hit| {
                 // Cache hit! Free the source we just read since cached result has its own
                 gpa.free(source);
 
-                return cached_result;
+                // Create a ProcessResult with the cached diagnostic counts
+                var result = cache_hit.result;
+                result.error_count = cache_hit.error_count;
+                result.warning_count = cache_hit.warning_count;
+                return result;
             },
             .miss => {
                 // Fall through to normal processing
@@ -105,11 +103,10 @@ pub fn processFile(
 
         // Cache miss - process normally and store result
         var result = try processSourceInternal(gpa, source, filepath, true);
-        result.cache_key = cache_key;
         result.was_cached = false;
 
         // Store in cache (don't fail compilation if cache store fails)
-        cache.store(cache_key, &result) catch |err| {
+        cache.store(source, compiler_version, &result) catch |err| {
             std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
         };
 
@@ -175,7 +172,7 @@ fn processSourceInternal(
 
     // Get parser diagnostic Reports
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(diagnostic, gpa, "<source>") catch continue;
+        const report = parse_ast.parseDiagnosticToReport(module_env, diagnostic, gpa, "<source>") catch continue;
         reports.append(report) catch continue;
     }
 
@@ -240,11 +237,31 @@ fn processSourceInternal(
         reports.append(report) catch continue;
     }
 
+    const final_reports = reports.toOwnedSlice() catch return error.OutOfMemory;
+
+    // Count errors and warnings
+    var error_count: u32 = 0;
+    var warning_count: u32 = 0;
+    for (final_reports) |report| {
+        switch (report.severity) {
+            .info => {}, // Informational messages don't affect error/warning counts
+            .runtime_error, .fatal => error_count += 1,
+            .warning => warning_count += 1,
+        }
+    }
+
     return ProcessResult{
         .cir = cir,
-        .reports = reports.toOwnedSlice() catch return error.OutOfMemory,
+        .reports = final_reports,
         .source = owned_source,
-        .cache_key = null,
+        .error_count = error_count,
+        .warning_count = warning_count,
         .was_cached = false,
     };
+}
+
+/// Get a compiler version string for cache key generation.
+/// Uses the build-time compiler version that includes git commit SHA.
+fn getCompilerVersion() []const u8 {
+    return build_options.compiler_version;
 }

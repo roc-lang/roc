@@ -1014,7 +1014,7 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
     // Parser Diagnostics
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
         parser_problems += 1;
-        var report: reporting.Report = parse_ast.parseDiagnosticToReport(diagnostic, output.gpa, snapshot_path) catch |err| {
+        var report: reporting.Report = parse_ast.parseDiagnosticToReport(module_env, diagnostic, output.gpa, snapshot_path) catch |err| {
             try output.md_writer.print("Error creating parse report: {}\n", .{err});
             if (output.html_writer) |writer| {
                 try writer.print("                    <p>Error creating parse report: {}</p>\n", .{err});
@@ -1637,7 +1637,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
         original_tree.toStringPretty(original_sexpr.writer().any());
 
         // Create and serialize MmapCache
-        const cache_data = try cache.CacheModule.create(gpa, &module_env, &can_ir);
+        const cache_data = try cache.CacheModule.create(gpa, &module_env, &can_ir, 0, 0);
         defer gpa.free(cache_data);
 
         // Deserialize back

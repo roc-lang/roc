@@ -13,7 +13,7 @@ pub const Diagnostics = @import("CacheModule.zig").Diagnostics;
 // Re-export new cache management components
 pub const CacheManager = @import("CacheManager.zig").CacheManager;
 pub const CacheResult = @import("CacheManager.zig").CacheResult;
-pub const CacheKey = @import("CacheKey.zig").CacheKey;
+pub const CacheHit = @import("CacheManager.zig").CacheHit;
 pub const CacheConfig = @import("CacheConfig.zig").CacheConfig;
 pub const CacheStats = @import("CacheConfig.zig").CacheStats;
 
@@ -82,6 +82,13 @@ pub fn printGlobalStats() !void {
     try global_stats.print(stderr.any());
 }
 
+/// Hashes the given data using the BLAKE3 algorithm.
+pub fn blake3Hash(data: []const u8) [32]u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash(data, &digest, .{});
+    return digest;
+}
+
 test "cache module" {
     // Basic test to ensure module compiles and types are accessible
     const allocator = std.testing.allocator;
@@ -90,6 +97,10 @@ test "cache module" {
     _ = CacheModule;
     _ = Header;
     _ = Diagnostics;
+    _ = CacheManager;
+    _ = CacheResult;
+    _ = CacheConfig;
+    _ = CacheStats;
 
     // Test stats functionality
     var stats = Stats{};

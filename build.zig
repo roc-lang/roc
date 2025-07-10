@@ -52,6 +52,7 @@ pub fn build(b: *std.Build) void {
     // Create compile time build options
     const build_options = b.addOptions();
     build_options.addOption(bool, "enable_tracy", tracy != null);
+    build_options.addOption([]const u8, "compiler_version", getCompilerVersion(b, optimize));
     if (target.result.os.tag == .macos and tracy_callstack) {
         std.log.warn("Tracy callstack does not work on MacOS, disabling.", .{});
         build_options.addOption(bool, "enable_tracy_callstack", false);
@@ -655,3 +656,38 @@ const llvm_libs = [_][]const u8{
     "LLVMSupport",
     "LLVMDemangle",
 };
+
+/// Get the compiler version string for cache versioning.
+/// Returns a string like "debug-abc12345" where abc12345 is the git commit SHA.
+/// If git is not available, falls back to "debug-no-git" format.
+fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
+    const build_mode = switch (optimize) {
+        .Debug => "debug",
+        .ReleaseSafe => "release-safe",
+        .ReleaseFast => "release-fast",
+        .ReleaseSmall => "release-small",
+    };
+
+    // Try to get git commit SHA using std.process.Child.run
+    const result = std.process.Child.run(.{
+        .allocator = b.allocator,
+        .argv = &[_][]const u8{ "git", "rev-parse", "--short=8", "HEAD" },
+    }) catch {
+        // Git command failed, use fallback
+        return std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+    };
+    defer b.allocator.free(result.stdout);
+    defer b.allocator.free(result.stderr);
+
+    if (result.term == .Exited and result.term.Exited == 0) {
+        // Git succeeded, use the commit SHA
+        const commit_sha = std.mem.trim(u8, result.stdout, " \n\r\t");
+        if (commit_sha.len > 0) {
+            return std.fmt.allocPrint(b.allocator, "{s}-{s}", .{ build_mode, commit_sha }) catch
+                std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+        }
+    }
+
+    // Git not available or failed, use fallback
+    return std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+}

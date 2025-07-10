@@ -27,7 +27,6 @@ Types of modules:
 
 Implementation:
 - new compiler:
-  - [processing of modules](src/coordinate.zig)
   - [folder with lots of module related things](src/base)
 - old compiler:
   - [module folder](crates/compiler/module)
