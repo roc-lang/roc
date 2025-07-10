@@ -71,7 +71,7 @@ mutex: ?std.Thread.Mutex,
 /// Stores parse result with metadata
 pub const ParseResult = struct {
     ast: *parse.AST,
-    module_path: []const u8,
+    module_path: []const u8, // Reference to path owned by ModuleEnv
 };
 
 /// Stores canonicalized module data
@@ -237,19 +237,15 @@ pub fn deinit(self: *Self) void {
     // Clean up parse results
     var parse_iter = self.parse_results.iterator();
     while (parse_iter.next()) |entry| {
-
-        // The AST owns the source memory, so we need to be careful about cleanup order
         const ast_ptr = entry.value_ptr.ast;
-        const module_path = entry.value_ptr.module_path;
 
-        // First deinit the AST (which frees its internal structures)
+        // Deinit the AST (which frees its internal structures)
         ast_ptr.deinit(self.config.allocator);
 
         // Then free the AST pointer itself
         self.config.allocator.destroy(ast_ptr);
 
-        // Finally free the module path
-        self.config.allocator.free(module_path);
+        // Note: module_path is owned by ModuleEnv, so we don't free it here
     }
     self.parse_results.deinit();
 
@@ -349,9 +345,7 @@ pub fn processTask(self: *Self, task: Task) !void {
         },
         .parse => |parse_task| {
             try self.parseModule(parse_task.module_id, parse_task.source, parse_task.path);
-            // Don't free parse_task.source here - ownership is transferred to the AST
-            // It will be freed when the AST is destroyed in Builder.deinit()
-            self.config.allocator.free(parse_task.path);
+            // Don't free source or path here - ownership is transferred to ModuleEnv
         },
         .canonicalize => |canon| {
             try self.canonicalizeModule(canon.module_id);
@@ -422,11 +416,14 @@ fn parseModule(self: *Self, module_id: ModuleId, source: []const u8, path: []con
         self.config.allocator.destroy(module_env);
     }
 
+    // Transfer ownership of source and path to ModuleEnv
+    module_env.source = source;
+    module_env.module_path = path;
+
     // Calculate line starts
     try module_env.calcLineStarts(source);
 
-    // Parse the source - this returns an AST that references the source
-    // The AST now owns the source memory
+    // Parse the source - AST references ModuleEnv which owns the source
     const parse_result = parse.parse(module_env, source);
 
     // Store the module environment
@@ -437,7 +434,7 @@ fn parseModule(self: *Self, module_id: ModuleId, source: []const u8, path: []con
         parse_result.parse_diagnostics.items.len > 0;
 
     // Store the parse result - this transfers ownership of the AST
-    try self.storeParseResult(module_id, parse_result, path);
+    try self.storeParseResult(module_id, parse_result);
 
     // Only queue canonicalization if there are no parse errors
     if (!has_parse_errors) {
@@ -494,12 +491,12 @@ fn canonicalizeModule(self: *Self, module_id: ModuleId) !void {
     const process_result = coordinate_simple.ProcessResult{
         .cir = cir,
         .reports = &[_]reporting.Report{}, // Reports are not cached
-        .source = parse_result.ast.source,
+        .source = parse_result.ast.env.source,
         .error_count = error_count,
         .warning_count = warning_count,
         .was_cached = false,
     };
-    try self.cache_manager.store(parse_result.ast.source, @import("build_options").compiler_version, &process_result);
+    try self.cache_manager.store(parse_result.ast.env.source, @import("build_options").compiler_version, &process_result);
 
     // Queue type checking task if there are no errors
     if (error_count == 0) {
@@ -599,7 +596,7 @@ pub fn waitForTask(self: *Self) void {
 }
 
 /// Store a parse result - takes ownership of the AST
-fn storeParseResult(self: *Self, module_id: ModuleId, ast: parse.AST, module_path: []const u8) !void {
+fn storeParseResult(self: *Self, module_id: ModuleId, ast: parse.AST) !void {
     if (self.mutex) |*mutex| {
         mutex.lock();
         defer mutex.unlock();
@@ -613,7 +610,7 @@ fn storeParseResult(self: *Self, module_id: ModuleId, ast: parse.AST, module_pat
 
     const result = ParseResult{
         .ast = ast_ptr,
-        .module_path = try self.config.allocator.dupe(u8, module_path),
+        .module_path = ast.env.module_path,
     };
 
     try self.parse_results.put(module_id, result);

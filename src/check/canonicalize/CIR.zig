@@ -170,12 +170,12 @@ pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
 /// The source parameter is not owned by this function - the caller must ensure it
 /// remains valid for the duration of this call. The returned Report will contain
 /// references to the source text but does not own it.
-pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator, source: []const u8, filename: []const u8) !reporting.Report {
+pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator, source: ?[]const u8, filename: []const u8) !reporting.Report {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Set temporary source for calcRegionInfo
-    self.temp_source_for_sexpr = source;
+    self.temp_source_for_sexpr = source orelse self.env.source;
     defer self.temp_source_for_sexpr = null;
 
     return switch (diagnostic) {
@@ -209,7 +209,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             break :blk Diagnostic.buildInvalidNumLiteralReport(
                 allocator,
                 data.region,
-                source,
+                source orelse self.env.source,
             );
         },
         .ident_already_in_scope => |data| blk: {
@@ -243,7 +243,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             break :blk Diagnostic.buildF64PatternLiteralReport(
                 allocator,
                 data.region,
-                source,
+                source orelse self.env.source,
             );
         },
         .invalid_single_quote => Diagnostic.buildInvalidSingleQuoteReport(allocator),
@@ -1364,9 +1364,9 @@ pub const IntValue = struct {
 
 /// Helper function to generate the S-expression node for the entire Canonical IR.
 /// If a single expression is provided, only that expression is returned.
-pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: []const u8) void {
+pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: ?[]const u8) void {
     // Set temporary source for region info calculation during SExpr generation
-    ir.temp_source_for_sexpr = source;
+    ir.temp_source_for_sexpr = source orelse ir.env.source;
     defer ir.temp_source_for_sexpr = null;
 
     if (maybe_expr_idx) |expr_idx| {
@@ -1479,9 +1479,9 @@ pub fn getNodeRegionInfo(ir: *const CIR, idx: anytype) base.RegionInfo {
 /// Helper function to convert type information from the Canonical IR to an SExpr node
 /// in S-expression format for snapshot testing. Implements the definition-focused
 /// format showing final types for defs, expressions, and builtins.
-pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: []const u8) void {
+pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: ?[]const u8) void {
     // Set temporary source for region info calculation during SExpr generation
-    ir.temp_source_for_sexpr = source;
+    ir.temp_source_for_sexpr = source orelse ir.env.source;
     defer ir.temp_source_for_sexpr = null;
 
     const gpa = ir.env.gpa;

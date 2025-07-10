@@ -205,7 +205,6 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                 // For fresh compilation, check parse results for detailed error reporting
                 if (builder.getParseResult(0)) |parse_result| {
                     const ast = parse_result.ast;
-                    const source = ast.source;
                     // Make a copy of the filename to ensure it's not freed memory
                     const filename = try gpa.dupe(u8, parse_result.module_path);
                     defer gpa.free(filename);
@@ -247,7 +246,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
                         for (diagnostics) |diagnostic| {
                             // Create report with owned data to avoid dangling references
-                            const report = @constCast(canon_result.cir).diagnosticToReport(diagnostic, gpa, source, filename) catch |err| {
+                            const report = @constCast(canon_result.cir).diagnosticToReport(diagnostic, gpa, null, filename) catch |err| {
                                 stderr.print("Error converting diagnostic to report: {}\n", .{err}) catch {};
                                 continue;
                             };

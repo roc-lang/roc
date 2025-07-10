@@ -547,7 +547,7 @@ pub fn canonicalizeFile(
                 const pattern = self.parse_ir.store.getPattern(decl.pattern);
                 if (pattern == .ident) {
                     const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
-                    const ident_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+                    const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
                     // If this identifier is exposed, add it to exposed_nodes
                     if (self.exposed_ident_texts.contains(ident_text)) {
@@ -773,7 +773,7 @@ fn createExposedScope(
             .lower_ident => |ident| {
                 // Get the text of the identifier token to use as key
                 const token_region = self.parse_ir.tokens.resolve(@intCast(ident.ident));
-                const ident_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+                const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
                 // Add to exposed_by_str for permanent storage (unconditionally)
                 self.can_ir.env.exposed_by_str.put(gpa, ident_text, {}) catch |err| collections.utils.exitOnOom(err);
@@ -806,7 +806,7 @@ fn createExposedScope(
             .upper_ident => |type_name| {
                 // Get the text of the identifier token to use as key
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_name.ident));
-                const type_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+                const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
                 // Add to exposed_by_str for permanent storage (unconditionally)
                 self.can_ir.env.exposed_by_str.put(gpa, type_text, {}) catch |err| collections.utils.exitOnOom(err);
@@ -839,7 +839,7 @@ fn createExposedScope(
             .upper_ident_star => |type_with_constructors| {
                 // Get the text of the identifier token to use as key
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_with_constructors.ident));
-                const type_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+                const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
                 // Add to exposed_by_str for permanent storage (unconditionally)
                 self.can_ir.env.exposed_by_str.put(gpa, type_text, {}) catch |err| collections.utils.exitOnOom(err);
@@ -1032,7 +1032,7 @@ fn canonicalizeImportStatement(
             // Slice from original source to get "qualifier.ModuleName"
             const qualifier_region = self.parse_ir.tokens.resolve(qualifier_tok);
             const module_region = self.parse_ir.tokens.resolve(import_stmt.module_name_tok);
-            const full_name = self.parse_ir.source[qualifier_region.start.offset..module_region.end.offset];
+            const full_name = self.parse_ir.env.source[qualifier_region.start.offset..module_region.end.offset];
 
             // Validate the full_name using Ident.from_bytes
             if (base.Ident.from_bytes(full_name)) |valid_ident| {

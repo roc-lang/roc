@@ -32,6 +32,12 @@ exposed_nodes: collections.SafeStringHashMap(u16),
 /// this is a more compact representation at the expense of extra computation only when generating error diagnostics.
 line_starts: collections.SafeList(u32),
 
+/// The source code of this module. Owned by ModuleEnv.
+source: []const u8 = "",
+
+/// The module path (filename). Owned by ModuleEnv.
+module_path: []const u8 = "",
+
 /// Initialize the module environment.
 pub fn init(gpa: std.mem.Allocator) Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
@@ -57,6 +63,14 @@ pub fn deinit(self: *Self) void {
     self.line_starts.deinit(self.gpa);
     self.exposed_by_str.deinit(self.gpa);
     self.exposed_nodes.deinit(self.gpa);
+
+    // Free owned source and module path
+    if (self.source.len > 0) {
+        self.gpa.free(self.source);
+    }
+    if (self.module_path.len > 0) {
+        self.gpa.free(self.module_path);
+    }
 }
 
 /// Calculate and store line starts from the source text

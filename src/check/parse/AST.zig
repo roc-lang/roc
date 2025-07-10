@@ -30,7 +30,7 @@ const Allocator = std.mem.Allocator;
 
 const AST = @This();
 
-source: []const u8,
+env: *base.ModuleEnv,
 tokens: TokenizedBuffer,
 store: NodeStore,
 root_node_idx: u32 = 0,
@@ -65,7 +65,7 @@ pub fn hasErrors(self: *AST) bool {
 pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const u32) base.RegionInfo {
     const start = self.tokens.resolve(region.start);
     const end = self.tokens.resolve(region.end);
-    const info = base.RegionInfo.position(self.source, line_starts, start.start.offset, end.end.offset) catch {
+    const info = base.RegionInfo.position(self.env.source, line_starts, start.start.offset, end.end.offset) catch {
         // std.debug.panic("failed to calculate position info for region {?}, start: {}, end: {}", .{ region, start, end });
         return .{
             .start_line_idx = 0,
@@ -83,7 +83,7 @@ pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const 
 pub fn appendRegionInfoToSexprTree(self: *AST, env: *base.ModuleEnv, tree: *SExprTree, region: TokenizedRegion) void {
     const start = self.tokens.resolve(region.start);
     const end = self.tokens.resolve(region.end);
-    const info: base.RegionInfo = base.RegionInfo.position(self.source, env.line_starts.items.items, start.start.offset, end.end.offset) catch .{
+    const info: base.RegionInfo = base.RegionInfo.position(self.env.source, env.line_starts.items.items, start.start.offset, end.end.offset) catch .{
         .start_line_idx = 0,
         .start_col_idx = 0,
         .end_line_idx = 0,
@@ -94,7 +94,6 @@ pub fn appendRegionInfoToSexprTree(self: *AST, env: *base.ModuleEnv, tree: *SExp
 }
 
 pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
-    defer gpa.free(self.source);
     defer self.tokens.deinit();
     defer self.store.deinit();
     defer self.tokenize_diagnostics.deinit(gpa);
@@ -171,7 +170,7 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
 /// Get the text content of a token for error reporting
 fn getTokenText(self: *AST, token_idx: Token.Idx) []const u8 {
     const token_region = self.tokens.resolve(@intCast(token_idx));
-    return self.source[token_region.start.offset..token_region.end.offset];
+    return self.env.source[token_region.start.offset..token_region.end.offset];
 }
 
 /// Convert a parse diagnostic to a Report for rendering
@@ -180,8 +179,8 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
 
     // Ensure region bounds are valid for source slicing
     const region = base.Region{
-        .start = .{ .offset = @min(raw_region.start.offset, self.source.len) },
-        .end = .{ .offset = @min(@max(raw_region.end.offset, raw_region.start.offset), self.source.len) },
+        .start = .{ .offset = @min(raw_region.start.offset, self.env.source.len) },
+        .end = .{ .offset = @min(@max(raw_region.end.offset, raw_region.start.offset), self.env.source.len) },
     };
 
     const title = switch (diagnostic.tag) {
@@ -289,7 +288,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
         .header_unexpected_token => {
             // Try to get the actual token text
             const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.source[region.start.offset..region.end.offset]
+                self.env.source[region.start.offset..region.end.offset]
             else
                 "<unknown>";
             const owned_token = try report.addOwnedString(token_text);
@@ -301,7 +300,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
         },
         .pattern_unexpected_token => {
             const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.source[region.start.offset..region.end.offset]
+                self.env.source[region.start.offset..region.end.offset]
             else
                 "<unknown>";
             const owned_token = try report.addOwnedString(token_text);
@@ -323,7 +322,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
         },
         .ty_anno_unexpected_token => {
             const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.source[region.start.offset..region.end.offset]
+                self.env.source[region.start.offset..region.end.offset]
             else
                 "<unknown>";
             const owned_token = try report.addOwnedString(token_text);
@@ -346,7 +345,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
         },
         .statement_unexpected_token => {
             const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.source[region.start.offset..region.end.offset]
+                self.env.source[region.start.offset..region.end.offset]
             else
                 "<unknown>";
             const owned_token = try report.addOwnedString(token_text);
@@ -358,7 +357,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
         },
         .string_unexpected_token => {
             const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.source[region.start.offset..region.end.offset]
+                self.env.source[region.start.offset..region.end.offset]
             else
                 "<unknown>";
             const owned_token = try report.addOwnedString(token_text);
@@ -370,7 +369,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
         },
         .expr_unexpected_token => {
             const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.source[region.start.offset..region.end.offset]
+                self.env.source[region.start.offset..region.end.offset]
             else
                 "<unknown>";
             const owned_token = try report.addOwnedString(token_text);
@@ -535,9 +534,9 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
     }
 
     // Add source context if we have a valid region
-    if (region.start.offset <= region.end.offset and region.end.offset <= self.source.len) {
+    if (region.start.offset <= region.end.offset and region.end.offset <= self.env.source.len) {
         // Use proper region info calculation with converted region
-        const region_info = base.RegionInfo.position(self.source, env.line_starts.items.items, region.start.offset, region.end.offset) catch {
+        const region_info = base.RegionInfo.position(self.env.source, env.line_starts.items.items, region.start.offset, region.end.offset) catch {
             return report; // Return report without source context if region calculation fails
         };
 
@@ -684,7 +683,7 @@ pub const TokenizedRegion = struct {
 /// Resolve a token index to a string slice from the source code.
 pub fn resolve(self: *AST, token: Token.Idx) []const u8 {
     const range = self.tokens.resolve(token);
-    return self.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
+    return self.env.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
 }
 
 /// Resolves a fully qualified name from a chain of qualifier tokens and a final token.
@@ -710,7 +709,7 @@ pub fn resolveQualifiedName(
         const start_offset = first_region.start.offset;
         const end_offset = final_region.end.offset;
 
-        return self.source[@intCast(start_offset)..@intCast(end_offset)];
+        return self.env.source[@intCast(start_offset)..@intCast(end_offset)];
     } else {
         // Get the raw token text and strip leading dot if it's one of the specified tokens
         const raw_text = self.resolve(final_token);

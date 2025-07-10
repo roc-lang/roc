@@ -1877,7 +1877,7 @@ const Formatter = struct {
                 } else {
                     try fmt.pushAll(" #");
                 }
-                const comment_text = fmt.ast.source[start..end];
+                const comment_text = fmt.ast.env.source[start..end];
                 if (comment_text[0] != ' ') {
                     try fmt.push(' ');
                 }
@@ -1907,7 +1907,7 @@ const Formatter = struct {
             const end = region.end.offset;
             if (end > start) {
                 try fmt.pushAll(" #");
-                const comment_text = fmt.ast.source[start..end];
+                const comment_text = fmt.ast.env.source[start..end];
                 if (comment_text[0] != ' ') {
                     try fmt.push(' ');
                 }
@@ -1952,7 +1952,7 @@ const Formatter = struct {
             else => {},
         }
 
-        const text = fmt.ast.source[start..region.end.offset];
+        const text = fmt.ast.env.source[start..region.end.offset];
         try fmt.pushAll(text);
     }
 
