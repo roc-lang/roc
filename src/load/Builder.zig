@@ -16,6 +16,7 @@ const coordinate_simple = @import("../coordinate_simple.zig");
 const reporting = @import("../reporting.zig");
 const check_types = @import("../check/check_types.zig");
 const types = @import("../types.zig");
+const problem = @import("../check/check_types/problem.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -212,23 +213,31 @@ pub fn init(config: Config) !Self {
 
 /// Deinitialize the builder
 pub fn deinit(self: *Self) void {
-    // // Clean up workers
-    // for (self.workers) |*worker| {
-    //     worker.deinit();
-    // }
-    // self.config.allocator.free(self.workers);
-
-    // Clean up module environments
-    var env_iter = self.module_envs.iterator();
-    while (env_iter.next()) |entry| {
-        entry.value_ptr.*.deinit();
-        self.config.allocator.destroy(entry.value_ptr.*);
+    // Clean up workers
+    for (self.workers) |*worker| {
+        worker.deinit();
     }
-    self.module_envs.deinit();
+    self.config.allocator.free(self.workers);
+
+    // Clean up type checked results first (no dependency on module environments)
+    var type_iter = self.type_checked_results.iterator();
+    while (type_iter.next()) |entry| {
+        entry.value_ptr.solved_types.problems.deinit(self.config.allocator);
+    }
+    self.type_checked_results.deinit();
+
+    // Clean up canonicalized results (CIR references module environments)
+    var canon_iter = self.canonicalized_results.iterator();
+    while (canon_iter.next()) |entry| {
+        entry.value_ptr.cir.deinit();
+        self.config.allocator.destroy(entry.value_ptr.cir);
+    }
+    self.canonicalized_results.deinit();
 
     // Clean up parse results
     var parse_iter = self.parse_results.iterator();
     while (parse_iter.next()) |entry| {
+
         // The AST owns the source memory, so we need to be careful about cleanup order
         const ast_ptr = entry.value_ptr.ast;
         const module_path = entry.value_ptr.module_path;
@@ -244,24 +253,17 @@ pub fn deinit(self: *Self) void {
     }
     self.parse_results.deinit();
 
-    // // Clean up canonicalized results
-    // var canon_iter = self.canonicalized_results.iterator();
-    // while (canon_iter.next()) |entry| {
-    //     entry.value_ptr.cir.deinit();
-    //     self.config.allocator.destroy(entry.value_ptr.cir);
-    // }
-    // self.canonicalized_results.deinit();
+    // Clean up module environments last (after nothing references them)
+    var env_iter = self.module_envs.iterator();
+    while (env_iter.next()) |entry| {
+        entry.value_ptr.*.deinit();
+        self.config.allocator.destroy(entry.value_ptr.*);
+    }
+    self.module_envs.deinit();
 
-    // // Clean up type checked results
-    // var type_iter = self.type_checked_results.iterator();
-    // while (type_iter.next()) |entry| {
-    //     entry.value_ptr.solved_types.problems.deinit(self.config.allocator);
-    // }
-    // self.type_checked_results.deinit();
-
-    // // Clean up task queue
-    // self.task_queue.deinit();
-    // self.config.allocator.destroy(self.task_queue);
+    // Clean up task queue
+    self.task_queue.deinit();
+    self.config.allocator.destroy(self.task_queue);
 
     // Cache manager doesn't need explicit cleanup - it just holds config
 }
@@ -375,14 +377,12 @@ fn loadFile(self: *Self, path: []const u8, module_id: ModuleId) !void {
             // Store the module environment (already allocated by cache restore)
             try self.storeModuleEnv(module_id, cached_data.result.cir.env);
 
-            // Store the canonicalized result
-            const canon_result = CanonicalizedModule{
-                .cir = cached_data.result.cir,
-                .error_count = cached_data.error_count,
-                .warning_count = cached_data.warning_count,
-                .was_cached = true,
-            };
-            try self.canonicalized_results.put(module_id, canon_result);
+            // Store the canonicalized result with the CIR pointer
+            try self.storeCanonicalizedResult(module_id, cached_data.result.cir, true);
+
+            // Free the unused source and reports from cache
+            self.config.allocator.free(cached_data.result.source);
+            self.config.allocator.free(cached_data.result.reports);
 
             // Queue type checking task if there are no errors
             if (cached_data.error_count == 0) {
@@ -430,16 +430,22 @@ fn parseModule(self: *Self, module_id: ModuleId, source: []const u8, path: []con
     // Store the module environment
     try self.storeModuleEnv(module_id, module_env);
 
+    // Check for parse errors
+    const has_parse_errors = parse_result.tokenize_diagnostics.items.len > 0 or
+        parse_result.parse_diagnostics.items.len > 0;
+
     // Store the parse result - this transfers ownership of the AST
     try self.storeParseResult(module_id, parse_result, path);
 
-    // Queue canonicalization
-    const canon_task = Task{
-        .kind = .{ .canonicalize = .{
-            .module_id = module_id,
-        } },
-    };
-    try self.task_queue.push(canon_task);
+    // Only queue canonicalization if there are no parse errors
+    if (!has_parse_errors) {
+        const canon_task = Task{
+            .kind = .{ .canonicalize = .{
+                .module_id = module_id,
+            } },
+        };
+        try self.task_queue.push(canon_task);
+    }
 }
 
 /// Canonicalize a module
@@ -467,7 +473,7 @@ fn canonicalizeModule(self: *Self, module_id: ModuleId) !void {
     try canonicalizer.canonicalizeFile();
 
     // Store the canonicalized result
-    try self.storeCanonicalizedResult(module_id, cir);
+    try self.storeCanonicalizedResult(module_id, cir, false);
 
     // Store to cache for future use
     // Count errors and warnings from diagnostics
@@ -519,7 +525,6 @@ fn typeCheckModule(self: *Self, module_id: ModuleId) !void {
         @constCast(canon_result.cir),
         empty_modules,
     );
-    defer type_checker.deinit();
 
     // Check all definitions
     try type_checker.checkDefs();
@@ -529,15 +534,22 @@ fn typeCheckModule(self: *Self, module_id: ModuleId) !void {
     // In a real implementation, we'd need to distinguish between errors and warnings
     const type_error_count: u32 = @intCast(type_checker.problems.problems.items.len);
 
+    // Move ownership of problems from type_checker to avoid double-free
+    const problems = type_checker.problems;
+    type_checker.problems = problem.Store.initCapacity(self.config.allocator, 64);
+
     // Store the type checked result
     const type_checked = TypeCheckedModule{
         .solved_types = .{
-            .problems = type_checker.problems,
+            .problems = problems,
             .types = canon_result.cir.env.types,
         },
         .type_error_count = @intCast(type_error_count),
     };
     try self.storeTypeCheckedResult(module_id, type_checked);
+
+    // Now we can safely deinit the type_checker
+    type_checker.deinit();
 }
 
 /// Store a module environment
@@ -616,7 +628,7 @@ pub fn getParseResult(self: *Self, module_id: ModuleId) ?ParseResult {
 }
 
 /// Store a canonicalized result
-fn storeCanonicalizedResult(self: *Self, module_id: ModuleId, cir: *canonicalize.CIR) !void {
+fn storeCanonicalizedResult(self: *Self, module_id: ModuleId, cir: *canonicalize.CIR, was_cached: bool) !void {
     if (self.mutex) |*mutex| {
         mutex.lock();
         defer mutex.unlock();
@@ -639,7 +651,7 @@ fn storeCanonicalizedResult(self: *Self, module_id: ModuleId, cir: *canonicalize
         .cir = cir,
         .error_count = error_count,
         .warning_count = warning_count,
-        .was_cached = false,
+        .was_cached = was_cached,
     };
 
     try self.canonicalized_results.put(module_id, result);

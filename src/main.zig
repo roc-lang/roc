@@ -185,43 +185,76 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     // Process diagnostics while builder is still alive
     {
-        // Get the root module (module ID 0)
-        if (builder.getCanonicalizedResult(0)) |canon_result| {
-            // Count errors and warnings
-            total_errors = canon_result.error_count;
-            total_warnings = canon_result.warning_count;
-            was_cached = canon_result.was_cached;
+        // First check for parse errors
+        if (builder.getParseResult(0)) |parse_result| {
+            const ast = parse_result.ast;
+            const source = ast.source;
+            // Make a copy of the filename to ensure it's not freed memory
+            const filename = try gpa.dupe(u8, parse_result.module_path);
+            defer gpa.free(filename);
 
-            // Check if type checking was done
-            if (builder.getTypeCheckedResult(0)) |type_result| {
-                total_errors += type_result.type_error_count;
+            // Count parse errors
+            const tokenize_error_count = ast.tokenize_diagnostics.items.len;
+            const parse_error_count = ast.parse_diagnostics.items.len;
+            total_errors += @intCast(tokenize_error_count + parse_error_count);
+
+            // Convert tokenize diagnostics to reports
+            if (!was_cached and tokenize_error_count > 0) {
+                for (ast.tokenize_diagnostics.items) |diagnostic| {
+                    const report = ast.tokenizeDiagnosticToReport(diagnostic, gpa) catch |err| {
+                        stderr.print("Error converting tokenize diagnostic to report: {}\n", .{err}) catch {};
+                        continue;
+                    };
+                    try all_reports.append(report);
+                }
             }
 
-            // Convert diagnostics to reports if not cached
-            if (!was_cached and (total_errors > 0 or total_warnings > 0)) {
-                // TEMPORARILY DISABLED to debug segfault
-                // // Get the source for error reporting
-                // if (builder.getParseResult(0)) |parse_result| {
-                //     const source = parse_result.ast.source;
-                //     const filename = parse_result.module_path;
+            // Convert parse diagnostics to reports
+            if (!was_cached and parse_error_count > 0) {
+                for (ast.parse_diagnostics.items) |diagnostic| {
+                    if (builder.getModuleEnv(0)) |module_env| {
+                        const report = ast.parseDiagnosticToReport(module_env, diagnostic, gpa, filename) catch |err| {
+                            stderr.print("Error converting parse diagnostic to report: {}\n", .{err}) catch {};
+                            continue;
+                        };
+                        try all_reports.append(report);
+                    }
+                }
+            }
 
-                //     // Convert CIR diagnostics to reports
-                //     const diagnostics = canon_result.cir.getDiagnostics();
-                //     defer gpa.free(diagnostics);
+            // If there were no parse errors, check canonicalization results
+            if (tokenize_error_count == 0 and parse_error_count == 0) {
+                if (builder.getCanonicalizedResult(0)) |canon_result| {
+                    // Count errors and warnings
+                    total_errors += canon_result.error_count;
+                    total_warnings += canon_result.warning_count;
+                    was_cached = canon_result.was_cached;
 
-                //     for (diagnostics) |diagnostic| {
-                //         // Create report with owned data to avoid dangling references
-                //         const report = @constCast(canon_result.cir).diagnosticToReport(diagnostic, gpa, source, filename) catch |err| {
-                //             stderr.print("Error converting diagnostic to report: {}\n", .{err}) catch {};
-                //             continue;
-                //         };
-                //         try all_reports.append(report);
-                //     }
-                // }
+                    // Check if type checking was done
+                    if (builder.getTypeCheckedResult(0)) |type_result| {
+                        total_errors += type_result.type_error_count;
+                    }
+
+                    // Convert diagnostics to reports if not cached
+                    if (!was_cached and (total_errors > 0 or total_warnings > 0)) {
+                        // Convert CIR diagnostics to reports
+                        const diagnostics = canon_result.cir.getDiagnostics();
+                        defer gpa.free(diagnostics);
+
+                        for (diagnostics) |diagnostic| {
+                            // Create report with owned data to avoid dangling references
+                            const report = @constCast(canon_result.cir).diagnosticToReport(diagnostic, gpa, source, filename) catch |err| {
+                                stderr.print("Error converting diagnostic to report: {}\n", .{err}) catch {};
+                                continue;
+                            };
+                            try all_reports.append(report);
+                        }
+                    }
+                }
             }
         } else {
-            // Module wasn't even canonicalized - likely a parse error or file not found
-            stderr.print("Error: Failed to process {s}\n", .{args.path}) catch {};
+            // No parse result - file not found or other error
+            stderr.print("Error: Failed to load {s}\n", .{args.path}) catch {};
             builder.deinit();
             std.process.exit(1);
         }
@@ -234,12 +267,6 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     // Now we can safely clean up the builder
     builder.deinit();
-
-    // TEMPORARY: Debug print and exit to bypass normal cleanup
-    stdout.print("No errors found in ", .{}) catch {};
-    formatElapsedTime(stdout, elapsed) catch {};
-    stdout.print(" for {s}\n", .{args.path}) catch {};
-    std.process.exit(0);
 
     // Display results
     if (was_cached and (total_errors > 0 or total_warnings > 0)) {

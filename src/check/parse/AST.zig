@@ -545,8 +545,9 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
         try report.document.addText("Here is the problematic code:");
         try report.document.addLineBreak();
 
-        // Use the proper addSourceContext method
-        try report.addSourceContext(region_info, filename);
+        // Use the proper addSourceContext method with owned filename
+        const owned_filename = try report.addOwnedString(filename);
+        try report.addSourceContext(region_info, owned_filename);
     }
 
     return report;
