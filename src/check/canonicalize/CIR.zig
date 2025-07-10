@@ -84,6 +84,7 @@ pub fn init(env: *ModuleEnv) CIR {
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = ExternalDecl.SafeList.initCapacity(env.gpa, 16),
         .imports = Import.Store.init(),
+        .module_name = "",
     };
 }
 
