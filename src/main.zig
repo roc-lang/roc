@@ -240,9 +240,8 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
                     // If there were no parse errors, convert CIR diagnostics
                     if (tokenize_error_count == 0 and parse_error_count == 0 and (total_errors > 0 or total_warnings > 0)) {
-                        // Convert CIR diagnostics to reports
-                        const diagnostics = canon_result.cir.getDiagnostics();
-                        defer gpa.free(diagnostics);
+                        // Use stored diagnostics from CanonicalizedModule
+                        const diagnostics = canon_result.diagnostics;
 
                         for (diagnostics) |diagnostic| {
                             // Create report with owned data to avoid dangling references

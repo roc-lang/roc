@@ -354,10 +354,11 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText(" missing up-top?");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
         );
         return report;
     }

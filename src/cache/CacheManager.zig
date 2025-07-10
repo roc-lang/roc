@@ -245,17 +245,10 @@ pub const CacheManager = struct {
 
     /// Serialize a ProcessResult to cache data.
     fn serializeResult(self: *Self, result: *const coordinate_simple.ProcessResult) ![]u8 {
-        // Count errors and warnings from reports to store in cache
-        var error_count: u32 = 0;
-        var warning_count: u32 = 0;
-
-        for (result.reports) |report| {
-            switch (report.severity) {
-                .info => {}, // Informational messages don't affect error/warning counts
-                .runtime_error, .fatal => error_count += 1,
-                .warning => warning_count += 1,
-            }
-        }
+        // Use the error and warning counts from the ProcessResult
+        // These were already computed when the result was created
+        const error_count = result.error_count;
+        const warning_count = result.warning_count;
 
         // Create cache data using the ModuleEnv from the CIR with diagnostic counts
         const cache_data = try Cache.create(self.allocator, result.cir.env, result.cir, error_count, warning_count);

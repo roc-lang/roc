@@ -84,6 +84,8 @@ pub const CanonicalizedModule = struct {
     warning_count: u32,
     /// Whether this module was loaded from cache
     was_cached: bool = false,
+    /// Diagnostics found during canonicalization (owned by this struct)
+    diagnostics: []canonicalize.CIR.Diagnostic,
 };
 
 /// Stores type checked module data
@@ -231,6 +233,7 @@ pub fn deinit(self: *Self) void {
     while (canon_iter.next()) |entry| {
         entry.value_ptr.cir.deinit();
         self.config.allocator.destroy(entry.value_ptr.cir);
+        self.config.allocator.free(entry.value_ptr.diagnostics);
     }
     self.canonicalized_results.deinit();
 
@@ -372,8 +375,8 @@ fn loadFile(self: *Self, path: []const u8, module_id: ModuleId) !void {
             // Store the module environment (already allocated by cache restore)
             try self.storeModuleEnv(module_id, cached_data.result.cir.env);
 
-            // Store the canonicalized result with the CIR pointer
-            try self.storeCanonicalizedResult(module_id, cached_data.result.cir, true);
+            // Store the canonicalized result with the CIR pointer and cached error counts
+            _ = try self.storeCanonicalizedResultWithCounts(module_id, cached_data.result.cir, true, cached_data.error_count, cached_data.warning_count);
 
             // Free the unused source and reports from cache
             self.config.allocator.free(cached_data.result.source);
@@ -472,34 +475,21 @@ fn canonicalizeModule(self: *Self, module_id: ModuleId) !void {
     try canonicalizer.canonicalizeFile();
 
     // Store the canonicalized result
-    try self.storeCanonicalizedResult(module_id, cir, false);
+    const canon_result = try self.storeCanonicalizedResult(module_id, cir, false);
 
     // Store to cache for future use
-    // Count errors and warnings from diagnostics
-    const diagnostics = cir.getDiagnostics();
-    defer cir.env.gpa.free(diagnostics);
-
-    var error_count: u32 = 0;
-    var warning_count: u32 = 0;
-    for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .shadowing_warning => warning_count += 1,
-            else => error_count += 1,
-        }
-    }
-
     const process_result = coordinate_simple.ProcessResult{
         .cir = cir,
         .reports = &[_]reporting.Report{}, // Reports are not cached
         .source = parse_result.ast.env.source,
-        .error_count = error_count,
-        .warning_count = warning_count,
+        .error_count = canon_result.error_count,
+        .warning_count = canon_result.warning_count,
         .was_cached = false,
     };
     try self.cache_manager.store(parse_result.ast.env.source, @import("build_options").compiler_version, &process_result);
 
     // Queue type checking task if there are no errors
-    if (error_count == 0) {
+    if (canon_result.error_count == 0) {
         const type_check_task = Task{
             .kind = .{ .type_check = .{
                 .module_id = module_id,
@@ -627,15 +617,9 @@ pub fn getParseResult(self: *Self, module_id: ModuleId) ?ParseResult {
 }
 
 /// Store a canonicalized result
-fn storeCanonicalizedResult(self: *Self, module_id: ModuleId, cir: *canonicalize.CIR, was_cached: bool) !void {
-    if (self.mutex) |*mutex| {
-        mutex.lock();
-        defer mutex.unlock();
-    }
-
-    // Count diagnostics for error and warning tracking
+fn storeCanonicalizedResult(self: *Self, module_id: ModuleId, cir: *canonicalize.CIR, was_cached: bool) !CanonicalizedModule {
+    // Get diagnostics (now non-destructive with our CIR fix)
     const diagnostics = cir.getDiagnostics();
-    defer cir.env.gpa.free(diagnostics);
 
     var error_count: u32 = 0;
     var warning_count: u32 = 0;
@@ -646,14 +630,37 @@ fn storeCanonicalizedResult(self: *Self, module_id: ModuleId, cir: *canonicalize
         }
     }
 
+    return self.storeCanonicalizedResultWithDiagnostics(module_id, cir, was_cached, error_count, warning_count, diagnostics);
+}
+
+/// Store a canonicalized result with explicit error/warning counts
+fn storeCanonicalizedResultWithCounts(self: *Self, module_id: ModuleId, cir: *canonicalize.CIR, was_cached: bool, error_count: u32, warning_count: u32) !CanonicalizedModule {
+    // For cached results, we don't have diagnostics
+    const diagnostics = try self.config.allocator.alloc(canonicalize.CIR.Diagnostic, 0);
+    return self.storeCanonicalizedResultWithDiagnostics(module_id, cir, was_cached, error_count, warning_count, diagnostics);
+}
+
+/// Store a canonicalized result with explicit diagnostics
+fn storeCanonicalizedResultWithDiagnostics(self: *Self, module_id: ModuleId, cir: *canonicalize.CIR, was_cached: bool, error_count: u32, warning_count: u32, diagnostics: []canonicalize.CIR.Diagnostic) !CanonicalizedModule {
+    if (self.mutex) |*mutex| {
+        mutex.lock();
+        defer mutex.unlock();
+    }
+
+    // Make a copy of the diagnostics since they're owned by the CIR
+    const diagnostics_copy = try self.config.allocator.alloc(canonicalize.CIR.Diagnostic, diagnostics.len);
+    @memcpy(diagnostics_copy, diagnostics);
+
     const result = CanonicalizedModule{
         .cir = cir,
         .error_count = error_count,
         .warning_count = warning_count,
         .was_cached = was_cached,
+        .diagnostics = diagnostics_copy,
     };
 
     try self.canonicalized_results.put(module_id, result);
+    return result;
 }
 
 /// Get a canonicalized result
