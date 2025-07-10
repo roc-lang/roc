@@ -34,10 +34,10 @@ j : I128
 j = -17011687303715884105728
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_025.md:10:15:10:15
+PARSE ERROR - fuzz_crash_025.md:10:15:10:18
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:11:3:11:25
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:14:48:14:52
-PARSE ERROR - fuzz_crash_025.md:14:50:14:50
+PARSE ERROR - fuzz_crash_025.md:14:50:14:52
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:15:3:15:5
 INVALID STATEMENT - fuzz_crash_025.md:11:3:11:25
 INVALID STATEMENT - fuzz_crash_025.md:11:5:13:2
@@ -63,11 +63,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**fuzz_crash_025.md:10:15:10:15:**
+**fuzz_crash_025.md:10:15:10:18:**
 ```roc
 c = 429496729 U64
 ```
-              
+              ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -111,11 +111,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**fuzz_crash_025.md:14:50:14:50:**
+**fuzz_crash_025.md:14:50:14:52:**
 ```roc
 e = 3402823669209384634633746074317682114553.14: I8
 ```
-                                                 
+                                                 ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**

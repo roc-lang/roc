@@ -17,11 +17,11 @@ getUser = |id| if (id > 1!) "big" else "l"
 # EXPECTED
 PARSE ERROR - fuzz_crash_022.md:1:1:1:6
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:29
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:1:32
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:1:33
 PARSE ERROR - fuzz_crash_022.md:6:27:6:30
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:1:8:6
 INVALID STATEMENT - fuzz_crash_022.md:1:28:1:33
-INVALID STATEMENT - fuzz_crash_022.md:1:1:1:1
+INVALID STATEMENT - fuzz_crash_022.md:1:32:1:33
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
 INVALID STATEMENT - fuzz_crash_022.md:8:1:8:6
 # PROBLEMS
@@ -50,15 +50,15 @@ app [main!] { |f: platform "c" }
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_022.md:1:32:1:32:**
+**fuzz_crash_022.md:1:32:1:33:**
 ```roc
 app [main!] { |f: platform "c" }
 ```
-                               
+                               ^
 
 
 **PARSE ERROR**
@@ -103,11 +103,11 @@ app [main!] { |f: platform "c" }
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_022.md:1:1:1:1:**
+**fuzz_crash_022.md:1:32:1:33:**
 ```roc
-
+app [main!] { |f: platform "c" }
 ```
-
+                               ^
 
 
 **INVALID IF CONDITION**
@@ -204,10 +204,10 @@ ain! = |_| getUser(900)
 (can-ir
 	(d-let
 		(p-assign @6.1-6.8 (ident "getUser"))
-		(e-lambda @1.1-1.1
+		(e-lambda @6.11-6.43
 			(args
 				(p-assign @6.12-6.14 (ident "id")))
-			(e-if @1.1-1.1
+			(e-if @6.16-6.43
 				(if-branches
 					(if-branch
 						(e-runtime-error (tag "if_condition_not_canonicalized"))
@@ -239,6 +239,6 @@ ain! = |_| getUser(900)
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
-		(expr @1.1-1.1 (type "* -> Str"))
+		(expr @6.11-6.43 (type "* -> Str"))
 		(expr @8.9-8.25 (type "* -> Str"))))
 ~~~

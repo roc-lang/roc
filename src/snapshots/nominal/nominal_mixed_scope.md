@@ -142,7 +142,7 @@ processColor = |color| {
 			(args
 				(p-assign @6.17-6.22 (ident "color")))
 			(e-block @6.24-16.2
-				(s-expr @1.1-1.1
+				(s-expr @9.12-9.21
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(e-match @11.5-15.6
 					(match @11.5-15.6

@@ -27,15 +27,15 @@ UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:9:15:9:25
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:9:20:9:33
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:9:25:9:36
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:9:34:9:40
-PARSE ERROR - multi_qualified_import.md:9:37:9:37
+PARSE ERROR - multi_qualified_import.md:9:37:9:40
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:10:9:10:12
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:10:11:10:19
 PARSE ERROR - multi_qualified_import.md:10:23:10:34
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:10:24:10:35
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:10:34:10:34
+UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:10:34:10:35
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:13:12:13:22
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:13:17:13:34
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:13:22:13:22
+UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:13:22:13:34
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:12:14:22
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:17:14:29
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:22:14:31
@@ -52,10 +52,10 @@ INVALID STATEMENT - multi_qualified_import.md:10:9:10:12
 INVALID STATEMENT - multi_qualified_import.md:10:11:10:19
 INVALID STATEMENT - multi_qualified_import.md:10:12:10:34
 INVALID STATEMENT - multi_qualified_import.md:10:24:10:35
-INVALID STATEMENT - multi_qualified_import.md:1:1:1:1
+INVALID STATEMENT - multi_qualified_import.md:10:34:10:35
 INVALID STATEMENT - multi_qualified_import.md:13:12:13:22
 INVALID STATEMENT - multi_qualified_import.md:13:17:13:34
-INVALID STATEMENT - multi_qualified_import.md:1:1:1:1
+INVALID STATEMENT - multi_qualified_import.md:13:22:13:34
 UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
 INVALID STATEMENT - multi_qualified_import.md:14:12:14:22
 INVALID STATEMENT - multi_qualified_import.md:14:17:14:29
@@ -151,11 +151,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**multi_qualified_import.md:9:37:9:37:**
+**multi_qualified_import.md:9:37:9:40:**
 ```roc
 process : json.Core.Utf8.Encoder -> Str
 ```
-                                    
+                                    ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -207,15 +207,15 @@ process = \encoder -> "processing"
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**multi_qualified_import.md:10:34:10:34:**
+**multi_qualified_import.md:10:34:10:35:**
 ```roc
 process = \encoder -> "processing"
 ```
-                                 
+                                 ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -243,15 +243,15 @@ data : json.Core.Utf8.EncodedData
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **.EncodedData** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**multi_qualified_import.md:13:22:13:22:**
+**multi_qualified_import.md:13:22:13:34:**
 ```roc
 data : json.Core.Utf8.EncodedData
 ```
-                     
+                     ^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -438,11 +438,11 @@ process = \encoder -> "processing"
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**multi_qualified_import.md:1:1:1:1:**
+**multi_qualified_import.md:10:34:10:35:**
 ```roc
-
+process = \encoder -> "processing"
 ```
-
+                                 ^
 
 
 **INVALID STATEMENT**
@@ -471,11 +471,11 @@ data : json.Core.Utf8.EncodedData
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**multi_qualified_import.md:1:1:1:1:**
+**multi_qualified_import.md:13:22:13:34:**
 ```roc
-
+data : json.Core.Utf8.EncodedData
 ```
-
+                     ^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**

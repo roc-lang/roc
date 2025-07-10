@@ -20,11 +20,11 @@ PARSE ERROR - fuzz_crash_024.md:1:33:1:53
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:34:1:53
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:53:1:53
 PARSE ERROR - fuzz_crash_024.md:4:1:4:6
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:8
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:9
 PARSE ERROR - fuzz_crash_024.md:7:1:7:6
 INVALID STATEMENT - fuzz_crash_024.md:1:18:1:53
 INVALID STATEMENT - fuzz_crash_024.md:1:34:1:53
-INVALID STATEMENT - fuzz_crash_024.md:1:1:1:1
+INVALID STATEMENT - fuzz_crash_024.md:1:53:1:53
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -105,15 +105,15 @@ var t= ]
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **]** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_024.md:4:8:4:8:**
+**fuzz_crash_024.md:4:8:4:9:**
 ```roc
 var t= ]
 ```
-       
+       ^
 
 
 **PARSE ERROR**
@@ -154,11 +154,11 @@ module [module ] { pf: platform ".-/main._]where # A
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_024.md:1:1:1:1:**
+**fuzz_crash_024.md:1:53:1:53:**
 ```roc
-
+module [module ] { pf: platform ".-/main._]where # A
 ```
-
+                                                    
 
 
 **UNKNOWN OPERATOR**
@@ -239,6 +239,6 @@ t = 0
 		(patt @4.5-4.6 (type "Error"))
 		(patt @7.5-7.6 (type "Num(*)")))
 	(expressions
-		(expr @1.1-1.1 (type "Error"))
+		(expr @4.8-4.9 (type "Error"))
 		(expr @7.8-7.9 (type "Num(*)"))))
 ~~~

@@ -11,23 +11,23 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:15:1:15
+UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:15:1:17
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:2:8:2:10
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:9
+UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:10
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:10
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:9
+UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
 UNDEFINED VARIABLE - record_builder.md:1:3:1:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **<-** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_builder.md:1:15:1:15:**
+**record_builder.md:1:15:1:17:**
 ```roc
 { Foo.Bar.baz <-
 ```
-              
+              ^^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -43,15 +43,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_builder.md:2:9:2:9:**
+**record_builder.md:2:9:2:10:**
 ```roc
     x: 5,
 ```
-        
+        ^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -67,15 +67,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_builder.md:3:9:3:9:**
+**record_builder.md:3:9:3:10:**
 ```roc
     y: 0,
 ```
-        
+        ^
 
 
 **UNDEFINED VARIABLE**

@@ -46,231 +46,47 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - type_alias_decl.md:30:5:30:11
+UNEXPECTED TOKEN IN EXPRESSION - type_alias_decl.md:33:5:33:11
+UNEXPECTED TOKEN IN EXPRESSION - type_alias_decl.md:36:5:36:10
+TYPE REDECLARED - type_alias_decl.md:7:1:7:37
+UNUSED VARIABLE - type_alias_decl.md:36:5:36:10
+UNUSED VARIABLE - type_alias_decl.md:33:5:33:11
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **app [main!] { pf: platform "../basic-cli/main.roc" }
-
-# Simple type alias
-UserId : U64
-
-# Generic type alias
-Result(ok, err) : [Ok(ok), Err(err)]
-
-# Record type alias
-Person : { name : Str, age : U64 }
-
-# Function type alias
-MapFn(a, b) : a -> b
-
-# Complex nested type alias
-ApiResponse(data) : Result(data, Str)
-
-# Type declaration with tag union
-Color : [Red, Green, Blue, Custom(U8, U8, U8)]
-
-# Type declaration with records and generics
-Container(item) : {
-    contents : List(item),
-    metadata : { size : U64, created : Str }
-}
-
-main! = |_| {
-    # Use the types to validate they work
-    userId : UserId
-    userId** is not expected in an expression.
+The token **userId** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_alias_decl.md:1:1:30:11:**
+**type_alias_decl.md:30:5:30:11:**
 ```roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-
-# Simple type alias
-UserId : U64
-
-# Generic type alias
-Result(ok, err) : [Ok(ok), Err(err)]
-
-# Record type alias
-Person : { name : Str, age : U64 }
-
-# Function type alias
-MapFn(a, b) : a -> b
-
-# Complex nested type alias
-ApiResponse(data) : Result(data, Str)
-
-# Type declaration with tag union
-Color : [Red, Green, Blue, Custom(U8, U8, U8)]
-
-# Type declaration with records and generics
-Container(item) : {
-    contents : List(item),
-    metadata : { size : U64, created : Str }
-}
-
-main! = |_| {
-    # Use the types to validate they work
-    userId : UserId
     userId = 123
 ```
+    ^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **app [main!] { pf: platform "../basic-cli/main.roc" }
-
-# Simple type alias
-UserId : U64
-
-# Generic type alias
-Result(ok, err) : [Ok(ok), Err(err)]
-
-# Record type alias
-Person : { name : Str, age : U64 }
-
-# Function type alias
-MapFn(a, b) : a -> b
-
-# Complex nested type alias
-ApiResponse(data) : Result(data, Str)
-
-# Type declaration with tag union
-Color : [Red, Green, Blue, Custom(U8, U8, U8)]
-
-# Type declaration with records and generics
-Container(item) : {
-    contents : List(item),
-    metadata : { size : U64, created : Str }
-}
-
-main! = |_| {
-    # Use the types to validate they work
-    userId : UserId
-    userId = 123
-
-    person : Person
-    person** is not expected in an expression.
+The token **person** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_alias_decl.md:1:1:33:11:**
+**type_alias_decl.md:33:5:33:11:**
 ```roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-
-# Simple type alias
-UserId : U64
-
-# Generic type alias
-Result(ok, err) : [Ok(ok), Err(err)]
-
-# Record type alias
-Person : { name : Str, age : U64 }
-
-# Function type alias
-MapFn(a, b) : a -> b
-
-# Complex nested type alias
-ApiResponse(data) : Result(data, Str)
-
-# Type declaration with tag union
-Color : [Red, Green, Blue, Custom(U8, U8, U8)]
-
-# Type declaration with records and generics
-Container(item) : {
-    contents : List(item),
-    metadata : { size : U64, created : Str }
-}
-
-main! = |_| {
-    # Use the types to validate they work
-    userId : UserId
-    userId = 123
-
-    person : Person
     person = { name: "Alice", age: 30 }
 ```
+    ^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **app [main!] { pf: platform "../basic-cli/main.roc" }
-
-# Simple type alias
-UserId : U64
-
-# Generic type alias
-Result(ok, err) : [Ok(ok), Err(err)]
-
-# Record type alias
-Person : { name : Str, age : U64 }
-
-# Function type alias
-MapFn(a, b) : a -> b
-
-# Complex nested type alias
-ApiResponse(data) : Result(data, Str)
-
-# Type declaration with tag union
-Color : [Red, Green, Blue, Custom(U8, U8, U8)]
-
-# Type declaration with records and generics
-Container(item) : {
-    contents : List(item),
-    metadata : { size : U64, created : Str }
-}
-
-main! = |_| {
-    # Use the types to validate they work
-    userId : UserId
-    userId = 123
-
-    person : Person
-    person = { name: "Alice", age: 30 }
-
-    color : Color
-    color** is not expected in an expression.
+The token **color** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_alias_decl.md:1:1:36:10:**
+**type_alias_decl.md:36:5:36:10:**
 ```roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-
-# Simple type alias
-UserId : U64
-
-# Generic type alias
-Result(ok, err) : [Ok(ok), Err(err)]
-
-# Record type alias
-Person : { name : Str, age : U64 }
-
-# Function type alias
-MapFn(a, b) : a -> b
-
-# Complex nested type alias
-ApiResponse(data) : Result(data, Str)
-
-# Type declaration with tag union
-Color : [Red, Green, Blue, Custom(U8, U8, U8)]
-
-# Type declaration with records and generics
-Container(item) : {
-    contents : List(item),
-    metadata : { size : U64, created : Str }
-}
-
-main! = |_| {
-    # Use the types to validate they work
-    userId : UserId
-    userId = 123
-
-    person : Person
-    person = { name: "Alice", age: 30 }
-
-    color : Color
     color = Red
 ```
+    ^^^^^
 
 
 **TYPE REDECLARED**
@@ -526,12 +342,12 @@ main! = |_| {
 			(args
 				(p-underscore @27.10-27.11))
 			(e-block @27.13-39.2
-				(s-type-anno @1.1-1.1 (name "userId")
+				(s-type-anno @29.5-29.20 (name "userId")
 					(ty @29.14-29.20 (name "UserId")))
 				(s-let @30.5-30.17
 					(p-assign @30.5-30.11 (ident "userId"))
 					(e-int @30.14-30.17 (value "123")))
-				(s-type-anno @1.1-1.1 (name "person")
+				(s-type-anno @32.5-32.20 (name "person")
 					(ty @32.14-32.20 (name "Person")))
 				(s-let @33.5-33.40
 					(p-assign @33.5-33.11 (ident "person"))
@@ -542,7 +358,7 @@ main! = |_| {
 									(e-literal @33.23-33.28 (string "Alice"))))
 							(field (name "age")
 								(e-int @33.36-33.38 (value "30"))))))
-				(s-type-anno @1.1-1.1 (name "color")
+				(s-type-anno @35.5-35.18 (name "color")
 					(ty @35.13-35.18 (name "Color")))
 				(s-let @36.5-36.16
 					(p-assign @36.5-36.10 (ident "color"))

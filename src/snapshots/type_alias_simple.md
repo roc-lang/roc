@@ -83,10 +83,10 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.8 (ident "getUser"))
-		(e-lambda @1.1-1.1
+		(e-lambda @6.11-6.47
 			(args
 				(p-assign @6.12-6.14 (ident "id")))
-			(e-if @1.1-1.1
+			(e-if @6.16-6.47
 				(if-branches
 					(if-branch
 						(e-binop @6.20-6.28 (op "gt")
@@ -126,6 +126,6 @@ NO CHANGE
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
-		(expr @1.1-1.1 (type "UserId -> Str"))
+		(expr @6.11-6.47 (type "UserId -> Str"))
 		(expr @8.9-8.25 (type "* -> Str"))))
 ~~~

@@ -15,11 +15,11 @@ main! = |_| {}
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:19:3:22
 PARSE ERROR - type_higher_order_multiple_vars.md:3:33:3:35
-UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:40:3:40
+UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:40:3:41
 INVALID STATEMENT - type_higher_order_multiple_vars.md:3:19:3:22
 INVALID STATEMENT - type_higher_order_multiple_vars.md:3:21:3:35
 INVALID STATEMENT - type_higher_order_multiple_vars.md:3:34:3:41
-INVALID STATEMENT - type_higher_order_multiple_vars.md:1:1:1:1
+INVALID STATEMENT - type_higher_order_multiple_vars.md:3:40:3:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, (** is not expected in an expression.
@@ -46,15 +46,15 @@ compose : (b -> c), (a -> b) -> (a -> c)
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **)** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_higher_order_multiple_vars.md:3:40:3:40:**
+**type_higher_order_multiple_vars.md:3:40:3:41:**
 ```roc
 compose : (b -> c), (a -> b) -> (a -> c)
 ```
-                                       
+                                       ^
 
 
 **INVALID STATEMENT**
@@ -94,11 +94,11 @@ compose : (b -> c), (a -> b) -> (a -> c)
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_higher_order_multiple_vars.md:1:1:1:1:**
+**type_higher_order_multiple_vars.md:3:40:3:41:**
 ```roc
-
+compose : (b -> c), (a -> b) -> (a -> c)
 ```
-
+                                       ^
 
 
 # TOKENS

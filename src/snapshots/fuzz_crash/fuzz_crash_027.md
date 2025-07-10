@@ -166,9 +166,59 @@ expect {
 }
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_027.md:34:12:35:2
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:35:1:35:1
-PARSE ERROR - fuzz_crash_027.md:1:1:39:2
+PARSE ERROR - fuzz_crash_027.md:35:1:35:2
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:35:1:35:2
+PARSE ERROR - fuzz_crash_027.md:39:1:39:2
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:39:1:39:2
+PARSE ERROR - fuzz_crash_027.md:122:3:122:11
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:4:125:9
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:9:125:10
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:126:2:126:3
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:148:1:148:2
+UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
+UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
+UNDECLARED TYPE - fuzz_crash_027.md:32:19:32:21
+UNDECLARED TYPE VARIABLE - fuzz_crash_027.md:32:32:32:33
+UNDECLARED TYPE - fuzz_crash_027.md:32:19:32:24
+UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
+UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
+UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:19
+UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:34
+UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
+UNDECLARED TYPE - fuzz_crash_027.md:30:2:30:5
+INVALID STATEMENT - fuzz_crash_027.md:35:1:35:2
+INVALID STATEMENT - fuzz_crash_027.md:39:1:39:2
+UNDEFINED VARIABLE - fuzz_crash_027.md:65:4:65:5
+UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
+UNUSED VARIABLE - fuzz_crash_027.md:64:11:64:14
+UNDEFINED VARIABLE - fuzz_crash_027.md:71:7:71:11
+UNUSED VARIABLE - fuzz_crash_027.md:70:38:70:42
+UNUSED VARIABLE - fuzz_crash_027.md:74:23:74:27
+UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
+UNUSED VARIABLE - fuzz_crash_027.md:82:21:82:29
+UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
+UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
+UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
+UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
+UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
+UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:71
+UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
+UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
+UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
+UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
+UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
+UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
+UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
+UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
+UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
+UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
+UNUSED VARIABLE - fuzz_crash_027.md:151:1:151:6
+UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
+UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
+UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
+TYPE MISMATCH - fuzz_crash_027.md:47:11:47:14
+INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
+TYPE MISMATCH - fuzz_crash_027.md:111:2:111:12
 # PROBLEMS
 **OVER CLOSED BRACE**
 There are too many closing braces here.
@@ -193,23 +243,23 @@ A parsing error occurred: `expected_ty_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_027.md:34:12:35:2:**
+**fuzz_crash_027.md:35:1:35:2:**
 ```roc
-	bar : Som# Afld
 }
 ```
+^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_027.md:35:1:35:1:**
+**fuzz_crash_027.md:35:1:35:2:**
 ```roc
 }
 ```
-
+^
 
 
 **PARSE ERROR**
@@ -217,60 +267,23 @@ A parsing error occurred: `expected_ty_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_027.md:1:1:39:2:**
+**fuzz_crash_027.md:39:1:39:2:**
 ```roc
-# Thnt!
-app [main!] { pf: platform "c" }
-
-import pf.Stdout exposing [line!, e!]
-
-import Stdot
-		exposing [ #tem
-		] # Cose
-
-import pkg.S exposing [func as fry, Custom.*]
-
-import Bae as Gooe
-import
-	Ba
-Map(a, b) : List(a), (a -> b) -> List(b)
-MapML( # Cere
-	a, # Anre
-	b,
-) # Ag
-	: # Aon
-		List( #rg
-		),
-		(a -> b) -> # row
-			List(			b	) #
-
-Foo : (Bar, Baz)
-
-line : ( # Cpen
-	Bar, #
-	Baz, #m
-) # Co
-Some(a) : { foo : Ok(a), bar : g }
-Ml(a) : { # d
-	bar : Som# Afld
-}
-
-Soine(a) : { #d
-	bar : Som
 } #
 ```
+^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **} #** is not expected in an expression.
+The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_027.md:39:1:39:4:**
+**fuzz_crash_027.md:39:1:39:2:**
 ```roc
 } #
 ```
-^^^
+^
 
 
 **PARSE ERROR**
@@ -298,39 +311,39 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **, # ee** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_027.md:125:9:125:15:**
+**fuzz_crash_027.md:125:9:125:10:**
 ```roc
 		),	456, # ee
 ```
-        ^^^^^^
+        ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **]** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_027.md:126:2:126:2:**
+**fuzz_crash_027.md:126:2:126:3:**
 ```roc
 	]
 ```
- 
+ ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **} # Commenl decl** is not expected in an expression.
+The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_027.md:148:1:148:17:**
+**fuzz_crash_027.md:148:1:148:2:**
 ```roc
 } # Commenl decl
 ```
-^^^^^^^^^^^^^^^^
+^
 
 
 **UNDECLARED TYPE**
@@ -466,22 +479,22 @@ This type is referenced here:
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_027.md:1:1:1:1:**
+**fuzz_crash_027.md:35:1:35:2:**
 ```roc
-
+}
 ```
-
+^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_027.md:39:1:39:4:**
+**fuzz_crash_027.md:39:1:39:2:**
 ```roc
 } #
 ```
-^^^
+^
 
 
 **EMPTY TUPLE NOT ALLOWED**
@@ -1942,7 +1955,7 @@ main! = |_| { # Yeah Ie
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-dbg @115.3-116.7
 							(e-int @116.4-116.6 (value "42")))))
-				(s-crash @1.1-1.1 (msg "Unreachtement"))
+				(s-crash @118.2-118.22 (msg "Unreachtement"))
 				(s-let @119.2-119.23
 					(p-assign @119.2-119.10 (ident "tag_with"))
 					(e-tag @119.13-119.23 (name "Ok")
@@ -2164,12 +2177,12 @@ main! = |_| { # Yeah Ie
 		(ty-header @33.1-33.6 (name "Ml")
 			(ty-args
 				(ty-var @33.4-33.5 (name "a"))))
-		(ty-malformed @34.12-35.2))
+		(ty-malformed @35.1-35.2))
 	(s-alias-decl @37.1-39.2
 		(ty-header @37.1-37.9 (name "Soine")
 			(ty-args
 				(ty-var @37.7-37.8 (name "a"))))
-		(ty-malformed @1.1-39.2))
+		(ty-malformed @39.1-39.2))
 	(s-alias-decl @40.1-41.2
 		(ty-header @40.1-40.5 (name "Maya"))
 		(ty-tag-union @40.9-41.2))

@@ -18,16 +18,16 @@ UNEXPECTED TOKEN IN PATTERN - guards_1.md:2:20:2:32
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:2:30:2:35
 UNEXPECTED TOKEN IN PATTERN - guards_1.md:2:43:2:44
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:2:44:2:45
-UNEXPECTED TOKEN IN PATTERN - guards_1.md:2:44:2:44
-UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:1:1:3:6
+UNEXPECTED TOKEN IN PATTERN - guards_1.md:2:44:2:45
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:5:3:6
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:16:3:20
 PARSE ERROR - guards_1.md:3:19:3:30
 UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:20:3:32
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:30:3:35
 UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:43:3:44
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:44:3:45
-UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:44:3:44
-UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:1:1:4:6
+UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:44:3:45
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:4:5:4:6
 UNDEFINED VARIABLE - guards_1.md:1:7:1:12
 UNUSED VARIABLE - guards_1.md:2:5:2:6
 UNDEFINED VARIABLE - guards_1.md:2:42:2:43
@@ -109,30 +109,27 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token  is not expected in a pattern.
+The token **"** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**guards_1.md:2:44:2:44:**
+**guards_1.md:2:44:2:45:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
 ```
-                                           
+                                           ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **match value {
-    x if x > 0 => "positive: ${Num.toStr x}"
-    x** is not expected in an expression.
+The token **x** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**guards_1.md:1:1:3:6:**
+**guards_1.md:3:5:3:6:**
 ```roc
-match value {
-    x if x > 0 => "positive: ${Num.toStr x}"
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
+    ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -208,32 +205,27 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token  is not expected in a pattern.
+The token **"** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**guards_1.md:3:44:3:44:**
+**guards_1.md:3:44:3:45:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
-                                           
+                                           ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **match value {
-    x if x > 0 => "positive: ${Num.toStr x}"
-    x if x < 0 => "negative: ${Num.toStr x}"
-    _** is not expected in an expression.
+The token **_** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**guards_1.md:1:1:4:6:**
+**guards_1.md:4:5:4:6:**
 ```roc
-match value {
-    x if x > 0 => "positive: ${Num.toStr x}"
-    x if x < 0 => "negative: ${Num.toStr x}"
     _ => "other"
 ```
+    ^
 
 
 **UNDEFINED VARIABLE**
@@ -457,7 +449,7 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @2.44-2.45 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -487,7 +479,7 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.44-3.45 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch

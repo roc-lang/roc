@@ -16,7 +16,7 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:6
 PARSE ERROR - fuzz_crash_021.md:3:15:3:15
 INVALID STATEMENT - fuzz_crash_021.md:1:4:1:9
 INVALID STATEMENT - fuzz_crash_021.md:1:5:1:14
-INVALID STATEMENT - fuzz_crash_021.md:1:1:1:1
+INVALID STATEMENT - fuzz_crash_021.md:1:13:1:16
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -102,11 +102,11 @@ Fli/main.roc" }
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_021.md:1:1:1:1:**
+**fuzz_crash_021.md:1:13:1:16:**
 ```roc
-
+Fli/main.roc" }
 ```
-
+            ^^^
 
 
 # TOKENS

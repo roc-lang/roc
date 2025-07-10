@@ -23,7 +23,7 @@ broken_fn3 : a -> b
 ~~~
 # EXPECTED
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:12
-WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:3
+WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:8
 INVALID STATEMENT - where_clauses_error_cases.md:6:25:9:11
 # PROBLEMS
 **WHERE CLAUSE ERROR**
@@ -46,11 +46,11 @@ For example:
         module(a).method : a -> b
 
 Here is the problematic code:
-**where_clauses_error_cases.md:10:3:10:3:**
+**where_clauses_error_cases.md:10:3:10:8:**
 ```roc
   where
 ```
-  
+  ^^^^^
 
 
 **MALFORMED WHERE CLAUSE**

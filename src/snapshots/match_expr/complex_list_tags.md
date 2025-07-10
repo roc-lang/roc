@@ -21,12 +21,12 @@ UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:3:54:3:58
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:3:56:3:61
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:3:69:3:71
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:3:70:3:72
-UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:3:71:3:71
+UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:3:71:3:72
 PARSE ERROR - complex_list_tags.md:4:36:4:41
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:4:83:4:85
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:4:84:4:97
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:4:85:4:98
-UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:4:97:4:97
+UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:4:97:4:98
 PARSE ERROR - complex_list_tags.md:5:53:5:60
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:5:74:5:76
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:75:5:78
@@ -39,7 +39,7 @@ UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:113:5:116
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:5:114:5:119
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:129:5:130
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:5:130:5:131
-UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:130:5:130
+UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:130:5:131
 PARSE ERROR - complex_list_tags.md:6:55:6:63
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:81:6:97
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:6:82:6:99
@@ -49,8 +49,8 @@ UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:111:6:114
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:6:112:6:117
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:125:6:126
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:6:126:6:127
-UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:126:6:126
-UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:1:1:7:6
+UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:126:6:127
+UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:7:5:7:6
 UNDEFINED VARIABLE - complex_list_tags.md:1:7:1:13
 UNUSED VARIABLE - complex_list_tags.md:3:15:3:16
 UNUSED VARIABLE - complex_list_tags.md:3:12:3:13
@@ -153,15 +153,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**complex_list_tags.md:3:71:3:71:**
+**complex_list_tags.md:3:71:3:72:**
 ```roc
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
 ```
-                                                                      
+                                                                      ^
 
 
 **PARSE ERROR**
@@ -213,15 +213,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**complex_list_tags.md:4:97:4:97:**
+**complex_list_tags.md:4:97:4:98:**
 ```roc
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
 ```
-                                                                                                
+                                                                                                ^
 
 
 **PARSE ERROR**
@@ -369,15 +369,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**complex_list_tags.md:5:130:5:130:**
+**complex_list_tags.md:5:130:5:131:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
 ```
-                                                                                                                                 
+                                                                                                                                 ^
 
 
 **PARSE ERROR**
@@ -489,38 +489,27 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token  is not expected in a pattern.
+The token **"** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**complex_list_tags.md:6:126:6:126:**
+**complex_list_tags.md:6:126:6:127:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
 ```
-                                                                                                                             
+                                                                                                                             ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **match events {
-    [] => "no events"
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-    _** is not expected in an expression.
+The token **_** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**complex_list_tags.md:1:1:7:6:**
+**complex_list_tags.md:7:5:7:6:**
 ```roc
-match events {
-    [] => "no events"
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
     _ => "other event pattern"
 ```
+    ^
 
 
 **UNDEFINED VARIABLE**
@@ -1305,7 +1294,7 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @6.126-6.127 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch

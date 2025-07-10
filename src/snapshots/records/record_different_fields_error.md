@@ -18,23 +18,23 @@ type=expr
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:2:20:2:39
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:21:2:40
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:39:2:41
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:40:2:40
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:40:2:41
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:3:13:3:33
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:14:3:34
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:33:3:35
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:34:3:34
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:34:3:35
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:15:4:18
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:25:4:25
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:25:4:26
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:15:5:18
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:24:5:24
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:24:5:25
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:10:6:18
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:6:20:6:27
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:21:6:28
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:27:6:29
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:6:28
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:6:29
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:10:7:18
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:17:7:20
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:7:30
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:7:31
 UNDEFINED VARIABLE - record_different_fields_error.md:5:5:5:10
 UNDEFINED VARIABLE - record_different_fields_error.md:5:11:5:15
 UNDEFINED VARIABLE - record_different_fields_error.md:6:5:6:10
@@ -77,15 +77,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_error.md:2:40:2:40:**
+**record_different_fields_error.md:2:40:2:41:**
 ```roc
     _privateField: "leading underscore",
 ```
-                                       
+                                       ^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -125,15 +125,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_error.md:3:34:3:34:**
+**record_different_fields_error.md:3:34:3:35:**
 ```roc
     field_: "trailing underscore",
 ```
-                                 
+                                 ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -149,15 +149,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_error.md:4:25:4:25:**
+**record_different_fields_error.md:4:25:4:26:**
 ```roc
     PascalCase: "pascal",
 ```
-                        
+                        ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -173,15 +173,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_error.md:5:24:5:24:**
+**record_different_fields_error.md:5:24:5:25:**
 ```roc
     kebab-case: "kebab",
 ```
-                       
+                       ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -233,15 +233,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_error.md:6:28:6:28:**
+**record_different_fields_error.md:6:28:6:29:**
 ```roc
     field$special: "dollar",
 ```
-                           
+                           ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -269,15 +269,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_error.md:7:30:7:30:**
+**record_different_fields_error.md:7:30:7:31:**
 ```roc
     field@symbol: "at symbol",
 ```
-                             
+                             ^
 
 
 **MALFORMED TYPE**

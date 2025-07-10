@@ -1510,7 +1510,7 @@ expect {
 						(e-lookup-local @84.2-84.4
 							(p-assign @49.1-49.3 (ident "me")))
 						(e-not-implemented @85.3-85.6)))
-				(s-expr @86.11-86.20
+				(s-expr @86.11-86.17
 					(e-string @86.11-86.17
 						(e-literal @86.12-86.16 (string "Unr!"))))
 				(s-let @87.2-87.14

@@ -11,11 +11,11 @@ type=file
 ~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_014.md:1:1:1:5
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:1:3:1:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:2:1:2:1
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:1:3:1:5
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:2:1:2:6
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:3:1:3:5
-INVALID STATEMENT - fuzz_crash_014.md:1:1:1:1
-INVALID STATEMENT - fuzz_crash_014.md:1:1:1:1
+INVALID STATEMENT - fuzz_crash_014.md:1:3:1:5
+INVALID STATEMENT - fuzz_crash_014.md:2:1:2:6
 INVALID STATEMENT - fuzz_crash_014.md:3:1:3:5
 # PROBLEMS
 **MISSING HEADER**
@@ -35,27 +35,27 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **.0** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_014.md:1:3:1:3:**
+**fuzz_crash_014.md:1:3:1:5:**
 ```roc
 0b.0
 ```
-  
+  ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **0bu22** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_014.md:2:1:2:1:**
+**fuzz_crash_014.md:2:1:2:6:**
 ```roc
 0bu22
 ```
-
+^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -74,22 +74,22 @@ Here is the problematic code:
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_014.md:1:1:1:1:**
+**fuzz_crash_014.md:1:3:1:5:**
 ```roc
-
+0b.0
 ```
-
+  ^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_014.md:1:1:1:1:**
+**fuzz_crash_014.md:2:1:2:6:**
 ```roc
-
+0bu22
 ```
-
+^^^^^
 
 
 **INVALID STATEMENT**

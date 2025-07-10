@@ -65,7 +65,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 			(ty @2.28-2.34 (name "Result"))))
 	(s-expr @2.35-2.53
 		(e-tag @2.35-2.39 (name "Bool")))
-	(s-expr @1.1-1.1
+	(s-expr @2.40-2.53
 		(e-tag @2.40-2.53 (name "LaunchNukeErr")))
 	(s-let @3.5-3.30
 		(p-assign @3.5-3.19 (ident "launchTheNukes"))

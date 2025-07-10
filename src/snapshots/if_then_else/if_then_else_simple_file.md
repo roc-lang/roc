@@ -14,7 +14,7 @@ foo = if 1 A
     }
 ~~~
 # EXPECTED
-PARSE ERROR - if_then_else_simple_file.md:1:1:1:1
+PARSE ERROR - if_then_else_simple_file.md:5:5:5:5
 UNEXPECTED TOKEN IN EXPRESSION - if_then_else_simple_file.md:5:5:5:11
 INVALID STATEMENT - if_then_else_simple_file.md:5:5:5:11
 INVALID STATEMENT - if_then_else_simple_file.md:5:10:7:6
@@ -24,11 +24,11 @@ A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**if_then_else_simple_file.md:1:1:1:1:**
+**if_then_else_simple_file.md:5:5:5:5:**
 ```roc
-module [foo]
+    else {
 ```
-
+    
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**

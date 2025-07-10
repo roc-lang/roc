@@ -64,7 +64,31 @@ combineResults = |jsonResult, httpStatus|
 PARSE ERROR - can_import_exposing_types.md:52:45:52:51
 PARSE ERROR - can_import_exposing_types.md:52:22:52:25
 UNEXPECTED TOKEN IN EXPRESSION - can_import_exposing_types.md:52:71:52:73
-UNEXPECTED TOKEN IN PATTERN - can_import_exposing_types.md:52:72:52:72
+UNEXPECTED TOKEN IN PATTERN - can_import_exposing_types.md:52:72:52:73
+UNEXPECTED TOKEN IN EXPRESSION - can_import_exposing_types.md:53:9:53:12
+UNDECLARED TYPE - can_import_exposing_types.md:31:18:31:24
+UNDECLARED TYPE - can_import_exposing_types.md:32:18:32:24
+UNDECLARED TYPE - can_import_exposing_types.md:33:23:33:31
+UNDECLARED TYPE - can_import_exposing_types.md:8:27:8:32
+UNDECLARED TYPE - can_import_exposing_types.md:8:34:8:39
+UNDECLARED TYPE - can_import_exposing_types.md:12:17:12:24
+UNDECLARED TYPE - can_import_exposing_types.md:12:28:12:36
+UNDECLARED TYPE - can_import_exposing_types.md:22:15:22:21
+UNDECLARED TYPE - can_import_exposing_types.md:22:28:22:33
+UNDECLARED TYPE - can_import_exposing_types.md:22:50:22:55
+UNDECLARED TYPE - can_import_exposing_types.md:22:58:22:63
+UNDEFINED VARIABLE - can_import_exposing_types.md:24:5:24:16
+UNDECLARED TYPE - can_import_exposing_types.md:37:16:37:22
+UNDECLARED TYPE - can_import_exposing_types.md:41:18:41:26
+UNDEFINED VARIABLE - can_import_exposing_types.md:45:23:45:37
+UNDECLARED TYPE - can_import_exposing_types.md:49:25:49:30
+UNDECLARED TYPE - can_import_exposing_types.md:49:32:49:37
+UNDECLARED TYPE - can_import_exposing_types.md:49:40:49:46
+UNDECLARED TYPE - can_import_exposing_types.md:49:57:49:65
+UNDECLARED TYPE - can_import_exposing_types.md:49:67:49:72
+UNUSED VARIABLE - can_import_exposing_types.md:52:12:52:17
+UNUSED VARIABLE - can_import_exposing_types.md:52:60:52:70
+UNUSED VARIABLE - can_import_exposing_types.md:50:31:50:41
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_curly_or_comma`
@@ -103,130 +127,27 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token  is not expected in a pattern.
+The token **)** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**can_import_exposing_types.md:52:72:52:72:**
+**can_import_exposing_types.md:52:72:52:73:**
 ```roc
         Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
 ```
-                                                                       
+                                                                       ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **module []
-
-import json.Json exposing [Value, Error, Config]
-import http.Client as Http exposing [Request, Response, Status]
-import utils.Result exposing [Result]
-
-# Test using exposed types directly in annotations
-parseJson : Str -> Result(Value, Error)
-parseJson = |input| Json.parse(input)
-
-# Test mixing exposed types with qualified access
-handleRequest : Request -> Response
-handleRequest = |req| {
-    result = Json.decode(req.body)
-    match result {
-        Ok(value) => Http.ok(value)
-        Err(error) => Http.badRequest(error)
-    }
-}
-
-# Test using exposed types in complex signatures
-processData : Config, List(Value) -> Result(List(Value), Error)
-processData = |config, values|
-    List.mapTry(
-        values,
-        |v| Json.validateWith(config, v),
-    )
-
-# Test exposed types in record fields
-ServerConfig : {
-    jsonConfig : Config,
-    httpStatus : Status,
-    defaultResponse : Response,
-}
-
-# Test exposed types with module-qualified usage
-createClient : Config -> Http.Client
-createClient = |config| Http.clientWith(config)
-
-# Test nested type usage
-handleResponse : Response -> Str
-handleResponse = |response|
-    match response.status {
-        Ok(status) => Http.statusToString(status)
-        Err(error) => Error.toString(error)
-    }
-
-# Test mixing exposed and qualified in same expression
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-combineResults = |jsonResult, httpStatus|
-    match jsonResult {
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-        Err** is not expected in an expression.
+The token **Err** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**can_import_exposing_types.md:1:1:53:12:**
+**can_import_exposing_types.md:53:9:53:12:**
 ```roc
-module []
-
-import json.Json exposing [Value, Error, Config]
-import http.Client as Http exposing [Request, Response, Status]
-import utils.Result exposing [Result]
-
-# Test using exposed types directly in annotations
-parseJson : Str -> Result(Value, Error)
-parseJson = |input| Json.parse(input)
-
-# Test mixing exposed types with qualified access
-handleRequest : Request -> Response
-handleRequest = |req| {
-    result = Json.decode(req.body)
-    match result {
-        Ok(value) => Http.ok(value)
-        Err(error) => Http.badRequest(error)
-    }
-}
-
-# Test using exposed types in complex signatures
-processData : Config, List(Value) -> Result(List(Value), Error)
-processData = |config, values|
-    List.mapTry(
-        values,
-        |v| Json.validateWith(config, v),
-    )
-
-# Test exposed types in record fields
-ServerConfig : {
-    jsonConfig : Config,
-    httpStatus : Status,
-    defaultResponse : Response,
-}
-
-# Test exposed types with module-qualified usage
-createClient : Config -> Http.Client
-createClient = |config| Http.clientWith(config)
-
-# Test nested type usage
-handleResponse : Response -> Str
-handleResponse = |response|
-    match response.status {
-        Ok(status) => Http.statusToString(status)
-        Err(error) => Error.toString(error)
-    }
-
-# Test mixing exposed and qualified in same expression
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-combineResults = |jsonResult, httpStatus|
-    match jsonResult {
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
         Err(error) => Err(error)
 ```
+        ^^^
 
 
 **UNDECLARED TYPE**
@@ -995,7 +916,7 @@ combineResults = |jsonResult, httpStatus|
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+									(p-runtime-error @52.72-52.73 (tag "pattern_not_canonicalized"))))
 							(value
 								(e-runtime-error (tag "expr_not_canonicalized"))))
 						(branch

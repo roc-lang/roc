@@ -51,21 +51,21 @@ transform = \result ->
 ~~~
 # EXPECTED
 PARSE ERROR - qualified_type_canonicalization.md:8:1:8:14
-PARSE ERROR - qualified_type_canonicalization.md:8:14:8:14
+PARSE ERROR - qualified_type_canonicalization.md:8:14:8:21
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:15:10:32
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:24:10:34
-PARSE ERROR - qualified_type_canonicalization.md:26:32:26:32
+PARSE ERROR - qualified_type_canonicalization.md:26:32:26:35
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:31:12:31:14
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:31:24:31:30
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:35:16:35:22
 PARSE ERROR - qualified_type_canonicalization.md:36:5:36:21
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:36:6:36:22
-UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:36:21:36:21
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:36:21:36:22
 PARSE ERROR - qualified_type_canonicalization.md:39:32:39:43
 PARSE ERROR - qualified_type_canonicalization.md:39:43:39:52
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:50:39:60
 PARSE ERROR - qualified_type_canonicalization.md:39:60:39:74
-UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:68:39:68
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:68:39:74
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:40:13:40:20
 PARSE ERROR - qualified_type_canonicalization.md:42:15:42:22
 PARSE ERROR - qualified_type_canonicalization.md:43:15:43:23
@@ -104,11 +104,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**qualified_type_canonicalization.md:8:14:8:14:**
+**qualified_type_canonicalization.md:8:14:8:21:**
 ```roc
 import Basics.Result
 ```
-             
+             ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -152,11 +152,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**qualified_type_canonicalization.md:26:32:26:32:**
+**qualified_type_canonicalization.md:26:32:26:35:**
 ```roc
 resultType : Result.Result I32 Str
 ```
-                               
+                               ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -220,15 +220,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**qualified_type_canonicalization.md:36:21:36:21:**
+**qualified_type_canonicalization.md:36:21:36:22:**
 ```roc
     "Color processed"
 ```
-                    
+                    ^
 
 
 **PARSE ERROR**
@@ -316,15 +316,15 @@ transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **.TypeC** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**qualified_type_canonicalization.md:39:68:39:68:**
+**qualified_type_canonicalization.md:39:68:39:74:**
 ```roc
 transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
 ```
-                                                                   
+                                                                   ^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -548,11 +548,11 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**qualified_type_canonicalization.md:1:1:1:1:**
+**qualified_type_canonicalization.md:36:21:36:22:**
 ```roc
-
+    "Color processed"
 ```
-
+                    ^
 
 
 **INVALID STATEMENT**
@@ -570,11 +570,11 @@ transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**qualified_type_canonicalization.md:1:1:1:1:**
+**qualified_type_canonicalization.md:39:68:39:74:**
 ```roc
-
+transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
 ```
-
+                                                                   ^^^^^^
 
 
 **UNKNOWN OPERATOR**

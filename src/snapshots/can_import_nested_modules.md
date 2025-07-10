@@ -33,14 +33,14 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:3:19:3:19
+UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:3:19:3:26
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:4:19:4:27
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:4:25:4:36
-PARSE ERROR - can_import_nested_modules.md:4:28:4:28
+PARSE ERROR - can_import_nested_modules.md:4:28:4:36
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:13:5:27
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:20:5:36
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:28:5:38
-INVALID STATEMENT - can_import_nested_modules.md:1:1:1:1
+INVALID STATEMENT - can_import_nested_modules.md:3:19:3:26
 INVALID STATEMENT - can_import_nested_modules.md:4:19:4:27
 INVALID STATEMENT - can_import_nested_modules.md:4:25:4:36
 INVALID STATEMENT - can_import_nested_modules.md:5:8:5:20
@@ -50,15 +50,15 @@ INVALID STATEMENT - can_import_nested_modules.md:5:28:5:38
 INVALID STATEMENT - can_import_nested_modules.md:5:37:8:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **.Config** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**can_import_nested_modules.md:3:19:3:19:**
+**can_import_nested_modules.md:3:19:3:26:**
 ```roc
 import json.Parser.Config
 ```
-                  
+                  ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -102,11 +102,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**can_import_nested_modules.md:4:28:4:28:**
+**can_import_nested_modules.md:4:28:4:36:**
 ```roc
 import http.Client.Auth as HttpAuth
 ```
-                           
+                           ^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -149,11 +149,11 @@ import utils.String.Format exposing [padLeft]
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**can_import_nested_modules.md:1:1:1:1:**
+**can_import_nested_modules.md:3:19:3:26:**
 ```roc
-
+import json.Parser.Config
 ```
-
+                  ^^^^^^^
 
 
 **INVALID STATEMENT**

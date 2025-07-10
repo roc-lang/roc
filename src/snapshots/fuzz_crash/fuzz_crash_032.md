@@ -219,7 +219,7 @@ olor = |color| {
 			(args
 				(p-assign @6.9-6.14 (ident "color")))
 			(e-block @6.16-12.2
-				(s-expr @1.1-1.1
+				(s-expr @6.25-6.34
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(e-match @8.5-11.6
 					(match @8.5-11.6
@@ -239,7 +239,7 @@ olor = |color| {
 									(pattern (degenerate false)
 										(p-applied-tag @9.1-9.6)))
 								(value
-									(e-binop @1.1-1.1 (op "sub")
+									(e-binop @9.10-9.30 (op "sub")
 										(e-tag @9.10-9.21 (name "LocalStatus"))
 										(e-tag @9.22-9.30 (name "Complete")))))
 							(branch

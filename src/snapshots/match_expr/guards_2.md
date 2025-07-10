@@ -18,16 +18,16 @@ UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:51:2:77
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:75:2:80
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:92:2:93
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:93:2:94
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:93:2:93
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:1:1:3:6
+UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:93:2:94
+UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:5:3:6
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:22:3:26
 PARSE ERROR - guards_2.md:3:25:3:48
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:26:3:50
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:48:3:53
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:61:3:62
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:62:3:63
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:62:3:62
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:1:1:4:6
+UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:62:3:63
+UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:4:5:4:6
 UNDEFINED VARIABLE - guards_2.md:1:7:1:12
 UNUSED VARIABLE - guards_2.md:2:6:2:11
 UNUSED VARIABLE - guards_2.md:2:19:2:23
@@ -111,30 +111,27 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token  is not expected in a pattern.
+The token **"** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**guards_2.md:2:93:2:93:**
+**guards_2.md:2:93:2:94:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-                                                                                            
+                                                                                            ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **match value {
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-    [** is not expected in an expression.
+The token **[** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**guards_2.md:1:1:3:6:**
+**guards_2.md:3:5:3:6:**
 ```roc
-match value {
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
+    ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -210,32 +207,27 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token  is not expected in a pattern.
+The token **"** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**guards_2.md:3:62:3:62:**
+**guards_2.md:3:62:3:63:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
-                                                             
+                                                             ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **match value {
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
-    _** is not expected in an expression.
+The token **_** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**guards_2.md:1:1:4:6:**
+**guards_2.md:4:5:4:6:**
 ```roc
-match value {
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
     _ => "other"
 ```
+    ^
 
 
 **UNDEFINED VARIABLE**
@@ -491,7 +483,7 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @2.93-2.94 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -524,7 +516,7 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.62-3.63 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch

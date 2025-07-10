@@ -47,8 +47,8 @@ combineResults = |result1, result2|
 ~~~
 # EXPECTED
 PARSE ERROR - can_import_type_annotations.md:17:21:17:24
-UNEXPECTED TOKEN IN PATTERN - can_import_type_annotations.md:17:41:17:41
-UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:1:1:18:12
+UNEXPECTED TOKEN IN PATTERN - can_import_type_annotations.md:17:41:17:42
+UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:18:9:18:12
 UNDECLARED TYPE - can_import_type_annotations.md:7:18:7:25
 UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
 UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
@@ -67,60 +67,27 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token  is not expected in a pattern.
+The token **)** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**can_import_type_annotations.md:17:41:17:41:**
+**can_import_type_annotations.md:17:41:17:42:**
 ```roc
         Ok(data) => Ok(Http.success data)
 ```
-                                        
+                                        ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **module []
-
-import http.Client as Http exposing [Request, Response]
-import json.Json
-import utils.Result exposing [Result]
-
-processRequest : Request -> Response
-processRequest = |req| Http.defaultResponse
-
-parseJson : Str -> Json.Value
-parseJson = |input| Json.parse(input)
-
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
-handleApi = |request| {
-    result = Json.decode(request.body)
-    match result {
-        Ok(data) => Ok(Http.success data)
-        Err** is not expected in an expression.
+The token **Err** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**can_import_type_annotations.md:1:1:18:12:**
+**can_import_type_annotations.md:18:9:18:12:**
 ```roc
-module []
-
-import http.Client as Http exposing [Request, Response]
-import json.Json
-import utils.Result exposing [Result]
-
-processRequest : Request -> Response
-processRequest = |req| Http.defaultResponse
-
-parseJson : Str -> Json.Value
-parseJson = |input| Json.parse(input)
-
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
-handleApi = |request| {
-    result = Json.decode(request.body)
-    match result {
-        Ok(data) => Ok(Http.success data)
         Err(err) => Err(err)
 ```
+        ^^^
 
 
 **UNDECLARED TYPE**
@@ -477,7 +444,7 @@ combineResults = |result1, result2|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+										(p-runtime-error @17.41-17.42 (tag "pattern_not_canonicalized"))))
 								(value
 									(e-runtime-error (tag "expr_not_canonicalized"))))
 							(branch

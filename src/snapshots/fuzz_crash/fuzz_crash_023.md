@@ -214,240 +214,105 @@ expect {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:89:9:90:4
-UNEXPECTED TOKEN IN PATTERN - fuzz_crash_023.md:90:3:90:28
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:90:6:91:9
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:1:1:92:4
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:90:3:90:4
+UNEXPECTED TOKEN IN PATTERN - fuzz_crash_023.md:90:3:90:4
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:91:4:91:9
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:92:3:92:4
+UNEXPECTED TOKEN IN PATTERN - fuzz_crash_023.md:92:3:92:8
+UNEXPECTED TOKEN IN PATTERN - fuzz_crash_023.md:93:4:93:8
+PARSE ERROR - fuzz_crash_023.md:178:37:178:40
+PARSE ERROR - fuzz_crash_023.md:178:38:178:41
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:40:178:45
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:45:178:50
+PARSE ERROR - fuzz_crash_023.md:178:52:178:55
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:179:2:179:7
+UNDECLARED TYPE - fuzz_crash_023.md:36:8:36:11
+UNDECLARED TYPE - fuzz_crash_023.md:36:13:36:16
+UNDECLARED TYPE - fuzz_crash_023.md:39:2:39:5
+UNDECLARED TYPE - fuzz_crash_023.md:40:2:40:5
+UNDECLARED TYPE - fuzz_crash_023.md:43:19:43:21
+UNDECLARED TYPE - fuzz_crash_023.md:43:32:43:41
+UNDECLARED TYPE - fuzz_crash_023.md:43:19:43:24
+UNDECLARED TYPE - fuzz_crash_023.md:45:8:45:10
+UNDECLARED TYPE - fuzz_crash_023.md:46:8:46:17
+UNDECLARED TYPE - fuzz_crash_023.md:45:8:45:13
+UNDECLARED TYPE - fuzz_crash_023.md:52:4:52:6
+UNDECLARED TYPE - fuzz_crash_023.md:53:8:53:17
+UNDECLARED TYPE - fuzz_crash_023.md:52:4:52:9
+UNDEFINED VARIABLE - fuzz_crash_023.md:72:4:72:13
+UNUSED VARIABLE - fuzz_crash_023.md:97:3:97:8
+UNUSED VARIABLE - fuzz_crash_023.md:102:19:102:23
+UNUSED VARIABLE - fuzz_crash_023.md:108:23:108:27
+UNUSED VARIABLE - fuzz_crash_023.md:115:6:115:10
+UNUSED VARIABLE - fuzz_crash_023.md:121:21:121:29
+UNUSED VARIABLE - fuzz_crash_023.md:127:4:128:10
+UNUSED VARIABLE - fuzz_crash_023.md:82:2:82:3
+UNDEFINED VARIABLE - fuzz_crash_023.md:141:2:141:6
+UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
+UNDEFINED VARIABLE - fuzz_crash_023.md:147:9:147:13
+UNDEFINED VARIABLE - fuzz_crash_023.md:158:2:158:11
+UNDEFINED VARIABLE - fuzz_crash_023.md:179:42:179:48
+UNDEFINED VARIABLE - fuzz_crash_023.md:183:3:183:7
+UNDEFINED VARIABLE - fuzz_crash_023.md:185:4:185:10
+UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
+UNDEFINED VARIABLE - fuzz_crash_023.md:193:4:193:13
+UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
+UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
+UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
+UNUSED VARIABLE - fuzz_crash_023.md:166:2:166:6
+UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
+UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
+UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
+UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
+TYPE MISMATCH - fuzz_crash_023.md:67:11:67:14
+TYPE MISMATCH - fuzz_crash_023.md:155:2:155:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token ** After pattern in alt
-		|** is not expected in an expression.
+The token **|** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_023.md:89:9:90:4:**
+**fuzz_crash_023.md:90:3:90:4:**
 ```roc
-		Blue # After pattern in alt
 		| # Before pattern in alt
 ```
+  ^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token **| # Before pattern in alt** is not expected in a pattern.
+The token **|** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**fuzz_crash_023.md:90:3:90:28:**
+**fuzz_crash_023.md:90:3:90:4:**
 ```roc
 		| # Before pattern in alt
 ```
-  ^^^^^^^^^^^^^^^^^^^^^^^^^
+  ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token ** Before pattern in alt
-			Green** is not expected in an expression.
+The token **Green** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_023.md:90:6:91:9:**
+**fuzz_crash_023.md:91:4:91:9:**
 ```roc
-		| # Before pattern in alt
 			Green
 ```
+   ^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **# This is a module comment!
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-import pf.Stdout exposing [line!, write!]
-
-import # Comment after import keyword
-	pf # Comment after qualifier
-		.StdoutMultiline # Comment after ident
-		exposing [ # Comment after exposing open
-			line!, # Comment after exposed item
-			write!, # Another after exposed item
-		] # Comment after exposing close
-
-import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
-
-import BadName as GoodName
-import
-	BadNameMultiline
-		as
-		GoodNameMultiline
-
-Map(a, b) : List(a), (a -> b) -> List(b)
-MapML( # Comment here
-	a, # And here
-	b,
-) # And after the last arg
-	: # And after the colon
-		List( # Inside Tag args
-			a, # After tag arg
-		),
-		(a -> b) -> # After arrow
-			List( # Inside tag args
-				b,
-			) # And after the type decl
-
-Foo : (Bar, Baz)
-
-FooMultiline : ( # Comment after pattern tuple open
-	Bar, # Comment after pattern tuple item
-	Baz, # Another after pattern tuple item
-) # Comment after pattern tuple close
-
-Some(a) : { foo : Ok(a), bar : Something }
-SomeMl(a) : { # After record open
-	foo : Ok(a), # After field
-	bar : Something, # After last field
-}
-
-SomeMultiline(a) : { # Comment after pattern record open
-	foo # After field name
-		: # Before field anno
-			Ok(a), # Comment after pattern record field
-	bar : Something, # Another after pattern record field
-} # Comment after pattern record close
-
-Maybe(a) : [Some(a), None]
-
-MaybeMultiline(a) : [ # Comment after tag union open
-	Some(a), # Comment after tag union member
-	None, # Another after tag union member
-] # Comment after tag union close
-
-SomeFunc(a) : Maybe(a), a -> Maybe(a)
-
-add_one_oneline = |num| if num 2 else 5
-
-add_one : U64 -> U64
-add_one = |num| {
-	other = 1
-	if num {
-		dbg # After debug
-			some_func() # After debug expr
-		0
-	} else {
-		dbg 123
-		other
-	}
-}
-
-match_time = |
-	a, # After arg
-	b,
-| # After args
-	match a {
-		Blue | Green | Red => {
-			x = 12
-			x
-		}
-		Blue # After pattern in alt
-		| # Before pattern in alt
-			Green
-		|** is not expected in an expression.
+The token **|** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_023.md:1:1:92:4:**
+**fuzz_crash_023.md:92:3:92:4:**
 ```roc
-# This is a module comment!
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-import pf.Stdout exposing [line!, write!]
-
-import # Comment after import keyword
-	pf # Comment after qualifier
-		.StdoutMultiline # Comment after ident
-		exposing [ # Comment after exposing open
-			line!, # Comment after exposed item
-			write!, # Another after exposed item
-		] # Comment after exposing close
-
-import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
-
-import BadName as GoodName
-import
-	BadNameMultiline
-		as
-		GoodNameMultiline
-
-Map(a, b) : List(a), (a -> b) -> List(b)
-MapML( # Comment here
-	a, # And here
-	b,
-) # And after the last arg
-	: # And after the colon
-		List( # Inside Tag args
-			a, # After tag arg
-		),
-		(a -> b) -> # After arrow
-			List( # Inside tag args
-				b,
-			) # And after the type decl
-
-Foo : (Bar, Baz)
-
-FooMultiline : ( # Comment after pattern tuple open
-	Bar, # Comment after pattern tuple item
-	Baz, # Another after pattern tuple item
-) # Comment after pattern tuple close
-
-Some(a) : { foo : Ok(a), bar : Something }
-SomeMl(a) : { # After record open
-	foo : Ok(a), # After field
-	bar : Something, # After last field
-}
-
-SomeMultiline(a) : { # Comment after pattern record open
-	foo # After field name
-		: # Before field anno
-			Ok(a), # Comment after pattern record field
-	bar : Something, # Another after pattern record field
-} # Comment after pattern record close
-
-Maybe(a) : [Some(a), None]
-
-MaybeMultiline(a) : [ # Comment after tag union open
-	Some(a), # Comment after tag union member
-	None, # Another after tag union member
-] # Comment after tag union close
-
-SomeFunc(a) : Maybe(a), a -> Maybe(a)
-
-add_one_oneline = |num| if num 2 else 5
-
-add_one : U64 -> U64
-add_one = |num| {
-	other = 1
-	if num {
-		dbg # After debug
-			some_func() # After debug expr
-		0
-	} else {
-		dbg 123
-		other
-	}
-}
-
-match_time = |
-	a, # After arg
-	b,
-| # After args
-	match a {
-		Blue | Green | Red => {
-			x = 12
-			x
-		}
-		Blue # After pattern in alt
-		| # Before pattern in alt
-			Green
 		| Red # After alt pattern
 ```
+  ^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
@@ -535,370 +400,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **# This is a module comment!
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-import pf.Stdout exposing [line!, write!]
-
-import # Comment after import keyword
-	pf # Comment after qualifier
-		.StdoutMultiline # Comment after ident
-		exposing [ # Comment after exposing open
-			line!, # Comment after exposed item
-			write!, # Another after exposed item
-		] # Comment after exposing close
-
-import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
-
-import BadName as GoodName
-import
-	BadNameMultiline
-		as
-		GoodNameMultiline
-
-Map(a, b) : List(a), (a -> b) -> List(b)
-MapML( # Comment here
-	a, # And here
-	b,
-) # And after the last arg
-	: # And after the colon
-		List( # Inside Tag args
-			a, # After tag arg
-		),
-		(a -> b) -> # After arrow
-			List( # Inside tag args
-				b,
-			) # And after the type decl
-
-Foo : (Bar, Baz)
-
-FooMultiline : ( # Comment after pattern tuple open
-	Bar, # Comment after pattern tuple item
-	Baz, # Another after pattern tuple item
-) # Comment after pattern tuple close
-
-Some(a) : { foo : Ok(a), bar : Something }
-SomeMl(a) : { # After record open
-	foo : Ok(a), # After field
-	bar : Something, # After last field
-}
-
-SomeMultiline(a) : { # Comment after pattern record open
-	foo # After field name
-		: # Before field anno
-			Ok(a), # Comment after pattern record field
-	bar : Something, # Another after pattern record field
-} # Comment after pattern record close
-
-Maybe(a) : [Some(a), None]
-
-MaybeMultiline(a) : [ # Comment after tag union open
-	Some(a), # Comment after tag union member
-	None, # Another after tag union member
-] # Comment after tag union close
-
-SomeFunc(a) : Maybe(a), a -> Maybe(a)
-
-add_one_oneline = |num| if num 2 else 5
-
-add_one : U64 -> U64
-add_one = |num| {
-	other = 1
-	if num {
-		dbg # After debug
-			some_func() # After debug expr
-		0
-	} else {
-		dbg 123
-		other
-	}
-}
-
-match_time = |
-	a, # After arg
-	b,
-| # After args
-	match a {
-		Blue | Green | Red => {
-			x = 12
-			x
-		}
-		Blue # After pattern in alt
-		| # Before pattern in alt
-			Green
-		| Red # After alt pattern
-			=> {
-				x = 12
-				x
-			}
-		lower # After pattern comment
-			=> 1
-		"foo" => # After arrow comment
-			100
-		"foo" | "bar" => 200
-		[1, 2, 3, .. as rest] # After pattern comment
-			=> # After arrow comment
-				123 # After branch comment
-
-		# Just a random comment
-
-		[1, 2 | 5, 3, .. as rest] => 123
-		[
-			1,
-			2 | 5,
-			3,
-			.. # After DoubleDot
-				as # Before alias
-					rest, # After last pattern in list
-		] => 123
-		3.14 => 314
-		3.14 | 6.28 => 314
-		(1, 2, 3) => 123
-		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
-		{ # After pattern record open
-			foo # After pattern record field name
-				: # Before pattern record field value
-					1, # After pattern record field
-			bar: 2,
-			.. # After spread operator
-				rest, # After last field
-		} => 12
-		{ foo: 1, bar: 2 | 7 } => 12
-		{
-			foo: 1,
-			bar: 2 | 7, # After last record field
-		} => 12
-		Ok(123) => 123
-		Ok(Some(dude)) => dude
-		TwoArgs("hello", Some("world")) => 1000
-	}
-
-expect # Comment after expect keyword
-	blah == 1 # Comment after expect statement
-
-main! : List(String) -> Result({}, _)
-main! = |_| { # Yeah I can leave a comment here
-	world = "World"
-	var number = 123
-	expect blah == 1
-	tag = Blue
-	return # Comment after return keyword
-		tag # Comment after return statement
-
-	# Just a random comment!
-
-	...
-	match_time(
-		..., # Single args with comment
-	)
-	some_func(
-		dbg # After debug
-			42, # After debug expr
-	)
-	crash # Comment after crash keyword
-		"Unreachable!" # Comment after crash statement
-	tag_with_payload = Ok(number)
-	interpolated = "Hello, ${world}"
-	list = [
-		add_one(
-			dbg # After dbg in list
-				number, # after dbg expr as arg
-		), # Comment one
-		456, # Comment two
-		789, # Comment three
-	]
-	for n in list {
-		Stdout.line!("Adding ${n} to ${number}")
-		number = number + n
-	}
-	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
-	tuple** is not expected in an expression.
+The token **tuple** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_023.md:1:1:179:7:**
+**fuzz_crash_023.md:179:2:179:7:**
 ```roc
-# This is a module comment!
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-import pf.Stdout exposing [line!, write!]
-
-import # Comment after import keyword
-	pf # Comment after qualifier
-		.StdoutMultiline # Comment after ident
-		exposing [ # Comment after exposing open
-			line!, # Comment after exposed item
-			write!, # Another after exposed item
-		] # Comment after exposing close
-
-import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
-
-import BadName as GoodName
-import
-	BadNameMultiline
-		as
-		GoodNameMultiline
-
-Map(a, b) : List(a), (a -> b) -> List(b)
-MapML( # Comment here
-	a, # And here
-	b,
-) # And after the last arg
-	: # And after the colon
-		List( # Inside Tag args
-			a, # After tag arg
-		),
-		(a -> b) -> # After arrow
-			List( # Inside tag args
-				b,
-			) # And after the type decl
-
-Foo : (Bar, Baz)
-
-FooMultiline : ( # Comment after pattern tuple open
-	Bar, # Comment after pattern tuple item
-	Baz, # Another after pattern tuple item
-) # Comment after pattern tuple close
-
-Some(a) : { foo : Ok(a), bar : Something }
-SomeMl(a) : { # After record open
-	foo : Ok(a), # After field
-	bar : Something, # After last field
-}
-
-SomeMultiline(a) : { # Comment after pattern record open
-	foo # After field name
-		: # Before field anno
-			Ok(a), # Comment after pattern record field
-	bar : Something, # Another after pattern record field
-} # Comment after pattern record close
-
-Maybe(a) : [Some(a), None]
-
-MaybeMultiline(a) : [ # Comment after tag union open
-	Some(a), # Comment after tag union member
-	None, # Another after tag union member
-] # Comment after tag union close
-
-SomeFunc(a) : Maybe(a), a -> Maybe(a)
-
-add_one_oneline = |num| if num 2 else 5
-
-add_one : U64 -> U64
-add_one = |num| {
-	other = 1
-	if num {
-		dbg # After debug
-			some_func() # After debug expr
-		0
-	} else {
-		dbg 123
-		other
-	}
-}
-
-match_time = |
-	a, # After arg
-	b,
-| # After args
-	match a {
-		Blue | Green | Red => {
-			x = 12
-			x
-		}
-		Blue # After pattern in alt
-		| # Before pattern in alt
-			Green
-		| Red # After alt pattern
-			=> {
-				x = 12
-				x
-			}
-		lower # After pattern comment
-			=> 1
-		"foo" => # After arrow comment
-			100
-		"foo" | "bar" => 200
-		[1, 2, 3, .. as rest] # After pattern comment
-			=> # After arrow comment
-				123 # After branch comment
-
-		# Just a random comment
-
-		[1, 2 | 5, 3, .. as rest] => 123
-		[
-			1,
-			2 | 5,
-			3,
-			.. # After DoubleDot
-				as # Before alias
-					rest, # After last pattern in list
-		] => 123
-		3.14 => 314
-		3.14 | 6.28 => 314
-		(1, 2, 3) => 123
-		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
-		{ # After pattern record open
-			foo # After pattern record field name
-				: # Before pattern record field value
-					1, # After pattern record field
-			bar: 2,
-			.. # After spread operator
-				rest, # After last field
-		} => 12
-		{ foo: 1, bar: 2 | 7 } => 12
-		{
-			foo: 1,
-			bar: 2 | 7, # After last record field
-		} => 12
-		Ok(123) => 123
-		Ok(Some(dude)) => dude
-		TwoArgs("hello", Some("world")) => 1000
-	}
-
-expect # Comment after expect keyword
-	blah == 1 # Comment after expect statement
-
-main! : List(String) -> Result({}, _)
-main! = |_| { # Yeah I can leave a comment here
-	world = "World"
-	var number = 123
-	expect blah == 1
-	tag = Blue
-	return # Comment after return keyword
-		tag # Comment after return statement
-
-	# Just a random comment!
-
-	...
-	match_time(
-		..., # Single args with comment
-	)
-	some_func(
-		dbg # After debug
-			42, # After debug expr
-	)
-	crash # Comment after crash keyword
-		"Unreachable!" # Comment after crash statement
-	tag_with_payload = Ok(number)
-	interpolated = "Hello, ${world}"
-	list = [
-		add_one(
-			dbg # After dbg in list
-				number, # after dbg expr as arg
-		), # Comment one
-		456, # Comment two
-		789, # Comment three
-	]
-	for n in list {
-		Stdout.line!("Adding ${n} to ${number}")
-		number = number + n
-	}
-	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 ```
+ ^^^^^
 
 
 **UNDECLARED TYPE**
@@ -2498,7 +2008,7 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-runtime-error @90.3-90.28 (tag "pattern_not_canonicalized"))))
+									(p-runtime-error @90.3-90.4 (tag "pattern_not_canonicalized"))))
 							(value
 								(e-runtime-error (tag "expr_not_canonicalized"))))
 						(branch
@@ -2724,7 +2234,7 @@ expect {
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-dbg @159.3-160.7
 							(e-int @160.4-160.6 (value "42")))))
-				(s-crash @162.2-163.49 (msg "Unreachable!"))
+				(s-crash @162.2-163.17 (msg "Unreachable!"))
 				(s-let @164.2-164.31
 					(p-assign @164.2-164.18 (ident "tag_with_payload"))
 					(e-tag @164.21-164.31 (name "Ok")
@@ -2753,8 +2263,8 @@ expect {
 				(s-expr @178.42-178.46
 					(e-lookup-local @178.42-178.45
 						(p-assign @148.2-148.5 (ident "tag"))))
-				(s-type-anno @1.1-1.1 (name "qux")
-					(ty-malformed @1.1-1.1))
+				(s-type-anno @178.47-178.71 (name "qux")
+					(ty-malformed @178.52-178.71))
 				(s-let @179.2-179.68
 					(p-assign @179.2-179.7 (ident "tuple"))
 					(e-tuple @179.10-179.68

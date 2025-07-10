@@ -21,11 +21,11 @@ InnerModule : {
 # EXPECTED
 PARSE ERROR - type_shadowing_across_scopes.md:11:5:11:13
 PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:32
-UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:11:31
+UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:11:32
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:12:1:12:2
 TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
-INVALID STATEMENT - type_shadowing_across_scopes.md:1:1:1:1
+INVALID STATEMENT - type_shadowing_across_scopes.md:11:31:11:32
 INVALID STATEMENT - type_shadowing_across_scopes.md:12:1:12:2
 # PROBLEMS
 **PARSE ERROR**
@@ -53,15 +53,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **]** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_shadowing_across_scopes.md:11:31:11:31:**
+**type_shadowing_across_scopes.md:11:31:11:32:**
 ```roc
     Result : [Success, Failure]
 ```
-                              
+                              ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -113,11 +113,11 @@ processData = |data|
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_shadowing_across_scopes.md:1:1:1:1:**
+**type_shadowing_across_scopes.md:11:31:11:32:**
 ```roc
-
+    Result : [Success, Failure]
 ```
-
+                              ^
 
 
 **INVALID STATEMENT**

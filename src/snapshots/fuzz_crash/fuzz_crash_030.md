@@ -23,24 +23,24 @@ ar,
 		]
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_030.md:8:5:8:5
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:9:3:9:10
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:10:2:10:15
+PARSE ERROR - fuzz_crash_030.md:8:5:8:6
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:9:3:9:4
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:10:2:10:10
 PARSE ERROR - fuzz_crash_030.md:12:8:12:12
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:9:12:13
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:12:12:14
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:13:12:17
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:17:12:20
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:13:2:13:15
-INVALID STATEMENT - fuzz_crash_030.md:9:3:9:10
-INVALID STATEMENT - fuzz_crash_030.md:10:2:10:15
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:17:12:18
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:13:2:13:10
+INVALID STATEMENT - fuzz_crash_030.md:9:3:9:4
+INVALID STATEMENT - fuzz_crash_030.md:10:2:10:10
 INVALID STATEMENT - fuzz_crash_030.md:11:3:12:12
 INVALID STATEMENT - fuzz_crash_030.md:12:9:12:13
 INVALID STATEMENT - fuzz_crash_030.md:12:12:12:14
 INVALID STATEMENT - fuzz_crash_030.md:12:13:12:17
 INVALID STATEMENT - fuzz_crash_030.md:12:15:12:18
-INVALID STATEMENT - fuzz_crash_030.md:12:17:12:20
-INVALID STATEMENT - fuzz_crash_030.md:13:2:13:15
+INVALID STATEMENT - fuzz_crash_030.md:12:17:12:18
+INVALID STATEMENT - fuzz_crash_030.md:13:2:13:10
 INVALID STATEMENT - fuzz_crash_030.md:14:3:16:4
 # PROBLEMS
 **PARSE ERROR**
@@ -48,11 +48,11 @@ A parsing error occurred: `exposed_item_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_030.md:8:5:8:5:**
+**fuzz_crash_030.md:8:5:8:6:**
 ```roc
 		[ .
 ```
-    
+    ^
 
 
 **EXPECTED CLOSING BRACKET**
@@ -68,27 +68,27 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **] # Cse** is not expected in an expression.
+The token **]** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_030.md:9:3:9:10:**
+**fuzz_crash_030.md:9:3:9:4:**
 ```roc
 		] # Cse
 ```
-  ^^^^^^^
+  ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **packages # Cd** is not expected in an expression.
+The token **packages** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_030.md:10:2:10:15:**
+**fuzz_crash_030.md:10:2:10:10:**
 ```roc
 	packages # Cd
 ```
- ^^^^^^^^^^^^^
+ ^^^^^^^^
 
 
 **PARSE ERROR**
@@ -140,49 +140,49 @@ pkg: 77"..c", mm} #
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **} #** is not expected in an expression.
+The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_030.md:12:17:12:20:**
+**fuzz_crash_030.md:12:17:12:18:**
 ```roc
 pkg: 77"..c", mm} #
 ```
-                ^^^
+                ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **provides # Cd** is not expected in an expression.
+The token **provides** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_030.md:13:2:13:15:**
+**fuzz_crash_030.md:13:2:13:10:**
 ```roc
 	provides # Cd
 ```
- ^^^^^^^^^^^^^
+ ^^^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_030.md:9:3:9:10:**
+**fuzz_crash_030.md:9:3:9:4:**
 ```roc
 		] # Cse
 ```
-  ^^^^^^^
+  ^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_030.md:10:2:10:15:**
+**fuzz_crash_030.md:10:2:10:10:**
 ```roc
 	packages # Cd
 ```
- ^^^^^^^^^^^^^
+ ^^^^^^^^
 
 
 **INVALID STATEMENT**
@@ -244,22 +244,22 @@ pkg: 77"..c", mm} #
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_030.md:12:17:12:20:**
+**fuzz_crash_030.md:12:17:12:18:**
 ```roc
 pkg: 77"..c", mm} #
 ```
-                ^^^
+                ^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_030.md:13:2:13:15:**
+**fuzz_crash_030.md:13:2:13:10:**
 ```roc
 	provides # Cd
 ```
- ^^^^^^^^^^^^^
+ ^^^^^^^^
 
 
 **INVALID STATEMENT**

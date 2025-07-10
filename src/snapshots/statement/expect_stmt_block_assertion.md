@@ -70,8 +70,8 @@ foo = |a| {
 			(args
 				(p-assign @4.8-4.9 (ident "a")))
 			(e-block @4.11-7.2
-				(s-expect @1.1-1.1
-					(e-binop @1.1-1.1 (op "eq")
+				(s-expect @5.5-5.26
+					(e-binop @5.12-5.26 (op "eq")
 						(e-lookup-local @5.12-5.13
 							(p-assign @4.8-4.9 (ident "a")))
 						(e-nominal @5.17-5.26 (nominal "Bool")

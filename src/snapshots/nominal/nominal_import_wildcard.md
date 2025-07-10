@@ -19,33 +19,33 @@ green : Color
 green = Green
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - nominal_import_wildcard.md:3:13:3:13
-INVALID STATEMENT - nominal_import_wildcard.md:1:1:1:1
+UNEXPECTED TOKEN IN EXPRESSION - nominal_import_wildcard.md:3:13:3:15
+INVALID STATEMENT - nominal_import_wildcard.md:3:13:3:15
 UNDECLARED TYPE - nominal_import_wildcard.md:5:7:5:12
 UNDECLARED TYPE - nominal_import_wildcard.md:8:8:8:13
 UNDECLARED TYPE - nominal_import_wildcard.md:11:9:11:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **.*** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**nominal_import_wildcard.md:3:13:3:13:**
+**nominal_import_wildcard.md:3:13:3:15:**
 ```roc
 import Color.*
 ```
-            
+            ^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**nominal_import_wildcard.md:1:1:1:1:**
+**nominal_import_wildcard.md:3:13:3:15:**
 ```roc
-
+import Color.*
 ```
-
+            ^^
 
 
 **UNDECLARED TYPE**

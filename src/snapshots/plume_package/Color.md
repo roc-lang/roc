@@ -79,7 +79,7 @@ is_named_color = |str|{
 ~~~
 # EXPECTED
 PARSE ERROR - Color.md:63:9:63:12
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:64:5:64:5
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:64:5:64:9
 PARSE ERROR - Color.md:65:13:65:26
 PARSE ERROR - Color.md:65:9:65:13
 PARSE ERROR - Color.md:65:9:65:13
@@ -89,11 +89,11 @@ UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:46:65:47
 UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:47:65:48
 UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:47:65:49
 UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:48:65:50
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:49:65:49
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:49:65:50
 UNUSED VARIABLE - Color.md:30:5:30:25
 UNUSED VARIABLE - Color.md:61:10:61:13
 UNDEFINED VARIABLE - Color.md:63:24:63:27
-INVALID STATEMENT - Color.md:1:1:1:1
+INVALID STATEMENT - Color.md:64:5:64:9
 INVALID STATEMENT - Color.md:65:27:65:43
 INVALID STATEMENT - Color.md:65:41:65:46
 INVALID STATEMENT - Color.md:65:43:65:47
@@ -101,7 +101,7 @@ INVALID STATEMENT - Color.md:65:46:65:47
 INVALID STATEMENT - Color.md:65:47:65:48
 INVALID STATEMENT - Color.md:65:47:65:49
 INVALID STATEMENT - Color.md:65:48:65:50
-INVALID STATEMENT - Color.md:1:1:1:1
+INVALID STATEMENT - Color.md:65:49:65:50
 UNDEFINED VARIABLE - Color.md:68:14:68:27
 TYPE MISMATCH - Color.md:20:20:20:22
 TYPE MISMATCH - Color.md:26:7:26:10
@@ -119,15 +119,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **else** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**Color.md:64:5:64:5:**
+**Color.md:64:5:64:9:**
 ```roc
     else
 ```
-    
+    ^^^^
 
 
 **PARSE ERROR**
@@ -251,15 +251,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **)** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**Color.md:65:49:65:49:**
+**Color.md:65:49:65:50:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-                                                
+                                                ^
 
 
 **UNUSED VARIABLE**
@@ -304,11 +304,11 @@ Is there an `import` or `exposing` missing up-top?
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**Color.md:1:1:1:1:**
+**Color.md:64:5:64:9:**
 ```roc
-
+    else
 ```
-
+    ^^^^
 
 
 **INVALID STATEMENT**
@@ -392,11 +392,11 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**Color.md:1:1:1:1:**
+**Color.md:65:49:65:50:**
 ```roc
-
+        Err(UnknownColor("Unknown color ${str}"))
 ```
-
+                                                ^
 
 
 **UNDEFINED VARIABLE**
@@ -1308,8 +1308,8 @@ is_named_color = |str| {
 				(ty @13.11-13.14 (name "Str")))
 			(ty-apply @14.5-14.13 (symbol "Hex")
 				(ty @14.9-14.12 (name "Str")))))
-	(s-expect @1.1-1.1
-		(e-binop @1.1-1.1 (op "eq")
+	(s-expect @56.1-56.57
+		(e-binop @56.8-56.57 (op "eq")
 			(e-dot-access @56.8-56.37 (field "to_str")
 				(receiver
 					(e-call @56.8-56.25
@@ -1321,8 +1321,8 @@ is_named_color = |str| {
 				(args))
 			(e-string @56.38-56.57
 				(e-literal @56.39-56.56 (string "rgb(124, 56, 245)")))))
-	(s-expect @1.1-1.1
-		(e-binop @1.1-1.1 (op "eq")
+	(s-expect @57.1-57.69
+		(e-binop @57.8-57.69 (op "eq")
 			(e-dot-access @57.8-57.43 (field "to_str")
 				(receiver
 					(e-call @57.8-57.31
