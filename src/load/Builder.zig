@@ -294,7 +294,7 @@ pub fn build(self: *Self, source_path: []const u8) !void {
 /// Process tasks in single-threaded mode
 fn processSingleThreaded(self: *Self) !void {
     while (!self.task_queue.isEmpty()) {
-        if (self.task_queue.pop()) |task| {
+        if (self.getNextTask()) |task| {
             try self.processTask(task);
         }
     }

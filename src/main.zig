@@ -185,58 +185,62 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     // Process diagnostics while builder is still alive
     {
-        // First check for parse errors
-        if (builder.getParseResult(0)) |parse_result| {
-            const ast = parse_result.ast;
-            const source = ast.source;
-            // Make a copy of the filename to ensure it's not freed memory
-            const filename = try gpa.dupe(u8, parse_result.module_path);
-            defer gpa.free(filename);
+        // Check if we have a canonicalized result (either from cache or fresh compilation)
+        if (builder.getCanonicalizedResult(0)) |canon_result| {
+            // Count errors and warnings
+            total_errors += canon_result.error_count;
+            total_warnings += canon_result.warning_count;
+            was_cached = canon_result.was_cached;
 
-            // Count parse errors
-            const tokenize_error_count = ast.tokenize_diagnostics.items.len;
-            const parse_error_count = ast.parse_diagnostics.items.len;
-            total_errors += @intCast(tokenize_error_count + parse_error_count);
-
-            // Convert tokenize diagnostics to reports
-            if (!was_cached and tokenize_error_count > 0) {
-                for (ast.tokenize_diagnostics.items) |diagnostic| {
-                    const report = ast.tokenizeDiagnosticToReport(diagnostic, gpa) catch |err| {
-                        stderr.print("Error converting tokenize diagnostic to report: {}\n", .{err}) catch {};
-                        continue;
-                    };
-                    try all_reports.append(report);
-                }
+            // Check if type checking was done
+            if (builder.getTypeCheckedResult(0)) |type_result| {
+                total_errors += type_result.type_error_count;
             }
 
-            // Convert parse diagnostics to reports
-            if (!was_cached and parse_error_count > 0) {
-                for (ast.parse_diagnostics.items) |diagnostic| {
-                    if (builder.getModuleEnv(0)) |module_env| {
-                        const report = ast.parseDiagnosticToReport(module_env, diagnostic, gpa, filename) catch |err| {
-                            stderr.print("Error converting parse diagnostic to report: {}\n", .{err}) catch {};
-                            continue;
-                        };
-                        try all_reports.append(report);
+            // If loaded from cache, we're done with counting
+            if (was_cached) {
+                // For cached results, we don't generate detailed reports
+                // The user can use --no-cache to see detailed errors
+            } else {
+                // For fresh compilation, check parse results for detailed error reporting
+                if (builder.getParseResult(0)) |parse_result| {
+                    const ast = parse_result.ast;
+                    const source = ast.source;
+                    // Make a copy of the filename to ensure it's not freed memory
+                    const filename = try gpa.dupe(u8, parse_result.module_path);
+                    defer gpa.free(filename);
+
+                    // Count parse errors
+                    const tokenize_error_count = ast.tokenize_diagnostics.items.len;
+                    const parse_error_count = ast.parse_diagnostics.items.len;
+                    total_errors += @intCast(tokenize_error_count + parse_error_count);
+
+                    // Convert tokenize diagnostics to reports
+                    if (tokenize_error_count > 0) {
+                        for (ast.tokenize_diagnostics.items) |diagnostic| {
+                            const report = ast.tokenizeDiagnosticToReport(diagnostic, gpa) catch |err| {
+                                stderr.print("Error converting tokenize diagnostic to report: {}\n", .{err}) catch {};
+                                continue;
+                            };
+                            try all_reports.append(report);
+                        }
                     }
-                }
-            }
 
-            // If there were no parse errors, check canonicalization results
-            if (tokenize_error_count == 0 and parse_error_count == 0) {
-                if (builder.getCanonicalizedResult(0)) |canon_result| {
-                    // Count errors and warnings
-                    total_errors += canon_result.error_count;
-                    total_warnings += canon_result.warning_count;
-                    was_cached = canon_result.was_cached;
-
-                    // Check if type checking was done
-                    if (builder.getTypeCheckedResult(0)) |type_result| {
-                        total_errors += type_result.type_error_count;
+                    // Convert parse diagnostics to reports
+                    if (parse_error_count > 0) {
+                        for (ast.parse_diagnostics.items) |diagnostic| {
+                            if (builder.getModuleEnv(0)) |module_env| {
+                                const report = ast.parseDiagnosticToReport(module_env, diagnostic, gpa, filename) catch |err| {
+                                    stderr.print("Error converting parse diagnostic to report: {}\n", .{err}) catch {};
+                                    continue;
+                                };
+                                try all_reports.append(report);
+                            }
+                        }
                     }
 
-                    // Convert diagnostics to reports if not cached
-                    if (!was_cached and (total_errors > 0 or total_warnings > 0)) {
+                    // If there were no parse errors, convert CIR diagnostics
+                    if (tokenize_error_count == 0 and parse_error_count == 0 and (total_errors > 0 or total_warnings > 0)) {
                         // Convert CIR diagnostics to reports
                         const diagnostics = canon_result.cir.getDiagnostics();
                         defer gpa.free(diagnostics);
@@ -253,10 +257,48 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                 }
             }
         } else {
-            // No parse result - file not found or other error
-            stderr.print("Error: Failed to load {s}\n", .{args.path}) catch {};
-            builder.deinit();
-            std.process.exit(1);
+            // No canonicalized result - could be parse error or file not found
+            if (builder.getParseResult(0)) |parse_result| {
+                // We have parse results, so there must have been parse errors
+                const ast = parse_result.ast;
+                // Make a copy of the filename to ensure it's not freed memory
+                const filename = try gpa.dupe(u8, parse_result.module_path);
+                defer gpa.free(filename);
+
+                // Count parse errors
+                const tokenize_error_count = ast.tokenize_diagnostics.items.len;
+                const parse_error_count = ast.parse_diagnostics.items.len;
+                total_errors += @intCast(tokenize_error_count + parse_error_count);
+
+                // Convert tokenize diagnostics to reports
+                if (tokenize_error_count > 0) {
+                    for (ast.tokenize_diagnostics.items) |diagnostic| {
+                        const report = ast.tokenizeDiagnosticToReport(diagnostic, gpa) catch |err| {
+                            stderr.print("Error converting tokenize diagnostic to report: {}\n", .{err}) catch {};
+                            continue;
+                        };
+                        try all_reports.append(report);
+                    }
+                }
+
+                // Convert parse diagnostics to reports
+                if (parse_error_count > 0) {
+                    for (ast.parse_diagnostics.items) |diagnostic| {
+                        if (builder.getModuleEnv(0)) |module_env| {
+                            const report = ast.parseDiagnosticToReport(module_env, diagnostic, gpa, filename) catch |err| {
+                                stderr.print("Error converting parse diagnostic to report: {}\n", .{err}) catch {};
+                                continue;
+                            };
+                            try all_reports.append(report);
+                        }
+                    }
+                }
+            } else {
+                // No parse result - file not found or other error
+                stderr.print("Error: Failed to load {s}\n", .{args.path}) catch {};
+                builder.deinit();
+                std.process.exit(1);
+            }
         }
     }
 
