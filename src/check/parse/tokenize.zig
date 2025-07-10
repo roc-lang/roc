@@ -1474,11 +1474,40 @@ pub const Tokenizer = struct {
                 } else {
                     escape = c == '\\';
 
-                    if (!std.ascii.isPrint(c)) {
+                    // Check if this is the start of a UTF-8 sequence
+                    const utf8_len = std.unicode.utf8ByteSequenceLength(c) catch {
+                        // Invalid UTF-8 start byte
                         self.cursor.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
-                    }
+                        self.cursor.pos += 1;
+                        continue;
+                    };
 
-                    self.cursor.pos += 1;
+                    // For single-byte UTF-8 (ASCII), check if it's printable
+                    if (utf8_len == 1) {
+                        if (!std.ascii.isPrint(c)) {
+                            self.cursor.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
+                        }
+                        self.cursor.pos += 1;
+                    } else {
+                        // Multi-byte UTF-8 sequence - validate it
+                        if (self.cursor.pos + utf8_len > self.cursor.buf.len) {
+                            // Incomplete UTF-8 sequence at end of input
+                            self.cursor.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
+                            self.cursor.pos += 1;
+                            continue;
+                        }
+
+                        const utf8_bytes = self.cursor.buf[self.cursor.pos .. self.cursor.pos + utf8_len];
+                        _ = std.unicode.utf8Decode(utf8_bytes) catch {
+                            // Invalid UTF-8 sequence
+                            self.cursor.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
+                            self.cursor.pos += 1;
+                            continue;
+                        };
+
+                        // Valid UTF-8 sequence - advance by the full sequence length
+                        self.cursor.pos += utf8_len;
+                    }
                 }
             }
         }
