@@ -129,12 +129,23 @@ pub const Dir = struct {
 
     /// Canonicalize the given filepath relative to this dir's path.
     pub fn canonicalize(dir: *Dir, filename: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-        return dir.dir.realpathAlloc(allocator, filename) catch |err| {
-            switch (err) {
-                error.OutOfMemory => exitOnOom(error.OutOfMemory),
-                else => return err,
-            }
-        };
+        if (comptime @import("builtin").target.os.tag == .wasi) {
+            // WASI doesn't support realpath, so we'll just resolve the path
+            // without following symlinks
+            return std.fs.path.resolve(allocator, &.{filename}) catch |err| {
+                switch (err) {
+                    error.OutOfMemory => exitOnOom(error.OutOfMemory),
+                    else => return err,
+                }
+            };
+        } else {
+            return dir.dir.realpathAlloc(allocator, filename) catch |err| {
+                switch (err) {
+                    error.OutOfMemory => exitOnOom(error.OutOfMemory),
+                    else => return err,
+                }
+            };
+        }
     }
 
     /// Close this directory.
@@ -226,12 +237,22 @@ fn baseNameDefault(absolute_path: []const u8) ?[]const u8 {
 }
 
 fn canonicalizeDefault(root_relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-    return std.fs.realpathAlloc(allocator, root_relative_path) catch |err| {
-        return switch (err) {
-            error.FileNotFound => error.FileNotFound,
-            else => error.Unknown,
+    if (comptime @import("builtin").target.os.tag == .wasi) {
+        // WASI doesn't support realpath, so we'll just resolve the path
+        // without following symlinks
+        return std.fs.path.resolve(allocator, &.{root_relative_path}) catch |err| {
+            return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+            };
         };
-    };
+    } else {
+        return std.fs.realpathAlloc(allocator, root_relative_path) catch |err| {
+            return switch (err) {
+                error.FileNotFound => error.FileNotFound,
+                else => error.Unknown,
+            };
+        };
+    }
 }
 
 /// Creates a directory and all its parent directories recursively, similar to `mkdir -p`
