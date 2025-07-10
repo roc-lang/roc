@@ -19,7 +19,7 @@ UNUSED VARIABLE - type_tag_union_basic.md:4:12:4:17
 Variable ``maybe`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_maybe` to suppress this warning.
-The unused variable is declared here:
+
 **type_tag_union_basic.md:4:12:4:17:**
 ```roc
 process = |maybe| "result"

@@ -63,6 +63,9 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var parse_env = base.ModuleEnv.init(allocator);
     defer parse_env.deinit();
     try parse_env.calcLineStarts(source);
+    // Set the source in module_env so canonicalization can access it
+    parse_env.source = try allocator.dupe(u8, source);
+    parse_env.owns_source = true;
     var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
     defer ast.deinit();
 
@@ -70,6 +73,9 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
     var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
@@ -148,6 +154,9 @@ test "import validation - no module_envs provided" {
     var parse_env = base.ModuleEnv.init(allocator);
     defer parse_env.deinit();
     try parse_env.calcLineStarts(source);
+    // Set the source in module_env so canonicalization can access it
+    parse_env.source = try allocator.dupe(u8, source);
+    parse_env.owns_source = true;
     var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
     defer ast.deinit();
 
@@ -208,6 +217,9 @@ test "import interner - Import.Idx functionality" {
     // Canonicalize without module validation to focus on Import.Idx
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
     try env.calcLineStarts(source);
     var cir = CIR.init(&env, "Test");
     defer cir.deinit();
@@ -296,6 +308,9 @@ test "import interner - comprehensive usage example" {
     // Canonicalize
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
     try env.calcLineStarts(source);
     var cir = CIR.init(&env, "Test");
     defer cir.deinit();
@@ -393,6 +408,9 @@ test "module scopes - imports are only available in their scope" {
     // Canonicalize without external module validation to focus on scope testing
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
     try env.calcLineStarts(source);
     var cir = CIR.init(&env, "Test");
     defer cir.deinit();
@@ -456,6 +474,9 @@ test "module-qualified lookups with e_lookup_external" {
     // Canonicalize
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
     try env.calcLineStarts(source);
     var cir = CIR.init(&env, "Test");
     defer cir.deinit();
@@ -618,6 +639,9 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
 
     var env2 = base.ModuleEnv.init(allocator);
     defer env2.deinit();
+    // Set the source in module_env so canonicalization can access it
+    env2.source = try allocator.dupe(u8, source2);
+    env2.owns_source = true;
     try env2.calcLineStarts(source2);
     var cir2 = CIR.init(&env2);
     defer cir2.deinit();
@@ -658,6 +682,9 @@ test "export count safety - ensures safe u16 casting" {
     // Test the diagnostic for exactly maxInt(u16) exports
     var env1 = base.ModuleEnv.init(allocator);
     defer env1.deinit();
+    // Set the source in module_env so canonicalization can access it
+    env1.source = try allocator.dupe(u8, source);
+    env1.owns_source = true;
     var cir1 = CIR.init(&env1);
     defer cir1.deinit();
 

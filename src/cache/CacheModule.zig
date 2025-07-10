@@ -590,6 +590,10 @@ test "create and restore cache" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
+    // Set the source in module_env so canonicalization can access it
+    module_env.source = try gpa.dupe(u8, source);
+    module_env.owns_source = true;
+
     var cir = CIR.init(&module_env, "TestModule");
     defer cir.deinit();
 
@@ -664,6 +668,10 @@ test "cache filesystem roundtrip with in-memory storage" {
     // Parse the source
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
+
+    // Set the source in module_env so canonicalization can access it
+    module_env.source = try gpa.dupe(u8, source);
+    module_env.owns_source = true;
 
     var cir = CIR.init(&module_env, "TestModule");
     defer cir.deinit();

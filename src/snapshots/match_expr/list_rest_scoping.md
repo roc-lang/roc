@@ -71,7 +71,7 @@ match items {
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
+
 **list_rest_scoping.md:2:15:2:19:**
 ```roc
     [first, ..rest] => first + 1
@@ -83,7 +83,7 @@ The unused variable is declared here:
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
+
 **list_rest_scoping.md:3:8:3:12:**
 ```roc
     [..rest, last] => last + 2
@@ -95,7 +95,7 @@ The unused variable is declared here:
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
+
 **list_rest_scoping.md:4:11:4:15:**
 ```roc
     [x, ..rest, y] => x + y

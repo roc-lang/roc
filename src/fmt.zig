@@ -149,6 +149,10 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
+    // Set the source in module_env so canonicalization can access it
+    module_env.source = try gpa.dupe(u8, contents);
+    module_env.owns_source = true;
+
     var parse_ast = parse.parse(&module_env, contents);
     defer parse_ast.deinit(gpa);
 
@@ -2079,6 +2083,10 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
+
+    // Set the source in module_env so canonicalization can access it
+    module_env.source = try gpa.dupe(u8, input);
+    module_env.owns_source = true;
 
     var parse_ast = parse.parse(&module_env, input);
     defer parse_ast.deinit(gpa);

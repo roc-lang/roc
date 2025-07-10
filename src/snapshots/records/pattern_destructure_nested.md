@@ -28,7 +28,7 @@ match person {
 Variable ``zipCode`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_zipCode` to suppress this warning.
-The unused variable is declared here:
+
 **pattern_destructure_nested.md:2:38:2:47:**
 ```roc
     { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"

@@ -11,8 +11,6 @@ kind: Kind,
 pub const Kind = union(enum) {
     /// Load a file from disk
     load_file: LoadFile,
-    /// Parse source code
-    parse: Parse,
     /// Canonicalize a module
     canonicalize: Canonicalize,
     /// Type check a module
@@ -25,16 +23,6 @@ pub const LoadFile = struct {
     path: []const u8,
     /// Module ID to assign
     module_id: Builder.ModuleId,
-};
-
-/// Parse task data
-pub const Parse = struct {
-    /// Module ID being parsed
-    module_id: Builder.ModuleId,
-    /// Source code to parse
-    source: []const u8,
-    /// Path to the module file
-    path: []const u8,
 };
 
 /// Canonicalize task data

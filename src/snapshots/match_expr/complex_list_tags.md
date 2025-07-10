@@ -542,7 +542,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``y`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:3:15:3:16:**
 ```roc
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
@@ -554,7 +554,7 @@ The unused variable is declared here:
 Variable ``x`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:3:12:3:13:**
 ```roc
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
@@ -591,7 +591,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``y`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:3:68:3:69:**
 ```roc
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
@@ -614,7 +614,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``key`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_key` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:4:15:4:18:**
 ```roc
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
@@ -626,7 +626,7 @@ The unused variable is declared here:
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:4:27:4:31:**
 ```roc
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
@@ -649,7 +649,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``len`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_len` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:4:70:4:78:**
 ```roc
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
@@ -679,7 +679,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``others`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_others` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:5:42:5:48:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -691,7 +691,7 @@ The unused variable is declared here:
 Variable ``dy2`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_dy2` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:5:30:5:33:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -703,7 +703,7 @@ The unused variable is declared here:
 Variable ``dx2`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_dx2` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:5:25:5:28:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -715,7 +715,7 @@ The unused variable is declared here:
 Variable ``dx`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_dx` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:5:11:5:13:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -727,7 +727,7 @@ The unused variable is declared here:
 Variable ``dy`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_dy` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:5:15:5:17:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -764,7 +764,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``dy`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_dy` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:5:88:5:90:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -794,7 +794,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``toStr`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:5:99:5:108:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -831,7 +831,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``dy2`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_dy2` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:5:126:5:129:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -854,7 +854,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``remaining`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_remaining` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:6:41:6:50:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -866,7 +866,7 @@ The unused variable is declared here:
 Variable ``amount`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_amount` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:6:13:6:19:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -878,7 +878,7 @@ The unused variable is declared here:
 Variable ``y`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:6:31:6:32:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -890,7 +890,7 @@ The unused variable is declared here:
 Variable ``x`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:6:28:6:29:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -927,7 +927,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``x`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:6:109:6:110:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -957,7 +957,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``toStr`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
-The unused variable is declared here:
+
 **complex_list_tags.md:6:114:6:123:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"

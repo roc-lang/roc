@@ -46,7 +46,7 @@ test "Builder.init and deinit" {
     defer builder.deinit();
 
     // Just ensure it initializes and deinitializes without errors
-    try testing.expect(builder.module_envs.count() == 0);
+    try testing.expect(builder.modules.count() == 0);
 }
 
 test "single-threaded file loading" {
@@ -65,7 +65,7 @@ test "single-threaded file loading" {
 
     // Don't actually run build() as it will try to parse
     // Just test that we can create and destroy a builder
-    try testing.expect(builder.module_envs.count() == 0);
+    try testing.expect(builder.modules.count() == 0);
 }
 
 test "multi-threaded file loading" {

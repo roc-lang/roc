@@ -36,7 +36,7 @@ handleResult : MyResultModule.MyResultType(Str, I32) -> Str
 Variable ``code`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_code` to suppress this warning.
-The unused variable is declared here:
+
 **nominal_external_fully_qualified.md:9:41:9:45:**
 ```roc
         MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"

@@ -21,6 +21,10 @@ test "exposed but not implemented - values" {
         \\foo = 42
     ;
 
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
+
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
@@ -61,6 +65,10 @@ test "exposed but not implemented - types" {
         \\
         \\MyType : [A, B]
     ;
+
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -104,6 +112,10 @@ test "redundant exposed entries" {
         \\bar = "hello"
         \\MyType : [A]
     ;
+
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -154,6 +166,10 @@ test "shadowing with exposed items" {
         \\y = "second"
     ;
 
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
+
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
@@ -191,6 +207,10 @@ test "shadowing non-exposed items" {
         \\notExposed = 1
         \\notExposed = 2
     ;
+
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -237,6 +257,10 @@ test "exposed items correctly tracked across shadowing" {
         \\
         \\# z is exposed but never defined
     ;
+
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -303,6 +327,10 @@ test "complex case with redundant, shadowing, and not implemented" {
         \\c = 100
     ;
 
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
+
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
@@ -363,6 +391,10 @@ test "exposed_by_str is populated correctly" {
         \\MyType : [A, B]
     ;
 
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
+
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
@@ -397,6 +429,10 @@ test "exposed_by_str persists after canonicalization" {
         \\# z is not defined
     ;
 
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
+
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
@@ -430,6 +466,10 @@ test "exposed_by_str never has entries removed" {
         \\bar = "hello"
         \\# baz is not implemented
     ;
+
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);

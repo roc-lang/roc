@@ -457,7 +457,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``value`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
-The unused variable is declared here:
+
 **can_import_exposing_types.md:52:12:52:17:**
 ```roc
         Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
@@ -491,7 +491,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``httpStatus`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_httpStatus` to suppress this warning.
-The unused variable is declared here:
+
 **can_import_exposing_types.md:52:60:52:70:**
 ```roc
         Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
@@ -510,7 +510,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``httpStatus`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_httpStatus` to suppress this warning.
-The unused variable is declared here:
+
 **can_import_exposing_types.md:50:31:50:41:**
 ```roc
 combineResults = |jsonResult, httpStatus|

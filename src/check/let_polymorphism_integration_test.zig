@@ -25,6 +25,10 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = ModuleEnv.init(allocator);
 
+    // Set the source in module_env so canonicalization can access it
+    module_env.source = try allocator.dupe(u8, source);
+    module_env.owns_source = true;
+
     // Parse
     const parse_ast = try allocator.create(parse.AST);
     parse_ast.* = parse.parseExpr(module_env, source);
@@ -91,6 +95,10 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = ModuleEnv.init(allocator);
+
+    // Set the source in module_env so canonicalization can access it
+    module_env.source = try allocator.dupe(u8, source);
+    module_env.owns_source = true;
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
@@ -163,6 +171,10 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = ModuleEnv.init(allocator);
+
+    // Set the source in module_env so canonicalization can access it
+    module_env.source = try allocator.dupe(u8, source);
+    module_env.owns_source = true;
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);

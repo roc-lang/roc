@@ -141,67 +141,39 @@ pub fn runWithRaceConditions(self: *Self, max_concurrent: usize) !void {
 
 /// Simulate a deadlock scenario
 pub fn simulateDeadlock(self: *Self) !void {
-    // Simulate a deadlock by creating circular dependencies
-    // This creates tasks that depend on each other in a cycle
+    // Module IDs
 
-    // First, let's drain any existing tasks
-    while (self.builder.getNextTask()) |_| {}
-
-    // Create a scenario where modules depend on each other circularly
-    // Module A imports Module B, Module B imports Module C, Module C imports Module A
-
-    // Add parse tasks for three interdependent modules
     const module_a_id: Builder.ModuleId = 100;
     const module_b_id: Builder.ModuleId = 101;
     const module_c_id: Builder.ModuleId = 102;
 
-    // Create parse tasks
-    const parse_a = Task{
-        .kind = .{ .parse = .{
-            .module_id = module_a_id,
-            .source = try self.builder.config.allocator.dupe(u8,
-                \\interface ModuleA
-                \\    imports [ModuleB]
-                \\    exposes [valueA]
-                \\
-                \\valueA = ModuleB.valueB + 1
-            ),
-            .path = try self.builder.config.allocator.dupe(u8, "ModuleA.roc"),
-        } },
-    };
+    // Create modules directly using createAndParseModule
+    const source_a = try self.builder.config.allocator.dupe(u8,
+        \\interface ModuleA
+        \\    imports [ModuleB]
+        \\    exposes [valueA]
+        \\
+        \\valueA = ModuleB.valueB + 1
+    );
+    try self.builder.createAndParseModule(module_a_id, source_a, "ModuleA.roc");
 
-    const parse_b = Task{
-        .kind = .{ .parse = .{
-            .module_id = module_b_id,
-            .source = try self.builder.config.allocator.dupe(u8,
-                \\interface ModuleB
-                \\    imports [ModuleC]
-                \\    exposes [valueB]
-                \\
-                \\valueB = ModuleC.valueC + 1
-            ),
-            .path = try self.builder.config.allocator.dupe(u8, "ModuleB.roc"),
-        } },
-    };
+    const source_b = try self.builder.config.allocator.dupe(u8,
+        \\interface ModuleB
+        \\    imports [ModuleC]
+        \\    exposes [valueB]
+        \\
+        \\valueB = ModuleC.valueC + 2
+    );
+    try self.builder.createAndParseModule(module_b_id, source_b, "ModuleB.roc");
 
-    const parse_c = Task{
-        .kind = .{ .parse = .{
-            .module_id = module_c_id,
-            .source = try self.builder.config.allocator.dupe(u8,
-                \\interface ModuleC
-                \\    imports [ModuleA]
-                \\    exposes [valueC]
-                \\
-                \\valueC = ModuleA.valueA + 1
-            ),
-            .path = try self.builder.config.allocator.dupe(u8, "ModuleC.roc"),
-        } },
-    };
-
-    // Push all parse tasks
-    try self.builder.task_queue.push(parse_a);
-    try self.builder.task_queue.push(parse_b);
-    try self.builder.task_queue.push(parse_c);
+    const source_c = try self.builder.config.allocator.dupe(u8,
+        \\interface ModuleC
+        \\    imports [ModuleA]  # Circular dependency!
+        \\    exposes [valueC]
+        \\
+        \\valueC = ModuleA.valueA + 3
+    );
+    try self.builder.createAndParseModule(module_c_id, source_c, "ModuleC.roc");
 
     // Log the deadlock simulation start
     try self.log(.{ .task_started = .{
@@ -255,17 +227,13 @@ fn getTaskInfo(self: *Self, task: Task) TaskInfo {
             .task_type = "load_file",
             .module_id = load.module_id,
         },
-        .parse => |parse_task| .{
-            .task_type = "parse",
-            .module_id = parse_task.module_id,
-        },
         .canonicalize => |canon| .{
             .task_type = "canonicalize",
             .module_id = canon.module_id,
         },
-        .type_check => |type_check| .{
+        .type_check => |tc| .{
             .task_type = "type_check",
-            .module_id = type_check.module_id,
+            .module_id = tc.module_id,
         },
     };
 }

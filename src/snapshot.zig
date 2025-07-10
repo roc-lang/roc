@@ -373,6 +373,10 @@ fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []con
     var module_env = base.ModuleEnv.init(allocator);
     defer module_env.deinit();
 
+    // Duplicate source for ModuleEnv to own (it will free it in deinit)
+    module_env.source = try allocator.dupe(u8, roc_content);
+    module_env.owns_source = true;
+
     // Parse the content
     var ast = parse.parse(&module_env, roc_content);
     defer ast.deinit(allocator);
@@ -1038,7 +1042,7 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
 
     // Canonicalization Diagnostics
     const diagnostics = can_ir.getDiagnostics();
-    defer output.gpa.free(diagnostics);
+    // Note: getDiagnostics returns cached diagnostics owned by CIR - don't free them here
     for (diagnostics) |diagnostic| {
         canonicalize_problems += 1;
         var report: reporting.Report = can_ir.diagnosticToReport(diagnostic, output.gpa, content.source, snapshot_path) catch |err| {
@@ -1564,7 +1568,10 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    // Parse the source code (ONCE)
+    // Duplicate source for ModuleEnv to own (it will free it in deinit)
+    module_env.source = try gpa.dupe(u8, content.source);
+    module_env.owns_source = true;
+
     var parse_ast = switch (content.meta.node_type) {
         .file => parse.parse(&module_env, content.source),
         .header => parse.parseHeader(&module_env, content.source),

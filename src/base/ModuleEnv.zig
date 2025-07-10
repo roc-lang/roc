@@ -35,8 +35,14 @@ line_starts: collections.SafeList(u32),
 /// The source code of this module. Owned by ModuleEnv.
 source: []const u8 = "",
 
+/// Whether the source is owned by this ModuleEnv (should be freed in deinit)
+owns_source: bool = false,
+
 /// The module path (filename). Owned by ModuleEnv.
 module_path: []const u8 = "",
+
+/// Whether the module_path is owned by this ModuleEnv (should be freed in deinit)
+owns_module_path: bool = false,
 
 /// Initialize the module environment.
 pub fn init(gpa: std.mem.Allocator) Self {
@@ -48,9 +54,11 @@ pub fn init(gpa: std.mem.Allocator) Self {
         .ident_ids_for_slicing = collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
         .strings = StringLiteral.Store.initCapacityBytes(gpa, 4096),
         .types = types_mod.Store.initCapacity(gpa, 2048, 512),
-        .exposed_by_str = collections.SafeStringHashMap(void).init(),
-        .exposed_nodes = collections.SafeStringHashMap(u16).init(),
+        .exposed_by_str = collections.SafeStringHashMap(void).initCapacity(gpa, 64),
+        .exposed_nodes = collections.SafeStringHashMap(u16).initCapacity(gpa, 64),
         .line_starts = collections.SafeList(u32).initCapacity(gpa, 256),
+        .owns_source = false,
+        .owns_module_path = false,
     };
 }
 
@@ -65,10 +73,10 @@ pub fn deinit(self: *Self) void {
     self.exposed_nodes.deinit(self.gpa);
 
     // Free owned source and module path
-    if (self.source.len > 0) {
+    if (self.owns_source and self.source.len > 0) {
         self.gpa.free(self.source);
     }
-    if (self.module_path.len > 0) {
+    if (self.owns_module_path and self.module_path.len > 0) {
         self.gpa.free(self.module_path);
     }
 }

@@ -114,6 +114,10 @@ fn loadOrCompileCanIr(
         // comment here so we discuss the plan and make the necessary changes.
         var module_env = base.ModuleEnv.init(gpa);
 
+        // Set the source in module_env so canonicalization can access it
+        module_env.source = try gpa.dupe(u8, contents);
+        module_env.owns_source = true;
+
         var parse_ir = parse.parse(&module_env, contents);
         parse_ir.store.emptyScratch();
 

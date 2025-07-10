@@ -9,6 +9,7 @@ const collections = @import("collections.zig");
 const reporting = @import("reporting.zig");
 const load = @import("load/mod.zig");
 const cache = @import("cache/mod.zig");
+const canonicalize = @import("check/canonicalize.zig");
 
 const tracy = @import("tracy.zig");
 const Filesystem = @import("fs/Filesystem.zig");
@@ -185,16 +186,25 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     // Process diagnostics while builder is still alive
     {
-        // Check if we have a canonicalized result (either from cache or fresh compilation)
-        if (builder.getCanonicalizedResult(0)) |canon_result| {
-            // Count errors and warnings
-            total_errors += canon_result.error_count;
-            total_warnings += canon_result.warning_count;
-            was_cached = canon_result.was_cached;
-
-            // Check if type checking was done
-            if (builder.getTypeCheckedResult(0)) |type_result| {
-                total_errors += type_result.type_error_count;
+        // Check if we have a module
+        if (builder.getModule(0)) |module| {
+            switch (module.phase_data) {
+                .created, .parsed => {
+                    // Module didn't make it past parsing
+                },
+                .canonicalized => |canon_data| {
+                    // Count errors and warnings from canonicalization
+                    total_errors += canon_data.error_count;
+                    total_warnings += canon_data.warning_count;
+                    was_cached = canon_data.was_cached;
+                },
+                .type_checked => |tc_data| {
+                    // Count errors and warnings from both phases
+                    total_errors += tc_data.canonicalize_error_count;
+                    total_warnings += tc_data.canonicalize_warning_count;
+                    total_errors += tc_data.type_error_count;
+                    was_cached = false; // Type checked means fresh compilation
+                },
             }
 
             // If loaded from cache, we're done with counting
@@ -202,65 +212,16 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                 // For cached results, we don't generate detailed reports
                 // The user can use --no-cache to see detailed errors
             } else {
-                // For fresh compilation, check parse results for detailed error reporting
-                if (builder.getParseResult(0)) |parse_result| {
-                    const ast = parse_result.ast;
-                    // Make a copy of the filename to ensure it's not freed memory
-                    const filename = try gpa.dupe(u8, parse_result.module_path);
-                    defer gpa.free(filename);
+                // For fresh compilation, get AST for detailed error reporting
+                const ast = switch (module.phase_data) {
+                    .created => unreachable,
+                    .parsed => |data| data.ast,
+                    .canonicalized => |data| data.ast,
+                    .type_checked => |data| data.ast,
+                };
 
-                    // Count parse errors
-                    const tokenize_error_count = ast.tokenize_diagnostics.items.len;
-                    const parse_error_count = ast.parse_diagnostics.items.len;
-                    total_errors += @intCast(tokenize_error_count + parse_error_count);
-
-                    // Convert tokenize diagnostics to reports
-                    if (tokenize_error_count > 0) {
-                        for (ast.tokenize_diagnostics.items) |diagnostic| {
-                            const report = ast.tokenizeDiagnosticToReport(diagnostic, gpa) catch |err| {
-                                stderr.print("Error converting tokenize diagnostic to report: {}\n", .{err}) catch {};
-                                continue;
-                            };
-                            try all_reports.append(report);
-                        }
-                    }
-
-                    // Convert parse diagnostics to reports
-                    if (parse_error_count > 0) {
-                        for (ast.parse_diagnostics.items) |diagnostic| {
-                            if (builder.getModuleEnv(0)) |module_env| {
-                                const report = ast.parseDiagnosticToReport(module_env, diagnostic, gpa, filename) catch |err| {
-                                    stderr.print("Error converting parse diagnostic to report: {}\n", .{err}) catch {};
-                                    continue;
-                                };
-                                try all_reports.append(report);
-                            }
-                        }
-                    }
-
-                    // If there were no parse errors, convert CIR diagnostics
-                    if (tokenize_error_count == 0 and parse_error_count == 0 and (total_errors > 0 or total_warnings > 0)) {
-                        // Use stored diagnostics from CanonicalizedModule
-                        const diagnostics = canon_result.diagnostics;
-
-                        for (diagnostics) |diagnostic| {
-                            // Create report with owned data to avoid dangling references
-                            const report = @constCast(canon_result.cir).diagnosticToReport(diagnostic, gpa, null, filename) catch |err| {
-                                stderr.print("Error converting diagnostic to report: {}\n", .{err}) catch {};
-                                continue;
-                            };
-                            try all_reports.append(report);
-                        }
-                    }
-                }
-            }
-        } else {
-            // No canonicalized result - could be parse error or file not found
-            if (builder.getParseResult(0)) |parse_result| {
-                // We have parse results, so there must have been parse errors
-                const ast = parse_result.ast;
                 // Make a copy of the filename to ensure it's not freed memory
-                const filename = try gpa.dupe(u8, parse_result.module_path);
+                const filename = try gpa.dupe(u8, module.module_path);
                 defer gpa.free(filename);
 
                 // Count parse errors
@@ -282,20 +243,84 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                 // Convert parse diagnostics to reports
                 if (parse_error_count > 0) {
                     for (ast.parse_diagnostics.items) |diagnostic| {
-                        if (builder.getModuleEnv(0)) |module_env| {
-                            const report = ast.parseDiagnosticToReport(module_env, diagnostic, gpa, filename) catch |err| {
-                                stderr.print("Error converting parse diagnostic to report: {}\n", .{err}) catch {};
-                                continue;
-                            };
-                            try all_reports.append(report);
-                        }
+                        const report = ast.parseDiagnosticToReport(module.env, diagnostic, gpa, filename) catch |err| {
+                            stderr.print("Error converting parse diagnostic to report: {}\n", .{err}) catch {};
+                            continue;
+                        };
+                        try all_reports.append(report);
                     }
                 }
-            } else {
-                // No parse result - file not found or other error
-                stderr.print("Error: Failed to load {s}\n", .{args.path}) catch {};
-                builder.deinit();
-                std.process.exit(1);
+
+                // If there were no parse errors, convert CIR diagnostics
+                if (tokenize_error_count == 0 and parse_error_count == 0 and (total_errors > 0 or total_warnings > 0)) {
+                    // Get diagnostics from canonicalized or type checked phase
+                    const diagnostics = switch (module.phase_data) {
+                        .created, .parsed => unreachable,
+                        .canonicalized => |data| data.diagnostics,
+                        .type_checked => blk: {
+                            // For type checked, we might want both canon and type diagnostics
+                            // For now, just use empty since type errors aren't converted to reports yet
+                            break :blk &[_]canonicalize.CIR.Diagnostic{};
+                        },
+                    };
+
+                    const cir = switch (module.phase_data) {
+                        .created, .parsed => unreachable,
+                        .canonicalized => |data| data.cir,
+                        .type_checked => |data| data.cir,
+                    };
+
+                    for (diagnostics) |diagnostic| {
+                        // Create report with owned data to avoid dangling references
+                        const report = @constCast(cir).diagnosticToReport(diagnostic, gpa, module.env.source, filename) catch |err| {
+                            stderr.print("Error converting diagnostic to report: {}\n", .{err}) catch {};
+                            continue;
+                        };
+                        try all_reports.append(report);
+                    }
+                }
+            }
+        } else {
+            // No module found - file not found or other error
+            stderr.print("Error: Failed to load {s}\n", .{args.path}) catch {};
+            builder.deinit();
+            std.process.exit(1);
+        }
+    }
+
+    // If we only got to parse phase, handle parse errors
+    if (builder.getModule(0)) |module| {
+        if (module.phase_data == .parsed) {
+            const ast = module.phase_data.parsed.ast;
+            // Make a copy of the filename to ensure it's not freed memory
+            const filename = try gpa.dupe(u8, module.module_path);
+            defer gpa.free(filename);
+
+            // Count parse errors
+            const tokenize_error_count = ast.tokenize_diagnostics.items.len;
+            const parse_error_count = ast.parse_diagnostics.items.len;
+            total_errors += @intCast(tokenize_error_count + parse_error_count);
+
+            // Convert tokenize diagnostics to reports
+            if (tokenize_error_count > 0) {
+                for (ast.tokenize_diagnostics.items) |diagnostic| {
+                    const report = ast.tokenizeDiagnosticToReport(diagnostic, gpa) catch |err| {
+                        stderr.print("Error converting tokenize diagnostic to report: {}\n", .{err}) catch {};
+                        continue;
+                    };
+                    try all_reports.append(report);
+                }
+            }
+
+            // Convert parse diagnostics to reports
+            if (parse_error_count > 0) {
+                for (ast.parse_diagnostics.items) |diagnostic| {
+                    const report = ast.parseDiagnosticToReport(module.env, diagnostic, gpa, filename) catch |err| {
+                        stderr.print("Error converting parse diagnostic to report: {}\n", .{err}) catch {};
+                        continue;
+                    };
+                    try all_reports.append(report);
+                }
             }
         }
     }
@@ -304,9 +329,6 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     if (args.verbose and cache_config.enabled) {
         builder.cache_manager.printStats(gpa);
     }
-
-    // Now we can safely clean up the builder
-    builder.deinit();
 
     // Display results
     if (was_cached and (total_errors > 0 or total_warnings > 0)) {
@@ -344,6 +366,10 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         const cache_status = if (was_cached) " (loaded from cache)" else "";
         stdout.print(" for {s}{s}\n", .{ args.path, cache_status }) catch {};
     }
+
+    // Clean up the builder after we're done rendering reports
+    // This must be done after rendering because reports contain references to source text
+    builder.deinit();
 }
 
 fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {

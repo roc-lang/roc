@@ -295,7 +295,7 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 Variable ``color`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_color` to suppress this warning.
-The unused variable is declared here:
+
 **type_alias_decl.md:36:5:36:10:**
 ```roc
     color = Red
@@ -307,7 +307,7 @@ The unused variable is declared here:
 Variable ``person`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
-The unused variable is declared here:
+
 **type_alias_decl.md:33:5:33:11:**
 ```roc
     person = { name: "Alice", age: 30 }

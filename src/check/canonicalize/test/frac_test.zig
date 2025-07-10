@@ -21,6 +21,10 @@ fn parseAndCanonicalizeFrac(allocator: std.mem.Allocator, source: []const u8) !s
     const module_env = try allocator.create(base.ModuleEnv);
     module_env.* = base.ModuleEnv.init(allocator);
 
+    // Set the source in module_env so canonicalization can access it
+    module_env.source = try allocator.dupe(u8, source);
+    module_env.owns_source = true;
+
     const parse_ast = try allocator.create(parse.AST);
     parse_ast.* = parse.parseExpr(module_env, source);
 
@@ -304,6 +308,10 @@ test "fractional literal - NaN handling" {
         test_allocator.destroy(module_env);
     }
 
+    // Set the source in module_env so canonicalization can access it
+    module_env.source = try test_allocator.dupe(u8, "NaN");
+    module_env.owns_source = true;
+
     var parse_ast = parse.parseExpr(module_env, "NaN");
     defer parse_ast.deinit(test_allocator);
 
@@ -325,6 +333,10 @@ test "fractional literal - infinity handling" {
         module_env.deinit();
         test_allocator.destroy(module_env);
     }
+
+    // Set the source in module_env so canonicalization can access it
+    module_env.source = try test_allocator.dupe(u8, "Infinity");
+    module_env.owns_source = true;
 
     var parse_ast = parse.parseExpr(module_env, "Infinity");
     defer parse_ast.deinit(test_allocator);

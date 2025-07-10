@@ -257,7 +257,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``first`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
-The unused variable is declared here:
+
 **guards_2.md:2:6:2:11:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -269,7 +269,7 @@ The unused variable is declared here:
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
+
 **guards_2.md:2:19:2:23:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -299,7 +299,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``toStr`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
-The unused variable is declared here:
+
 **guards_2.md:2:77:2:86:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -329,7 +329,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 Variable ``x`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+
 **guards_2.md:3:6:3:7:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -341,7 +341,7 @@ The unused variable is declared here:
 Variable ``y`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
+
 **guards_2.md:3:9:3:10:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -371,7 +371,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``toStr`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
-The unused variable is declared here:
+
 **guards_2.md:3:50:3:59:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"

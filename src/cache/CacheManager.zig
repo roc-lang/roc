@@ -282,6 +282,15 @@ pub const CacheManager = struct {
         const module_env = try self.allocator.create(ModuleEnv);
         module_env.* = restored.module_env;
 
+        // Fix source and module_path pointers since they weren't cached
+        // Create a placeholder source that won't cause crashes when displayed
+        const placeholder_source = try self.allocator.dupe(u8, "# Source not available (loaded from cache)");
+        module_env.source = placeholder_source;
+
+        // Use a generic module path for cached modules
+        const cached_module_path = try self.allocator.dupe(u8, "<cached_module>");
+        module_env.module_path = cached_module_path;
+
         // Allocate CIR to heap for ownership
         const cir = try self.allocator.create(CIR);
 
@@ -290,14 +299,12 @@ pub const CacheManager = struct {
         // Immediately fix env pointer to point to our heap-allocated module_env
         cir.env = module_env;
 
-        // Source content is not cached - provide a placeholder
-        const source = try self.allocator.dupe(u8, "# Source loaded from cache");
-
         // Create ProcessResult with proper ownership
+        // Use the same source as ModuleEnv to avoid inconsistency
         const process_result = coordinate_simple.ProcessResult{
             .cir = cir,
             .reports = reports,
-            .source = source,
+            .source = module_env.source,
             .was_cached = true,
         };
 

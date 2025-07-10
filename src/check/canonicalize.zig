@@ -6289,6 +6289,10 @@ test "hexadecimal integer literals" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
+        // Set the source in module_env so canonicalization can access it
+        env.source = try gpa.dupe(u8, tc.literal);
+        env.owns_source = true;
+
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
 
@@ -6378,6 +6382,10 @@ test "binary integer literals" {
     for (test_cases) |tc| {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
+
+        // Set the source in module_env so canonicalization can access it
+        env.source = try gpa.dupe(u8, tc.literal);
+        env.owns_source = true;
 
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
@@ -6469,6 +6477,10 @@ test "octal integer literals" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
+        // Set the source in module_env so canonicalization can access it
+        env.source = try gpa.dupe(u8, tc.literal);
+        env.owns_source = true;
+
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
 
@@ -6558,6 +6570,10 @@ test "integer literals with uppercase base prefixes" {
     for (test_cases) |tc| {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
+
+        // Set the source in module_env so canonicalization can access it
+        env.source = try gpa.dupe(u8, tc.literal);
+        env.owns_source = true;
 
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
@@ -6951,7 +6967,12 @@ test "record literal uses record_unbound" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var ast = parse.parseExpr(&env, "{ x: 42, y: \"hello\" }");
+        // Set the source in module_env so canonicalization can access it
+        const source1 = "{ x: 42, y: \"hello\" }";
+        env.source = try gpa.dupe(u8, source1);
+        env.owns_source = true;
+
+        var ast = parse.parseExpr(&env, source1);
         defer ast.deinit(gpa);
 
         var cir = CIR.init(&env, "Test");
@@ -6987,7 +7008,12 @@ test "record literal uses record_unbound" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var ast = parse.parseExpr(&env, "{}");
+        // Set the source in module_env so canonicalization can access it
+        const source2 = "{}";
+        env.source = try gpa.dupe(u8, source2);
+        env.owns_source = true;
+
+        var ast = parse.parseExpr(&env, source2);
         defer ast.deinit(gpa);
 
         var cir = CIR.init(&env, "Test");
@@ -7022,7 +7048,12 @@ test "record literal uses record_unbound" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var ast = parse.parseExpr(&env, "{ value: 123 }");
+        // Set the source in module_env so canonicalization can access it
+        const source3 = "{ value: 123 }";
+        env.source = try gpa.dupe(u8, source3);
+        env.owns_source = true;
+
+        var ast = parse.parseExpr(&env, source3);
         defer ast.deinit(gpa);
 
         var cir = CIR.init(&env, "Test");
@@ -7066,7 +7097,12 @@ test "record_unbound basic functionality" {
     var env = base.ModuleEnv.init(gpa);
     defer env.deinit();
 
-    var ast = parse.parseExpr(&env, "{ x: 42, y: 99 }");
+    // Set the source in module_env so canonicalization can access it
+    const source = "{ x: 42, y: 99 }";
+    env.source = try gpa.dupe(u8, source);
+    env.owns_source = true;
+
+    var ast = parse.parseExpr(&env, source);
     defer ast.deinit(gpa);
 
     var cir = CIR.init(&env, "Test");
@@ -7108,8 +7144,13 @@ test "record_unbound with multiple fields" {
     var env = base.ModuleEnv.init(gpa);
     defer env.deinit();
 
+    // Set the source in module_env so canonicalization can access it
+    const source = "{ a: 123, b: 456, c: 789 }";
+    env.source = try gpa.dupe(u8, source);
+    env.owns_source = true;
+
     // Create record_unbound with multiple fields
-    var ast = parse.parseExpr(&env, "{ a: 123, b: 456, c: 789 }");
+    var ast = parse.parseExpr(&env, source);
     defer ast.deinit(gpa);
 
     var cir = CIR.init(&env, "Test");

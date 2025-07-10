@@ -40,7 +40,7 @@ TYPE MISMATCH - test_exact_pattern_crash.md:23:10:23:18
 Variable ``p1`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_p1` to suppress this warning.
-The unused variable is declared here:
+
 **test_exact_pattern_crash.md:19:5:19:7:**
 ```roc
     p1 = swap_pair((1, 2))
