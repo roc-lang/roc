@@ -14,6 +14,8 @@ const TokenIdx = Token.Idx;
 
 const exitOnOom = collections.utils.exitOnOom;
 
+const MAX_PARSE_DIAGNOSTICS: usize = 1_000;
+
 /// A parser which tokenizes and parses source code into an abstract syntax tree.
 pub const Parser = @This();
 
@@ -23,6 +25,7 @@ tok_buf: TokenizedBuffer,
 store: NodeStore,
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
+cached_malformed_node: ?Node.Idx,
 
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer) Parser {
@@ -36,6 +39,7 @@ pub fn init(tokens: TokenizedBuffer) Parser {
         .store = store,
         .scratch_nodes = .{},
         .diagnostics = .{},
+        .cached_malformed_node = null,
     };
 }
 
@@ -148,10 +152,12 @@ pub fn peekSkippingNewlines(self: *Parser) Token.Tag {
 
 /// add a diagnostic error
 pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.TokenizedRegion) void {
-    self.diagnostics.append(self.gpa, .{
-        .tag = tag,
-        .region = region,
-    }) catch |err| exitOnOom(err);
+    if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
+        self.diagnostics.append(self.gpa, .{
+            .tag = tag,
+            .region = region,
+        }) catch |err| exitOnOom(err);
+    }
 }
 /// add a malformed token
 pub fn pushMalformed(self: *Parser, comptime t: type, tag: AST.Diagnostic.Tag, start: TokenIdx) t {
@@ -161,21 +167,38 @@ pub fn pushMalformed(self: *Parser, comptime t: type, tag: AST.Diagnostic.Tag, s
         self.advanceOne(); // TODO: find a better point to advance to
     }
 
-    // Create a diagnostic region that points to the problematic token
-    // If the parser has moved too far from the start, use the start token for better error location
-    const diagnostic_start = if (self.pos > start and (self.pos - start) > 2) start else @min(pos, self.pos);
-    const diagnostic_end = if (self.pos > start and (self.pos - start) > 2) start + 1 else @max(pos, self.pos);
-    // If start equals end, make it a single-token region
-    const diagnostic_region = AST.TokenizedRegion{ .start = diagnostic_start, .end = if (diagnostic_start == diagnostic_end) diagnostic_start + 1 else diagnostic_end };
+    if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
+        // Create a diagnostic region that points to the problematic token
+        // If the parser has moved too far from the start, use the start token for better error location
+        const diagnostic_start = if (self.pos > start and (self.pos - start) > 2) start else @min(pos, self.pos);
+        const diagnostic_end = if (self.pos > start and (self.pos - start) > 2) start + 1 else @max(pos, self.pos);
+        // If start equals end, make it a single-token region
+        const diagnostic_region = AST.TokenizedRegion{ .start = diagnostic_start, .end = if (diagnostic_start == diagnostic_end) diagnostic_start + 1 else diagnostic_end };
 
-    // AST node should span the entire malformed expression
-    const ast_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+        // AST node should span the entire malformed expression
+        const ast_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
 
-    self.diagnostics.append(self.gpa, .{
-        .tag = tag,
-        .region = diagnostic_region,
-    }) catch |err| exitOnOom(err);
-    return self.store.addMalformed(t, tag, ast_region);
+        self.diagnostics.append(self.gpa, .{
+            .tag = tag,
+            .region = diagnostic_region,
+        }) catch |err| exitOnOom(err);
+        return self.store.addMalformed(t, tag, ast_region);
+    } else {
+        // Return a cached malformed node to avoid creating excessive nodes when diagnostic limit is exceeded
+        if (self.cached_malformed_node == null) {
+            // Create a generic malformed node with a fallback diagnostic tag
+            const fallback_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+            const nid = self.store.nodes.append(self.gpa, .{
+                .tag = .malformed,
+                .main_token = 0,
+                .data = .{ .lhs = @intFromEnum(AST.Diagnostic.Tag.expr_unexpected_token), .rhs = 0 },
+                .region = fallback_region,
+            });
+            self.cached_malformed_node = nid;
+        }
+        // Cast the cached node to the requested type
+        return @enumFromInt(@intFromEnum(self.cached_malformed_node.?));
+    }
 }
 /// parse a `.roc` module
 ///
