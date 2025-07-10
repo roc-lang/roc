@@ -450,11 +450,6 @@ This trades off some compile time for a much better runtime performance, since w
 look up which implementation to call at runtime (AKA dynamic dispatch).
 
 Related Files:
-- new compiler:
-  - [specialize_functions.zig](src/build/specialize_functions.zig)
-  - [specialize_functions folder](src/build/specialize_functions)
-  - [specialize_types.zig](src/build/specialize_types.zig)
-  - [specialize types folder](src/build/specialize_types)
 
 - old compiler:
   - [mono folder](crates/compiler/mono)
@@ -482,7 +477,6 @@ These pauses can be annoying in games for example, because it can result in a no
 Another approach, manual memory management, would allow you to produce the fastest program but it is also more tedious to write code that way.
 
 Reference counting implementation:
-- New compiler: [reference_count.zig](src/build/reference_count.zig) and the [reference_count folder](src/build/reference_count/) (work in progress)
 - Old compiler: [Mono folder](crates/compiler/mono/src) (search ref)
 
 ## Mutate in place
@@ -560,7 +554,7 @@ TODO
 
 Left & Right Hand Side: for example in `1 + 2`, `1` is on the left hand side and `2` is on the right hand side.
 
-## Span 
+## Span
 
 TODO
 
