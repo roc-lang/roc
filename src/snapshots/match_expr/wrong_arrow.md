@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Match expression with empty list pattern followed by list rest pattern (segfault regression test)
+description=Match expression with wrong arrow
 type=expr
 ~~~
 # SOURCE
@@ -11,7 +11,9 @@ match l {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - empty_list_before_rest_pattern.md:1:7:1:8
+PARSE ERROR - wrong_arrow.md:2:8:2:10
+PARSE ERROR - wrong_arrow.md:3:13:3:15
+UNDEFINED VARIABLE - wrong_arrow.md:1:7:1:8
 # PROBLEMS
 **PARSE ERROR**
 Match branches use `=>` instead of `->`.
