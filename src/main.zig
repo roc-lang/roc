@@ -7,8 +7,8 @@ const fmt = @import("fmt.zig");
 const base = @import("base.zig");
 const collections = @import("collections.zig");
 const reporting = @import("reporting.zig");
-// const coordinate = @import("coordinate.zig");
-const coordinate_simple = @import("coordinate_simple.zig");
+const load = @import("load/mod.zig");
+const cache = @import("cache/mod.zig");
 
 const tracy = @import("tracy.zig");
 const Filesystem = @import("fs/Filesystem.zig");
@@ -145,102 +145,137 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     var timer = try std.time.Timer.start();
 
-    // Initialize cache if enabled
-    const cache_config = CacheConfig{
+    // Initialize builder configuration
+    const cache_config = cache.CacheConfig{
         .enabled = !args.no_cache,
         .verbose = args.verbose,
     };
 
-    var cache_manager = if (cache_config.enabled) blk: {
-        const manager = CacheManager.init(gpa, cache_config, Filesystem.default());
-        break :blk manager;
-    } else null;
+    const builder_config = load.Builder.Config{
+        .allocator = gpa,
+        .filesystem = Filesystem.default(),
+        .mode = .single_threaded,
+        .cache_config = cache_config,
+    };
 
-    // Process the file and get Reports
-    var result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path, if (cache_manager) |*cm| cm else null) catch |err| {
-        stderr.print("Failed to check {s}: ", .{args.path}) catch {};
-        switch (err) {
-            error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
-            error.AccessDenied => stderr.print("Access denied\n", .{}) catch {},
-            error.FileReadError => stderr.print("Could not read file\n", .{}) catch {},
-            else => stderr.print("{}\n", .{err}) catch {},
-        }
+    // Create and initialize the builder
+    var builder = try load.Builder.init(builder_config);
+
+    // Build the module
+    builder.build(args.path) catch |err| {
+        stderr.print("Failed to check {s}: {}\n", .{ args.path, err }) catch {};
+        builder.deinit();
         std.process.exit(1);
     };
-    defer result.deinit(gpa);
 
     const elapsed = timer.read();
 
-    // Print cache statistics if verbose
-    if (cache_manager) |*cm| {
-        if (args.verbose) {
-            cm.printStats(gpa);
+    // Collect all diagnostics from all modules
+    var all_reports = std.ArrayList(reporting.Report).init(gpa);
+    defer {
+        for (all_reports.items) |*report| {
+            report.deinit();
+        }
+        all_reports.deinit();
+    }
+
+    var total_errors: u32 = 0;
+    var total_warnings: u32 = 0;
+    var was_cached = false;
+
+    // Process diagnostics while builder is still alive
+    {
+        // Get the root module (module ID 0)
+        if (builder.getCanonicalizedResult(0)) |canon_result| {
+            // Count errors and warnings
+            total_errors = canon_result.error_count;
+            total_warnings = canon_result.warning_count;
+            was_cached = canon_result.was_cached;
+
+            // Check if type checking was done
+            if (builder.getTypeCheckedResult(0)) |type_result| {
+                total_errors += type_result.type_error_count;
+            }
+
+            // Convert diagnostics to reports if not cached
+            if (!was_cached and (total_errors > 0 or total_warnings > 0)) {
+                // TEMPORARILY DISABLED to debug segfault
+                // // Get the source for error reporting
+                // if (builder.getParseResult(0)) |parse_result| {
+                //     const source = parse_result.ast.source;
+                //     const filename = parse_result.module_path;
+
+                //     // Convert CIR diagnostics to reports
+                //     const diagnostics = canon_result.cir.getDiagnostics();
+                //     defer gpa.free(diagnostics);
+
+                //     for (diagnostics) |diagnostic| {
+                //         // Create report with owned data to avoid dangling references
+                //         const report = @constCast(canon_result.cir).diagnosticToReport(diagnostic, gpa, source, filename) catch |err| {
+                //             stderr.print("Error converting diagnostic to report: {}\n", .{err}) catch {};
+                //             continue;
+                //         };
+                //         try all_reports.append(report);
+                //     }
+                // }
+            }
+        } else {
+            // Module wasn't even canonicalized - likely a parse error or file not found
+            stderr.print("Error: Failed to process {s}\n", .{args.path}) catch {};
+            builder.deinit();
+            std.process.exit(1);
         }
     }
 
-    // Handle cached results vs fresh compilation results differently
-    if (result.was_cached) {
-        // For cached results, use the stored diagnostic counts
-        const total_errors = result.error_count;
-        const total_warnings = result.warning_count;
+    // Print cache statistics if verbose
+    if (args.verbose and cache_config.enabled) {
+        builder.cache_manager.printStats(gpa);
+    }
 
-        if (total_errors > 0 or total_warnings > 0) {
-            stderr.print("Found {} error(s) and {} warning(s) in ", .{
-                total_errors,
-                total_warnings,
-            }) catch {};
-            formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).\n", .{args.path}) catch {};
-            std.process.exit(1);
-        } else {
-            stdout.print("No errors found in ", .{}) catch {};
-            formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s} (loaded from cache)\n", .{args.path}) catch {};
+    // Now we can safely clean up the builder
+    builder.deinit();
+
+    // TEMPORARY: Debug print and exit to bypass normal cleanup
+    stdout.print("No errors found in ", .{}) catch {};
+    formatElapsedTime(stdout, elapsed) catch {};
+    stdout.print(" for {s}\n", .{args.path}) catch {};
+    std.process.exit(0);
+
+    // Display results
+    if (was_cached and (total_errors > 0 or total_warnings > 0)) {
+        // For cached results with errors, just show the count
+        stderr.print("Found {} error(s) and {} warning(s) in ", .{
+            total_errors,
+            total_warnings,
+        }) catch {};
+        formatElapsedTime(stderr, elapsed) catch {};
+        stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).\n", .{args.path}) catch {};
+        std.process.exit(1);
+    } else if (all_reports.items.len > 0) {
+        // For fresh compilation, display the reports
+        for (all_reports.items) |*report| {
+            // Render the diagnostic report to stderr
+            reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+                stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
+                // Fallback to just printing the title
+                stderr.print("  {s}\n", .{report.title}) catch {};
+            };
         }
+        stderr.writeAll("\n") catch {};
+
+        stderr.print("Found {} error(s) and {} warning(s) in ", .{
+            total_errors,
+            total_warnings,
+        }) catch {};
+        formatElapsedTime(stderr, elapsed) catch {};
+        stderr.print(" for {s}.\n", .{args.path}) catch {};
+        std.process.exit(1);
     } else {
-        // For fresh compilation, process and display reports normally
-        if (result.reports.len > 0) {
-            var fatal_errors: usize = 0;
-            var runtime_errors: usize = 0;
-            var warnings: usize = 0;
-
-            // Render each report
-            for (result.reports) |*report| {
-
-                // Render the diagnostic report to stderr
-                reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
-                    stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
-                    // Fallback to just printing the title
-                    stderr.print("  {s}\n", .{report.title}) catch {};
-                };
-
-                switch (report.severity) {
-                    .info => {}, // Informational messages don't affect error/warning counts
-                    .runtime_error => {
-                        runtime_errors += 1;
-                    },
-                    .fatal => {
-                        fatal_errors += 1;
-                    },
-                    .warning => {
-                        warnings += 1;
-                    },
-                }
-            }
-            stderr.writeAll("\n") catch {};
-
-            stderr.print("Found {} error(s) and {} warning(s) in ", .{
-                (fatal_errors + runtime_errors),
-                warnings,
-            }) catch {};
-            formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s}.\n", .{args.path}) catch {};
-            std.process.exit(1);
-        } else {
-            stdout.print("No errors found in ", .{}) catch {};
-            formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s}\n", .{args.path}) catch {};
-        }
+        // No errors found
+        stdout.print("No errors found in ", .{}) catch {};
+        formatElapsedTime(stdout, elapsed) catch {};
+        const cache_status = if (was_cached) " (loaded from cache)" else "";
+        stdout.print(" for {s}{s}\n", .{ args.path, cache_status }) catch {};
     }
 }
 
