@@ -210,7 +210,7 @@ pub fn main() !void {
 
     if (snapshot_paths.items.len > 0) {
         for (snapshot_paths.items) |path| {
-            try collectWorkItems(snapshot_allocator, path, &work_list);
+            try collectWorkItems(gpa, path, &work_list);
         }
     } else {
         // process all files in snapshots_dir
@@ -661,6 +661,7 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !voi
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
         return;
     };
+    defer gpa.free(canonical_path);
 
     // Try to open as directory first
     if (std.fs.cwd().openDir(canonical_path, .{ .iterate = true })) |dir_handle| {
@@ -669,8 +670,9 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !voi
 
         // It's a directory
         if (isMultiFileSnapshot(canonical_path)) {
+            const path_copy = try gpa.dupe(u8, canonical_path);
             try work_list.append(WorkItem{
-                .path = canonical_path,
+                .path = path_copy,
                 .kind = .multi_file_snapshot,
             });
         } else {
@@ -680,36 +682,33 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !voi
                 if (entry.name[0] == '.') continue;
 
                 const full_path = try std.fs.path.join(gpa, &[_][]const u8{ canonical_path, entry.name });
+                defer gpa.free(full_path);
 
                 if (entry.kind == .directory) {
                     try collectWorkItems(gpa, full_path, work_list);
-                    gpa.free(full_path);
                 } else if (entry.kind == .file and isSnapshotFile(entry.name)) {
+                    const path_copy = try gpa.dupe(u8, full_path);
                     try work_list.append(WorkItem{
-                        .path = full_path,
+                        .path = path_copy,
                         .kind = .snapshot_file,
                     });
-                } else {
-                    gpa.free(full_path);
                 }
             }
-            gpa.free(canonical_path);
         }
     } else |dir_err| {
         // Not a directory, try as file
         if (dir_err == error.NotDir) {
             if (isSnapshotFile(canonical_path)) {
+                const path_copy = try gpa.dupe(u8, canonical_path);
                 try work_list.append(WorkItem{
-                    .path = canonical_path,
+                    .path = path_copy,
                     .kind = .snapshot_file,
                 });
             } else {
                 std.log.err("file '{s}' is not a snapshot file (must end with .md)", .{canonical_path});
-                gpa.free(canonical_path);
             }
         } else {
             std.log.err("failed to access path '{s}': {s}", .{ canonical_path, @errorName(dir_err) });
-            gpa.free(canonical_path);
         }
     }
 }
