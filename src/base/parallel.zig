@@ -5,10 +5,16 @@ const Thread = std.Thread;
 /// Atomic type for thread-safe usize operations
 pub const AtomicUsize = std.atomic.Value(usize);
 
+/// Processing options for parallel execution
+pub const ProcessOptions = struct {
+    max_threads: usize,
+    use_per_thread_arenas: bool,
+};
+
 /// Worker thread function signature
-/// Takes: context, item_id -> void
+/// Takes: allocator, context, item_id -> void
 pub fn WorkerFn(comptime T: type) type {
-    return *const fn (context: *T, item_id: usize) void;
+    return *const fn (allocator: Allocator, context: *T, item_id: usize) void;
 }
 
 /// Internal worker thread context
@@ -18,15 +24,35 @@ fn WorkerContext(comptime T: type) type {
         index: *AtomicUsize,
         worker_fn: WorkerFn(T),
         context: *T,
+        base_allocator: Allocator,
+        options: ProcessOptions,
     };
 }
 
 /// Worker thread implementation using work-stealing
 fn workerThread(comptime T: type, ctx: WorkerContext(T)) void {
-    while (true) {
-        const i = ctx.index.fetchAdd(1, .monotonic);
-        if (i >= ctx.work_item_count) break;
-        ctx.worker_fn(ctx.context, i);
+    if (ctx.options.use_per_thread_arenas) {
+        // Use per-thread arena allocator with page allocator that clears between work items
+        // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = std.heap.ArenaAllocator.init(ctx.base_allocator);
+        defer arena.deinit();
+
+        while (true) {
+            const i = ctx.index.fetchAdd(1, .monotonic);
+            if (i >= ctx.work_item_count) break;
+
+            // Clear arena between work items
+            _ = arena.reset(.retain_capacity);
+
+            ctx.worker_fn(arena.allocator(), ctx.context, i);
+        }
+    } else {
+        // Use the base allocator directly
+        while (true) {
+            const i = ctx.index.fetchAdd(1, .monotonic);
+            if (i >= ctx.work_item_count) break;
+            ctx.worker_fn(ctx.base_allocator, ctx.context, i);
+        }
     }
 }
 
@@ -54,13 +80,13 @@ pub fn process(
     worker_fn: WorkerFn(T),
     allocator: Allocator,
     work_item_count: usize,
-    max_threads: usize,
+    options: ProcessOptions,
 ) !void {
     if (work_item_count == 0) {
         return;
     }
 
-    if (max_threads == 1) {
+    if (options.max_threads == 1) {
         // Process everything in main thread
         var index = AtomicUsize.init(0);
         const ctx = WorkerContext(T){
@@ -68,11 +94,13 @@ pub fn process(
             .index = &index,
             .worker_fn = worker_fn,
             .context = context,
+            .base_allocator = allocator,
+            .options = options,
         };
         workerThread(T, ctx);
     } else {
         const thread_count = @min(
-            if (max_threads == 0) std.Thread.getCpuCount() catch 1 else max_threads,
+            if (options.max_threads == 0) std.Thread.getCpuCount() catch 1 else options.max_threads,
             work_item_count,
         );
 
@@ -92,6 +120,8 @@ pub fn process(
                 .index = &index,
                 .worker_fn = worker_fn,
                 .context = context,
+                .base_allocator = allocator,
+                .options = options,
             };
             if (i < threads.len) {
                 threads[i] = try Thread.spawn(.{}, workerThread, .{ T, ctx });
@@ -123,7 +153,8 @@ test "process basic functionality" {
     };
 
     const TestWorker = struct {
-        fn worker(item: *MyContext, item_id: usize) void {
+        fn worker(worker_allocator: Allocator, item: *MyContext, item_id: usize) void {
+            _ = worker_allocator; // unused in this test
             const value = item.items[item_id];
             if (value < 0) {
                 item.outputs[item_id] = -1;
@@ -146,7 +177,7 @@ test "process basic functionality" {
         TestWorker.worker,
         allocator,
         outputs.len,
-        1,
+        .{ .max_threads = 1, .use_per_thread_arenas = false },
     );
     try testing.expectEqual(
         outputs,

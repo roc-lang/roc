@@ -95,8 +95,10 @@ fn warn(comptime fmt_str: []const u8, args: anytype) void {
 
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
-    // Use c_allocator for argument parsing
-    const gpa = std.heap.c_allocator;
+    // Use GeneralPurposeAllocator for command-line parsing and general work
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_impl.deinit();
+    const gpa = gpa_impl.allocator();
 
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
@@ -175,17 +177,6 @@ pub fn main() !void {
         max_threads = 1;
     }
 
-    // Choose allocator for snapshot processing based on debug mode
-    var gpa_impl: ?std.heap.GeneralPurposeAllocator(.{}) = null;
-    defer if (gpa_impl) |*impl| {
-        _ = impl.deinit();
-    };
-
-    const snapshot_allocator = if (debug_mode) blk: {
-        gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-        break :blk gpa_impl.?.allocator();
-    } else std.heap.c_allocator;
-
     const config = Config{
         .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
         .generate_html = generate_html,
@@ -221,7 +212,7 @@ pub fn main() !void {
     log("collected {d} work items in {d} ms", .{ work_list.items.len, collect_duration_ms });
 
     // Stage 2: Process work items (in parallel or single-threaded)
-    const result = try processWorkItems(snapshot_allocator, work_list, max_threads, config);
+    const result = try processWorkItems(gpa, work_list, max_threads, debug_mode, config);
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
 
@@ -599,7 +590,6 @@ const WorkItem = struct {
 const WorkList = std.ArrayList(WorkItem);
 
 const ProcessContext = struct {
-    allocator: Allocator,
     work_list: *WorkList,
     config: Config,
     success_count: parallel.AtomicUsize,
@@ -607,12 +597,12 @@ const ProcessContext = struct {
 };
 
 /// Worker function that processes a single work item
-fn processWorkItem(context: *ProcessContext, item_id: usize) void {
+fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usize) void {
     const work_item = context.work_list.items[item_id];
     const success = switch (work_item.kind) {
-        .snapshot_file => processSnapshotFile(context.allocator, work_item.path, context.config.maybe_fuzz_corpus_path, context.config.generate_html) catch false,
+        .snapshot_file => processSnapshotFile(allocator, work_item.path, context.config.maybe_fuzz_corpus_path, context.config.generate_html) catch false,
         .multi_file_snapshot => blk: {
-            processMultiFileSnapshot(context.allocator, work_item.path, context.config.generate_html) catch {
+            processMultiFileSnapshot(allocator, work_item.path, context.config.generate_html) catch {
                 break :blk false;
             };
             break :blk true;
@@ -627,17 +617,22 @@ fn processWorkItem(context: *ProcessContext, item_id: usize) void {
 }
 
 /// Stage 2: Process work items in parallel using the parallel utility
-fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, config: Config) !ProcessResult {
+fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, debug: bool, config: Config) !ProcessResult {
     if (work_list.items.len == 0) {
         return ProcessResult{ .success = 0, .failed = 0 };
     }
 
     var context = ProcessContext{
-        .allocator = gpa,
         .work_list = @constCast(&work_list),
         .config = config,
         .success_count = parallel.AtomicUsize.init(0),
         .failed_count = parallel.AtomicUsize.init(0),
+    };
+
+    // Use per-thread arena allocators for snapshot processing
+    const options = parallel.ProcessOptions{
+        .max_threads = max_threads,
+        .use_per_thread_arenas = !debug,
     };
 
     try parallel.process(
@@ -646,7 +641,7 @@ fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, con
         processWorkItem,
         gpa,
         work_list.items.len,
-        max_threads,
+        options,
     );
 
     return ProcessResult{
