@@ -11,6 +11,7 @@
 //! the IR, as well as converting it to S-expressions for debugging and visualization.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const base = @import("../../base.zig");
 const tokenize = @import("tokenize.zig");
@@ -139,26 +140,49 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
 /// Convert TokenizedRegion to base.Region for error reporting
 pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) base.Region {
     const token_count: u32 = @intCast(self.tokens.tokens.len);
+    const tags = self.tokens.tokens.items(.tag);
 
-    // Ensure both start and end are within bounds
-    const safe_start_idx = if (tokenized_region.start >= token_count)
-        token_count - 1
-    else
-        tokenized_region.start;
+    // Debug: warn if diagnostic region includes leading or trailing newline tokens
+    switch (builtin.mode) {
+        .Debug => {
+            const start_idx = @min(tokenized_region.start, token_count - 1);
+            const end_idx = @min(tokenized_region.end, token_count - 1);
 
-    const safe_end_idx = if (tokenized_region.end >= token_count)
-        token_count - 1
-    else
-        tokenized_region.end;
+            if (start_idx < token_count and tags[start_idx] == .Newline) {
+                std.log.info("WARNING: Diagnostic region starts with Newline token at index {}", .{start_idx});
+            }
+            if (end_idx < token_count and tags[end_idx] == .Newline) {
+                std.log.info("WARNING: Diagnostic region ends with Newline token at index {}", .{end_idx});
+            }
+        },
+        else => {},
+    }
 
-    // Ensure end is at least start to prevent invalid regions
-    const final_end_idx = if (safe_end_idx < safe_start_idx)
-        safe_start_idx
-    else
-        safe_end_idx;
+    // TODO we are stripping leading and trailing Newline tokens here because they are currently
+    // not given proper Regions. I'm not sure if they should be... it may have been a performance
+    // optimization. The issue is that a lot of our reports currently include these regions and
+    // when we slice the source bytes we get a starting offset of 0 and an ending offset in the middle
+    // of the file, which means we will repeatedly utf8-validate very large slices of the source.
+    //
+    // Once we are confident none of the report diagnostics include Newline, or we determine that
+    // Newline tokens should have proper regions, we can remove the logic below, and convert the above
+    // into a debug assertion.
+
+    // Find the first non-newline token at or after start
+    var safe_start_idx = @min(tokenized_region.start, token_count - 1);
+    while (safe_start_idx < token_count and tags[safe_start_idx] == .Newline) {
+        safe_start_idx += 1;
+    }
+    if (safe_start_idx >= token_count) safe_start_idx = token_count - 1;
+
+    // Find the last non-newline token at or before end
+    var safe_end_idx = @min(tokenized_region.end, token_count - 1);
+    while (safe_end_idx > safe_start_idx and tags[safe_end_idx] == .Newline) {
+        safe_end_idx -= 1;
+    }
 
     const start_region = self.tokens.resolve(safe_start_idx);
-    const end_region = self.tokens.resolve(final_end_idx);
+    const end_region = self.tokens.resolve(safe_end_idx);
     return .{
         .start = start_region.start,
         .end = end_region.end,
