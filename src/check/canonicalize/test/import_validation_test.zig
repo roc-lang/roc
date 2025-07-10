@@ -70,7 +70,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, &module_envs);
@@ -155,7 +155,7 @@ test "import validation - no module_envs provided" {
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -209,7 +209,7 @@ test "import interner - Import.Idx functionality" {
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -297,7 +297,7 @@ test "import interner - comprehensive usage example" {
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -394,7 +394,7 @@ test "module scopes - imports are only available in their scope" {
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -457,7 +457,7 @@ test "module-qualified lookups with e_lookup_external" {
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -553,7 +553,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, &module_envs);

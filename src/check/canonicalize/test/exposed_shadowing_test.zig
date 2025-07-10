@@ -24,7 +24,7 @@ test "exposed but not implemented - values" {
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -65,7 +65,7 @@ test "exposed but not implemented - types" {
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -108,7 +108,7 @@ test "redundant exposed entries" {
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -157,7 +157,7 @@ test "shadowing with exposed items" {
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -195,7 +195,7 @@ test "shadowing non-exposed items" {
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -241,7 +241,7 @@ test "exposed items correctly tracked across shadowing" {
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -306,7 +306,7 @@ test "complex case with redundant, shadowing, and not implemented" {
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -366,7 +366,7 @@ test "exposed_by_str is populated correctly" {
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -400,7 +400,7 @@ test "exposed_by_str persists after canonicalization" {
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -434,7 +434,7 @@ test "exposed_by_str never has entries removed" {
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);

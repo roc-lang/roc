@@ -1230,7 +1230,7 @@ pub const ReportBuilder = struct {
         // Get region info for the import
         const import_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items,
+            self.module_env.line_starts.items.items,
             import_region.start.offset,
             import_region.end.offset,
         ) catch return report;
