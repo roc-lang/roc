@@ -68,7 +68,7 @@ fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) Test
 
 /// helper to advance the parser until a non-newline token is encountered
 pub fn advance(self: *Parser) void {
-    while (true and self.peek() != .EndOfFile) {
+    while (self.peek() != .EndOfFile) {
         self.pos += 1;
         if (self.peek() != .Newline) {
             break;
@@ -2238,6 +2238,14 @@ pub fn parseBranch(self: *Parser) AST.MatchBranch.Idx {
     const start = self.pos;
     const p = self.parsePattern(.alternatives_allowed);
     if (self.peek() == .OpFatArrow) {
+        self.advance();
+    } else if (self.peek() == .OpArrow) {
+        // Add diagnostic for wrong arrow
+        self.pushDiagnostic(.match_branch_wrong_arrow, .{
+            .start = self.pos,
+            .end = self.pos,
+        });
+
         self.advance();
     }
     const b = self.parseExpr();

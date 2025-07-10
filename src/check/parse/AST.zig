@@ -518,6 +518,9 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
             try report.document.addIndent(1);
             try report.document.addCodeBlock("module(a).method : a -> b");
         },
+        .match_branch_wrong_arrow => {
+            try report.document.addReflowingText("Match branches use `=>` instead of `->`.");
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -646,6 +649,7 @@ pub const Diagnostic = struct {
         var_must_have_ident,
         var_expected_equals,
         for_expected_in,
+        match_branch_wrong_arrow,
     };
 };
 
