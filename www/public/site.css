@@ -170,7 +170,7 @@ hr {
     position: relative;
     top: 14px;
     height: 4.5rem;
-    fill: #000;
+    fill: #fff;
 }
 
 #sponsor-logos .logo-decem .cls-1 {
@@ -896,7 +896,7 @@ details {
     }
 
     #sponsor-logos .logo-lambda-class {
-        fill: #fff;
+        fill: #000;
     }
 }
 
