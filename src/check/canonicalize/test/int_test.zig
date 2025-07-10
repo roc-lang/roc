@@ -411,7 +411,7 @@ test "invalid number literal - too large for u128" {
 
     // Check that we have an invalid_num_literal diagnostic
     const diagnostics = resources.cir.getDiagnostics();
-    defer allocator.free(diagnostics);
+    // Note: getDiagnostics returns cached diagnostics owned by CIR - don't free them here
     try testing.expect(diagnostics.len > 0);
 
     var found_invalid_num = false;
@@ -469,7 +469,7 @@ test "invalid number literal - negative too large for i128" {
 
     // Check that we have an invalid_num_literal diagnostic
     const diagnostics = resources.cir.getDiagnostics();
-    defer allocator.free(diagnostics);
+    // Note: getDiagnostics returns cached diagnostics owned by CIR - don't free them here
     try testing.expect(diagnostics.len > 0);
 
     var found_invalid_num = false;
