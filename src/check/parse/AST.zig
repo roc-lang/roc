@@ -172,7 +172,7 @@ fn getTokenText(self: *AST, token_idx: Token.Idx) []const u8 {
 }
 
 /// Convert a parse diagnostic to a Report for rendering
-pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
+pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
     const raw_region = self.tokenizedRegionToRegion(diagnostic.region);
 
     // Ensure region bounds are valid for source slicing
@@ -530,19 +530,8 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
 
     // Add source context if we have a valid region
     if (region.start.offset <= region.end.offset and region.end.offset <= self.source.len) {
-        // Compute line_starts from source for proper region info calculation
-        var line_starts = collections.SafeList(u32).initCapacity(allocator, 256);
-        defer line_starts.deinit(allocator);
-
-        _ = line_starts.append(allocator, 0); // First line starts at 0
-        for (self.source, 0..) |char, i| {
-            if (char == '\n') {
-                _ = line_starts.append(allocator, @intCast(i + 1));
-            }
-        }
-
         // Use proper region info calculation with converted region
-        const region_info = base.RegionInfo.position(self.source, line_starts.items.items, region.start.offset, region.end.offset) catch {
+        const region_info = base.RegionInfo.position(self.source, env.line_starts.items.items, region.start.offset, region.end.offset) catch {
             return report; // Return report without source context if region calculation fails
         };
 
