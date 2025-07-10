@@ -1635,7 +1635,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
         original_tree.toStringPretty(original_sexpr.writer().any());
 
         // Create and serialize MmapCache
-        const cache_data = try cache.CacheModule.create(gpa, &module_env, &can_ir);
+        const cache_data = try cache.CacheModule.create(gpa, &module_env, &can_ir, 0, 0);
         defer gpa.free(cache_data);
 
         // Deserialize back
