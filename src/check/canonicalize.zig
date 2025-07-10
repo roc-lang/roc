@@ -3089,9 +3089,6 @@ fn canonicalizePattern(
             // Mark the start of scratch patterns for non-rest patterns only
             const scratch_top = self.can_ir.store.scratchPatternTop();
 
-            // Create element type variable early so list rest patterns can use it
-            const elem_var = self.can_ir.env.types.fresh();
-
             // Track rest pattern information
             var rest_index: ?u32 = null;
             var rest_pattern: ?CIR.Pattern.Idx = null;
@@ -3124,9 +3121,9 @@ fn canonicalizePattern(
                                 .ident = ident_idx,
                             } }, name_region);
 
-                            // Set the rest variable's type to be a list of the same element type
-                            const rest_list_type = Content{ .structure = .{ .list = elem_var } };
-                            _ = self.can_ir.setTypeVarAtPat(assign_idx, rest_list_type);
+                            // Note: The rest variable's type will be set later when we know elem_var
+                            // For now, just give it a flex var
+                            _ = self.can_ir.setTypeVarAtPat(assign_idx, Content{ .flex_var = null });
 
                             // Introduce the identifier into scope
                             switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
@@ -3162,7 +3159,7 @@ fn canonicalizePattern(
 
                     // Store rest information
                     // The rest_index should be the number of patterns canonicalized so far
-                    const patterns_so_far = self.can_ir.store.scratch_patterns.items.items.len - scratch_top;
+                    const patterns_so_far = self.can_ir.store.scratch_patterns.top() - scratch_top;
                     rest_index = @intCast(patterns_so_far);
                     rest_pattern = current_rest_pattern;
                 } else {
@@ -3182,13 +3179,50 @@ fn canonicalizePattern(
             // Create span of the canonicalized non-rest patterns
             const patterns_span = self.can_ir.store.patternSpanFrom(scratch_top);
 
-            // Create fresh type variable for the list
-            const list_var = self.can_ir.env.types.fresh();
+            // Handle empty list patterns specially
+            if (patterns_span.span.len == 0 and rest_index == null) {
+                // Empty list pattern - create a simple pattern without elem_var
+                const pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{
+                    .list = .{
+                        .list_var = @enumFromInt(0), // Will be set by setTypeVarAtPat
+                        .elem_var = @enumFromInt(0), // Not used for empty lists
+                        .patterns = patterns_span,
+                        .rest_info = null,
+                    },
+                }, region);
+
+                // Set type variable for the pattern - use list_unbound for empty lists
+                _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{ .structure = .list_unbound });
+
+                return pattern_idx;
+            }
+
+            // For non-empty list patterns, use the first pattern's type variable as elem_var
+            const elem_var: TypeVar = if (patterns_span.span.len > 0) blk: {
+                const first_pattern_idx = self.can_ir.store.slicePatterns(patterns_span)[0];
+                break :blk @enumFromInt(@intFromEnum(first_pattern_idx));
+            } else blk: {
+                // Must be a rest-only pattern like [..] or [.. as rest]
+                // Create a placeholder pattern for the element type
+                const placeholder_idx = try self.can_ir.store.addPattern(CIR.Pattern{
+                    .underscore = {},
+                }, region);
+                // Give it a flex type variable
+                _ = self.can_ir.setTypeVarAtPat(placeholder_idx, Content{ .flex_var = null });
+                break :blk @enumFromInt(@intFromEnum(placeholder_idx));
+            };
+
+            // Update rest pattern's type if it exists
+            if (rest_pattern) |rest_pat| {
+                // Update the rest pattern's type to be a list of elem_var
+                const rest_list_type = Content{ .structure = .{ .list = elem_var } };
+                _ = self.can_ir.env.types.setVarContent(@enumFromInt(@intFromEnum(rest_pat)), rest_list_type) catch |err| exitOnOom(err);
+            }
 
             // Create the list pattern with rest info
             const pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{
                 .list = .{
-                    .list_var = list_var,
+                    .list_var = @enumFromInt(0), // Will be set by setTypeVarAtPat
                     .elem_var = elem_var,
                     .patterns = patterns_span,
                     .rest_info = if (rest_index) |idx| .{ .index = idx, .pattern = rest_pattern } else null,
