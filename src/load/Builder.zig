@@ -349,7 +349,8 @@ pub fn processTask(self: *Self, task: Task) !void {
         },
         .parse => |parse_task| {
             try self.parseModule(parse_task.module_id, parse_task.source, parse_task.path);
-            self.config.allocator.free(parse_task.source);
+            // Don't free parse_task.source here - ownership is transferred to the AST
+            // It will be freed when the AST is destroyed in Builder.deinit()
             self.config.allocator.free(parse_task.path);
         },
         .canonicalize => |canon| {
@@ -424,7 +425,8 @@ fn parseModule(self: *Self, module_id: ModuleId, source: []const u8, path: []con
     // Calculate line starts
     try module_env.calcLineStarts(source);
 
-    // Parse the source - this returns an owned AST
+    // Parse the source - this returns an AST that references the source
+    // The AST now owns the source memory
     const parse_result = parse.parse(module_env, source);
 
     // Store the module environment

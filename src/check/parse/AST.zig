@@ -94,6 +94,7 @@ pub fn appendRegionInfoToSexprTree(self: *AST, env: *base.ModuleEnv, tree: *SExp
 }
 
 pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
+    defer gpa.free(self.source);
     defer self.tokens.deinit();
     defer self.store.deinit();
     defer self.tokenize_diagnostics.deinit(gpa);
