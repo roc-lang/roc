@@ -61,8 +61,12 @@ pub const Header = struct {
     all_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
 
+    /// Diagnostic counts for accurate reporting when loading from cache
+    error_count: u32,
+    warning_count: u32,
+
     /// Fixed padding to ensure alignment
-    _padding: [24]u8 = [_]u8{0} ** 24,
+    _padding: [16]u8 = [_]u8{0} ** 16,
 
     /// Error specific to initializing a Header from bytes
     pub const InitError = error{
@@ -105,6 +109,8 @@ pub const CacheModule = struct {
         allocator: Allocator,
         module_env: *const base.ModuleEnv,
         cir: *const CIR,
+        error_count: u32,
+        warning_count: u32,
     ) ![]align(SERIALIZATION_ALIGNMENT) u8 {
         // Calculate component sizes
         const node_store_size = cir.store.serializedSize();
@@ -185,6 +191,8 @@ pub const CacheModule = struct {
             .external_decls = .{ .offset = external_decls_offset, .length = @intCast(external_decls_size) },
             .all_defs = cir.all_defs,
             .all_statements = cir.all_statements,
+            .error_count = error_count,
+            .warning_count = warning_count,
         };
 
         // Get data section (must be aligned)
@@ -603,7 +611,7 @@ test "create and restore cache" {
     original_tree.toStringPretty(original_sexpr.writer().any());
 
     // Create cache from real data
-    const cache_data = try CacheModule.create(gpa, &module_env, &cir);
+    const cache_data = try CacheModule.create(gpa, &module_env, &cir, 0, 0);
     defer gpa.free(cache_data);
 
     // Load cache
@@ -678,7 +686,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     original_tree.toStringPretty(original_sexpr.writer().any());
 
     // Create cache from real data
-    const cache_data = try CacheModule.create(gpa, &module_env, &cir);
+    const cache_data = try CacheModule.create(gpa, &module_env, &cir, 0, 0);
     defer gpa.free(cache_data);
 
     // In-memory file storage for comprehensive mock filesystem
