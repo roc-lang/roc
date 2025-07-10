@@ -108,7 +108,8 @@ pub fn main() !void {
     var expect_fuzz_corpus_path: bool = false;
     var generate_html: bool = false;
     var debug_mode: bool = false;
-    var single_thread: bool = false;
+    var max_threads: usize = 0;
+    var expect_threads: bool = false;
 
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--verbose")) {
@@ -117,8 +118,12 @@ pub fn main() !void {
             generate_html = true;
         } else if (std.mem.eql(u8, arg, "--debug")) {
             debug_mode = true;
-        } else if (std.mem.eql(u8, arg, "--singlethread")) {
-            single_thread = true;
+        } else if (std.mem.eql(u8, arg, "--threads")) {
+            if (max_threads != 0) {
+                std.log.err("`--threads` should only be specified once.", .{});
+                std.process.exit(1);
+            }
+            expect_threads = true;
         } else if (std.mem.eql(u8, arg, "--fuzz-corpus")) {
             if (maybe_fuzz_corpus_path != null) {
                 std.log.err("`--fuzz-corpus` should only be specified once.", .{});
@@ -128,6 +133,12 @@ pub fn main() !void {
         } else if (expect_fuzz_corpus_path) {
             maybe_fuzz_corpus_path = arg;
             expect_fuzz_corpus_path = false;
+        } else if (expect_threads) {
+            max_threads = std.fmt.parseInt(usize, arg, 10) catch |err| {
+                std.log.err("Invalid thread count '{s}': {s}", .{ arg, @errorName(err) });
+                std.process.exit(1);
+            };
+            expect_threads = false;
         } else if (std.mem.eql(u8, arg, "--help")) {
             const usage =
                 \\Usage: roc snapshot [options] [snapshot_paths...]
@@ -136,7 +147,7 @@ pub fn main() !void {
                 \\  --verbose       Enable verbose logging
                 \\  --html          Generate HTML output files
                 \\  --debug         Use GeneralPurposeAllocator for debugging (default: c_allocator)
-                \\  --singlethread  Process snapshots in single-threaded mode. Implied with --debug.
+                \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.
                 \\  --fuzz-corpus <path>  Specify the path to the fuzz corpus
                 \\
                 \\Arguments:
@@ -152,6 +163,16 @@ pub fn main() !void {
     if (expect_fuzz_corpus_path) {
         std.log.err("Expected fuzz corpus path, but none was provided", .{});
         std.process.exit(1);
+    }
+
+    if (expect_threads) {
+        std.log.err("Expected thread count, but none was provided", .{});
+        std.process.exit(1);
+    }
+
+    // Force single-threaded mode in debug mode
+    if (debug_mode and max_threads == 0) {
+        max_threads = 1;
     }
 
     // Choose allocator for snapshot processing based on debug mode
@@ -200,7 +221,7 @@ pub fn main() !void {
     log("collected {d} work items in {d} ms", .{ work_list.items.len, collect_duration_ms });
 
     // Stage 2: Process work items (in parallel or single-threaded)
-    const result = try processWorkItems(snapshot_allocator, work_list, single_thread or debug_mode, config);
+    const result = try processWorkItems(snapshot_allocator, work_list, max_threads, config);
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
 
@@ -606,7 +627,7 @@ fn processWorkItem(context: *ProcessContext, item_id: usize) void {
 }
 
 /// Stage 2: Process work items in parallel using the parallel utility
-fn processWorkItems(gpa: Allocator, work_list: WorkList, single_thread: bool, config: Config) !ProcessResult {
+fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, config: Config) !ProcessResult {
     if (work_list.items.len == 0) {
         return ProcessResult{ .success = 0, .failed = 0 };
     }
@@ -618,8 +639,6 @@ fn processWorkItems(gpa: Allocator, work_list: WorkList, single_thread: bool, co
         .success_count = parallel.AtomicUsize.init(0),
         .failed_count = parallel.AtomicUsize.init(0),
     };
-
-    const max_threads: usize = if (single_thread) 1 else 0;
 
     try parallel.process(
         ProcessContext,
