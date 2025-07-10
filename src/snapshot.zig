@@ -1071,6 +1071,7 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
     while (problems_itr.next()) |problem_idx| {
         check_types_problem += 1;
         const problem = solver.problems.problems.get(problem_idx);
+        const empty_modules: []const *CIR = &.{};
         var report_builder = types_problem_mod.ReportBuilder.init(
             output.gpa,
             module_env,
@@ -1078,6 +1079,7 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
             &solver.snapshots,
             content.source,
             snapshot_path,
+            empty_modules,
         );
         defer report_builder.deinit();
 

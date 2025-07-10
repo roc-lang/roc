@@ -28,7 +28,7 @@ test {
     try std.testing.expectEqual(8, @sizeOf(Alias));
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
-    try std.testing.expectEqual(8, @sizeOf(NominalType));
+    try std.testing.expectEqual(12, @sizeOf(NominalType));
 }
 
 /// A type variable
@@ -561,6 +561,9 @@ pub const Num = union(enum) {
 pub const NominalType = struct {
     ident: TypeIdent,
     num_args: u32,
+    /// The full module path where this nominal type was originally defined
+    /// (e.g., "Json.Decode" or "mypackage.Data.Person")
+    origin_module: Ident.Idx,
 
     /// Get the backing var for this nominal type given the nominal type var
     pub fn getBackingVar(self: NominalType, nominal_var: Var) Var {

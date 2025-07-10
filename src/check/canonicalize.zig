@@ -232,6 +232,7 @@ fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8) std.mem.Allocato
         Content{ .structure = FlatType{ .nominal_type = types.NominalType{
             .ident = types.TypeIdent{ .ident_idx = type_ident },
             .num_args = 0,
+            .origin_module = ir.env.idents.insert(gpa, base.Ident.for_text(ir.module_name), Region.zero()),
         } } },
     );
     _ = try ir.pushFreshTypeVar(type_decl_node_idx, Region.zero());
@@ -280,6 +281,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
         Content{ .structure = FlatType{ .nominal_type = types.NominalType{
             .ident = types.TypeIdent{ .ident_idx = type_ident },
             .num_args = 0,
+            .origin_module = ir.env.idents.insert(gpa, base.Ident.for_text(ir.module_name), Region.zero()),
         } } },
     );
     _ = try ir.pushRedirectTypeVar(anno_var, type_decl_node_idx, Region.zero());
@@ -460,6 +462,7 @@ pub fn canonicalizeFile(
                                 Content{ .structure = .{ .nominal_type = types.NominalType{
                                     .ident = type_ident,
                                     .num_args = num_args,
+                                    .origin_module = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.can_ir.module_name), Region.zero()),
                                 } } },
                             };
                         },
