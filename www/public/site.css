@@ -166,15 +166,11 @@ hr {
     margin-top: 32px;
 }
 
-#sponsor-logos .logo-rwx {
-    position: relative;
-    top: 6px;
-}
-
-#sponsor-logos .logo-tweede-golf {
+#sponsor-logos .logo-lambda-class {
     position: relative;
     top: 14px;
     height: 4.5rem;
+    fill: #000;
 }
 
 #sponsor-logos .logo-decem .cls-1 {
@@ -896,6 +892,10 @@ details {
     }
 
     #sponsor-logos .logo-decem .cls-1 {
+        fill: #fff;
+    }
+
+    #sponsor-logos .logo-lambda-class {
         fill: #fff;
     }
 }
