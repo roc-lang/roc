@@ -35,7 +35,8 @@ const ImportCacheKey = struct {
 /// When we import a type from another module, we need to copy it into our module's
 /// type store because type variables are module-specific. However, since we use
 /// "preserve" mode unification with imported types (meaning the imported type is
-/// read-only and never modified), we can safely cache these copies and reuse them.
+/// read-only and never modified), we can safely cache these copies and reuse them;
+/// they will never be mutated during unification.
 ///
 /// Benefits:
 /// - Reduces memory usage by avoiding duplicate copies of the same imported type
@@ -246,13 +247,12 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
         .e_lookup_external => |e| {
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 
-            // Use the module index directly
             const module_idx = @intFromEnum(e.module_idx);
             if (module_idx < self.other_modules.len) {
                 const other_module_cir = self.other_modules[module_idx];
                 const other_module_env = &other_module_cir.env;
 
-                // The target_node_idx points to an expression in the other module
+                // The idx of the expression in the other module
                 const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(e.target_node_idx));
 
                 // Check if we've already copied this import
@@ -286,16 +286,13 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 // we can safely cache and reuse copied_var for multiple imports.
                 const result = self.unify(expr_var, copied_var);
                 if (result.isProblem()) {
-                    // Handle the unification problem
-                    const problem_idx = result.problem;
-                    self.setProblemTypeMismatchDetail(problem_idx, .{
+                    self.setProblemTypeMismatchDetail(result.problem, .{
                         .cross_module_import = .{
                             .import_region = expr_idx,
                             .module_idx = e.module_idx,
                         },
                     });
 
-                    // Set the expression to an error type
                     try self.types.setVarContent(expr_var, .err);
                 }
             } else {
@@ -857,7 +854,7 @@ fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype,
                     if (expected_args.len == arg_patterns.len) {
                         // Unify each pattern with its expected type before checking body
                         for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
-                            const pattern_var = @as(Var, @enumFromInt(@intFromEnum(pattern_idx)));
+                            const pattern_var = try self.can_ir.idxToTypeVar(self.types, pattern_idx);
                             _ = self.unify(pattern_var, expected_arg);
                         }
                     }
@@ -871,8 +868,8 @@ fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype,
     const is_effectful = try self.checkExpr(lambda.body);
 
     // The return type var is just the body's var
-    const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
-    const fn_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+    const return_var = try self.can_ir.idxToTypeVar(self.types, lambda.body);
+    const fn_var = try self.can_ir.idxToTypeVar(self.types, expr_idx);
 
     if (is_effectful) {
         // If the function body does effects, create an effectful function.
@@ -1039,7 +1036,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
     // Check the match's condition
     var does_fx = try self.checkExpr(match.cond);
-    const cond_var: Var = @enumFromInt(@intFromEnum(match.cond));
+    const cond_var = try self.can_ir.idxToTypeVar(self.types, match.cond);
 
     // Bail if we somehow have 0 branches
     // TODO: Should this be an error? Here or in Can?
@@ -1059,7 +1056,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
     for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.can_ir.store.getMatchBranchPattern(branch_ptrn_idx);
         try self.checkPattern(branch_ptrn.pattern);
-        const branch_ptrn_var: Var = @enumFromInt(@intFromEnum(branch_ptrn.pattern));
+        const branch_ptrn_var = try self.can_ir.idxToTypeVar(self.types, branch_ptrn.pattern);
 
         const ptrn_result = self.unify(cond_var, branch_ptrn_var);
         self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
@@ -1073,7 +1070,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
     // Check the first branch's value, then use that at the branch_var
     does_fx = try self.checkExpr(first_branch.value) or does_fx;
-    const branch_var: Var = @enumFromInt(@intFromEnum(first_branch.value));
+    const branch_var = try self.can_ir.idxToTypeVar(self.types, first_branch.value);
 
     // Then iterate over the rest of the branches
     for (branch_idxs[1..], 1..) |branch_idx, branch_cur_index| {
@@ -1087,7 +1084,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
             try self.checkPattern(branch_ptrn.pattern);
 
             // Check the pattern against the cond
-            const branch_ptrn_var: Var = @enumFromInt(@intFromEnum(branch_ptrn.pattern));
+            const branch_ptrn_var = try self.can_ir.idxToTypeVar(self.types, branch_ptrn.pattern);
             const ptrn_result = self.unify(cond_var, branch_ptrn_var);
             self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                 .match_expr = expr_idx,
@@ -1100,7 +1097,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
         // Then, check the body
         does_fx = try self.checkExpr(branch.value) or does_fx;
-        const branch_result = self.unify(branch_var, @enumFromInt(@intFromEnum(branch.value)));
+        const branch_result = self.unify(branch_var, try self.can_ir.idxToTypeVar(self.types, branch.value));
         self.setDetailIfTypeMismatch(branch_result, problem.TypeMismatchDetail{ .incompatible_match_branches = .{
             .match_expr = expr_idx,
             .num_branches = @intCast(match.branches.span.len),
@@ -1121,7 +1118,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
                     try self.checkPattern(other_branch_ptrn.pattern);
 
                     // Check the pattern against the cond
-                    const other_branch_ptrn_var: Var = @enumFromInt(@intFromEnum(other_branch_ptrn.pattern));
+                    const other_branch_ptrn_var = try self.can_ir.idxToTypeVar(self.types, other_branch_ptrn.pattern);
                     const ptrn_result = self.unify(cond_var, other_branch_ptrn_var);
                     self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                         .match_expr = expr_idx,
@@ -1134,7 +1131,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
                 // Then check the other branch's exprs
                 does_fx = try self.checkExpr(other_branch.value) or does_fx;
-                try self.types.setVarContent(@enumFromInt(@intFromEnum(other_branch.value)), .err);
+                try self.types.setVarContent(try self.can_ir.idxToTypeVar(self.types, other_branch.value), .err);
             }
 
             // Then stop type checking for this branch
@@ -1360,7 +1357,7 @@ test "lambda with record field access infers correct type" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var can_ir = CIR.init(&module_env);
+    var can_ir = CIR.init(&module_env, "Test");
     defer can_ir.deinit();
 
     const empty_modules: []const *CIR = &.{};
@@ -1465,7 +1462,7 @@ test "dot access properly unifies field types with parameters" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var can_ir = CIR.init(&module_env);
+    var can_ir = CIR.init(&module_env, "Test");
     defer can_ir.deinit();
 
     const empty_modules: []const *CIR = &.{};
@@ -1573,7 +1570,7 @@ test "call site unification order matters for concrete vs flexible types" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var can_ir = CIR.init(&module_env);
+    var can_ir = CIR.init(&module_env, "Test");
     defer can_ir.deinit();
 
     const empty_modules: []const *CIR = &.{};

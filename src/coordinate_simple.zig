@@ -181,7 +181,13 @@ fn processSourceInternal(
 
     // Initialize the Can IR (heap-allocated)
     var cir = try gpa.create(CIR);
-    cir.* = CIR.init(module_env);
+    // Extract module name from filename (remove path and extension)
+    const basename = std.fs.path.basename(filename);
+    const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
+        basename[0..dot_idx]
+    else
+        basename;
+    cir.* = CIR.init(module_env, module_name);
 
     // Create scope for semantic analysis
     // Canonicalize the AST

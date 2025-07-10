@@ -263,7 +263,13 @@ pub const CacheManager = struct {
         cache.validate() catch return error.InvalidCache;
 
         // Restore the data
-        const restored = cache.restore(self.allocator) catch return error.RestoreError;
+        // Extract module name from source path (remove path and extension)
+        const basename = std.fs.path.basename(source_path);
+        const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
+            basename[0..dot_idx]
+        else
+            basename;
+        const restored = cache.restore(self.allocator, module_name) catch return error.RestoreError;
 
         // Reports are not cached - they need to be recomputed if needed
         // Users can use --no-cache to see diagnostic reports

@@ -380,7 +380,13 @@ fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []con
     // Try canonicalization
     ast.store.emptyScratch();
 
-    var can_ir = CIR.init(&module_env);
+    // Extract module name from output path
+    const basename = std.fs.path.basename(output_path);
+    const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
+        basename[0..dot_idx]
+    else
+        basename;
+    var can_ir = CIR.init(&module_env, module_name);
     defer can_ir.deinit();
 
     var can = canonicalize.init(&can_ir, &ast, null) catch |err| {
@@ -1573,7 +1579,13 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     parse_ast.store.emptyScratch();
 
     // Canonicalize the source code (ONCE)
-    var can_ir = CIR.init(&module_env);
+    // Extract module name from snapshot path
+    const basename = std.fs.path.basename(snapshot_path);
+    const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
+        basename[0..dot_idx]
+    else
+        basename;
+    var can_ir = CIR.init(&module_env, module_name);
     defer can_ir.deinit();
 
     var can = try canonicalize.init(&can_ir, &parse_ast, null);
@@ -1632,7 +1644,13 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
         var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
 
         // Restore ModuleEnv and CIR
-        const restored = try loaded_cache.restore(gpa);
+        // Extract module name from snapshot path
+        const cache_basename = std.fs.path.basename(snapshot_path);
+        const cache_module_name = if (std.mem.lastIndexOfScalar(u8, cache_basename, '.')) |dot_idx|
+            cache_basename[0..dot_idx]
+        else
+            cache_basename;
+        const restored = try loaded_cache.restore(gpa, cache_module_name);
         var restored_module_env = restored.module_env;
         defer restored_module_env.deinit();
         var restored_cir = restored.cir;

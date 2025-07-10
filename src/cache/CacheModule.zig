@@ -256,7 +256,7 @@ pub const CacheModule = struct {
     };
 
     /// Restore ModuleEnv and CIR from the cached data
-    pub fn restore(self: *const CacheModule, allocator: Allocator) !RestoredData {
+    pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8) !RestoredData {
         // Deserialize each component
         const node_store = try NodeStore.deserializeFrom(
             @as([]align(@alignOf(Node)) const u8, @alignCast(self.getComponentData(.node_store))),
@@ -307,7 +307,7 @@ pub const CacheModule = struct {
                 .all_statements = self.header.all_statements,
                 .external_decls = external_decls,
                 .imports = CIR.Import.Store.init(),
-                .module_name = "",
+                .module_name = module_name,
             },
         };
 
@@ -582,7 +582,7 @@ test "create and restore cache" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env);
+    var cir = CIR.init(&module_env, "TestModule");
     defer cir.deinit();
 
     // Parse and canonicalize
@@ -613,7 +613,7 @@ test "create and restore cache" {
     try cache.validate();
 
     // Restore ModuleEnv and CIR
-    const restored = try cache.restore(gpa);
+    const restored = try cache.restore(gpa, "TestModule");
 
     var restored_module_env = restored.module_env;
     defer restored_module_env.deinit();
@@ -657,7 +657,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env);
+    var cir = CIR.init(&module_env, "TestModule");
     defer cir.deinit();
 
     // Parse and canonicalize
@@ -754,7 +754,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     try roundtrip_cache.validate();
 
     // Restore from the roundtrip cache
-    const restored = try roundtrip_cache.restore(gpa);
+    const restored = try roundtrip_cache.restore(gpa, "TestModule");
 
     var restored_module_env = restored.module_env;
     defer restored_module_env.deinit();
