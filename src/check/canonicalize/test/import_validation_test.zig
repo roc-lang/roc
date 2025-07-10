@@ -70,7 +70,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, &module_envs);
@@ -155,7 +155,7 @@ test "import validation - no module_envs provided" {
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -209,7 +209,7 @@ test "import interner - Import.Idx functionality" {
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -227,13 +227,8 @@ test "import interner - Import.Idx functionality" {
     var found_json_decode = false;
     var found_set = false;
 
-    for (cir.imports.imports.items, 0..) |import, idx| {
-        const import_idx: CIR.Import.Idx = @enumFromInt(idx);
+    for (cir.imports.imports.items) |import| {
         const module_name = import.module_name;
-
-        // Verify we can look up the module name from Import.Idx
-        const retrieved_name = cir.imports.getModuleName(import_idx);
-        try testing.expectEqualStrings(module_name, retrieved_name);
 
         if (std.mem.eql(u8, module_name, "List")) {
             found_list = true;
@@ -264,10 +259,6 @@ test "import interner - Import.Idx functionality" {
     }
 
     try testing.expect(list_import_idx != null);
-
-    // Verify we can retrieve the correct module name from the Import.Idx
-    const retrieved_list_name = cir.imports.getModuleName(list_import_idx.?);
-    try testing.expectEqualStrings("List", retrieved_list_name);
 }
 
 test "import interner - comprehensive usage example" {
@@ -306,7 +297,7 @@ test "import interner - comprehensive usage example" {
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -330,24 +321,14 @@ test "import interner - comprehensive usage example" {
     try testing.expect(list_import.? != result_import.?);
     try testing.expect(dict_import.? != result_import.?);
 
-    // Verify we can look up module names from Import.Idx
-    const list_name = cir.imports.getModuleName(list_import.?);
-    const dict_name = cir.imports.getModuleName(dict_import.?);
-    const result_name = cir.imports.getModuleName(result_import.?);
-
-    try testing.expectEqualStrings("List", list_name);
-    try testing.expectEqualStrings("Dict", dict_name);
-    try testing.expectEqualStrings("Result", result_name);
-
     // Verify total unique imports
     try expectEqual(@as(usize, 3), cir.imports.imports.items.len);
 
     // Demo: Print all imports with their indices
     std.debug.print("\n=== Import Index Demo ===\n", .{});
-    for (cir.imports.imports.items, 0..) |import, idx| {
-        const import_idx: CIR.Import.Idx = @enumFromInt(idx);
+    for (cir.imports.imports.items) |import| {
         const module_name_text = import.module_name;
-        std.debug.print("Import.Idx {} -> module '{}'\n", .{ @intFromEnum(import_idx), module_name_text });
+        std.debug.print("Module '{}'\n", .{module_name_text});
     }
 }
 
@@ -413,7 +394,7 @@ test "module scopes - imports are only available in their scope" {
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -476,7 +457,7 @@ test "module-qualified lookups with e_lookup_external" {
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -500,8 +481,8 @@ test "module-qualified lookups with e_lookup_external" {
             // Get the external lookup data
             const module_idx: CIR.Import.Idx = @enumFromInt(node.data_1);
             const field_name_idx: base.Ident.Idx = @bitCast(node.data_2);
-
-            const module_name = cir.imports.getModuleName(module_idx);
+            const import = &cir.imports.imports.items.items[@intFromEnum(module_idx)];
+            const module_name = import.name;
             const field_name = env.idents.getText(field_name_idx);
 
             if (std.mem.eql(u8, module_name, "List")) {
@@ -572,7 +553,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     var env = base.ModuleEnv.init(allocator);
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, &module_envs);
@@ -591,8 +572,8 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
             const module_idx: CIR.Import.Idx = @enumFromInt(node.data_1);
             const field_name_idx: base.Ident.Idx = @bitCast(node.data_2);
             const target_node_idx: u16 = @intCast(node.data_3);
-
-            const module_name = cir.imports.getModuleName(module_idx);
+            const import = &cir.imports.imports.items.items[@intFromEnum(module_idx)];
+            const module_name = import.name;
             const field_name = env.idents.getText(field_name_idx);
 
             if (std.mem.eql(u8, module_name, "MathUtils")) {

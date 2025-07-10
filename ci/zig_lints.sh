@@ -13,8 +13,8 @@ while read -r file; do
         /^pub / {
             if (prev !~ /^\/\/\//) {
                 # Skip doc comment requirements for init, deinit, @import, and pub const re-exports
-                if ($0 !~ /pub.*fn init\(/ && 
-                    $0 !~ /pub.*fn deinit/ && 
+                if ($0 !~ /pub.*fn init\(/ &&
+                    $0 !~ /pub.*fn deinit/ &&
                     $0 !~ /pub.*@import/ &&
                     $0 !~ /pub.*const.*=[[:space:]]*[a-z][^[:space:]]*\.[^([:space:]]*;/) {
                     print FILENAME ":" FNR ": pub declaration without doc comment `///`"
@@ -27,7 +27,7 @@ while read -r file; do
         echo "$errors"
         found_errors=true
     fi
-done < <(find src -type f -name "*.zig")
+done < <(find src -type f -name "*.zig" -not -path "*/.zig-cache/*")
 
 if [[ "$found_errors" == true ]]; then
     echo ""

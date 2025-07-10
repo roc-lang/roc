@@ -62,6 +62,9 @@ all_statements: Statement.Span,
 external_decls: ExternalDecl.SafeList,
 /// Store for interned module imports
 imports: Import.Store,
+/// The module's name as a string
+/// This is needed for import resolution to match import names to modules
+module_name: []const u8,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -70,10 +73,11 @@ imports: Import.Store,
 /// the entirety of the IR into an arena that holds nothing besides
 /// the IR. We can then load the cached binary data back into memory
 /// with only 2 syscalls.
+/// Initialize the IR for a module's canonicalization info.
 ///
 /// Since the can IR holds indices into the `ModuleEnv`, we need
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
-pub fn init(env: *ModuleEnv) CIR {
+pub fn init(env: *ModuleEnv, module_name: []const u8) CIR {
     return CIR{
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
@@ -81,11 +85,12 @@ pub fn init(env: *ModuleEnv) CIR {
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = ExternalDecl.SafeList.initCapacity(env.gpa, 16),
         .imports = Import.Store.init(),
+        .module_name = module_name,
     };
 }
 
 /// Create a CIR from cached data, completely rehydrating from cache
-pub fn fromCache(env: *ModuleEnv, cached_store: NodeStore, all_defs: Def.Span, all_statements: Statement.Span) CIR {
+pub fn fromCache(env: *ModuleEnv, cached_store: NodeStore, all_defs: Def.Span, all_statements: Statement.Span, module_name: []const u8) CIR {
     return CIR{
         .env = env,
         .store = cached_store,
@@ -94,6 +99,7 @@ pub fn fromCache(env: *ModuleEnv, cached_store: NodeStore, all_defs: Def.Span, a
         .all_statements = all_statements,
         .external_decls = ExternalDecl.SafeList.initCapacity(env.gpa, 16),
         .imports = Import.Store.init(),
+        .module_name = module_name,
     };
 }
 
@@ -925,11 +931,6 @@ pub const Import = struct {
                 gop.value_ptr.* = import_idx;
             }
             return gop.value_ptr.*;
-        }
-
-        /// Get the module name for an Import.Idx
-        pub fn getModuleName(self: *const Store, idx: Import.Idx) []const u8 {
-            return self.imports.items[@intFromEnum(idx)];
         }
     };
 };

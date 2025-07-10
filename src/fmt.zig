@@ -3,7 +3,7 @@
 const std = @import("std");
 const parse = @import("check/parse.zig");
 const collections = @import("collections.zig");
-const Filesystem = @import("coordinate/Filesystem.zig");
+const Filesystem = @import("fs/Filesystem.zig");
 
 const base = @import("base.zig");
 const tracy = @import("tracy.zig");

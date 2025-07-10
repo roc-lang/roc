@@ -8,7 +8,7 @@ const canonicalize = @import("check/canonicalize.zig");
 const Solver = @import("check/check_types.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const reporting = @import("reporting.zig");
-const Filesystem = @import("coordinate/Filesystem.zig");
+const Filesystem = @import("fs/Filesystem.zig");
 
 const ModuleEnv = base.ModuleEnv;
 const CIR = canonicalize.CIR;
@@ -181,7 +181,13 @@ fn processSourceInternal(
 
     // Initialize the Can IR (heap-allocated)
     var cir = try gpa.create(CIR);
-    cir.* = CIR.init(module_env);
+    // Extract module name from filename (remove path and extension)
+    const basename = std.fs.path.basename(filename);
+    const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
+        basename[0..dot_idx]
+    else
+        basename;
+    cir.* = CIR.init(module_env, module_name);
 
     // Create scope for semantic analysis
     // Canonicalize the AST
@@ -198,7 +204,8 @@ fn processSourceInternal(
     }
 
     // Type checking
-    var solver = try Solver.init(gpa, &module_env.types, cir);
+    const empty_modules: []const *CIR = &.{};
+    var solver = try Solver.init(gpa, &module_env.types, cir, empty_modules);
     defer solver.deinit();
 
     // Check for type errors

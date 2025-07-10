@@ -9,6 +9,7 @@ const occurs = @import("check_types/occurs.zig");
 const problem = @import("check_types/problem.zig");
 const snapshot = @import("check_types/snapshot.zig");
 const instantiate = @import("check_types/instantiate.zig");
+const copy_import = @import("check_types/copy_import.zig");
 const CIR = @import("./canonicalize/CIR.zig");
 const ModuleEnv = @import("../base/ModuleEnv.zig");
 
@@ -16,7 +17,6 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;
-const ModuleWork = base.ModuleWork;
 const Func = types_mod.Func;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
@@ -24,16 +24,55 @@ const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
 
+/// Key for the import cache: module index + expression index in that module
+const ImportCacheKey = struct {
+    module_idx: CIR.Import.Idx,
+    expr_idx: CIR.Expr.Idx,
+};
+
+/// Cache for imported types to avoid repeated copying
+///
+/// When we import a type from another module, we need to copy it into our module's
+/// type store because type variables are module-specific. However, since we use
+/// "preserve" mode unification with imported types (meaning the imported type is
+/// read-only and never modified), we can safely cache these copies and reuse them;
+/// they will never be mutated during unification.
+///
+/// Benefits:
+/// - Reduces memory usage by avoiding duplicate copies of the same imported type
+/// - Improves performance by avoiding redundant copying operations
+/// - Particularly beneficial for commonly imported values/functions
+///
+/// Example: If a module imports `List.map` and uses it 10 times, without caching
+/// we would create 10 separate copies of the `List.map` type. With caching, we
+/// create just one copy and reuse it.
+const ImportCache = std.HashMapUnmanaged(ImportCacheKey, Var, struct {
+    pub fn hash(_: @This(), key: ImportCacheKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(std.mem.asBytes(&key.module_idx));
+        hasher.update(std.mem.asBytes(&key.expr_idx));
+        return hasher.final();
+    }
+
+    pub fn eql(_: @This(), a: ImportCacheKey, b: ImportCacheKey) bool {
+        return a.module_idx == b.module_idx and a.expr_idx == b.expr_idx;
+    }
+}, 80);
+
 gpa: std.mem.Allocator,
 // not owned
 types: *types_mod.Store,
 can_ir: *CIR,
+other_modules: []const *CIR,
 // owned
 snapshots: snapshot.Store,
 problems: problem.Store,
 unify_scratch: unifier.Scratch,
 occurs_scratch: occurs.Scratch,
 instantiate_subs: instantiate.VarSubstitution,
+/// Cache for imported types. This cache lives for the entire type-checking session
+/// of a module, so the same imported type can be reused across the entire module.
+import_cache: ImportCache,
 
 /// Init type solver
 /// Does *not* own types_store or can_ir, but *does* own other fields
@@ -41,16 +80,19 @@ pub fn init(
     gpa: std.mem.Allocator,
     types: *types_mod.Store,
     can_ir: *CIR,
+    other_modules: []const *CIR,
 ) std.mem.Allocator.Error!Self {
     return .{
         .gpa = gpa,
         .types = types,
         .can_ir = can_ir,
+        .other_modules = other_modules,
         .snapshots = snapshot.Store.initCapacity(gpa, 512),
         .problems = problem.Store.initCapacity(gpa, 64),
         .unify_scratch = unifier.Scratch.init(gpa),
         .occurs_scratch = occurs.Scratch.init(gpa),
         .instantiate_subs = instantiate.VarSubstitution.init(gpa),
+        .import_cache = ImportCache{},
     };
 }
 
@@ -61,6 +103,7 @@ pub fn deinit(self: *Self) void {
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
     self.instantiate_subs.deinit();
+    self.import_cache.deinit(self.gpa);
 }
 
 /// Unify two types
@@ -117,9 +160,9 @@ pub fn unifyPreserveA(self: *Self, a: Var, b: Var) unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return unifier.unifyMode(
-        .preserve_a,
+    return unifier.unifyPreserve(
         self.can_ir.env,
+        self.types,
         self.types,
         &self.problems,
         &self.snapshots,
@@ -202,9 +245,58 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             _ = self.unify(lookup_var, pattern_var);
         },
         .e_lookup_external => |e| {
-            // TODO: Handle type checking for external lookups
-            // For now, just skip type checking
-            _ = e;
+            const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+            const module_idx = @intFromEnum(e.module_idx);
+            if (module_idx < self.other_modules.len) {
+                const other_module_cir = self.other_modules[module_idx];
+                const other_module_env = &other_module_cir.env;
+
+                // The idx of the expression in the other module
+                const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(e.target_node_idx));
+
+                // Check if we've already copied this import
+                const cache_key = ImportCacheKey{
+                    .module_idx = e.module_idx,
+                    .expr_idx = target_expr_idx,
+                };
+
+                const copied_var = if (self.import_cache.get(cache_key)) |cached_var|
+                    // Reuse the previously copied type.
+                    // This is safe because imported types are never modified (preserve mode)
+                    cached_var
+                else blk: {
+                    // First time importing this type - copy it and cache the result
+                    const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
+                    const new_copy = try copy_import.copyImportedType(
+                        &other_module_env.*.types,
+                        self.types,
+                        imported_var,
+                        self.gpa,
+                    );
+                    try self.import_cache.put(self.gpa, cache_key, new_copy);
+                    break :blk new_copy;
+                };
+
+                // Unify our expression with the copied type
+                // Note: This unification uses "preserve" mode internally (via copy_import),
+                // which means the imported type (copied_var) is read-only. This is why
+                // we can safely cache and reuse copied_var for multiple imports.
+                const result = self.unify(expr_var, copied_var);
+                if (result.isProblem()) {
+                    self.setProblemTypeMismatchDetail(result.problem, .{
+                        .cross_module_import = .{
+                            .import_region = expr_idx,
+                            .module_idx = e.module_idx,
+                        },
+                    });
+
+                    try self.types.setVarContent(expr_var, .err);
+                }
+            } else {
+                // Import not found
+                try self.types.setVarContent(expr_var, .err);
+            }
         },
         .e_list => |list| {
             const elem_var = @as(Var, @enumFromInt(@intFromEnum(list.elem_var)));
@@ -1154,10 +1246,11 @@ test "lambda with record field access infers correct type" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var can_ir = CIR.init(&module_env);
+    var can_ir = CIR.init(&module_env, "Test");
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir);
+    const empty_modules: []const *CIR = &.{};
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, empty_modules);
     defer solver.deinit();
 
     // Create type variables for the lambda parameters
@@ -1258,10 +1351,11 @@ test "dot access properly unifies field types with parameters" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var can_ir = CIR.init(&module_env);
+    var can_ir = CIR.init(&module_env, "Test");
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir);
+    const empty_modules: []const *CIR = &.{};
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, empty_modules);
     defer solver.deinit();
 
     // Create a parameter type variable
@@ -1365,10 +1459,11 @@ test "call site unification order matters for concrete vs flexible types" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var can_ir = CIR.init(&module_env);
+    var can_ir = CIR.init(&module_env, "Test");
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir);
+    const empty_modules: []const *CIR = &.{};
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, empty_modules);
     defer solver.deinit();
 
     // First, verify basic number unification works as expected
@@ -1503,4 +1598,8 @@ test "call site unification order matters for concrete vs flexible types" {
             else => return error.TestUnexpectedResult,
         }
     }
+}
+
+test {
+    _ = @import("check_types/cross_module_test.zig");
 }

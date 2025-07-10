@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const parse = @import("check/parse.zig");
-const module_work = @import("base/module_work.zig");
 
 pub const SExprTree = @import("base/SExprTree.zig");
 pub const Ident = @import("base/Ident.zig");
@@ -13,9 +12,6 @@ pub const ModuleImport = @import("base/ModuleImport.zig");
 pub const StringLiteral = @import("base/StringLiteral.zig");
 pub const RegionInfo = @import("base/RegionInfo.zig");
 pub const Scratch = @import("base/Scratch.zig").Scratch;
-
-pub const ModuleWork = module_work.ModuleWork;
-pub const ModuleWorkIdx = module_work.ModuleWorkIdx;
 
 /// Whether a function calls itself.
 pub const Recursive = enum {

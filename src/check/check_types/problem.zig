@@ -90,6 +90,7 @@ pub const TypeMismatchDetail = union(enum) {
     incompatible_match_branches: IncompatibleMatchBranches,
     invalid_bool_binop: InvalidBoolBinop,
     invalid_nominal_tag,
+    cross_module_import: CrossModuleImport,
 };
 
 /// Problem data for when list elements have incompatible types
@@ -99,7 +100,13 @@ pub const IncompatibleListElements = struct {
     list_length: u32, // Total number of elements in the list
 };
 
-/// Problem data for when if branches have have incompatible types
+/// Problem data for cross-module import type mismatches
+pub const CrossModuleImport = struct {
+    import_region: CIR.Expr.Idx,
+    module_idx: CIR.Import.Idx,
+};
+
+/// Problem data for when if branches have incompatible types
 pub const IncompatibleIfBranches = struct {
     parent_if_expr: CIR.Expr.Idx,
     last_if_branch: CIR.Expr.IfBranch.Idx,
@@ -219,6 +226,9 @@ pub const ReportBuilder = struct {
                         },
                         .invalid_nominal_tag => {
                             return self.buildInvalidNominalTag(&snapshot_writer, mismatch.types);
+                        },
+                        .cross_module_import => |data| {
+                            return self.buildCrossModuleImportError(&snapshot_writer, mismatch.types, data);
                         },
                     }
                 } else {
@@ -1194,6 +1204,97 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_expected, .type_variable);
+
+        return report;
+    }
+
+    // cross-module import //
+
+    /// Build a report for cross-module import type mismatch
+    fn buildCrossModuleImportError(
+        self: *Self,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        types: TypePair,
+        data: CrossModuleImport,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+
+        try report.document.addText("This value is being used in an unexpected way.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Get the import expression
+        const import_expr = self.can_ir.store.getExpr(data.import_region);
+        const import_region = import_expr.e_lookup_external.region;
+
+        // Get region info for the import
+        const import_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.line_starts.items.items,
+            import_region.start.offset,
+            import_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = import_region_info.line_text,
+            .start_line = import_region_info.start_line_idx + 1,
+            .start_column = import_region_info.start_col_idx + 1,
+            .end_line = import_region_info.end_line_idx + 1,
+            .end_column = import_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        // Create underline region
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = import_region_info.start_line_idx + 1,
+                .start_column = import_region_info.start_col_idx + 1,
+                .end_line = import_region_info.end_line_idx + 1,
+                .end_column = import_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        // Get module name if available
+        const module_idx = @intFromEnum(data.module_idx);
+        const module_name = if (module_idx < self.can_ir.imports.imports.items.len) blk: {
+            const import_name = self.can_ir.imports.imports.items[module_idx];
+            break :blk import_name;
+        } else null;
+
+        // Show what was imported
+        try report.document.addText("It has the type:");
+        try report.document.addLineBreak();
+
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.expected_snapshot);
+        const expected_type = try report.addOwnedString(self.buf.items);
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show the actual type from the import
+        if (module_name) |name| {
+            try report.document.addText("However, the value imported from ");
+            try report.document.addAnnotated(name, .module_name);
+            try report.document.addText(" has the type:");
+        } else {
+            try report.document.addText("However, the imported value has the type:");
+        }
+        try report.document.addLineBreak();
+
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.actual_snapshot);
+        const actual_type = try report.addOwnedString(self.buf.items);
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
 
         return report;
     }

@@ -5974,7 +5974,7 @@ const ScopeTestContext = struct {
 
         // heap allocate CIR for testing
         const cir = try gpa.create(CIR);
-        cir.* = CIR.init(env);
+        cir.* = CIR.init(env, "Test");
 
         return ScopeTestContext{
             .self = try Self.init(cir, undefined, null),
@@ -6289,7 +6289,7 @@ test "hexadecimal integer literals" {
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         var can = try init(&cir, &ast, null);
@@ -6379,7 +6379,7 @@ test "binary integer literals" {
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         var can = try init(&cir, &ast, null);
@@ -6469,7 +6469,7 @@ test "octal integer literals" {
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         var can = try init(&cir, &ast, null);
@@ -6559,7 +6559,7 @@ test "integer literals with uppercase base prefixes" {
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         var can = try init(&cir, &ast, null);
@@ -6618,7 +6618,7 @@ test "numeric literal patterns use pattern idx as type var" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         // Create an int literal pattern directly
@@ -6666,7 +6666,7 @@ test "numeric literal patterns use pattern idx as type var" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         // Create a dec literal pattern directly
@@ -6721,7 +6721,7 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -6762,7 +6762,7 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -6814,7 +6814,7 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -6855,7 +6855,7 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -6903,7 +6903,7 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -6951,7 +6951,7 @@ test "record literal uses record_unbound" {
         var ast = parse.parseExpr(&env, "{ x: 42, y: \"hello\" }");
         defer ast.deinit(gpa);
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         var can = try Self.init(&cir, &ast, null);
@@ -6987,7 +6987,7 @@ test "record literal uses record_unbound" {
         var ast = parse.parseExpr(&env, "{}");
         defer ast.deinit(gpa);
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         var can = try Self.init(&cir, &ast, null);
@@ -7022,7 +7022,7 @@ test "record literal uses record_unbound" {
         var ast = parse.parseExpr(&env, "{ value: 123 }");
         defer ast.deinit(gpa);
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         var can = try Self.init(&cir, &ast, null);
@@ -7066,7 +7066,7 @@ test "record_unbound basic functionality" {
     var ast = parse.parseExpr(&env, "{ x: 42, y: 99 }");
     defer ast.deinit(gpa);
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var can = try Self.init(&cir, &ast, null);
@@ -7109,7 +7109,7 @@ test "record_unbound with multiple fields" {
     var ast = parse.parseExpr(&env, "{ a: 123, b: 456, c: 789 }");
     defer ast.deinit(gpa);
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     var can = try Self.init(&cir, &ast, null);
@@ -7147,7 +7147,7 @@ test "record with extension variable" {
     var env = base.ModuleEnv.init(gpa);
     defer env.deinit();
 
-    var cir = CIR.init(&env);
+    var cir = CIR.init(&env, "Test");
     defer cir.deinit();
 
     // Test that regular records have extension variables
@@ -7223,7 +7223,7 @@ test "numeric pattern types: unbound vs polymorphic - frac" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -7281,7 +7281,7 @@ test "pattern numeric literal value edge cases" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         // Test i128 max
@@ -7310,7 +7310,7 @@ test "pattern numeric literal value edge cases" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         const small_dec_pattern = CIR.Pattern{
@@ -7334,7 +7334,7 @@ test "pattern numeric literal value edge cases" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         const dec_pattern = CIR.Pattern{
@@ -7356,7 +7356,7 @@ test "pattern numeric literal value edge cases" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         // Test negative zero (RocDec doesn't distinguish between +0 and -0)
@@ -7382,7 +7382,7 @@ test "pattern literal type transitions" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -7431,7 +7431,7 @@ test "pattern literal type transitions" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         // Hex pattern (0xFF)
@@ -7480,7 +7480,7 @@ test "pattern type inference with numeric literals" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         // Create patterns representing different numeric literals
@@ -7550,7 +7550,7 @@ test "pattern type inference with numeric literals" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var cir = CIR.init(&env);
+        var cir = CIR.init(&env, "Test");
         defer cir.deinit();
 
         // Create a pattern that will be constrained by context

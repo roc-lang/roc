@@ -17,7 +17,7 @@ const func_spec = @import("build/specialize_functions.zig");
 const lower = @import("build/lower_statements.zig");
 const refcount = @import("build/reference_count.zig");
 const utils = @import("coordinate/utils.zig");
-const Filesystem = @import("coordinate/Filesystem.zig");
+const Filesystem = @import("fs/Filesystem.zig");
 const ModuleGraph = @import("coordinate/ModuleGraph.zig");
 
 const AST = parse.AST;

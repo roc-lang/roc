@@ -13,7 +13,7 @@ pub const IR = @import("resolve_imports/IR.zig");
 pub fn resolveImports(
     ir: *IR,
     can_ir: *const can.CIR,
-    other_modules: *const base.ModuleWork(IR).Store,
+    other_modules: []const *can.CIR,
 ) void {
     _ = ir;
     _ = can_ir;
