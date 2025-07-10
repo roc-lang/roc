@@ -10,7 +10,7 @@ const collections = @import("../collections.zig");
 const types = @import("../types.zig");
 const parse = @import("../check/parse.zig").parse;
 const SExprTree = @import("../base/SExprTree.zig");
-const Filesystem = @import("../coordinate/Filesystem.zig");
+const Filesystem = @import("../fs/Filesystem.zig");
 const SERIALIZATION_ALIGNMENT = @import("../serialization/mod.zig").SERIALIZATION_ALIGNMENT;
 
 const Allocator = std.mem.Allocator;
