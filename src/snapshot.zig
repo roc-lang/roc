@@ -165,9 +165,14 @@ pub fn main() !void {
         break :blk gpa_impl.?.allocator();
     } else std.heap.c_allocator;
 
-    if (maybe_fuzz_corpus_path != null) {
-        log("copying SOURCE from snapshots to: {s}", .{maybe_fuzz_corpus_path.?});
-        try std.fs.cwd().makePath(maybe_fuzz_corpus_path.?);
+    const config = Config{
+        .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
+        .generate_html = generate_html,
+    };
+
+    if (config.maybe_fuzz_corpus_path != null) {
+        log("copying SOURCE from snapshots to: {s}", .{config.maybe_fuzz_corpus_path.?});
+        try std.fs.cwd().makePath(config.maybe_fuzz_corpus_path.?);
     }
     const snapshots_dir = "src/snapshots";
     var timer = std.time.Timer.start() catch unreachable;
@@ -184,18 +189,18 @@ pub fn main() !void {
 
     if (snapshot_paths.items.len > 0) {
         for (snapshot_paths.items) |path| {
-            try collectWorkItems(snapshot_allocator, path, &work_list, maybe_fuzz_corpus_path, generate_html);
+            try collectWorkItems(snapshot_allocator, path, &work_list);
         }
     } else {
         // process all files in snapshots_dir
-        try collectWorkItems(gpa, snapshots_dir, &work_list, maybe_fuzz_corpus_path, generate_html);
+        try collectWorkItems(gpa, snapshots_dir, &work_list);
     }
 
     const collect_duration_ms = timer.read() / std.time.ns_per_ms;
     log("collected {d} work items in {d} ms", .{ work_list.items.len, collect_duration_ms });
 
     // Stage 2: Process work items (in parallel or single-threaded)
-    const result = try processWorkItems(snapshot_allocator, work_list, single_thread or debug_mode);
+    const result = try processWorkItems(snapshot_allocator, work_list, single_thread or debug_mode, config);
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
 
@@ -552,6 +557,11 @@ fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []con
     try processSnapshotContent(allocator, content, output_path, generate_html);
 }
 
+const Config = struct {
+    maybe_fuzz_corpus_path: ?[]const u8,
+    generate_html: bool,
+};
+
 const ProcessResult = struct {
     success: usize,
     failed: usize,
@@ -563,59 +573,75 @@ const WorkItem = struct {
         snapshot_file,
         multi_file_snapshot,
     },
-    maybe_fuzz_corpus_path: ?[]const u8,
-    generate_html: bool,
 };
 
 const WorkList = std.ArrayList(WorkItem);
 
+const ProcessContext = struct {
+    allocator: Allocator,
+    work_list: *WorkList,
+    config: Config,
+    success_count: parallel.AtomicUsize,
+    failed_count: parallel.AtomicUsize,
+};
+
 /// Worker function that processes a single work item
-fn processWorkItem(allocator: Allocator, work_item: WorkItem) bool {
+fn processWorkItem(context: *ProcessContext, item_id: usize) void {
+    const work_item = context.work_list.items[item_id];
     const success = switch (work_item.kind) {
-        .snapshot_file => processSnapshotFile(allocator, work_item.path, work_item.maybe_fuzz_corpus_path, work_item.generate_html) catch false,
+        .snapshot_file => processSnapshotFile(context.allocator, work_item.path, context.config.maybe_fuzz_corpus_path, context.config.generate_html) catch false,
         .multi_file_snapshot => blk: {
-            processMultiFileSnapshot(allocator, work_item.path, work_item.generate_html) catch {
+            processMultiFileSnapshot(context.allocator, work_item.path, context.config.generate_html) catch {
                 break :blk false;
             };
             break :blk true;
         },
     };
 
-    return success;
+    if (success) {
+        _ = context.success_count.fetchAdd(1, .monotonic);
+    } else {
+        _ = context.failed_count.fetchAdd(1, .monotonic);
+    }
 }
 
 /// Stage 2: Process work items in parallel using the parallel utility
-fn processWorkItems(gpa: Allocator, work_list: WorkList, single_thread: bool) !ProcessResult {
+fn processWorkItems(gpa: Allocator, work_list: WorkList, single_thread: bool, config: Config) !ProcessResult {
     if (work_list.items.len == 0) {
         return ProcessResult{ .success = 0, .failed = 0 };
     }
 
-    const config = parallel.ParallelConfig{
-        .single_threaded = single_thread,
-        .max_threads = 0, // Auto-detect
+    var context = ProcessContext{
+        .allocator = gpa,
+        .work_list = @constCast(&work_list),
+        .config = config,
+        .success_count = parallel.AtomicUsize.init(0),
+        .failed_count = parallel.AtomicUsize.init(0),
     };
 
-    const result = try parallel.processParallel(
-        WorkItem,
-        gpa,
-        work_list.items,
+    const max_threads: usize = if (single_thread) 1 else 0;
+
+    try parallel.process(
+        ProcessContext,
+        &context,
         processWorkItem,
-        config,
+        gpa,
+        work_list.items.len,
+        max_threads,
     );
 
     return ProcessResult{
-        .success = result.success,
-        .failed = result.failed,
+        .success = context.success_count.load(.monotonic),
+        .failed = context.failed_count.load(.monotonic),
     };
 }
 
 /// Stage 1: Walk directory tree and collect work items
-fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList, maybe_fuzz_corpus_path: ?[]const u8, generate_html: bool) !void {
+fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !void {
     const canonical_path = std.fs.cwd().realpathAlloc(gpa, path) catch |err| {
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
         return;
     };
-    defer gpa.free(canonical_path);
 
     // Try to open as directory first
     if (std.fs.cwd().openDir(canonical_path, .{ .iterate = true })) |dir_handle| {
@@ -624,12 +650,9 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList, mayb
 
         // It's a directory
         if (isMultiFileSnapshot(canonical_path)) {
-            const path_copy = try gpa.dupe(u8, canonical_path);
             try work_list.append(WorkItem{
-                .path = path_copy,
+                .path = canonical_path,
                 .kind = .multi_file_snapshot,
-                .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
-                .generate_html = generate_html,
             });
         } else {
             var dir_iterator = dir.iterate();
@@ -638,37 +661,36 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList, mayb
                 if (entry.name[0] == '.') continue;
 
                 const full_path = try std.fs.path.join(gpa, &[_][]const u8{ canonical_path, entry.name });
-                defer gpa.free(full_path);
 
                 if (entry.kind == .directory) {
-                    try collectWorkItems(gpa, full_path, work_list, maybe_fuzz_corpus_path, generate_html);
+                    try collectWorkItems(gpa, full_path, work_list);
+                    gpa.free(full_path);
                 } else if (entry.kind == .file and isSnapshotFile(entry.name)) {
-                    const path_copy = try gpa.dupe(u8, full_path);
                     try work_list.append(WorkItem{
-                        .path = path_copy,
+                        .path = full_path,
                         .kind = .snapshot_file,
-                        .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
-                        .generate_html = generate_html,
                     });
+                } else {
+                    gpa.free(full_path);
                 }
             }
+            gpa.free(canonical_path);
         }
     } else |dir_err| {
         // Not a directory, try as file
         if (dir_err == error.NotDir) {
             if (isSnapshotFile(canonical_path)) {
-                const path_copy = try gpa.dupe(u8, canonical_path);
                 try work_list.append(WorkItem{
-                    .path = path_copy,
+                    .path = canonical_path,
                     .kind = .snapshot_file,
-                    .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
-                    .generate_html = generate_html,
                 });
             } else {
                 std.log.err("file '{s}' is not a snapshot file (must end with .md)", .{canonical_path});
+                gpa.free(canonical_path);
             }
         } else {
             std.log.err("failed to access path '{s}': {s}", .{ canonical_path, @errorName(dir_err) });
+            gpa.free(canonical_path);
         }
     }
 }
