@@ -2809,6 +2809,7 @@ pub fn partitionFields(
     return UnifierBidirectional.partitionFields(ident_store, scratch, a_fields_range, b_fields_range);
 }
 
+/// Partitions tags from two tag ranges for unification.
 pub fn partitionTags(
     ident_store: *const Ident.Store,
     scratch: *Scratch,

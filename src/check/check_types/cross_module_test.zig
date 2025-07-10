@@ -1,3 +1,5 @@
+//! Tests for cross-module type checking functionality.
+
 const std = @import("std");
 const base = @import("../../base.zig");
 const types_mod = @import("../../types.zig");
