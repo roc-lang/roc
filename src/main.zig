@@ -116,6 +116,7 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     var timer = try std.time.Timer.start();
     var elapsed: u64 = undefined;
     var failure_count: usize = 0;
+    var exit_code: u8 = 0;
 
     if (args.check) {
         var files_to_reformat = std.ArrayList([]const u8).init(gpa);
@@ -135,9 +136,13 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
                 try stdout.writer().print("    {s}\n", .{file_name});
             }
             try stdout.writer().print("You can fix this with `roc format FILENAME.roc`.\n", .{});
+            exit_code = 1;
+        } else {
+            try stdout.writer().print("All formatting valid\n", .{});
         }
         if (failure_count > 0) {
             try stdout.writer().print("Failed to check {} files.\n", .{failure_count});
+            exit_code = 1;
         }
     } else {
         var success_count: usize = 0;
@@ -150,6 +155,7 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
         try stdout.writer().print("Successfully formatted {} files\n", .{success_count});
         if (failure_count > 0) {
             try stdout.writer().print("Failed to format {} files.\n", .{failure_count});
+            exit_code = 1;
         }
     }
 
@@ -157,9 +163,7 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     try formatElapsedTime(stdout.writer(), elapsed);
     try stdout.writer().print(".\n", .{});
 
-    if (failure_count > 0) {
-        std.process.exit(1);
-    }
+    std.process.exit(exit_code);
 }
 
 fn rocVersion(gpa: Allocator) !void {
