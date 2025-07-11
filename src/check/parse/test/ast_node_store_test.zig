@@ -103,8 +103,7 @@ test "NodeStore round trip - Headers" {
         };
     }
 
-    // Note + 1 here because we don't include the malformed header type
-    // there is an assertion if we use store.addHeader telling us to use addMalformed instead
+    // Note + 1 here because we don't include the malformed
     const actual_test_count = headers.items.len + 1;
 
     if (actual_test_count < NodeStore.AST_HEADER_NODE_COUNT) {
@@ -243,13 +242,121 @@ test "NodeStore round trip - Statement" {
         };
     }
 
-    // Note + 1 here because we don't include the malformed header type
-    // there is an assertion if we use store.addStatement telling us to use addMalformed instead
+    // Note + 1 here because we don't include the malformed
     const actual_test_count = statements.items.len + 1;
 
     if (actual_test_count < NodeStore.AST_STATEMENT_NODE_COUNT) {
         std.debug.print("Statement test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.AST_STATEMENT_NODE_COUNT, actual_test_count });
         std.debug.print("Please add test cases for missing statement variants.\n", .{});
         return error.IncompleteStatementTestCoverage;
+    }
+}
+
+test "NodeStore round trip - Pattern" {
+    const gpa = testing.allocator;
+    var store = NodeStore.initCapacity(gpa, NodeStore.AST_PATTERN_NODE_COUNT);
+    defer store.deinit();
+
+    var expected_test_count: usize = NodeStore.AST_PATTERN_NODE_COUNT;
+
+    var patterns = std.ArrayList(AST.Pattern).init(gpa);
+    defer patterns.deinit();
+
+    try patterns.append(AST.Pattern{
+        .ident = .{
+            .ident_tok = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(AST.Pattern{
+        .tag = .{
+            .args = AST.Pattern.Span{ .span = rand_span() },
+            .region = rand_region(),
+            .tag_tok = rand_token_idx(),
+        },
+    });
+    try patterns.append(AST.Pattern{
+        .int = .{
+            .number_tok = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(AST.Pattern{
+        .frac = .{
+            .number_tok = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(AST.Pattern{
+        .string = .{
+            .expr = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+            .string_tok = rand_token_idx(),
+        },
+    });
+    try patterns.append(AST.Pattern{
+        .single_quote = .{
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try patterns.append(AST.Pattern{
+        .record = .{
+            .fields = AST.PatternRecordField.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(AST.Pattern{
+        .list = .{
+            .patterns = AST.Pattern.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(AST.Pattern{
+        .list_rest = .{
+            .name = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(AST.Pattern{
+        .tuple = .{
+            .patterns = AST.Pattern.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(AST.Pattern{
+        .underscore = .{
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(AST.Pattern{
+        .alternatives = .{
+            .patterns = AST.Pattern.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(AST.Pattern{
+        .as = .{ .name = rand_token_idx(), .region = rand_region(), .pattern = rand_idx(AST.Pattern.Idx) },
+    });
+
+    // We don't include .malformed variant
+    expected_test_count -= 1;
+
+    for (patterns.items) |pattern| {
+        const idx = store.addPattern(pattern);
+        const retrieved = store.getPattern(idx);
+
+        testing.expectEqualDeep(pattern, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal:  {any}\n\n", .{pattern});
+            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
+            return err;
+        };
+    }
+
+    const actual_test_count = patterns.items.len;
+    if (actual_test_count != expected_test_count) {
+        std.debug.print("Pattern test coverage insufficient! Expected {d} test cases but found {d}.\n", .{ expected_test_count, actual_test_count });
+        std.debug.print("Please add or remove test cases for missing pattern variants.\n", .{});
+        return error.IncompletePatternTestCoverage;
     }
 }
