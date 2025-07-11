@@ -40,38 +40,38 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 # PARSE
 ~~~clojure
 (e-record @1.1-12.2
-	(field (field "person") (optional false)
+	(field (field "person")
 		(e-record @2.13-2.39
-			(field (field "name") (optional false)
+			(field (field "name")
 				(e-string @2.21-2.28
 					(e-string-part @2.22-2.27 (raw "Alice"))))
-			(field (field "age") (optional false)
+			(field (field "age")
 				(e-int @2.35-2.37 (raw "30")))))
-	(field (field "address") (optional false)
+	(field (field "address")
 		(e-record @3.14-7.6
-			(field (field "street") (optional false)
+			(field (field "street")
 				(e-string @4.17-4.30
 					(e-string-part @4.18-4.29 (raw "123 Main St"))))
-			(field (field "city") (optional false)
+			(field (field "city")
 				(e-string @5.15-5.28
 					(e-string-part @5.16-5.27 (raw "Springfield"))))
-			(field (field "coordinates") (optional false)
+			(field (field "coordinates")
 				(e-record @6.22-6.53
-					(field (field "lat") (optional false)
+					(field (field "lat")
 						(e-frac @6.29-6.36 (raw "42.1234")))
-					(field (field "lng") (optional false)
+					(field (field "lng")
 						(e-frac @6.43-6.51 (raw "-71.5678")))))))
-	(field (field "contact") (optional false)
+	(field (field "contact")
 		(e-record @8.14-11.6
-			(field (field "email") (optional false)
+			(field (field "email")
 				(e-string @9.16-9.35
 					(e-string-part @9.17-9.34 (raw "alice@example.com"))))
-			(field (field "phone") (optional false)
+			(field (field "phone")
 				(e-record @10.16-10.54
-					(field (field "home") (optional false)
+					(field (field "home")
 						(e-string @10.24-10.34
 							(e-string-part @10.25-10.33 (raw "555-1234"))))
-					(field (field "work") (optional false)
+					(field (field "work")
 						(e-string @10.42-10.52
 							(e-string-part @10.43-10.51 (raw "555-5678")))))))))
 ~~~

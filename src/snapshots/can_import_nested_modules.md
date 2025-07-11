@@ -40,12 +40,14 @@ PARSE ERROR - can_import_nested_modules.md:4:28:4:28
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:13:5:27
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:20:5:36
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:28:5:38
-UNDEFINED VARIABLE - can_import_nested_modules.md:9:26:9:41
-UNDEFINED VARIABLE - can_import_nested_modules.md:13:29:13:43
-UNDEFINED VARIABLE - can_import_nested_modules.md:18:5:18:37
-UNDEFINED VARIABLE - can_import_nested_modules.md:22:23:22:30
-UNDEFINED VARIABLE - can_import_nested_modules.md:22:37:22:58
-UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
+INVALID STATEMENT - can_import_nested_modules.md:1:1:1:1
+INVALID STATEMENT - can_import_nested_modules.md:4:19:4:27
+INVALID STATEMENT - can_import_nested_modules.md:4:25:4:36
+INVALID STATEMENT - can_import_nested_modules.md:5:8:5:20
+INVALID STATEMENT - can_import_nested_modules.md:5:13:5:27
+INVALID STATEMENT - can_import_nested_modules.md:5:20:5:36
+INVALID STATEMENT - can_import_nested_modules.md:5:28:5:38
+INVALID STATEMENT - can_import_nested_modules.md:5:37:8:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.
@@ -147,33 +149,91 @@ import utils.String.Format exposing [padLeft]
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**can_import_nested_modules.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**can_import_nested_modules.md:4:19:4:27:**
+```roc
+import http.Client.Auth as HttpAuth
+```
+                  ^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**can_import_nested_modules.md:4:25:4:36:**
+```roc
+import http.Client.Auth as HttpAuth
+```
+                        ^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**can_import_nested_modules.md:5:8:5:20:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+       ^^^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**can_import_nested_modules.md:5:13:5:27:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+            ^^^^^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**can_import_nested_modules.md:5:20:5:36:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+                   ^^^^^^^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**can_import_nested_modules.md:5:28:5:38:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+                           ^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**can_import_nested_modules.md:5:37:8:12:**
+```roc
+import utils.String.Format exposing [padLeft]
+
+# Test multi-level type qualification
+parseConfig : Config.Settings -> Str
+```
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `toString` in this scope.
@@ -401,7 +461,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(e-call @9.26-9.51
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @9.42-9.50
-					(pattern @9.16-9.24))))
+					(p-assign @9.16-9.24 (ident "settings")))))
 		(annotation @9.1-9.12
 			(declared-type
 				(ty-fn @8.15-8.37 (effectful false)
@@ -417,9 +477,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(e-call @13.29-13.55
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @13.44-13.48
-					(pattern @13.17-13.21))
+					(p-assign @13.17-13.21 (ident "user")))
 				(e-lookup-local @13.50-13.54
-					(pattern @13.23-13.27))))
+					(p-assign @13.23-13.27 (ident "pass")))))
 		(annotation @13.1-13.13
 			(declared-type
 				(ty-fn @12.16-12.42 (effectful false)
@@ -436,9 +496,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(e-call @18.5-18.60
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @18.38-18.52
-					(pattern @17.16-17.30))
+					(p-assign @17.16-17.30 (ident "advancedConfig")))
 				(e-lookup-local @18.54-18.59
-					(pattern @17.32-17.37))))
+					(p-assign @17.32-17.37 (ident "input")))))
 		(annotation @17.1-17.12
 			(declared-type
 				(ty-fn @16.15-16.78 (effectful false)
@@ -457,7 +517,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(e-call @22.23-22.59
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @22.31-22.35
-					(pattern @22.17-22.21))
+					(p-assign @22.17-22.21 (ident "text")))
 				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation @22.1-22.13
 			(declared-type
@@ -472,7 +532,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(e-call @26.24-26.48
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @26.42-26.47
-					(pattern @26.17-26.22))))
+					(p-assign @26.17-26.22 (ident "creds")))))
 		(annotation @26.1-26.13
 			(declared-type
 				(ty-fn @25.16-25.78 (effectful false)
@@ -486,7 +546,14 @@ validateAuth = |creds| HttpAuth.validate(creds)
 	(s-import @3.1-3.19 (module "json.Parser") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.19 (module "http.Client") (qualifier "http")
-		(exposes)))
+		(exposes))
+	(ext-decl @8.15-8.30 (ident "Config.Settings") (kind "type"))
+	(ext-decl @12.28-12.42 (ident "HttpAuth.Token") (kind "type"))
+	(ext-decl @16.15-16.37 (ident "Config.Parser.Advanced") (kind "type"))
+	(ext-decl @16.58-16.77 (ident "Config.Parser.Error") (kind "type"))
+	(ext-decl @25.16-25.36 (ident "HttpAuth.Credentials") (kind "type"))
+	(ext-decl @25.47-25.61 (ident "HttpAuth.Token") (kind "type"))
+	(ext-decl @25.63-25.77 (ident "HttpAuth.Error") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

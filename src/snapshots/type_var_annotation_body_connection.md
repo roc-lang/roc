@@ -98,9 +98,9 @@ main! = |_| {}
 				(s-let @6.5-6.14
 					(p-assign @6.5-6.10 (ident "thing"))
 					(e-lookup-local @6.13-6.14
-						(pattern @4.13-4.14)))
+						(p-assign @4.13-4.14 (ident "x"))))
 				(e-lookup-local @7.5-7.10
-					(pattern @6.5-6.10))))
+					(p-assign @6.5-6.10 (ident "thing")))))
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.18 (effectful false)

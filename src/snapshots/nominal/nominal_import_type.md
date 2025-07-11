@@ -69,7 +69,8 @@ red = Red
 				(ty-lookup-external @5.7-5.16
 					(ext-decl @5.7-5.16 (ident "Color.RGB") (kind "type"))))))
 	(s-import @3.1-3.13 (module "Color")
-		(exposes)))
+		(exposes))
+	(ext-decl @5.7-5.16 (ident "Color.RGB") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -77,5 +78,5 @@ red = Red
 	(defs
 		(patt @6.1-6.4 (type "Error")))
 	(expressions
-		(expr @6.7-6.20 (type "Error"))))
+		(expr @6.12-6.16 (type "Error"))))
 ~~~

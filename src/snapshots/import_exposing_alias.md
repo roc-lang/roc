@@ -51,10 +51,10 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 					(s-decl @6.2-6.33
 						(p-ident @6.2-6.6 (raw "data"))
 						(e-record @6.9-6.33
-							(field (field "name") (optional false)
+							(field (field "name")
 								(e-string @6.17-6.22
 									(e-string-part @6.18-6.21 (raw "Bob"))))
-							(field (field "age") (optional false)
+							(field (field "age")
 								(e-int @6.29-6.31 (raw "25")))))
 					(s-decl @7.2-7.24
 						(p-ident @7.2-7.9 (raw "encoded"))
@@ -99,19 +99,21 @@ main = {
 			(s-let @7.2-7.24
 				(p-assign @7.2-7.9 (ident "encoded"))
 				(e-call @7.12-7.24
-					(e-lookup-external
-						(ext-decl @7.12-7.18 (ident "json.Json.encode") (kind "value")))
+					(e-lookup-external @7.12-7.18
+						(module-idx "0")
+						(target-node-idx "0"))
 					(e-lookup-local @7.19-7.23
-						(pattern @6.2-6.6))))
+						(p-assign @6.2-6.6 (ident "data")))))
 			(s-let @8.2-8.29
 				(p-assign @8.2-8.9 (ident "decoded"))
 				(e-call @8.12-8.29
-					(e-lookup-external
-						(ext-decl @8.12-8.20 (ident "json.Json.decode") (kind "value")))
+					(e-lookup-external @8.12-8.20
+						(module-idx "0")
+						(target-node-idx "0"))
 					(e-lookup-local @8.21-8.28
-						(pattern @7.2-7.9))))
+						(p-assign @7.2-7.9 (ident "encoded")))))
 			(e-lookup-local @9.2-9.9
-				(pattern @8.2-8.9))))
+				(p-assign @8.2-8.9 (ident "decoded")))))
 	(s-import @3.1-3.65 (module "json.Json") (qualifier "json")
 		(exposes
 			(exposed (name "decode") (alias "fromJson") (wildcard false))

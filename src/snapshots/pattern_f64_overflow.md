@@ -140,31 +140,36 @@ match x {
 		(branches
 			(branch
 				(patterns
-					(p-runtime-error @2.5-2.10 (tag "f64_pattern_literal") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @2.5-2.10 (tag "f64_pattern_literal"))))
 				(value
 					(e-string @2.14-2.33
 						(e-literal @2.15-2.32 (string "very large number")))))
 			(branch
 				(patterns
-					(p-runtime-error @3.5-3.10 (tag "f64_pattern_literal") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @3.5-3.10 (tag "f64_pattern_literal"))))
 				(value
 					(e-string @3.14-3.33
 						(e-literal @3.15-3.32 (string "very small number")))))
 			(branch
 				(patterns
-					(p-runtime-error @4.5-4.27 (tag "f64_pattern_literal") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @4.5-4.27 (tag "f64_pattern_literal"))))
 				(value
 					(e-string @4.31-4.45
 						(e-literal @4.32-4.44 (string "near f64 max")))))
 			(branch
 				(patterns
-					(p-small-dec @5.5-5.8 (degenerate false)))
+					(pattern (degenerate false)
+						(p-small-dec @5.5-5.8)))
 				(value
 					(e-string @5.12-5.18
 						(e-literal @5.13-5.17 (string "zero")))))
 			(branch
 				(patterns
-					(p-assign @6.5-6.10 (ident "value") (degenerate false)))
+					(pattern (degenerate false)
+						(p-assign @6.5-6.10 (ident "value"))))
 				(value
 					(e-string @6.14-6.21
 						(e-literal @6.15-6.20 (string "other"))))))))

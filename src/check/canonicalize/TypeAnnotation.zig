@@ -13,6 +13,7 @@ const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
+const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
 const Expr = CIR.Expr;
 const IntValue = CIR.IntValue;
@@ -33,18 +34,14 @@ pub const TypeAnno = union(enum) {
     /// Examples: `a`, `b`, `elem` in generic type signatures
     ty_var: struct {
         name: Ident.Idx, // The variable name (e.g., "a", "b")
-        region: Region,
     },
     /// Inferred type `_`
-    underscore: struct {
-        region: Region,
-    },
+    underscore: void,
     /// Basic type identifier: a concrete type name without arguments.
     ///
     /// Examples: `Str`, `U64`, `Bool`
     ty: struct {
         symbol: Ident.Idx, // The type name
-        region: Region,
     },
     /// Tag union type: a union of tags, possibly with payloads.
     ///
@@ -67,171 +64,168 @@ pub const TypeAnno = union(enum) {
     /// Examples: `(a -> b)` in `a, (a -> b) -> b`
     parens: struct {
         anno: TypeAnno.Idx, // The type inside the parentheses
-        region: Region,
     },
     /// External type lookup: references a type from another module via external declaration.
     ///
     /// Examples: `Json.Value`, `Http.Request` - types that will be resolved when dependencies are available
     ty_lookup_external: struct {
         external_decl: CIR.ExternalDecl.Idx,
-        region: Region,
     },
     /// Malformed type annotation: represents a type that couldn't be parsed correctly.
     /// This follows the "Inform Don't Block" principle - compilation continues with
     /// an error marker that will be reported to the user.
     malformed: struct {
         diagnostic: Diagnostic.Idx, // The error that occurred
-        region: Region,
     },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, type_anno_idx: TypeAnno.Idx) void {
         switch (self.*) {
             .apply => |a| {
-                var node = SExpr.init(gpa, "ty-apply");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, a.region);
-
-                node.appendStringAttr(gpa, "symbol", ir.getIdentText(a.symbol));
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-apply");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                tree.pushStringPair("symbol", ir.getIdentText(a.symbol));
+                const attrs = tree.beginNode();
 
                 const args_slice = ir.store.sliceTypeAnnos(a.args);
                 for (args_slice) |arg_idx| {
-                    const arg = ir.store.getTypeAnno(arg_idx);
-                    var arg_node = arg.toSExpr(ir);
-                    node.appendNode(gpa, &arg_node);
+                    ir.store.getTypeAnno(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
 
-                return node;
+                tree.endNode(begin, attrs);
             },
             .ty_var => |tv| {
-                var node = SExpr.init(gpa, "ty-var");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, tv.region);
-                node.appendStringAttr(gpa, "name", ir.getIdentText(tv.name));
-                return node;
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-var");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                tree.pushStringPair("name", ir.getIdentText(tv.name));
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
             },
-            .underscore => |u| {
-                var node = SExpr.init(gpa, "ty-underscore");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, u.region);
-                return node;
+            .underscore => |_| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-underscore");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
             },
             .ty => |t| {
-                var node = SExpr.init(gpa, "ty");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, t.region);
-                node.appendStringAttr(gpa, "name", ir.getIdentText(t.symbol));
-                return node;
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                tree.pushStringPair("name", ir.getIdentText(t.symbol));
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
             },
             .tag_union => |tu| {
-                var node = SExpr.init(gpa, "ty-tag-union");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, tu.region);
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-tag-union");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
 
                 const tags_slice = ir.store.sliceTypeAnnos(tu.tags);
                 for (tags_slice) |tag_idx| {
-                    const tag = ir.store.getTypeAnno(tag_idx);
-                    var tag_node = tag.toSExpr(ir);
-                    node.appendNode(gpa, &tag_node);
+                    ir.store.getTypeAnno(tag_idx).pushToSExprTree(ir, tree, tag_idx);
                 }
 
                 if (tu.ext) |open_idx| {
-                    const open_anno = ir.store.getTypeAnno(open_idx);
-                    var open_node = open_anno.toSExpr(ir);
-                    node.appendNode(gpa, &open_node);
+                    ir.store.getTypeAnno(open_idx).pushToSExprTree(ir, tree, open_idx);
                 }
 
-                return node;
+                tree.endNode(begin, attrs);
             },
-            .tuple => |tup| {
-                var node = SExpr.init(gpa, "ty-tuple");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, tup.region);
+            .tuple => |t| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-tuple");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
 
-                const annos_slice = ir.store.sliceTypeAnnos(tup.elems);
+                const annos_slice = ir.store.sliceTypeAnnos(t.elems);
                 for (annos_slice) |anno_idx| {
-                    const anno = ir.store.getTypeAnno(anno_idx);
-                    var anno_node = anno.toSExpr(ir);
-                    node.appendNode(gpa, &anno_node);
+                    ir.store.getTypeAnno(anno_idx).pushToSExprTree(ir, tree, anno_idx);
                 }
 
-                return node;
+                tree.endNode(begin, attrs);
             },
             .record => |r| {
-                var node = SExpr.init(gpa, "ty-record");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, r.region);
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-record");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
 
                 const fields_slice = ir.store.sliceAnnoRecordFields(r.fields);
                 for (fields_slice) |field_idx| {
                     const field = ir.store.getAnnoRecordField(field_idx);
-                    var field_node = SExpr.init(gpa, "field");
-                    field_node.appendStringAttr(gpa, "field", ir.getIdentText(field.name));
 
-                    var type_node = ir.store.getTypeAnno(field.ty).toSExpr(ir);
-                    field_node.appendNode(gpa, &type_node);
+                    const field_begin = tree.beginNode();
+                    tree.pushStaticAtom("field");
+                    tree.pushStringPair("field", ir.getIdentText(field.name));
+                    const field_attrs = tree.beginNode();
 
-                    node.appendNode(gpa, &field_node);
+                    ir.store.getTypeAnno(field.ty).pushToSExprTree(ir, tree, field.ty);
+
+                    tree.endNode(field_begin, field_attrs);
                 }
 
-                return node;
+                tree.endNode(begin, attrs);
             },
             .@"fn" => |f| {
-                var node = SExpr.init(gpa, "ty-fn");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, f.region);
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-fn");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                tree.pushBoolPair("effectful", f.effectful);
+                const attrs = tree.beginNode();
 
                 const args_slice = ir.store.sliceTypeAnnos(f.args);
                 for (args_slice) |arg_idx| {
-                    const arg = ir.store.getTypeAnno(arg_idx);
-                    var arg_node = arg.toSExpr(ir);
-                    node.appendNode(gpa, &arg_node);
+                    ir.store.getTypeAnno(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
 
-                var ret_node = ir.store.getTypeAnno(f.ret).toSExpr(ir);
-                node.appendNode(gpa, &ret_node);
+                ir.store.getTypeAnno(f.ret).pushToSExprTree(ir, tree, f.ret);
 
-                node.appendBoolAttr(gpa, "effectful", f.effectful);
-
-                return node;
+                tree.endNode(begin, attrs);
             },
             .parens => |p| {
-                var node = SExpr.init(gpa, "ty-parens");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-parens");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
 
-                const inner_anno = ir.store.getTypeAnno(p.anno);
-                var inner_node = inner_anno.toSExpr(ir);
-                node.appendNode(gpa, &inner_node);
+                ir.store.getTypeAnno(p.anno).pushToSExprTree(ir, tree, p.anno);
 
-                return node;
+                tree.endNode(begin, attrs);
             },
             .ty_lookup_external => |tle| {
-                var node = SExpr.init(gpa, "ty-lookup-external");
-                node.appendRegion(gpa, ir.calcRegionInfo(tle.region));
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-lookup-external");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
 
-                const external_decl = ir.getExternalDecl(tle.external_decl);
-                var decl_node = external_decl.toSExpr(ir);
-                node.appendNode(gpa, &decl_node);
+                ir.getExternalDecl(tle.external_decl).pushToSExprTreeWithRegion(ir, tree, region);
 
-                return node;
+                tree.endNode(begin, attrs);
             },
-            .malformed => |m| {
-                var node = SExpr.init(gpa, "ty-malformed");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, m.region);
-                return node;
+            .malformed => |_| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("ty-malformed");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
             },
-        }
-    }
-
-    /// Extract the region from any TypeAnno variant
-    pub fn toRegion(self: *const @This()) Region {
-        switch (self.*) {
-            .apply => |a| return a.region,
-            .ty_var => |tv| return tv.region,
-            .underscore => |u| return u.region,
-            .ty => |t| return t.region,
-            .tuple => |t| return t.region,
-            .tag_union => |tu| return tu.region,
-            .record => |r| return r.region,
-            .@"fn" => |f| return f.region,
-            .parens => |p| return p.region,
-            .ty_lookup_external => |tle| return tle.region,
-            .malformed => |m| return m.region,
         }
     }
 
@@ -239,7 +233,6 @@ pub const TypeAnno = union(enum) {
     pub const RecordField = struct {
         name: Ident.Idx,
         ty: TypeAnno.Idx,
-        region: Region,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = struct { span: DataSpan };
@@ -249,7 +242,6 @@ pub const TypeAnno = union(enum) {
     pub const Apply = struct {
         symbol: Ident.Idx, // The type constructor being applied (e.g., "List", "Dict")
         args: TypeAnno.Span, // The type arguments (e.g., [Str], [String, Int])
-        region: Region,
     };
 
     /// A func in a type annotation
@@ -257,25 +249,21 @@ pub const TypeAnno = union(enum) {
         args: TypeAnno.Span, // Argument types
         ret: TypeAnno.Idx, // Return type
         effectful: bool, // Whether the function can perform effects, i.e. uses fat arrow `=>`
-        region: Region,
     };
 
     /// A record in a type annotation
     pub const Record = struct {
         fields: RecordField.Span, // The field definitions
-        region: Region,
     };
 
     /// A tag union in a type annotation
     pub const TagUnion = struct {
         tags: TypeAnno.Span, // The individual tags in the union
         ext: ?TypeAnno.Idx, // Optional extension variable for open unions
-        region: Region,
     };
 
     /// A tuple in a type annotation
     pub const Tuple = struct {
         elems: TypeAnno.Span, // The types of each tuple element
-        region: Region,
     };
 };

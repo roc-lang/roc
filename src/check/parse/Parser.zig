@@ -14,6 +14,8 @@ const TokenIdx = Token.Idx;
 
 const exitOnOom = collections.utils.exitOnOom;
 
+const MAX_PARSE_DIAGNOSTICS: usize = 1_000;
+
 /// A parser which tokenizes and parses source code into an abstract syntax tree.
 pub const Parser = @This();
 
@@ -23,6 +25,7 @@ tok_buf: TokenizedBuffer,
 store: NodeStore,
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
+cached_malformed_node: ?Node.Idx,
 
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer) Parser {
@@ -36,6 +39,7 @@ pub fn init(tokens: TokenizedBuffer) Parser {
         .store = store,
         .scratch_nodes = .{},
         .diagnostics = .{},
+        .cached_malformed_node = null,
     };
 }
 
@@ -64,7 +68,7 @@ fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) Test
 
 /// helper to advance the parser until a non-newline token is encountered
 pub fn advance(self: *Parser) void {
-    while (true and self.peek() != .EndOfFile) {
+    while (self.peek() != .EndOfFile) {
         self.pos += 1;
         if (self.peek() != .Newline) {
             break;
@@ -148,33 +152,53 @@ pub fn peekSkippingNewlines(self: *Parser) Token.Tag {
 
 /// add a diagnostic error
 pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.TokenizedRegion) void {
-    self.diagnostics.append(self.gpa, .{
-        .tag = tag,
-        .region = region,
-    }) catch |err| exitOnOom(err);
+    if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
+        self.diagnostics.append(self.gpa, .{
+            .tag = tag,
+            .region = region,
+        }) catch |err| exitOnOom(err);
+    }
 }
 /// add a malformed token
 pub fn pushMalformed(self: *Parser, comptime t: type, tag: AST.Diagnostic.Tag, start: TokenIdx) t {
     const pos = self.pos;
+
     if (self.peek() != .EndOfFile) {
         self.advanceOne(); // TODO: find a better point to advance to
     }
 
-    // Create a diagnostic region that points to the problematic token
-    // If the parser has moved too far from the start, use the start token for better error location
-    const diagnostic_start = if (self.pos > start and (self.pos - start) > 2) start else @min(pos, self.pos);
-    const diagnostic_end = if (self.pos > start and (self.pos - start) > 2) start + 1 else @max(pos, self.pos);
-    // If start equals end, make it a single-token region
-    const diagnostic_region = AST.TokenizedRegion{ .start = diagnostic_start, .end = if (diagnostic_start == diagnostic_end) diagnostic_start + 1 else diagnostic_end };
+    if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
+        // Create a diagnostic region that points to the problematic token
+        // If the parser has moved too far from the start, use the start token for better error location
+        const diagnostic_start = if (self.pos > start and (self.pos - start) > 2) start else @min(pos, self.pos);
+        const diagnostic_end = if (self.pos > start and (self.pos - start) > 2) start + 1 else @max(pos, self.pos);
+        // If start equals end, make it a single-token region
+        const diagnostic_region = AST.TokenizedRegion{ .start = diagnostic_start, .end = if (diagnostic_start == diagnostic_end) diagnostic_start + 1 else diagnostic_end };
 
-    // AST node should span the entire malformed expression
-    const ast_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+        // AST node should span the entire malformed expression
+        const ast_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
 
-    self.diagnostics.append(self.gpa, .{
-        .tag = tag,
-        .region = diagnostic_region,
-    }) catch |err| exitOnOom(err);
-    return self.store.addMalformed(t, tag, ast_region);
+        self.diagnostics.append(self.gpa, .{
+            .tag = tag,
+            .region = diagnostic_region,
+        }) catch |err| exitOnOom(err);
+        return self.store.addMalformed(t, tag, ast_region);
+    } else {
+        // Return a cached malformed node to avoid creating excessive nodes when diagnostic limit is exceeded
+        if (self.cached_malformed_node == null) {
+            // Create a generic malformed node with a fallback diagnostic tag
+            const fallback_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+            const nid = self.store.nodes.append(self.gpa, .{
+                .tag = .malformed,
+                .main_token = 0,
+                .data = .{ .lhs = @intFromEnum(AST.Diagnostic.Tag.expr_unexpected_token), .rhs = 0 },
+                .region = fallback_region,
+            });
+            self.cached_malformed_node = nid;
+        }
+        // Cast the cached node to the requested type
+        return @enumFromInt(@intFromEnum(self.cached_malformed_node.?));
+    }
 }
 /// parse a `.roc` module
 ///
@@ -764,7 +788,6 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
             const pidx = self.store.addRecordField(.{
                 .name = name_tok,
                 .value = value,
-                .optional = false,
                 .region = .{ .start = entry_start, .end = self.pos },
             });
             self.store.addScratchRecordField(pidx);
@@ -778,7 +801,6 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
             self.store.addScratchRecordField(self.store.addRecordField(.{
                 .name = name_tok,
                 .value = value,
-                .optional = false,
                 .region = .{ .start = entry_start, .end = self.pos },
             }));
         }
@@ -1027,6 +1049,19 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
             }
             return statement_idx;
         },
+        .KwDbg => {
+            const start = self.pos;
+            self.advance();
+            const expr = self.parseExpr();
+            const statement_idx = self.store.addStatement(.{ .dbg = .{
+                .expr = expr,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            if (self.peek() == .Newline) {
+                self.advance();
+            }
+            return statement_idx;
+        },
         .KwReturn => {
             const start = self.pos;
             self.advance();
@@ -1184,16 +1219,37 @@ fn parseWhereConstraint(self: *Parser) ?AST.Collection.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    const where_start = self.pos; // Position of the where keyword
+
     self.expect(.KwWhere) catch {
         return null;
     };
-    const start = self.pos;
+
+    const where_end = self.pos; // Position right after the where keyword
     const where_clauses_top = self.store.scratchWhereClauseTop();
     while (self.peek() != .Comma and self.peek() != .EndOfFile) {
         const curr = self.peek();
         const next = self.peekNext();
+
+        // Check if we've reached the start of a new statement (e.g., "broken_fn2 : a -> b" or "process = ...")
+        // This indicates we should stop parsing where clauses
+        if (curr == .LowerIdent and (next == .OpColon or next == .OpAssign)) {
+            break;
+        }
+
         const valid_lookahead = curr == .KwModule or (curr == .LowerIdent and (next == .NoSpaceDotLowerIdent or next == .DotLowerIdent or next == .NoSpaceDotUpperIdent or next == .DotUpperIdent));
         if (!valid_lookahead) {
+            // Check if we have a malformed constraint that starts with a type variable
+            if (curr == .LowerIdent) {
+                // Try to parse as a malformed where clause to provide better error messages
+                const clause = self.parseWhereClause();
+                self.store.addScratchWhereClause(clause);
+                if (self.peek() != .Comma) {
+                    break;
+                }
+                self.advance();
+                continue;
+            }
             break;
         }
         const clause = self.parseWhereClause();
@@ -1204,10 +1260,38 @@ fn parseWhereConstraint(self: *Parser) ?AST.Collection.Idx {
         self.advance();
     }
     const where_clauses = self.store.whereClauseSpanFrom(where_clauses_top);
+
+    // Check if the where clause is empty
+    if (where_clauses.span.len == 0) {
+        // Create diagnostic region pointing to the where keyword
+        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = where_start + 1 };
+
+        // Create AST region for the malformed node
+        const ast_region = AST.TokenizedRegion{ .start = where_start, .end = where_end };
+
+        // Add the diagnostic
+        self.diagnostics.append(self.gpa, .{
+            .tag = .where_expected_constraints,
+            .region = diagnostic_region,
+        }) catch |err| exitOnOom(err);
+
+        // Create the malformed where clause node
+        const malformed_clause = self.store.addMalformed(AST.WhereClause.Idx, .where_expected_constraints, ast_region);
+
+        self.store.addScratchWhereClause(malformed_clause);
+        const updated_where_clauses = self.store.whereClauseSpanFrom(where_clauses_top);
+        const coll_id = self.store.addCollection(.collection_where_clause, .{
+            .region = .{ .start = where_start, .end = where_end },
+            .span = updated_where_clauses.span,
+        });
+        return coll_id;
+    }
+
     const coll_id = self.store.addCollection(.collection_where_clause, .{
-        .region = .{ .start = start, .end = self.pos },
+        .region = .{ .start = where_start, .end = self.pos },
         .span = where_clauses.span,
     });
+
     return coll_id;
 }
 
@@ -1289,6 +1373,13 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
             },
             .StringStart => {
                 pattern = self.parseStringPattern();
+            },
+            .SingleQuote => {
+                pattern = self.store.addPattern(.{ .single_quote = .{
+                    .token = start,
+                    .region = .{ .start = start, .end = start },
+                } });
+                self.advance();
             },
             .Int => {
                 pattern = self.store.addPattern(.{ .int = .{
@@ -1629,6 +1720,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
     defer trace.end();
 
     const start = self.pos;
+
     var expr: ?AST.Expr.Idx = null;
     const token = self.peek();
     switch (token) {
@@ -2120,6 +2212,7 @@ pub fn parseRecordField(self: *Parser) AST.RecordField.Idx {
     defer trace.end();
 
     const start = self.pos;
+
     self.expect(.LowerIdent) catch {
         return self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
     };
@@ -2133,7 +2226,6 @@ pub fn parseRecordField(self: *Parser) AST.RecordField.Idx {
     return self.store.addRecordField(.{
         .name = name,
         .value = value,
-        .optional = false,
         .region = .{ .start = start, .end = self.pos },
     });
 }
@@ -2146,6 +2238,14 @@ pub fn parseBranch(self: *Parser) AST.MatchBranch.Idx {
     const start = self.pos;
     const p = self.parsePattern(.alternatives_allowed);
     if (self.peek() == .OpFatArrow) {
+        self.advance();
+    } else if (self.peek() == .OpArrow) {
+        // Add diagnostic for wrong arrow
+        self.pushDiagnostic(.match_branch_wrong_arrow, .{
+            .start = self.pos,
+            .end = self.pos,
+        });
+
         self.advance();
     }
     const b = self.parseExpr();
@@ -2507,94 +2607,104 @@ pub fn parseWhereClause(self: *Parser) AST.WhereClause.Idx {
         // Parsing a mod_method clause
         self.advance();
         self.expect(.NoSpaceOpenRound) catch {
-            return self.store.addMalformed(
+            return self.pushMalformed(
                 AST.WhereClause.Idx,
                 .where_expected_mod_open,
-                .{ .start = start, .end = self.pos },
+                start,
             );
         };
         const var_tok = self.pos;
         self.expect(.LowerIdent) catch {
-            return self.store.addMalformed(
+            return self.pushMalformed(
                 AST.WhereClause.Idx,
                 .where_expected_var,
-                .{ .start = start, .end = self.pos },
+                start,
             );
         };
         self.expect(.CloseRound) catch {
-            return self.store.addMalformed(
+            return self.pushMalformed(
                 AST.WhereClause.Idx,
                 .where_expected_mod_close,
-                .{ .start = start, .end = self.pos },
+                start,
             );
         };
         const name_tok = self.pos;
-        if (self.peek() != .NoSpaceDotLowerIdent and self.peek() != .DotLowerIdent) {
-            return self.store.addMalformed(
+        if (self.peek() != .NoSpaceDotLowerIdent and self.peek() != .DotLowerIdent and self.peek() != .NoSpaceDotUpperIdent and self.peek() != .DotUpperIdent) {
+            return self.pushMalformed(
                 AST.WhereClause.Idx,
                 .where_expected_method_or_alias_name,
-                .{ .start = start, .end = self.pos },
+                start,
             );
         }
         self.advance();
-        const arg_start = self.pos;
-        self.expect(.NoSpaceOpenRound) catch {
-            return self.store.addMalformed(
+
+        // Check if this is a type alias (uppercase identifier)
+        const current_token_tag = self.tok_buf.tokens.items(.tag)[name_tok];
+        if (current_token_tag == .NoSpaceDotUpperIdent or current_token_tag == .DotUpperIdent) {
+            // Type alias case: module(a).TypeAlias
+            return self.store.addWhereClause(.{ .mod_alias = .{
+                .region = .{ .start = start, .end = self.pos },
+                .name_tok = name_tok,
+                .var_tok = var_tok,
+            } });
+        }
+
+        if (self.peek() == .OpColon) {
+            // Handle type annotation syntax: module(a).method : type
+            self.advance(); // advance past colon
+            const method_type_anno = self.parseTypeAnno(.not_looking_for_args);
+            const method_type = self.store.getTypeAnno(method_type_anno);
+
+            // Check if the type annotation is a function type
+            if (method_type == .@"fn") {
+                // Function type: extract args and return type
+                const fn_type = method_type.@"fn";
+                const args = self.store.addCollection(
+                    .collection_ty_anno,
+                    .{
+                        .region = .{ .start = self.pos, .end = self.pos },
+                        .span = fn_type.args.span,
+                    },
+                );
+                return self.store.addWhereClause(.{ .mod_method = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .name_tok = name_tok,
+                    .var_tok = var_tok,
+                    .args = args,
+                    .ret_anno = fn_type.ret,
+                } });
+            } else {
+                // Non-function type: treat as zero-argument method
+                const empty_args = self.store.addCollection(
+                    .collection_ty_anno,
+                    .{
+                        .region = .{ .start = self.pos, .end = self.pos },
+                        .span = base.DataSpan.empty(),
+                    },
+                );
+                return self.store.addWhereClause(.{ .mod_method = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .name_tok = name_tok,
+                    .var_tok = var_tok,
+                    .args = empty_args,
+                    .ret_anno = method_type_anno,
+                } });
+            }
+        } else if (self.peek() == .OpArrow) {
+            // Handle case where user forgot the colon: module(a).method -> Type
+            return self.pushMalformed(
                 AST.WhereClause.Idx,
-                .where_expected_arg_open,
-                .{ .start = start, .end = self.pos },
+                .where_expected_colon,
+                start,
             );
-        };
-        const ty_anno_top = self.store.scratchTypeAnnoTop();
-        const arg_end = self.parseCollectionSpan(
-            AST.TypeAnno.Idx,
-            .CloseRound,
-            NodeStore.addScratchTypeAnno,
-            Parser.parseTypeAnnoInCollection,
-        ) catch {
-            self.store.clearScratchTypeAnnosFrom(ty_anno_top);
-            return self.store.addMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_arg_close,
-                .{ .start = start, .end = self.pos },
-            );
-        };
-        const arg_span = self.store.typeAnnoSpanFrom(ty_anno_top);
-        const args = self.store.addCollection(
-            .collection_ty_anno,
-            .{
-                .region = .{ .start = arg_start, .end = arg_end },
-                .span = arg_span.span,
-            },
-        );
-        self.expect(.OpArrow) catch {
-            return self.store.addMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_method_arrow,
-                .{ .start = start, .end = self.pos },
-            );
-        };
-        const ret_ty_anno = self.parseTypeAnnoInCollection();
-        return self.store.addWhereClause(.{ .mod_method = .{
-            .region = .{ .start = start, .end = self.pos },
-            .name_tok = name_tok,
-            .var_tok = var_tok,
-            .args = args,
-            .ret_anno = ret_ty_anno,
-        } });
-    } else if (self.peek() == .LowerIdent) {
-        // Parsing either an alias or method clause
-        const var_tok = self.pos;
-        self.advance();
-        const name_tok = self.pos;
-        if (self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent) {
-            self.advance();
+        } else {
+            // Handle method call syntax: module(a).method(args) -> ret
             const arg_start = self.pos;
             self.expect(.NoSpaceOpenRound) catch {
-                return self.store.addMalformed(
+                return self.pushMalformed(
                     AST.WhereClause.Idx,
                     .where_expected_arg_open,
-                    .{ .start = start, .end = self.pos },
+                    start,
                 );
             };
             const ty_anno_top = self.store.scratchTypeAnnoTop();
@@ -2605,10 +2715,10 @@ pub fn parseWhereClause(self: *Parser) AST.WhereClause.Idx {
                 Parser.parseTypeAnnoInCollection,
             ) catch {
                 self.store.clearScratchTypeAnnosFrom(ty_anno_top);
-                return self.store.addMalformed(
+                return self.pushMalformed(
                     AST.WhereClause.Idx,
                     .where_expected_arg_close,
-                    .{ .start = start, .end = self.pos },
+                    start,
                 );
             };
             const arg_span = self.store.typeAnnoSpanFrom(ty_anno_top);
@@ -2620,41 +2730,27 @@ pub fn parseWhereClause(self: *Parser) AST.WhereClause.Idx {
                 },
             );
             self.expect(.OpArrow) catch {
-                return self.store.addMalformed(
+                return self.pushMalformed(
                     AST.WhereClause.Idx,
                     .where_expected_method_arrow,
-                    .{ .start = start, .end = self.pos },
+                    start,
                 );
             };
             const ret_ty_anno = self.parseTypeAnnoInCollection();
-            return self.store.addWhereClause(.{ .method = .{
+            return self.store.addWhereClause(.{ .mod_method = .{
                 .region = .{ .start = start, .end = self.pos },
                 .name_tok = name_tok,
                 .var_tok = var_tok,
                 .args = args,
                 .ret_anno = ret_ty_anno,
             } });
-        } else if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
-            const alias_tok = self.pos;
-            self.advance();
-            return self.store.addWhereClause(.{ .alias = .{
-                .region = .{ .start = start, .end = alias_tok },
-                .var_tok = var_tok,
-                .alias_tok = alias_tok,
-            } });
-        } else {
-            return self.store.addMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_method_or_alias_name,
-                .{ .start = start, .end = self.pos },
-            );
         }
     } else {
-        // malformed
-        return self.store.addMalformed(
+        // Only module(a).method syntax is supported
+        return self.pushMalformed(
             AST.WhereClause.Idx,
-            .where_expected_var_or_module,
-            .{ .start = start, .end = self.pos },
+            .where_expected_module,
+            start,
         );
     }
 }

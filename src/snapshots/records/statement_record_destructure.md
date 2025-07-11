@@ -13,6 +13,14 @@ UNEXPECTED TOKEN IN EXPRESSION - statement_record_destructure.md:1:7:1:12
 UNEXPECTED TOKEN IN EXPRESSION - statement_record_destructure.md:1:12:1:19
 UNEXPECTED TOKEN IN EXPRESSION - statement_record_destructure.md:1:20:1:23
 UNEXPECTED TOKEN IN EXPRESSION - statement_record_destructure.md:1:22:1:30
+INVALID STATEMENT - statement_record_destructure.md:1:3:1:8
+INVALID STATEMENT - statement_record_destructure.md:1:7:1:12
+INVALID STATEMENT - statement_record_destructure.md:1:9:1:13
+INVALID STATEMENT - statement_record_destructure.md:1:12:1:19
+INVALID STATEMENT - statement_record_destructure.md:1:14:1:21
+INVALID STATEMENT - statement_record_destructure.md:1:20:1:23
+INVALID STATEMENT - statement_record_destructure.md:1:22:1:30
+INVALID STATEMENT - statement_record_destructure.md:1:24:1:30
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -82,33 +90,89 @@ Here is the problematic code:
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**statement_record_destructure.md:1:3:1:8:**
+```roc
+{ name, age, email } = person
+```
+  ^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**statement_record_destructure.md:1:7:1:12:**
+```roc
+{ name, age, email } = person
+```
+      ^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**statement_record_destructure.md:1:9:1:13:**
+```roc
+{ name, age, email } = person
+```
+        ^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**statement_record_destructure.md:1:12:1:19:**
+```roc
+{ name, age, email } = person
+```
+           ^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**statement_record_destructure.md:1:14:1:21:**
+```roc
+{ name, age, email } = person
+```
+             ^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**statement_record_destructure.md:1:20:1:23:**
+```roc
+{ name, age, email } = person
+```
+                   ^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**statement_record_destructure.md:1:22:1:30:**
+```roc
+{ name, age, email } = person
+```
+                     ^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**statement_record_destructure.md:1:24:1:30:**
+```roc
+{ name, age, email } = person
+```
+                       ^^^^^^
+
 
 # TOKENS
 ~~~zig

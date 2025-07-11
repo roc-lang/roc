@@ -379,17 +379,6 @@ Some(a) : { foo : Ok(a), bar : g }
                                ^
 
 
-**UNDECLARED TYPE**
-The type ``Ok`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:32:19:32:24:**
-```roc
-Some(a) : { foo : Ok(a), bar : g }
-```
-                  ^^^^^
-
-
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -419,28 +408,6 @@ Func(a) : Maybe(a), a -> Maybe(a)
 
 
 **UNDECLARED TYPE**
-The type ``Maybe`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:43:11:43:19:**
-```roc
-Func(a) : Maybe(a), a -> Maybe(a)
-```
-          ^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Maybe`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:43:26:43:34:**
-```roc
-Func(a) : Maybe(a), a -> Maybe(a)
-```
-                         ^^^^^^^^
-
-
-**UNDECLARED TYPE**
 The type ``Bar`` is not declared in this scope.
 
 This type is referenced here:
@@ -466,21 +433,33 @@ This type is referenced here:
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**fuzz_crash_027.md:1:1:1:1:**
+```roc
+
+```
+
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
+**fuzz_crash_027.md:39:1:39:4:**
+```roc
+} #
+```
+^^^
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
+**EMPTY TUPLE NOT ALLOWED**
+I am part way through parsing this tuple, but it is empty:
+**fuzz_crash_027.md:52:1:52:3:**
+```roc
+() #r
+```
+^^
+
+If you want to represent nothing, try using an empty record: `{}`.
 
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
@@ -504,9 +483,17 @@ Is there an `import` or `exposing` missing up-top?
      ^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
+**UNUSED VARIABLE**
+Variable ``lue`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:64:11:64:14:**
+```roc
+	match a {lue | Red => {
+```
+          ^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `ment` in this scope.
@@ -532,7 +519,7 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -560,31 +547,31 @@ ist
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
 Let us know if you want to help!
 
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:82:21:82:29:**
+```roc
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+```
+                    ^^^^^^^^
+
+
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+This feature is not yet implemented or doesn't have a proper error report yet: report an error when unable to resolve field identifier
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -599,9 +586,16 @@ The unused variable is declared here:
  ^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `blah` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:97:2:97:6:**
+```roc
+	blah == 1 # Commnt
+```
+ ^^^^
+
 
 **UNDECLARED TYPE**
 The type ``String`` is not declared in this scope.
@@ -614,13 +608,16 @@ main! : List(String) -> Result({}, _)
              ^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `blah` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+**fuzz_crash_027.md:103:9:103:13:**
+```roc
+	expect blah == 1
+```
+        ^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
@@ -632,14 +629,6 @@ Is there an `import` or `exposing` missing up-top?
 ```
  ^^^^^^^^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: crash statement
-Let us know if you want to help!
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
@@ -725,10 +714,6 @@ tuple : Value((a, b, c))
 ```
         ^^^^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
 
 **UNUSED VARIABLE**
 Variable ``record`` is not used anywhere in your code.
@@ -840,6 +825,54 @@ It is of type:
 But you are trying to use it as:
     _Bool_
 
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern in the third branch of this `match` differs from previous ones:
+**fuzz_crash_027.md:64:2:**
+```roc
+	match a {lue | Red => {
+			x x
+		}
+		Blue		=> 1
+		"foo" => # ent
+00
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
+			=> ment
+
+
+		[1, 2 | 5, 3, .. as rest] => 123
+		[
+ist
+		] => 123
+		3.14 => 314
+		3.14 | 6.28 => 314
+		(1, 2, 3) => 123
+		(1, 2 | 5, 3) => 123
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ # Afrd open
+			foo #
+				: #ue
+					1, # Aftd field
+			bar: 2,
+			..} => 12
+		{ foo: 1, bar: 2 | 7 } => 12
+		{
+			foo: 1,
+			} => 12
+		Ok(123) => 121000
+	}
+```
+  ^
+
+The third pattern has this type:
+    _Str_
+
+But all the previous patterns have this type: 
+    _[Red, Blue]*_
+
+All patterns in an `match` must have compatible types.
+
+
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_027.md:111:2:111:12:**
@@ -849,7 +882,7 @@ This expression is used in an unexpected way:
  ^^^^^^^^^^
 
 It is of type:
-    _Error, * -> Error_
+    _[Red, Blue]*, * -> Error_
 
 But you are trying to use it as:
     _* -> *_
@@ -1147,12 +1180,12 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 							(e-ident @50.5-50.8 (raw "num"))
 							(e-block @50.9-54.3
 								(statements
-									(e-dbg
+									(s-dbg @51.3-53.4
 										(e-tuple @52.1-52.3))
 									(e-int @53.3-53.4 (raw "0"))))
 							(e-block @54.9-57.3
 								(statements
-									(e-dbg
+									(s-dbg @55.3-56.8
 										(e-int @55.7-55.10 (raw "123")))
 									(e-ident @56.3-56.8 (raw "other")))))))))
 		(s-decl @60.1-94.3
@@ -1328,7 +1361,7 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 						(e-int @125.6-125.9 (raw "456"))
 						(e-malformed @125.9-125.15 (reason "expr_unexpected_token"))
 						(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
-						(s-for
+						(s-for @127.2-131.8
 							(p-ident @127.6-127.7 (raw "n"))
 							(e-ident @127.11-127.15 (raw "list"))
 							(e-block @127.16-130.3
@@ -1349,18 +1382,18 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 						(s-decl @131.2-131.71
 							(p-ident @131.2-131.8 (raw "record"))
 							(e-record @131.11-131.71
-								(field (field "foo") (optional false)
+								(field (field "foo")
 									(e-int @131.18-131.21 (raw "123")))
-								(field (field "bar") (optional false)
+								(field (field "bar")
 									(e-string @131.28-131.35
 										(e-string-part @131.29-131.34 (raw "Hello"))))
-								(field (field "baz") (optional false)
+								(field (field "baz")
 									(e-ident @131.42-131.45 (raw "tag")))
-								(field (field "qux") (optional false)
+								(field (field "qux")
 									(e-apply @131.52-131.61
 										(e-tag @131.52-131.54 (raw "Ok"))
 										(e-ident @131.55-131.60 (raw "world"))))
-								(field (field "punned") (optional false))))
+								(field (field "punned"))))
 						(s-decl @132.2-132.68
 							(p-ident @132.2-132.7 (raw "tuple"))
 							(e-tuple @132.10-132.68
@@ -1649,7 +1682,7 @@ main! = |_| { # Yeah Ie
 				(if-branches
 					(if-branch
 						(e-lookup-local @45.16-45.19
-							(pattern @45.8-45.11))
+							(p-assign @45.8-45.11 (ident "num")))
 						(e-int @45.20-45.21 (value "2"))))
 				(if-else
 					(e-int @45.27-45.28 (value "5"))))))
@@ -1666,17 +1699,17 @@ main! = |_| { # Yeah Ie
 					(if-branches
 						(if-branch
 							(e-lookup-local @50.5-50.8
-								(pattern @48.12-48.15))
+								(p-assign @48.12-48.15 (ident "num")))
 							(e-block @50.9-54.3
-								(s-expr @51.3-53.4
-									(e-runtime-error (tag "not_implemented")))
+								(s-dbg @51.3-53.4
+									(e-runtime-error (tag "empty_tuple")))
 								(e-int @53.3-53.4 (value "0")))))
 					(if-else
 						(e-block @54.9-57.3
-							(s-expr @55.3-56.8
-								(e-runtime-error (tag "not_implemented")))
+							(s-dbg @55.3-56.8
+								(e-int @55.7-55.10 (value "123")))
 							(e-lookup-local @56.3-56.8
-								(pattern @49.2-49.7)))))))
+								(p-assign @49.2-49.7 (ident "other"))))))))
 		(annotation @48.1-48.8
 			(declared-type
 				(ty-fn @47.11-47.21 (effectful false)
@@ -1692,11 +1725,14 @@ main! = |_| { # Yeah Ie
 				(match @64.2-94.3
 					(cond
 						(e-lookup-local @64.8-64.9
-							(pattern @61.2-61.3)))
+							(p-assign @61.2-61.3 (ident "a"))))
 					(branches
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-assign @64.11-64.14 (ident "lue")))
+								(pattern (degenerate false)
+									(p-applied-tag @64.17-64.20)))
 							(value
 								(e-block @64.24-66.4
 									(s-expr @65.4-65.7
@@ -1704,99 +1740,138 @@ main! = |_| { # Yeah Ie
 									(e-runtime-error (tag "ident_not_in_scope")))))
 						(branch
 							(patterns
-								(p-applied-tag @67.3-67.7 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @67.3-67.7)))
 							(value
 								(e-int @67.12-67.13 (value "1"))))
 						(branch
 							(patterns
-								(p-str @68.3-68.4 (text """) (degenerate false)))
+								(pattern (degenerate false)
+									(p-str @68.3-68.4 (text """))))
 							(value
 								(e-int @69.1-69.3 (value "0"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-str @70.3-70.4 (text """)))
+								(pattern (degenerate false)
+									(p-str @70.11-70.12 (text """))))
 							(value
 								(e-int @70.20-70.22 (value "20"))))
 						(branch
 							(patterns
-								(p-list @70.22-70.43 (degenerate false)
-									(patterns
-										(p-int @70.23-70.24)
-										(p-int @70.26-70.27)
-										(p-int @70.29-70.30))
-									(rest-at (index 3)
-										(p-assign @70.38-70.42 (ident "rest")))))
+								(pattern (degenerate false)
+									(p-list @70.22-70.43
+										(patterns
+											(p-int @70.23-70.24 (value "1"))
+											(p-int @70.26-70.27 (value "2"))
+											(p-int @70.29-70.30 (value "3")))
+										(rest-at (index 3)
+											(p-assign @70.38-70.42 (ident "rest"))))))
 							(value
 								(e-runtime-error (tag "ident_not_in_scope"))))
 						(branch
 							(patterns
-								(p-list @74.3-74.28 (degenerate false)
-									(patterns
-										(p-int @74.4-74.5)
-										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-										(p-int @74.14-74.15))
-									(rest-at (index 3)
-										(p-assign @74.23-74.27 (ident "rest")))))
+								(pattern (degenerate false)
+									(p-list @74.3-74.28
+										(patterns
+											(p-int @74.4-74.5 (value "1"))
+											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+											(p-int @74.14-74.15 (value "3")))
+										(rest-at (index 3)
+											(p-assign @74.23-74.27 (ident "rest"))))))
 							(value
 								(e-int @74.32-74.35 (value "123"))))
 						(branch
 							(patterns
-								(p-list @75.3-77.4 (degenerate false)
-									(patterns
-										(p-assign @76.1-76.4 (ident "ist")))))
+								(pattern (degenerate false)
+									(p-list @75.3-77.4
+										(patterns
+											(p-assign @76.1-76.4 (ident "ist"))))))
 							(value
 								(e-int @77.8-77.11 (value "123"))))
 						(branch
 							(patterns
-								(p-small-dec @78.3-78.7 (degenerate false)))
+								(pattern (degenerate false)
+									(p-small-dec @78.3-78.7)))
 							(value
 								(e-int @78.11-78.14 (value "314"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-small-dec @79.3-79.7))
+								(pattern (degenerate false)
+									(p-small-dec @79.10-79.14)))
 							(value
 								(e-int @79.18-79.21 (value "314"))))
 						(branch
 							(patterns
-								(p-tuple @80.3-80.12 (degenerate false)
-									(patterns
-										(p-int @80.4-80.5)
-										(p-int @80.7-80.8)
-										(p-int @80.10-80.11))))
+								(pattern (degenerate false)
+									(p-tuple @80.3-80.12
+										(patterns
+											(p-int @80.4-80.5 (value "1"))
+											(p-int @80.7-80.8 (value "2"))
+											(p-int @80.10-80.11 (value "3"))))))
 							(value
 								(e-int @80.16-80.19 (value "123"))))
 						(branch
 							(patterns
-								(p-tuple @81.3-81.16 (degenerate false)
-									(patterns
-										(p-int @81.4-81.5)
-										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-										(p-int @81.14-81.15))))
+								(pattern (degenerate false)
+									(p-tuple @81.3-81.16
+										(patterns
+											(p-int @81.4-81.5 (value "1"))
+											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+											(p-int @81.14-81.15 (value "3"))))))
 							(value
 								(e-int @81.20-81.23 (value "123"))))
 						(branch
 							(patterns
-								(p-runtime-error @82.5-82.12 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-record-destructure @82.3-82.29
+										(destructs
+											(record-destruct @82.5-82.12 (label "foo") (ident "foo")
+												(sub-pattern
+													(p-int @82.10-82.11 (value "1"))))
+											(record-destruct @82.13-82.20 (label "bar") (ident "bar")
+												(sub-pattern
+													(p-int @82.18-82.19 (value "2"))))
+											(record-destruct @82.21-82.29 (label "rest") (ident "rest")
+												(required))))))
 							(value
 								(e-runtime-error (tag "not_implemented"))))
 						(branch
 							(patterns
-								(p-runtime-error @84.4-86.8 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-runtime-error @88.4-88.7 (tag "not_implemented"))))
 							(value
 								(e-int @88.11-88.13 (value "12"))))
 						(branch
 							(patterns
-								(p-runtime-error @89.5-89.12 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-record-destructure @89.3-89.25
+										(destructs
+											(record-destruct @89.5-89.12 (label "foo") (ident "foo")
+												(sub-pattern
+													(p-int @89.10-89.11 (value "1"))))
+											(record-destruct @89.13-89.25 (label "bar") (ident "bar")
+												(sub-pattern
+													(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
 							(value
 								(e-int @89.29-89.31 (value "12"))))
 						(branch
 							(patterns
-								(p-runtime-error @91.4-91.11 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-record-destructure @90.3-92.5
+										(destructs
+											(record-destruct @91.4-91.11 (label "foo") (ident "foo")
+												(sub-pattern
+													(p-int @91.9-91.10 (value "1"))))))))
 							(value
 								(e-int @92.9-92.11 (value "12"))))
 						(branch
 							(patterns
-								(p-applied-tag @93.3-93.10 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @93.3-93.10)))
 							(value
 								(e-int @93.14-93.20 (value "121000")))))))))
 	(d-let
@@ -1812,32 +1887,41 @@ main! = |_| { # Yeah Ie
 				(s-var @102.2-103.8
 					(p-assign @102.2-103.8 (ident "number"))
 					(e-int @102.15-102.18 (value "123")))
+				(s-expect @103.2-104.5
+					(e-binop @103.9-104.5 (op "eq")
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-int @103.17-103.18 (value "1"))))
 				(s-let @104.2-104.12
 					(p-assign @104.2-104.5 (ident "tag"))
 					(e-tag @104.8-104.12 (name "Blue")))
+				(s-return @105.2-110.5
+					(e-lookup-local @106.3-106.6
+						(p-assign @104.2-104.5 (ident "tag"))))
 				(s-expr @110.2-111.12
-					(e-not-implemented))
+					(e-not-implemented @110.2-110.5))
 				(s-expr @111.2-114.11
 					(e-call @111.2-113.3
 						(e-lookup-local @111.2-111.12
-							(pattern @60.1-60.11))
-						(e-not-implemented)))
+							(p-assign @60.1-60.11 (ident "match_time")))
+						(e-not-implemented @112.3-112.6)))
 				(s-expr @114.2-118.7
 					(e-call @114.2-117.3
 						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-dbg @115.3-116.7
+							(e-int @116.4-116.6 (value "42")))))
+				(s-crash @1.1-1.1 (msg "Unreachtement"))
 				(s-let @119.2-119.23
 					(p-assign @119.2-119.10 (ident "tag_with"))
-					(e-tag @119.13-119.23 (name "Ok")
+					(e-tag @119.13-119.15 (name "Ok")
 						(args
 							(e-lookup-local @119.16-119.22
-								(pattern @102.2-103.8)))))
+								(p-assign @102.2-103.8 (ident "number"))))))
 				(s-let @120.2-120.26
 					(p-assign @120.2-120.6 (ident "ited"))
 					(e-string @120.9-120.26
 						(e-literal @120.10-120.17 (string "Hello, "))
 						(e-lookup-local @120.19-120.24
-							(pattern @101.2-101.7))
+							(p-assign @101.2-101.7 (ident "world")))
 						(e-literal @120.25-120.25 (string ""))))
 				(s-let @121.2-125.4
 					(p-assign @121.2-121.6 (ident "list"))
@@ -1855,12 +1939,12 @@ main! = |_| { # Yeah Ie
 									(e-literal @131.29-131.34 (string "Hello"))))
 							(field (name "baz")
 								(e-lookup-local @131.42-131.45
-									(pattern @104.2-104.5)))
+									(p-assign @104.2-104.5 (ident "tag"))))
 							(field (name "qux")
-								(e-tag @131.52-131.61 (name "Ok")
+								(e-tag @131.52-131.54 (name "Ok")
 									(args
 										(e-lookup-local @131.55-131.60
-											(pattern @101.2-101.7)))))
+											(p-assign @101.2-101.7 (ident "world"))))))
 							(field (name "punned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @132.2-132.68
@@ -1871,16 +1955,16 @@ main! = |_| { # Yeah Ie
 							(e-string @132.16-132.23
 								(e-literal @132.17-132.22 (string "World")))
 							(e-lookup-local @132.25-132.28
-								(pattern @104.2-104.5))
-							(e-tag @132.30-132.39 (name "Ok")
+								(p-assign @104.2-104.5 (ident "tag")))
+							(e-tag @132.30-132.32 (name "Ok")
 								(args
 									(e-lookup-local @132.33-132.38
-										(pattern @101.2-101.7))))
+										(p-assign @101.2-101.7 (ident "world")))))
 							(e-tuple @132.41-132.56
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @132.50-132.55
-										(pattern @132.2-132.7))))
+										(p-assign @132.2-132.7 (ident "tuple")))))
 							(e-list @132.58-132.67
 								(elems
 									(e-int @132.59-132.60 (value "1"))
@@ -1894,15 +1978,15 @@ main! = |_| { # Yeah Ie
 							(e-string @135.3-135.10
 								(e-literal @135.4-135.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @137.3-137.12 (name "Ok")
+							(e-tag @137.3-137.5 (name "Ok")
 								(args
 									(e-lookup-local @137.6-137.11
-										(pattern @101.2-101.7))))
+										(p-assign @101.2-101.7 (ident "world")))))
 							(e-tuple @138.3-138.18
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @138.12-138.17
-										(pattern @132.2-132.7))))
+										(p-assign @132.2-132.7 (ident "tuple")))))
 							(e-list @139.3-139.12
 								(elems
 									(e-int @139.4-139.5 (value "1"))
@@ -1914,7 +1998,7 @@ main! = |_| { # Yeah Ie
 						(e-binop @141.10-141.66 (op "or")
 							(e-binop @141.10-141.35 (op "gt")
 								(e-binop @141.10-141.26 (op "null_coalesce")
-									(e-tag @141.10-141.18 (name "Err")
+									(e-tag @141.10-141.13 (name "Err")
 										(args
 											(e-runtime-error (tag "ident_not_in_scope"))))
 									(e-int @141.22-141.24 (value "12")))
@@ -1947,14 +2031,14 @@ main! = |_| { # Yeah Ie
 										(receiver
 											(e-runtime-error (tag "not_implemented")))))))))
 				(s-expr @143.2-148.2
-					(e-tag @143.2-147.3 (name "Stdoline!")
+					(e-tag @143.2-143.11 (name "Stdoline!")
 						(args
 							(e-string @144.3-146.10
 								(e-literal @144.4-144.14 (string "How about "))
 								(e-call @145.4-145.21
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @145.14-145.20
-										(pattern @102.2-103.8)))
+										(p-assign @102.2-103.8 (ident "number"))))
 								(e-literal @146.4-146.9 (string " as a"))))))
 				(s-type-anno @150.1-151.6 (name "empty")
 					(ty-record @150.9-150.11))
@@ -1967,7 +2051,32 @@ main! = |_| { # Yeah Ie
 							(ty-var @153.16-153.17 (name "a"))
 							(ty-var @153.19-153.20 (name "b"))
 							(ty-var @153.22-153.23 (name "c")))))
-				(e-runtime-error (tag "not_implemented"))))
+				(s-expect @155.1-159.2
+					(e-block @155.8-159.2
+						(s-let @156.2-156.9
+							(p-assign @156.2-156.5 (ident "foo"))
+							(e-int @156.8-156.9 (value "1")))
+						(s-let @157.2-157.10
+							(p-assign @157.2-157.6 (ident "blah"))
+							(e-int @157.9-157.10 (value "1")))
+						(e-binop @158.2-159.2 (op "eq")
+							(e-lookup-local @158.2-158.6
+								(p-assign @157.2-157.6 (ident "blah")))
+							(e-lookup-local @158.10-158.13
+								(p-assign @156.2-156.5 (ident "foo"))))))
+				(e-expect @155.1-159.2
+					(e-block @155.8-159.2
+						(s-let @156.2-156.9
+							(p-assign @156.2-156.5 (ident "foo"))
+							(e-int @156.8-156.9 (value "1")))
+						(s-let @157.2-157.10
+							(p-assign @157.2-157.6 (ident "blah"))
+							(e-int @157.9-157.10 (value "1")))
+						(e-binop @158.2-159.2 (op "eq")
+							(e-lookup-local @158.2-158.6
+								(p-assign @157.2-157.6 (ident "blah")))
+							(e-lookup-local @158.10-158.13
+								(p-assign @156.2-156.5 (ident "foo"))))))))
 		(annotation @100.1-100.6
 			(declared-type
 				(ty-fn @99.9-99.38 (effectful false)
@@ -2054,14 +2163,18 @@ main! = |_| { # Yeah Ie
 	(s-import @12.1-12.19 (module "Bae") (alias "Gooe")
 		(exposes))
 	(s-import @13.1-14.4 (module "Ba")
-		(exposes)))
+		(exposes))
+	(s-expect @96.1-99.6
+		(e-binop @97.2-99.6 (op "eq")
+			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-int @97.10-97.11 (value "1")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @45.1-45.4 (type "Bool -> Num(*)"))
-		(patt @48.1-48.8 (type "Error -> U64"))
+		(patt @48.1-48.8 (type "Error -> Error"))
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error")))
 	(type_decls
@@ -2097,7 +2210,7 @@ main! = |_| { # Yeah Ie
 					(ty-var @43.6-43.7 (name "a"))))))
 	(expressions
 		(expr @45.7-47.8 (type "Bool -> Num(*)"))
-		(expr @48.11-58.2 (type "Error -> U64"))
+		(expr @48.11-58.2 (type "Error -> Error"))
 		(expr @60.14-94.3 (type "Error"))
 		(expr @100.9-159.2 (type "Error -> Error"))))
 ~~~

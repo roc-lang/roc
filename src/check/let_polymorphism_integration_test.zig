@@ -43,10 +43,10 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 
     // Canonicalize
     const cir = try allocator.create(CIR);
-    cir.* = CIR.init(module_env);
+    cir.* = CIR.init(module_env, "Test");
 
     const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(cir, parse_ast);
+    can.* = try canonicalize.init(cir, parse_ast, null);
 
     // Run canonicalization - for expressions
     var canon_expr_idx: ?CIR.Expr.Idx = null;
@@ -57,7 +57,9 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
-    checker.* = try check_types.init(allocator, &module_env.types, cir);
+    const empty_modules: []const *CIR = &.{};
+
+    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules);
 
     // For expressions, check the expression directly
     if (canon_expr_idx) |expr_idx| {
@@ -111,7 +113,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
     cir.* = CIR.init(module_env);
 
     const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(cir, parse_ast);
+    can.* = try canonicalize.init(cir, parse_ast, null);
 
     // Run canonicalization - for files
     // Check if we have a valid file structure first
@@ -130,7 +132,9 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
-    checker.* = try check_types.init(allocator, &module_env.types, cir, &cir.store.regions);
+    const empty_modules: []const *CIR = &.{};
+
+    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules);
 
     try checker.checkDefs();
 
@@ -178,10 +182,10 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
 
     // Canonicalize
     const cir = try allocator.create(CIR);
-    cir.* = CIR.init(module_env);
+    cir.* = CIR.init(module_env, "Test");
 
     const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(cir, parse_ast);
+    can.* = try canonicalize.init(cir, parse_ast, null);
 
     // Run canonicalization - for statements
     var canon_result: ?CIR.Expr.Idx = null;
@@ -192,7 +196,9 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
-    checker.* = try check_types.init(allocator, &module_env.types, cir);
+    const empty_modules: []const *CIR = &.{};
+
+    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules);
 
     // Check if we have any defs to check
     if (cir.all_defs.span.len > 0) {
@@ -399,6 +405,25 @@ test "let-polymorphism error - incompatible list elements" {
 
     // Verify this produces type errors - can't mix numbers and strings in a list
     try testing.expect(result.has_type_errors);
+}
+
+test "match expression with empty list followed by rest pattern - regression test for segfault" {
+    const source =
+        \\let
+        \\    last = |l|
+        \\        match l {
+        \\            [] => Err(EmptyList),
+        \\            [.., e] => Ok(e),
+        \\        }
+        \\in
+        \\    last
+    ;
+
+    const result = try typeCheckExpr(test_allocator, source);
+    defer cleanup(result, test_allocator);
+
+    // This should not segfault and should type check correctly
+    try testing.expect(!result.has_type_errors);
 }
 
 test "let-polymorphism error - over-generalization attempt" {

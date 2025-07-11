@@ -118,7 +118,7 @@ main! = |_| processNested([])
 				(p-underscore @6.10-6.11))
 			(e-call @6.13-6.30
 				(e-lookup-local @6.13-6.26
-					(pattern @4.1-4.14))
+					(p-assign @4.1-4.14 (ident "processNested")))
 				(e-empty_list @6.27-6.29)))))
 ~~~
 # TYPES

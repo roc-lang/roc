@@ -20,6 +20,8 @@ type_vars: std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
 module_aliases: std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
 /// Maps exposed item names to their source modules and original names (for import resolution)
 exposed_items: std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
+/// Maps module names to their Import.Idx for modules imported in this scope
+imported_modules: std.StringHashMapUnmanaged(CIR.Import.Idx),
 is_function_boundary: bool,
 
 /// Initialize the scope
@@ -31,6 +33,7 @@ pub fn init(is_function_boundary: bool) Scope {
         .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx){},
         .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx){},
         .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
+        .imported_modules = std.StringHashMapUnmanaged(CIR.Import.Idx){},
         .is_function_boundary = is_function_boundary,
     };
 }
@@ -43,6 +46,7 @@ pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
     self.type_vars.deinit(gpa);
     self.module_aliases.deinit(gpa);
     self.exposed_items.deinit(gpa);
+    self.imported_modules.deinit(gpa);
 }
 
 /// Scope management types and structures
@@ -131,6 +135,18 @@ pub const ExposedItemIntroduceResult = union(enum) {
     success: void,
     shadowing_warning: ExposedItemInfo, // The exposed item that was shadowed
     already_in_scope: ExposedItemInfo, // The exposed item already exists in this scope
+};
+
+/// Result of looking up an imported module
+pub const ImportedModuleLookupResult = union(enum) {
+    found: CIR.Import.Idx,
+    not_found: void,
+};
+
+/// Result of introducing an imported module
+pub const ImportedModuleIntroduceResult = union(enum) {
+    success: void,
+    already_imported: CIR.Import.Idx, // The module was already imported in this scope
 };
 
 /// Item kinds in a scope
@@ -387,4 +403,27 @@ pub fn introduceExposedItem(
     }
 
     return ExposedItemIntroduceResult{ .success = {} };
+}
+
+/// Look up an imported module in this scope
+pub fn lookupImportedModule(scope: *const Scope, module_name: []const u8) ImportedModuleLookupResult {
+    if (scope.imported_modules.get(module_name)) |import_idx| {
+        return ImportedModuleLookupResult{ .found = import_idx };
+    }
+    return ImportedModuleLookupResult{ .not_found = {} };
+}
+
+/// Introduce an imported module into this scope
+pub fn introduceImportedModule(
+    scope: *Scope,
+    gpa: std.mem.Allocator,
+    module_name: []const u8,
+    import_idx: CIR.Import.Idx,
+) ImportedModuleIntroduceResult {
+    if (scope.imported_modules.contains(module_name)) {
+        return ImportedModuleIntroduceResult{ .already_imported = scope.imported_modules.get(module_name).? };
+    }
+
+    scope.imported_modules.put(gpa, module_name, import_idx) catch |err| collections.utils.exitOnOom(err);
+    return ImportedModuleIntroduceResult{ .success = {} };
 }

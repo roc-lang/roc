@@ -14,6 +14,8 @@ main! = |_| {}
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_function_multi_arg.md:3:21:3:25
+INVALID STATEMENT - type_function_multi_arg.md:3:21:3:25
+INVALID STATEMENT - type_function_multi_arg.md:3:24:4:6
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-> (** is not expected in an expression.
@@ -31,9 +33,23 @@ curry : (a, b -> c) -> (a -> b -> c)
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**type_function_multi_arg.md:3:21:3:25:**
+```roc
+curry : (a, b -> c) -> (a -> b -> c)
+```
+                    ^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**type_function_multi_arg.md:3:24:4:6:**
+```roc
+curry : (a, b -> c) -> (a -> b -> c)
+curry = |fn| |x| |y| fn(x, y)
+```
+
 
 # TOKENS
 ~~~zig
@@ -117,11 +133,11 @@ main! = |_| {}
 						(p-assign @4.19-4.20 (ident "y")))
 					(e-call @4.22-4.30
 						(e-lookup-local @4.22-4.24
-							(pattern @4.10-4.12))
+							(p-assign @4.10-4.12 (ident "fn")))
 						(e-lookup-local @4.25-4.26
-							(pattern @4.15-4.16))
+							(p-assign @4.15-4.16 (ident "x")))
 						(e-lookup-local @4.28-4.29
-							(pattern @4.19-4.20)))))))
+							(p-assign @4.19-4.20 (ident "y"))))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15

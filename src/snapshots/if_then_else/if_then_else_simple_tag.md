@@ -37,15 +37,15 @@ if True Ok(0) else Err(1)
 		(if-branch
 			(e-nominal @1.4-1.8 (nominal "Bool")
 				(e-tag @1.4-1.13 (name "True")))
-			(e-tag @1.14-1.19 (name "Ok")
+			(e-tag @1.14-1.16 (name "Ok")
 				(args
 					(e-int @1.17-1.18 (value "0"))))))
 	(if-else
-		(e-tag @1.25-1.31 (name "Err")
+		(e-tag @1.25-1.28 (name "Err")
 			(args
 				(e-int @1.29-1.30 (value "1"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.31 (type "[Ok, Err]*"))
+(expr @1.1-1.31 (type "[Ok(Num(*)), Err(Num(*))]*"))
 ~~~

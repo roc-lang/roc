@@ -102,16 +102,17 @@ main! = |_| {}
 			(e-block @6.22-9.2
 				(s-expr @7.5-8.11
 					(e-call @7.5-7.30
-						(e-lookup-external
-							(ext-decl @7.5-7.17 (ident "pf.Stdout.line!") (kind "value")))
+						(e-lookup-external @7.5-7.17
+							(module-idx "0")
+							(target-node-idx "0"))
 						(e-dot-access @7.18-7.30 (field "name")
 							(receiver
 								(e-lookup-local @7.18-7.24
-									(pattern @6.14-6.20))))))
+									(p-assign @6.14-6.20 (ident "person")))))))
 				(e-dot-access @8.5-9.2 (field "name")
 					(receiver
 						(e-lookup-local @8.5-8.11
-							(pattern @6.14-6.20))))))
+							(p-assign @6.14-6.20 (ident "person")))))))
 		(annotation @6.1-6.10
 			(declared-type
 				(ty-fn @5.13-5.43 (effectful true)

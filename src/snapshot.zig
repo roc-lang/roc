@@ -2,9 +2,12 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
+const parallel = base.parallel;
 const canonicalize = @import("check/canonicalize.zig");
 const types_mod = @import("types.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
+const cache = @import("cache/mod.zig");
+
 const Solver = @import("check/check_types.zig");
 const CIR = canonicalize.CIR;
 const parse = @import("check/parse.zig");
@@ -12,7 +15,7 @@ const fmt = @import("fmt.zig");
 const types = @import("types.zig");
 const reporting = @import("reporting.zig");
 const tokenize = @import("check/parse/tokenize.zig");
-const SExpr = @import("base/SExpr.zig");
+const SExprTree = @import("base/SExprTree.zig");
 
 const AST = parse.AST;
 const Report = reporting.Report;
@@ -92,10 +95,9 @@ fn warn(comptime fmt_str: []const u8, args: anytype) void {
 
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
+    // Use GeneralPurposeAllocator for command-line parsing and general work
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        _ = gpa_impl.deinit();
-    }
+    defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
     const args = try std.process.argsAlloc(gpa);
@@ -106,10 +108,24 @@ pub fn main() !void {
 
     var maybe_fuzz_corpus_path: ?[]const u8 = null;
     var expect_fuzz_corpus_path: bool = false;
+    var generate_html: bool = false;
+    var debug_mode: bool = false;
+    var max_threads: usize = 0;
+    var expect_threads: bool = false;
 
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_log = true;
+        } else if (std.mem.eql(u8, arg, "--html")) {
+            generate_html = true;
+        } else if (std.mem.eql(u8, arg, "--debug")) {
+            debug_mode = true;
+        } else if (std.mem.eql(u8, arg, "--threads")) {
+            if (max_threads != 0) {
+                std.log.err("`--threads` should only be specified once.", .{});
+                std.process.exit(1);
+            }
+            expect_threads = true;
         } else if (std.mem.eql(u8, arg, "--fuzz-corpus")) {
             if (maybe_fuzz_corpus_path != null) {
                 std.log.err("`--fuzz-corpus` should only be specified once.", .{});
@@ -119,12 +135,21 @@ pub fn main() !void {
         } else if (expect_fuzz_corpus_path) {
             maybe_fuzz_corpus_path = arg;
             expect_fuzz_corpus_path = false;
+        } else if (expect_threads) {
+            max_threads = std.fmt.parseInt(usize, arg, 10) catch |err| {
+                std.log.err("Invalid thread count '{s}': {s}", .{ arg, @errorName(err) });
+                std.process.exit(1);
+            };
+            expect_threads = false;
         } else if (std.mem.eql(u8, arg, "--help")) {
             const usage =
                 \\Usage: roc snapshot [options] [snapshot_paths...]
                 \\
                 \\Options:
                 \\  --verbose       Enable verbose logging
+                \\  --html          Generate HTML output files
+                \\  --debug         Use GeneralPurposeAllocator for debugging (default: c_allocator)
+                \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.
                 \\  --fuzz-corpus <path>  Specify the path to the fuzz corpus
                 \\
                 \\Arguments:
@@ -142,37 +167,59 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    if (maybe_fuzz_corpus_path != null) {
-        log("copying SOURCE from snapshots to: {s}", .{maybe_fuzz_corpus_path.?});
-        try std.fs.cwd().makePath(maybe_fuzz_corpus_path.?);
+    if (expect_threads) {
+        std.log.err("Expected thread count, but none was provided", .{});
+        std.process.exit(1);
     }
 
+    // Force single-threaded mode in debug mode
+    if (debug_mode and max_threads == 0) {
+        max_threads = 1;
+    }
+
+    const config = Config{
+        .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
+        .generate_html = generate_html,
+    };
+
+    if (config.maybe_fuzz_corpus_path != null) {
+        log("copying SOURCE from snapshots to: {s}", .{config.maybe_fuzz_corpus_path.?});
+        try std.fs.cwd().makePath(config.maybe_fuzz_corpus_path.?);
+    }
     const snapshots_dir = "src/snapshots";
-    var total_success: usize = 0;
-    var total_failed: usize = 0;
     var timer = std.time.Timer.start() catch unreachable;
+
+    // Stage 1: Collect work items
+    var work_list = WorkList.init(gpa);
+    defer {
+        // Clean up any remaining work items
+        for (work_list.items) |work_item| {
+            gpa.free(work_item.path);
+        }
+        work_list.deinit();
+    }
 
     if (snapshot_paths.items.len > 0) {
         for (snapshot_paths.items) |path| {
-            const result = try processPath(gpa, path, maybe_fuzz_corpus_path);
-            total_success += result.success;
-            total_failed += result.failed;
+            try collectWorkItems(gpa, path, &work_list);
         }
     } else {
         // process all files in snapshots_dir
-        const result = try processPath(gpa, snapshots_dir, maybe_fuzz_corpus_path);
-        total_success = result.success;
-        total_failed = result.failed;
+        try collectWorkItems(gpa, snapshots_dir, &work_list);
     }
+
+    const collect_duration_ms = timer.read() / std.time.ns_per_ms;
+    log("collected {d} work items in {d} ms", .{ work_list.items.len, collect_duration_ms });
+
+    // Stage 2: Process work items (in parallel or single-threaded)
+    const result = try processWorkItems(gpa, work_list, max_threads, debug_mode, config);
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
 
-    std.log.info("processed {d} snapshots in {d} ms.", .{ total_success, duration_ms });
-
-    if (total_failed > 0) {
-        std.log.err("failed to process {d} snapshots", .{total_failed});
-        std.process.exit(1);
-    }
+    std.log.info(
+        "collected {d} items in {d} ms, processed {d} snapshots in {d} ms.",
+        .{ work_list.items.len, collect_duration_ms, result.success, duration_ms },
+    );
 }
 
 /// Check if a file has a valid snapshot extension
@@ -193,7 +240,7 @@ fn getMultiFileSnapshotType(path: []const u8) NodeType {
     return .file; // fallback, shouldn't happen if isMultiFileSnapshot was checked first
 }
 
-fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8) !void {
+fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, generate_html: bool) !void {
     log("Processing multi-file snapshot directory: {s}", .{dir_path});
 
     var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
@@ -311,12 +358,12 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8) !void {
             const expected_content = expected_sections.get(snapshot_file_name);
 
             // Process the .roc file as a snapshot
-            try processRocFileAsSnapshotWithExpected(allocator, snapshot_file_path, roc_content, meta, expected_content);
+            try processRocFileAsSnapshotWithExpected(allocator, snapshot_file_path, roc_content, meta, expected_content, generate_html);
         }
     }
 }
 
-fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_content: []const u8, meta: Meta) !void {
+fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_content: []const u8, meta: Meta, generate_html: bool) !void {
     // Try to read existing EXPECTED section if the file exists
     var expected_content: ?[]const u8 = null;
     defer if (expected_content) |content| allocator.free(content);
@@ -350,65 +397,132 @@ fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_c
         // File doesn't exist yet, that's fine
     }
 
-    try processRocFileAsSnapshotWithExpected(allocator, output_path, roc_content, meta, expected_content);
+    try processRocFileAsSnapshotWithExpected(allocator, output_path, roc_content, meta, expected_content, generate_html);
 }
 
-fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []const u8, roc_content: []const u8, meta: Meta, expected_content: ?[]const u8) !void {
+fn processSnapshotContent(allocator: Allocator, content: Content, output_path: []const u8, generate_html: bool) !void {
     log("Generating snapshot for: {s}", .{output_path});
 
     // Process the content through the compilation pipeline
     var module_env = base.ModuleEnv.init(allocator);
     defer module_env.deinit();
 
-    // Parse the content
-    var ast = parse.parse(&module_env, roc_content);
-    defer ast.deinit(allocator);
+    // Parse the source code based on node type
+    var parse_ast = switch (content.meta.node_type) {
+        .file => parse.parse(&module_env, content.source),
+        .header => parse.parseHeader(&module_env, content.source),
+        .expr => parse.parseExpr(&module_env, content.source),
+        .statement => parse.parseStatement(&module_env, content.source),
+        .package => parse.parse(&module_env, content.source),
+        .platform => parse.parse(&module_env, content.source),
+        .app => parse.parse(&module_env, content.source),
+    };
+    defer parse_ast.deinit(allocator);
 
-    // Try canonicalization
-    ast.store.emptyScratch();
+    parse_ast.store.emptyScratch();
 
-    var can_ir = CIR.init(&module_env);
+    // Extract module name from output path
+    const basename = std.fs.path.basename(output_path);
+    const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
+        basename[0..dot_idx]
+    else
+        basename;
+    var can_ir = CIR.init(&module_env, module_name);
     defer can_ir.deinit();
 
-    var can = canonicalize.init(&can_ir, &ast) catch |err| {
-        warn("Canonicalization init failed: {}", .{err});
-        return;
-    };
+    var can = try canonicalize.init(&can_ir, &parse_ast, null);
     defer can.deinit();
 
-    const maybe_expr_idx: ?CIR.Expr.Idx = null;
+    var maybe_expr_idx: ?CIR.Expr.Idx = null;
 
-    can.canonicalizeFile() catch |err| {
-        warn("Canonicalization failed: {}", .{err});
-        return;
-    };
+    switch (content.meta.node_type) {
+        .file => try can.canonicalizeFile(),
+        .header => {
+            // TODO: implement canonicalize_header when available
+        },
+        .expr => {
+            const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+            maybe_expr_idx = try can.canonicalizeExpr(expr_idx);
+        },
+        .statement => {
+            // Manually track scratch statements because we aren't using the file entrypoint
+            const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+            const scratch_statements_start = can_ir.store.scratch_statements.top();
+            _ = try can.canonicalizeStatement(stmt_idx);
+            can_ir.all_statements = can_ir.store.statementSpanFrom(scratch_statements_start);
+        },
+        .package => try can.canonicalizeFile(),
+        .platform => try can.canonicalizeFile(),
+        .app => try can.canonicalizeFile(),
+    }
 
-    // Types (ONCE)
-    var solver = Solver.init(allocator, &can_ir.env.types, &can_ir) catch |err| {
-        warn("Type solver init failed: {}", .{err});
-        return;
-    };
+    // Types
+    const empty_modules: []const *CIR = &.{};
+    var solver = try Solver.init(allocator, &can_ir.env.types, &can_ir, empty_modules);
     defer solver.deinit();
 
-    try solver.checkDefs();
+    if (maybe_expr_idx) |expr_idx| {
+        _ = try solver.checkExpr(expr_idx);
+    } else {
+        try solver.checkDefs();
+    }
 
-    // Create content structure
-    const content = Content{
-        .meta = meta,
-        .source = roc_content,
-        .expected = expected_content,
-        .formatted = null,
-        .has_canonicalize = true,
-    };
+    // Cache round-trip validation - ensure ModuleCache serialization/deserialization works
+    {
+        // Generate original S-expression for comparison
+        var original_tree = SExprTree.init(allocator);
+        defer original_tree.deinit();
+        CIR.pushToSExprTree(&can_ir, null, &original_tree, content.source);
+
+        var original_sexpr = std.ArrayList(u8).init(allocator);
+        defer original_sexpr.deinit();
+        original_tree.toStringPretty(original_sexpr.writer().any());
+
+        // Create and serialize MmapCache
+        const cache_data = try cache.CacheModule.create(allocator, &module_env, &can_ir, 0, 0);
+        defer allocator.free(cache_data);
+
+        // Deserialize back
+        var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
+
+        // Restore ModuleEnv and CIR
+        const restored = try loaded_cache.restore(allocator, module_name);
+        var restored_module_env = restored.module_env;
+        defer restored_module_env.deinit();
+        var restored_cir = restored.cir;
+        defer restored_cir.deinit();
+
+        // Fix env pointer after struct move
+        restored_cir.env = &restored_module_env;
+
+        // Generate S-expression from restored CIR
+        var restored_tree = SExprTree.init(allocator);
+        defer restored_tree.deinit();
+        CIR.pushToSExprTree(&restored_cir, null, &restored_tree, content.source);
+
+        var restored_sexpr = std.ArrayList(u8).init(allocator);
+        defer restored_sexpr.deinit();
+        restored_tree.toStringPretty(restored_sexpr.writer().any());
+
+        // Compare S-expressions - crash if they don't match
+        if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
+            std.log.err("Cache round-trip validation failed for snapshot: {s}", .{output_path});
+            std.log.err("Original and restored CIR S-expressions don't match!", .{});
+            std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
+            std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
+            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
+            return error.CacheRoundTripValidationFailed;
+        }
+    }
 
     // Buffer all output in memory before writing files
     var md_buffer = std.ArrayList(u8).init(allocator);
     defer md_buffer.deinit();
 
-    var html_buffer = std.ArrayList(u8).init(allocator);
-    defer html_buffer.deinit();
+    var html_buffer = if (generate_html) std.ArrayList(u8).init(allocator) else null;
+    defer if (html_buffer) |*buf| buf.deinit();
 
-    var output = DualOutput.init(allocator, &md_buffer, &html_buffer);
+    var output = DualOutput.init(allocator, &md_buffer, if (html_buffer) |*buf| buf else null);
 
     // Generate HTML wrapper
     try generateHtmlWrapper(&output, &content);
@@ -417,10 +531,10 @@ fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []con
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
     try generateExpectedSection(&output, &content);
-    try generateProblemsSection(&output, &ast, &can_ir, &solver, &content, output_path, &module_env);
-    try generateTokensSection(&output, &ast, &content, &module_env);
-    try generateParseSection(&output, &content, &ast, &module_env);
-    try generateFormattedSection(&output, &content, &ast);
+    try generateProblemsSection(&output, &parse_ast, &can_ir, &solver, &content, output_path, &module_env);
+    try generateTokensSection(&output, &parse_ast, &content, &module_env);
+    try generateParseSection(&output, &content, &parse_ast, &module_env);
+    try generateFormattedSection(&output, &content, &parse_ast);
     try generateCanonicalizeSection(&output, &content, &can_ir, maybe_expr_idx);
     try generateTypesSection(&output, &content, &can_ir, maybe_expr_idx);
 
@@ -435,31 +549,112 @@ fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []con
 
     try md_file.writeAll(md_buffer.items);
 
-    // Write HTML file
-    const html_path = try std.fmt.allocPrint(allocator, "{s}.html", .{output_path[0 .. output_path.len - 3]});
-    defer allocator.free(html_path);
-
-    const html_file = std.fs.cwd().createFile(html_path, .{}) catch |err| {
-        warn("Failed to create {s}: {}", .{ html_path, err });
-        return;
-    };
-    defer html_file.close();
-
-    try html_file.writeAll(html_buffer.items);
+    if (html_buffer) |*buf| {
+        writeHtmlFile(allocator, output_path, buf) catch |err| {
+            warn("Failed to write HTML file for {s}: {}", .{ output_path, err });
+        };
+    }
 }
+
+fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []const u8, roc_content: []const u8, meta: Meta, expected_content: ?[]const u8, generate_html: bool) !void {
+    // Create content structure
+    const content = Content{
+        .meta = meta,
+        .source = roc_content,
+        .expected = expected_content,
+        .formatted = null,
+        .has_canonicalize = true,
+    };
+
+    try processSnapshotContent(allocator, content, output_path, generate_html);
+}
+
+const Config = struct {
+    maybe_fuzz_corpus_path: ?[]const u8,
+    generate_html: bool,
+};
 
 const ProcessResult = struct {
     success: usize,
     failed: usize,
 };
 
-fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !ProcessResult {
-    var processed_count: usize = 0;
-    var failed_count: usize = 0;
+const WorkItem = struct {
+    path: []const u8,
+    kind: enum {
+        snapshot_file,
+        multi_file_snapshot,
+    },
+};
 
+const WorkList = std.ArrayList(WorkItem);
+
+const ProcessContext = struct {
+    work_list: *WorkList,
+    config: Config,
+    success_count: parallel.AtomicUsize,
+    failed_count: parallel.AtomicUsize,
+};
+
+/// Worker function that processes a single work item
+fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usize) void {
+    const work_item = context.work_list.items[item_id];
+    const success = switch (work_item.kind) {
+        .snapshot_file => processSnapshotFile(allocator, work_item.path, context.config.maybe_fuzz_corpus_path, context.config.generate_html) catch false,
+        .multi_file_snapshot => blk: {
+            processMultiFileSnapshot(allocator, work_item.path, context.config.generate_html) catch {
+                break :blk false;
+            };
+            break :blk true;
+        },
+    };
+
+    if (success) {
+        _ = context.success_count.fetchAdd(1, .monotonic);
+    } else {
+        _ = context.failed_count.fetchAdd(1, .monotonic);
+    }
+}
+
+/// Stage 2: Process work items in parallel using the parallel utility
+fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, debug: bool, config: Config) !ProcessResult {
+    if (work_list.items.len == 0) {
+        return ProcessResult{ .success = 0, .failed = 0 };
+    }
+
+    var context = ProcessContext{
+        .work_list = @constCast(&work_list),
+        .config = config,
+        .success_count = parallel.AtomicUsize.init(0),
+        .failed_count = parallel.AtomicUsize.init(0),
+    };
+
+    // Use per-thread arena allocators for snapshot processing
+    const options = parallel.ProcessOptions{
+        .max_threads = max_threads,
+        .use_per_thread_arenas = !debug,
+    };
+
+    try parallel.process(
+        ProcessContext,
+        &context,
+        processWorkItem,
+        gpa,
+        work_list.items.len,
+        options,
+    );
+
+    return ProcessResult{
+        .success = context.success_count.load(.monotonic),
+        .failed = context.failed_count.load(.monotonic),
+    };
+}
+
+/// Stage 1: Walk directory tree and collect work items
+fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !void {
     const canonical_path = std.fs.cwd().realpathAlloc(gpa, path) catch |err| {
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
-        return .{ .success = 0, .failed = 1 };
+        return;
     };
     defer gpa.free(canonical_path);
 
@@ -470,9 +665,11 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
 
         // It's a directory
         if (isMultiFileSnapshot(canonical_path)) {
-            try processMultiFileSnapshot(gpa, canonical_path);
-            processed_count += 1;
-            return .{ .success = processed_count, .failed = failed_count };
+            const path_copy = try gpa.dupe(u8, canonical_path);
+            try work_list.append(WorkItem{
+                .path = path_copy,
+                .kind = .multi_file_snapshot,
+            });
         } else {
             var dir_iterator = dir.iterate();
             while (try dir_iterator.next()) |entry| {
@@ -483,16 +680,13 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
                 defer gpa.free(full_path);
 
                 if (entry.kind == .directory) {
-                    const result = try processPath(gpa, full_path, maybe_fuzz_corpus_path);
-                    processed_count += result.success;
-                    failed_count += result.failed;
+                    try collectWorkItems(gpa, full_path, work_list);
                 } else if (entry.kind == .file and isSnapshotFile(entry.name)) {
-                    if (try processSnapshotFile(gpa, full_path, maybe_fuzz_corpus_path)) {
-                        processed_count += 1;
-                    } else {
-                        log("skipped file (not a valid snapshot): {s}", .{full_path});
-                        failed_count += 1;
-                    }
+                    const path_copy = try gpa.dupe(u8, full_path);
+                    try work_list.append(WorkItem{
+                        .path = path_copy,
+                        .kind = .snapshot_file,
+                    });
                 }
             }
         }
@@ -500,23 +694,18 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
         // Not a directory, try as file
         if (dir_err == error.NotDir) {
             if (isSnapshotFile(canonical_path)) {
-                if (try processSnapshotFile(gpa, canonical_path, maybe_fuzz_corpus_path)) {
-                    processed_count += 1;
-                } else {
-                    std.log.err("failed to process snapshot file: {s}", .{canonical_path});
-                    std.log.err("make sure the file starts with '~~~META' and has valid snapshot format", .{});
-                    failed_count += 1;
-                }
+                const path_copy = try gpa.dupe(u8, canonical_path);
+                try work_list.append(WorkItem{
+                    .path = path_copy,
+                    .kind = .snapshot_file,
+                });
             } else {
                 std.log.err("file '{s}' is not a snapshot file (must end with .md)", .{canonical_path});
             }
         } else {
             std.log.err("failed to access path '{s}': {s}", .{ canonical_path, @errorName(dir_err) });
-            return .{ .success = 0, .failed = 1 };
         }
     }
-
-    return .{ .success = processed_count, .failed = failed_count };
 }
 
 /// Represents the different sections of a snapshot file.
@@ -780,30 +969,34 @@ const Error = error{ MissingSnapshotHeader, MissingSnapshotSource, InvalidNodeTy
 /// Dual output writers for markdown and HTML generation
 const DualOutput = struct {
     md_writer: std.ArrayList(u8).Writer,
-    html_writer: std.ArrayList(u8).Writer,
+    html_writer: ?std.ArrayList(u8).Writer,
     gpa: Allocator,
 
-    fn init(gpa: Allocator, md_buffer: *std.ArrayList(u8), html_buffer: *std.ArrayList(u8)) DualOutput {
+    fn init(gpa: Allocator, md_buffer: *std.ArrayList(u8), html_buffer: ?*std.ArrayList(u8)) DualOutput {
         return .{
             .md_writer = md_buffer.writer(),
-            .html_writer = html_buffer.writer(),
+            .html_writer = if (html_buffer) |buf| buf.writer() else null,
             .gpa = gpa,
         };
     }
 
     fn begin_section(self: *DualOutput, name: []const u8) !void {
         try self.md_writer.print("# {s}\n", .{name});
-        try self.html_writer.print(
-            \\        <div class="section" data-section="{s}">
-            \\            <div class="section-content">
-        , .{name});
+        if (self.html_writer) |writer| {
+            try writer.print(
+                \\        <div class="section" data-section="{s}">
+                \\            <div class="section-content">
+            , .{name});
+        }
     }
 
     fn end_section(self: *DualOutput) !void {
-        try self.html_writer.writeAll(
-            \\            </div>
-            \\        </div>
-        );
+        if (self.html_writer) |writer| {
+            try writer.writeAll(
+                \\            </div>
+                \\        </div>
+            );
+        }
     }
 
     fn begin_code_block(self: *DualOutput, language: []const u8) !void {
@@ -835,18 +1028,20 @@ fn generateMetaSection(output: *DualOutput, content: *const Content) !void {
     try output.md_writer.writeAll("\n");
 
     // HTML META section
-    try output.html_writer.writeAll(
-        \\                <div class="meta-info">
-        \\                    <p><strong>Description:</strong>
-    );
-    try output.html_writer.writeAll(content.meta.description);
-    try output.html_writer.writeAll("</p>\n                    <p><strong>Type:</strong> ");
-    try output.html_writer.writeAll(content.meta.node_type.toString());
-    try output.html_writer.writeAll(
-        \\</p>
-        \\                </div>
-        \\
-    );
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <div class="meta-info">
+            \\                    <p><strong>Description:</strong>
+        );
+        try writer.writeAll(content.meta.description);
+        try writer.writeAll("</p>\n                    <p><strong>Type:</strong> ");
+        try writer.writeAll(content.meta.node_type.toString());
+        try writer.writeAll(
+            \\</p>
+            \\                </div>
+            \\
+        );
+    }
 
     try output.end_code_block();
     try output.end_section();
@@ -862,31 +1057,33 @@ fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
     }
 
     // HTML SOURCE section - encode source as JavaScript string
-    try output.html_writer.writeAll(
-        \\                <div class="source-code" id="source-display">
-        \\                </div>
-        \\                <script>
-        \\                window.rocSourceCode =
-    );
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <div class="source-code" id="source-display">
+            \\                </div>
+            \\                <script>
+            \\                window.rocSourceCode =
+        );
 
-    // Escape the source code for JavaScript string literal
-    try output.html_writer.writeAll("`");
-    for (content.source) |char| {
-        switch (char) {
-            '`' => try output.html_writer.writeAll("\\`"),
-            '\\' => try output.html_writer.writeAll("\\\\"),
-            '$' => try output.html_writer.writeAll("\\$"),
-            '\n' => try output.html_writer.writeAll("\\n"),
-            '\r' => try output.html_writer.writeAll("\\r"),
-            '\t' => try output.html_writer.writeAll("\\t"),
-            else => try output.html_writer.writeByte(char),
+        // Escape the source code for JavaScript string literal
+        try writer.writeAll("`");
+        for (content.source) |char| {
+            switch (char) {
+                '`' => try writer.writeAll("\\`"),
+                '\\' => try writer.writeAll("\\\\"),
+                '$' => try writer.writeAll("\\$"),
+                '\n' => try writer.writeAll("\\n"),
+                '\r' => try writer.writeAll("\\r"),
+                '\t' => try writer.writeAll("\\t"),
+                else => try writer.writeByte(char),
+            }
         }
+        try writer.writeAll(
+            \\`;
+            \\      </script>
+            \\
+        );
     }
-    try output.html_writer.writeAll(
-        \\`;
-        \\      </script>
-        \\
-    );
 
     try output.end_code_block();
     try output.end_section();
@@ -896,36 +1093,46 @@ fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
 fn generateExpectedSection(output: *DualOutput, content: *const Content) !void {
     try output.begin_section("EXPECTED");
 
-    // HTML EXPECTED section
-    try output.html_writer.writeAll(
-        \\                <div class="expected">
-    );
-
     if (content.expected) |expected| {
         try output.md_writer.writeAll(expected);
         try output.md_writer.writeByte('\n');
 
-        // For HTML, escape the expected content
-        for (expected) |char| {
-            switch (char) {
-                '<' => try output.html_writer.writeAll("&lt;"),
-                '>' => try output.html_writer.writeAll("&gt;"),
-                '&' => try output.html_writer.writeAll("&amp;"),
-                '"' => try output.html_writer.writeAll("&quot;"),
-                '\'' => try output.html_writer.writeAll("&#39;"),
-                else => try output.html_writer.writeByte(char),
+        // HTML EXPECTED section
+        if (output.html_writer) |writer| {
+            try writer.writeAll(
+                \\                <div class="expected">
+            );
+
+            // For HTML, escape the expected content
+            for (expected) |char| {
+                switch (char) {
+                    '<' => try writer.writeAll("&lt;"),
+                    '>' => try writer.writeAll("&gt;"),
+                    '&' => try writer.writeAll("&amp;"),
+                    '"' => try writer.writeAll("&quot;"),
+                    '\'' => try writer.writeAll("&#39;"),
+                    else => try writer.writeByte(char),
+                }
             }
+
+            try writer.writeAll(
+                \\
+                \\                </div>
+                \\
+            );
         }
     } else {
         try output.md_writer.writeAll("NIL\n");
-        try output.html_writer.writeAll("                    <p>NIL</p>");
-    }
 
-    try output.html_writer.writeAll(
-        \\
-        \\                </div>
-        \\
-    );
+        if (output.html_writer) |writer| {
+            try writer.writeAll(
+                \\                <div class="expected">
+                \\                    <p>NIL</p>
+                \\                </div>
+                \\
+            );
+        }
+    }
 
     try output.end_section();
 }
@@ -935,9 +1142,11 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
     try output.begin_section("PROBLEMS");
 
     // HTML PROBLEMS section
-    try output.html_writer.writeAll(
-        \\                <div class="problems">
-    );
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <div class="problems">
+        );
+    }
 
     var tokenize_problems: usize = 0;
     var parser_problems: usize = 0;
@@ -949,7 +1158,9 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
         tokenize_problems += 1;
         var report: reporting.Report = parse_ast.tokenizeDiagnosticToReport(diagnostic, output.gpa) catch |err| {
             try output.md_writer.print("Error creating tokenize report: {}\n", .{err});
-            try output.html_writer.print("                    <p>Error creating tokenize report: {}</p>\n", .{err});
+            if (output.html_writer) |writer| {
+                try writer.print("                    <p>Error creating tokenize report: {}</p>\n", .{err});
+            }
             continue;
         };
         defer report.deinit();
@@ -958,19 +1169,23 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
             try output.md_writer.print("Error rendering report: {}\n", .{err});
         };
 
-        try output.html_writer.writeAll("                    <div class=\"problem\">");
-        report.render(output.html_writer.any(), .markdown) catch |err| {
-            try output.html_writer.print("Error rendering report: {}", .{err});
-        };
-        try output.html_writer.writeAll("</div>\n");
+        if (output.html_writer) |writer| {
+            try writer.writeAll("                    <div class=\"problem\">");
+            report.render(writer.any(), .markdown) catch |err| {
+                try writer.print("Error rendering report: {}", .{err});
+            };
+            try writer.writeAll("</div>\n");
+        }
     }
 
     // Parser Diagnostics
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
         parser_problems += 1;
-        var report: reporting.Report = parse_ast.parseDiagnosticToReport(diagnostic, output.gpa, snapshot_path) catch |err| {
+        var report: reporting.Report = parse_ast.parseDiagnosticToReport(module_env, diagnostic, output.gpa, snapshot_path) catch |err| {
             try output.md_writer.print("Error creating parse report: {}\n", .{err});
-            try output.html_writer.print("                    <p>Error creating parse report: {}</p>\n", .{err});
+            if (output.html_writer) |writer| {
+                try writer.print("                    <p>Error creating parse report: {}</p>\n", .{err});
+            }
             continue;
         };
         defer report.deinit();
@@ -979,11 +1194,13 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
             try output.md_writer.print("Error rendering report: {}\n", .{err});
         };
 
-        try output.html_writer.writeAll("                    <div class=\"problem\">");
-        report.render(output.html_writer.any(), .markdown) catch |err| {
-            try output.html_writer.print("Error rendering report: {}", .{err});
-        };
-        try output.html_writer.writeAll("</div>\n");
+        if (output.html_writer) |writer| {
+            try writer.writeAll("                    <div class=\"problem\">");
+            report.render(writer.any(), .markdown) catch |err| {
+                try writer.print("Error rendering report: {}", .{err});
+            };
+            try writer.writeAll("</div>\n");
+        }
     }
 
     // Canonicalization Diagnostics
@@ -993,7 +1210,9 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
         canonicalize_problems += 1;
         var report: reporting.Report = can_ir.diagnosticToReport(diagnostic, output.gpa, content.source, snapshot_path) catch |err| {
             try output.md_writer.print("Error creating canonicalization report: {}\n", .{err});
-            try output.html_writer.print("                    <p>Error creating canonicalization report: {}</p>\n", .{err});
+            if (output.html_writer) |writer| {
+                try writer.print("                    <p>Error creating canonicalization report: {}</p>\n", .{err});
+            }
             continue;
         };
         defer report.deinit();
@@ -1002,11 +1221,13 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
             try output.md_writer.print("Error rendering report: {}\n", .{err});
         };
 
-        try output.html_writer.writeAll("                    <div class=\"problem\">");
-        report.render(output.html_writer.any(), .markdown) catch |err| {
-            try output.html_writer.print("Error rendering report: {}", .{err});
-        };
-        try output.html_writer.writeAll("</div>\n");
+        if (output.html_writer) |writer| {
+            try writer.writeAll("                    <div class=\"problem\">");
+            report.render(writer.any(), .markdown) catch |err| {
+                try writer.print("Error rendering report: {}", .{err});
+            };
+            try writer.writeAll("</div>\n");
+        }
     }
 
     // Check Types Problems
@@ -1017,6 +1238,7 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
     while (problems_itr.next()) |problem_idx| {
         check_types_problem += 1;
         const problem = solver.problems.problems.get(problem_idx);
+        const empty_modules: []const *CIR = &.{};
         var report_builder = types_problem_mod.ReportBuilder.init(
             output.gpa,
             module_env,
@@ -1024,12 +1246,15 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
             &solver.snapshots,
             content.source,
             snapshot_path,
+            empty_modules,
         );
         defer report_builder.deinit();
 
         var report: reporting.Report = report_builder.build(problem) catch |err| {
             try output.md_writer.print("Error creating type checking report: {}\n", .{err});
-            try output.html_writer.print("                    <p>Error creating type checking report: {}</p>\n", .{err});
+            if (output.html_writer) |writer| {
+                try writer.print("                    <p>Error creating type checking report: {}</p>\n", .{err});
+            }
             continue;
         };
         defer report.deinit();
@@ -1038,18 +1263,22 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
             try output.md_writer.print("Error rendering report: {}\n", .{err});
         };
 
-        try output.html_writer.writeAll("                    <div class=\"problem\">");
-        report.render(output.html_writer.any(), .markdown) catch |err| {
-            try output.html_writer.print("Error rendering report: {}", .{err});
-        };
-        try output.html_writer.writeAll("</div>\n");
+        if (output.html_writer) |writer| {
+            try writer.writeAll("                    <div class=\"problem\">");
+            report.render(writer.any(), .markdown) catch |err| {
+                try writer.print("Error rendering report: {}", .{err});
+            };
+            try writer.writeAll("</div>\n");
+        }
     }
 
     const nil_problems = tokenize_problems == 0 and parser_problems == 0 and canonicalize_problems == 0 and check_types_problem == 0;
 
     if (nil_problems) {
         try output.md_writer.writeAll("NIL\n");
-        try output.html_writer.writeAll("                    <p>NIL</p>\n");
+        if (output.html_writer) |writer| {
+            try writer.writeAll("                    <p>NIL</p>\n");
+        }
         log("reported NIL problems", .{});
     } else {
         log("reported {} token problems", .{tokenize_problems});
@@ -1058,10 +1287,12 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
         log("reported {} type problems", .{check_types_problem});
     }
 
-    try output.html_writer.writeAll(
-        \\                </div>
-        \\
-    );
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                </div>
+            \\
+        );
+    }
 
     try output.end_section();
 }
@@ -1072,12 +1303,14 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
     try output.begin_code_block("zig");
 
     // HTML TOKENS section - encode tokens as JavaScript array
-    try output.html_writer.writeAll(
-        \\                <div class="token-list" id="tokens-display">
-        \\                </div>
-        \\                <script>
-        \\                window.rocTokens = [
-    );
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <div class="token-list" id="tokens-display">
+            \\                </div>
+            \\                <script>
+            \\                window.rocTokens = [
+        );
+    }
 
     var tokenizedBuffer = parse_ast.tokens;
     const tokens = tokenizedBuffer.tokens.items(.tag);
@@ -1087,7 +1320,7 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
         // const category = tokenToCategory(tok);
 
         // Markdown token output
-        const region_str = try std.fmt.allocPrint(output.gpa, "{s}({d}:{d}-{d}:{d}),", .{
+        try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
             @tagName(tok),
             // add one to display numbers instead of index
             info.start_line_idx + 1,
@@ -1095,103 +1328,104 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
             info.end_line_idx + 1,
             info.end_col_idx + 1,
         });
-        defer output.gpa.free(region_str);
-
-        try output.md_writer.writeAll(region_str);
 
         // HTML token output as JavaScript array element: [token_kind_str, start_byte, end_byte]
-        try output.html_writer.print("                    [\"{s}\", {d}, {d}]", .{
-            @tagName(tok),
-            region.start.offset,
-            region.end.offset,
-        });
+        if (output.html_writer) |writer| {
+            try writer.print("                    [\"{s}\", {d}, {d}]", .{
+                @tagName(tok),
+                region.start.offset,
+                region.end.offset,
+            });
 
-        // Add comma except for last token
-        if (i < tokens.len - 1) {
-            try output.html_writer.writeAll(",");
+            // Add comma except for last token
+            if (i < tokens.len - 1) {
+                try writer.writeAll(",");
+            }
         }
 
         if (tok == .Newline) {
             try output.md_writer.writeAll("\n");
-            try output.html_writer.writeAll("\n");
+            if (output.html_writer) |writer| {
+                try writer.writeAll("\n");
+            }
         } else {
-            try output.html_writer.writeAll(" ");
+            if (output.html_writer) |writer| {
+                try writer.writeAll(" ");
+            }
         }
     }
 
     try output.md_writer.writeAll("\n");
 
-    try output.html_writer.writeAll(
-        \\                ];
-        \\                </script>
-        \\
-    );
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                ];
+            \\                </script>
+            \\
+        );
+    }
     try output.end_code_block();
     try output.end_section();
 }
 
-/// Generate PARSE section for both markdown and HTML
-fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, module_env: *base.ModuleEnv) !void {
-    var parse_buffer = std.ArrayList(u8).init(output.gpa);
-    defer parse_buffer.deinit();
+/// Generate PARSE2 section using SExprTree for both markdown and HTML
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *base.ModuleEnv) !void {
+    var tree = SExprTree.init(output.gpa);
+    defer tree.deinit();
 
-    // Generate S-expression node based on content type
-    var node_opt: ?SExpr = null;
-    defer if (node_opt) |*node| node.deinit(output.gpa);
-
+    // Generate SExprTree node based on content type
     switch (content.meta.node_type) {
         .file => {
-            // Inline the toSExprStr logic for file case
             const file = parse_ast.store.getFile();
-            node_opt = file.toSExpr(module_env, parse_ast);
+            file.pushToSExprTree(env, parse_ast, &tree);
         },
         .header => {
             const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
-            node_opt = header.toSExpr(module_env, parse_ast);
+            header.pushToSExprTree(env, parse_ast, &tree);
         },
         .expr => {
             const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
-            node_opt = expr.toSExpr(module_env, parse_ast);
+            expr.pushToSExprTree(env, parse_ast, &tree);
         },
         .statement => {
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
-            node_opt = stmt.toSExpr(module_env, parse_ast);
+            stmt.pushToSExprTree(env, parse_ast, &tree);
         },
         .package => {
             const file = parse_ast.store.getFile();
-            node_opt = file.toSExpr(module_env, parse_ast);
+            file.pushToSExprTree(env, parse_ast, &tree);
         },
         .platform => {
             const file = parse_ast.store.getFile();
-            node_opt = file.toSExpr(module_env, parse_ast);
+            file.pushToSExprTree(env, parse_ast, &tree);
         },
         .app => {
             const file = parse_ast.store.getFile();
-            node_opt = file.toSExpr(module_env, parse_ast);
+            file.pushToSExprTree(env, parse_ast, &tree);
         },
     }
 
-    if (node_opt) |node| {
-        // Generate markdown output
-        node.toStringPretty(parse_buffer.writer().any());
-
+    // Only generate section if we have content on the stack
+    if (tree.stack.items.len > 0) {
         try output.begin_section("PARSE");
         try output.begin_code_block("clojure");
 
-        try output.md_writer.writeAll(parse_buffer.items);
+        tree.toStringPretty(output.md_writer.any());
         try output.md_writer.writeAll("\n");
 
         // Generate HTML output with syntax highlighting
-        try output.html_writer.writeAll(
-            \\                <pre class="ast-parse">
-        );
+        if (output.html_writer) |writer| {
+            try writer.writeAll(
+                \\                <pre class="ast-parse">
+            );
 
-        node.toHtml(output.html_writer.any());
+            tree.toHtml(writer.any());
 
-        try output.html_writer.writeAll(
-            \\</pre>
-            \\
-        );
+            try writer.writeAll(
+                \\</pre>
+                \\
+            );
+        }
 
         try output.end_code_block();
         try output.end_section();
@@ -1237,44 +1471,47 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
     try output.md_writer.writeAll("\n");
 
     // HTML FORMATTED section
-    try output.html_writer.writeAll(
-        \\                <pre>
-    );
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <pre>
+        );
 
-    // Escape HTML in formatted content
-    for (display_content) |char| {
-        try escapeHtmlChar(output.html_writer, char);
+        // Escape HTML in formatted content
+        for (display_content) |char| {
+            try escapeHtmlChar(writer, char);
+        }
+
+        try writer.writeAll(
+            \\</pre>
+            \\
+        );
     }
-
-    try output.html_writer.writeAll(
-        \\</pre>
-        \\
-    );
     try output.end_code_block();
     try output.end_section();
 }
 
 /// Generate CANONICALIZE section for both markdown and HTML
 fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
-    var node = can_ir.toSExpr(maybe_expr_idx, content.source);
-    defer node.deinit(can_ir.env.gpa);
+    var tree = SExprTree.init(output.gpa);
+    defer tree.deinit();
+    can_ir.pushToSExprTree(maybe_expr_idx, &tree, content.source);
 
     try output.begin_section("CANONICALIZE");
-
-    try output.html_writer.writeAll(
-        \\                <pre>
-    );
     try output.begin_code_block("clojure");
 
-    node.toStringPretty(output.md_writer.any());
-    node.toHtml(output.html_writer.any());
-
+    tree.toStringPretty(output.md_writer.any());
     try output.md_writer.writeAll("\n");
 
-    try output.html_writer.writeAll(
-        \\</pre>
-        \\
-    );
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <pre>
+        );
+        tree.toHtml(writer.any());
+        try writer.writeAll(
+            \\</pre>
+            \\
+        );
+    }
 
     try output.end_code_block();
     try output.end_section();
@@ -1282,23 +1519,26 @@ fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can
 
 /// Generate TYPES section for both markdown and HTML
 fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
-    var node = can_ir.toSexprTypes(maybe_expr_idx, content.source);
-    defer node.deinit(can_ir.env.gpa);
+    var tree = SExprTree.init(output.gpa);
+    defer tree.deinit();
+    try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree, content.source);
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
-    node.toStringPretty(output.md_writer.any());
+    tree.toStringPretty(output.md_writer.any());
     try output.md_writer.writeAll("\n");
 
     // HTML TYPES section
-    try output.html_writer.writeAll(
-        \\                <pre>
-    );
-    node.toHtml(output.html_writer.any());
-    try output.html_writer.writeAll(
-        \\</pre>
-        \\
-    );
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <pre>
+        );
+        tree.toHtml(writer.any());
+        try writer.writeAll(
+            \\</pre>
+            \\
+        );
+    }
     try output.end_code_block();
     try output.end_section();
 }
@@ -1318,30 +1558,34 @@ fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir
     try output.md_writer.writeAll(Section.SECTION_END[0 .. Section.SECTION_END.len - 1]);
 
     // HTML TYPES section
-    try output.html_writer.writeAll(
-        \\        <div class="section">
-        \\            <div class="section-header">TYPES</div>
-        \\            <div class="section-content">
-        \\                <pre>
-    );
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\        <div class="section">
+            \\            <div class="section-header">TYPES</div>
+            \\            <div class="section-content">
+            \\                <pre>
+        );
 
-    // Escape HTML in types content
-    for (solved.items) |char| {
-        try escapeHtmlChar(output.html_writer, char);
+        // Escape HTML in types content
+        for (solved.items) |char| {
+            try escapeHtmlChar(writer, char);
+        }
+
+        try writer.writeAll(
+            \\</pre>
+            \\            </div>
+            \\        </div>
+            \\
+        );
     }
-
-    try output.html_writer.writeAll(
-        \\</pre>
-        \\            </div>
-        \\        </div>
-        \\
-    );
 }
 
 /// Generate HTML document structure and JavaScript
 fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
+    const writer = output.html_writer orelse return;
+
     // Write HTML document structure
-    try output.html_writer.writeAll(
+    try writer.writeAll(
         \\<!DOCTYPE html>
         \\<html lang="en">
         \\<head>
@@ -1349,14 +1593,14 @@ fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
         \\    <meta name="viewport" content="width=device-width, initial-scale=1.0">
         \\    <title>Roc Snapshot:
     );
-    try output.html_writer.writeAll(content.meta.description);
-    try output.html_writer.writeAll(
+    try writer.writeAll(content.meta.description);
+    try writer.writeAll(
         \\</title>
         \\    <style>
         \\
     );
-    try output.html_writer.writeAll(@embedFile("snapshot.css"));
-    try output.html_writer.writeAll(
+    try writer.writeAll(@embedFile("snapshot.css"));
+    try writer.writeAll(
         \\    </style>
         \\</head>
         \\<body>
@@ -1396,15 +1640,17 @@ fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
 
 /// Generate HTML closing tags and JavaScript
 fn generateHtmlClosing(output: *DualOutput) !void {
+    const writer = output.html_writer orelse return;
+
     // Close data sections container and add JavaScript
-    try output.html_writer.writeAll(
+    try writer.writeAll(
         \\    </div>
         \\
         \\    <script>
     );
     // Embed remaining snapshot.js directly into the HTML
-    try output.html_writer.writeAll(@embedFile("snapshot.js"));
-    try output.html_writer.writeAll(
+    try writer.writeAll(@embedFile("snapshot.js"));
+    try writer.writeAll(
         \\    </script>
         \\</body>
         \\</html>
@@ -1437,7 +1683,7 @@ fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.Ar
 }
 
 /// New unified processSnapshotFile function that generates both markdown and HTML simultaneously
-fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !bool {
+fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8, generate_html: bool) !bool {
     // Log the file path that was written to
     log("processing snapshot file: {s}", .{snapshot_path});
 
@@ -1482,103 +1728,11 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
         }
     };
 
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    // Parse the source code (ONCE)
-    var parse_ast = switch (content.meta.node_type) {
-        .file => parse.parse(&module_env, content.source),
-        .header => parse.parseHeader(&module_env, content.source),
-        .expr => parse.parseExpr(&module_env, content.source),
-        .statement => parse.parseStatement(&module_env, content.source),
-        .package => parse.parse(&module_env, content.source),
-        .platform => parse.parse(&module_env, content.source),
-        .app => parse.parse(&module_env, content.source),
-    };
-    defer parse_ast.deinit(gpa);
-
-    parse_ast.store.emptyScratch();
-
-    // Canonicalize the source code (ONCE)
-    var can_ir = CIR.init(&module_env);
-    defer can_ir.deinit();
-
-    var can = try canonicalize.init(&can_ir, &parse_ast);
-    defer can.deinit();
-
-    var maybe_expr_idx: ?CIR.Expr.Idx = null;
-
-    switch (content.meta.node_type) {
-        .file => try can.canonicalizeFile(),
-        .header => {
-            // TODO: implement canonicalize_header when available
-        },
-        .expr => {
-            const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-            maybe_expr_idx = try can.canonicalizeExpr(expr_idx);
-        },
-        .statement => {
-            // Manually track scratch statements because we aren't using the file entrypoint
-            const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-            const scratch_statements_start = can_ir.store.scratch_statements.top();
-            _ = try can.canonicalizeStatement(stmt_idx);
-            can_ir.all_statements = can_ir.store.statementSpanFrom(scratch_statements_start);
-        },
-        .package => try can.canonicalizeFile(),
-        .platform => try can.canonicalizeFile(),
-        .app => try can.canonicalizeFile(),
-    }
-
-    // Types (ONCE)
-    var solver = try Solver.init(gpa, &can_ir.env.types, &can_ir);
-    defer solver.deinit();
-
-    if (maybe_expr_idx) |expr_idx| {
-        _ = try solver.checkExpr(expr_idx);
-    } else {
-        try solver.checkDefs();
-    }
-
-    // Buffer all output in memory before writing files
-    var md_buffer = std.ArrayList(u8).init(gpa);
-    defer md_buffer.deinit();
-
-    var html_buffer = std.ArrayList(u8).init(gpa);
-    defer html_buffer.deinit();
-
-    var output = DualOutput.init(gpa, &md_buffer, &html_buffer);
-
-    // Generate HTML wrapper
-    try generateHtmlWrapper(&output, &content);
-
-    // Generate all sections simultaneously
-    try generateMetaSection(&output, &content);
-    try generateSourceSection(&output, &content);
-    try generateExpectedSection(&output, &content);
-    try generateProblemsSection(&output, &parse_ast, &can_ir, &solver, &content, snapshot_path, &module_env);
-    try generateTokensSection(&output, &parse_ast, &content, &module_env);
-
-    // Generate remaining sections
-    try generateParseSection(&output, &content, &parse_ast, &module_env);
-    try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, &content, &can_ir, maybe_expr_idx);
-    try generateTypesSection(&output, &content, &can_ir, maybe_expr_idx);
-    // TODO: Include to emit entire types store. Can be helpful for debugging
-    // try generateTypesStoreSection(gpa, &output, &can_ir);
-
-    // Generate HTML closing
-    try generateHtmlClosing(&output);
-
-    // Write markdown file
-    var md_file = std.fs.cwd().createFile(snapshot_path, .{}) catch |err| {
-        log("failed to create file '{s}': {s}", .{ snapshot_path, @errorName(err) });
+    // Process the content through the shared compilation pipeline
+    processSnapshotContent(gpa, content, snapshot_path, generate_html) catch |err| {
+        log("failed to process snapshot content: {s}", .{@errorName(err)});
         return false;
     };
-    defer md_file.close();
-    try md_file.writer().writeAll(md_buffer.items);
-
-    // Write HTML file
-    try writeHtmlFile(gpa, snapshot_path, &html_buffer);
 
     // If flag --fuzz-corpus is passed, write the SOURCE to our corpus
     if (maybe_fuzz_corpus_path != null) {
@@ -1614,8 +1768,8 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     return true;
 }
 
-fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !bool {
-    return processSnapshotFileUnified(gpa, snapshot_path, maybe_fuzz_corpus_path);
+fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8, generate_html: bool) !bool {
+    return processSnapshotFileUnified(gpa, snapshot_path, maybe_fuzz_corpus_path, generate_html);
 }
 
 /// Extracts the sections from a snapshot file

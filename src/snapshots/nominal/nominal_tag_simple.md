@@ -75,7 +75,7 @@ LowerIdent(9:1-9:7),OpAssign(9:8-9:9),UpperIdent(9:10-9:15),NoSpaceDotUpperIdent
 ~~~roc
 module [Color, blue]
 
-Color : [Red, Green, Blue]
+Color := [Red, Green, Blue]
 
 blue : Color
 blue = Blue
@@ -111,12 +111,12 @@ yellow = Yellow
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "Color"))
+		(patt @6.1-6.5 (type "Error"))
 		(patt @9.1-9.7 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.28 (type "Color")
+		(nominal @3.1-3.28 (type "Error")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions
-		(expr @6.8-6.18 (type "Color"))
-		(expr @9.10-9.22 (type "Error"))))
+		(expr @6.8-6.13 (type "Error"))
+		(expr @9.10-9.15 (type "Error"))))
 ~~~

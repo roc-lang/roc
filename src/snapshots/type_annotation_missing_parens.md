@@ -36,6 +36,16 @@ nums : List U8
               
 
 
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``nums`` is exposed, but it is not defined anywhere in this module.
+
+**type_annotation_missing_parens.md:1:9:1:13:**
+```roc
+module [nums]
+```
+        ^^^^
+You can fix this by either defining ``nums`` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),Newline(1:1-1:1),

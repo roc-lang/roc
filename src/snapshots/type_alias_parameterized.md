@@ -112,9 +112,9 @@ NO CHANGE
 			(e-tuple @6.21-6.27
 				(elems
 					(e-lookup-local @6.22-6.23
-						(pattern @6.17-6.18))
+						(p-assign @6.17-6.18 (ident "y")))
 					(e-lookup-local @6.25-6.26
-						(pattern @6.14-6.15)))))
+						(p-assign @6.14-6.15 (ident "x"))))))
 		(annotation @6.1-6.9
 			(declared-type
 				(ty-fn @5.12-5.36 (effectful false)
@@ -131,7 +131,7 @@ NO CHANGE
 				(p-underscore @8.10-8.11))
 			(e-call @8.13-8.27
 				(e-lookup-local @8.13-8.21
-					(pattern @6.1-6.9))
+					(p-assign @6.1-6.9 (ident "swapPair")))
 				(e-int @8.22-8.23 (value "1"))
 				(e-int @8.25-8.26 (value "2")))))
 	(s-alias-decl @3.1-3.20

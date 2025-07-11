@@ -61,22 +61,24 @@ match person {
 		(branches
 			(branch
 				(patterns
-					(p-record-destructure @2.5-2.13 (degenerate false)
-						(destructs
-							(record-destruct @2.7-2.13 (label "name") (ident "name")
-								(required)))))
+					(pattern (degenerate false)
+						(p-record-destructure @2.5-2.13
+							(destructs
+								(record-destruct @2.7-2.13 (label "name") (ident "name")
+									(required))))))
 				(value
 					(e-lookup-local @2.17-2.21
-						(pattern @2.7-2.13))))
+						(p-assign @2.7-2.13 (ident "name")))))
 			(branch
 				(patterns
-					(p-record-destructure @3.5-3.12 (degenerate false)
-						(destructs
-							(record-destruct @3.7-3.12 (label "age") (ident "age")
-								(required)))))
+					(pattern (degenerate false)
+						(p-record-destructure @3.5-3.12
+							(destructs
+								(record-destruct @3.7-3.12 (label "age") (ident "age")
+									(required))))))
 				(value
 					(e-lookup-local @3.16-3.19
-						(pattern @3.7-3.12)))))))
+						(p-assign @3.7-3.12 (ident "age"))))))))
 ~~~
 # TYPES
 ~~~clojure

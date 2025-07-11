@@ -37,9 +37,9 @@ NO CHANGE
 		(p-assign @1.5-1.6 (ident "y")))
 	(e-binop @1.8-1.13 (op "add")
 		(e-lookup-local @1.8-1.9
-			(pattern @1.2-1.3))
+			(p-assign @1.2-1.3 (ident "x")))
 		(e-lookup-local @1.12-1.13
-			(pattern @1.5-1.6))))
+			(p-assign @1.5-1.6 (ident "y")))))
 ~~~
 # TYPES
 ~~~clojure

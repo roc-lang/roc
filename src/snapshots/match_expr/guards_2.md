@@ -462,64 +462,75 @@ match value {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.24 (degenerate false)
-						(patterns
-							(p-assign @2.6-2.11 (ident "first")))
-						(rest-at (index 1)
-							(p-assign @2.19-2.23 (ident "rest")))))
+					(pattern (degenerate false)
+						(p-list @2.5-2.24
+							(patterns
+								(p-assign @2.6-2.11 (ident "first")))
+							(rest-at (index 1)
+								(p-assign @2.19-2.23 (ident "rest"))))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-runtime-error @2.51-2.77 (tag "pattern_not_canonicalized") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @2.51-2.77 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-assign @2.77-2.86 (ident "toStr") (degenerate false)))
+					(pattern (degenerate false)
+						(p-assign @2.77-2.86 (ident "toStr"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
 				(patterns
-					(p-runtime-error @2.92-2.93 (tag "pattern_not_canonicalized") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @2.92-2.93 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-list @3.5-3.11 (degenerate false)
-						(patterns
-							(p-assign @3.6-3.7 (ident "x"))
-							(p-assign @3.9-3.10 (ident "y")))))
+					(pattern (degenerate false)
+						(p-list @3.5-3.11
+							(patterns
+								(p-assign @3.6-3.7 (ident "x"))
+								(p-assign @3.9-3.10 (ident "y"))))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-runtime-error @3.26-3.50 (tag "pattern_not_canonicalized") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @3.26-3.50 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-assign @3.50-3.59 (ident "toStr") (degenerate false)))
+					(pattern (degenerate false)
+						(p-assign @3.50-3.59 (ident "toStr"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
 				(patterns
-					(p-runtime-error @3.61-3.62 (tag "pattern_not_canonicalized") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @3.61-3.62 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-underscore @4.5-4.6 (degenerate false)))
+					(pattern (degenerate false)
+						(p-underscore @4.5-4.6)))
 				(value
 					(e-string @4.10-4.17
 						(e-literal @4.11-4.16 (string "other"))))))))

@@ -3,7 +3,7 @@
 const std = @import("std");
 const parse = @import("check/parse.zig");
 const collections = @import("collections.zig");
-const Filesystem = @import("coordinate/Filesystem.zig");
+const Filesystem = @import("fs/Filesystem.zig");
 
 const base = @import("base.zig");
 const tracy = @import("tracy.zig");
@@ -167,12 +167,12 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
     // compute offsets of each line, looping over bytes of the input
-    var line_offsets = std.ArrayList(u32).init(gpa);
-    defer line_offsets.deinit();
-    try line_offsets.append(0);
+    var line_offsets = @import("collections.zig").SafeList(u32).initCapacity(gpa, 256);
+    defer line_offsets.deinit(gpa);
+    _ = line_offsets.append(gpa, 0);
     for (source, 0..) |c, i| {
         if (c == '\n') {
-            try line_offsets.append(@intCast(i));
+            _ = line_offsets.append(gpa, @intCast(i));
         }
     }
 
@@ -180,8 +180,8 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
-        const line = binarySearch(line_offsets.items, region.start.offset) orelse unreachable;
-        const column = region.start.offset - line_offsets.items[line];
+        const line = binarySearch(line_offsets.items.items, region.start.offset) orelse unreachable;
+        const column = region.start.offset - line_offsets.items.items[line];
         const token = parse_ast.tokens.tokens.items(.tag)[err.region.start];
         // TODO: pretty print the parse failures.
         try stderr.print("\t{s}, at token {s} at {d}:{d}\n", .{ @tagName(err.tag), @tagName(token), line + 1, column });
@@ -421,7 +421,11 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                try fmt.push(':');
+                if (d.kind == .nominal) {
+                    try fmt.pushAll(":=");
+                } else {
+                    try fmt.push(':');
+                }
                 const anno_region = fmt.nodeRegion(@intFromEnum(d.anno));
                 if (multiline and try fmt.flushCommentsBefore(anno_region.start)) {
                     fmt.curr_indent += 1;
@@ -432,9 +436,7 @@ const Formatter = struct {
                 _ = try fmt.formatTypeAnno(d.anno);
                 if (d.where) |w| {
                     _ = try fmt.flushCommentsAfter(anno_region.end);
-                    fmt.curr_indent += 1;
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
+                    try fmt.push(' ');
                     try fmt.formatWhereConstraint(w);
                 }
             },
@@ -457,9 +459,7 @@ const Formatter = struct {
                 _ = try fmt.formatTypeAnno(t.anno);
                 if (t.where) |w| {
                     _ = try fmt.flushCommentsAfter(anno_region.end);
-                    fmt.curr_indent += 1;
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
+                    try fmt.push(' ');
                     try fmt.formatWhereConstraint(w);
                 }
             },
@@ -518,6 +518,17 @@ const Formatter = struct {
                 }
                 _ = try fmt.formatExpr(c.expr);
             },
+            .dbg => |d| {
+                try fmt.pushAll("dbg");
+                const body_region = fmt.nodeRegion(@intFromEnum(d.expr));
+                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(d.expr);
+            },
             .@"return" => |r| {
                 try fmt.pushAll("return");
                 const body_region = fmt.nodeRegion(@intFromEnum(r.expr));
@@ -535,13 +546,31 @@ const Formatter = struct {
         }
     }
 
+    fn whereClauseHasTrailingComma(fmt: *Formatter, region: AST.TokenizedRegion) bool {
+        const tags = fmt.ast.tokens.tokens.items(.tag);
+        var i = region.end;
+        // Walk backwards from the end, skipping newlines
+        while (i >= region.start) {
+            const tag = tags[i];
+            if (tag == .Comma) {
+                return true;
+            }
+            if (tag != .Newline) {
+                return false;
+            }
+            if (i == 0) break;
+            i -= 1;
+        }
+        return false;
+    }
+
     fn formatWhereConstraint(fmt: *Formatter, w: AST.Collection.Idx) !void {
         const start_indent = fmt.curr_indent;
         defer fmt.curr_indent = start_indent;
         try fmt.pushAll("where");
         var i: usize = 0;
         const clause_coll = fmt.ast.store.getCollection(w);
-        const clauses_multiline = fmt.ast.regionIsMultiline(clause_coll.region);
+        const clauses_multiline = fmt.whereClauseHasTrailingComma(clause_coll.region);
         const clause_slice = fmt.ast.store.whereClauseSlice(.{ .span = clause_coll.span });
         for (clause_slice) |clause| {
             const clause_region = fmt.nodeRegion(@intFromEnum(clause));
@@ -555,7 +584,7 @@ const Formatter = struct {
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
             }
-            try fmt.formatWhereClause(clause);
+            try fmt.formatWhereClause(clause, clauses_multiline or flushed_after_clause);
             if ((!clauses_multiline and !flushed_after_clause) and i < clause_slice.len - 1) {
                 try fmt.pushAll(", ");
             } else if (clauses_multiline or flushed_after_clause) {
@@ -660,7 +689,7 @@ const Formatter = struct {
         const field = fmt.ast.store.getRecordField(idx);
         try fmt.pushTokenText(field.name);
         if (field.value) |v| {
-            try fmt.pushAll(if (field.optional) "? " else ": ");
+            try fmt.pushAll(": ");
             _ = try fmt.formatExpr(v);
         }
 
@@ -1083,6 +1112,10 @@ const Formatter = struct {
             .string => |s| {
                 region = s.region;
                 _ = try fmt.formatExpr(s.expr);
+            },
+            .single_quote => |sq| {
+                region = sq.region;
+                try fmt.formatIdent(sq.token, null);
             },
             .int => |n| {
                 region = n.region;
@@ -1587,65 +1620,12 @@ const Formatter = struct {
         return field.region;
     }
 
-    fn formatWhereClause(fmt: *Formatter, idx: AST.WhereClause.Idx) !void {
+    fn formatWhereClause(fmt: *Formatter, idx: AST.WhereClause.Idx, multiline: bool) !void {
         const clause = fmt.ast.store.getWhereClause(idx);
         const start_indent = fmt.curr_indent;
         defer fmt.curr_indent = start_indent;
         switch (clause) {
-            .alias => |c| {
-                const multiline = fmt.ast.regionIsMultiline(c.region);
-                try fmt.pushTokenText(c.var_tok);
-                if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                }
-                try fmt.push('.');
-                if (multiline and try fmt.flushCommentsBefore(c.alias_tok)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                }
-                try fmt.pushTokenText(c.alias_tok);
-            },
-            .method => |c| {
-                const multiline = fmt.ast.regionIsMultiline(c.region);
-                try fmt.pushTokenText(c.var_tok);
-                if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                }
-                try fmt.push('.');
-                try fmt.pushTokenText(c.name_tok);
-                const args_coll = fmt.ast.store.getCollection(c.args);
-                if (multiline and try fmt.flushCommentsBefore(args_coll.region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                }
-                const args = fmt.ast.store.typeAnnoSlice(.{ .span = args_coll.span });
-                try fmt.formatCollection(
-                    args_coll.region,
-                    .round,
-                    AST.TypeAnno.Idx,
-                    args,
-                    Formatter.formatTypeAnno,
-                );
-                if (multiline and try fmt.flushCommentsAfter(args_coll.region.end)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                    try fmt.pushAll("->");
-                } else {
-                    try fmt.pushAll(" ->");
-                }
-                const ret_region = fmt.nodeRegion(@intFromEnum(c.ret_anno));
-                if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatTypeAnno(c.ret_anno);
-            },
             .mod_method => |c| {
-                const multiline = fmt.ast.regionIsMultiline(c.region);
                 try fmt.pushAll("module(");
                 const tags = fmt.ast.tokens.tokens.items(.tag);
                 const varNeedsFlush = tags[c.var_tok - 1] == .Newline or (tags.len > (c.var_tok + 1) and tags[c.var_tok + 1] == .Newline);
@@ -1663,34 +1643,69 @@ const Formatter = struct {
                 try fmt.push(')');
                 try fmt.push('.');
                 try fmt.pushTokenText(c.name_tok);
+                try fmt.pushAll(" : ");
                 const args_coll = fmt.ast.store.getCollection(c.args);
+                const ret_region = fmt.nodeRegion(@intFromEnum(c.ret_anno));
+                const fn_type_region = AST.TokenizedRegion{ .start = args_coll.region.start, .end = ret_region.end };
+                const fn_type_multiline = fmt.ast.regionIsMultiline(fn_type_region);
+
                 if (multiline and try fmt.flushCommentsBefore(args_coll.region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }
                 const args = fmt.ast.store.typeAnnoSlice(.{ .span = args_coll.span });
-                try fmt.formatCollection(
-                    args_coll.region,
-                    .round,
-                    AST.TypeAnno.Idx,
-                    args,
-                    Formatter.formatTypeAnno,
-                );
-                if (multiline and try fmt.flushCommentsAfter(args_coll.region.end)) {
+                // Format function arguments without parentheses (like regular function types)
+                var i: usize = 0;
+                for (args) |arg_idx| {
+                    const arg_region = fmt.nodeRegion(@intFromEnum(arg_idx));
+                    if (fn_type_multiline and i > 0) {
+                        _ = try fmt.flushCommentsBefore(arg_region.start);
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
+                    }
+                    _ = try fmt.formatTypeAnno(arg_idx);
+                    if (i < (args.len - 1)) {
+                        if (fn_type_multiline) {
+                            try fmt.push(',');
+                        } else {
+                            try fmt.pushAll(", ");
+                        }
+                    }
+                    i += 1;
+                }
+                if (fn_type_multiline and try fmt.flushCommentsAfter(args_coll.region.end)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                     try fmt.pushAll("->");
                 } else {
                     try fmt.pushAll(" ->");
                 }
-                const ret_region = fmt.nodeRegion(@intFromEnum(c.ret_anno));
-                if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
+                if (fn_type_multiline and try fmt.flushCommentsBefore(ret_region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatTypeAnno(c.ret_anno);
+            },
+            .mod_alias => |c| {
+                try fmt.pushAll("module(");
+                const tags = fmt.ast.tokens.tokens.items(.tag);
+                const varNeedsFlush = tags[c.var_tok - 1] == .Newline or (tags.len > (c.var_tok + 1) and tags[c.var_tok + 1] == .Newline);
+                if (varNeedsFlush) {
+                    _ = try fmt.flushCommentsBefore(c.var_tok);
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.pushTokenText(c.var_tok);
+                if (varNeedsFlush) {
+                    _ = try fmt.flushCommentsAfter(c.var_tok);
+                    fmt.curr_indent -= 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.push(')');
+                try fmt.push('.');
+                try fmt.pushTokenText(c.name_tok);
             },
             .malformed => {
                 // Output nothing for malformed node

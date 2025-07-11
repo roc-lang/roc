@@ -147,9 +147,9 @@ CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 				(args
 					(p-ident @11.19-11.24 (raw "value")))
 				(e-record @11.26-11.51
-					(field (field "data") (optional false)
+					(field (field "data")
 						(e-ident @11.34-11.39 (raw "value")))
-					(field (field "count") (optional false)
+					(field (field "count")
 						(e-int @11.48-11.49 (raw "1"))))))
 		(s-decl @14.1-14.36
 			(p-ident @14.1-14.14 (raw "int_container"))
@@ -197,7 +197,7 @@ CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 				(args
 					(p-ident @26.20-26.21 (raw "x")))
 				(e-record @26.23-26.35
-					(field (field "value") (optional false)
+					(field (field "value")
 						(e-ident @26.32-26.33 (raw "x"))))))
 		(s-decl @29.1-29.33
 			(p-ident @29.1-29.11 (raw "int_record"))
@@ -297,9 +297,9 @@ main = |_| {
 		(e-list @8.20-8.31
 			(elems
 				(e-lookup-local @8.21-8.24
-					(pattern @4.1-4.4))
+					(p-assign @4.1-4.4 (ident "num")))
 				(e-lookup-local @8.26-8.30
-					(pattern @5.1-5.5)))))
+					(p-assign @5.1-5.5 (ident "frac"))))))
 	(d-let
 		(p-assign @11.1-11.15 (ident "make_container"))
 		(e-lambda @11.18-11.51
@@ -309,30 +309,30 @@ main = |_| {
 				(fields
 					(field (name "data")
 						(e-lookup-local @11.34-11.39
-							(pattern @11.19-11.24)))
+							(p-assign @11.19-11.24 (ident "value"))))
 					(field (name "count")
 						(e-int @11.48-11.49 (value "1")))))))
 	(d-let
 		(p-assign @14.1-14.14 (ident "int_container"))
 		(e-call @14.17-14.36
 			(e-lookup-local @14.17-14.31
-				(pattern @11.1-11.15))
+				(p-assign @11.1-11.15 (ident "make_container")))
 			(e-lookup-local @14.32-14.35
-				(pattern @4.1-4.4))))
+				(p-assign @4.1-4.4 (ident "num")))))
 	(d-let
 		(p-assign @15.1-15.14 (ident "str_container"))
 		(e-call @15.17-15.36
 			(e-lookup-local @15.17-15.31
-				(pattern @11.1-11.15))
+				(p-assign @11.1-11.15 (ident "make_container")))
 			(e-lookup-local @15.32-15.35
-				(pattern @6.1-6.4))))
+				(p-assign @6.1-6.4 (ident "str")))))
 	(d-let
 		(p-assign @16.1-16.15 (ident "list_container"))
 		(e-call @16.18-16.47
 			(e-lookup-local @16.18-16.32
-				(pattern @11.1-11.15))
+				(p-assign @11.1-11.15 (ident "make_container")))
 			(e-lookup-local @16.33-16.46
-				(pattern @7.1-7.14))))
+				(p-assign @7.1-7.14 (ident "my_empty_list")))))
 	(d-let
 		(p-assign @19.1-19.12 (ident "update_data"))
 		(e-lambda @19.15-19.69
@@ -342,7 +342,7 @@ main = |_| {
 			(e-block @19.38-19.69
 				(s-expr @19.40-19.51
 					(e-lookup-local @19.40-19.49
-						(pattern @19.16-19.25)))
+						(p-assign @19.16-19.25 (ident "container"))))
 				(s-type-anno @19.52-19.69 (name "data")
 					(ty-var @19.58-19.67 (name "new_value")))
 				(e-tuple @19.52-19.69
@@ -351,17 +351,17 @@ main = |_| {
 		(p-assign @22.1-22.12 (ident "updated_int"))
 		(e-call @22.15-22.46
 			(e-lookup-local @22.15-22.26
-				(pattern @19.1-19.12))
+				(p-assign @19.1-19.12 (ident "update_data")))
 			(e-lookup-local @22.27-22.40
-				(pattern @14.1-14.14))
+				(p-assign @14.1-14.14 (ident "int_container")))
 			(e-int @22.42-22.45 (value "100"))))
 	(d-let
 		(p-assign @23.1-23.12 (ident "updated_str"))
 		(e-call @23.15-23.50
 			(e-lookup-local @23.15-23.26
-				(pattern @19.1-19.12))
+				(p-assign @19.1-19.12 (ident "update_data")))
 			(e-lookup-local @23.27-23.40
-				(pattern @15.1-15.14))
+				(p-assign @15.1-15.14 (ident "str_container")))
 			(e-string @23.42-23.49
 				(e-literal @23.43-23.48 (string "world")))))
 	(d-let
@@ -373,25 +373,25 @@ main = |_| {
 				(fields
 					(field (name "value")
 						(e-lookup-local @26.32-26.33
-							(pattern @26.20-26.21)))))))
+							(p-assign @26.20-26.21 (ident "x"))))))))
 	(d-let
 		(p-assign @29.1-29.11 (ident "int_record"))
 		(e-call @29.14-29.33
 			(e-lookup-local @29.14-29.29
-				(pattern @26.1-26.16))
+				(p-assign @26.1-26.16 (ident "identity_record")))
 			(e-int @29.30-29.32 (value "42"))))
 	(d-let
 		(p-assign @30.1-30.11 (ident "str_record"))
 		(e-call @30.14-30.37
 			(e-lookup-local @30.14-30.29
-				(pattern @26.1-26.16))
+				(p-assign @26.1-26.16 (ident "identity_record")))
 			(e-string @30.30-30.36
 				(e-literal @30.31-30.35 (string "test")))))
 	(d-let
 		(p-assign @31.1-31.12 (ident "list_record"))
 		(e-call @31.15-31.41
 			(e-lookup-local @31.15-31.30
-				(pattern @26.1-26.16))
+				(p-assign @26.1-26.16 (ident "identity_record")))
 			(e-list @31.31-31.40
 				(elems
 					(e-int @31.32-31.33 (value "1"))
@@ -407,11 +407,11 @@ main = |_| {
 					(e-dot-access @35.5-35.26 (field "count")
 						(receiver
 							(e-lookup-local @35.5-35.18
-								(pattern @14.1-14.14))))
+								(p-assign @14.1-14.14 (ident "int_container")))))
 					(e-dot-access @35.27-36.2 (field "count")
 						(receiver
 							(e-lookup-local @35.27-35.40
-								(pattern @15.1-15.14)))))))))
+								(p-assign @15.1-15.14 (ident "str_container"))))))))))
 ~~~
 # TYPES
 ~~~clojure

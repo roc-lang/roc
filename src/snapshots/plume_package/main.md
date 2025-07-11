@@ -10,9 +10,18 @@ package [
 ] {}
 ~~~
 # EXPECTED
-NIL
+EXPOSED BUT NOT DEFINED - main.md:2:5:2:10
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``Color`` is exposed, but it is not defined anywhere in this module.
+
+**main.md:2:5:2:10:**
+```roc
+    Color,
+```
+    ^^^^^
+You can fix this by either defining ``Color`` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwPackage(1:1-1:8),OpenSquare(1:9-1:10),Newline(1:1-1:1),

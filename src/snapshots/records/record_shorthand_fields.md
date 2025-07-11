@@ -64,10 +64,10 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),Comma
 # PARSE
 ~~~clojure
 (e-record @1.1-1.29
-	(field (field "name") (optional false))
-	(field (field "age") (optional false))
-	(field (field "email") (optional false))
-	(field (field "active") (optional false)))
+	(field (field "name"))
+	(field (field "age"))
+	(field (field "email"))
+	(field (field "active")))
 ~~~
 # FORMATTED
 ~~~roc

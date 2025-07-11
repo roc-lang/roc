@@ -5,12 +5,12 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("../base.zig");
 const utils = @import("utils.zig");
-const cache = @import("../cache.zig");
+const cache = @import("../cache/mod.zig");
 const collections = @import("../collections.zig");
 const Can = @import("../check/canonicalize.zig");
 const Scope = @import("../check/canonicalize/Scope.zig");
 const parse = @import("../check/parse.zig");
-const Filesystem = @import("../coordinate/Filesystem.zig");
+const Filesystem = @import("../fs/Filesystem.zig");
 const types = @import("../types.zig");
 
 const Package = base.Package;

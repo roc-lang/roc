@@ -135,6 +135,7 @@ UNDECLARED TYPE - fuzz_crash_020.md:24:15:24:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:24:24:24:25
 UNDECLARED TYPE - fuzz_crash_020.md:37:7:37:9
 UNDEFINED VARIABLE - fuzz_crash_020.md:40:5:40:8
+UNDEFINED VARIABLE - fuzz_crash_020.md:42:4:42:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:42:6:42:10
 UNDEFINED VARIABLE - fuzz_crash_020.md:45:3:45:4
 UNDEFINED VARIABLE - fuzz_crash_020.md:53:2:53:3
@@ -143,8 +144,11 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:55:11:55:12
 UNUSED VARIABLE - fuzz_crash_020.md:57:2:57:4
 UNDEFINED VARIABLE - fuzz_crash_020.md:59:3:59:7
 UNUSED VARIABLE - fuzz_crash_020.md:60:12:60:15
+UNDEFINED VARIABLE - fuzz_crash_020.md:72:2:72:4
 UNDECLARED TYPE - fuzz_crash_020.md:74:9:74:15
 UNDEFINED VARIABLE - fuzz_crash_020.md:75:11:75:12
+UNDEFINED VARIABLE - fuzz_crash_020.md:78:9:78:14
+UNDEFINED VARIABLE - fuzz_crash_020.md:80:3:80:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:87:11:87:12
 UNDEFINED VARIABLE - fuzz_crash_020.md:89:3:89:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:34:96:37
@@ -164,6 +168,9 @@ UNUSED VARIABLE - fuzz_crash_020.md:96:2:96:4
 UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
 UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
 UNDECLARED TYPE - fuzz_crash_020.md:116:5:116:6
+UNDEFINED VARIABLE - fuzz_crash_020.md:119:2:119:5
+UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
+UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -249,9 +256,16 @@ Is there an `import` or `exposing` missing up-top?
     ^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `s` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:42:4:42:5:**
+```roc
+			s exp0
+```
+   ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `exp0` in this scope.
@@ -263,10 +277,6 @@ Is there an `import` or `exposing` missing up-top?
 ```
      ^^^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
 
 **UNDEFINED VARIABLE**
 Nothing is named `r` in this scope.
@@ -348,13 +358,16 @@ The unused variable is declared here:
            ^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `nt` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
+**fuzz_crash_020.md:72:2:72:4:**
+```roc
+	nt
+```
+ ^^
+
 
 **UNDECLARED TYPE**
 The type ``Listlt`` is not declared in this scope.
@@ -378,17 +391,37 @@ ma= |_| { e
           ^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `blaue` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+**fuzz_crash_020.md:78:9:78:14:**
+```roc
+	expect blaue
+```
+        ^^^^^
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: crash statement
-Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `tag` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:80:3:80:6:**
+```roc
+		tag
+```
+  ^^^
+
+
+**CRASH EXPECTS STRING**
+The `crash` keyword expects a string literal as its argument.
+For example: `crash "Something went wrong"`
+**fuzz_crash_020.md:86:3:86:12:**
+```roc
+	)crash ke"Unr!" #)
+```
+  ^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `d` in this scope.
@@ -629,9 +662,38 @@ t : V((a,c))
     ^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:119:2:119:5:**
+```roc
+	foo == 1
+```
+ ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `h` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:120:1:120:2:**
+```roc
+h == foo
+```
+^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:120:6:120:9:**
+```roc
+h == foo
+```
+     ^^^
+
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -893,12 +955,12 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 							(e-ident @40.5-40.8 (raw "num"))
 							(e-block @40.9-43.3
 								(statements
-									(e-dbg
+									(s-dbg @41.3-42.10
 										(e-ident @42.4-42.5 (raw "s")))
 									(e-ident @42.6-42.10 (raw "exp0"))))
 							(e-block @43.9-46.3
 								(statements
-									(e-dbg
+									(s-dbg @44.3-45.4
 										(e-int @44.7-44.10 (raw "123")))
 									(e-ident @45.3-45.4 (raw "r")))))))))
 		(s-decl @49.1-69.3
@@ -1011,7 +1073,7 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 									(e-ident @89.7-89.9 (raw "er")))
 								(e-int @89.16-89.19 (raw "456"))
 								(e-int @90.1-90.2 (raw "9"))))
-						(s-for
+						(s-for @92.2-96.4
 							(p-ident @92.6-92.7 (raw "n"))
 							(e-ident @92.11-92.15 (raw "list"))
 							(e-block @92.16-95.3
@@ -1030,18 +1092,18 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 						(s-decl @96.2-96.59
 							(p-ident @96.2-96.4 (raw "rd"))
 							(e-record @96.7-96.59
-								(field (field "foo") (optional false)
+								(field (field "foo")
 									(e-int @96.14-96.17 (raw "123")))
-								(field (field "bar") (optional false)
+								(field (field "bar")
 									(e-string @96.24-96.27
 										(e-string-part @96.25-96.26 (raw "H"))))
-								(field (field "baz") (optional false)
+								(field (field "baz")
 									(e-ident @96.34-96.37 (raw "tag")))
-								(field (field "qux") (optional false)
+								(field (field "qux")
 									(e-apply @96.44-96.53
 										(e-tag @96.44-96.46 (raw "Ok"))
 										(e-ident @96.47-96.52 (raw "world"))))
-								(field (field "ned") (optional false))))
+								(field (field "ned"))))
 						(s-decl @97.2-97.48
 							(p-ident @97.2-97.3 (raw "t"))
 							(e-tuple @97.6-97.48
@@ -1282,7 +1344,7 @@ expect {
 				(if-branches
 					(if-branch
 						(e-lookup-local @35.16-35.19
-							(pattern @35.8-35.11))
+							(p-assign @35.8-35.11 (ident "num")))
 						(e-int @35.20-35.21 (value "2"))))
 				(if-else
 					(e-int @35.27-35.28 (value "5"))))))
@@ -1299,13 +1361,13 @@ expect {
 						(if-branch
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-block @40.9-43.3
-								(s-expr @41.3-42.10
-									(e-runtime-error (tag "not_implemented")))
+								(s-dbg @41.3-42.10
+									(e-runtime-error (tag "ident_not_in_scope")))
 								(e-runtime-error (tag "ident_not_in_scope")))))
 					(if-else
 						(e-block @43.9-46.3
-							(s-expr @44.3-45.4
-								(e-runtime-error (tag "not_implemented")))
+							(s-dbg @44.3-45.4
+								(e-int @44.7-44.10 (value "123")))
 							(e-runtime-error (tag "ident_not_in_scope"))))))))
 	(d-let
 		(p-assign @49.1-49.3 (ident "me"))
@@ -1316,88 +1378,103 @@ expect {
 				(match @52.2-69.3
 					(cond
 						(e-lookup-local @52.8-52.9
-							(pattern @50.2-50.3)))
+							(p-assign @50.2-50.3 (ident "a"))))
 					(branches
 						(branch
 							(patterns
-								(p-assign @52.11-52.14 (ident "lue") (degenerate false)))
+								(pattern (degenerate false)
+									(p-assign @52.11-52.14 (ident "lue"))))
 							(value
 								(e-block @52.16-54.4
 									(e-runtime-error (tag "ident_not_in_scope")))))
 						(branch
 							(patterns
-								(p-applied-tag @55.3-55.7 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @55.3-55.7)))
 							(value
 								(e-block @55.10-56.5
 									(e-runtime-error (tag "ident_not_in_scope")))))
 						(branch
 							(patterns
-								(p-assign @57.2-57.4 (ident "er") (degenerate false)))
+								(pattern (degenerate false)
+									(p-assign @57.2-57.4 (ident "er"))))
 							(value
 								(e-int @58.4-58.5 (value "1"))))
 						(branch
 							(patterns
-								(p-str @58.6-58.7 (text """) (degenerate false)))
+								(pattern (degenerate false)
+									(p-str @58.6-58.7 (text """))))
 							(value
 								(e-int @58.15-58.17 (value "20"))))
 						(branch
 							(patterns
-								(p-list @58.17-58.22 (degenerate false)
-									(patterns
-										(p-int @58.18-58.19))))
+								(pattern (degenerate false)
+									(p-list @58.17-58.22
+										(patterns
+											(p-int @58.18-58.19 (value "1"))))))
 							(value
 								(e-runtime-error (tag "ident_not_in_scope"))))
 						(branch
 							(patterns
-								(p-list @60.3-60.16 (degenerate false)
-									(patterns
-										(p-int @60.4-60.5)
-										(p-int @60.7-60.8)
-										(p-int @60.10-60.11)
-										(p-assign @60.12-60.15 (ident "est")))))
+								(pattern (degenerate false)
+									(p-list @60.3-60.16
+										(patterns
+											(p-int @60.4-60.5 (value "1"))
+											(p-int @60.7-60.8 (value "2"))
+											(p-int @60.10-60.11 (value "3"))
+											(p-assign @60.12-60.15 (ident "est"))))))
 							(value
 								(e-int @60.16-60.19 (value "123"))))
 						(branch
 							(patterns
-								(p-list @61.3-62.4 (degenerate false)
-									(patterns)))
+								(pattern (degenerate false)
+									(p-list @61.3-62.4
+										(patterns))))
 							(value
 								(e-int @62.5-62.7 (value "23"))))
 						(branch
 							(patterns
-								(p-small-dec @63.3-63.6 (degenerate false)))
+								(pattern (degenerate false)
+									(p-small-dec @63.3-63.6)))
 							(value
 								(e-int @63.7-63.10 (value "314"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-small-dec @64.3-64.7))
+								(pattern (degenerate false)
+									(p-small-dec @64.10-64.14)))
 							(value
 								(e-int @64.18-64.21 (value "314"))))
 						(branch
 							(patterns
-								(p-tuple @65.3-65.8 (degenerate false)
-									(patterns
-										(p-int @65.4-65.5))))
+								(pattern (degenerate false)
+									(p-tuple @65.3-65.8
+										(patterns
+											(p-int @65.4-65.5 (value "1"))))))
 							(value
 								(e-int @65.12-65.15 (value "123"))))
 						(branch
 							(patterns
-								(p-tuple @66.3-66.12 (degenerate false)
-									(patterns
-										(p-int @66.4-66.5)
-										(p-int @66.7-66.8)
-										(p-int @66.10-66.11))))
+								(pattern (degenerate false)
+									(p-tuple @66.3-66.12
+										(patterns
+											(p-int @66.4-66.5 (value "1"))
+											(p-int @66.7-66.8 (value "2"))
+											(p-int @66.10-66.11 (value "3"))))))
 							(value
 								(e-int @66.12-66.15 (value "123"))))
 						(branch
 							(patterns
-								(p-record-destructure @67.3-67.7 (degenerate false)
-									(destructs)))
+								(pattern (degenerate false)
+									(p-record-destructure @67.3-67.7
+										(destructs))))
 							(value
 								(e-int @67.11-67.13 (value "12"))))
 						(branch
 							(patterns
-								(p-applied-tag @68.3-68.10 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @68.3-68.10)))
 							(value
 								(e-int @68.14-68.16 (value "12")))))))))
 	(d-let
@@ -1415,13 +1492,17 @@ expect {
 				(s-var @77.2-78.8
 					(p-assign @77.2-78.8 (ident "er"))
 					(e-int @77.11-77.14 (value "123")))
+				(s-expect @78.2-79.8
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(s-return @79.2-83.5
+					(e-runtime-error (tag "ident_not_in_scope")))
 				(s-expr @83.2-84.4
-					(e-not-implemented))
+					(e-not-implemented @83.2-83.5))
 				(s-expr @84.2-86.8
 					(e-call @84.2-86.3
 						(e-lookup-local @84.2-84.4
-							(pattern @49.1-49.3))
-						(e-not-implemented)))
+							(p-assign @49.1-49.3 (ident "me")))
+						(e-not-implemented @85.3-85.6)))
 				(s-expr @86.11-86.20
 					(e-string @86.11-86.17
 						(e-literal @86.12-86.16 (string "Unr!"))))
@@ -1438,7 +1519,7 @@ expect {
 							(e-call @89.3-89.14
 								(e-runtime-error (tag "ident_not_in_scope"))
 								(e-lookup-local @89.7-89.9
-									(pattern @77.2-78.8)))
+									(p-assign @77.2-78.8 (ident "er"))))
 							(e-int @89.16-89.19 (value "456"))
 							(e-int @90.1-90.2 (value "9")))))
 				(s-let @96.2-96.59
@@ -1453,7 +1534,7 @@ expect {
 							(field (name "baz")
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(field (name "qux")
-								(e-tag @96.44-96.53 (name "Ok")
+								(e-tag @96.44-96.46 (name "Ok")
 									(args
 										(e-runtime-error (tag "ident_not_in_scope")))))
 							(field (name "ned")
@@ -1471,7 +1552,7 @@ expect {
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @97.34-97.35
-										(pattern @97.2-97.3))))
+										(p-assign @97.2-97.3 (ident "t")))))
 							(e-list @97.38-97.47
 								(elems
 									(e-int @97.39-97.40 (value "1"))
@@ -1526,7 +1607,7 @@ expect {
 									(e-dot-access @105.55-105.76 (field "unknown")
 										(receiver
 											(e-runtime-error (tag "not_implemented")))))))))
-				(e-tag @106.2-110.3 (name "Stdo!")
+				(e-tag @106.2-106.7 (name "Stdo!")
 					(args
 						(e-string @107.3-109.6
 							(e-literal @107.4-107.6 (string "Ho"))
@@ -1593,7 +1674,18 @@ expect {
 	(s-import @10.1-10.19 (module "Bae") (alias "Gooe")
 		(exposes))
 	(s-import @11.1-12.4 (module "Ba")
-		(exposes)))
+		(exposes))
+	(s-expect @71.1-74.6
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(s-expect @118.1-121.2
+		(e-block @118.8-121.2
+			(s-expr @119.2-120.2
+				(e-binop @119.2-120.2 (op "eq")
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-int @119.9-119.10 (value "1"))))
+			(e-binop @120.1-121.2 (op "eq")
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "ident_not_in_scope"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -1601,8 +1693,8 @@ expect {
 	(defs
 		(patt @35.1-35.4 (type "Bool -> Num(*)"))
 		(patt @38.1-38.4 (type "[Rum]* -> Error"))
-		(patt @49.1-49.3 (type "Error -> Error"))
-		(patt @75.1-75.3 (type "* -> [Stdo!]*"))
+		(patt @49.1-49.3 (type "[Blue]* -> Error"))
+		(patt @75.1-75.3 (type "* -> [Stdo!(Str)]*"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
 		(alias @13.1-13.33 (type "Map(a, b)")
@@ -1633,7 +1725,7 @@ expect {
 	(expressions
 		(expr @35.7-37.4 (type "Bool -> Num(*)"))
 		(expr @38.7-47.2 (type "[Rum]* -> Error"))
-		(expr @49.6-69.3 (type "Error -> Error"))
-		(expr @75.5-111.2 (type "* -> [Stdo!]*"))
+		(expr @49.6-69.3 (type "[Blue]* -> Error"))
+		(expr @75.5-111.2 (type "* -> [Stdo!(Str)]*"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

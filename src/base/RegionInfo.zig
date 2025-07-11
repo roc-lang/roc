@@ -5,6 +5,7 @@
 //! as this is more compact, and then when we need to we can calculate the line and column information
 //! using line_starts and the offsets.
 const std = @import("std");
+const collections = @import("../collections.zig");
 const Allocator = std.mem.Allocator;
 
 // byte indexes into the source text
@@ -54,8 +55,8 @@ fn getLineText(source: []const u8, line_starts: []const u32, start_line_idx: u32
 }
 
 /// Record the offsets for the start of each line in the source code
-pub fn findLineStarts(gpa: Allocator, source: []const u8) !std.ArrayList(u32) {
-    var line_starts = std.ArrayList(u32).init(gpa);
+pub fn findLineStarts(gpa: Allocator, source: []const u8) !collections.SafeList(u32) {
+    var line_starts = collections.SafeList(u32).initCapacity(gpa, 256);
 
     // if the source is empty, return an empty list of line starts
     if (source.len == 0) {
@@ -63,14 +64,14 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) !std.ArrayList(u32) {
     }
 
     // the first line starts at offset 0
-    try line_starts.append(0);
+    _ = line_starts.append(gpa, 0);
 
     // find all newlines in the source, save their offset
     var pos: u32 = 0;
     for (source) |c| {
         if (c == '\n') {
             // next line starts after the newline in the current position
-            try line_starts.append(pos + 1);
+            _ = line_starts.append(gpa, pos + 1);
         }
         pos += 1;
     }
@@ -107,81 +108,81 @@ pub fn position(source: []const u8, line_starts: []const u32, begin: u32, end: u
 
 test "lineIdx" {
     const gpa = std.testing.allocator;
-    var line_starts = std.ArrayList(u32).init(gpa);
-    defer line_starts.deinit();
+    var line_starts = collections.SafeList(u32).initCapacity(gpa, 256);
+    defer line_starts.deinit(gpa);
 
     // Simple test case with lines at positions 0, 10, 20
-    try line_starts.append(0);
-    try line_starts.append(10);
-    try line_starts.append(20);
-    try line_starts.append(30);
+    _ = line_starts.append(gpa, 0);
+    _ = line_starts.append(gpa, 10);
+    _ = line_starts.append(gpa, 20);
+    _ = line_starts.append(gpa, 30);
 
-    try std.testing.expectEqual(0, lineIdx(line_starts.items, 0));
-    try std.testing.expectEqual(0, lineIdx(line_starts.items, 5));
-    try std.testing.expectEqual(0, lineIdx(line_starts.items, 9));
-    try std.testing.expectEqual(1, lineIdx(line_starts.items, 10));
-    try std.testing.expectEqual(1, lineIdx(line_starts.items, 15));
-    try std.testing.expectEqual(1, lineIdx(line_starts.items, 19));
-    try std.testing.expectEqual(2, lineIdx(line_starts.items, 20));
-    try std.testing.expectEqual(2, lineIdx(line_starts.items, 25));
-    try std.testing.expectEqual(2, lineIdx(line_starts.items, 29));
-    try std.testing.expectEqual(3, lineIdx(line_starts.items, 30));
-    try std.testing.expectEqual(3, lineIdx(line_starts.items, 35));
+    try std.testing.expectEqual(0, lineIdx(line_starts.items.items, 0));
+    try std.testing.expectEqual(0, lineIdx(line_starts.items.items, 5));
+    try std.testing.expectEqual(0, lineIdx(line_starts.items.items, 9));
+    try std.testing.expectEqual(1, lineIdx(line_starts.items.items, 10));
+    try std.testing.expectEqual(1, lineIdx(line_starts.items.items, 15));
+    try std.testing.expectEqual(1, lineIdx(line_starts.items.items, 19));
+    try std.testing.expectEqual(2, lineIdx(line_starts.items.items, 20));
+    try std.testing.expectEqual(2, lineIdx(line_starts.items.items, 25));
+    try std.testing.expectEqual(2, lineIdx(line_starts.items.items, 29));
+    try std.testing.expectEqual(3, lineIdx(line_starts.items.items, 30));
+    try std.testing.expectEqual(3, lineIdx(line_starts.items.items, 35));
 }
 
 test "columnIdx" {
     const gpa = std.testing.allocator;
-    var line_starts = std.ArrayList(u32).init(gpa);
-    defer line_starts.deinit();
+    var line_starts = collections.SafeList(u32).initCapacity(gpa, 256);
+    defer line_starts.deinit(gpa);
 
-    try line_starts.append(0);
-    try line_starts.append(10);
-    try line_starts.append(20);
+    _ = line_starts.append(gpa, 0);
+    _ = line_starts.append(gpa, 10);
+    _ = line_starts.append(gpa, 20);
 
-    try std.testing.expectEqual(0, columnIdx(line_starts.items, 0, 0));
-    try std.testing.expectEqual(5, columnIdx(line_starts.items, 0, 5));
-    try std.testing.expectEqual(9, columnIdx(line_starts.items, 0, 9));
+    try std.testing.expectEqual(0, columnIdx(line_starts.items.items, 0, 0));
+    try std.testing.expectEqual(5, columnIdx(line_starts.items.items, 0, 5));
+    try std.testing.expectEqual(9, columnIdx(line_starts.items.items, 0, 9));
 
-    try std.testing.expectEqual(0, columnIdx(line_starts.items, 1, 10));
-    try std.testing.expectEqual(5, columnIdx(line_starts.items, 1, 15));
+    try std.testing.expectEqual(0, columnIdx(line_starts.items.items, 1, 10));
+    try std.testing.expectEqual(5, columnIdx(line_starts.items.items, 1, 15));
 }
 
 test "getLineText" {
     const gpa = std.testing.allocator;
-    var line_starts = std.ArrayList(u32).init(gpa);
-    defer line_starts.deinit();
+    var line_starts = collections.SafeList(u32).initCapacity(gpa, 256);
+    defer line_starts.deinit(gpa);
 
     const source = "line0\nline1\nline2";
 
-    try line_starts.append(0);
-    try line_starts.append(6);
-    try line_starts.append(12);
+    _ = line_starts.append(gpa, 0);
+    _ = line_starts.append(gpa, 6);
+    _ = line_starts.append(gpa, 12);
 
-    try std.testing.expectEqualStrings("line0", getLineText(source, line_starts.items, 0, 0));
-    try std.testing.expectEqualStrings("line1", getLineText(source, line_starts.items, 1, 1));
-    try std.testing.expectEqualStrings("line0\nline1", getLineText(source, line_starts.items, 0, 1));
-    try std.testing.expectEqualStrings("line2", getLineText(source, line_starts.items, 2, 2));
+    try std.testing.expectEqualStrings("line0", getLineText(source, line_starts.items.items, 0, 0));
+    try std.testing.expectEqualStrings("line1", getLineText(source, line_starts.items.items, 1, 1));
+    try std.testing.expectEqualStrings("line0\nline1", getLineText(source, line_starts.items.items, 0, 1));
+    try std.testing.expectEqualStrings("line2", getLineText(source, line_starts.items.items, 2, 2));
 }
 
 test "get" {
     const gpa = std.testing.allocator;
-    var line_starts = std.ArrayList(u32).init(gpa);
-    defer line_starts.deinit();
+    var line_starts = collections.SafeList(u32).initCapacity(gpa, 256);
+    defer line_starts.deinit(gpa);
 
     const source = "line0\nline1\nline2";
 
-    try line_starts.append(0);
-    try line_starts.append(6);
-    try line_starts.append(12);
+    _ = line_starts.append(gpa, 0);
+    _ = line_starts.append(gpa, 6);
+    _ = line_starts.append(gpa, 12);
 
-    const info1 = try position(source, line_starts.items, 2, 4);
+    const info1 = try position(source, line_starts.items.items, 2, 4);
     try std.testing.expectEqual(0, info1.start_line_idx);
     try std.testing.expectEqual(2, info1.start_col_idx);
     try std.testing.expectEqual(0, info1.end_line_idx);
     try std.testing.expectEqual(4, info1.end_col_idx);
     try std.testing.expectEqualStrings("line0", info1.line_text);
 
-    const info2 = try position(source, line_starts.items, 8, 10);
+    const info2 = try position(source, line_starts.items.items, 8, 10);
     try std.testing.expectEqual(1, info2.start_line_idx);
     try std.testing.expectEqual(2, info2.start_col_idx);
     try std.testing.expectEqual(1, info2.end_line_idx);

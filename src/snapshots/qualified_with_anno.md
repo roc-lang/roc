@@ -49,7 +49,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:15),NoSpaceDotUpperIdent(
 ~~~roc
 module [value]
 
-MyType : [TagA, TagB]
+MyType := [TagA, TagB]
 
 value : MyType
 value = TagA
@@ -79,5 +79,5 @@ value = TagA
 		(nominal @3.1-3.23 (type "MyType")
 			(ty-header @3.1-3.7 (name "MyType"))))
 	(expressions
-		(expr @6.9-6.20 (type "MyType"))))
+		(expr @6.9-6.15 (type "MyType"))))
 ~~~

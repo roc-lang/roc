@@ -11,8 +11,11 @@ const reporting = @import("reporting.zig");
 const coordinate_simple = @import("coordinate_simple.zig");
 
 const tracy = @import("tracy.zig");
-const Filesystem = @import("coordinate/Filesystem.zig");
+const Filesystem = @import("fs/Filesystem.zig");
 const cli_args = @import("cli_args.zig");
+const cache_mod = @import("cache/mod.zig");
+const CacheManager = cache_mod.CacheManager;
+const CacheConfig = cache_mod.CacheConfig;
 
 const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
@@ -153,61 +156,98 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     var timer = try std.time.Timer.start();
 
+    // Initialize cache if enabled
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = args.verbose,
+    };
+
+    var cache_manager = if (cache_config.enabled) blk: {
+        const manager = CacheManager.init(gpa, cache_config, Filesystem.default());
+        break :blk manager;
+    } else null;
+
     // Process the file and get Reports
-    var result = (if (args.time)
-        coordinate_simple.processFileWithTiming(gpa, Filesystem.default(), args.path)
-    else
-        coordinate_simple.processFile(gpa, Filesystem.default(), args.path)) catch |err| handleProcessFileError(err, stderr, args.path);
-    defer result.deinit(gpa);
+    var process_result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path, if (cache_manager) |*cm| cm else null, args.time) catch |err| handleProcessFileError(err, stderr, args.path);
+
+    defer process_result.deinit(gpa);
 
     const elapsed = timer.read();
 
-    // Process reports and render them using the reporting system
-    if (result.reports.len > 0) {
-        var fatal_errors: usize = 0;
-        var runtime_errors: usize = 0;
-        var warnings: usize = 0;
-
-        // Render each report
-        for (result.reports) |*report| {
-            // Render the diagnostic report to stderr
-            reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
-                stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
-                // Fallback to just printing the title
-                stderr.print("  {s}\n", .{report.title}) catch {};
-            };
-
-            switch (report.severity) {
-                .runtime_error => {
-                    runtime_errors += 1;
-                },
-                .fatal => {
-                    fatal_errors += 1;
-                },
-                .warning => {
-                    warnings += 1;
-                },
-            }
+    // Print cache statistics if verbose
+    if (cache_manager) |*cm| {
+        if (args.verbose) {
+            cm.printStats(gpa);
         }
-        stderr.writeAll("\n") catch {};
-
-        stderr.print("Found {} error(s) and {} warning(s) in ", .{
-            (fatal_errors + runtime_errors),
-            warnings,
-        }) catch {};
-        formatElapsedTime(stderr, elapsed) catch {};
-        stderr.print(" for {s}.\n", .{args.path}) catch {};
-
-        printTimingBreakdown(stderr, result.timing);
-
-        std.process.exit(1);
-    } else {
-        stdout.print("No errors found in ", .{}) catch {};
-        formatElapsedTime(stdout, elapsed) catch {};
-        stdout.print(" for {s}\n", .{args.path}) catch {};
-
-        printTimingBreakdown(stdout, result.timing);
     }
+
+    // Handle cached results vs fresh compilation results differently
+    if (process_result.was_cached) {
+        // For cached results, use the stored diagnostic counts
+        const total_errors = process_result.error_count;
+        const total_warnings = process_result.warning_count;
+
+        if (total_errors > 0 or total_warnings > 0) {
+            stderr.print("Found {} error(s) and {} warning(s) in ", .{
+                total_errors,
+                total_warnings,
+            }) catch {};
+            formatElapsedTime(stderr, elapsed) catch {};
+            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).\n", .{args.path}) catch {};
+            std.process.exit(1);
+        } else {
+            stdout.print("No errors found in ", .{}) catch {};
+            formatElapsedTime(stdout, elapsed) catch {};
+            stdout.print(" for {s} (loaded from cache)\n", .{args.path}) catch {};
+        }
+    } else {
+        // For fresh compilation, process and display reports normally
+        if (process_result.reports.len > 0) {
+            var fatal_errors: usize = 0;
+            var runtime_errors: usize = 0;
+            var warnings: usize = 0;
+
+            // Render each report
+            for (process_result.reports) |*report| {
+
+                // Render the diagnostic report to stderr
+                reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+                    stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
+                    // Fallback to just printing the title
+                    stderr.print("  {s}\n", .{report.title}) catch {};
+                };
+
+                switch (report.severity) {
+                    .info => {}, // Informational messages don't affect error/warning counts
+                    .runtime_error => {
+                        runtime_errors += 1;
+                    },
+                    .fatal => {
+                        fatal_errors += 1;
+                    },
+                    .warning => {
+                        warnings += 1;
+                    },
+                }
+            }
+            stderr.writeAll("\n") catch {};
+
+            stderr.print("Found {} error(s) and {} warning(s) in ", .{
+                (fatal_errors + runtime_errors),
+                warnings,
+            }) catch {};
+            formatElapsedTime(stderr, elapsed) catch {};
+            stderr.print(" for {s}.\n", .{args.path}) catch {};
+
+            std.process.exit(1);
+        } else {
+            stdout.print("No errors found in ", .{}) catch {};
+            formatElapsedTime(stdout, elapsed) catch {};
+            stdout.print(" for {s}\n", .{args.path}) catch {};
+        }
+    }
+
+    printTimingBreakdown(stderr, process_result.timing);
 }
 
 fn printTimingBreakdown(writer: anytype, timing: ?coordinate_simple.TimingInfo) void {

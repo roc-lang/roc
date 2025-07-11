@@ -113,19 +113,22 @@ match x {
 		(branches
 			(branch
 				(patterns
-					(p-runtime-error @2.5-2.15 (tag "pattern_not_canonicalized") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @2.5-2.15 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-string @2.16-2.20
 						(e-literal @2.17-2.19 (string "pi")))))
 			(branch
 				(patterns
-					(p-runtime-error @3.5-3.14 (tag "pattern_not_canonicalized") (degenerate false)))
+					(pattern (degenerate false)
+						(p-runtime-error @3.5-3.14 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-string @3.15-3.21
 						(e-literal @3.16-3.20 (string "zero")))))
 			(branch
 				(patterns
-					(p-assign @4.5-4.10 (ident "value") (degenerate false)))
+					(pattern (degenerate false)
+						(p-assign @4.5-4.10 (ident "value"))))
 				(value
 					(e-string @4.14-4.21
 						(e-literal @4.15-4.20 (string "other"))))))))

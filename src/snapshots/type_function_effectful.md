@@ -15,6 +15,10 @@ main! = |_| {}
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:22:3:25
 UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:26:3:30
+INVALID STATEMENT - type_function_effectful.md:3:22:3:25
+INVALID STATEMENT - type_function_effectful.md:3:24:3:28
+INVALID STATEMENT - type_function_effectful.md:3:26:3:30
+INVALID STATEMENT - type_function_effectful.md:3:29:4:11
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, a** is not expected in an expression.
@@ -44,17 +48,45 @@ runEffect! : (a => b), a => b
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**type_function_effectful.md:3:22:3:25:**
+```roc
+runEffect! : (a => b), a => b
+```
+                     ^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**type_function_effectful.md:3:24:3:28:**
+```roc
+runEffect! : (a => b), a => b
+```
+                       ^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**type_function_effectful.md:3:26:3:30:**
+```roc
+runEffect! : (a => b), a => b
+```
+                         ^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**type_function_effectful.md:3:29:4:11:**
+```roc
+runEffect! : (a => b), a => b
+runEffect! = |fn!, x| fn!(x)
+```
+
 
 # TOKENS
 ~~~zig
@@ -123,9 +155,9 @@ main! = |_| {}
 				(p-assign @4.20-4.21 (ident "x")))
 			(e-call @4.23-4.29
 				(e-lookup-local @4.23-4.26
-					(pattern @4.15-4.18))
+					(p-assign @4.15-4.18 (ident "fn!")))
 				(e-lookup-local @4.27-4.28
-					(pattern @4.20-4.21)))))
+					(p-assign @4.20-4.21 (ident "x"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15

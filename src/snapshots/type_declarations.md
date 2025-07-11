@@ -26,7 +26,6 @@ UNDECLARED TYPE - type_declarations.md:5:8:5:11
 UNDECLARED TYPE - type_declarations.md:5:13:5:16
 UNDECLARED TYPE - type_declarations.md:7:19:7:21
 UNDECLARED TYPE - type_declarations.md:7:32:7:41
-UNDECLARED TYPE - type_declarations.md:7:19:7:24
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``Bar`` is not declared in this scope.
@@ -72,16 +71,25 @@ Some(a) : { foo : Ok(a), bar : Something }
                                ^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type ``Ok`` is not declared in this scope.
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``main!`` is exposed, but it is not defined anywhere in this module.
 
-This type is referenced here:
-**type_declarations.md:7:19:7:24:**
+**type_declarations.md:1:51:1:56:**
 ```roc
-Some(a) : { foo : Ok(a), bar : Something }
+module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
 ```
-                  ^^^^^
+                                                  ^^^^^
+You can fix this by either defining ``main!`` in this module, or by removing it from the list of exposed values.
 
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``add_one`` is exposed, but it is not defined anywhere in this module.
+
+**type_declarations.md:1:42:1:49:**
+```roc
+module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
+```
+                                         ^^^^^^^
+You can fix this by either defining ``add_one`` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -237,7 +245,8 @@ NO CHANGE
 	(s-alias-decl @15.1-15.24
 		(ty-header @15.1-15.8 (name "MyType2"))
 		(ty-lookup-external @15.11-15.24
-			(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type")))))
+			(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type"))))
+	(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

@@ -14,6 +14,7 @@ foo =
 ~~~
 # EXPECTED
 MISMATCHED BRACE - fuzz_crash_009.md:1:2:1:4
+INVALID STATEMENT - fuzz_crash_009.md:1:3:4:4
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.
@@ -41,6 +42,15 @@ Here is the problematic code:
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**fuzz_crash_009.md:1:3:4:4:**
+```roc
+ f{o,
+     ]
+
+foo =
+```
+
+
 # TOKENS
 ~~~zig
 LowerIdent(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:4-1:5),Comma(1:5-1:6),Newline(1:1-1:1),
@@ -56,7 +66,7 @@ StringStart(6:5-6:6),StringPart(6:6-6:12),EndOfFile(6:12-6:12),
 	(malformed-header @1.2-1.4 (tag "missing_header"))
 	(statements
 		(e-record @1.3-2.7
-			(field (field "o") (optional false)))
+			(field (field "o")))
 		(s-decl @4.1-6.12
 			(p-ident @4.1-4.4 (raw "foo"))
 			(e-string @6.5-6.12

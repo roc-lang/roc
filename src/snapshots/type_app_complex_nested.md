@@ -32,7 +32,7 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
-UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:50
+INVALID STATEMENT - type_app_complex_nested.md:1:1:1:1
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **crash "** is not expected in an expression.
@@ -113,23 +113,19 @@ deepNested : Maybe(Result(List(Dict(Str, a)), b)) -> a
              ^^^^^
 
 
-**UNDECLARED TYPE**
-The type ``Maybe`` is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:12:14:12:50:**
-```roc
-deepNested : Maybe(Result(List(Dict(Str, a)), b)) -> a
-```
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **INVALID LAMBDA**
 The body of this lambda expression is not valid.
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**type_app_complex_nested.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 # TOKENS
 ~~~zig
@@ -288,16 +284,18 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(match @6.5-9.6
 					(cond
 						(e-lookup-local @6.11-6.17
-							(pattern @5.19-5.25)))
+							(p-assign @5.19-5.25 (ident "result"))))
 					(branches
 						(branch
 							(patterns
-								(p-applied-tag @7.9-7.22 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @7.9-7.22)))
 							(value
 								(e-empty_list @7.26-7.28)))
 						(branch
 							(patterns
-								(p-applied-tag @8.9-8.15 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @8.9-8.15)))
 							(value
 								(e-empty_list @8.19-8.21)))))))
 		(annotation @5.1-5.15
@@ -337,12 +335,12 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(p-underscore @18.10-18.11))
 			(e-call @18.13-18.49
 				(e-lookup-local @18.13-18.27
-					(pattern @5.1-5.15))
-				(e-tag @18.28-18.48 (name "Ok")
+					(p-assign @5.1-5.15 (ident "processComplex")))
+				(e-tag @18.28-18.30 (name "Ok")
 					(args
 						(e-list @18.31-18.47
 							(elems
-								(e-tag @18.32-18.40 (name "Some")
+								(e-tag @18.32-18.36 (name "Some")
 									(args
 										(e-int @18.37-18.39 (value "42"))))
 								(e-tag @18.42-18.46 (name "None")))))))))

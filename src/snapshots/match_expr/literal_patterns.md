@@ -106,23 +106,27 @@ match Answer {
 		(branches
 			(branch
 				(patterns
-					(p-applied-tag @2.5-2.11 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @2.5-2.11)))
 				(value
 					(e-int @2.15-2.16 (value "1"))))
 			(branch
 				(patterns
-					(p-applied-tag @3.5-3.9 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @3.5-3.9)))
 				(value
 					(e-string @3.13-3.20
 						(e-literal @3.14-3.19 (string "hello")))))
 			(branch
 				(patterns
-					(p-applied-tag @4.5-4.13 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @4.5-4.13)))
 				(value
 					(e-int @4.17-4.18 (value "3"))))
 			(branch
 				(patterns
-					(p-int @5.5-5.7 (degenerate false)))
+					(pattern (degenerate false)
+						(p-int @5.5-5.7 (value "10"))))
 				(value
 					(e-int @5.11-5.12 (value "4")))))))
 ~~~

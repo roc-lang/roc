@@ -971,17 +971,6 @@ Some(a) : { foo : Ok(a), bar : Something }
 The type ``Ok`` is not declared in this scope.
 
 This type is referenced here:
-**fuzz_crash_023.md:43:19:43:24:**
-```roc
-Some(a) : { foo : Ok(a), bar : Something }
-```
-                  ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Ok`` is not declared in this scope.
-
-This type is referenced here:
 **fuzz_crash_023.md:45:8:45:10:**
 ```roc
 	foo : Ok(a), # After field
@@ -998,17 +987,6 @@ This type is referenced here:
 	bar : Something, # After last field
 ```
        ^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Ok`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_023.md:45:8:45:13:**
-```roc
-	foo : Ok(a), # After field
-```
-       ^^^^^
 
 
 **UNDECLARED TYPE**
@@ -1033,17 +1011,6 @@ This type is referenced here:
        ^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type ``Ok`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_023.md:52:4:52:9:**
-```roc
-			Ok(a), # Comment after pattern record field
-```
-   ^^^^^
-
-
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: malformed import module name contains invalid control characters
 Let us know if you want to help!
@@ -1056,17 +1023,16 @@ Let us know if you want to help!
 This feature is not yet implemented or doesn't have a proper error report yet: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
 Let us know if you want to help!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `some_func` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
+**fuzz_crash_023.md:72:4:72:13:**
+```roc
+			some_func() # After debug expr
+```
+   ^^^^^^^^^
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -1101,10 +1067,6 @@ The unused variable is declared here:
   ^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
 **UNUSED VARIABLE**
 Variable ``rest`` is not used anywhere in your code.
 
@@ -1118,7 +1080,7 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -1134,7 +1096,7 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -1150,31 +1112,43 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
 Let us know if you want to help!
 
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:121:21:121:29:**
+```roc
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+```
+                    ^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:127:4:128:10:**
+```roc
+			.. # After spread operator
+				rest, # After last field
+```
+
+
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -1189,9 +1163,16 @@ The unused variable is declared here:
  ^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `blah` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_023.md:141:2:141:6:**
+```roc
+	blah == 1 # Comment after expect statement
+```
+ ^^^^
+
 
 **UNDECLARED TYPE**
 The type ``String`` is not declared in this scope.
@@ -1204,13 +1185,16 @@ main! : List(String) -> Result({}, _)
              ^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `blah` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+**fuzz_crash_023.md:147:9:147:13:**
+```roc
+	expect blah == 1
+```
+        ^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
@@ -1222,18 +1206,6 @@ Is there an `import` or `exposing` missing up-top?
 ```
  ^^^^^^^^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: crash statement
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
@@ -1400,10 +1372,6 @@ tuple : Value((a, b, c))
         ^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_023.md:67:11:67:14:**
@@ -1431,29 +1399,6 @@ It is of type:
 
 But you are trying to use it as:
     _* -> *_
-
-**INCOMPATIBLE LIST ELEMENTS**
-The first two elements in this list have incompatible types:
-**fuzz_crash_023.md:167:3:**
-```roc
-		add_one(
-			dbg # After dbg in list
-				number, # after dbg expr as arg
-		), # Comment one
-		456, # Comment two
-```
-  ^^^
-
-The first element has this type:
-    _U64_
-
-However, the second element has this type:
-    _Num(*)_
-
-All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -1828,13 +1773,13 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 							(e-ident @70.5-70.8 (raw "num"))
 							(e-block @70.9-74.3
 								(statements
-									(e-dbg
+									(s-dbg @71.3-73.4
 										(e-apply @72.4-72.15
 											(e-ident @72.4-72.13 (raw "some_func"))))
 									(e-int @73.3-73.4 (raw "0"))))
 							(e-block @74.9-77.3
 								(statements
-									(e-dbg
+									(s-dbg @75.3-76.8
 										(e-int @75.7-75.10 (raw "123")))
 									(e-ident @76.3-76.8 (raw "other")))))))))
 		(s-decl @80.1-138.3
@@ -2054,7 +1999,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 										(e-ident @169.5-169.11 (raw "number"))))
 								(e-int @171.3-171.6 (raw "456"))
 								(e-int @172.3-172.6 (raw "789"))))
-						(s-for
+						(s-for @174.2-178.8
 							(p-ident @174.6-174.7 (raw "n"))
 							(e-ident @174.11-174.15 (raw "list"))
 							(e-block @174.16-177.3
@@ -2427,7 +2372,7 @@ expect {
 				(if-branches
 					(if-branch
 						(e-lookup-local @65.28-65.31
-							(pattern @65.20-65.23))
+							(p-assign @65.20-65.23 (ident "num")))
 						(e-int @65.32-65.33 (value "2"))))
 				(if-else
 					(e-int @65.39-65.40 (value "5"))))))
@@ -2444,17 +2389,18 @@ expect {
 					(if-branches
 						(if-branch
 							(e-lookup-local @70.5-70.8
-								(pattern @68.12-68.15))
+								(p-assign @68.12-68.15 (ident "num")))
 							(e-block @70.9-74.3
-								(s-expr @71.3-73.4
-									(e-runtime-error (tag "not_implemented")))
+								(s-dbg @71.3-73.4
+									(e-call @72.4-72.15
+										(e-runtime-error (tag "ident_not_in_scope"))))
 								(e-int @73.3-73.4 (value "0")))))
 					(if-else
 						(e-block @74.9-77.3
-							(s-expr @75.3-76.8
-								(e-runtime-error (tag "not_implemented")))
+							(s-dbg @75.3-76.8
+								(e-int @75.7-75.10 (value "123")))
 							(e-lookup-local @76.3-76.8
-								(pattern @69.2-69.7)))))))
+								(p-assign @69.2-69.7 (ident "other"))))))))
 		(annotation @68.1-68.8
 			(declared-type
 				(ty-fn @67.11-67.21 (effectful false)
@@ -2470,158 +2416,221 @@ expect {
 				(match @84.2-138.3
 					(cond
 						(e-lookup-local @84.8-84.9
-							(pattern @81.2-81.3)))
+							(p-assign @81.2-81.3 (ident "a"))))
 					(branches
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @85.3-85.7))
+								(pattern (degenerate false)
+									(p-applied-tag @85.10-85.15))
+								(pattern (degenerate false)
+									(p-applied-tag @85.18-85.21)))
 							(value
 								(e-block @85.25-88.4
 									(s-let @86.4-86.10
 										(p-assign @86.4-86.5 (ident "x"))
 										(e-int @86.8-86.10 (value "12")))
 									(e-lookup-local @87.4-87.5
-										(pattern @86.4-86.5)))))
+										(p-assign @86.4-86.5 (ident "x"))))))
 						(branch
 							(patterns
-								(p-applied-tag @89.3-89.7 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @89.3-89.7)))
 							(value
 								(e-runtime-error (tag "expr_not_canonicalized"))))
 						(branch
 							(patterns
-								(p-runtime-error @90.3-90.28 (tag "pattern_not_canonicalized") (degenerate false)))
+								(pattern (degenerate false)
+									(p-runtime-error @90.3-90.28 (tag "pattern_not_canonicalized"))))
 							(value
 								(e-runtime-error (tag "expr_not_canonicalized"))))
 						(branch
 							(patterns
-								(p-applied-tag @91.4-91.9 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @91.4-91.9)))
 							(value
 								(e-runtime-error (tag "expr_not_canonicalized"))))
 						(branch
 							(patterns
-								(p-runtime-error @92.3-92.8 (tag "pattern_not_canonicalized") (degenerate false)))
+								(pattern (degenerate false)
+									(p-runtime-error @92.3-92.8 (tag "pattern_not_canonicalized"))))
 							(value
 								(e-tag @92.5-92.8 (name "Red"))))
 						(branch
 							(patterns
-								(p-runtime-error @93.4-93.8 (tag "pattern_not_canonicalized") (degenerate false)))
+								(pattern (degenerate false)
+									(p-runtime-error @93.4-93.8 (tag "pattern_not_canonicalized"))))
 							(value
 								(e-block @93.7-96.5
 									(s-let @94.5-94.11
 										(p-assign @94.5-94.6 (ident "x"))
 										(e-int @94.9-94.11 (value "12")))
 									(e-lookup-local @95.5-95.6
-										(pattern @94.5-94.6)))))
+										(p-assign @94.5-94.6 (ident "x"))))))
 						(branch
 							(patterns
-								(p-assign @97.3-97.8 (ident "lower") (degenerate false)))
+								(pattern (degenerate false)
+									(p-assign @97.3-97.8 (ident "lower"))))
 							(value
 								(e-int @98.7-98.8 (value "1"))))
 						(branch
 							(patterns
-								(p-str @99.3-99.4 (text """) (degenerate false)))
+								(pattern (degenerate false)
+									(p-str @99.3-99.4 (text """))))
 							(value
 								(e-int @100.4-100.7 (value "100"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-str @101.3-101.4 (text """)))
+								(pattern (degenerate false)
+									(p-str @101.11-101.12 (text """))))
 							(value
 								(e-int @101.20-101.23 (value "200"))))
 						(branch
 							(patterns
-								(p-list @102.3-102.24 (degenerate false)
-									(patterns
-										(p-int @102.4-102.5)
-										(p-int @102.7-102.8)
-										(p-int @102.10-102.11))
-									(rest-at (index 3)
-										(p-assign @102.19-102.23 (ident "rest")))))
+								(pattern (degenerate false)
+									(p-list @102.3-102.24
+										(patterns
+											(p-int @102.4-102.5 (value "1"))
+											(p-int @102.7-102.8 (value "2"))
+											(p-int @102.10-102.11 (value "3")))
+										(rest-at (index 3)
+											(p-assign @102.19-102.23 (ident "rest"))))))
 							(value
 								(e-int @104.5-104.8 (value "123"))))
 						(branch
 							(patterns
-								(p-list @108.3-108.28 (degenerate false)
-									(patterns
-										(p-int @108.4-108.5)
-										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-										(p-int @108.14-108.15))
-									(rest-at (index 3)
-										(p-assign @108.23-108.27 (ident "rest")))))
+								(pattern (degenerate false)
+									(p-list @108.3-108.28
+										(patterns
+											(p-int @108.4-108.5 (value "1"))
+											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+											(p-int @108.14-108.15 (value "3")))
+										(rest-at (index 3)
+											(p-assign @108.23-108.27 (ident "rest"))))))
 							(value
 								(e-int @108.32-108.35 (value "123"))))
 						(branch
 							(patterns
-								(p-list @109.3-116.4 (degenerate false)
-									(patterns
-										(p-int @110.4-110.5)
-										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-										(p-int @112.4-112.5))
-									(rest-at (index 3)
-										(p-assign @115.6-115.10 (ident "rest")))))
+								(pattern (degenerate false)
+									(p-list @109.3-116.4
+										(patterns
+											(p-int @110.4-110.5 (value "1"))
+											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+											(p-int @112.4-112.5 (value "3")))
+										(rest-at (index 3)
+											(p-assign @115.6-115.10 (ident "rest"))))))
 							(value
 								(e-int @116.8-116.11 (value "123"))))
 						(branch
 							(patterns
-								(p-small-dec @117.3-117.7 (degenerate false)))
+								(pattern (degenerate false)
+									(p-small-dec @117.3-117.7)))
 							(value
 								(e-int @117.11-117.14 (value "314"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-small-dec @118.3-118.7))
+								(pattern (degenerate false)
+									(p-small-dec @118.10-118.14)))
 							(value
 								(e-int @118.18-118.21 (value "314"))))
 						(branch
 							(patterns
-								(p-tuple @119.3-119.12 (degenerate false)
-									(patterns
-										(p-int @119.4-119.5)
-										(p-int @119.7-119.8)
-										(p-int @119.10-119.11))))
+								(pattern (degenerate false)
+									(p-tuple @119.3-119.12
+										(patterns
+											(p-int @119.4-119.5 (value "1"))
+											(p-int @119.7-119.8 (value "2"))
+											(p-int @119.10-119.11 (value "3"))))))
 							(value
 								(e-int @119.16-119.19 (value "123"))))
 						(branch
 							(patterns
-								(p-tuple @120.3-120.16 (degenerate false)
-									(patterns
-										(p-int @120.4-120.5)
-										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-										(p-int @120.14-120.15))))
+								(pattern (degenerate false)
+									(p-tuple @120.3-120.16
+										(patterns
+											(p-int @120.4-120.5 (value "1"))
+											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+											(p-int @120.14-120.15 (value "3"))))))
 							(value
 								(e-int @120.20-120.23 (value "123"))))
 						(branch
 							(patterns
-								(p-runtime-error @121.5-121.12 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-record-destructure @121.3-121.29
+										(destructs
+											(record-destruct @121.5-121.12 (label "foo") (ident "foo")
+												(sub-pattern
+													(p-int @121.10-121.11 (value "1"))))
+											(record-destruct @121.13-121.20 (label "bar") (ident "bar")
+												(sub-pattern
+													(p-int @121.18-121.19 (value "2"))))
+											(record-destruct @121.21-121.29 (label "rest") (ident "rest")
+												(required))))))
 							(value
 								(e-runtime-error (tag "not_implemented"))))
 						(branch
 							(patterns
-								(p-runtime-error @123.4-125.8 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-record-destructure @122.3-129.4
+										(destructs
+											(record-destruct @123.4-125.8 (label "foo") (ident "foo")
+												(sub-pattern
+													(p-int @125.6-125.7 (value "1"))))
+											(record-destruct @126.4-126.11 (label "bar") (ident "bar")
+												(sub-pattern
+													(p-int @126.9-126.10 (value "2"))))
+											(record-destruct @127.4-128.10 (label "rest") (ident "rest")
+												(required))))))
 							(value
 								(e-int @129.8-129.10 (value "12"))))
 						(branch
 							(patterns
-								(p-runtime-error @130.5-130.12 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-record-destructure @130.3-130.25
+										(destructs
+											(record-destruct @130.5-130.12 (label "foo") (ident "foo")
+												(sub-pattern
+													(p-int @130.10-130.11 (value "1"))))
+											(record-destruct @130.13-130.25 (label "bar") (ident "bar")
+												(sub-pattern
+													(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
 							(value
 								(e-int @130.29-130.31 (value "12"))))
 						(branch
 							(patterns
-								(p-runtime-error @132.4-132.11 (tag "not_implemented") (degenerate false)))
+								(pattern (degenerate false)
+									(p-record-destructure @131.3-134.4
+										(destructs
+											(record-destruct @132.4-132.11 (label "foo") (ident "foo")
+												(sub-pattern
+													(p-int @132.9-132.10 (value "1"))))
+											(record-destruct @133.4-133.15 (label "bar") (ident "bar")
+												(sub-pattern
+													(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
 							(value
 								(e-int @134.8-134.10 (value "12"))))
 						(branch
 							(patterns
-								(p-applied-tag @135.3-135.10 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @135.3-135.10)))
 							(value
 								(e-int @135.14-135.17 (value "123"))))
 						(branch
 							(patterns
-								(p-applied-tag @136.3-136.17 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @136.3-136.17)))
 							(value
 								(e-lookup-local @136.21-136.25
-									(pattern @136.11-136.15))))
+									(p-assign @136.11-136.15 (ident "dude")))))
 						(branch
 							(patterns
-								(p-applied-tag @137.3-137.34 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @137.3-137.34)))
 							(value
 								(e-int @137.38-137.42 (value "1000")))))))))
 	(d-let
@@ -2637,32 +2646,41 @@ expect {
 				(s-var @146.2-147.8
 					(p-assign @146.2-147.8 (ident "number"))
 					(e-int @146.15-146.18 (value "123")))
+				(s-expect @147.2-148.5
+					(e-binop @147.9-148.5 (op "eq")
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-int @147.17-147.18 (value "1"))))
 				(s-let @148.2-148.12
 					(p-assign @148.2-148.5 (ident "tag"))
 					(e-tag @148.8-148.12 (name "Blue")))
+				(s-return @149.2-154.5
+					(e-lookup-local @150.3-150.6
+						(p-assign @148.2-148.5 (ident "tag"))))
 				(s-expr @154.2-155.12
-					(e-not-implemented))
+					(e-not-implemented @154.2-154.5))
 				(s-expr @155.2-158.11
 					(e-call @155.2-157.3
 						(e-lookup-local @155.2-155.12
-							(pattern @80.1-80.11))
-						(e-not-implemented)))
+							(p-assign @80.1-80.11 (ident "match_time")))
+						(e-not-implemented @156.3-156.6)))
 				(s-expr @158.2-162.7
 					(e-call @158.2-161.3
 						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-dbg @159.3-160.7
+							(e-int @160.4-160.6 (value "42")))))
+				(s-crash @162.2-163.49 (msg "Unreachable!"))
 				(s-let @164.2-164.31
 					(p-assign @164.2-164.18 (ident "tag_with_payload"))
-					(e-tag @164.21-164.31 (name "Ok")
+					(e-tag @164.21-164.23 (name "Ok")
 						(args
 							(e-lookup-local @164.24-164.30
-								(pattern @146.2-147.8)))))
+								(p-assign @146.2-147.8 (ident "number"))))))
 				(s-let @165.2-165.34
 					(p-assign @165.2-165.14 (ident "interpolated"))
 					(e-string @165.17-165.34
 						(e-literal @165.18-165.25 (string "Hello, "))
 						(e-lookup-local @165.27-165.32
-							(pattern @145.2-145.7))
+							(p-assign @145.2-145.7 (ident "world")))
 						(e-literal @165.33-165.33 (string ""))))
 				(s-let @166.2-173.3
 					(p-assign @166.2-166.6 (ident "list"))
@@ -2670,13 +2688,15 @@ expect {
 						(elems
 							(e-call @167.3-170.4
 								(e-lookup-local @167.3-167.10
-									(pattern @68.1-68.8))
-								(e-runtime-error (tag "not_implemented")))
+									(p-assign @68.1-68.8 (ident "add_one")))
+								(e-dbg @168.4-169.12
+									(e-lookup-local @169.5-169.11
+										(p-assign @146.2-147.8 (ident "number")))))
 							(e-int @171.3-171.6 (value "456"))
 							(e-int @172.3-172.6 (value "789")))))
 				(s-expr @178.42-178.46
 					(e-lookup-local @178.42-178.45
-						(pattern @148.2-148.5)))
+						(p-assign @148.2-148.5 (ident "tag"))))
 				(s-type-anno @1.1-1.1 (name "qux")
 					(ty-malformed @1.1-1.1))
 				(s-let @179.2-179.68
@@ -2687,16 +2707,16 @@ expect {
 							(e-string @179.16-179.23
 								(e-literal @179.17-179.22 (string "World")))
 							(e-lookup-local @179.25-179.28
-								(pattern @148.2-148.5))
-							(e-tag @179.30-179.39 (name "Ok")
+								(p-assign @148.2-148.5 (ident "tag")))
+							(e-tag @179.30-179.32 (name "Ok")
 								(args
 									(e-lookup-local @179.33-179.38
-										(pattern @145.2-145.7))))
+										(p-assign @145.2-145.7 (ident "world")))))
 							(e-tuple @179.41-179.56
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @179.50-179.55
-										(pattern @179.2-179.7))))
+										(p-assign @179.2-179.7 (ident "tuple")))))
 							(e-list @179.58-179.67
 								(elems
 									(e-int @179.59-179.60 (value "1"))
@@ -2710,15 +2730,15 @@ expect {
 							(e-string @182.3-182.10
 								(e-literal @182.4-182.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @184.3-184.12 (name "Ok")
+							(e-tag @184.3-184.5 (name "Ok")
 								(args
 									(e-lookup-local @184.6-184.11
-										(pattern @145.2-145.7))))
+										(p-assign @145.2-145.7 (ident "world")))))
 							(e-tuple @185.3-185.18
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @185.12-185.17
-										(pattern @179.2-179.7))))
+										(p-assign @179.2-179.7 (ident "tuple")))))
 							(e-list @186.3-186.12
 								(elems
 									(e-int @186.4-186.5 (value "1"))
@@ -2730,7 +2750,7 @@ expect {
 						(e-binop @188.18-188.74 (op "or")
 							(e-binop @188.18-188.43 (op "gt")
 								(e-binop @188.18-188.34 (op "null_coalesce")
-									(e-tag @188.18-188.26 (name "Err")
+									(e-tag @188.18-188.21 (name "Err")
 										(args
 											(e-runtime-error (tag "ident_not_in_scope"))))
 									(e-int @188.30-188.32 (value "12")))
@@ -2765,14 +2785,15 @@ expect {
 				(s-expr @190.2-191.8
 					(e-runtime-error (tag "not_implemented")))
 				(e-call @191.2-195.3
-					(e-lookup-external
-						(ext-decl @191.2-191.14 (ident "pf.Stdout.line!") (kind "value")))
+					(e-lookup-external @191.2-191.14
+						(module-idx "0")
+						(target-node-idx "0"))
 					(e-string @192.3-194.18
 						(e-literal @192.4-192.14 (string "How about "))
 						(e-call @193.4-193.21
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @193.14-193.20
-								(pattern @146.2-147.8)))
+								(p-assign @146.2-147.8 (ident "number"))))
 						(e-literal @194.4-194.17 (string " as a string?"))))))
 		(annotation @144.1-144.6
 			(declared-type
@@ -2898,7 +2919,24 @@ expect {
 	(s-import @16.1-16.27 (module "BadName") (alias "GoodName")
 		(exposes))
 	(s-import @17.1-20.20 (module "BadNameMultiline") (alias "GoodNameMultiline")
-		(exposes)))
+		(exposes))
+	(s-expect @140.1-143.6
+		(e-binop @141.2-143.6 (op "eq")
+			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-int @141.10-141.11 (value "1"))))
+	(s-expect @203.1-207.2
+		(e-block @203.8-207.2
+			(s-let @204.2-204.9
+				(p-assign @204.2-204.5 (ident "foo"))
+				(e-int @204.8-204.9 (value "1")))
+			(s-let @205.2-205.10
+				(p-assign @205.2-205.6 (ident "blah"))
+				(e-int @205.9-205.10 (value "1")))
+			(e-binop @206.2-207.2 (op "eq")
+				(e-lookup-local @206.2-206.6
+					(p-assign @205.2-205.6 (ident "blah")))
+				(e-lookup-local @206.10-206.13
+					(p-assign @204.2-204.5 (ident "foo")))))))
 ~~~
 # TYPES
 ~~~clojure
