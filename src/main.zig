@@ -107,21 +107,31 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var timer = try std.time.Timer.start();
-    var count = fmt.SuccessFailCount{ .success = 0, .failure = 0 };
-    for (args.paths) |path| {
-        const inner_count = try fmt.formatPath(gpa, arena, std.fs.cwd(), path);
-        count.success += inner_count.success;
-        count.failure += inner_count.failure;
+    const stdin = std.io.getStdIn();
+    const stdout = std.io.getStdOut();
+    if (args.stdin) {
+        const contents = try stdin.readToEndAlloc(gpa, Filesystem.max_file_size);
+        defer gpa.free(contents);
+        fmt.formatToWriter(gpa, contents, stdout.writer().any()) catch {
+            std.process.exit(1);
+        };
+    } else {
+        var timer = try std.time.Timer.start();
+        var count = fmt.SuccessFailCount{ .success = 0, .failure = 0 };
+        for (args.paths) |path| {
+            const inner_count = try fmt.formatPath(gpa, arena, std.fs.cwd(), path);
+            count.success += inner_count.success;
+            count.failure += inner_count.failure;
+        }
+        const elapsed = timer.read();
+        try std.io.getStdOut().writer().print("Successfully formatted {} files\n", .{count.success});
+        if (count.failure > 0) {
+            try std.io.getStdOut().writer().print("Failed to format {} files.\n", .{count.failure});
+        }
+        try std.io.getStdOut().writer().print("Took ", .{});
+        try formatElapsedTime(std.io.getStdOut().writer(), elapsed);
+        try std.io.getStdOut().writer().print(".\n", .{});
     }
-    const elapsed = timer.read();
-    try std.io.getStdOut().writer().print("Successfully formatted {} files\n", .{count.success});
-    if (count.failure > 0) {
-        try std.io.getStdOut().writer().print("Failed to format {} files.\n", .{count.failure});
-    }
-    try std.io.getStdOut().writer().print("Took ", .{});
-    try formatElapsedTime(std.io.getStdOut().writer(), elapsed);
-    try std.io.getStdOut().writer().print(".\n", .{});
 }
 
 fn rocVersion(gpa: Allocator) !void {

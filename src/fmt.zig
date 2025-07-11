@@ -165,6 +165,23 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     try formatAst(parse_ast, output_file.writer().any());
 }
 
+pub fn formatToWriter(gpa: std.mem.Allocator, buffer: []u8, writer: std.io.AnyWriter) !void {
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var parse_ast = parse.parse(&module_env, buffer);
+    defer parse_ast.deinit(gpa);
+
+    // If there are any parsing problems, print them to stderr
+    if (parse_ast.parse_diagnostics.items.len > 0) {
+        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        try printParseErrors(gpa, buffer, parse_ast);
+        return error.ParsingFailed;
+    }
+
+    try formatAst(parse_ast, writer);
+}
+
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
     // compute offsets of each line, looping over bytes of the input
     var line_offsets = @import("collections.zig").SafeList(u32).initCapacity(gpa, 256);
