@@ -2149,11 +2149,7 @@ pub const Expr = union(enum) {
         ext: ?Expr.Idx,
         region: TokenizedRegion,
     },
-    tag: struct {
-        token: Token.Idx,
-        qualifiers: Token.Span,
-        region: TokenizedRegion,
-    },
+    tag: TagExpr,
     lambda: struct {
         args: Pattern.Span,
         body: Expr.Idx,
@@ -2593,7 +2589,14 @@ pub const RecordField = struct {
     }
 };
 
-/// TODO
+/// A tag expr
+pub const TagExpr = struct {
+    token: Token.Idx,
+    qualifiers: Token.Span,
+    region: TokenizedRegion,
+};
+
+/// An if-else expr
 pub const IfElse = struct {
     condition: Expr.Idx,
     body: Expr.Idx,
@@ -2603,7 +2606,7 @@ pub const IfElse = struct {
     pub const Span = struct { span: base.DataSpan };
 };
 
-/// TODO
+/// A match branch
 pub const MatchBranch = struct {
     pattern: Pattern.Idx,
     body: Expr.Idx,

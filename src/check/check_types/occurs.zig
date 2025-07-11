@@ -180,12 +180,12 @@ const CheckOccurs = struct {
                         .num => {},
                         .nominal_type => |nominal_type| {
                             // Check all argument vars using iterator
-                            var arg_iter = nominal_type.argIterator(root.var_);
+                            var arg_iter = self.types_store.iterNominalArgs(nominal_type);
                             while (arg_iter.next()) |arg_var| {
                                 try self.occursSubVar(root, arg_var, ctx);
                             }
                             // Check backing var using helper method
-                            const backing_var = nominal_type.getBackingVar(root.var_);
+                            const backing_var = self.types_store.getNominalBackingVar(nominal_type);
                             try self.occursSubVar(root, backing_var, ctx.markNominal());
                         },
                         .fn_pure => |func| {
@@ -232,11 +232,11 @@ const CheckOccurs = struct {
                 },
                 .alias => |alias| {
                     // Check all argument vars using iterator
-                    var arg_iter = alias.argIterator(var_);
+                    var arg_iter = self.types_store.iterAliasArgs(alias);
                     while (arg_iter.next()) |arg_var| {
                         try self.occursSubVar(root, arg_var, ctx);
                     }
-                    const backing_var = alias.getBackingVar(var_);
+                    const backing_var = self.types_store.getAliasBackingVar(alias);
                     try self.occursSubVar(root, backing_var, ctx);
                 },
                 .flex_var => {},
@@ -507,15 +507,14 @@ test "occurs: recursive alias (v = Alias(List v))" {
     defer scratch.deinit();
 
     const v = types_store.fresh();
-    _ = types_store.fresh(); // backing var at v+1
-    _ = types_store.freshRedirect(v); // arg at v+2 redirecting to v (creating infinite recursion on purpose for the test)
+    const backing_var = types_store.fresh(); // backing var at v+1
+    const arg = types_store.freshRedirect(v); // arg at v+2 redirecting to v (creating infinite recursion on purpose for the test)
 
-    try types_store.setRootVarContent(v, Content{
-        .alias = .{
-            .ident = types.TypeIdent{ .ident_idx = undefined },
-            .num_args = 1,
-        },
-    });
+    try types_store.setRootVarContent(v, types_store.mkAlias(
+        types.TypeIdent{ .ident_idx = undefined },
+        backing_var,
+        &.{arg},
+    ));
 
     const result = occurs(&types_store, &scratch, v);
     try std.testing.expectEqual(.infinite, result);
@@ -534,15 +533,14 @@ test "occurs: alias with no recursion (v = Alias Str)" {
     defer scratch.deinit();
 
     const alias_var = types_store.fresh();
-    const backing_var = types_store.fresh(); // backing var at alias_var+1
-    const arg_var = types_store.fresh(); // arg at alias_var+2
+    const backing_var = types_store.freshFromContent(Content{ .structure = .str });
+    const arg_var = types_store.freshFromContent(Content{ .structure = .str });
 
-    try types_store.setRootVarContent(alias_var, Content{ .alias = .{
-        .ident = types.TypeIdent{ .ident_idx = undefined },
-        .num_args = 1,
-    } });
-    try types_store.setRootVarContent(backing_var, Content{ .structure = .str });
-    try types_store.setRootVarContent(arg_var, Content{ .structure = .str });
+    try types_store.setRootVarContent(alias_var, types_store.mkAlias(
+        types.TypeIdent{ .ident_idx = undefined },
+        backing_var,
+        &.{arg_var},
+    ));
 
     const result = occurs(&types_store, &scratch, alias_var);
     try std.testing.expectEqual(.not_recursive, result);
@@ -631,26 +629,20 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     defer scratch.deinit();
 
     const nominal_type = types_store.fresh();
-    // Create backing var immediately after nominal_type to ensure it's at nominal_type + 1
-    const backing_var = types_store.fresh();
 
     const elem = types_store.fresh();
     const ext = types_store.fresh();
 
     const cons_tag_args = types_store.appendTagArgs(&[_]Var{ elem, nominal_type });
     const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
-
     const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty };
-
-    const tags = types_store.appendTags(&[_]Tag{ cons_tag, nil_tag });
-
-    try types_store.setRootVarContent(nominal_type, .{ .structure = .{ .nominal_type = NominalType{
-        .ident = undefined,
-        .num_args = 0,
-        .origin_module = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
-    } } });
-
-    try types_store.setRootVarContent(backing_var, .{ .structure = .{ .tag_union = TagUnion{ .tags = tags, .ext = ext } } });
+    const backing_var = types_store.freshFromContent(types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
+    try types_store.setVarContent(nominal_type, types_store.mkNominal(
+        undefined,
+        backing_var,
+        &.{},
+        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+    ));
 
     // assert that starting from the nominal type, it works
 
@@ -698,37 +690,32 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     defer scratch.deinit();
 
     // Create vars in the required order for adjacency to work out
-    const type_b_nominal = types_store.fresh(); // Var(0)
-    const type_b_backing = types_store.fresh(); // Var(1)
-    const type_a_nominal = types_store.fresh(); // Var(2)
-    const type_a_backing = types_store.fresh(); // Var(3)
-    const elem = types_store.fresh(); // Var(4)
-    const ext = types_store.fresh(); // Var(5)
+    const type_b_nominal = types_store.fresh();
+    const type_a_nominal = types_store.fresh();
+    const elem = types_store.fresh();
+    const ext = types_store.fresh();
 
     // Create the tag union content that references type_a_nominal
     const cons_tag_args = types_store.appendTagArgs(&[_]Var{ elem, type_a_nominal });
     const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
     const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty };
-    const tags = types_store.appendTags(&[_]Tag{ cons_tag, nil_tag });
+    const type_b_backing = types_store.freshFromContent(types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
 
     // Set up TypeB = [ Cons(Elem, TypeA), Nil ]
-    try types_store.setRootVarContent(type_b_nominal, .{ .structure = .{ .nominal_type = NominalType{
-        .ident = undefined,
-        .num_args = 0,
-        .origin_module = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
-    } } });
-    try types_store.setRootVarContent(type_b_backing, .{ .structure = .{ .tag_union = TagUnion{ .tags = tags, .ext = ext } } });
+    try types_store.setVarContent(type_b_nominal, types_store.mkNominal(
+        undefined,
+        type_b_backing,
+        &.{},
+        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+    ));
 
-    // Set up TypeA to be a nominal type
-    try types_store.setRootVarContent(type_a_nominal, .{ .structure = .{ .nominal_type = NominalType{
-        .ident = undefined,
-        .num_args = 0,
-        .origin_module = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
-    } } });
-
-    // Set up TypeA's backing var to redirect to TypeB
-    const type_b_desc = types_store.resolveVar(type_b_nominal).desc;
-    types_store.union_(type_a_backing, type_b_nominal, type_b_desc);
+    // Set up TypeA = Type B
+    try types_store.setVarContent(type_a_nominal, types_store.mkNominal(
+        undefined,
+        type_b_nominal,
+        &.{},
+        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+    ));
 
     // assert that starting from the `TypeA` nominal, it works
     const result1 = occurs(&types_store, &scratch, type_a_nominal);

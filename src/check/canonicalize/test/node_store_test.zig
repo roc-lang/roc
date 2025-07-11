@@ -774,9 +774,8 @@ test "NodeStore round trip - Pattern" {
     });
     try patterns.append(CIR.Pattern{
         .applied_tag = .{
-            .ext_var = @enumFromInt(456),
-            .tag_name = @bitCast(@as(u32, 567)),
-            .arguments = CIR.Pattern.Span{ .span = base.DataSpan.init(678, 789) },
+            .name = @bitCast(@as(u32, 567)),
+            .args = CIR.Pattern.Span{ .span = base.DataSpan.init(678, 789) },
         },
     });
     try patterns.append(CIR.Pattern{

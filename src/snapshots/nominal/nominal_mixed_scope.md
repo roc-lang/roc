@@ -155,21 +155,21 @@ processColor = |color| {
 									(pattern (degenerate false)
 										(p-applied-tag @12.9-12.16)))
 								(value
-									(e-nominal @12.20-12.39 (nominal "LocalStatus")
+									(e-nominal @12.20-12.31 (nominal "LocalStatus")
 										(e-tag @12.20-12.39 (name "Pending")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
 										(p-applied-tag @13.9-13.18)))
 								(value
-									(e-nominal @13.22-13.42 (nominal "LocalStatus")
+									(e-nominal @13.22-13.33 (nominal "LocalStatus")
 										(e-tag @13.22-13.42 (name "Complete")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
 										(p-applied-tag @14.9-14.17)))
 								(value
-									(e-nominal @14.21-14.40 (nominal "LocalStatus")
+									(e-nominal @14.21-14.32 (nominal "LocalStatus")
 										(e-tag @14.21-14.40 (name "Pending"))))))))))
 		(annotation @6.1-6.13
 			(declared-type

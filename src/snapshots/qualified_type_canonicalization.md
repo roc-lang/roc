@@ -858,7 +858,7 @@ err->TypeC.default
 					(ext-decl @22.23-22.44 (ident "ModuleA.ModuleB.TypeC") (kind "type"))))))
 	(d-let
 		(p-assign @27.1-27.11 (ident "resultType"))
-		(e-nominal @27.14-27.23 (nominal "Result")
+		(e-nominal @27.14-27.20 (nominal "<malformed>")
 			(e-tag @27.14-27.23 (name "Ok"))))
 	(d-let
 		(p-assign @31.1-31.9 (ident "getColor"))
@@ -902,7 +902,7 @@ err->TypeC.default
 		(patt @15.1-15.16 (type "Error"))
 		(patt @19.1-19.17 (type "Error"))
 		(patt @23.1-23.20 (type "Error"))
-		(patt @27.1-27.11 (type "Result"))
+		(patt @27.1-27.11 (type "Error"))
 		(patt @31.1-31.9 (type "Error"))
 		(patt @35.1-35.13 (type "Error"))
 		(patt @40.1-40.10 (type "Error")))
@@ -910,7 +910,7 @@ err->TypeC.default
 		(expr @15.19-15.24 (type "Error"))
 		(expr @19.26-19.35 (type "Error"))
 		(expr @23.23-23.32 (type "Error"))
-		(expr @27.14-27.23 (type "Result"))
+		(expr @27.14-27.20 (type "Error"))
 		(expr @31.12-31.14 (type "Error"))
 		(expr @35.16-35.22 (type "Error"))
 		(expr @40.13-40.20 (type "Error"))))

@@ -37,7 +37,7 @@ The `else` branch has the type:
     _Str_
 
 But the `then` branch has the type:
-    _[Err]*_
+    _[Err([TooBig]*)]*_
 
 All branches in an `if` must have compatible types.
 
@@ -136,17 +136,17 @@ foo = |num| {
 									(e-int @5.21-5.23 (value "10")))
 								(e-block @5.25-7.6
 									(s-return @6.9-7.6
-										(e-tag @6.16-6.27 (name "Err")
+										(e-tag @6.16-6.19 (name "Err")
 											(args
 												(e-tag @6.20-6.26 (name "TooBig")))))
-									(e-tag @6.16-6.27 (name "Err")
+									(e-tag @6.16-6.19 (name "Err")
 										(args
 											(e-tag @6.20-6.26 (name "TooBig")))))))
 						(if-else
 							(e-block @7.12-9.6
 								(e-string @8.9-8.16
 									(e-literal @8.10-8.15 (string "SMALL")))))))
-				(e-tag @10.5-10.12 (name "Ok")
+				(e-tag @10.5-10.7 (name "Ok")
 					(args
 						(e-lookup-local @10.8-10.11
 							(p-assign @5.5-5.8 (ident "str")))))))
