@@ -112,6 +112,7 @@ pub const Module = struct {
     module_path: []const u8,
 };
 
+/// Unique identifier for a module in the build system
 pub const ModuleId = u32;
 
 const TaskQueue = switch (builtin.single_threaded) {
