@@ -353,26 +353,24 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
                 .qualified = 0,
                 .num_exposes = @as(u30, @intCast(i.exposes.span.len)),
             };
-            var ed_start: u32 = i.exposes.span.start;
+
+            // Store all import data in a flat format:
+            // [exposes.span.start, exposes.span.len, qualifier_tok?, alias_tok?]
+            const data_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, i.exposes.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, i.exposes.span.len) catch |err| exitOnOom(err);
+
             if (i.qualifier_tok) |tok| {
                 rhs.qualified = 1;
-                if (ed_start == 0) {
-                    ed_start = @intCast(store.extra_data.items.len);
-                }
-
                 store.extra_data.append(store.gpa, tok) catch |err| exitOnOom(err);
             }
             if (i.alias_tok) |tok| {
                 rhs.aliased = 1;
-                if (ed_start == 0) {
-                    ed_start = @intCast(store.extra_data.items.len);
-                }
                 store.extra_data.append(store.gpa, tok) catch |err| exitOnOom(err);
             }
+
             node.data.rhs = @as(u32, @bitCast(rhs));
-            if (node.data.rhs > 0) {
-                node.data.lhs = ed_start;
-            }
+            node.data.lhs = data_start;
         },
         .type_decl => |d| {
             node.tag = .type_decl;
@@ -1060,7 +1058,14 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
         },
         .import => {
             const rhs = @as(AST.ImportRhs, @bitCast(node.data.rhs));
-            var extra_data_pos = node.data.lhs + rhs.num_exposes;
+
+            // Read flat data format: [exposes.span.start, exposes.span.len, qualifier_tok?, alias_tok?]
+            var extra_data_pos = node.data.lhs;
+            const exposes_start = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const exposes_len = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+
             var qualifier_tok: ?Token.Idx = null;
             var alias_tok: ?Token.Idx = null;
             if (rhs.qualified == 1) {
@@ -1070,13 +1075,14 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
             if (rhs.aliased == 1) {
                 alias_tok = store.extra_data.items[extra_data_pos];
             }
+
             return AST.Statement{ .import = .{
                 .module_name_tok = node.main_token,
                 .qualifier_tok = qualifier_tok,
                 .alias_tok = alias_tok,
                 .exposes = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = rhs.num_exposes,
+                    .start = exposes_start,
+                    .len = exposes_len,
                 } },
                 .region = node.region,
             } };
