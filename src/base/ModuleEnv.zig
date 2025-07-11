@@ -72,7 +72,6 @@ pub fn deinit(self: *Self) void {
     self.exposed_by_str.deinit(self.gpa);
     self.exposed_nodes.deinit(self.gpa);
 
-    // Free owned source and module path
     if (self.owns_source and self.source.len > 0) {
         self.gpa.free(self.source);
     }
