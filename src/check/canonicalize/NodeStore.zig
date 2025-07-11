@@ -746,19 +746,13 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             },
         },
         .pattern_applied_tag => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
-
-            const arguments_start = extra_data[0];
-            const arguments_len = extra_data[1];
-            const tag_name = @as(Ident.Idx, @bitCast(extra_data[2]));
-            const ext_var = @as(types.Var, @enumFromInt(extra_data[3]));
-
+            const arguments_start = node.data_1;
+            const arguments_len = node.data_2;
+            const tag_name = @as(Ident.Idx, @bitCast(node.data_3));
             return CIR.Pattern{
                 .applied_tag = .{
-                    .arguments = DataSpan.init(arguments_start, arguments_len).as(CIR.Pattern.Span),
-                    .tag_name = tag_name,
-                    .ext_var = ext_var,
+                    .args = DataSpan.init(arguments_start, arguments_len).as(CIR.Pattern.Span),
+                    .name = tag_name,
                 },
             };
         },
@@ -1562,14 +1556,9 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
         .applied_tag => |p| {
             node.tag = .pattern_applied_tag;
-
-            // Store applied tag data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, p.arguments.span.start);
-            try store.extra_data.append(store.gpa, p.arguments.span.len);
-            try store.extra_data.append(store.gpa, @bitCast(p.tag_name));
-            try store.extra_data.append(store.gpa, @intFromEnum(p.ext_var));
-            node.data_1 = extra_data_start;
+            node.data_1 = p.args.span.start;
+            node.data_2 = p.args.span.len;
+            node.data_3 = @bitCast(p.name);
         },
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;

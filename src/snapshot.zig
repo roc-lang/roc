@@ -1358,7 +1358,7 @@ fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can
 fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
-    can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree, content.source);
+    try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree, content.source);
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");

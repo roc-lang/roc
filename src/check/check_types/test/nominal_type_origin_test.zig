@@ -24,9 +24,13 @@ test "nominal type origin - displays origin in snapshot writer" {
     defer snapshots.deinit();
 
     // Create a nominal type snapshot with origin from a different module
+    const nominal_type_backing = snapshot.SnapshotContent{ .structure = .str };
+    const nominal_type_backing_idx = snapshots.contents.append(test_allocator, nominal_type_backing);
+    const vars_range = snapshots.nominal_type_args.appendSlice(test_allocator, &.{nominal_type_backing_idx});
+
     const nominal_type = snapshot.SnapshotNominalType{
         .ident = types_mod.TypeIdent{ .ident_idx = type_name_ident },
-        .args = .{ .start = @enumFromInt(0), .end = @enumFromInt(0) },
+        .vars = vars_range,
         .origin_module = other_module_ident,
     };
 
@@ -58,7 +62,7 @@ test "nominal type origin - displays origin in snapshot writer" {
         // Create a nominal type from the current module
         const same_module_nominal = snapshot.SnapshotNominalType{
             .ident = types_mod.TypeIdent{ .ident_idx = type_name_ident },
-            .args = .{ .start = @enumFromInt(0), .end = @enumFromInt(0) },
+            .vars = vars_range,
             .origin_module = current_module_ident,
         };
 
@@ -83,15 +87,14 @@ test "nominal type origin - displays origin in snapshot writer" {
         defer buf.deinit();
 
         // Create type arguments
-        const start_idx = snapshots.nominal_type_args.len();
         const str_content = snapshot.SnapshotContent{ .structure = .{ .str = {} } };
         const str_idx = snapshots.contents.append(test_allocator, str_content);
-        _ = snapshots.nominal_type_args.append(test_allocator, str_idx);
+        const args_range = snapshots.nominal_type_args.appendSlice(test_allocator, &.{ nominal_type_backing_idx, str_idx });
 
         // Create a nominal type with args from a different module
         const generic_nominal = snapshot.SnapshotNominalType{
             .ident = types_mod.TypeIdent{ .ident_idx = type_name_ident },
-            .args = .{ .start = @enumFromInt(@as(u32, @intCast(start_idx))), .end = @enumFromInt(@as(u32, @intCast(start_idx + 1))) },
+            .vars = args_range,
             .origin_module = other_module_ident,
         };
 
@@ -122,9 +125,13 @@ test "nominal type origin - works with no context" {
     var snapshots = snapshot.Store.initCapacity(test_allocator, 16);
     defer snapshots.deinit();
 
+    const nominal_type_backing = snapshot.SnapshotContent{ .structure = .str };
+    const nominal_type_backing_idx = snapshots.contents.append(test_allocator, nominal_type_backing);
+    const vars_range = snapshots.nominal_type_args.appendSlice(test_allocator, &.{nominal_type_backing_idx});
+
     const nominal_type = snapshot.SnapshotNominalType{
         .ident = types_mod.TypeIdent{ .ident_idx = type_name_ident },
-        .args = .{ .start = @enumFromInt(0), .end = @enumFromInt(0) },
+        .vars = vars_range,
         .origin_module = module_ident,
     };
 

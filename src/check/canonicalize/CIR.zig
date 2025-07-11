@@ -1493,18 +1493,16 @@ pub fn getNodeRegionInfo(ir: *const CIR, idx: anytype) base.RegionInfo {
 /// Helper function to convert type information from the Canonical IR to an SExpr node
 /// in S-expression format for snapshot testing. Implements the definition-focused
 /// format showing final types for defs, expressions, and builtins.
-pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: ?[]const u8) void {
+pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: []const u8) std.mem.Allocator.Error!void {
     // Set temporary source for region info calculation during SExpr generation
-    ir.temp_source_for_sexpr = source orelse ir.env.source;
+    ir.temp_source_for_sexpr = source;
     defer ir.temp_source_for_sexpr = null;
 
     const gpa = ir.env.gpa;
 
     // Create TypeWriter for converting types to strings
-    var type_string_buf = std.ArrayList(u8).init(gpa);
-    defer type_string_buf.deinit();
-
-    var type_writer = types.writers.TypeWriter.init(type_string_buf.writer(), ir.env);
+    var type_writer = try types.writers.TypeWriter.init(gpa, ir.env);
+    defer type_writer.deinit();
 
     if (maybe_expr_idx) |expr_idx| {
         const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
@@ -1520,8 +1518,8 @@ pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTre
             const unknown_attrs = tree.beginNode();
             tree.endNode(unknown_begin, unknown_attrs);
         } else {
-            if (type_writer.writeVar(expr_var)) {
-                tree.pushStringPair("type", type_string_buf.items);
+            if (type_writer.write(expr_var)) {
+                tree.pushStringPair("type", type_writer.get());
             } else |err| {
                 exitOnOom(err);
             }
@@ -1557,12 +1555,11 @@ pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTre
                     ir.appendRegionInfoToSExprTreeFromRegion(tree, pattern_region);
 
                     // Get the type variable for this definition
-                    const def_var = ir.idxToTypeVar(&ir.env.types, def_idx) catch |err| exitOnOom(err);
+                    const def_var = try ir.idxToTypeVar(&ir.env.types, def_idx);
 
                     // Clear the buffer and write the type
-                    type_string_buf.clearRetainingCapacity();
-                    type_writer.writeVar(def_var) catch |err| exitOnOom(err);
-                    tree.pushStringPair("type", type_string_buf.items);
+                    try type_writer.write(def_var);
+                    tree.pushStringPair("type", type_writer.get());
 
                     const patt_attrs = tree.beginNode();
                     tree.endNode(patt_begin, patt_attrs);
@@ -1620,9 +1617,8 @@ pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTre
                         ir.appendRegionInfoToSExprTreeFromRegion(tree, alias_region);
 
                         // Clear the buffer and write the type
-                        type_string_buf.clearRetainingCapacity();
-                        type_writer.writeVar(stmt_var) catch |err| exitOnOom(err);
-                        tree.pushStringPair("type", type_string_buf.items);
+                        try type_writer.write(stmt_var);
+                        tree.pushStringPair("type", type_writer.get());
                         const stmt_node_attrs = tree.beginNode();
 
                         const header = ir.store.getTypeHeader(alias.header);
@@ -1639,9 +1635,8 @@ pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTre
                         ir.appendRegionInfoToSExprTreeFromRegion(tree, nominal_region);
 
                         // Clear the buffer and write the type
-                        type_string_buf.clearRetainingCapacity();
-                        type_writer.writeVar(stmt_var) catch |err| exitOnOom(err);
-                        tree.pushStringPair("type", type_string_buf.items);
+                        try type_writer.write(stmt_var);
+                        tree.pushStringPair("type", type_writer.get());
 
                         const stmt_node_attrs = tree.beginNode();
 
@@ -1686,9 +1681,8 @@ pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTre
                 tree.endNode(unknown_begin, unknown_attrs);
             } else {
                 // Clear the buffer and write the type
-                type_string_buf.clearRetainingCapacity();
-                type_writer.writeVar(expr_var) catch |err| exitOnOom(err);
-                tree.pushStringPair("type", type_string_buf.items);
+                try type_writer.write(expr_var);
+                tree.pushStringPair("type", type_writer.get());
             }
 
             const expr_node_attrs = tree.beginNode();

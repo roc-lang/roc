@@ -1534,7 +1534,7 @@ expect {
 							(field (name "baz")
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(field (name "qux")
-								(e-tag @96.44-96.53 (name "Ok")
+								(e-tag @96.44-96.46 (name "Ok")
 									(args
 										(e-runtime-error (tag "ident_not_in_scope")))))
 							(field (name "ned")
@@ -1607,7 +1607,7 @@ expect {
 									(e-dot-access @105.55-105.76 (field "unknown")
 										(receiver
 											(e-runtime-error (tag "not_implemented")))))))))
-				(e-tag @106.2-110.3 (name "Stdo!")
+				(e-tag @106.2-106.7 (name "Stdo!")
 					(args
 						(e-string @107.3-109.6
 							(e-literal @107.4-107.6 (string "Ho"))
@@ -1693,8 +1693,8 @@ expect {
 	(defs
 		(patt @35.1-35.4 (type "Bool -> Num(*)"))
 		(patt @38.1-38.4 (type "[Rum]* -> Error"))
-		(patt @49.1-49.3 (type "Error -> Error"))
-		(patt @75.1-75.3 (type "* -> [Stdo!]*"))
+		(patt @49.1-49.3 (type "[Blue]* -> Error"))
+		(patt @75.1-75.3 (type "* -> [Stdo!(Str)]*"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
 		(alias @13.1-13.33 (type "Map(a, b)")
@@ -1725,7 +1725,7 @@ expect {
 	(expressions
 		(expr @35.7-37.4 (type "Bool -> Num(*)"))
 		(expr @38.7-47.2 (type "[Rum]* -> Error"))
-		(expr @49.6-69.3 (type "Error -> Error"))
-		(expr @75.5-111.2 (type "* -> [Stdo!]*"))
+		(expr @49.6-69.3 (type "[Blue]* -> Error"))
+		(expr @75.5-111.2 (type "* -> [Stdo!(Str)]*"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

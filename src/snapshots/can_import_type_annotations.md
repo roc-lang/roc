@@ -485,7 +485,7 @@ combineResults = |result1, result2|
 									(pattern (degenerate false)
 										(p-applied-tag @18.9-18.17)))
 								(value
-									(e-tag @18.21-18.29 (name "Err")
+									(e-tag @18.21-18.24 (name "Err")
 										(args
 											(e-lookup-local @18.25-18.28
 												(p-assign @18.13-18.16 (ident "err"))))))))))))
@@ -561,7 +561,7 @@ combineResults = |result1, result2|
 													(pattern (degenerate false)
 														(p-applied-tag @35.17-35.27)))
 												(value
-													(e-tag @35.31-35.51 (name "Ok")
+													(e-tag @35.31-35.33 (name "Ok")
 														(args
 															(e-tuple @35.34-35.50
 																(elems
@@ -574,7 +574,7 @@ combineResults = |result1, result2|
 													(pattern (degenerate false)
 														(p-applied-tag @36.17-36.25)))
 												(value
-													(e-tag @36.29-36.37 (name "Err")
+													(e-tag @36.29-36.32 (name "Err")
 														(args
 															(e-lookup-local @36.33-36.36
 																(p-assign @36.21-36.24 (ident "err"))))))))))))
@@ -583,7 +583,7 @@ combineResults = |result1, result2|
 								(pattern (degenerate false)
 									(p-applied-tag @38.9-38.17)))
 							(value
-								(e-tag @38.21-38.29 (name "Err")
+								(e-tag @38.21-38.24 (name "Err")
 									(args
 										(e-lookup-local @38.25-38.28
 											(p-assign @38.13-38.16 (ident "err")))))))))))

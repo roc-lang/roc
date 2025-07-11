@@ -27,11 +27,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.9 (name "Some")
+(e-tag @1.1-1.5 (name "Some")
 	(args
 		(e-int @1.6-1.8 (value "42"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.9 (type "[Some]*"))
+(expr @1.1-1.5 (type "[Some(Num(*))]*"))
 ~~~

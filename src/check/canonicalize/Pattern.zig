@@ -60,9 +60,8 @@ pub const Pattern = union(enum) {
     /// }
     /// ```
     applied_tag: struct {
-        ext_var: TypeVar,
-        tag_name: Ident.Idx,
-        arguments: Pattern.Span,
+        name: Ident.Idx,
+        args: Pattern.Span,
     },
     /// Pattern that destructures a record, extracting specific fields including nested records.
     ///

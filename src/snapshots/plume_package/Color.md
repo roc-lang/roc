@@ -105,6 +105,7 @@ INVALID STATEMENT - Color.md:1:1:1:1
 UNDEFINED VARIABLE - Color.md:68:14:68:27
 TYPE MISMATCH - Color.md:20:20:20:22
 TYPE MISMATCH - Color.md:26:7:26:10
+TYPE MISMATCH - Color.md:48:10:48:15
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`
@@ -437,6 +438,20 @@ It is of type:
 
 But you are trying to use it as:
     _{ to_utf8: List(Num(*)) }_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Color.md:48:10:48:15:**
+```roc
+to_str : Color -> Str
+```
+         ^^^^^
+
+It is of type:
+    _Color_
+
+But you are trying to use it as:
+    _[Named(Str), RGB(*, *, *), RGBA(*, *, *, *), Hex(Str)]*_
 
 # TOKENS
 ~~~zig
@@ -963,14 +978,15 @@ is_named_color = |str| {
 				(p-assign @18.8-18.9 (ident "r"))
 				(p-assign @18.11-18.12 (ident "g"))
 				(p-assign @18.14-18.15 (ident "b")))
-			(e-tag @18.17-18.35 (name "RGB")
-				(args
-					(e-lookup-local @18.27-18.28
-						(p-assign @18.8-18.9 (ident "r")))
-					(e-lookup-local @18.30-18.31
-						(p-assign @18.11-18.12 (ident "g")))
-					(e-lookup-local @18.33-18.34
-						(p-assign @18.14-18.15 (ident "b"))))))
+			(e-nominal @18.17-18.22 (nominal "Color")
+				(e-tag @18.17-18.26 (name "RGB")
+					(args
+						(e-lookup-local @18.27-18.28
+							(p-assign @18.8-18.9 (ident "r")))
+						(e-lookup-local @18.30-18.31
+							(p-assign @18.11-18.12 (ident "g")))
+						(e-lookup-local @18.33-18.34
+							(p-assign @18.14-18.15 (ident "b")))))))
 		(annotation @18.1-18.4
 			(declared-type
 				(ty-fn @17.7-17.26 (effectful false)
@@ -996,16 +1012,17 @@ is_named_color = |str| {
 									(p-assign @21.18-21.19 (ident "a"))))
 							(args))
 						(e-dec-small @22.29-22.34 (numerator "2550") (denominator-power-of-ten "1") (value "255"))))
-				(e-tag @23.5-23.33 (name "RGBA")
-					(args
-						(e-lookup-local @23.16-23.17
-							(p-assign @21.9-21.10 (ident "r")))
-						(e-lookup-local @23.19-23.20
-							(p-assign @21.12-21.13 (ident "g")))
-						(e-lookup-local @23.22-23.23
-							(p-assign @21.15-21.16 (ident "b")))
-						(e-lookup-local @23.25-23.32
-							(p-assign @22.5-22.12 (ident "rounded")))))))
+				(e-nominal @23.5-23.10 (nominal "Color")
+					(e-tag @23.5-23.15 (name "RGBA")
+						(args
+							(e-lookup-local @23.16-23.17
+								(p-assign @21.9-21.10 (ident "r")))
+							(e-lookup-local @23.19-23.20
+								(p-assign @21.12-21.13 (ident "g")))
+							(e-lookup-local @23.22-23.23
+								(p-assign @21.15-21.16 (ident "b")))
+							(e-lookup-local @23.25-23.32
+								(p-assign @22.5-22.12 (ident "rounded"))))))))
 		(annotation @21.1-21.5
 			(declared-type
 				(ty-fn @20.8-20.31 (effectful false)
@@ -1123,16 +1140,17 @@ is_named_color = |str| {
 												(if-branch
 													(e-lookup-local @42.16-42.24
 														(p-assign @34.13-34.21 (ident "is_valid")))
-													(e-tag @42.25-42.43 (name "Ok")
+													(e-tag @42.25-42.27 (name "Ok")
 														(args
-															(e-tag @42.28-42.42 (name "Hex")
-																(args
-																	(e-lookup-local @42.38-42.41
-																		(p-assign @27.8-27.11 (ident "str")))))))))
+															(e-nominal @42.28-42.33 (nominal "Color")
+																(e-tag @42.28-42.37 (name "Hex")
+																	(args
+																		(e-lookup-local @42.38-42.41
+																			(p-assign @27.8-27.11 (ident "str"))))))))))
 											(if-else
-												(e-tag @42.49-42.125 (name "Err")
+												(e-tag @42.49-42.52 (name "Err")
 													(args
-														(e-tag @42.53-42.124 (name "InvalidHex")
+														(e-tag @42.53-42.63 (name "InvalidHex")
 															(args
 																(e-string @42.64-42.123
 																	(e-literal @42.65-42.116 (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
@@ -1144,9 +1162,9 @@ is_named_color = |str| {
 									(pattern (degenerate false)
 										(p-underscore @44.9-44.10)))
 								(value
-									(e-tag @44.14-44.100 (name "Err")
+									(e-tag @44.14-44.17 (name "Err")
 										(args
-											(e-tag @44.18-44.99 (name "InvalidHex")
+											(e-tag @44.18-44.28 (name "InvalidHex")
 												(args
 													(e-string @44.29-44.98
 														(e-literal @44.30-44.91 (string "Expected Hex must start with # and be 7 characters long, got "))
@@ -1255,9 +1273,10 @@ is_named_color = |str| {
 				(args
 					(p-assign @61.10-61.13 (ident "str")))
 				(e-runtime-error (tag "lambda_body_not_canonicalized")))
-			(e-tag @63.12-63.28 (name "Named")
-				(args
-					(e-runtime-error (tag "ident_not_in_scope")))))
+			(e-nominal @63.12-63.17 (nominal "Color")
+				(e-tag @63.12-63.23 (name "Named")
+					(args
+						(e-runtime-error (tag "ident_not_in_scope"))))))
 		(annotation @61.1-61.6
 			(declared-type
 				(ty-fn @60.9-60.50 (effectful false)
@@ -1347,7 +1366,7 @@ is_named_color = |str| {
 				(args
 					(e-lookup-local @58.30-58.36
 						(p-assign @49.1-49.7 (ident "to_str")))))
-			(e-tag @58.41-58.54 (name "Ok")
+			(e-tag @58.41-58.43 (name "Ok")
 				(args
 					(e-string @58.44-58.53
 						(e-literal @58.45-58.52 (string "#ff00ff"))))))))
@@ -1356,20 +1375,20 @@ is_named_color = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.4 (type "U8, U8, U8 -> [RGB]*"))
-		(patt @21.1-21.5 (type "U8, U8, U8, Error -> [RGBA]*"))
+		(patt @18.1-18.4 (type "Error, Error, Error -> Error"))
+		(patt @21.1-21.5 (type "Error, Error, Error, Error -> Error"))
 		(patt @27.1-27.4 (type "Error -> Error"))
-		(patt @49.1-49.7 (type "[Named, RGB, RGBA, Hex]* -> Str"))
+		(patt @49.1-49.7 (type "Error -> Error"))
 		(patt @61.1-61.6 (type "Error"))
 		(patt @67.1-67.15 (type "* -> *")))
 	(type_decls
-		(nominal @10.1-15.2 (type "Color")
+		(nominal @10.1-15.2 (type "Error")
 			(ty-header @10.1-10.6 (name "Color"))))
 	(expressions
-		(expr @18.7-18.35 (type "U8, U8, U8 -> [RGB]*"))
-		(expr @21.8-24.2 (type "U8, U8, U8, Error -> [RGBA]*"))
+		(expr @18.7-18.35 (type "Error, Error, Error -> Error"))
+		(expr @21.8-24.2 (type "Error, Error, Error, Error -> Error"))
 		(expr @27.7-46.2 (type "Error -> Error"))
-		(expr @49.10-54.2 (type "[Named, RGB, RGBA, Hex]* -> Str"))
+		(expr @49.10-54.2 (type "Error -> Error"))
 		(expr @61.9-63.29 (type "Error"))
 		(expr @67.18-71.2 (type "* -> *"))))
 ~~~

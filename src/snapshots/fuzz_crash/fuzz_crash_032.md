@@ -232,7 +232,7 @@ olor = |color| {
 									(pattern (degenerate false)
 										(p-applied-tag @8.19-8.22)))
 								(value
-									(e-nominal @8.26-8.45 (nominal "<malformed>")
+									(e-nominal @8.26-8.37 (nominal "<malformed>")
 										(e-tag @8.26-8.45 (name "Pending")))))
 							(branch
 								(patterns
@@ -247,7 +247,7 @@ olor = |color| {
 									(pattern (degenerate false)
 										(p-applied-tag @10.3-10.9)))
 								(value
-									(e-nominal @10.13-10.32 (nominal "<malformed>")
+									(e-nominal @10.13-10.24 (nominal "<malformed>")
 										(e-tag @10.13-10.32 (name "Pending"))))))))))
 		(annotation @6.1-6.5
 			(declared-type

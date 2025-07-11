@@ -162,7 +162,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(e-int @3.22-3.24 (value "92"))
 					(e-int @3.26-3.28 (value "78")))))
 		(field (name "status")
-			(e-tag @4.13-4.44 (name "Active")
+			(e-tag @4.13-4.19 (name "Active")
 				(args
 					(e-record @4.20-4.43
 						(fields
@@ -175,12 +175,12 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(field (name "theme")
 						(e-tag @5.27-5.31 (name "Dark")))
 					(field (name "notifications")
-						(e-tag @5.48-5.74 (name "Email")
+						(e-tag @5.48-5.53 (name "Email")
 							(args
 								(e-string @5.54-5.73
 									(e-literal @5.55-5.72 (string "alice@example.com")))))))))
 		(field (name "metadata")
-			(e-tag @6.15-9.7 (name "Ok")
+			(e-tag @6.15-6.17 (name "Ok")
 				(args
 					(e-record @6.18-9.6
 						(fields
@@ -213,17 +213,17 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(field (name "items")
 						(e-list @12.16-12.52
 							(elems
-								(e-tag @12.17-12.30 (name "Some")
+								(e-tag @12.17-12.21 (name "Some")
 									(args
 										(e-string @12.22-12.29
 											(e-literal @12.23-12.28 (string "first")))))
 								(e-tag @12.32-12.36 (name "None"))
-								(e-tag @12.38-12.51 (name "Some")
+								(e-tag @12.38-12.42 (name "Some")
 									(args
 										(e-string @12.43-12.50
 											(e-literal @12.44-12.49 (string "third"))))))))
 					(field (name "result")
-						(e-tag @13.17-13.70 (name "Success")
+						(e-tag @13.17-13.24 (name "Success")
 							(args
 								(e-record @13.25-13.69
 									(fields
@@ -239,5 +239,5 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-15.2 (type "{ name: Str, scores: List(Num(*)), status: [Active]*, preferences: { theme: [Dark]*, notifications: [Email]* }, metadata: [Ok]*, callback: * -> *, nested: { items: List([Some]), result: [Success]* } }"))
+(expr @1.1-15.2 (type "{ name: Str, scores: List(Num(*)), status: [Active({ since: Str })]*, preferences: { theme: [Dark]*, notifications: [Email(Str)]* }, metadata: [Ok({ tags: List(Str), permissions: List([Read]*) })]*, callback: * -> *, nested: { items: List([Some(Str)]), result: [Success({ data: List(Num(*)), timestamp: Str })]* } }"))
 ~~~

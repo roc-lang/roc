@@ -88,14 +88,14 @@ yellow = Yellow
 (can-ir
 	(d-let
 		(p-assign @6.1-6.5 (ident "blue"))
-		(e-nominal @6.8-6.18 (nominal "Color")
+		(e-nominal @6.8-6.13 (nominal "Color")
 			(e-tag @6.8-6.18 (name "Blue")))
 		(annotation @6.1-6.5
 			(declared-type
 				(ty @5.8-5.13 (name "Color")))))
 	(d-let
 		(p-assign @9.1-9.7 (ident "yellow"))
-		(e-nominal @9.10-9.22 (nominal "Color")
+		(e-nominal @9.10-9.15 (nominal "Color")
 			(e-tag @9.10-9.22 (name "Yellow")))
 		(annotation @9.1-9.7
 			(declared-type
@@ -111,12 +111,12 @@ yellow = Yellow
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "Color"))
+		(patt @6.1-6.5 (type "Error"))
 		(patt @9.1-9.7 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.28 (type "Color")
+		(nominal @3.1-3.28 (type "Error")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions
-		(expr @6.8-6.18 (type "Color"))
-		(expr @9.10-9.22 (type "Error"))))
+		(expr @6.8-6.13 (type "Error"))
+		(expr @9.10-9.15 (type "Error"))))
 ~~~

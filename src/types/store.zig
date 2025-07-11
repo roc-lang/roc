@@ -90,6 +90,8 @@ pub const Store = struct {
     descs: DescStore,
 
     /// Storage for compound type parts
+    /// TODO: Consolidate all var lists into 1
+    vars: VarSafeList,
     tuple_elems: VarSafeList,
     func_args: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
@@ -112,6 +114,7 @@ pub const Store = struct {
             .slots = SlotStore.init(gpa, root_capacity),
 
             // everything else
+            .vars = VarSafeList.initCapacity(gpa, child_capacity),
             .tuple_elems = VarSafeList.initCapacity(gpa, child_capacity),
             .func_args = VarSafeList.initCapacity(gpa, child_capacity),
             .record_fields = RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
@@ -133,6 +136,7 @@ pub const Store = struct {
         self.slots.deinit(self.gpa);
 
         // everything else
+        self.vars.deinit(self.gpa);
         self.tuple_elems.deinit(self.gpa);
         self.func_args.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
@@ -269,6 +273,49 @@ pub const Store = struct {
     pub fn mkTag(self: *Self, name: base.Ident.Idx, args: []const Var) Tag {
         const args_range = self.appendTagArgs(args);
         return Tag{ .name = name, .args = args_range };
+    }
+
+    /// Make alias data type
+    /// Does not insert content into the types store
+    pub fn mkAlias(self: *Self, ident: types.TypeIdent, backing_var: Var, args: []const Var) Content {
+        const backing_idx = self.appendVar(backing_var);
+        var span = self.appendVars(args);
+
+        // Adjust args span to include backing  var
+        span.start = backing_idx;
+        span.count = span.count + 1;
+
+        return Content{
+            .alias = types.Alias{
+                .ident = ident,
+                .vars = .{ .nonempty = span },
+            },
+        };
+    }
+
+    /// Make nominal data type
+    /// Does not insert content into the types store
+    pub fn mkNominal(
+        self: *Self,
+        ident: types.TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        origin_module: base.Ident.Idx,
+    ) Content {
+        const backing_idx = self.appendVar(backing_var);
+        var span = self.appendVars(args);
+
+        // Adjust args span to include backing  var
+        span.start = backing_idx;
+        span.count = span.count + 1;
+
+        return Content{ .structure = types.FlatType{
+            .nominal_type = types.NominalType{
+                .ident = ident,
+                .vars = .{ .nonempty = span },
+                .origin_module = origin_module,
+            },
+        } };
     }
 
     // Make a function data type with unbound effectfulness
@@ -418,6 +465,16 @@ pub const Store = struct {
 
     // sub list setters //
 
+    /// Append a var to the backing list, returning the idx
+    pub fn appendVar(self: *Self, v: Var) VarSafeList.Idx {
+        return self.vars.append(self.gpa, v);
+    }
+
+    /// Append a var to the backing list, returning the idx
+    pub fn appendVars(self: *Self, s: []const Var) VarSafeList.Span {
+        return self.vars.appendSliceSpan(self.gpa, s);
+    }
+
     /// Append a tuple elem to the backing list, returning the idx
     pub fn appendTupleElem(self: *Self, v: Var) VarSafeList.Idx {
         return self.tuple_elems.append(self.gpa, v);
@@ -483,6 +540,58 @@ pub const Store = struct {
     /// Given a range, get a slice of tag args from the backing list
     pub fn getTagArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
         return self.tag_args.rangeToSlice(range);
+    }
+
+    // helpers - alias types //
+
+    // Alias types contain a span of variables. In this span, the 1st element
+    // is the backing variable, and the remainder are the arguments
+
+    /// Get the backing var for this alias type
+    pub fn getAliasBackingVar(self: *const Self, alias: types.Alias) Var {
+        std.debug.assert(alias.vars.nonempty.count > 0);
+        return self.vars.get(alias.vars.nonempty.start).*;
+    }
+
+    /// Get the arg vars for this alias type
+    pub fn sliceAliasArgs(self: *const Self, alias: types.Alias) []Var {
+        std.debug.assert(alias.vars.nonempty.count > 0);
+        const slice = self.vars.sliceSpan(alias.vars.nonempty);
+        return slice[1..];
+    }
+
+    /// Get the an iterator arg vars for this alias type
+    pub fn iterAliasArgs(self: *const Self, alias: types.Alias) VarSafeList.Iterator {
+        std.debug.assert(alias.vars.nonempty.count > 0);
+        var span = alias.vars.nonempty;
+        span.dropFirstElem();
+        return self.vars.iterSpan(span);
+    }
+
+    // helpers - nominal types //
+
+    // Nominal types contain a span of variables. In this span, the 1st element
+    // is the backing variable, and the remainder are the arguments
+
+    /// Get the backing var for this nominal type
+    pub fn getNominalBackingVar(self: *const Self, nominal: types.NominalType) Var {
+        std.debug.assert(nominal.vars.nonempty.count > 0);
+        return self.vars.get(nominal.vars.nonempty.start).*;
+    }
+
+    /// Get the arg vars for this nominal type
+    pub fn sliceNominalArgs(self: *const Self, nominal: types.NominalType) []Var {
+        std.debug.assert(nominal.vars.nonempty.count > 0);
+        const slice = self.vars.sliceSpan(nominal.vars.nonempty);
+        return slice[1..];
+    }
+
+    /// Get the an iterator arg vars for this nominal type
+    pub fn iterNominalArgs(self: *const Self, nominal: types.NominalType) VarSafeList.Iterator {
+        std.debug.assert(nominal.vars.nonempty.count > 0);
+        var span = nominal.vars.nonempty;
+        span.dropFirstElem();
+        return self.vars.iterSpan(span);
     }
 
     // mark & rank //
@@ -659,6 +768,8 @@ pub const Store = struct {
         return @enumFromInt(@intFromEnum(slot_idx));
     }
 
+    // serialization //
+
     /// Calculate the size needed to serialize this Store
     pub fn serializedSize(self: *const Self) usize {
         const slots_size = self.slots.serializedSize();
@@ -668,22 +779,35 @@ pub const Store = struct {
         const record_fields_size = self.record_fields.serializedSize();
         const tags_size = self.tags.serializedSize();
         const tag_args_size = self.tag_args.serializedSize();
+        const vars_size = self.vars.serializedSize();
 
         // Add alignment padding for each component
-        var total_size: usize = @sizeOf(u32) * 7; // size headers
+        var total_size: usize = @sizeOf(u32) * 8; // size headers
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+
         total_size += slots_size;
+        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+
         total_size += descs_size;
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+
         total_size += tuple_elems_size;
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+
         total_size += func_args_size;
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+
         total_size += record_fields_size;
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+
         total_size += tags_size;
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+
         total_size += tag_args_size;
+        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+
+        total_size += vars_size;
+        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
 
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
         return std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
@@ -726,6 +850,10 @@ pub const Store = struct {
         @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(tag_args_size);
         offset += @sizeOf(u32);
 
+        const vars_size = self.vars.serializedSize();
+        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(vars_size);
+        offset += @sizeOf(u32);
+
         // Serialize data
         offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
         const slots_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + slots_size]));
@@ -760,6 +888,11 @@ pub const Store = struct {
         const tag_args_slice = try self.tag_args.serializeInto(tag_args_buffer);
         offset += tag_args_slice.len;
 
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const vars_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + vars_size]));
+        const vars_slice = try self.vars.serializeInto(vars_buffer);
+        offset += vars_slice.len;
+
         // Zero out any padding bytes
         if (offset < size) {
             @memset(buffer[offset..size], 0);
@@ -770,7 +903,7 @@ pub const Store = struct {
 
     /// Deserialize a Store from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
-        if (buffer.len < @sizeOf(u32) * 7) return error.BufferTooSmall;
+        if (buffer.len < @sizeOf(u32) * 8) return error.BufferTooSmall;
 
         var offset: usize = 0;
 
@@ -794,6 +927,9 @@ pub const Store = struct {
         offset += @sizeOf(u32);
 
         const tag_args_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
+        offset += @sizeOf(u32);
+
+        const vars_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
         offset += @sizeOf(u32);
 
         // Deserialize data
@@ -829,6 +965,12 @@ pub const Store = struct {
         offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
         const tag_args_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + tag_args_size]));
         const tag_args = try VarSafeList.deserializeFrom(tag_args_buffer, allocator);
+        offset += tag_args_size;
+
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const vars_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + vars_size]));
+        const vars = try VarSafeList.deserializeFrom(vars_buffer, allocator);
+        offset += vars_size;
 
         return Self{
             .gpa = allocator,
@@ -839,6 +981,7 @@ pub const Store = struct {
             .record_fields = record_fields,
             .tags = tags,
             .tag_args = tag_args,
+            .vars = vars,
         };
     }
 };
