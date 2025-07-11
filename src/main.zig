@@ -107,31 +107,27 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdin = std.io.getStdIn();
     const stdout = std.io.getStdOut();
     if (args.stdin) {
-        const contents = try stdin.readToEndAlloc(gpa, Filesystem.max_file_size);
-        defer gpa.free(contents);
-        fmt.formatToWriter(gpa, contents, stdout.writer().any()) catch {
-            std.process.exit(1);
-        };
-    } else {
-        var timer = try std.time.Timer.start();
-        var count = fmt.SuccessFailCount{ .success = 0, .failure = 0 };
-        for (args.paths) |path| {
-            const inner_count = try fmt.formatPath(gpa, arena, std.fs.cwd(), path);
-            count.success += inner_count.success;
-            count.failure += inner_count.failure;
-        }
-        const elapsed = timer.read();
-        try stdout.writer().print("Successfully formatted {} files\n", .{count.success});
-        if (count.failure > 0) {
-            try stdout.writer().print("Failed to format {} files.\n", .{count.failure});
-        }
-        try stdout.writer().print("Took ", .{});
-        try formatElapsedTime(stdout.writer(), elapsed);
-        try stdout.writer().print(".\n", .{});
+        fmt.formatStdin(gpa) catch std.process.exit(1);
+        return;
     }
+
+    var timer = try std.time.Timer.start();
+    var count = fmt.SuccessFailCount{ .success = 0, .failure = 0 };
+    for (args.paths) |path| {
+        const inner_count = try fmt.formatPath(gpa, arena, std.fs.cwd(), path);
+        count.success += inner_count.success;
+        count.failure += inner_count.failure;
+    }
+    const elapsed = timer.read();
+    try stdout.writer().print("Successfully formatted {} files\n", .{count.success});
+    if (count.failure > 0) {
+        try stdout.writer().print("Failed to format {} files.\n", .{count.failure});
+    }
+    try stdout.writer().print("Took ", .{});
+    try formatElapsedTime(stdout.writer(), elapsed);
+    try stdout.writer().print(".\n", .{});
 }
 
 fn rocVersion(gpa: Allocator) !void {

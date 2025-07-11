@@ -146,27 +146,43 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     };
     defer gpa.free(contents);
 
-    const output_file = try base_dir.createFile(path, .{});
-    defer output_file.close();
-
-    try formatToWriter(gpa, contents, output_file.writer().any());
-}
-
-pub fn formatToWriter(gpa: std.mem.Allocator, buffer: []u8, writer: std.io.AnyWriter) !void {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var parse_ast = parse.parse(&module_env, buffer);
+    var parse_ast = parse.parse(&module_env, contents);
     defer parse_ast.deinit(gpa);
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
         parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, buffer, parse_ast);
+        try printParseErrors(gpa, contents, parse_ast);
         return error.ParsingFailed;
     }
 
-    try formatAst(parse_ast, writer);
+    const output_file = try base_dir.createFile(path, .{});
+    defer output_file.close();
+
+    try formatAst(parse_ast, output_file.writer().any());
+}
+
+pub fn formatStdin(gpa: std.mem.Allocator) !void {
+    const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
+    defer gpa.free(contents);
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var parse_ast = parse.parse(&module_env, contents);
+    defer parse_ast.deinit(gpa);
+
+    // If there are any parsing problems, print them to stderr
+    if (parse_ast.parse_diagnostics.items.len > 0) {
+        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        try printParseErrors(gpa, contents, parse_ast);
+        return error.ParsingFailed;
+    }
+
+    try formatAst(parse_ast, std.io.getStdOut().writer().any());
 }
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
