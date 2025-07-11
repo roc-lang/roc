@@ -115,6 +115,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .OverClosedBrace => "OVER CLOSED BRACE",
         .MismatchedBrace => "MISMATCHED BRACE",
         .NonPrintableUnicodeInStrLiteral => "NON-PRINTABLE UNICODE IN STRING LITERAL",
+        .InvalidUtf8InSource => "INVALID UTF-8",
     };
 
     const body = switch (diagnostic.tag) {
@@ -129,6 +130,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .OverClosedBrace => "There are too many closing braces here.",
         .MismatchedBrace => "This brace does not match the corresponding opening brace.",
         .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string literals.",
+        .InvalidUtf8InSource => "Invalid UTF-8 encoding found in source code. Roc source files must be valid UTF-8.",
     };
 
     var report = reporting.Report.init(allocator, title, .runtime_error);
