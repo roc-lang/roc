@@ -83,7 +83,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "{ to_b: b } -> b")))
+		(patt @4.1-4.8 (type "{ to_b: * } -> *")))
 	(expressions
-		(expr @4.11-4.23 (type "{ to_b: b } -> b"))))
+		(expr @4.11-4.23 (type "{ to_b: * } -> *"))))
 ~~~

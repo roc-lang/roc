@@ -2119,7 +2119,7 @@ main! = |_| { # Yeah Ie
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error")))
 	(type_decls
-		(alias @15.1-15.41 (type "Map(a, b)")
+		(alias @15.1-15.41 (type "Map(*, *)")
 			(ty-header @15.1-15.10 (name "Map")
 				(ty-args
 					(ty-var @15.5-15.6 (name "a"))

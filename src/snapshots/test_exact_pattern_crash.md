@@ -329,7 +329,7 @@ main = {
 		(patt @12.1-12.9 (type "Error"))
 		(patt @17.1-17.5 (type "*")))
 	(type_decls
-		(alias @4.1-4.20 (type "Pair(a, b)")
+		(alias @4.1-4.20 (type "Pair(*, *)")
 			(ty-header @4.1-4.11 (name "Pair")
 				(ty-args
 					(ty-var @4.6-4.7 (name "a"))

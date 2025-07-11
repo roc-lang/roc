@@ -62,7 +62,8 @@ const ImportCache = std.HashMapUnmanaged(ImportCacheKey, Var, struct {
 gpa: std.mem.Allocator,
 // not owned
 types: *types_mod.Store,
-can_ir: *CIR,
+cir: *const CIR,
+regions: *Region.List,
 other_modules: []const *CIR,
 // owned
 snapshots: snapshot.Store,
@@ -75,18 +76,20 @@ instantiate_subs: instantiate.VarSubstitution,
 import_cache: ImportCache,
 
 /// Init type solver
-/// Does *not* own types_store or can_ir, but *does* own other fields
+/// Does *not* own types_store or cir, but *does* own other fields
 pub fn init(
     gpa: std.mem.Allocator,
     types: *types_mod.Store,
-    can_ir: *CIR,
+    cir: *const CIR,
     other_modules: []const *CIR,
+    regions: *Region.List,
 ) std.mem.Allocator.Error!Self {
     return .{
         .gpa = gpa,
         .types = types,
-        .can_ir = can_ir,
+        .cir = cir,
         .other_modules = other_modules,
+        .regions = regions,
         .snapshots = snapshot.Store.initCapacity(gpa, 512),
         .problems = problem.Store.initCapacity(gpa, 64),
         .unify_scratch = unifier.Scratch.init(gpa),
@@ -106,13 +109,29 @@ pub fn deinit(self: *Self) void {
     self.import_cache.deinit(self.gpa);
 }
 
+/// Assert that type vars and regions in sync
+pub inline fn debugAssertArraysInSync(self: *const Self) void {
+    if (std.debug.runtime_safety) {
+        const region_nodes = self.regions.len();
+        const type_nodes = self.types.len();
+        if (!(region_nodes == type_nodes)) {
+            std.debug.panic(
+                "Arrays out of sync:\n type_nodes={}\n  region_nodes={}\n ",
+                .{ type_nodes, region_nodes },
+            );
+        }
+    }
+}
+
+// unify //
+
 /// Unify two types
 pub fn unify(self: *Self, a: Var, b: Var) unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     return unifier.unify(
-        self.can_ir.env,
+        self.cir.env,
         self.types,
         &self.problems,
         &self.snapshots,
@@ -123,39 +142,103 @@ pub fn unify(self: *Self, a: Var, b: Var) unifier.Result {
     );
 }
 
-/// Instantiate a variable, writing su
-pub fn instantiateVar(self: *Self, var_to_instantiate: Var, parent_node_idx: CIR.Node.Idx) std.mem.Allocator.Error!Var {
-    self.instantiate_subs.clearRetainingCapacity();
-    const instantiated_var = try instantiate.instantiateVar(self.types, var_to_instantiate, &self.instantiate_subs);
+// instantiate //
 
-    // If we had to insert any new type variables, ensure that we
-    // have corresponding CIR nodes for them. This is essential for
-    // error reporting
+const InstantiateRegionBehavior = union(enum) {
+    explicit: Region,
+    use_root_instantiated,
+    use_last_var,
+};
+
+/// Instantiate a variable, writing su
+fn instantiateVar(self: *Self, var_to_instantiate: Var, region_behavior: InstantiateRegionBehavior) std.mem.Allocator.Error!Var {
+    self.instantiate_subs.clearRetainingCapacity();
+    const instantiated_var = try instantiate.instantiateVar(
+        self.types,
+        var_to_instantiate,
+        &self.instantiate_subs,
+    );
+
+    const root_instantiated_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
+
+    // If we had to insert any new type variables, ensure that we have
+    // corresponding regions for them. This is essential for error reporting.
     if (self.instantiate_subs.count() > 0) {
-        var cur_max: Var = @enumFromInt(0);
         var iterator = self.instantiate_subs.iterator();
         while (iterator.next()) |x| {
-            const new_var = x.value_ptr.*;
-            if (@intFromEnum(new_var) > @intFromEnum(cur_max)) {
-                cur_max = new_var;
+            // Get the newly created var
+            const fresh_var = x.value_ptr.*;
+            try self.fillInRegionsThrough(fresh_var);
+
+            switch (region_behavior) {
+                .explicit => |region| {
+                    self.setRegionAt(fresh_var, region);
+                },
+                .use_root_instantiated => {
+                    self.setRegionAt(fresh_var, root_instantiated_region);
+                },
+                .use_last_var => {
+                    const old_var = x.key_ptr.*;
+                    const old_region = self.regions.get(@enumFromInt(@intFromEnum(old_var))).*;
+                    self.setRegionAt(fresh_var, old_region);
+                },
             }
         }
-        try self.can_ir.store.fillInTypeVarSlotsThru(
-            CIR.nodeIdxFrom(cur_max),
-            parent_node_idx,
-            self.can_ir.store.getRegionAt(parent_node_idx),
-        );
     }
+
+    // Assert that we have regions for every type variable
+    self.debugAssertArraysInSync();
 
     return instantiated_var;
 }
+
+// regions //
+
+/// Fill slots in the regions array up to and including the target var
+fn fillInRegionsThrough(self: *Self, target_var: Var) Allocator.Error!void {
+    const idx = @intFromEnum(target_var);
+
+    if (idx >= self.regions.len()) {
+        try self.regions.items.ensureTotalCapacity(self.gpa, idx + 1);
+
+        const empty_region = Region.zero();
+        while (self.regions.len() <= idx) {
+            self.regions.items.appendAssumeCapacity(empty_region);
+        }
+    }
+}
+
+/// The the region for a variable
+fn setRegionAt(self: *Self, target_var: Var, new_region: Region) void {
+    self.regions.set(@enumFromInt(@intFromEnum(target_var)), new_region);
+}
+
+// fresh vars //
+
+/// The the region for a variable
+fn fresh(self: *Self, new_region: Region) Allocator.Error!Var {
+    const var_ = self.types.fresh();
+    try self.fillInRegionsThrough(var_);
+    self.setRegionAt(var_, new_region);
+    return var_;
+}
+
+/// The the region for a variable
+fn freshFromContent(self: *Self, content: Content, new_region: Region) Allocator.Error!Var {
+    const var_ = self.types.freshFromContent(content);
+    try self.fillInRegionsThrough(var_);
+    self.setRegionAt(var_, new_region);
+    return var_;
+}
+
+// check types //
 
 /// Check the types for all defs
 pub fn checkDefs(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const defs_slice = self.can_ir.store.sliceDefs(self.can_ir.all_defs);
+    const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
     for (defs_slice) |def_idx| {
         try self.checkDef(def_idx);
     }
@@ -166,23 +249,29 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const def = self.can_ir.store.getDef(def_idx);
+    const def = self.cir.store.getDef(def_idx);
     const expr_var: Var = CIR.varFrom(def.expr);
+    const expr_region = self.cir.store.getNodeRegion(CIR.nodeIdxFrom(def.expr));
 
     try self.checkPattern(def.pattern);
     _ = try self.checkExpr(def.expr);
 
     // Ensure the def has a type variable slot
-    const def_var = try self.can_ir.idxToTypeVar(self.types, def_idx);
+    const def_var = CIR.varFrom(def_idx);
 
     // Special handling for lambda expressions with annotations
     if (def.annotation) |anno_idx| {
-        const annotation = self.can_ir.store.getAnnotation(anno_idx);
-        const expr = self.can_ir.store.getExpr(def.expr);
+        const annotation = self.cir.store.getAnnotation(anno_idx);
+        const expr = self.cir.store.getExpr(def.expr);
 
         // If the expression is a lambda and we have an annotation, pass the expected type
         if (expr == .e_lambda) {
-            _ = try self.checkLambdaWithExpected(def.expr, expr.e_lambda, annotation.signature);
+            _ = try self.checkLambdaWithExpected(
+                def.expr,
+                expr_region,
+                expr.e_lambda,
+                annotation.signature,
+            );
         }
 
         // Unify the expression with its annotation
@@ -194,7 +283,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
 
     // Also unify the pattern with the def - needed so lookups work correctly
     // TODO could we unify directly with the pattern elsewhere, to save a type var and unify() here?
-    _ = self.unify(try self.can_ir.idxToTypeVar(self.types, def.pattern), def_var);
+    _ = self.unify(CIR.varFrom(def.pattern), def_var);
 }
 
 /// Check the types for an exprexpression. Returns whether evaluating the expr might perform side effects.
@@ -202,7 +291,8 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const expr = self.can_ir.store.getExpr(expr_idx);
+    const expr = self.cir.store.getExpr(expr_idx);
+    const expr_region = self.cir.store.getNodeRegion(CIR.nodeIdxFrom(expr_idx));
     var does_fx = false; // Does this expression potentially perform any side effects?
     switch (expr) {
         .e_int => |_| {},
@@ -247,7 +337,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         self.types,
                         imported_var,
                         &other_module_env.*.idents,
-                        &self.can_ir.env.idents,
+                        &self.cir.env.idents,
                         self.gpa,
                     );
                     try self.import_cache.put(self.gpa, cache_key, new_copy);
@@ -276,7 +366,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
         },
         .e_list => |list| {
             const elem_var = @as(Var, @enumFromInt(@intFromEnum(list.elem_var)));
-            const elems = self.can_ir.store.exprSlice(list.elems);
+            const elems = self.cir.store.exprSlice(list.elems);
 
             std.debug.assert(elems.len > 0); // Should never be 0 here, because this is not an .empty_list
 
@@ -315,11 +405,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             does_fx = try self.checkMatchExpr(expr_idx, match);
         },
         .e_if => |if_expr| {
-            does_fx = try self.checkIfElseExpr(expr_idx, if_expr);
+            does_fx = try self.checkIfElseExpr(expr_idx, expr_region, if_expr);
         },
         .e_call => |call| {
             // Get all expressions - first is function, rest are arguments
-            const all_exprs = self.can_ir.store.sliceExpr(call.args);
+            const all_exprs = self.cir.store.sliceExpr(call.args);
 
             if (all_exprs.len == 0) return false; // No function to call
 
@@ -333,7 +423,10 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             }
 
             // Don't try to unify with the function if the function is a runtime error.
-            if (self.can_ir.store.getExpr(func_expr_idx) != .e_runtime_error) {
+            const func_expr = self.cir.store.getExpr(func_expr_idx);
+            if (func_expr != .e_runtime_error) {
+                const func_expr_region = self.cir.store.getRegionAt(CIR.nodeIdxFrom(func_expr_idx));
+
                 const call_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
                 const func_var = @as(Var, @enumFromInt(@intFromEnum(func_expr_idx)));
                 const resolved_func = self.types.resolveVar(func_var);
@@ -348,34 +441,35 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         .fn_effectful => |_| {
                             does_fx = true;
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try self.instantiateVar(current_func_var, CIR.nodeIdxFrom(func_expr_idx));
+                                const instantiated_var = try self.instantiateVar(current_func_var, .{ .explicit = expr_region });
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_effectful);
                                 const inst_func = resolved_inst.desc.content.structure.fn_effectful;
-                                try self.unifyCallWithFunc(call_var, inst_func, call_args, func_var);
+                                try self.unifyCallWithFunc(call_var, inst_func, call_args, func_var, expr_region);
                                 return does_fx;
                             }
                         },
                         .fn_pure => |_| {
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try self.instantiateVar(current_func_var, CIR.nodeIdxFrom(func_expr_idx));
+                                const instantiated_var = try self.instantiateVar(current_func_var, .{ .explicit = expr_region });
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_pure);
                                 const inst_func = resolved_inst.desc.content.structure.fn_pure;
-                                try self.unifyCallWithFunc(call_var, inst_func, call_args, func_var);
+                                try self.unifyCallWithFunc(call_var, inst_func, call_args, func_var, func_expr_region);
                                 return does_fx;
                             }
                         },
                         .fn_unbound => |_| {
+                            // Create TypeWriter for converting types to strings
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try self.instantiateVar(current_func_var, CIR.nodeIdxFrom(func_expr_idx));
+                                const instantiated_var = try self.instantiateVar(current_func_var, .{ .explicit = expr_region });
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_unbound);
                                 const inst_func = resolved_inst.desc.content.structure.fn_unbound;
-                                try self.unifyCallWithFunc(call_var, inst_func, call_args, func_var);
+                                try self.unifyCallWithFunc(call_var, inst_func, call_args, func_var, expr_region);
                                 return does_fx;
                             }
                         },
@@ -407,7 +501,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 // What happens if later this type variable has a problem, and we
                 // try to look up its region in CIR?
                 const func_content = self.types.mkFuncUnbound(arg_vars, call_var);
-                const expected_func_var = self.types.freshFromContent(func_content);
+                const expected_func_var = try self.freshFromContent(func_content, expr_region);
                 _ = self.unify(expected_func_var, current_func_var);
             }
         },
@@ -425,8 +519,8 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             const record_var_content = record_var_resolved.desc.content;
 
             // Process each field
-            for (self.can_ir.store.sliceRecordFields(e.fields)) |field_idx| {
-                const field = self.can_ir.store.getRecordField(field_idx);
+            for (self.cir.store.sliceRecordFields(e.fields)) |field_idx| {
+                const field = self.cir.store.getRecordField(field_idx);
 
                 // STEP 1: Check the field value expression first
                 // This ensures the field value has a concrete type to unify with
@@ -441,7 +535,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     const field_names = record_fields.items(.name);
                     const field_vars = record_fields.items(.var_);
                     for (field_names, field_vars) |type_field_name, type_field_var| {
-                        if (self.can_ir.env.idents.identsHaveSameText(type_field_name, field.name)) {
+                        if (self.cir.env.idents.identsHaveSameText(type_field_name, field.name)) {
                             // Extract the type variable from the field value expression
                             // Different expression types store their type variables in different places
                             const field_expr_type_var = @as(Var, @enumFromInt(@intFromEnum(field.value)));
@@ -497,7 +591,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
             // Then, instantiate the nominal types backing var, for unification
             const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
-            const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, CIR.nodeIdxFrom(expr_idx));
+            const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, .{ .explicit = expr_region });
 
             // Then, unify the nominal type's backing var against the CIR backing var
             const result = self.unify(instantiated_backing_var, expr_backing_var);
@@ -506,7 +600,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             switch (result) {
                 .ok => {
                     // Then, instantiate the nominal type
-                    const instantiated_qualified_var = try self.instantiateVar(nominal_var, CIR.nodeIdxFrom(expr_idx));
+                    const instantiated_qualified_var = try self.instantiateVar(nominal_var, .{ .explicit = expr_region });
 
                     // Unify - this should always succeed expr_var should be flex var
                     _ = self.unify(expr_var, instantiated_qualified_var);
@@ -530,13 +624,13 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
         },
         .e_zero_argument_tag => |_| {},
         .e_binop => |binop| {
-            does_fx = try self.checkBinopExpr(expr_idx, binop);
+            does_fx = try self.checkBinopExpr(expr_idx, expr_region, binop);
         },
         .e_block => |block| {
             // Check all statements in the block
-            const statements = self.can_ir.store.sliceStatements(block.stmts);
+            const statements = self.cir.store.sliceStatements(block.stmts);
             for (statements) |stmt_idx| {
-                const stmt = self.can_ir.store.getStatement(stmt_idx);
+                const stmt = self.cir.store.getStatement(stmt_idx);
                 switch (stmt) {
                     .s_decl => |decl_stmt| {
                         // Check pattern and expression, then unify
@@ -570,11 +664,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             );
         },
         .e_lambda => |lambda| {
-            does_fx = try self.checkLambdaWithExpected(expr_idx, lambda, null);
+            does_fx = try self.checkLambdaWithExpected(expr_idx, expr_region, lambda, null);
         },
         .e_tuple => |tuple| {
             // Check tuple elements
-            const elems_slice = self.can_ir.store.exprSlice(tuple.elems);
+            const elems_slice = self.cir.store.exprSlice(tuple.elems);
             for (elems_slice) |single_elem_expr_idx| {
                 does_fx = try self.checkExpr(single_elem_expr_idx) or does_fx;
             }
@@ -598,16 +692,16 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         if (dot_access.args) |args_span| {
                             // Method call with arguments
                             // Get the origin module path
-                            const origin_module_path = self.can_ir.env.idents.getText(nominal.origin_module);
+                            const origin_module_path = self.cir.env.idents.getText(nominal.origin_module);
 
                             // Find which imported module matches this path
                             var origin_module_idx: ?CIR.Import.Idx = null;
                             var origin_module: ?*const CIR = null;
 
                             // Check if it's the current module
-                            const current_module_ident = self.can_ir.env.idents.insert(self.gpa, base.Ident.for_text(self.can_ir.module_name), base.Region.zero());
-                            if (std.mem.eql(u8, origin_module_path, self.can_ir.env.idents.getText(current_module_ident))) {
-                                origin_module = self.can_ir;
+                            const current_module_ident = self.cir.env.idents.insert(self.gpa, base.Ident.for_text(self.cir.module_name), base.Region.zero());
+                            if (std.mem.eql(u8, origin_module_path, self.cir.env.idents.getText(current_module_ident))) {
+                                origin_module = self.cir;
                             } else {
                                 // Search through imported modules
                                 for (self.other_modules, 0..) |other_module, idx| {
@@ -623,7 +717,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
                             if (origin_module) |module| {
                                 // Look up the method in the origin module's exports
-                                const method_name_str = self.can_ir.env.idents.getText(dot_access.field_name);
+                                const method_name_str = self.cir.env.idents.getText(dot_access.field_name);
 
                                 // Search through the module's exposed nodes
                                 if (module.env.exposed_nodes.get(method_name_str)) |node_idx| {
@@ -646,7 +740,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                                             self.types,
                                             source_var,
                                             &module.env.idents,
-                                            &self.can_ir.env.idents,
+                                            &self.cir.env.idents,
                                             self.gpa,
                                         );
                                         try self.import_cache.put(self.gpa, cache_key, new_copy);
@@ -678,7 +772,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                                     // Create a function type for the method call
                                     const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
                                     const func_content = self.types.mkFuncUnbound(args.items, dot_access_var);
-                                    const expected_func_var = self.types.freshFromContent(func_content);
+                                    const expected_func_var = try self.freshFromContent(func_content, expr_region);
 
                                     // Unify with the imported method type
                                     _ = self.unify(expected_func_var, method_var);
@@ -738,7 +832,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 .flex_var => {
                     // Receiver is unbound, we need to constrain it to be a record with the field
                     // Create a fresh variable for the field type
-                    const field_var = self.types.fresh();
+                    const field_var = try self.fresh(expr_region);
                     const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
                     _ = self.unify(dot_access_var, field_var);
 
@@ -765,7 +859,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     // TODO: Do we need to insert a CIR placeholder node here as well?
                     // What happens if later this type variable has a problem, and we
                     // try to look up it's region in CIR?
-                    const record_var = self.types.freshFromContent(record_content);
+                    const record_var = try self.freshFromContent(record_content, expr_region);
                     _ = self.unify(receiver_var, record_var);
                 },
                 else => {
@@ -784,7 +878,14 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 }
 
 /// Helper function to unify a call expression with a function type
-fn unifyCallWithFunc(self: *Self, call_var: Var, func: types_mod.Func, call_args: []const CIR.Expr.Idx, original_func_var: Var) std.mem.Allocator.Error!void {
+fn unifyCallWithFunc(
+    self: *Self,
+    call_var: Var,
+    func: types_mod.Func,
+    call_args: []const CIR.Expr.Idx,
+    original_func_var: Var,
+    region: Region,
+) std.mem.Allocator.Error!void {
     // Unify instantiated argument types with actual arguments
     const inst_args = self.types.getFuncArgsSlice(func.args);
     const arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
@@ -801,61 +902,37 @@ fn unifyCallWithFunc(self: *Self, call_var: Var, func: types_mod.Func, call_args
         // Fall back to normal unification to get proper error message
         // Use the original func_var to avoid issues with instantiated variables in error reporting
         const func_content = self.types.mkFuncUnbound(arg_vars, call_var);
-        const expected_func_var = self.types.freshFromContent(func_content);
+        const expected_func_var = try self.freshFromContent(func_content, region);
         _ = self.unify(expected_func_var, original_func_var);
     }
 }
 
 /// Check a lambda expression with an optional expected type
-fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype, expected_type: ?Var) std.mem.Allocator.Error!bool {
+fn checkLambdaWithExpected(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    _: Region,
+    lambda: std.meta.FieldType(CIR.Expr, .e_lambda),
+    expected_type: ?Var,
+) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // The function is effectful iff the body of the lambda is effectful
+    const is_effectful = try self.checkExpr(lambda.body);
+
     // Get the actual lambda arguments
-    const arg_patterns = self.can_ir.store.slicePatterns(lambda.args);
+    const arg_patterns = self.cir.store.slicePatterns(lambda.args);
 
     // Create type variables for each argument pattern
     // Since pattern idx map 1-to-1 to variables, we can get cast the slice to vars
     const arg_vars: []Var = @ptrCast(@alignCast(arg_patterns));
 
-    // The return type var is just the body's var
-    const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
-
-    // The function is effectful iff the body of the lambda is effectful
-    const is_effectful = try self.checkExpr(lambda.body);
-
-    // Create TypeWriter for converting types to strings
-    var type_writer = try types_mod.writers.TypeWriter.init(self.can_ir.env.gpa, self.can_ir.env);
-    defer type_writer.deinit();
-
-    // If we have an expected type and it's a function, unify parameter types before checking body
-    //
-    // TODO: Why does this basically re-implement unify logic? Can we create the
-    // function type then unify it with the anno directly?
-    if (expected_type) |expected| {
-        const expected_resolved = self.types.resolveVar(expected);
-        if (expected_resolved.desc.content == .structure) {
-            switch (expected_resolved.desc.content.structure) {
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    const expected_args = self.types.getFuncArgsSlice(func.args);
-                    if (expected_args.len == arg_patterns.len) {
-                        // Unify each pattern with its expected type before checking body
-                        for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
-                            const pattern_var = CIR.varFrom(pattern_idx);
-                            _ = self.unify(pattern_var, expected_arg);
-
-                            try type_writer.write(pattern_var);
-                        }
-                    }
-                    _ = self.unify(return_var, func.ret);
-                },
-                else => {},
-            }
-        }
-    }
-
     // The root expr will be the entire functions var
     const fn_var = CIR.varFrom(expr_idx);
+
+    // The return type var is just the body's var
+    const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
 
     if (is_effectful) {
         // If the function body does effects, create an effectful function.
@@ -866,13 +943,44 @@ fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype,
         _ = try self.types.setVarContent(fn_var, self.types.mkFuncUnbound(arg_vars, return_var));
     }
 
+    // If the expected type is a function, then check the args and return type
+    // directly. This results in better error messages!
+    //
+    // If the expected type is *not* a function, unify like normal (which will be a mismatch)
+    if (expected_type) |expected| {
+        const instantiated_var = try self.instantiateVar(expected, .use_last_var);
+        const instantiated_content = self.types.resolveVar(instantiated_var).desc.content;
+        if (instantiated_content == .structure) {
+            switch (instantiated_content.structure) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    const expected_args = self.types.getFuncArgsSlice(func.args);
+                    // Unify each pattern with its expected type before checking body
+                    if (expected_args.len == arg_patterns.len) {
+                        for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
+                            const pattern_var = CIR.varFrom(pattern_idx);
+                            _ = self.unify(pattern_var, expected_arg);
+                        }
+                        _ = self.unify(return_var, func.ret);
+                    } else {
+                        _ = self.unify(fn_var, instantiated_var);
+                    }
+                },
+                else => {
+                    _ = self.unify(fn_var, instantiated_var);
+                },
+            }
+        } else {
+            _ = self.unify(fn_var, instantiated_var);
+        }
+    }
+
     return is_effectful;
 }
 
 // binop //
 
 /// Check the types for an if-else expr
-fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Allocator.Error!bool {
+fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, binop: CIR.Expr.Binop) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -884,7 +992,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Al
             // TODO: These will use static dispact of the lhs, passing in rhs
         },
         .@"and" => {
-            const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(expr_idx));
+            const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
             const lhs_result = self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -893,7 +1001,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Al
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(expr_idx));
+                const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
                 const rhs_result = self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -903,7 +1011,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Al
             }
         },
         .@"or" => {
-            const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(expr_idx));
+            const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
             const lhs_result = self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -912,7 +1020,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Al
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(expr_idx));
+                const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
                 const rhs_result = self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -931,23 +1039,28 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Al
 // if-else //
 
 /// Check the types for an if-else expr
-fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: std.meta.FieldType(CIR.Expr, .e_if)) std.mem.Allocator.Error!bool {
+fn checkIfElseExpr(
+    self: *Self,
+    if_expr_idx: CIR.Expr.Idx,
+    expr_region: Region,
+    if_: std.meta.FieldType(CIR.Expr, .e_if),
+) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const branches = self.can_ir.store.sliceIfBranches(if_.branches);
+    const branches = self.cir.store.sliceIfBranches(if_.branches);
 
     // Should never be 0
     std.debug.assert(branches.len > 0);
 
     // Get the first branch
     const first_branch_idx = branches[0];
-    const first_branch = self.can_ir.store.getIfBranch(first_branch_idx);
+    const first_branch = self.cir.store.getIfBranch(first_branch_idx);
 
     // Check the condition of the 1st branch
     var does_fx = try self.checkExpr(first_branch.cond);
     const first_cond_var: Var = @enumFromInt(@intFromEnum(first_branch.cond));
-    const bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(if_expr_idx));
+    const bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
     const first_cond_result = self.unify(bool_var, first_cond_var);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
@@ -962,12 +1075,12 @@ fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: std.meta.FieldTy
 
     var last_if_branch = first_branch_idx;
     for (branches[1..], 1..) |branch_idx, cur_index| {
-        const branch = self.can_ir.store.getIfBranch(branch_idx);
+        const branch = self.cir.store.getIfBranch(branch_idx);
 
         // Check the branches condition
         does_fx = try self.checkExpr(branch.cond) or does_fx;
         const cond_var: Var = @enumFromInt(@intFromEnum(branch.cond));
-        const branch_bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(if_expr_idx));
+        const branch_bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
         const cond_result = self.unify(branch_bool_var, cond_var);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
@@ -985,12 +1098,12 @@ fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: std.meta.FieldTy
         if (!body_result.isOk()) {
             // Check remaining branches to catch their individual errors
             for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
-                const remaining_branch = self.can_ir.store.getIfBranch(remaining_branch_idx);
+                const remaining_branch = self.cir.store.getIfBranch(remaining_branch_idx);
 
                 does_fx = try self.checkExpr(remaining_branch.cond) or does_fx;
                 const remaining_cond_var: Var = @enumFromInt(@intFromEnum(remaining_branch.cond));
 
-                const fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(if_expr_idx));
+                const fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
                 const remaining_cond_result = self.unify(fresh_bool, remaining_cond_var);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 
@@ -1028,27 +1141,27 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
     // Check the match's condition
     var does_fx = try self.checkExpr(match.cond);
-    const cond_var = try self.can_ir.idxToTypeVar(self.types, match.cond);
+    const cond_var = CIR.varFrom(match.cond);
 
     // Bail if we somehow have 0 branches
     // TODO: Should this be an error? Here or in Can?
     if (match.branches.span.len == 0) return does_fx;
 
     // Get slice of branches
-    const branch_idxs = self.can_ir.store.sliceMatchBranches(match.branches);
+    const branch_idxs = self.cir.store.sliceMatchBranches(match.branches);
 
     // Manually check the 1st branch
     // The type of the branch's body becomes the var other branch bodies must unify
     // against.
     const first_branch_idx = branch_idxs[0];
-    const first_branch = self.can_ir.store.getMatchBranch(first_branch_idx);
+    const first_branch = self.cir.store.getMatchBranch(first_branch_idx);
 
-    const first_branch_ptrn_idxs = self.can_ir.store.sliceMatchBranchPatterns(first_branch.patterns);
+    const first_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(first_branch.patterns);
 
     for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
-        const branch_ptrn = self.can_ir.store.getMatchBranchPattern(branch_ptrn_idx);
+        const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         try self.checkPattern(branch_ptrn.pattern);
-        const branch_ptrn_var = try self.can_ir.idxToTypeVar(self.types, branch_ptrn.pattern);
+        const branch_ptrn_var = CIR.varFrom(branch_ptrn.pattern);
 
         const ptrn_result = self.unify(cond_var, branch_ptrn_var);
         self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
@@ -1062,21 +1175,21 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
     // Check the first branch's value, then use that at the branch_var
     does_fx = try self.checkExpr(first_branch.value) or does_fx;
-    const branch_var = try self.can_ir.idxToTypeVar(self.types, first_branch.value);
+    const branch_var = CIR.varFrom(first_branch.value);
 
     // Then iterate over the rest of the branches
     for (branch_idxs[1..], 1..) |branch_idx, branch_cur_index| {
-        const branch = self.can_ir.store.getMatchBranch(branch_idx);
+        const branch = self.cir.store.getMatchBranch(branch_idx);
 
         // First, check the patterns of this branch
-        const branch_ptrn_idxs = self.can_ir.store.sliceMatchBranchPatterns(branch.patterns);
+        const branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(branch.patterns);
         for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             // Check the pattern's sub types
-            const branch_ptrn = self.can_ir.store.getMatchBranchPattern(branch_ptrn_idx);
+            const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
             try self.checkPattern(branch_ptrn.pattern);
 
             // Check the pattern against the cond
-            const branch_ptrn_var = try self.can_ir.idxToTypeVar(self.types, branch_ptrn.pattern);
+            const branch_ptrn_var = CIR.varFrom(branch_ptrn.pattern);
             const ptrn_result = self.unify(cond_var, branch_ptrn_var);
             self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                 .match_expr = expr_idx,
@@ -1089,7 +1202,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
         // Then, check the body
         does_fx = try self.checkExpr(branch.value) or does_fx;
-        const branch_result = self.unify(branch_var, try self.can_ir.idxToTypeVar(self.types, branch.value));
+        const branch_result = self.unify(branch_var, CIR.varFrom(branch.value));
         self.setDetailIfTypeMismatch(branch_result, problem.TypeMismatchDetail{ .incompatible_match_branches = .{
             .match_expr = expr_idx,
             .num_branches = @intCast(match.branches.span.len),
@@ -1100,17 +1213,17 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
             // If there was a body mismatch, do not check other branches to stop
             // cascading errors. But still check each other branch's sub types
             for (branch_idxs[branch_cur_index + 1 ..], branch_cur_index + 1..) |other_branch_idx, other_branch_cur_index| {
-                const other_branch = self.can_ir.store.getMatchBranch(other_branch_idx);
+                const other_branch = self.cir.store.getMatchBranch(other_branch_idx);
 
                 // Still check the other patterns
-                const other_branch_ptrn_idxs = self.can_ir.store.sliceMatchBranchPatterns(other_branch.patterns);
+                const other_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(other_branch.patterns);
                 for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
                     // Check the pattern's sub types
-                    const other_branch_ptrn = self.can_ir.store.getMatchBranchPattern(other_branch_ptrn_idx);
+                    const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
                     try self.checkPattern(other_branch_ptrn.pattern);
 
                     // Check the pattern against the cond
-                    const other_branch_ptrn_var = try self.can_ir.idxToTypeVar(self.types, other_branch_ptrn.pattern);
+                    const other_branch_ptrn_var = CIR.varFrom(other_branch_ptrn.pattern);
                     const ptrn_result = self.unify(cond_var, other_branch_ptrn_var);
                     self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                         .match_expr = expr_idx,
@@ -1123,7 +1236,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
                 // Then check the other branch's exprs
                 does_fx = try self.checkExpr(other_branch.value) or does_fx;
-                try self.types.setVarContent(try self.can_ir.idxToTypeVar(self.types, other_branch.value), .err);
+                try self.types.setVarContent(CIR.varFrom(other_branch.value), .err);
             }
 
             // Then stop type checking for this branch
@@ -1349,11 +1462,11 @@ test "lambda with record field access infers correct type" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var can_ir = CIR.init(&module_env, "Test");
-    defer can_ir.deinit();
+    var cir = CIR.init(&module_env, "Test");
+    defer cir.deinit();
 
     const empty_modules: []const *CIR = &.{};
-    var solver = try Self.init(gpa, &module_env.types, &can_ir, empty_modules);
+    var solver = try Self.init(gpa, &module_env.types, &cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 
     // Create type variables for the lambda parameters
@@ -1454,11 +1567,11 @@ test "dot access properly unifies field types with parameters" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var can_ir = CIR.init(&module_env, "Test");
-    defer can_ir.deinit();
+    var cir = CIR.init(&module_env, "Test");
+    defer cir.deinit();
 
     const empty_modules: []const *CIR = &.{};
-    var solver = try Self.init(gpa, &module_env.types, &can_ir, empty_modules);
+    var solver = try Self.init(gpa, &module_env.types, &cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 
     // Create a parameter type variable
@@ -1562,11 +1675,11 @@ test "call site unification order matters for concrete vs flexible types" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var can_ir = CIR.init(&module_env, "Test");
-    defer can_ir.deinit();
+    var cir = CIR.init(&module_env, "Test");
+    defer cir.deinit();
 
     const empty_modules: []const *CIR = &.{};
-    var solver = try Self.init(gpa, &module_env.types, &can_ir, empty_modules);
+    var solver = try Self.init(gpa, &module_env.types, &cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 
     // First, verify basic number unification works as expected

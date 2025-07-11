@@ -24,7 +24,7 @@ main! = |_| mapList([1,2,3,4,5])
             ^^^^^^^
 
 It is of type:
-    _Error, a -> b -> Error_
+    _Error, * -> * -> Error_
 
 But you are trying to use it as:
     _List(Num(*)) -> *_
