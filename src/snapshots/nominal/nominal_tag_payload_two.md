@@ -52,9 +52,9 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 (file @1.1-12.2
 	(module @1.1-1.29
 		(exposes @1.8-1.29
-			(exposed-upper-ident (text "MyResult"))
-			(exposed-lower-ident (text "ok"))
-			(exposed-lower-ident (text "is_ok"))))
+			(exposed-upper-ident @1.9-1.17 (text "MyResult"))
+			(exposed-lower-ident @1.19-1.21 (text "ok"))
+			(exposed-lower-ident @1.23-1.28 (text "is_ok"))))
 	(statements
 		(s-type-decl @3.1-3.40
 			(header @3.1-3.18 (name "MyResult")
@@ -65,17 +65,17 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 				(tags
 					(ty-apply @3.23-3.29
 						(ty @3.23-3.25 (name "Ok"))
-						(ty-var @3.26-3.28 (raw "ok")))
+						(ty-var @3.26-3.26 (raw "ok")))
 					(ty-apply @3.31-3.39
 						(ty @3.31-3.34 (name "Err"))
-						(ty-var @3.35-3.38 (raw "err"))))))
-		(s-type-anno @5.1-6.3 (name "ok")
+						(ty-var @3.35-3.35 (raw "err"))))))
+		(s-type-anno @5.1-5.27 (name "ok")
 			(ty-fn @5.6-5.27
-				(ty-var @5.6-5.8 (raw "ok"))
+				(ty-var @1.1-1.1 (raw "ok"))
 				(ty-apply @5.12-5.27
 					(ty @5.12-5.20 (name "MyResult"))
-					(ty-var @5.21-5.23 (raw "ok"))
-					(ty-var @5.25-5.26 (raw "b")))))
+					(ty-var @5.21-5.21 (raw "ok"))
+					(ty-var @1.1-1.1 (raw "b")))))
 		(s-decl @6.1-6.24
 			(p-ident @6.1-6.3 (raw "ok"))
 			(e-lambda @6.6-6.24
@@ -84,12 +84,12 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 				(e-apply @6.10-6.24
 					(e-tag @6.10-6.21 (raw "MyResult.Ok"))
 					(e-ident @6.22-6.23 (raw "a")))))
-		(s-type-anno @8.1-9.6 (name "is_ok")
+		(s-type-anno @8.1-8.34 (name "is_ok")
 			(ty-fn @8.9-8.34
 				(ty-apply @8.9-8.26
 					(ty @8.9-8.17 (name "MyResult"))
-					(ty-var @8.18-8.20 (raw "ok"))
-					(ty-var @8.22-8.25 (raw "err")))
+					(ty-var @8.18-8.18 (raw "ok"))
+					(ty-var @1.1-1.1 (raw "err")))
 				(ty @8.30-8.34 (name "Bool"))))
 		(s-decl @9.1-12.2
 			(p-ident @9.1-9.6 (raw "is_ok"))
@@ -99,11 +99,11 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 				(e-match
 					(e-ident @9.24-9.30 (raw "result"))
 					(branches
-						(branch @10.5-11.13
+						(branch @10.5-10.32
 							(p-tag @10.5-10.19 (raw ".Ok")
 								(p-underscore))
 							(e-tag @10.23-10.32 (raw "Bool.True")))
-						(branch @11.5-12.2
+						(branch @11.5-11.34
 							(p-tag @11.5-11.20 (raw ".Err")
 								(p-underscore))
 							(e-tag @11.24-11.34 (raw "Bool.False")))))))))
@@ -139,10 +139,10 @@ is_ok = |result| match result {
 		(annotation @6.1-6.3
 			(declared-type
 				(ty-fn @5.6-5.27 (effectful false)
-					(ty-var @5.6-5.8 (name "ok"))
+					(ty-var @1.1-1.1 (name "ok"))
 					(ty-apply @5.12-5.27 (symbol "MyResult")
-						(ty-var @5.21-5.23 (name "ok"))
-						(ty-var @5.25-5.26 (name "b")))))))
+						(ty-var @5.21-5.21 (name "ok"))
+						(ty-var @1.1-1.1 (name "b")))))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "is_ok"))
 		(e-lambda @9.9-12.2
@@ -172,8 +172,8 @@ is_ok = |result| match result {
 			(declared-type
 				(ty-fn @8.9-8.34 (effectful false)
 					(ty-apply @8.9-8.26 (symbol "MyResult")
-						(ty-var @8.18-8.20 (name "ok"))
-						(ty-var @8.22-8.25 (name "err")))
+						(ty-var @8.18-8.18 (name "ok"))
+						(ty-var @1.1-1.1 (name "err")))
 					(ty @8.30-8.34 (name "Bool"))))))
 	(s-nominal-decl @3.1-3.40
 		(ty-header @3.1-3.18 (name "MyResult")
@@ -182,9 +182,9 @@ is_ok = |result| match result {
 				(ty-var @3.14-3.17 (name "err"))))
 		(ty-tag-union @3.22-3.40
 			(ty-apply @3.23-3.29 (symbol "Ok")
-				(ty-var @3.26-3.28 (name "ok")))
+				(ty-var @3.26-3.26 (name "ok")))
 			(ty-apply @3.31-3.39 (symbol "Err")
-				(ty-var @3.35-3.38 (name "err"))))))
+				(ty-var @3.35-3.35 (name "err"))))))
 ~~~
 # TYPES
 ~~~clojure

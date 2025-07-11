@@ -37,11 +37,11 @@ KwWhere(6:2-6:7),KwModule(6:8-6:14),NoSpaceOpenRound(6:14-6:15),LowerIdent(6:15-
 (file @1.1-6.24
 	(module @1.1-1.16
 		(exposes @1.8-1.16
-			(exposed-lower-ident (text "decode"))))
+			(exposed-lower-ident @1.9-1.15 (text "decode"))))
 	(statements
 		(s-import @3.1-3.32 (raw "Decode")
 			(exposing
-				(exposed-upper-ident (text "Decode"))))
+				(exposed-upper-ident @3.25-3.31 (text "Decode"))))
 		(s-type-anno @5.1-6.24 (name "decodeThings")
 			(ty-fn @5.16-5.41
 				(ty-apply @5.16-5.30
@@ -51,7 +51,7 @@ KwWhere(6:2-6:7),KwModule(6:8-6:14),NoSpaceOpenRound(6:14-6:15),LowerIdent(6:15-
 						(ty @5.26-5.28 (name "U8"))))
 				(ty-apply @5.34-5.41
 					(ty @5.34-5.38 (name "List"))
-					(ty-var @5.39-5.40 (raw "a"))))
+					(ty-var @5.39-5.39 (raw "a"))))
 			(where
 				(alias @6.8-6.24 (module-of "a") (name "Decode"))))))
 ~~~
@@ -76,7 +76,7 @@ decodeThings : List(List(U8)) -> List(a)
 				(ty-apply @5.21-5.29 (symbol "List")
 					(ty @5.26-5.28 (name "U8"))))
 			(ty-apply @5.34-5.41 (symbol "List")
-				(ty-var @5.39-5.40 (name "a"))))
+				(ty-var @5.39-5.39 (name "a"))))
 		(where
 			(alias @6.8-6.24 (module-of "a") (ident "Decode"))))
 	(ext-decl @6.8-6.24 (ident "module(a).Decode") (kind "type")))

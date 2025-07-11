@@ -28,13 +28,13 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~clojure
 (e-block @1.1-6.2
 	(statements
-		(s-type-anno @2.5-3.9 (name "pair")
+		(s-type-anno @2.5-2.26 (name "pair")
 			(ty-fn @2.12-2.26
-				(ty-var @2.12-2.13 (raw "a"))
-				(ty-var @2.15-2.16 (raw "a"))
+				(ty-var @1.1-1.1 (raw "a"))
+				(ty-var @1.1-1.1 (raw "a"))
 				(ty-tuple @2.20-2.26
-					(ty-var @2.21-2.22 (raw "a"))
-					(ty-var @2.24-2.25 (raw "a")))))
+					(ty-var @2.21-2.21 (raw "a"))
+					(ty-var @1.1-1.1 (raw "a")))))
 		(s-decl @3.5-3.25
 			(p-ident @3.5-3.9 (raw "pair"))
 			(e-lambda @3.12-3.25
@@ -62,13 +62,13 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-6.2
-	(s-type-anno @2.5-3.9 (name "pair")
+	(s-type-anno @2.5-2.26 (name "pair")
 		(ty-fn @2.12-2.26 (effectful false)
-			(ty-var @2.12-2.13 (name "a"))
-			(ty-var @2.15-2.16 (name "a"))
+			(ty-var @1.1-1.1 (name "a"))
+			(ty-var @1.1-1.1 (name "a"))
 			(ty-tuple @2.20-2.26
-				(ty-var @2.21-2.22 (name "a"))
-				(ty-var @2.24-2.25 (name "a")))))
+				(ty-var @2.21-2.21 (name "a"))
+				(ty-var @1.1-1.1 (name "a")))))
 	(s-let @3.5-3.25
 		(p-assign @3.5-3.9 (ident "pair"))
 		(e-lambda @3.12-3.25

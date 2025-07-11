@@ -23,20 +23,20 @@ process = |list| {
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:40
+UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:33
 UNDEFINED VARIABLE - type_var_namespace.md:11:14:11:24
 UNDEFINED VARIABLE - type_var_namespace.md:11:34:11:52
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **|> Result** is not expected in an expression.
+The token **|>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_var_namespace.md:11:31:11:40:**
+**type_var_namespace.md:11:31:11:33:**
 ```roc
     result = List.first(list) |> Result.withDefault(elem)
 ```
-                              ^^^^^^^^^
+                              ^^
 
 
 **UNDEFINED VARIABLE**
@@ -77,22 +77,22 @@ LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:
 ~~~clojure
 (file @1.1-16.15
 	(app @1.1-1.57
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.55 (name "pf")
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @4.1-5.8 (name "process")
+		(s-type-anno @4.1-4.29 (name "process")
 			(ty-fn @4.11-4.29
 				(ty-apply @4.11-4.21
 					(ty @4.11-4.15 (name "List"))
-					(ty-var @4.16-4.20 (raw "elem")))
-				(ty-var @4.25-4.29 (raw "elem"))))
+					(ty-var @4.16-4.16 (raw "elem")))
+				(ty-var @1.1-1.1 (raw "elem"))))
 		(s-decl @5.1-14.2
 			(p-ident @5.1-5.8 (raw "process"))
 			(e-lambda @5.11-14.2
@@ -103,14 +103,14 @@ LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:
 						(s-decl @7.5-7.14
 							(p-ident @7.5-7.9 (raw "elem"))
 							(e-int @7.12-7.14 (raw "42")))
-						(s-type-anno @10.5-11.11 (name "result")
-							(ty-var @10.14-10.18 (raw "elem")))
+						(s-type-anno @10.5-10.18 (name "result")
+							(ty-var @1.1-1.1 (raw "elem")))
 						(s-decl @11.5-11.30
 							(p-ident @11.5-11.11 (raw "result"))
 							(e-apply @11.14-11.30
 								(e-ident @11.14-11.24 (raw "List.first"))
 								(e-ident @11.25-11.29 (raw "list"))))
-						(e-malformed @11.31-11.40 (reason "expr_unexpected_token"))
+						(e-malformed @11.31-11.33 (reason "expr_unexpected_token"))
 						(e-apply @11.34-11.58
 							(e-ident @11.34-11.52 (raw "Result.withDefault"))
 							(e-ident @11.53-11.57 (raw "elem")))
@@ -139,6 +139,7 @@ process = |list| {
 	Result.withDefault(elem)
 
 	result
+
 }
 
 main! = |_| {}
@@ -155,15 +156,15 @@ main! = |_| {}
 				(s-let @7.5-7.14
 					(p-assign @7.5-7.9 (ident "elem"))
 					(e-int @7.12-7.14 (value "42")))
-				(s-type-anno @10.5-11.11 (name "result")
-					(ty-var @10.14-10.18 (name "elem")))
+				(s-type-anno @10.5-10.18 (name "result")
+					(ty-var @1.1-1.1 (name "elem")))
 				(s-let @11.5-11.30
 					(p-assign @11.5-11.11 (ident "result"))
 					(e-call @11.14-11.30
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11.25-11.29
 							(p-assign @5.12-5.16 (ident "list")))))
-				(s-expr @11.34-13.11
+				(s-expr @11.34-11.58
 					(e-call @11.34-11.58
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11.53-11.57
@@ -174,8 +175,8 @@ main! = |_| {}
 			(declared-type
 				(ty-fn @4.11-4.29 (effectful false)
 					(ty-apply @4.11-4.21 (symbol "List")
-						(ty-var @4.16-4.20 (name "elem")))
-					(ty-var @4.25-4.29 (name "elem"))))))
+						(ty-var @4.16-4.16 (name "elem")))
+					(ty-var @1.1-1.1 (name "elem"))))))
 	(d-let
 		(p-assign @16.1-16.6 (ident "main!"))
 		(e-lambda @16.9-16.15

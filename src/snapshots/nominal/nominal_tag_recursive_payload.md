@@ -28,8 +28,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:17),NoSpaceDotUpperIdent(
 (file @1.1-6.21
 	(module @1.1-1.25
 		(exposes @1.8-1.25
-			(exposed-upper-ident (text "ConsList"))
-			(exposed-lower-ident (text "empty"))))
+			(exposed-upper-ident @1.9-1.17 (text "ConsList"))
+			(exposed-lower-ident @1.19-1.24 (text "empty"))))
 	(statements
 		(s-type-decl @3.1-3.40
 			(header @3.1-3.12 (name "ConsList")
@@ -42,11 +42,11 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:17),NoSpaceDotUpperIdent(
 						(ty @3.22-3.26 (name "Node"))
 						(ty-apply @3.27-3.38
 							(ty @3.27-3.35 (name "ConsList"))
-							(ty-var @3.36-3.37 (raw "a")))))))
-		(s-type-anno @5.1-6.6 (name "empty")
+							(ty-var @3.36-3.36 (raw "a")))))))
+		(s-type-anno @5.1-5.20 (name "empty")
 			(ty-apply @5.9-5.20
 				(ty @5.9-5.17 (name "ConsList"))
-				(ty-var @5.18-5.19 (raw "a"))))
+				(ty-var @5.18-5.18 (raw "a"))))
 		(s-decl @6.1-6.21
 			(p-ident @6.1-6.6 (raw "empty"))
 			(e-tag @6.9-6.21 (raw "ConsList.Nil")))))
@@ -70,7 +70,7 @@ empty = Nil
 		(annotation @6.1-6.6
 			(declared-type
 				(ty-apply @5.9-5.20 (symbol "ConsList")
-					(ty-var @5.18-5.19 (name "a"))))))
+					(ty-var @5.18-5.18 (name "a"))))))
 	(s-nominal-decl @3.1-3.40
 		(ty-header @3.1-3.12 (name "ConsList")
 			(ty-args
@@ -79,7 +79,7 @@ empty = Nil
 			(ty @3.17-3.20 (name "Nil"))
 			(ty-apply @3.22-3.39 (symbol "Node")
 				(ty-apply @3.27-3.38 (symbol "ConsList")
-					(ty-var @3.36-3.37 (name "a")))))))
+					(ty-var @3.36-3.36 (name "a")))))))
 ~~~
 # TYPES
 ~~~clojure

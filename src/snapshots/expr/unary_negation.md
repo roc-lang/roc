@@ -8,18 +8,18 @@ type=expr
 -foo
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - unary_negation.md:1:1:1:5
+UNEXPECTED TOKEN IN EXPRESSION - unary_negation.md:1:1:1:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **-foo** is not expected in an expression.
+The token **-** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**unary_negation.md:1:1:1:5:**
+**unary_negation.md:1:1:1:2:**
 ```roc
 -foo
 ```
-^^^^
+^
 
 
 # TOKENS
@@ -28,7 +28,7 @@ OpUnaryMinus(1:1-1:2),LowerIdent(1:2-1:5),EndOfFile(1:5-1:5),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.5 (reason "expr_unexpected_token"))
+(e-malformed @1.1-1.2 (reason "expr_unexpected_token"))
 ~~~
 # FORMATTED
 ~~~roc

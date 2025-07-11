@@ -27,28 +27,28 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~clojure
 (file @1.1-6.47
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.12 (name "processList")
+		(s-type-anno @3.1-3.31 (name "processList")
 			(ty-fn @3.15-3.31
 				(ty-apply @3.15-3.24
 					(ty @3.15-3.19 (name "List"))
 					(ty @3.20-3.23 (name "Str")))
 				(ty @3.28-3.31 (name "U64"))))
-		(s-decl @4.1-6.6
+		(s-decl @4.1-4.32
 			(p-ident @4.1-4.12 (raw "processList"))
-			(e-lambda @4.15-6.6
+			(e-lambda @4.15-4.32
 				(args
 					(p-ident @4.16-4.20 (raw "list")))
-				(e-field-access @4.22-6.6
+				(e-field-access @4.22-4.32
 					(e-ident @4.22-4.26 (raw "list"))
 					(e-apply @4.26-4.32
 						(e-ident @4.26-4.30 (raw "len"))))))
@@ -81,10 +81,10 @@ main! = |_| processList(["one", "two", "three"])
 (can-ir
 	(d-let
 		(p-assign @4.1-4.12 (ident "processList"))
-		(e-lambda @4.15-6.6
+		(e-lambda @4.15-4.32
 			(args
 				(p-assign @4.16-4.20 (ident "list")))
-			(e-dot-access @4.22-6.6 (field "len")
+			(e-dot-access @4.22-4.32 (field "len")
 				(receiver
 					(e-lookup-local @4.22-4.26
 						(p-assign @4.16-4.20 (ident "list"))))
@@ -119,6 +119,6 @@ main! = |_| processList(["one", "two", "three"])
 		(patt @4.1-4.12 (type "Error -> U64"))
 		(patt @6.1-6.6 (type "* -> U64")))
 	(expressions
-		(expr @4.15-6.6 (type "Error -> U64"))
+		(expr @4.15-4.32 (type "Error -> U64"))
 		(expr @6.9-6.47 (type "* -> U64"))))
 ~~~

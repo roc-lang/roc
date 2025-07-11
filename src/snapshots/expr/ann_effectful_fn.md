@@ -28,7 +28,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~clojure
 (e-block @1.1-6.2
 	(statements
-		(s-type-anno @2.5-2.39 (name "launchTheNukes")
+		(s-type-anno @2.5-2.34 (name "launchTheNukes")
 			(ty-fn @2.22-2.34
 				(ty-record @2.22-2.24)
 				(ty @2.28-2.34 (name "Result"))))
@@ -58,13 +58,13 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-6.2
-	(s-type-anno @2.5-2.39 (name "launchTheNukes")
+	(s-type-anno @2.5-2.34 (name "launchTheNukes")
 		(ty-fn @2.22-2.34 (effectful true)
 			(ty-record @2.22-2.24)
 			(ty @2.28-2.34 (name "Result"))))
-	(s-expr @2.35-2.53
+	(s-expr @2.35-2.39
 		(e-tag @2.35-2.39 (name "Bool")))
-	(s-expr @2.40-3.19
+	(s-expr @2.40-2.53
 		(e-tag @2.40-2.53 (name "LaunchNukeErr")))
 	(s-let @3.5-3.30
 		(p-assign @3.5-3.19 (ident "launchTheNukes"))
@@ -72,7 +72,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 			(args
 				(p-record-destructure @3.23-3.25
 					(destructs)))
-			(e-not-implemented @3.27-3.30)))
+			(e-not-implemented @1.1-1.1)))
 	(e-call @5.5-5.23
 		(e-lookup-local @5.5-5.19
 			(p-assign @3.5-3.19 (ident "launchTheNukes")))

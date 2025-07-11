@@ -47,8 +47,8 @@ CloseSquare(5:2-5:3),EndOfFile(5:3-5:3),
 (file @1.1-5.3
 	(module @1.1-5.3
 		(exposes @2.2-5.3
-			(exposed-lower-ident (text "something"))
-			(exposed-upper-ident (text "SomeType"))))
+			(exposed-lower-ident @3.3-3.12 (text "something"))
+			(exposed-upper-ident @4.3-4.11 (text "SomeType"))))
 	(statements))
 ~~~
 # FORMATTED

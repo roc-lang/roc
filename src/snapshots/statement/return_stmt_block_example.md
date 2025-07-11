@@ -29,7 +29,6 @@ This `if` has an `else` branch with a different type from it's `then` branch:
     } else {
         "SMALL"
     }
-    Ok(str)
 ```
         ^^^^^^^
 
@@ -62,9 +61,9 @@ CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
 (file @1.1-11.2
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident (text "foo"))))
+			(exposed-lower-ident @1.9-1.12 (text "foo"))))
 	(statements
-		(s-type-anno @3.1-4.4 (name "foo")
+		(s-type-anno @3.1-3.35 (name "foo")
 			(ty-fn @3.7-3.35
 				(ty @3.7-3.10 (name "U64"))
 				(ty-apply @3.14-3.35
@@ -80,16 +79,16 @@ CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
 					(p-ident @4.8-4.11 (raw "num")))
 				(e-block @4.13-11.2
 					(statements
-						(s-decl @5.5-10.7
+						(s-decl @5.5-9.6
 							(p-ident @5.5-5.8 (raw "str"))
-							(e-if-then-else @5.11-10.7
+							(e-if-then-else @5.11-9.6
 								(e-tuple @5.14-5.24
-									(e-binop @5.15-5.24 (op ">")
+									(e-binop @5.15-5.23 (op ">")
 										(e-ident @5.15-5.18 (raw "num"))
 										(e-int @5.21-5.23 (raw "10"))))
 								(e-block @5.25-7.6
 									(statements
-										(s-return @6.9-7.6
+										(s-return @6.9-6.27
 											(e-apply @6.16-6.27
 												(e-tag @6.16-6.19 (raw "Err"))
 												(e-tag @6.20-6.26 (raw "TooBig"))))))
@@ -124,17 +123,17 @@ foo = |num| {
 			(args
 				(p-assign @4.8-4.11 (ident "num")))
 			(e-block @4.13-11.2
-				(s-let @5.5-10.7
+				(s-let @5.5-9.6
 					(p-assign @5.5-5.8 (ident "str"))
-					(e-if @5.11-10.7
+					(e-if @5.11-9.6
 						(if-branches
 							(if-branch
-								(e-binop @5.15-5.24 (op "gt")
+								(e-binop @5.15-5.23 (op "gt")
 									(e-lookup-local @5.15-5.18
 										(p-assign @4.8-4.11 (ident "num")))
 									(e-int @5.21-5.23 (value "10")))
 								(e-block @5.25-7.6
-									(s-return @6.9-7.6
+									(s-return @6.9-6.27
 										(e-tag @6.16-6.19 (name "Err")
 											(args
 												(e-tag @6.20-6.26 (name "TooBig")))))

@@ -61,13 +61,13 @@ CloseCurly(29:1-29:2),EndOfFile(29:2-29:2),
 ~~~clojure
 (file @1.1-29.2
 	(app @1.1-1.56
-		(provides @1.6-1.11
-			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf")
+		(provides @1.5-1.11
+			(exposed-lower-ident @1.6-1.10 (text "main")))
+		(record-field @1.14-1.54 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf")
+			(record-field @1.14-1.54 (name "pf")
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -83,32 +83,32 @@ CloseCurly(29:1-29:2),EndOfFile(29:2-29:2),
 		(s-decl @9.1-9.17
 			(p-ident @9.1-9.10 (raw "float_use"))
 			(e-ident @9.13-9.17 (raw "frac")))
-		(s-decl @12.1-13.13
+		(s-decl @12.1-12.19
 			(p-ident @12.1-12.8 (raw "int_add"))
-			(e-binop @12.11-13.13 (op "+")
+			(e-binop @12.11-12.19 (op "+")
 				(e-ident @12.11-12.14 (raw "num"))
 				(e-int @12.17-12.19 (raw "10"))))
-		(s-decl @13.1-16.10
+		(s-decl @13.1-13.23
 			(p-ident @13.1-13.13 (raw "int_multiply"))
-			(e-binop @13.16-16.10 (op "*")
+			(e-binop @13.16-13.23 (op "*")
 				(e-ident @13.16-13.19 (raw "num"))
 				(e-int @13.22-13.23 (raw "2"))))
-		(s-decl @16.1-17.15
+		(s-decl @16.1-16.23
 			(p-ident @16.1-16.10 (raw "float_add"))
-			(e-binop @16.13-17.15 (op "+")
+			(e-binop @16.13-16.23 (op "+")
 				(e-ident @16.13-16.16 (raw "num"))
 				(e-frac @16.19-16.23 (raw "3.14"))))
-		(s-decl @17.1-20.7
+		(s-decl @17.1-17.27
 			(p-ident @17.1-17.15 (raw "float_multiply"))
-			(e-binop @17.18-20.7 (op "*")
+			(e-binop @17.18-17.27 (op "*")
 				(e-ident @17.18-17.21 (raw "num"))
 				(e-frac @17.24-17.27 (raw "2.5"))))
-		(s-decl @20.1-23.12
+		(s-decl @20.1-20.19
 			(p-ident @20.1-20.7 (raw "double"))
-			(e-lambda @20.10-23.12
+			(e-lambda @20.10-20.19
 				(args
 					(p-ident @20.11-20.12 (raw "x")))
-				(e-binop @20.14-23.12 (op "*")
+				(e-binop @20.14-20.19 (op "*")
 					(e-ident @20.14-20.15 (raw "x"))
 					(e-int @20.18-20.19 (raw "2")))))
 		(s-decl @23.1-23.24
@@ -128,7 +128,7 @@ CloseCurly(29:1-29:2),EndOfFile(29:2-29:2),
 					(p-underscore))
 				(e-block @26.12-29.2
 					(statements
-						(e-binop @28.5-29.2 (op "+")
+						(e-binop @28.5-28.27 (op "+")
 							(e-ident @28.5-28.12 (raw "int_add"))
 							(e-ident @28.15-28.27 (raw "int_multiply")))))))))
 ~~~
@@ -183,34 +183,34 @@ main = |_| {
 			(p-assign @5.1-5.5 (ident "frac"))))
 	(d-let
 		(p-assign @12.1-12.8 (ident "int_add"))
-		(e-binop @12.11-13.13 (op "add")
+		(e-binop @12.11-12.19 (op "add")
 			(e-lookup-local @12.11-12.14
 				(p-assign @4.1-4.4 (ident "num")))
 			(e-int @12.17-12.19 (value "10"))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "int_multiply"))
-		(e-binop @13.16-16.10 (op "mul")
+		(e-binop @13.16-13.23 (op "mul")
 			(e-lookup-local @13.16-13.19
 				(p-assign @4.1-4.4 (ident "num")))
 			(e-int @13.22-13.23 (value "2"))))
 	(d-let
 		(p-assign @16.1-16.10 (ident "float_add"))
-		(e-binop @16.13-17.15 (op "add")
+		(e-binop @16.13-16.23 (op "add")
 			(e-lookup-local @16.13-16.16
 				(p-assign @4.1-4.4 (ident "num")))
 			(e-dec-small @16.19-16.23 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
 	(d-let
 		(p-assign @17.1-17.15 (ident "float_multiply"))
-		(e-binop @17.18-20.7 (op "mul")
+		(e-binop @17.18-17.27 (op "mul")
 			(e-lookup-local @17.18-17.21
 				(p-assign @4.1-4.4 (ident "num")))
 			(e-dec-small @17.24-17.27 (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
 	(d-let
 		(p-assign @20.1-20.7 (ident "double"))
-		(e-lambda @20.10-23.12
+		(e-lambda @20.10-20.19
 			(args
 				(p-assign @20.11-20.12 (ident "x")))
-			(e-binop @20.14-23.12 (op "mul")
+			(e-binop @20.14-20.19 (op "mul")
 				(e-lookup-local @20.14-20.15
 					(p-assign @20.11-20.12 (ident "x")))
 				(e-int @20.18-20.19 (value "2")))))
@@ -232,7 +232,7 @@ main = |_| {
 			(args
 				(p-underscore @26.9-26.10))
 			(e-block @26.12-29.2
-				(e-binop @28.5-29.2 (op "add")
+				(e-binop @28.5-28.27 (op "add")
 					(e-lookup-local @28.5-28.12
 						(p-assign @12.1-12.8 (ident "int_add")))
 					(e-lookup-local @28.15-28.27
@@ -259,11 +259,11 @@ main = |_| {
 		(expr @5.8-5.11 (type "Frac(*)"))
 		(expr @8.11-8.14 (type "Num(*)"))
 		(expr @9.13-9.17 (type "Frac(*)"))
-		(expr @12.11-13.13 (type "*"))
-		(expr @13.16-16.10 (type "*"))
-		(expr @16.13-17.15 (type "*"))
-		(expr @17.18-20.7 (type "*"))
-		(expr @20.10-23.12 (type "* -> *"))
+		(expr @12.11-12.19 (type "*"))
+		(expr @13.16-13.23 (type "*"))
+		(expr @16.13-16.23 (type "*"))
+		(expr @17.18-17.27 (type "*"))
+		(expr @20.10-20.19 (type "* -> *"))
 		(expr @23.15-23.24 (type "*"))
 		(expr @24.17-24.28 (type "*"))
 		(expr @26.8-29.2 (type "* -> *"))))

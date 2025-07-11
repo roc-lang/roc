@@ -23,7 +23,7 @@ processColor = |color| {
 }
 ~~~
 # EXPECTED
-IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:9:5:9:17
+IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:9:5:9:11
 UNDEFINED VARIABLE - nominal_mixed_scope.md:9:12:9:17
 # PROBLEMS
 **IMPORT MUST BE TOP LEVEL**
@@ -31,11 +31,11 @@ Import statements must appear at the top level of a module.
 Move this import to the top of the file, after the module header but before any definitions.
 
 Here is the problematic code:
-**nominal_mixed_scope.md:9:5:9:17:**
+**nominal_mixed_scope.md:9:5:9:11:**
 ```roc
     import Color.RGB
 ```
-    ^^^^^^^^^^^^
+    ^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -72,8 +72,8 @@ CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
 (file @1.1-16.2
 	(module @1.1-1.35
 		(exposes @1.8-1.35
-			(exposed-upper-ident (text "LocalStatus"))
-			(exposed-lower-ident (text "processColor"))))
+			(exposed-upper-ident @1.9-1.20 (text "LocalStatus"))
+			(exposed-lower-ident @1.22-1.34 (text "processColor"))))
 	(statements
 		(s-type-decl @3.1-3.35
 			(header @3.1-3.12 (name "LocalStatus")
@@ -82,7 +82,7 @@ CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
 				(tags
 					(ty @3.17-3.24 (name "Pending"))
 					(ty @3.26-3.34 (name "Complete")))))
-		(s-type-anno @5.1-6.13 (name "processColor")
+		(s-type-anno @5.1-5.32 (name "processColor")
 			(ty-fn @5.16-5.32
 				(_)
 				(ty @5.21-5.32 (name "LocalStatus"))))
@@ -93,18 +93,18 @@ CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
 					(p-ident @6.17-6.22 (raw "color")))
 				(e-block @6.24-16.2
 					(statements
-						(s-malformed @9.5-9.17 (tag "import_must_be_top_level"))
+						(s-malformed @9.5-9.11 (tag "import_must_be_top_level"))
 						(e-tag @9.12-9.21 (raw "Color.RGB"))
 						(e-match
 							(e-ident @11.11-11.16 (raw "color"))
 							(branches
-								(branch @12.9-13.12
+								(branch @12.9-12.39
 									(p-tag @12.9-12.16 (raw ".Red"))
 									(e-tag @12.20-12.39 (raw "LocalStatus.Pending")))
-								(branch @13.9-14.12
+								(branch @13.9-13.42
 									(p-tag @13.9-13.18 (raw ".Green"))
 									(e-tag @13.22-13.42 (raw "LocalStatus.Complete")))
-								(branch @14.9-15.6
+								(branch @14.9-14.40
 									(p-tag @14.9-14.17 (raw ".Blue"))
 									(e-tag @14.21-14.40 (raw "LocalStatus.Pending")))))))))))
 ~~~
@@ -137,7 +137,7 @@ processColor = |color| {
 			(args
 				(p-assign @6.17-6.22 (ident "color")))
 			(e-block @6.24-16.2
-				(s-expr @9.12-11.10
+				(s-expr @9.12-9.21
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(e-match @11.5-15.6
 					(match @11.5-15.6
@@ -169,7 +169,7 @@ processColor = |color| {
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.32 (effectful false)
-					(ty-underscore @5.16-5.17)
+					(ty-underscore @1.1-1.1)
 					(ty @5.21-5.32 (name "LocalStatus"))))))
 	(s-nominal-decl @3.1-3.35
 		(ty-header @3.1-3.12 (name "LocalStatus"))

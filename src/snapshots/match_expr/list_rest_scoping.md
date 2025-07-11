@@ -16,9 +16,9 @@ BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:2:13:2:19
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:3:6:3:12
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:4:9:4:15
 UNDEFINED VARIABLE - list_rest_scoping.md:1:7:1:12
-UNUSED VARIABLE - list_rest_scoping.md:2:15:2:19
-UNUSED VARIABLE - list_rest_scoping.md:3:8:3:12
-UNUSED VARIABLE - list_rest_scoping.md:4:11:4:15
+UNUSED VARIABLE - list_rest_scoping.md:2:15:2:15
+UNUSED VARIABLE - list_rest_scoping.md:3:8:3:8
+UNUSED VARIABLE - list_rest_scoping.md:4:11:4:11
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.
@@ -72,11 +72,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**list_rest_scoping.md:2:15:2:19:**
+**list_rest_scoping.md:2:15:2:15:**
 ```roc
     [first, ..rest] => first + 1
 ```
-              ^^^^
+              
 
 
 **UNUSED VARIABLE**
@@ -84,11 +84,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**list_rest_scoping.md:3:8:3:12:**
+**list_rest_scoping.md:3:8:3:8:**
 ```roc
     [..rest, last] => last + 2
 ```
-       ^^^^
+       
 
 
 **UNUSED VARIABLE**
@@ -96,11 +96,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**list_rest_scoping.md:4:11:4:15:**
+**list_rest_scoping.md:4:11:4:11:**
 ```roc
     [x, ..rest, y] => x + y
 ```
-          ^^^^
+          
 
 
 # TOKENS
@@ -116,26 +116,26 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 (e-match
 	(e-ident @1.7-1.12 (raw "items"))
 	(branches
-		(branch @2.5-3.6
+		(branch @2.5-2.33
 			(p-list @2.5-2.20
 				(p-ident @2.6-2.11 (raw "first"))
-				(p-list-rest @2.13-2.20 (name "rest")))
-			(e-binop @2.24-3.6 (op "+")
+				(p-list-rest @2.13-2.19 (name "rest")))
+			(e-binop @2.24-2.33 (op "+")
 				(e-ident @2.24-2.29 (raw "first"))
 				(e-int @2.32-2.33 (raw "1"))))
-		(branch @3.5-4.6
+		(branch @3.5-3.31
 			(p-list @3.5-3.19
-				(p-list-rest @3.6-3.13 (name "rest"))
+				(p-list-rest @3.6-3.12 (name "rest"))
 				(p-ident @3.14-3.18 (raw "last")))
-			(e-binop @3.23-4.6 (op "+")
+			(e-binop @3.23-3.31 (op "+")
 				(e-ident @3.23-3.27 (raw "last"))
 				(e-int @3.30-3.31 (raw "2"))))
-		(branch @4.5-5.2
+		(branch @4.5-4.28
 			(p-list @4.5-4.19
 				(p-ident @4.6-4.7 (raw "x"))
-				(p-list-rest @4.9-4.16 (name "rest"))
+				(p-list-rest @4.9-4.15 (name "rest"))
 				(p-ident @4.17-4.18 (raw "y")))
-			(e-binop @4.23-5.2 (op "+")
+			(e-binop @4.23-4.28 (op "+")
 				(e-ident @4.23-4.24 (raw "x"))
 				(e-ident @4.27-4.28 (raw "y"))))))
 ~~~
@@ -161,9 +161,9 @@ match items {
 							(patterns
 								(p-assign @2.6-2.11 (ident "first")))
 							(rest-at (index 1)
-								(p-assign @2.15-2.19 (ident "rest"))))))
+								(p-assign @2.15-2.15 (ident "rest"))))))
 				(value
-					(e-binop @2.24-3.6 (op "add")
+					(e-binop @2.24-2.33 (op "add")
 						(e-lookup-local @2.24-2.29
 							(p-assign @2.6-2.11 (ident "first")))
 						(e-int @2.32-2.33 (value "1")))))
@@ -174,9 +174,9 @@ match items {
 							(patterns
 								(p-assign @3.14-3.18 (ident "last")))
 							(rest-at (index 0)
-								(p-assign @3.8-3.12 (ident "rest"))))))
+								(p-assign @3.8-3.8 (ident "rest"))))))
 				(value
-					(e-binop @3.23-4.6 (op "add")
+					(e-binop @3.23-3.31 (op "add")
 						(e-lookup-local @3.23-3.27
 							(p-assign @3.14-3.18 (ident "last")))
 						(e-int @3.30-3.31 (value "2")))))
@@ -188,9 +188,9 @@ match items {
 								(p-assign @4.6-4.7 (ident "x"))
 								(p-assign @4.17-4.18 (ident "y")))
 							(rest-at (index 1)
-								(p-assign @4.11-4.15 (ident "rest"))))))
+								(p-assign @4.11-4.11 (ident "rest"))))))
 				(value
-					(e-binop @4.23-5.2 (op "add")
+					(e-binop @4.23-4.28 (op "add")
 						(e-lookup-local @4.23-4.24
 							(p-assign @4.6-4.7 (ident "x")))
 						(e-lookup-local @4.27-4.28

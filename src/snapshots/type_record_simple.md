@@ -27,30 +27,30 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~clojure
 (file @1.1-6.15
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.9 (name "get_name")
+		(s-type-anno @3.1-3.42 (name "get_name")
 			(ty-fn @3.12-3.42
 				(ty-record @3.12-3.35
-					(anno-record-field @3.14-3.24 (name "name")
+					(anno-record-field @3.14-3.23 (name "name")
 						(ty @3.20-3.23 (name "Str")))
-					(anno-record-field @3.25-3.35 (name "age")
+					(anno-record-field @3.25-3.33 (name "age")
 						(ty @3.30-3.33 (name "U64"))))
 				(ty @3.39-3.42 (name "Str"))))
-		(s-decl @4.1-6.6
+		(s-decl @4.1-4.32
 			(p-ident @4.1-4.9 (raw "get_name"))
-			(e-lambda @4.12-6.6
+			(e-lambda @4.12-4.32
 				(args
 					(p-ident @4.13-4.19 (raw "person")))
-				(e-field-access @4.21-6.6
+				(e-field-access @4.21-4.32
 					(e-ident @4.21-4.27 (raw "person"))
 					(e-ident @4.27-4.32 (raw "name")))))
 		(s-decl @6.1-6.15
@@ -74,10 +74,10 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign @4.1-4.9 (ident "get_name"))
-		(e-lambda @4.12-6.6
+		(e-lambda @4.12-4.32
 			(args
 				(p-assign @4.13-4.19 (ident "person")))
-			(e-dot-access @4.21-6.6 (field "name")
+			(e-dot-access @4.21-4.32 (field "name")
 				(receiver
 					(e-lookup-local @4.21-4.27
 						(p-assign @4.13-4.19 (ident "person"))))))
@@ -104,6 +104,6 @@ main! = |_| {}
 		(patt @4.1-4.9 (type "{ name: Str, age: U64 } -> Str"))
 		(patt @6.1-6.6 (type "* -> {}")))
 	(expressions
-		(expr @4.12-6.6 (type "{ name: Str, age: U64 } -> Str"))
+		(expr @4.12-4.32 (type "{ name: Str, age: U64 } -> Str"))
 		(expr @6.9-6.15 (type "* -> {}"))))
 ~~~

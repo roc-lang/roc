@@ -36,17 +36,17 @@ LowerIdent(10:1-10:2),OpAssign(10:3-10:4),Float(10:5-10:12),EndOfFile(10:12-10:1
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
-		(s-type-anno @3.1-4.2 (name "a")
+		(s-type-anno @3.1-3.8 (name "a")
 			(ty @3.5-3.8 (name "F32")))
 		(s-decl @4.1-4.9
 			(p-ident @4.1-4.2 (raw "a"))
 			(e-frac @4.5-4.9 (raw "3.14")))
-		(s-type-anno @6.1-7.2 (name "b")
+		(s-type-anno @6.1-6.8 (name "b")
 			(ty @6.5-6.8 (name "F64")))
 		(s-decl @7.1-7.12
 			(p-ident @7.1-7.2 (raw "b"))
 			(e-frac @7.5-7.12 (raw "2.71828")))
-		(s-type-anno @9.1-10.2 (name "c")
+		(s-type-anno @9.1-9.8 (name "c")
 			(ty @9.5-9.8 (name "Dec")))
 		(s-decl @10.1-10.12
 			(p-ident @10.1-10.2 (raw "c"))

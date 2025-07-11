@@ -43,24 +43,24 @@ LowerIdent(9:1-9:5),OpAssign(9:6-9:7),LowerIdent(9:8-9:12),NoSpaceOpenRound(9:12
 ~~~clojure
 (file @1.1-9.18
 	(app @1.1-1.56
-		(provides @1.6-1.11
-			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf")
+		(provides @1.5-1.11
+			(exposed-lower-ident @1.6-1.10 (text "main")))
+		(record-field @1.14-1.54 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf")
+			(record-field @1.14-1.54 (name "pf")
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @4.1-5.5 (name "swap")
+		(s-type-anno @4.1-4.24 (name "swap")
 			(ty-fn @4.8-4.24
 				(ty-tuple @4.8-4.14
-					(ty-var @4.9-4.10 (raw "a"))
-					(ty-var @4.12-4.13 (raw "b")))
+					(ty-var @4.9-4.9 (raw "a"))
+					(ty-var @1.1-1.1 (raw "b")))
 				(ty-tuple @4.18-4.24
-					(ty-var @4.19-4.20 (raw "b"))
-					(ty-var @4.22-4.23 (raw "a")))))
+					(ty-var @4.19-4.19 (raw "b"))
+					(ty-var @1.1-1.1 (raw "a")))))
 		(s-decl @5.1-5.23
 			(p-ident @5.1-5.5 (raw "swap"))
 			(e-lambda @5.8-5.23
@@ -103,11 +103,11 @@ NO CHANGE
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)
 					(ty-tuple @4.8-4.14
-						(ty-var @4.9-4.10 (name "a"))
-						(ty-var @4.12-4.13 (name "b")))
+						(ty-var @4.9-4.9 (name "a"))
+						(ty-var @1.1-1.1 (name "b")))
 					(ty-tuple @4.18-4.24
-						(ty-var @4.19-4.20 (name "b"))
-						(ty-var @4.22-4.23 (name "a")))))))
+						(ty-var @4.19-4.19 (name "b"))
+						(ty-var @1.1-1.1 (name "a")))))))
 	(d-let
 		(p-assign @9.1-9.5 (ident "main"))
 		(e-call @9.8-9.18

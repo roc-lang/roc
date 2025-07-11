@@ -34,7 +34,7 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 (file @1.1-9.2
 	(module @1.1-1.14
 		(exposes @1.8-1.14
-			(exposed-lower-ident (text "kind"))))
+			(exposed-lower-ident @1.9-1.13 (text "kind"))))
 	(statements
 		(s-type-decl @3.1-3.51
 			(header @3.1-3.6 (name "Color")
@@ -47,7 +47,7 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 					(ty @3.28-3.34 (name "Yellow"))
 					(ty @3.36-3.42 (name "Orange"))
 					(ty @3.44-3.50 (name "Purple")))))
-		(s-type-anno @5.1-6.5 (name "kind")
+		(s-type-anno @5.1-5.20 (name "kind")
 			(ty-fn @5.8-5.20
 				(ty @5.8-5.13 (name "Color"))
 				(ty @5.17-5.20 (name "Str"))))
@@ -59,14 +59,14 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 				(e-match
 					(e-ident @6.22-6.27 (raw "color"))
 					(branches
-						(branch @7.5-8.11
+						(branch @7.5-7.36
 							(p-alternatives
 								(p-tag @7.5-7.8 (raw "Red"))
 								(p-tag @7.11-7.16 (raw "Green"))
 								(p-tag @7.19-7.23 (raw "Blue")))
 							(e-string @7.27-7.36
 								(e-string-part @7.28-7.35 (raw "primary"))))
-						(branch @8.5-9.2
+						(branch @8.5-8.44
 							(p-alternatives
 								(p-tag @8.5-8.11 (raw "Yellow"))
 								(p-tag @8.14-8.20 (raw "Orange"))

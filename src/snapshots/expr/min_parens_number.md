@@ -8,18 +8,18 @@ type=expr
 -(8)
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - min_parens_number.md:1:1:1:3
+UNEXPECTED TOKEN IN EXPRESSION - min_parens_number.md:1:1:1:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **-(** is not expected in an expression.
+The token **-** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**min_parens_number.md:1:1:1:3:**
+**min_parens_number.md:1:1:1:2:**
 ```roc
 -(8)
 ```
-^^
+^
 
 
 # TOKENS
@@ -28,7 +28,7 @@ OpUnaryMinus(1:1-1:2),NoSpaceOpenRound(1:2-1:3),Int(1:3-1:4),CloseRound(1:4-1:5)
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.3 (reason "expr_unexpected_token"))
+(e-malformed @1.1-1.2 (reason "expr_unexpected_token"))
 ~~~
 # FORMATTED
 ~~~roc

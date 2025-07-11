@@ -34,17 +34,17 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 (e-match
 	(e-ident @1.7-1.13 (raw "person"))
 	(branches
-		(branch @2.5-3.2
+		(branch @2.5-2.92
 			(p-record @2.5-2.37
-				(field @2.7-2.22 (name "name") (rest false)
+				(field @2.7-2.21 (name "name") (rest false)
 					(p-ident @2.13-2.21 (raw "userName")))
-				(field @2.23-2.37 (name "age") (rest false)
+				(field @2.23-2.35 (name "age") (rest false)
 					(p-ident @2.28-2.35 (raw "userAge"))))
 			(e-string @2.41-2.92
 				(e-string-part @2.42-2.47 (raw "User "))
 				(e-ident @2.49-2.57 (raw "userName"))
 				(e-string-part @2.58-2.62 (raw " is "))
-				(e-field-access @2.64-2.81
+				(e-field-access @2.64-2.80
 					(e-ident @2.64-2.71 (raw "userAge"))
 					(e-apply @2.71-2.80
 						(e-ident @2.71-2.78 (raw "to_str"))))
@@ -68,10 +68,10 @@ match person {
 					(pattern (degenerate false)
 						(p-record-destructure @2.5-2.37
 							(destructs
-								(record-destruct @2.7-2.22 (label "name") (ident "name")
+								(record-destruct @2.7-2.21 (label "name") (ident "name")
 									(sub-pattern
 										(p-assign @2.13-2.21 (ident "userName"))))
-								(record-destruct @2.23-2.37 (label "age") (ident "age")
+								(record-destruct @2.23-2.35 (label "age") (ident "age")
 									(sub-pattern
 										(p-assign @2.28-2.35 (ident "userAge"))))))))
 				(value
@@ -80,7 +80,7 @@ match person {
 						(e-lookup-local @2.49-2.57
 							(p-assign @2.13-2.21 (ident "userName")))
 						(e-literal @2.58-2.62 (string " is "))
-						(e-dot-access @2.64-2.81 (field "to_str")
+						(e-dot-access @2.64-2.80 (field "to_str")
 							(receiver
 								(e-lookup-local @2.64-2.71
 									(p-assign @2.28-2.35 (ident "userAge"))))

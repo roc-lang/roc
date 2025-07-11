@@ -89,10 +89,10 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 						(e-tag @8.29-8.34 (raw "Write"))
 						(e-tag @8.36-8.41 (raw "Admin")))))))
 	(field (field "callback")
-		(e-lambda @10.15-10.25
+		(e-lambda @10.15-10.24
 			(args
 				(p-ident @10.16-10.17 (raw "x")))
-			(e-binop @10.19-10.25 (op "+")
+			(e-binop @10.19-10.24 (op "+")
 				(e-ident @10.19-10.20 (raw "x"))
 				(e-int @10.23-10.24 (raw "1")))))
 	(field (field "nested")
@@ -134,7 +134,6 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 
 			tags: ["developer", "senior", "fullstack"],
 			permissions: [Read, Write, Admin]
-
 		},
 	),
 	callback: |x| x + 1,
@@ -142,9 +141,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 
 		items: [Some("first"), None, Some("third")],
 		result: Success({data: [1, 2, 3], timestamp: "2024-01-01"})
-
 	}
-
 }
 ~~~
 # CANONICALIZE
@@ -200,10 +197,10 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 										(e-tag @8.29-8.34 (name "Write"))
 										(e-tag @8.36-8.41 (name "Admin"))))))))))
 		(field (name "callback")
-			(e-lambda @10.15-10.25
+			(e-lambda @10.15-10.24
 				(args
 					(p-assign @10.16-10.17 (ident "x")))
-				(e-binop @10.19-10.25 (op "add")
+				(e-binop @10.19-10.24 (op "add")
 					(e-lookup-local @10.19-10.20
 						(p-assign @10.16-10.17 (ident "x")))
 					(e-int @10.23-10.24 (value "1")))))

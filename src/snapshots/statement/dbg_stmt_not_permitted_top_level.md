@@ -13,18 +13,17 @@ dbg "foo"
 foo = ...
 ~~~
 # EXPECTED
-INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:4:1:6:4
+INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:4:1:4:10
 # PROBLEMS
 **INVALID STATEMENT**
 The statement **dbg** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**dbg_stmt_not_permitted_top_level.md:4:1:6:4:**
+**dbg_stmt_not_permitted_top_level.md:4:1:4:10:**
 ```roc
 dbg "foo"
-
-foo = ...
 ```
+^^^^^^^^^
 
 
 # TOKENS
@@ -38,9 +37,9 @@ LowerIdent(6:1-6:4),OpAssign(6:5-6:6),TripleDot(6:7-6:10),EndOfFile(6:10-6:10),
 (file @1.1-6.10
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident (text "foo"))))
+			(exposed-lower-ident @1.9-1.12 (text "foo"))))
 	(statements
-		(s-dbg @4.1-6.4
+		(s-dbg @4.1-4.10
 			(e-string @4.5-4.10
 				(e-string-part @4.6-4.9 (raw "foo"))))
 		(s-decl @6.1-6.10
@@ -56,7 +55,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "foo"))
-		(e-not-implemented @6.7-6.10)))
+		(e-not-implemented @1.1-1.1)))
 ~~~
 # TYPES
 ~~~clojure
@@ -64,5 +63,5 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.4 (type "*")))
 	(expressions
-		(expr @6.7-6.10 (type "*"))))
+		(expr @1.1-1.1 (type "*"))))
 ~~~

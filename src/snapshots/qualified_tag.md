@@ -26,7 +26,7 @@ LowerIdent(5:1-5:5),OpAssign(5:6-5:7),UpperIdent(5:8-5:13),NoSpaceDotUpperIdent(
 (file @1.1-5.17
 	(module @1.1-1.15
 		(exposes @1.8-1.15
-			(exposed-upper-ident (text "Color"))))
+			(exposed-upper-ident @1.9-1.14 (text "Color"))))
 	(statements
 		(s-type-decl @3.1-3.21
 			(header @3.1-3.6 (name "Color")

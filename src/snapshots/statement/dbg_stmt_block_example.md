@@ -32,7 +32,7 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 (file @1.1-9.2
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident (text "foo"))))
+			(exposed-lower-ident @1.9-1.12 (text "foo"))))
 	(statements
 		(s-decl @3.1-9.2
 			(p-ident @3.1-3.4 (raw "foo"))
@@ -41,12 +41,12 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 					(p-ident @3.8-3.11 (raw "num")))
 				(e-block @3.13-9.2
 					(statements
-						(s-dbg @5.5-8.8
-							(e-field-access @5.9-8.8
+						(s-dbg @5.5-5.21
+							(e-field-access @5.9-5.21
 								(e-ident @5.9-5.12 (raw "num"))
 								(e-apply @5.12-5.21
 									(e-ident @5.12-5.19 (raw "to_str")))))
-						(s-dbg @8.5-9.2
+						(s-dbg @8.5-8.13
 							(e-tuple @8.8-8.13
 								(e-ident @8.9-8.12 (raw "num"))))))))))
 ~~~
@@ -71,13 +71,13 @@ foo = |num| {
 			(args
 				(p-assign @3.8-3.11 (ident "num")))
 			(e-block @3.13-9.2
-				(s-dbg @5.5-8.8
-					(e-dot-access @5.9-8.8 (field "to_str")
+				(s-dbg @5.5-5.21
+					(e-dot-access @5.9-5.21 (field "to_str")
 						(receiver
 							(e-lookup-local @5.9-5.12
 								(p-assign @3.8-3.11 (ident "num"))))
 						(args)))
-				(e-dbg @8.5-9.2
+				(e-dbg @8.5-8.13
 					(e-lookup-local @8.9-8.12
 						(p-assign @3.8-3.11 (ident "num"))))))))
 ~~~

@@ -15,53 +15,50 @@ getUser = |id| if (id > 1!) "big" else "l"
 -ain! = |_| getUser(900)
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_022.md:1:1:1:6
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:29
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:3:7
-PARSE ERROR - fuzz_crash_022.md:6:27:6:30
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:1:8:6
-INVALID STATEMENT - fuzz_crash_022.md:1:28:1:33
-INVALID STATEMENT - fuzz_crash_022.md:1:32:3:7
+PARSE ERROR - fuzz_crash_022.md:1:1:1:4
+UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:27
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:1:33
+PARSE ERROR - fuzz_crash_022.md:6:27:6:28
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:1:8:2
+INVALID STATEMENT - fuzz_crash_022.md:1:28:1:31
+INVALID STATEMENT - fuzz_crash_022.md:1:32:1:33
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
-INVALID STATEMENT - fuzz_crash_022.md:8:1:8:6
+INVALID STATEMENT - fuzz_crash_022.md:8:1:8:2
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_package_or_platform_name`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_022.md:1:1:1:6:**
+**fuzz_crash_022.md:1:1:1:4:**
 ```roc
 app [main!] { |f: platform "c" }
 ```
-^^^^^
+^^^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **platform "** is not expected in a type annotation.
+The token **platform** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
 Here is the problematic code:
-**fuzz_crash_022.md:1:19:1:29:**
+**fuzz_crash_022.md:1:19:1:27:**
 ```roc
 app [main!] { |f: platform "c" }
 ```
-                  ^^^^^^^^^^
+                  ^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **}
-
-UserId** is not expected in an expression.
+The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_022.md:1:32:3:7:**
+**fuzz_crash_022.md:1:32:1:33:**
 ```roc
 app [main!] { |f: platform "c" }
-
-UserId : U64
 ```
+                               ^
 
 
 **PARSE ERROR**
@@ -69,23 +66,23 @@ A parsing error occurred: `expected_expr_close_round_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_022.md:6:27:6:30:**
+**fuzz_crash_022.md:6:27:6:28:**
 ```roc
 getUser = |id| if (id > 1!) "big" else "l"
 ```
-                          ^^^
+                          ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **-ain!** is not expected in an expression.
+The token **-** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_022.md:8:1:8:6:**
+**fuzz_crash_022.md:8:1:8:2:**
 ```roc
 -ain! = |_| getUser(900)
 ```
-^^^^^
+^
 
 
 **MALFORMED TYPE**
@@ -95,23 +92,22 @@ This type annotation is malformed or contains invalid syntax.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_022.md:1:28:1:33:**
+**fuzz_crash_022.md:1:28:1:31:**
 ```roc
 app [main!] { |f: platform "c" }
 ```
-                           ^^^^^
+                           ^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_022.md:1:32:3:7:**
+**fuzz_crash_022.md:1:32:1:33:**
 ```roc
 app [main!] { |f: platform "c" }
-
-UserId : U64
 ```
+                               ^
 
 
 **INVALID IF CONDITION**
@@ -135,11 +131,11 @@ getUser = |id| if (id > 1!) "big" else "l"
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_022.md:8:1:8:6:**
+**fuzz_crash_022.md:8:1:8:2:**
 ```roc
 -ain! = |_| getUser(900)
 ```
-^^^^^
+^
 
 
 # TOKENS
@@ -153,33 +149,33 @@ OpUnaryMinus(8:1-8:2),LowerIdent(8:2-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Unde
 # PARSE
 ~~~clojure
 (file @1.1-8.25
-	(malformed-header @1.1-1.17 (tag "expected_package_or_platform_name"))
+	(malformed-header @1.1-1.16 (tag "expected_package_or_platform_name"))
 	(statements
-		(s-type-anno @1.16-1.29 (name "f")
-			(ty-malformed @1.19-1.29 (tag "ty_anno_unexpected_token")))
+		(s-type-anno @1.16-1.27 (name "f")
+			(ty-malformed @1.19-1.27 (tag "ty_anno_unexpected_token")))
 		(e-string @1.28-1.31
 			(e-string-part @1.29-1.30 (raw "c")))
-		(e-malformed @1.32-3.7 (reason "expr_unexpected_token"))
+		(e-malformed @1.32-1.33 (reason "expr_unexpected_token"))
 		(s-type-decl @3.1-3.13
 			(header @3.1-3.7 (name "UserId")
 				(args))
 			(ty @3.10-3.13 (name "U64")))
-		(s-type-anno @5.1-6.8 (name "ser")
+		(s-type-anno @5.1-5.20 (name "ser")
 			(ty-fn @5.7-5.20
 				(ty @5.7-5.13 (name "UserId"))
 				(ty @5.17-5.20 (name "Str"))))
-		(s-decl @6.1-8.2
+		(s-decl @6.1-6.43
 			(p-ident @6.1-6.8 (raw "getUser"))
-			(e-lambda @6.11-8.2
+			(e-lambda @6.11-6.43
 				(args
 					(p-ident @6.12-6.14 (raw "id")))
-				(e-if-then-else @6.16-8.2
-					(e-malformed @6.27-6.30 (reason "expected_expr_close_round_or_comma"))
+				(e-if-then-else @6.16-6.43
+					(e-malformed @6.27-6.28 (reason "expected_expr_close_round_or_comma"))
 					(e-string @6.29-6.34
 						(e-string-part @6.30-6.33 (raw "big")))
 					(e-string @6.40-6.43
 						(e-string-part @6.41-6.42 (raw "l"))))))
-		(e-malformed @8.1-8.6 (reason "expr_unexpected_token"))
+		(e-malformed @8.1-8.2 (reason "expr_unexpected_token"))
 		(s-decl @8.2-8.25
 			(p-ident @8.2-8.6 (raw "ain!"))
 			(e-lambda @8.9-8.25
@@ -205,10 +201,10 @@ ain! = |_| getUser(900)
 (can-ir
 	(d-let
 		(p-assign @6.1-6.8 (ident "getUser"))
-		(e-lambda @6.11-8.2
+		(e-lambda @6.11-6.43
 			(args
 				(p-assign @6.12-6.14 (ident "id")))
-			(e-if @6.16-8.2
+			(e-if @6.16-6.43
 				(if-branches
 					(if-branch
 						(e-runtime-error (tag "if_condition_not_canonicalized"))
@@ -240,6 +236,6 @@ ain! = |_| getUser(900)
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
-		(expr @6.11-8.2 (type "* -> Str"))
+		(expr @6.11-6.43 (type "* -> Str"))
 		(expr @8.9-8.25 (type "* -> Str"))))
 ~~~

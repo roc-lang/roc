@@ -8,20 +8,20 @@ type=statement
 process_user! : { name : Str, age : U32, .. } => Str
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN TYPE ANNOTATION - type_open_record.md:1:42:1:46
-PARSE ERROR - type_open_record.md:1:37:1:41
-PARSE ERROR - type_open_record.md:1:47:1:53
+UNEXPECTED TOKEN IN TYPE ANNOTATION - type_open_record.md:1:42:1:44
+PARSE ERROR - type_open_record.md:1:37:1:40
+PARSE ERROR - type_open_record.md:1:47:1:49
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **.. }** is not expected in a type annotation.
+The token **..** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
 Here is the problematic code:
-**type_open_record.md:1:42:1:46:**
+**type_open_record.md:1:42:1:44:**
 ```roc
 process_user! : { name : Str, age : U32, .. } => Str
 ```
-                                         ^^^^
+                                         ^^
 
 
 **PARSE ERROR**
@@ -29,11 +29,11 @@ A parsing error occurred: `expected_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**type_open_record.md:1:37:1:41:**
+**type_open_record.md:1:37:1:40:**
 ```roc
 process_user! : { name : Str, age : U32, .. } => Str
 ```
-                                    ^^^^
+                                    ^^^
 
 
 **PARSE ERROR**
@@ -41,11 +41,11 @@ A parsing error occurred: `expected_ty_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**type_open_record.md:1:47:1:53:**
+**type_open_record.md:1:47:1:49:**
 ```roc
 process_user! : { name : Str, age : U32, .. } => Str
 ```
-                                              ^^^^^^
+                                              ^^
 
 
 **MALFORMED TYPE**
@@ -57,8 +57,8 @@ LowerIdent(1:1-1:14),OpColon(1:15-1:16),OpenCurly(1:17-1:18),LowerIdent(1:19-1:2
 ~~~
 # PARSE
 ~~~clojure
-(s-type-anno @1.1-1.53 (name "process_user!")
-	(ty-malformed @1.47-1.53 (tag "expected_ty_close_curly_or_comma")))
+(s-type-anno @1.1-1.49 (name "process_user!")
+	(ty-malformed @1.47-1.49 (tag "expected_ty_close_curly_or_comma")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -67,8 +67,8 @@ process_user! :
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno @1.1-1.53 (name "process_user!")
-		(ty-malformed @1.47-1.53)))
+	(s-type-anno @1.1-1.49 (name "process_user!")
+		(ty-malformed @1.47-1.49)))
 ~~~
 # TYPES
 ~~~clojure

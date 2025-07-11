@@ -11,18 +11,18 @@ module []
 var topLevelVar_ = 0
 ~~~
 # EXPECTED
-PARSE ERROR - can_var_scoping_invalid_top_level.md:4:1:4:17
+PARSE ERROR - can_var_scoping_invalid_top_level.md:4:1:4:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `var_only_allowed_in_a_body`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**can_var_scoping_invalid_top_level.md:4:1:4:17:**
+**can_var_scoping_invalid_top_level.md:4:1:4:4:**
 ```roc
 var topLevelVar_ = 0
 ```
-^^^^^^^^^^^^^^^^
+^^^
 
 
 # TOKENS
@@ -36,7 +36,7 @@ KwVar(4:1-4:4),LowerIdent(4:5-4:17),OpAssign(4:18-4:19),Int(4:20-4:21),EndOfFile
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
-		(s-malformed @4.1-4.17 (tag "var_only_allowed_in_a_body"))
+		(s-malformed @4.1-4.4 (tag "var_only_allowed_in_a_body"))
 		(s-decl @4.5-4.21
 			(p-ident @4.5-4.17 (raw "topLevelVar_"))
 			(e-int @4.20-4.21 (raw "0")))))

@@ -28,7 +28,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~clojure
 (e-block @1.1-6.2
 	(statements
-		(s-type-anno @2.5-3.6 (name "f")
+		(s-type-anno @2.5-2.33 (name "f")
 			(ty-fn @2.9-2.33
 				(ty-tuple @2.9-2.19
 					(ty @2.10-2.13 (name "Str"))
@@ -60,7 +60,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-6.2
-	(s-type-anno @2.5-3.6 (name "f")
+	(s-type-anno @2.5-2.33 (name "f")
 		(ty-fn @2.9-2.33 (effectful false)
 			(ty-tuple @2.9-2.19
 				(ty @2.10-2.13 (name "Str"))

@@ -69,13 +69,13 @@ LowerIdent(24:1-24:6),OpAssign(24:7-24:8),OpBar(24:9-24:10),Underscore(24:10-24:
 ~~~clojure
 (file @1.1-24.15
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -134,7 +134,7 @@ LowerIdent(24:1-24:6),OpAssign(24:7-24:8),OpBar(24:9-24:10),Underscore(24:10-24:
 					(ty-apply @14.42-14.57
 						(ty @14.42-14.52 (name "Connecting"))
 						(ty @14.53-14.56 (name "Str"))))))
-		(s-type-anno @17.1-18.14 (name "processResult")
+		(s-type-anno @17.1-17.30 (name "processResult")
 			(ty-fn @17.17-17.30
 				(ty @17.17-17.23 (name "Result"))
 				(ty @17.27-17.30 (name "Str"))))
@@ -145,7 +145,7 @@ LowerIdent(24:1-24:6),OpAssign(24:7-24:8),OpBar(24:9-24:10),Underscore(24:10-24:
 					(p-ident @18.18-18.25 (raw "_result")))
 				(e-string @18.27-18.38
 					(e-string-part @18.28-18.37 (raw "processed")))))
-		(s-type-anno @21.1-22.15 (name "handleResponse")
+		(s-type-anno @21.1-21.33 (name "handleResponse")
 			(ty-fn @21.18-21.33
 				(ty @21.18-21.26 (name "Response"))
 				(ty @21.30-21.33 (name "Str"))))

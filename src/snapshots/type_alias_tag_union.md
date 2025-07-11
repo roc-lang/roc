@@ -47,13 +47,13 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 ~~~clojure
 (file @1.1-20.15
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -66,11 +66,11 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 				(tags
 					(ty-apply @4.22-4.30
 						(ty @4.22-4.26 (name "Good"))
-						(ty-var @4.27-4.29 (raw "ok")))
+						(ty-var @4.27-4.27 (raw "ok")))
 					(ty-apply @4.32-4.40
 						(ty @4.32-4.35 (name "Bad"))
-						(ty-var @4.36-4.39 (raw "err"))))))
-		(s-type-anno @7.1-8.8 (name "process")
+						(ty-var @4.36-4.36 (raw "err"))))))
+		(s-type-anno @7.1-7.36 (name "process")
 			(ty-fn @7.11-7.36
 				(ty-apply @7.11-7.29
 					(ty @7.11-7.19 (name "MyResult"))
@@ -92,9 +92,9 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 				(tags
 					(ty-apply @11.14-11.21
 						(ty @11.14-11.18 (name "Some"))
-						(ty-var @11.19-11.20 (raw "a")))
+						(ty-var @11.19-11.19 (raw "a")))
 					(ty @11.23-11.27 (name "None")))))
-		(s-type-anno @14.1-15.10 (name "getString")
+		(s-type-anno @14.1-14.31 (name "getString")
 			(ty-fn @14.13-14.31
 				(ty-apply @14.13-14.24
 					(ty @14.13-14.19 (name "Option"))
@@ -107,7 +107,7 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 					(p-ident @15.14-15.18 (raw "_opt")))
 				(e-string @15.20-15.29
 					(e-string-part @15.21-15.28 (raw "default")))))
-		(s-type-anno @17.1-18.10 (name "getNumber")
+		(s-type-anno @17.1-17.31 (name "getNumber")
 			(ty-fn @17.13-17.31
 				(ty-apply @17.13-17.24
 					(ty @17.13-17.19 (name "Option"))
@@ -185,16 +185,16 @@ NO CHANGE
 				(ty-var @4.14-4.17 (name "err"))))
 		(ty-tag-union @4.21-4.41
 			(ty-apply @4.22-4.30 (symbol "Good")
-				(ty-var @4.27-4.29 (name "ok")))
+				(ty-var @4.27-4.27 (name "ok")))
 			(ty-apply @4.32-4.40 (symbol "Bad")
-				(ty-var @4.36-4.39 (name "err")))))
+				(ty-var @4.36-4.36 (name "err")))))
 	(s-alias-decl @11.1-11.28
 		(ty-header @11.1-11.10 (name "Option")
 			(ty-args
 				(ty-var @11.8-11.9 (name "a"))))
 		(ty-tag-union @11.13-11.28
 			(ty-apply @11.14-11.21 (symbol "Some")
-				(ty-var @11.19-11.20 (name "a")))
+				(ty-var @11.19-11.19 (name "a")))
 			(ty @11.23-11.27 (name "None")))))
 ~~~
 # TYPES

@@ -43,7 +43,6 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 	field_with_underscores: "underscore",
 	field123: "numbers",
 	camelCase: "camel"
-
 }
 ~~~
 # CANONICALIZE

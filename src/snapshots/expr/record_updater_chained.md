@@ -29,8 +29,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpenCurly(6:9-6:10),DoubleDot(6:11-6:13),L
 (file @1.1-6.53
 	(module @1.1-1.23
 		(exposes @1.8-1.23
-			(exposed-lower-ident (text "person"))
-			(exposed-lower-ident (text "final"))))
+			(exposed-lower-ident @1.9-1.15 (text "person"))
+			(exposed-lower-ident @1.17-1.22 (text "final"))))
 	(statements
 		(s-decl @3.1-3.52
 			(p-ident @3.1-3.7 (raw "person"))

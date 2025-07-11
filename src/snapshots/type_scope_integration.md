@@ -65,8 +65,8 @@ UpperIdent(13:1-13:4),OpColon(13:5-13:6),UpperIdent(13:7-13:10),EndOfFile(13:10-
 (file @1.1-13.10
 	(module @1.1-1.18
 		(exposes @1.8-1.18
-			(exposed-upper-ident (text "Foo"))
-			(exposed-upper-ident (text "Bar"))))
+			(exposed-upper-ident @1.9-1.12 (text "Foo"))
+			(exposed-upper-ident @1.14-1.17 (text "Bar"))))
 	(statements
 		(s-type-decl @4.1-4.10
 			(header @4.1-4.4 (name "Foo")

@@ -38,28 +38,28 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 (e-match
 	(e-ident @1.7-1.12 (raw "shape"))
 	(branches
-		(branch @2.5-3.14
+		(branch @2.5-2.45
 			(p-tag @2.5-2.19 (raw "Circle")
 				(p-ident @2.12-2.18 (raw "radius")))
-			(e-binop @2.23-3.14 (op "*")
+			(e-binop @2.23-2.45 (op "*")
 				(e-frac @2.23-2.27 (raw "3.14"))
-				(e-binop @2.30-3.14 (op "*")
+				(e-binop @2.30-2.45 (op "*")
 					(e-ident @2.30-2.36 (raw "radius"))
 					(e-ident @2.39-2.45 (raw "radius")))))
-		(branch @3.5-4.13
+		(branch @3.5-3.47
 			(p-tag @3.5-3.29 (raw "Rectangle")
 				(p-ident @3.15-3.20 (raw "width"))
 				(p-ident @3.22-3.28 (raw "height")))
-			(e-binop @3.33-4.13 (op "*")
+			(e-binop @3.33-3.47 (op "*")
 				(e-ident @3.33-3.38 (raw "width"))
 				(e-ident @3.41-3.47 (raw "height"))))
-		(branch @4.5-5.2
+		(branch @4.5-4.50
 			(p-tag @4.5-4.27 (raw "Triangle")
 				(p-ident @4.14-4.18 (raw "base"))
 				(p-ident @4.20-4.26 (raw "height")))
-			(e-binop @4.31-5.2 (op "*")
+			(e-binop @4.31-4.50 (op "*")
 				(e-frac @4.31-4.34 (raw "0.5"))
-				(e-binop @4.37-5.2 (op "*")
+				(e-binop @4.37-4.50 (op "*")
 					(e-ident @4.37-4.41 (raw "base"))
 					(e-ident @4.44-4.50 (raw "height")))))))
 ~~~
@@ -83,9 +83,9 @@ match shape {
 					(pattern (degenerate false)
 						(p-applied-tag @2.5-2.19)))
 				(value
-					(e-binop @2.23-3.14 (op "mul")
+					(e-binop @2.23-2.45 (op "mul")
 						(e-dec-small @2.23-2.27 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
-						(e-binop @2.30-3.14 (op "mul")
+						(e-binop @2.30-2.45 (op "mul")
 							(e-lookup-local @2.30-2.36
 								(p-assign @2.12-2.18 (ident "radius")))
 							(e-lookup-local @2.39-2.45
@@ -95,7 +95,7 @@ match shape {
 					(pattern (degenerate false)
 						(p-applied-tag @3.5-3.29)))
 				(value
-					(e-binop @3.33-4.13 (op "mul")
+					(e-binop @3.33-3.47 (op "mul")
 						(e-lookup-local @3.33-3.38
 							(p-assign @3.15-3.20 (ident "width")))
 						(e-lookup-local @3.41-3.47
@@ -105,9 +105,9 @@ match shape {
 					(pattern (degenerate false)
 						(p-applied-tag @4.5-4.27)))
 				(value
-					(e-binop @4.31-5.2 (op "mul")
+					(e-binop @4.31-4.50 (op "mul")
 						(e-dec-small @4.31-4.34 (numerator "5") (denominator-power-of-ten "1") (value "0.5"))
-						(e-binop @4.37-5.2 (op "mul")
+						(e-binop @4.37-4.50 (op "mul")
 							(e-lookup-local @4.37-4.41
 								(p-assign @4.14-4.18 (ident "base")))
 							(e-lookup-local @4.44-4.50

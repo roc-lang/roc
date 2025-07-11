@@ -12,33 +12,33 @@ match x {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN PATTERN - f64_pattern_literal_error.md:2:5:2:15
-UNEXPECTED TOKEN IN PATTERN - f64_pattern_literal_error.md:3:5:3:14
+UNEXPECTED TOKEN IN PATTERN - f64_pattern_literal_error.md:2:5:2:12
+UNEXPECTED TOKEN IN PATTERN - f64_pattern_literal_error.md:3:5:3:11
 UNDEFINED VARIABLE - f64_pattern_literal_error.md:1:7:1:8
 UNUSED VARIABLE - f64_pattern_literal_error.md:4:5:4:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN PATTERN**
-The token **3.14f64 =>** is not expected in a pattern.
+The token **3.14f64** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**f64_pattern_literal_error.md:2:5:2:15:**
+**f64_pattern_literal_error.md:2:5:2:12:**
 ```roc
     3.14f64 => "pi"
 ```
-    ^^^^^^^^^^
+    ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token **0.0f64 =>** is not expected in a pattern.
+The token **0.0f64** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**f64_pattern_literal_error.md:3:5:3:14:**
+**f64_pattern_literal_error.md:3:5:3:11:**
 ```roc
     0.0f64 => "zero"
 ```
-    ^^^^^^^^^
+    ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -83,15 +83,15 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 (e-match
 	(e-ident @1.7-1.8 (raw "x"))
 	(branches
-		(branch @2.5-3.11
-			(p-malformed @2.5-2.15 (tag "pattern_unexpected_token"))
+		(branch @2.5-2.20
+			(p-malformed @2.5-2.12 (tag "pattern_unexpected_token"))
 			(e-string @2.16-2.20
 				(e-string-part @2.17-2.19 (raw "pi"))))
-		(branch @3.5-4.10
-			(p-malformed @3.5-3.14 (tag "pattern_unexpected_token"))
+		(branch @3.5-3.21
+			(p-malformed @3.5-3.11 (tag "pattern_unexpected_token"))
 			(e-string @3.15-3.21
 				(e-string-part @3.16-3.20 (raw "zero"))))
-		(branch @4.5-5.2
+		(branch @4.5-4.21
 			(p-ident @4.5-4.10 (raw "value"))
 			(e-string @4.14-4.21
 				(e-string-part @4.15-4.20 (raw "other"))))))
@@ -114,14 +114,14 @@ match x {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @2.5-2.15 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @2.5-2.12 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-string @2.16-2.20
 						(e-literal @2.17-2.19 (string "pi")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @3.5-3.14 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.5-3.11 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-string @3.15-3.21
 						(e-literal @3.16-3.20 (string "zero")))))

@@ -43,11 +43,11 @@ KwModule(9:5-9:11),NoSpaceOpenRound(9:11-9:12),LowerIdent(9:12-9:13),CloseRound(
 (file @1.1-9.22
 	(module @1.1-1.16
 		(exposes @1.8-1.16
-			(exposed-lower-ident (text "decode"))))
+			(exposed-lower-ident @1.9-1.15 (text "decode"))))
 	(statements
 		(s-import @3.1-3.32 (raw "Decode")
 			(exposing
-				(exposed-upper-ident (text "Decode"))))
+				(exposed-upper-ident @3.25-3.31 (text "Decode"))))
 		(s-type-anno @5.1-9.22 (name "decodeThings")
 			(ty-fn @7.3-7.28
 				(ty-apply @7.3-7.17
@@ -57,9 +57,9 @@ KwModule(9:5-9:11),NoSpaceOpenRound(9:11-9:12),LowerIdent(9:12-9:13),CloseRound(
 						(ty @7.13-7.15 (name "U8"))))
 				(ty-apply @7.21-7.28
 					(ty @7.21-7.25 (name "List"))
-					(ty-var @7.26-7.27 (raw "a"))))
+					(ty-var @7.26-7.26 (raw "a"))))
 			(where
-				(alias @9.5-9.22 (module-of "a") (name "Decode"))))))
+				(alias @9.5-9.21 (module-of "a") (name "Decode"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -85,10 +85,10 @@ decodeThings # After member name
 				(ty-apply @7.8-7.16 (symbol "List")
 					(ty @7.13-7.15 (name "U8"))))
 			(ty-apply @7.21-7.28 (symbol "List")
-				(ty-var @7.26-7.27 (name "a"))))
+				(ty-var @7.26-7.26 (name "a"))))
 		(where
-			(alias @9.5-9.22 (module-of "a") (ident "Decode"))))
-	(ext-decl @9.5-9.22 (ident "module(a).Decode") (kind "type")))
+			(alias @9.5-9.21 (module-of "a") (ident "Decode"))))
+	(ext-decl @9.5-9.21 (ident "module(a).Decode") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

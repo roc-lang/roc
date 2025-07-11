@@ -352,18 +352,18 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 	(statements
 		(s-import @3.1-3.49 (raw "json.Json")
 			(exposing
-				(exposed-upper-ident (text "Value"))
-				(exposed-upper-ident (text "Error"))
-				(exposed-upper-ident (text "Config"))))
+				(exposed-upper-ident @3.28-3.33 (text "Value"))
+				(exposed-upper-ident @3.35-3.40 (text "Error"))
+				(exposed-upper-ident @3.42-3.48 (text "Config"))))
 		(s-import @4.1-4.64 (raw "http.Client") (alias "Http")
 			(exposing
-				(exposed-upper-ident (text "Request"))
-				(exposed-upper-ident (text "Response"))
-				(exposed-upper-ident (text "Status"))))
+				(exposed-upper-ident @4.38-4.45 (text "Request"))
+				(exposed-upper-ident @4.47-4.55 (text "Response"))
+				(exposed-upper-ident @4.57-4.63 (text "Status"))))
 		(s-import @5.1-5.38 (raw "utils.Result")
 			(exposing
-				(exposed-upper-ident (text "Result"))))
-		(s-type-anno @8.1-9.10 (name "parseJson")
+				(exposed-upper-ident @5.31-5.37 (text "Result"))))
+		(s-type-anno @8.1-8.40 (name "parseJson")
 			(ty-fn @8.13-8.40
 				(ty @8.13-8.16 (name "Str"))
 				(ty-apply @8.20-8.40
@@ -378,7 +378,7 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 				(e-apply @9.21-9.38
 					(e-ident @9.21-9.31 (raw "Json.parse"))
 					(e-ident @9.32-9.37 (raw "input")))))
-		(s-type-anno @12.1-13.14 (name "handleRequest")
+		(s-type-anno @12.1-12.36 (name "handleRequest")
 			(ty-fn @12.17-12.36
 				(ty @12.17-12.24 (name "Request"))
 				(ty @12.28-12.36 (name "Response"))))
@@ -393,25 +393,25 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 							(p-ident @14.5-14.11 (raw "result"))
 							(e-apply @14.14-14.35
 								(e-ident @14.14-14.25 (raw "Json.decode"))
-								(e-field-access @14.26-14.35
+								(e-field-access @14.26-14.34
 									(e-ident @14.26-14.29 (raw "req"))
 									(e-ident @14.29-14.34 (raw "body")))))
 						(e-match
 							(e-ident @15.11-15.17 (raw "result"))
 							(branches
-								(branch @16.9-17.12
+								(branch @16.9-16.36
 									(p-tag @16.9-16.18 (raw "Ok")
 										(p-ident @16.12-16.17 (raw "value")))
 									(e-apply @16.22-16.36
 										(e-ident @16.22-16.29 (raw "Http.ok"))
 										(e-ident @16.30-16.35 (raw "value"))))
-								(branch @17.9-18.6
+								(branch @17.9-17.45
 									(p-tag @17.9-17.19 (raw "Err")
 										(p-ident @17.13-17.18 (raw "error")))
 									(e-apply @17.23-17.45
 										(e-ident @17.23-17.38 (raw "Http.badRequest"))
 										(e-ident @17.39-17.44 (raw "error"))))))))))
-		(s-type-anno @22.1-23.12 (name "processData")
+		(s-type-anno @22.1-22.64 (name "processData")
 			(ty-fn @22.15-22.64
 				(ty @22.15-22.21 (name "Config"))
 				(ty-apply @22.23-22.34
@@ -443,13 +443,13 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 			(header @30.1-30.13 (name "ServerConfig")
 				(args))
 			(ty-record @30.16-34.2
-				(anno-record-field @31.5-31.25 (name "jsonConfig")
+				(anno-record-field @31.5-31.24 (name "jsonConfig")
 					(ty @31.18-31.24 (name "Config")))
-				(anno-record-field @32.5-32.25 (name "httpStatus")
+				(anno-record-field @32.5-32.24 (name "httpStatus")
 					(ty @32.18-32.24 (name "Status")))
-				(anno-record-field @33.5-33.32 (name "defaultResponse")
+				(anno-record-field @33.5-33.31 (name "defaultResponse")
 					(ty @33.23-33.31 (name "Response")))))
-		(s-type-anno @37.1-38.13 (name "createClient")
+		(s-type-anno @37.1-37.37 (name "createClient")
 			(ty-fn @37.16-37.37
 				(ty @37.16-37.22 (name "Config"))
 				(ty @37.26-37.37 (name "Http.Client"))))
@@ -461,7 +461,7 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 				(e-apply @38.25-38.48
 					(e-ident @38.25-38.40 (raw "Http.clientWith"))
 					(e-ident @38.41-38.47 (raw "config")))))
-		(s-type-anno @41.1-42.15 (name "handleResponse")
+		(s-type-anno @41.1-41.33 (name "handleResponse")
 			(ty-fn @41.18-41.33
 				(ty @41.18-41.26 (name "Response"))
 				(ty @41.30-41.33 (name "Str"))))
@@ -471,23 +471,23 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 				(args
 					(p-ident @42.19-42.27 (raw "response")))
 				(e-match
-					(e-field-access @43.11-43.28
+					(e-field-access @43.11-43.26
 						(e-ident @43.11-43.19 (raw "response"))
 						(e-ident @43.19-43.26 (raw "status")))
 					(branches
-						(branch @44.9-45.12
+						(branch @44.9-44.50
 							(p-tag @44.9-44.19 (raw "Ok")
 								(p-ident @44.12-44.18 (raw "status")))
 							(e-apply @44.23-44.50
 								(e-ident @44.23-44.42 (raw "Http.statusToString"))
 								(e-ident @44.43-44.49 (raw "status"))))
-						(branch @45.9-46.6
+						(branch @45.9-45.44
 							(p-tag @45.9-45.19 (raw "Err")
 								(p-ident @45.13-45.18 (raw "error")))
 							(e-apply @45.23-45.44
 								(e-ident @45.23-45.37 (raw "Error.toString"))
 								(e-ident @45.38-45.43 (raw "error"))))))))
-		(s-type-anno @49.1-50.15 (name "combineResults")
+		(s-type-anno @49.1-49.73 (name "combineResults")
 			(ty-fn @49.18-49.73
 				(ty-apply @49.18-49.38
 					(ty @49.18-49.24 (name "Result"))
@@ -507,7 +507,7 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 				(e-match
 					(e-ident @51.11-51.21 (raw "jsonResult"))
 					(branches
-						(branch @52.9-53.12
+						(branch @52.9-52.74
 							(p-tag @52.9-52.18 (raw "Ok")
 								(p-ident @52.12-52.17 (raw "value")))
 							(e-apply @52.22-52.74
@@ -519,7 +519,7 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 											(e-ident @52.45-52.50 (raw "value"))))
 									(field (field "status")
 										(e-ident @52.61-52.71 (raw "httpStatus"))))))
-						(branch @53.9-54.6
+						(branch @53.9-53.33
 							(p-tag @53.9-53.19 (raw "Err")
 								(p-ident @53.13-53.18 (raw "error")))
 							(e-apply @53.23-53.33
@@ -546,6 +546,8 @@ handleRequest = |req| {
 		Ok(value) => Http.ok(value)
 		Err(error) => Http.badRequest(error)
 	}
+
+	# Test using exposed types in complex signatures
 }
 
 # Test using exposed types in complex signatures
@@ -616,7 +618,7 @@ combineResults = |jsonResult, httpStatus|
 						(e-lookup-external @14.14-14.25
 							(module-idx "0")
 							(target-node-idx "0"))
-						(e-dot-access @14.26-14.35 (field "body")
+						(e-dot-access @14.26-14.34 (field "body")
 							(receiver
 								(e-lookup-local @14.26-14.29
 									(p-assign @13.18-13.21 (ident "req")))))))
@@ -709,7 +711,7 @@ combineResults = |jsonResult, httpStatus|
 			(e-match @43.5-46.6
 				(match @43.5-46.6
 					(cond
-						(e-dot-access @43.11-43.28 (field "status")
+						(e-dot-access @43.11-43.26 (field "status")
 							(receiver
 								(e-lookup-local @43.11-43.19
 									(p-assign @42.19-42.27 (ident "response"))))))

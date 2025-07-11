@@ -30,7 +30,7 @@ match ... {
 	_ => "other"
 }
 ```
- ^
+ ^^^^^^^
 
 The second pattern has this type:
     _Str_
@@ -58,20 +58,20 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 (e-match
 	(e-ellipsis)
 	(branches
-		(branch @2.2-3.3
+		(branch @2.2-2.30
 			(p-alternatives
 				(p-int @2.2-2.3 (raw "1"))
 				(p-int @2.6-2.7 (raw "2"))
 				(p-int @2.10-2.11 (raw "3")))
 			(e-string @2.15-2.30
 				(e-string-part @2.16-2.29 (raw "small numbers"))))
-		(branch @3.2-4.4
+		(branch @3.2-3.34
 			(p-alternatives
-				(p-string @3.2-3.3 (raw """))
-				(p-string @3.12-3.13 (raw """)))
+				(p-string @3.2-3.9 (raw """))
+				(p-string @3.12-3.19 (raw """)))
 			(e-string @3.23-3.34
 				(e-string-part @3.24-3.33 (raw "greetings"))))
-		(branch @4.2-5.3
+		(branch @4.2-4.36
 			(p-alternatives
 				(p-tag @4.2-4.7 (raw "Ok")
 					(p-underscore))
@@ -79,14 +79,14 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 					(p-underscore)))
 			(e-string @4.21-4.36
 				(e-string-part @4.22-4.35 (raw "success value"))))
-		(branch @5.2-6.3
+		(branch @5.2-5.26
 			(p-alternatives
 				(p-list @5.2-5.4)
 				(p-list @5.7-5.10
 					(p-underscore)))
 			(e-string @5.14-5.26
 				(e-string-part @5.15-5.25 (raw "short list"))))
-		(branch @6.2-7.3
+		(branch @6.2-6.31
 			(p-alternatives
 				(p-tuple @6.2-6.8
 					(p-int @6.3-6.4 (raw "0"))
@@ -96,7 +96,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 					(p-int @6.15-6.16 (raw "0"))))
 			(e-string @6.21-6.31
 				(e-string-part @6.22-6.30 (raw "has zero"))))
-		(branch @7.2-8.2
+		(branch @7.2-7.14
 			(p-underscore)
 			(e-string @7.7-7.14
 				(e-string-part @7.8-7.13 (raw "other"))))))
@@ -110,7 +110,7 @@ NO CHANGE
 (e-match @1.1-8.2
 	(match @1.1-8.2
 		(cond
-			(e-not-implemented @1.7-1.10))
+			(e-not-implemented @1.1-1.1))
 		(branches
 			(branch
 				(patterns
@@ -126,9 +126,9 @@ NO CHANGE
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-str @3.2-3.3 (text """)))
+						(p-str @3.2-3.9 (text """)))
 					(pattern (degenerate false)
-						(p-str @3.12-3.13 (text """))))
+						(p-str @3.12-3.19 (text """))))
 				(value
 					(e-string @3.23-3.34
 						(e-literal @3.24-3.33 (string "greetings")))))
