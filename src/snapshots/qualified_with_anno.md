@@ -12,6 +12,8 @@ MyType := [TagA, TagB]
 value : MyType
 value = MyType.TagA
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -47,7 +49,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:15),NoSpaceDotUpperIdent(
 ~~~roc
 module [value]
 
-MyType : [TagA, TagB]
+MyType := [TagA, TagB]
 
 value : MyType
 value = TagA
@@ -57,11 +59,12 @@ value = TagA
 (can-ir
 	(d-let
 		(p-assign @6.1-6.6 (ident "value"))
-		(e-tag @6.9-6.20 (name "TagA"))
+		(e-nominal @6.9-6.15 (nominal "MyType")
+			(e-tag @6.9-6.20 (name "TagA")))
 		(annotation @6.1-6.6
 			(declared-type
 				(ty @5.9-5.15 (name "MyType")))))
-	(s-nominal-decl @3.1-3.23 (match "TODO")
+	(s-nominal-decl @3.1-3.23
 		(ty-header @3.1-3.7 (name "MyType"))
 		(ty-tag-union @3.11-3.23
 			(ty @3.12-3.16 (name "TagA"))
@@ -71,7 +74,10 @@ value = TagA
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "[TagA]*")))
+		(patt @6.1-6.6 (type "MyType")))
+	(type_decls
+		(nominal @3.1-3.23 (type "MyType")
+			(ty-header @3.1-3.7 (name "MyType"))))
 	(expressions
-		(expr @6.9-6.20 (type "[TagA]*"))))
+		(expr @6.9-6.15 (type "MyType"))))
 ~~~

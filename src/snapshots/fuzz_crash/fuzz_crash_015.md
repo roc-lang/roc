@@ -10,6 +10,14 @@ type=file
 0u8.0
 0_
 ~~~
+# EXPECTED
+LEADING ZERO - fuzz_crash_015.md:1:1:1:6
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_015.md:1:4:1:4
+PARSE ERROR - fuzz_crash_015.md:3:4:3:4
+INVALID STATEMENT - fuzz_crash_015.md:1:1:1:1
+INVALID STATEMENT - fuzz_crash_015.md:2:1:3:4
+INVALID STATEMENT - fuzz_crash_015.md:1:1:1:1
+INVALID STATEMENT - fuzz_crash_015.md:4:1:4:3
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -58,17 +66,45 @@ Here is the problematic code:
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_015.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**fuzz_crash_015.md:2:1:3:4:**
+```roc
+0_0
+0u8.0
+```
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_015.md:1:1:1:1:**
+```roc
+
+```
+
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_015.md:4:1:4:3:**
+```roc
+0_
+```
+^^
+
 
 # TOKENS
 ~~~zig

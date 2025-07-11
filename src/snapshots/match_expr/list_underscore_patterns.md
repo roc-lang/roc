@@ -14,10 +14,19 @@ match items {
     [] => 0 # match an empty list
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - list_underscore_patterns.md:1:7:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `items` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_underscore_patterns.md:1:7:1:12:**
+```roc
+match items {
+```
+      ^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -88,57 +97,63 @@ match items {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.8 (degenerate false)
-						(patterns
-							(p-underscore @2.6-2.7))))
+					(pattern (degenerate false)
+						(p-list @2.5-2.8
+							(patterns
+								(p-underscore @2.6-2.7)))))
 				(value
 					(e-int @2.12-2.13 (value "1"))))
 			(branch
 				(patterns
-					(p-list @3.5-3.15 (degenerate false)
-						(patterns
-							(p-assign @3.10-3.14 (ident "last")))
-						(rest-at (index 0))))
+					(pattern (degenerate false)
+						(p-list @3.5-3.15
+							(patterns
+								(p-assign @3.10-3.14 (ident "last")))
+							(rest-at (index 0)))))
 				(value
 					(e-lookup-local @3.19-3.23
-						(pattern @3.10-3.14))))
+						(p-assign @3.10-3.14 (ident "last")))))
 			(branch
 				(patterns
-					(p-list @4.5-4.16 (degenerate false)
-						(patterns
-							(p-assign @4.6-4.11 (ident "first")))
-						(rest-at (index 1))))
+					(pattern (degenerate false)
+						(p-list @4.5-4.16
+							(patterns
+								(p-assign @4.6-4.11 (ident "first")))
+							(rest-at (index 1)))))
 				(value
 					(e-lookup-local @4.20-4.25
-						(pattern @4.6-4.11))))
+						(p-assign @4.6-4.11 (ident "first")))))
 			(branch
 				(patterns
-					(p-list @5.5-5.18 (degenerate false)
-						(patterns
-							(p-underscore @5.6-5.7)
-							(p-underscore @5.9-5.10)
-							(p-assign @5.12-5.17 (ident "third")))))
+					(pattern (degenerate false)
+						(p-list @5.5-5.18
+							(patterns
+								(p-underscore @5.6-5.7)
+								(p-underscore @5.9-5.10)
+								(p-assign @5.12-5.17 (ident "third"))))))
 				(value
 					(e-lookup-local @5.22-5.27
-						(pattern @5.12-5.17))))
+						(p-assign @5.12-5.17 (ident "third")))))
 			(branch
 				(patterns
-					(p-list @6.5-6.17 (degenerate false)
-						(patterns
-							(p-assign @6.6-6.7 (ident "x"))
-							(p-underscore @6.9-6.10)
-							(p-underscore @6.12-6.13)
-							(p-assign @6.15-6.16 (ident "y")))))
+					(pattern (degenerate false)
+						(p-list @6.5-6.17
+							(patterns
+								(p-assign @6.6-6.7 (ident "x"))
+								(p-underscore @6.9-6.10)
+								(p-underscore @6.12-6.13)
+								(p-assign @6.15-6.16 (ident "y"))))))
 				(value
 					(e-binop @6.21-7.6 (op "add")
 						(e-lookup-local @6.21-6.22
-							(pattern @6.6-6.7))
+							(p-assign @6.6-6.7 (ident "x")))
 						(e-lookup-local @6.25-6.26
-							(pattern @6.15-6.16)))))
+							(p-assign @6.15-6.16 (ident "y"))))))
 			(branch
 				(patterns
-					(p-list @7.5-7.7 (degenerate false)
-						(patterns)))
+					(pattern (degenerate false)
+						(p-list @7.5-7.7
+							(patterns))))
 				(value
 					(e-int @7.11-7.12 (value "0")))))))
 ~~~

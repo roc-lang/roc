@@ -76,21 +76,37 @@ is_named_color = |str|{
 
     colors.contains(str)
 }
-
 ~~~
+# EXPECTED
+PARSE ERROR - Color.md:63:9:63:12
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:64:5:64:5
+PARSE ERROR - Color.md:65:13:65:26
+PARSE ERROR - Color.md:65:9:65:13
+PARSE ERROR - Color.md:65:9:65:13
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:27:65:43
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:41:65:46
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:46:65:47
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:47:65:48
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:47:65:49
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:48:65:50
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:49:65:49
+UNUSED VARIABLE - Color.md:30:5:30:25
+UNUSED VARIABLE - Color.md:61:10:61:13
+UNDEFINED VARIABLE - Color.md:63:24:63:27
+INVALID STATEMENT - Color.md:1:1:1:1
+INVALID STATEMENT - Color.md:65:27:65:43
+INVALID STATEMENT - Color.md:65:41:65:46
+INVALID STATEMENT - Color.md:65:43:65:47
+INVALID STATEMENT - Color.md:65:46:65:47
+INVALID STATEMENT - Color.md:65:47:65:48
+INVALID STATEMENT - Color.md:65:47:65:49
+INVALID STATEMENT - Color.md:65:48:65:50
+INVALID STATEMENT - Color.md:1:1:1:1
+UNDEFINED VARIABLE - Color.md:68:14:68:27
+TYPE MISMATCH - Color.md:20:20:20:22
+TYPE MISMATCH - Color.md:26:7:26:10
+TYPE MISMATCH - Color.md:48:10:48:15
 # PROBLEMS
-**UNEXPECTED TOKEN IN PATTERN**
-The token **'#',** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**Color.md:33:10:33:14:**
-```roc
-        ['#', a, b, c, d, e, f] => {
-```
-         ^^^^
-
-
 **PARSE ERROR**
 A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
@@ -247,9 +263,6 @@ Here is the problematic code:
                                                 
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
 **UNUSED VARIABLE**
 Variable ``is_char_in_hex_range`` is not used anywhere in your code.
 
@@ -261,18 +274,6 @@ The unused variable is declared here:
 ```
     ^^^^^^^^^^^^^^^^^^^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
 
 **INVALID LAMBDA**
 The body of this lambda expression is not valid.
@@ -293,53 +294,130 @@ named = |str|
 Nothing is named `str` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Color.md:63:24:63:27:**
+```roc
+        Ok(Color.Named(str))
+```
+                       ^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Color.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Color.md:65:27:65:43:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                          ^^^^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Color.md:65:41:65:46:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                        ^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**Color.md:65:43:65:47:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                          ^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**Color.md:65:46:65:47:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                             ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**Color.md:65:47:65:48:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                              ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**Color.md:65:47:65:49:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                              ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**Color.md:65:48:65:50:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                               ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**Color.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `from_list` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**Color.md:68:14:68:27:**
+```roc
+    colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
+```
+             ^^^^^^^^^^^^^
+
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**Color.md:21:1:21:5:**
+**Color.md:20:20:20:22:**
 ```roc
-rgba = |r, g, b, a| {
+rgba : U8, U8, U8, U8 -> Color
 ```
-^^^^
+                   ^^
 
 It is of type:
     _U8_
@@ -349,17 +427,31 @@ But you are trying to use it as:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**Color.md:27:1:27:4:**
+**Color.md:26:7:26:10:**
 ```roc
-hex = |str| {
+hex : Str -> Result(Color, [InvalidHex(Str)])
 ```
-^^^
+      ^^^
 
 It is of type:
     _Str_
 
 But you are trying to use it as:
-    _{ to_utf8: List(*) }_
+    _{ to_utf8: List(Num(*)) }_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Color.md:48:10:48:15:**
+```roc
+to_str : Color -> Str
+```
+         ^^^^^
+
+It is of type:
+    _Color_
+
+But you are trying to use it as:
+    _[Named(Str), RGB(*, *, *), RGBA(*, *, *, *), Hex(Str)]*_
 
 # TOKENS
 ~~~zig
@@ -579,7 +671,7 @@ EndOfFile(72:1-72:1),
 							(branches
 								(branch @33.9-44.10
 									(p-list @33.9-33.32
-										(p-malformed @33.10-33.14 (tag "pattern_unexpected_token"))
+										(p-single-quote @33.10-33.13 (raw "'#'"))
 										(p-ident @33.15-33.16 (raw "a"))
 										(p-ident @33.18-33.19 (raw "b"))
 										(p-ident @33.21-33.22 (raw "c"))
@@ -812,7 +904,7 @@ module [
 	named,
 ]
 
-Color : [
+Color := [
 	RGB(U8, U8, U8),
 	RGBA(U8, U8, U8, Dec),
 	Named(Str),
@@ -835,7 +927,7 @@ hex = |str| {
 	is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
 
 	match bytes {
-		[, a, b, c, d, e, f] => {
+		['#', a, b, c, d, e, f] => {
 			is_valid = 
 				a.is_char_in_hex_range()
 					and b.is_char_in_hex_range()
@@ -886,14 +978,15 @@ is_named_color = |str| {
 				(p-assign @18.8-18.9 (ident "r"))
 				(p-assign @18.11-18.12 (ident "g"))
 				(p-assign @18.14-18.15 (ident "b")))
-			(e-tag @18.17-18.35 (name "RGB")
-				(args
-					(e-lookup-local @18.27-18.28
-						(pattern @18.8-18.9))
-					(e-lookup-local @18.30-18.31
-						(pattern @18.11-18.12))
-					(e-lookup-local @18.33-18.34
-						(pattern @18.14-18.15)))))
+			(e-nominal @18.17-18.22 (nominal "Color")
+				(e-tag @18.17-18.26 (name "RGB")
+					(args
+						(e-lookup-local @18.27-18.28
+							(p-assign @18.8-18.9 (ident "r")))
+						(e-lookup-local @18.30-18.31
+							(p-assign @18.11-18.12 (ident "g")))
+						(e-lookup-local @18.33-18.34
+							(p-assign @18.14-18.15 (ident "b")))))))
 		(annotation @18.1-18.4
 			(declared-type
 				(ty-fn @17.7-17.26 (effectful false)
@@ -916,19 +1009,20 @@ is_named_color = |str| {
 						(e-dot-access @22.15-22.28 (field "to_frac")
 							(receiver
 								(e-lookup-local @22.15-22.16
-									(pattern @21.18-21.19)))
+									(p-assign @21.18-21.19 (ident "a"))))
 							(args))
 						(e-dec-small @22.29-22.34 (numerator "2550") (denominator-power-of-ten "1") (value "255"))))
-				(e-tag @23.5-23.33 (name "RGBA")
-					(args
-						(e-lookup-local @23.16-23.17
-							(pattern @21.9-21.10))
-						(e-lookup-local @23.19-23.20
-							(pattern @21.12-21.13))
-						(e-lookup-local @23.22-23.23
-							(pattern @21.15-21.16))
-						(e-lookup-local @23.25-23.32
-							(pattern @22.5-22.12))))))
+				(e-nominal @23.5-23.10 (nominal "Color")
+					(e-tag @23.5-23.15 (name "RGBA")
+						(args
+							(e-lookup-local @23.16-23.17
+								(p-assign @21.9-21.10 (ident "r")))
+							(e-lookup-local @23.19-23.20
+								(p-assign @21.12-21.13 (ident "g")))
+							(e-lookup-local @23.22-23.23
+								(p-assign @21.15-21.16 (ident "b")))
+							(e-lookup-local @23.25-23.32
+								(p-assign @22.5-22.12 (ident "rounded"))))))))
 		(annotation @21.1-21.5
 			(declared-type
 				(ty-fn @20.8-20.31 (effectful false)
@@ -948,7 +1042,7 @@ is_named_color = |str| {
 					(e-dot-access @29.13-30.25 (field "to_utf8")
 						(receiver
 							(e-lookup-local @29.13-29.16
-								(pattern @27.8-27.11)))
+								(p-assign @27.8-27.11 (ident "str"))))
 						(args)))
 				(s-let @30.5-32.10
 					(p-assign @30.5-30.25 (ident "is_char_in_hex_range"))
@@ -960,47 +1054,48 @@ is_named_color = |str| {
 								(e-binop @30.33-30.55 (op "and")
 									(e-binop @30.33-30.45 (op "ge")
 										(e-lookup-local @30.33-30.34
-											(pattern @30.29-30.30))
+											(p-assign @30.29-30.30 (ident "b")))
 										(e-int @30.38-30.41 (value "48")))
 									(e-binop @30.46-30.55 (op "le")
 										(e-lookup-local @30.46-30.47
-											(pattern @30.29-30.30))
+											(p-assign @30.29-30.30 (ident "b")))
 										(e-int @30.51-30.54 (value "57"))))
 								(e-binop @30.60-30.82 (op "and")
 									(e-binop @30.60-30.72 (op "ge")
 										(e-lookup-local @30.60-30.61
-											(pattern @30.29-30.30))
+											(p-assign @30.29-30.30 (ident "b")))
 										(e-int @30.65-30.68 (value "97")))
 									(e-binop @30.73-30.82 (op "le")
 										(e-lookup-local @30.73-30.74
-											(pattern @30.29-30.30))
+											(p-assign @30.29-30.30 (ident "b")))
 										(e-int @30.78-30.81 (value "102")))))
 							(e-binop @30.87-30.109 (op "and")
 								(e-binop @30.87-30.99 (op "ge")
 									(e-lookup-local @30.87-30.88
-										(pattern @30.29-30.30))
+										(p-assign @30.29-30.30 (ident "b")))
 									(e-int @30.92-30.95 (value "65")))
 								(e-binop @30.100-30.109 (op "le")
 									(e-lookup-local @30.100-30.101
-										(pattern @30.29-30.30))
+										(p-assign @30.29-30.30 (ident "b")))
 									(e-int @30.105-30.108 (value "70")))))))
 				(e-match @32.5-45.6
 					(match @32.5-45.6
 						(cond
 							(e-lookup-local @32.11-32.16
-								(pattern @29.5-29.10)))
+								(p-assign @29.5-29.10 (ident "bytes"))))
 						(branches
 							(branch
 								(patterns
-									(p-list @33.9-33.32 (degenerate false)
-										(patterns
-											(p-runtime-error @33.10-33.14 (tag "pattern_not_canonicalized"))
-											(p-assign @33.15-33.16 (ident "a"))
-											(p-assign @33.18-33.19 (ident "b"))
-											(p-assign @33.21-33.22 (ident "c"))
-											(p-assign @33.24-33.25 (ident "d"))
-											(p-assign @33.27-33.28 (ident "e"))
-											(p-assign @33.30-33.31 (ident "f")))))
+									(pattern (degenerate false)
+										(p-list @33.9-33.32
+											(patterns
+												(p-int @33.10-33.13 (value "35"))
+												(p-assign @33.15-33.16 (ident "a"))
+												(p-assign @33.18-33.19 (ident "b"))
+												(p-assign @33.21-33.22 (ident "c"))
+												(p-assign @33.24-33.25 (ident "d"))
+												(p-assign @33.27-33.28 (ident "e"))
+												(p-assign @33.30-33.31 (ident "f"))))))
 								(value
 									(e-block @33.36-43.10
 										(s-let @34.13-42.15
@@ -1013,66 +1108,68 @@ is_named_color = |str| {
 																(e-dot-access @35.17-36.20 (field "is_char_in_hex_range")
 																	(receiver
 																		(e-lookup-local @35.17-35.18
-																			(pattern @33.15-33.16)))
+																			(p-assign @33.15-33.16 (ident "a"))))
 																	(args))
 																(e-dot-access @36.21-37.20 (field "is_char_in_hex_range")
 																	(receiver
 																		(e-lookup-local @36.21-36.22
-																			(pattern @33.18-33.19)))
+																			(p-assign @33.18-33.19 (ident "b"))))
 																	(args)))
 															(e-dot-access @37.21-38.20 (field "is_char_in_hex_range")
 																(receiver
 																	(e-lookup-local @37.21-37.22
-																		(pattern @33.21-33.22)))
+																		(p-assign @33.21-33.22 (ident "c"))))
 																(args)))
 														(e-dot-access @38.21-39.20 (field "is_char_in_hex_range")
 															(receiver
 																(e-lookup-local @38.21-38.22
-																	(pattern @33.24-33.25)))
+																	(p-assign @33.24-33.25 (ident "d"))))
 															(args)))
 													(e-dot-access @39.21-40.20 (field "is_char_in_hex_range")
 														(receiver
 															(e-lookup-local @39.21-39.22
-																(pattern @33.27-33.28)))
+																(p-assign @33.27-33.28 (ident "e"))))
 														(args)))
 												(e-dot-access @40.21-42.15 (field "is_char_in_hex_range")
 													(receiver
 														(e-lookup-local @40.21-40.22
-															(pattern @33.30-33.31)))
+															(p-assign @33.30-33.31 (ident "f"))))
 													(args))))
 										(e-if @42.13-43.10
 											(if-branches
 												(if-branch
 													(e-lookup-local @42.16-42.24
-														(pattern @34.13-34.21))
-													(e-tag @42.25-42.43 (name "Ok")
+														(p-assign @34.13-34.21 (ident "is_valid")))
+													(e-tag @42.25-42.27 (name "Ok")
 														(args
-															(e-tag @42.28-42.42 (name "Hex")
-																(args
-																	(e-lookup-local @42.38-42.41
-																		(pattern @27.8-27.11))))))))
+															(e-nominal @42.28-42.33 (nominal "Color")
+																(e-tag @42.28-42.37 (name "Hex")
+																	(args
+																		(e-lookup-local @42.38-42.41
+																			(p-assign @27.8-27.11 (ident "str"))))))))))
 											(if-else
-												(e-tag @42.49-42.125 (name "Err")
+												(e-tag @42.49-42.52 (name "Err")
 													(args
-														(e-tag @42.53-42.124 (name "InvalidHex")
+														(e-tag @42.53-42.63 (name "InvalidHex")
 															(args
 																(e-string @42.64-42.123
 																	(e-literal @42.65-42.116 (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
 																	(e-lookup-local @42.118-42.121
-																		(pattern @27.8-27.11))
+																		(p-assign @27.8-27.11 (ident "str")))
 																	(e-literal @42.122-42.122 (string ""))))))))))))
 							(branch
 								(patterns
-									(p-underscore @44.9-44.10 (degenerate false)))
+									(pattern (degenerate false)
+										(p-underscore @44.9-44.10)))
 								(value
-									(e-tag @44.14-44.100 (name "Err")
+									(e-tag @44.14-44.17 (name "Err")
 										(args
-											(e-tag @44.18-44.99 (name "InvalidHex")
+											(e-tag @44.18-44.28 (name "InvalidHex")
 												(args
 													(e-string @44.29-44.98
 														(e-literal @44.30-44.91 (string "Expected Hex must start with # and be 7 characters long, got "))
 														(e-lookup-local @44.93-44.96
-															(pattern @27.8-27.11))
+															(p-assign @27.8-27.11 (ident "str")))
 														(e-literal @44.97-44.97 (string ""))))))))))))))
 		(annotation @27.1-27.4
 			(declared-type
@@ -1092,74 +1189,78 @@ is_named_color = |str| {
 				(match @49.18-54.2
 					(cond
 						(e-lookup-local @49.24-49.29
-							(pattern @49.11-49.16)))
+							(p-assign @49.11-49.16 (ident "color"))))
 					(branches
 						(branch
 							(patterns
-								(p-applied-tag @50.5-50.23 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @50.5-50.23)))
 							(value
 								(e-string @50.27-50.86
 									(e-literal @50.28-50.32 (string "rgb("))
 									(e-call @50.34-50.47
 										(e-lookup-local @50.34-50.44
-											(pattern @49.1-49.7))
+											(p-assign @49.1-49.7 (ident "to_str")))
 										(e-lookup-local @50.45-50.46
-											(pattern @50.15-50.16)))
+											(p-assign @50.15-50.16 (ident "r"))))
 									(e-literal @50.48-50.50 (string ", "))
 									(e-call @50.52-50.65
 										(e-lookup-local @50.52-50.62
-											(pattern @49.1-49.7))
+											(p-assign @49.1-49.7 (ident "to_str")))
 										(e-lookup-local @50.63-50.64
-											(pattern @50.18-50.19)))
+											(p-assign @50.18-50.19 (ident "g"))))
 									(e-literal @50.66-50.68 (string ", "))
 									(e-call @50.70-50.83
 										(e-lookup-local @50.70-50.80
-											(pattern @49.1-49.7))
+											(p-assign @49.1-49.7 (ident "to_str")))
 										(e-lookup-local @50.81-50.82
-											(pattern @50.21-50.22)))
+											(p-assign @50.21-50.22 (ident "b"))))
 									(e-literal @50.84-50.85 (string ")")))))
 						(branch
 							(patterns
-								(p-applied-tag @51.5-51.27 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @51.5-51.27)))
 							(value
 								(e-string @51.31-51.109
 									(e-literal @51.32-51.37 (string "rgba("))
 									(e-call @51.39-51.52
 										(e-lookup-local @51.39-51.49
-											(pattern @49.1-49.7))
+											(p-assign @49.1-49.7 (ident "to_str")))
 										(e-lookup-local @51.50-51.51
-											(pattern @51.16-51.17)))
+											(p-assign @51.16-51.17 (ident "r"))))
 									(e-literal @51.53-51.55 (string ", "))
 									(e-call @51.57-51.70
 										(e-lookup-local @51.57-51.67
-											(pattern @49.1-49.7))
+											(p-assign @49.1-49.7 (ident "to_str")))
 										(e-lookup-local @51.68-51.69
-											(pattern @51.19-51.20)))
+											(p-assign @51.19-51.20 (ident "g"))))
 									(e-literal @51.71-51.73 (string ", "))
 									(e-call @51.75-51.88
 										(e-lookup-local @51.75-51.85
-											(pattern @49.1-49.7))
+											(p-assign @49.1-49.7 (ident "to_str")))
 										(e-lookup-local @51.86-51.87
-											(pattern @51.22-51.23)))
+											(p-assign @51.22-51.23 (ident "b"))))
 									(e-literal @51.89-51.91 (string ", "))
 									(e-call @51.93-51.106
 										(e-lookup-local @51.93-51.103
-											(pattern @49.1-49.7))
+											(p-assign @49.1-49.7 (ident "to_str")))
 										(e-lookup-local @51.104-51.105
-											(pattern @51.25-51.26)))
+											(p-assign @51.25-51.26 (ident "a"))))
 									(e-literal @51.107-51.108 (string ")")))))
 						(branch
 							(patterns
-								(p-applied-tag @52.5-52.23 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @52.5-52.23)))
 							(value
 								(e-lookup-local @52.27-52.32
-									(pattern @52.17-52.22))))
+									(p-assign @52.17-52.22 (ident "inner")))))
 						(branch
 							(patterns
-								(p-applied-tag @53.5-53.21 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @53.5-53.21)))
 							(value
 								(e-lookup-local @53.25-53.30
-									(pattern @53.15-53.20))))))))
+									(p-assign @53.15-53.20 (ident "inner")))))))))
 		(annotation @49.1-49.7
 			(declared-type
 				(ty-fn @48.10-48.22 (effectful false)
@@ -1172,9 +1273,10 @@ is_named_color = |str| {
 				(args
 					(p-assign @61.10-61.13 (ident "str")))
 				(e-runtime-error (tag "lambda_body_not_canonicalized")))
-			(e-tag @63.12-63.28 (name "Named")
-				(args
-					(e-runtime-error (tag "ident_not_in_scope")))))
+			(e-nominal @63.12-63.17 (nominal "Color")
+				(e-tag @63.12-63.23 (name "Named")
+					(args
+						(e-runtime-error (tag "ident_not_in_scope"))))))
 		(annotation @61.1-61.6
 			(declared-type
 				(ty-fn @60.9-60.50 (effectful false)
@@ -1205,11 +1307,11 @@ is_named_color = |str| {
 				(e-dot-access @70.5-71.2 (field "contains")
 					(receiver
 						(e-lookup-local @70.5-70.11
-							(pattern @68.5-68.11)))
+							(p-assign @68.5-68.11 (ident "colors"))))
 					(args
 						(e-lookup-local @70.21-70.24
-							(pattern @67.19-67.22)))))))
-	(s-nominal-decl @10.1-15.2 (match "TODO")
+							(p-assign @67.19-67.22 (ident "str"))))))))
+	(s-nominal-decl @10.1-15.2
 		(ty-header @10.1-10.6 (name "Color"))
 		(ty-tag-union @10.10-15.2
 			(ty-apply @11.5-11.20 (symbol "RGB")
@@ -1224,23 +1326,69 @@ is_named_color = |str| {
 			(ty-apply @13.5-13.15 (symbol "Named")
 				(ty @13.11-13.14 (name "Str")))
 			(ty-apply @14.5-14.13 (symbol "Hex")
-				(ty @14.9-14.12 (name "Str"))))))
+				(ty @14.9-14.12 (name "Str")))))
+	(s-expect @1.1-1.1
+		(e-binop @1.1-1.1 (op "eq")
+			(e-dot-access @56.8-56.37 (field "to_str")
+				(receiver
+					(e-call @56.8-56.25
+						(e-lookup-local @56.8-56.11
+							(p-assign @18.1-18.4 (ident "rgb")))
+						(e-int @56.12-56.15 (value "124"))
+						(e-int @56.17-56.19 (value "56"))
+						(e-int @56.21-56.24 (value "245"))))
+				(args))
+			(e-string @56.38-56.57
+				(e-literal @56.39-56.56 (string "rgb(124, 56, 245)")))))
+	(s-expect @1.1-1.1
+		(e-binop @1.1-1.1 (op "eq")
+			(e-dot-access @57.8-57.43 (field "to_str")
+				(receiver
+					(e-call @57.8-57.31
+						(e-lookup-local @57.8-57.12
+							(p-assign @21.1-21.5 (ident "rgba")))
+						(e-int @57.13-57.16 (value "124"))
+						(e-int @57.18-57.20 (value "56"))
+						(e-int @57.22-57.25 (value "245"))
+						(e-int @57.27-57.30 (value "255"))))
+				(args))
+			(e-string @57.44-57.69
+				(e-literal @57.45-57.68 (string "rgba(124, 56, 245, 1.0)")))))
+	(s-expect @58.1-60.6
+		(e-binop @58.8-60.6 (op "eq")
+			(e-dot-access @58.8-58.40 (field "map_ok")
+				(receiver
+					(e-call @58.8-58.22
+						(e-lookup-local @58.8-58.11
+							(p-assign @27.1-27.4 (ident "hex")))
+						(e-string @58.12-58.21
+							(e-literal @58.13-58.20 (string "#ff00ff")))))
+				(args
+					(e-lookup-local @58.30-58.36
+						(p-assign @49.1-49.7 (ident "to_str")))))
+			(e-tag @58.41-58.43 (name "Ok")
+				(args
+					(e-string @58.44-58.53
+						(e-literal @58.45-58.52 (string "#ff00ff"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.4 (type "U8, U8, U8 -> Color"))
-		(patt @21.1-21.5 (type "U8, U8, U8, Error -> Color"))
+		(patt @18.1-18.4 (type "Error, Error, Error -> Error"))
+		(patt @21.1-21.5 (type "Error, Error, Error, Error -> Error"))
 		(patt @27.1-27.4 (type "Error -> Error"))
-		(patt @49.1-49.7 (type "[Named, RGB, RGBA, Hex]* -> Str"))
+		(patt @49.1-49.7 (type "Error -> Error"))
 		(patt @61.1-61.6 (type "Error"))
 		(patt @67.1-67.15 (type "* -> *")))
+	(type_decls
+		(nominal @10.1-15.2 (type "Error")
+			(ty-header @10.1-10.6 (name "Color"))))
 	(expressions
-		(expr @18.7-18.35 (type "U8, U8, U8 -> Color"))
-		(expr @21.8-24.2 (type "U8, U8, U8, Error -> Color"))
+		(expr @18.7-18.35 (type "Error, Error, Error -> Error"))
+		(expr @21.8-24.2 (type "Error, Error, Error, Error -> Error"))
 		(expr @27.7-46.2 (type "Error -> Error"))
-		(expr @49.10-54.2 (type "[Named, RGB, RGBA, Hex]* -> Str"))
+		(expr @49.10-54.2 (type "Error -> Error"))
 		(expr @61.9-63.29 (type "Error"))
 		(expr @67.18-71.2 (type "* -> *"))))
 ~~~

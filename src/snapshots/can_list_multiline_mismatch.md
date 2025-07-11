@@ -11,6 +11,8 @@ type=expr
     100
 ]
 ~~~
+# EXPECTED
+INCOMPATIBLE LIST ELEMENTS - can_list_multiline_mismatch.md:2:5:2:5
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The first two elements in this list have incompatible types:

@@ -26,6 +26,14 @@ main! = |_| {
     []
 }
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:9:17:9:24
+UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:13:23:13:30
+INVALID STATEMENT - crash_and_ellipsis_test.md:1:1:1:1
+INVALID STATEMENT - crash_and_ellipsis_test.md:1:1:1:1
+UNUSED VARIABLE - crash_and_ellipsis_test.md:16:5:16:12
+UNUSED VARIABLE - crash_and_ellipsis_test.md:17:5:17:12
+UNUSED VARIABLE - crash_and_ellipsis_test.md:18:5:18:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **crash "** is not expected in an expression.
@@ -51,9 +59,19 @@ testCrashSimple = |_| crash "oops"
                       ^^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: ...
-Let us know if you want to help!
+**INVALID LAMBDA**
+The body of this lambda expression is not valid.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**crash_and_ellipsis_test.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **INVALID LAMBDA**
 The body of this lambda expression is not valid.
@@ -62,12 +80,12 @@ The body of this lambda expression is not valid.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID LAMBDA**
-The body of this lambda expression is not valid.
+**crash_and_ellipsis_test.md:1:1:1:1:**
+```roc
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+```
+
+
 
 **UNUSED VARIABLE**
 Variable ``result1`` is not used anywhere in your code.
@@ -231,7 +249,7 @@ main! = |_| {
 		(e-lambda @5.16-5.23
 			(args
 				(p-underscore @5.17-5.18))
-			(e-runtime-error (tag "not_implemented")))
+			(e-not-implemented @5.20-5.23))
 		(annotation @5.1-5.13
 			(declared-type
 				(ty-fn @4.16-4.26 (effectful false)
@@ -269,19 +287,19 @@ main! = |_| {
 					(p-assign @16.5-16.12 (ident "result1"))
 					(e-call @16.15-16.31
 						(e-lookup-local @16.15-16.27
-							(pattern @5.1-5.13))
+							(p-assign @5.1-5.13 (ident "testEllipsis")))
 						(e-int @16.28-16.30 (value "42"))))
 				(s-let @17.5-17.28
 					(p-assign @17.5-17.12 (ident "result2"))
 					(e-call @17.15-17.28
 						(e-lookup-local @17.15-17.24
-							(pattern @9.1-9.10))
+							(p-assign @9.1-9.10 (ident "testCrash")))
 						(e-int @17.25-17.27 (value "42"))))
 				(s-let @18.5-18.34
 					(p-assign @18.5-18.12 (ident "result3"))
 					(e-call @18.15-18.34
 						(e-lookup-local @18.15-18.30
-							(pattern @13.1-13.16))
+							(p-assign @13.1-13.16 (ident "testCrashSimple")))
 						(e-int @18.31-18.33 (value "42"))))
 				(e-empty_list @19.5-19.7)))))
 ~~~
@@ -289,13 +307,13 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.13 (type "U64 -> U64"))
-		(patt @9.1-9.10 (type "U64 -> Error"))
-		(patt @13.1-13.16 (type "U64 -> Error"))
+		(patt @5.1-5.13 (type "Error -> Error"))
+		(patt @9.1-9.10 (type "Error -> Error"))
+		(patt @13.1-13.16 (type "Error -> Error"))
 		(patt @15.1-15.6 (type "* -> List(*)")))
 	(expressions
-		(expr @5.16-5.23 (type "U64 -> U64"))
-		(expr @9.13-9.24 (type "U64 -> Error"))
-		(expr @13.19-13.30 (type "U64 -> Error"))
+		(expr @5.16-5.23 (type "Error -> Error"))
+		(expr @9.13-9.24 (type "Error -> Error"))
+		(expr @13.19-13.30 (type "Error -> Error"))
 		(expr @15.9-20.2 (type "* -> List(*)"))))
 ~~~

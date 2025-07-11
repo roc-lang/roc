@@ -7,6 +7,9 @@ type=file
 ~~~roc
 module P]F
 ~~~
+# EXPECTED
+PARSE ERROR - fuzz_crash_011.md:1:8:1:11
+PARSE ERROR - fuzz_crash_011.md:1:11:1:11
 # PROBLEMS
 **OVER CLOSED BRACE**
 There are too many closing braces here.

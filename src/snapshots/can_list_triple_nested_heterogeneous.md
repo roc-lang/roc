@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 [[], [[], [1]], [[], ["hello"]]]
 ~~~
+# EXPECTED
+INCOMPATIBLE LIST ELEMENTS - can_list_triple_nested_heterogeneous.md:1:6:1:6
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The second and third elements in this list have incompatible types:

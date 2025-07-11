@@ -8,6 +8,7 @@ const Node = @import("Node.zig");
 const CIR = @import("CIR.zig");
 const RocDec = @import("../../builtins/dec.zig").RocDec;
 const PackedDataSpan = @import("../../base/PackedDataSpan.zig");
+const SERIALIZATION_ALIGNMENT = @import("../../serialization/mod.zig").SERIALIZATION_ALIGNMENT;
 
 const DataSpan = base.DataSpan;
 const Region = base.Region;
@@ -21,6 +22,7 @@ const NodeStore = @This();
 
 gpa: std.mem.Allocator,
 nodes: Node.List,
+regions: Region.List,
 extra_data: std.ArrayListUnmanaged(u32),
 scratch_statements: base.Scratch(CIR.Statement.Idx),
 scratch_exprs: base.Scratch(CIR.Expr.Idx),
@@ -50,6 +52,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
     return .{
         .gpa = gpa,
         .nodes = Node.List.initCapacity(gpa, capacity),
+        .regions = Region.List.initCapacity(gpa, capacity),
         .extra_data = std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2) catch |err| exitOnOom(err),
         .scratch_statements = base.Scratch(CIR.Statement.Idx).init(gpa),
         .scratch_exprs = base.Scratch(CIR.Expr.Idx).init(gpa),
@@ -72,6 +75,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
 /// Deinitializes the NodeStore, freeing any allocated resources.
 pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
+    store.regions.deinit(store.gpa);
     store.extra_data.deinit(store.gpa);
     store.scratch_statements.items.deinit(store.gpa);
     store.scratch_exprs.items.deinit(store.gpa);
@@ -94,15 +98,15 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 33;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 42;
 /// Count of the expression nodes in the CIR
-pub const CIR_EXPR_NODE_COUNT = 23;
+pub const CIR_EXPR_NODE_COUNT = 28;
 /// Count of the statement nodes in the CIR
-pub const CIR_STATEMENT_NODE_COUNT = 12;
+pub const CIR_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the CIR
 pub const CIR_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the pattern nodes in the CIR
-pub const CIR_PATTERN_NODE_COUNT = 13;
+pub const CIR_PATTERN_NODE_COUNT = 12;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
@@ -134,10 +138,39 @@ comptime {
     std.debug.assert(pattern_fields.len == CIR_PATTERN_NODE_COUNT);
 }
 
+/// Helper function to get a region by node index, handling the type conversion
+pub fn getRegionAt(store: *const NodeStore, node_idx: Node.Idx) Region {
+    const idx: Region.Idx = @enumFromInt(@intFromEnum(node_idx));
+    return store.regions.get(idx).*;
+}
+
+/// Helper function to get a region by pattern index
+pub fn getPatternRegion(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) Region {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+    return store.getRegionAt(node_idx);
+}
+
+/// Helper function to get a region by expression index
+pub fn getExprRegion(store: *const NodeStore, expr_idx: CIR.Expr.Idx) Region {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    return store.getRegionAt(node_idx);
+}
+
+/// Helper function to get a region by statement index
+pub fn getStatementRegion(store: *const NodeStore, stmt_idx: CIR.Statement.Idx) Region {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(stmt_idx));
+    return store.getRegionAt(node_idx);
+}
+
+/// Helper function to get a region by type annotation index
+pub fn getTypeAnnoRegion(store: *const NodeStore, type_anno_idx: CIR.TypeAnno.Idx) Region {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(type_anno_idx));
+    return store.getRegionAt(node_idx);
+}
+
 /// Retrieves a region from node from the store.
 pub fn getNodeRegion(store: *const NodeStore, node_idx: Node.Idx) Region {
-    const node = store.nodes.get(node_idx);
-    return node.region;
+    return store.getRegionAt(node_idx);
 }
 
 /// Retrieves a statement node from the store.
@@ -147,40 +180,35 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
 
     switch (node.tag) {
         .statement_decl => return CIR.Statement{ .s_decl = .{
-            .region = node.region,
-            .expr = @enumFromInt(node.data_1),
-            .pattern = @enumFromInt(node.data_2),
+            .pattern = @enumFromInt(node.data_1),
+            .expr = @enumFromInt(node.data_2),
         } },
         .statement_var => return CIR.Statement{ .s_var = .{
-            .region = node.region,
-            .expr = @enumFromInt(node.data_1),
-            .pattern_idx = @enumFromInt(node.data_2),
+            .pattern_idx = @enumFromInt(node.data_1),
+            .expr = @enumFromInt(node.data_2),
         } },
         .statement_reassign => return CIR.Statement{ .s_reassign = .{
-            .region = node.region,
-            .expr = @enumFromInt(node.data_1),
-            .pattern_idx = @enumFromInt(node.data_2),
+            .pattern_idx = @enumFromInt(node.data_1),
+            .expr = @enumFromInt(node.data_2),
         } },
         .statement_crash => return CIR.Statement{ .s_crash = .{
             .msg = @enumFromInt(node.data_1),
-            .region = node.region,
+        } },
+        .statement_dbg => return CIR.Statement{ .s_dbg = .{
+            .expr = @enumFromInt(node.data_1),
         } },
         .statement_expr => return .{ .s_expr = .{
             .expr = @enumFromInt(node.data_1),
-            .region = node.region,
         } },
         .statement_expect => return CIR.Statement{ .s_expect = .{
-            .region = node.region,
             .body = @enumFromInt(node.data_1),
         } },
         .statement_for => return CIR.Statement{ .s_for = .{
-            .region = node.region,
-            .body = @enumFromInt(node.data_1),
+            .patt = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
-            .patt = @enumFromInt(node.data_3),
+            .body = @enumFromInt(node.data_3),
         } },
         .statement_return => return CIR.Statement{ .s_return = .{
-            .region = node.region,
             .expr = @enumFromInt(node.data_1),
         } },
         .statement_import => {
@@ -198,11 +226,10 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
 
             return CIR.Statement{
                 .s_import = .{
-                    .region = node.region,
                     .module_name_tok = @bitCast(node.data_1),
-                    .exposes = DataSpan.init(exposes_start, exposes_len).as(CIR.ExposedItem.Span),
-                    .alias_tok = alias_tok,
                     .qualifier_tok = qualifier_tok,
+                    .alias_tok = alias_tok,
+                    .exposes = DataSpan.init(exposes_start, exposes_len).as(CIR.ExposedItem.Span),
                 },
             };
         },
@@ -211,19 +238,21 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             const extra_data = store.extra_data.items[extra_start..];
 
             const anno = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[0]));
-            const header = @as(CIR.TypeHeader.Idx, @enumFromInt(extra_data[1]));
+            const anno_var = @as(types.Var, @enumFromInt(extra_data[1]));
+            const header = @as(CIR.TypeHeader.Idx, @enumFromInt(extra_data[2]));
+            const has_where = extra_data[3] != 0;
 
-            const where_clause = if (extra_data.len > 3) blk: {
-                const where_start = extra_data[2];
-                const where_len = extra_data[3];
+            const where_clause = if (has_where) blk: {
+                const where_start = extra_data[4];
+                const where_len = extra_data[5];
                 break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
             } else null;
 
             return CIR.Statement{
                 .s_alias_decl = .{
-                    .region = node.region,
-                    .anno = anno,
                     .header = header,
+                    .anno = anno,
+                    .anno_var = anno_var,
                     .where = where_clause,
                 },
             };
@@ -233,19 +262,21 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             const extra_data = store.extra_data.items[extra_start..];
 
             const anno = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[0]));
-            const header = @as(CIR.TypeHeader.Idx, @enumFromInt(extra_data[1]));
+            const anno_var = @as(types.Var, @enumFromInt(extra_data[1]));
+            const header = @as(CIR.TypeHeader.Idx, @enumFromInt(extra_data[2]));
+            const has_where = extra_data[3] != 0;
 
-            const where_clause = if (extra_data.len > 3) blk: {
-                const where_start = extra_data[2];
-                const where_len = extra_data[3];
+            const where_clause = if (has_where) blk: {
+                const where_start = extra_data[4];
+                const where_len = extra_data[5];
                 break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
             } else null;
 
             return CIR.Statement{
                 .s_nominal_decl = .{
-                    .region = node.region,
-                    .anno = anno,
                     .header = header,
+                    .anno = anno,
+                    .anno_var = anno_var,
                     .where = where_clause,
                 },
             };
@@ -266,7 +297,6 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
 
             return CIR.Statement{
                 .s_type_anno = .{
-                    .region = node.region,
                     .name = name,
                     .anno = anno,
                     .where = where_clause,
@@ -289,13 +319,16 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_lookup_local = .{
                     .pattern_idx = @enumFromInt(node.data_1),
-                    .region = node.region,
                 },
             };
         },
         .expr_external_lookup => {
             // Handle external lookups
-            return CIR.Expr{ .e_lookup_external = @enumFromInt(node.data_1) };
+            return CIR.Expr{ .e_lookup_external = .{
+                .module_idx = @enumFromInt(node.data_1),
+                .target_node_idx = @intCast(node.data_2),
+                .region = store.getRegionAt(node_idx),
+            } };
         },
         .expr_int => {
             // Read i128 from extra_data (stored as 4 u32s in data_1)
@@ -305,16 +338,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_int = .{
                     .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = .i128 },
-                    .region = node.region,
                 },
             };
         },
         .expr_list => {
             return CIR.Expr{
                 .e_list = .{
-                    .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                     .elem_var = @enumFromInt(node.data_3),
-                    .region = node.region,
+                    .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                 },
             };
         },
@@ -322,7 +353,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_tuple = .{
                     .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-                    .region = node.region,
                 },
             };
         },
@@ -338,7 +368,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .e_call = .{
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
                     .called_via = @enumFromInt(node.data_2),
-                    .region = node.region,
                 },
             };
         },
@@ -352,7 +381,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_frac_f64 = .{
                     .value = value,
-                    .region = node.region,
                 },
             };
         },
@@ -365,7 +393,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_frac_dec = .{
                     .value = RocDec{ .num = value_as_i128 },
-                    .region = node.region,
                 },
             };
         },
@@ -380,33 +407,37 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .e_dec_small = .{
                     .numerator = numerator,
                     .denominator_power_of_ten = denominator_power_of_ten,
-                    .region = node.region,
                 },
             };
         },
         .expr_string_segment => return CIR.Expr.initStrSegment(
             @enumFromInt(node.data_1),
-            node.region,
         ),
         .expr_string => return CIR.Expr.initStr(
             DataSpan.init(node.data_1, node.data_2).as(CIR.Expr.Span),
-            node.region,
         ),
         .expr_tag => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
-
-            const ext_var = @as(types.Var, @enumFromInt(extra_data[0]));
-            const name = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const args_start = extra_data[2];
-            const args_len = extra_data[3];
+            const name = @as(Ident.Idx, @bitCast(node.data_1));
+            const args_start = node.data_2;
+            const args_len = node.data_3;
 
             return CIR.Expr{
                 .e_tag = .{
-                    .ext_var = ext_var,
                     .name = name,
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                    .region = node.region,
+                },
+            };
+        },
+        .expr_nominal => {
+            const nominal_type_decl: CIR.Statement.Idx = @enumFromInt(node.data_1);
+            const backing_expr: CIR.Expr.Idx = @enumFromInt(node.data_2);
+            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(node.data_3);
+
+            return CIR.Expr{
+                .e_nominal = .{
+                    .nominal_type_decl = nominal_type_decl,
+                    .backing_expr = backing_expr,
+                    .backing_type = backing_type,
                 },
             };
         },
@@ -416,7 +447,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     @enumFromInt(node.data_1),
                     @enumFromInt(node.data_2),
                     @enumFromInt(node.data_3),
-                    node.region,
                 ),
             };
         },
@@ -433,7 +463,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .e_lambda = .{
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
                     .body = @enumFromInt(body_idx),
-                    .region = node.region,
                 },
             };
         },
@@ -442,23 +471,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .e_block = .{
                     .stmts = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                     .final_expr = @enumFromInt(node.data_3),
-                    .region = node.region,
                 },
             };
         },
         .expr_empty_record => {
-            return CIR.Expr{
-                .e_empty_record = .{
-                    .region = node.region,
-                },
-            };
+            return CIR.Expr{ .e_empty_record = .{} };
         },
         .expr_empty_list => {
-            return CIR.Expr{
-                .e_empty_list = .{
-                    .region = node.region,
-                },
-            };
+            return CIR.Expr{ .e_empty_list = .{} };
         },
         .expr_record => {
             const extra_start = node.data_1;
@@ -474,7 +494,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .e_record = .{
                     .fields = .{ .span = .{ .start = fields_start, .len = fields_len } },
                     .ext = ext,
-                    .region = node.region,
                 },
             };
         },
@@ -490,7 +509,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_match = CIR.Expr.Match{
                     .cond = cond,
-                    .region = node.region,
                     .branches = .{ .span = .{ .start = branches_start, .len = branches_len } },
                     .exhaustive = exhaustive,
                 },
@@ -511,23 +529,37 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .variant_var = variant_var,
                     .ext_var = ext_var,
                     .name = name,
-                    .region = node.region,
                 },
             };
+        },
+        .expr_crash => {
+            return CIR.Expr{ .e_crash = .{
+                .msg = @enumFromInt(node.data_1),
+            } };
+        },
+        .expr_dbg => {
+            return CIR.Expr{ .e_dbg = .{
+                .expr = @enumFromInt(node.data_1),
+            } };
         },
         .expr_static_dispatch,
         .expr_apply,
         .expr_record_update,
         .expr_unary,
         .expr_suffix_single_question,
-        .expr_dbg,
-        .expr_ellipsis,
         .expr_record_builder,
         => {
             std.log.debug("TODO: implement getExpr for node type {?}", .{node.tag});
             return CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = @enumFromInt(0),
-                .region = node.region,
+            } };
+        },
+        .expr_ellipsis => {
+            return CIR.Expr{ .e_ellipsis = .{} };
+        },
+        .expr_expect => {
+            return CIR.Expr{ .e_expect = .{
+                .body = @enumFromInt(node.data_1),
             } };
         },
         .expr_if_then_else => {
@@ -547,7 +579,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_if = .{
                 .branches = branches_span,
                 .final_else = final_else,
-                .region = node.region,
             } };
         },
         .expr_dot_access => {
@@ -561,13 +592,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .receiver = @enumFromInt(node.data_1),
                 .field_name = @bitCast(node.data_2),
                 .args = args_span,
-                .region = node.region,
             } };
         },
         .malformed => {
             return CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = @enumFromInt(node.data_1),
-                .region = node.region,
             } };
         },
 
@@ -618,7 +647,6 @@ pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx
         .value = value_idx,
         .guard = guard_idx,
         .redundant = redundant,
-        .region = node.region,
     };
 }
 
@@ -631,8 +659,7 @@ pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match
 
     return CIR.Expr.Match.BranchPattern{
         .pattern = @enumFromInt(node.data_1),
-        .degenerate = if (node.data_2 == 0) false else true,
-        .region = node.region,
+        .degenerate = node.data_2 != 0,
     };
 }
 
@@ -644,7 +671,7 @@ pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Expr.Match.Branch.Spa
 }
 
 /// Retrieves a 'where' clause from the store.
-pub fn getWhereClause(store: *NodeStore, whereClause: CIR.WhereClause.Idx) CIR.WhereClause {
+pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx) CIR.WhereClause {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(whereClause));
     const node = store.nodes.get(node_idx);
 
@@ -657,56 +684,43 @@ pub fn getWhereClause(store: *NodeStore, whereClause: CIR.WhereClause.Idx) CIR.W
     const discriminant = extra_data[0];
 
     switch (discriminant) {
-        0 => { // alias
-            const var_tok = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const alias_tok = @as(Ident.Idx, @bitCast(extra_data[2]));
-            const region_start = extra_data[3];
-            const region_end = extra_data[4];
-
-            return CIR.WhereClause{
-                .alias = .{
-                    .var_tok = var_tok,
-                    .alias_tok = alias_tok,
-                    .region = Region{ .start = region_start, .end = region_end },
-                },
-            };
-        },
-        1 => { // method
-            const var_tok = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const name_tok = @as(Ident.Idx, @bitCast(extra_data[2]));
+        0 => { // mod_method
+            const var_name = @as(Ident.Idx, @bitCast(extra_data[1]));
+            const method_name = @as(Ident.Idx, @bitCast(extra_data[2]));
             const args_start = extra_data[3];
             const args_len = extra_data[4];
             const ret_anno = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[5]));
-            const region_start = extra_data[6];
-            const region_end = extra_data[7];
-
-            return CIR.WhereClause{
-                .method = .{
-                    .var_tok = var_tok,
-                    .name_tok = name_tok,
-                    .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                    .ret_anno = ret_anno,
-                    .region = Region{ .start = region_start, .end = region_end },
-                },
-            };
-        },
-        2 => { // mod_method
-            const var_tok = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const name_tok = @as(Ident.Idx, @bitCast(extra_data[2]));
-            const args_start = extra_data[3];
-            const args_len = extra_data[4];
-            const ret_anno_start = extra_data[5];
-            const ret_anno_len = extra_data[6];
-            const region_start = extra_data[7];
-            const region_end = extra_data[8];
+            const external_decl = @as(CIR.ExternalDecl.Idx, @enumFromInt(extra_data[6]));
 
             return CIR.WhereClause{
                 .mod_method = .{
-                    .var_tok = var_tok,
-                    .name_tok = name_tok,
+                    .var_name = var_name,
+                    .method_name = method_name,
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                    .ret_anno = .{ .span = .{ .start = ret_anno_start, .len = ret_anno_len } },
-                    .region = Region{ .start = region_start, .end = region_end },
+                    .ret_anno = ret_anno,
+                    .external_decl = external_decl,
+                },
+            };
+        },
+        1 => { // mod_alias
+            const var_name = @as(Ident.Idx, @bitCast(extra_data[1]));
+            const alias_name = @as(Ident.Idx, @bitCast(extra_data[2]));
+            const external_decl = @as(CIR.ExternalDecl.Idx, @enumFromInt(extra_data[3]));
+
+            return CIR.WhereClause{
+                .mod_alias = .{
+                    .var_name = var_name,
+                    .alias_name = alias_name,
+                    .external_decl = external_decl,
+                },
+            };
+        },
+        2 => { // malformed
+            const diagnostic = @as(CIR.Diagnostic.Idx, @enumFromInt(extra_data[1]));
+
+            return CIR.WhereClause{
+                .malformed = .{
+                    .diagnostic = diagnostic,
                 },
             };
         },
@@ -723,31 +737,22 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         .pattern_identifier => return CIR.Pattern{
             .assign = .{
                 .ident = @bitCast(node.data_1),
-                .region = node.region,
             },
         },
         .pattern_as => return CIR.Pattern{
             .as = .{
                 .ident = @bitCast(node.data_1),
                 .pattern = @enumFromInt(node.data_2),
-                .region = node.region,
             },
         },
         .pattern_applied_tag => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
-
-            const arguments_start = extra_data[0];
-            const arguments_len = extra_data[1];
-            const tag_name = @as(Ident.Idx, @bitCast(extra_data[2]));
-            const ext_var = @as(types.Var, @enumFromInt(extra_data[3]));
-
+            const arguments_start = node.data_1;
+            const arguments_len = node.data_2;
+            const tag_name = @as(Ident.Idx, @bitCast(node.data_3));
             return CIR.Pattern{
                 .applied_tag = .{
-                    .region = node.region,
-                    .arguments = DataSpan.init(arguments_start, arguments_len).as(CIR.Pattern.Span),
-                    .tag_name = tag_name,
-                    .ext_var = ext_var,
+                    .args = DataSpan.init(arguments_start, arguments_len).as(CIR.Pattern.Span),
+                    .name = tag_name,
                 },
             };
         },
@@ -762,7 +767,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .record_destructure = .{
-                    .region = node.region,
                     .destructs = DataSpan.init(destructs_start, destructs_len).as(CIR.Pattern.RecordDestruct.Span),
                     .ext_var = ext_var,
                     .whole_var = whole_var,
@@ -795,7 +799,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .list = .{
-                    .region = node.region,
                     .patterns = DataSpan.init(patterns_start, patterns_len).as(CIR.Pattern.Span),
                     .elem_var = elem_var,
                     .list_var = list_var,
@@ -805,7 +808,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_tuple => return CIR.Pattern{
             .tuple = .{
-                .region = node.region,
                 .patterns = DataSpan.init(node.data_1, node.data_2).as(CIR.Pattern.Span),
             },
         },
@@ -816,7 +818,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .int_literal = .{
-                    .region = node.region,
                     .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
                 },
             };
@@ -828,7 +829,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .int_literal = .{
-                    .region = node.region,
                     .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
                 },
             };
@@ -840,7 +840,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .dec_literal = .{
-                    .region = node.region,
                     .value = RocDec{ .num = value_as_i128 },
                 },
             };
@@ -854,41 +853,19 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .small_dec_literal = .{
-                    .region = node.region,
                     .numerator = numerator,
                     .denominator_power_of_ten = denominator_power_of_ten,
                 },
             };
         },
         .pattern_str_literal => return CIR.Pattern{ .str_literal = .{
-            .region = node.region,
             .literal = @enumFromInt(node.data_1),
         } },
-        .pattern_char_literal => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
 
-            const value = extra_data[0];
-            const num_var = @as(types.Var, @enumFromInt(extra_data[1]));
-            const sign_needed = extra_data[2] != 0;
-            const bits_needed = @as(types.Num.Int.BitsNeeded, @enumFromInt(extra_data[3]));
-
-            return CIR.Pattern{
-                .char_literal = .{
-                    .region = node.region,
-                    .num_var = num_var,
-                    .requirements = .{ .sign_needed = sign_needed, .bits_needed = bits_needed },
-                    .value = value,
-                },
-            };
-        },
-        .pattern_underscore => return CIR.Pattern{ .underscore = .{
-            .region = node.region,
-        } },
+        .pattern_underscore => return CIR.Pattern{ .underscore = {} },
         .malformed => {
             return CIR.Pattern{ .runtime_error = .{
                 .diagnostic = @enumFromInt(node.data_1),
-                .region = node.region,
             } };
         },
         else => {
@@ -914,31 +891,23 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         .ty_apply => return CIR.TypeAnno{ .apply = .{
             .symbol = @bitCast(node.data_1),
             .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
-            .region = node.region,
         } },
         .ty_var => return CIR.TypeAnno{ .ty_var = .{
             .name = @bitCast(node.data_1),
-            .region = node.region,
         } },
-        .ty_underscore => return CIR.TypeAnno{ .underscore = .{
-            .region = node.region,
-        } },
+        .ty_underscore => return CIR.TypeAnno{ .underscore = {} },
         .ty_ident => return CIR.TypeAnno{ .ty = .{
             .symbol = @bitCast(node.data_1),
-            .region = node.region,
         } },
         .ty_tag_union => return CIR.TypeAnno{ .tag_union = .{
             .tags = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-            .open_anno = if (node.data_3 != 0) @enumFromInt(node.data_3) else null,
-            .region = node.region,
+            .ext = if (node.data_3 != 0) @enumFromInt(node.data_3) else null,
         } },
         .ty_tuple => return CIR.TypeAnno{ .tuple = .{
-            .annos = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-            .region = node.region,
+            .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
         } },
         .ty_record => return CIR.TypeAnno{ .record = .{
             .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-            .region = node.region,
         } },
         .ty_fn => {
             const ret_and_effectful = node.data_3;
@@ -948,26 +917,21 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
                 .args = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                 .ret = ret,
                 .effectful = effectful,
-                .region = node.region,
             } };
         },
         .ty_parens => return CIR.TypeAnno{ .parens = .{
             .anno = @enumFromInt(node.data_1),
-            .region = node.region,
         } },
         .ty_lookup_external => return CIR.TypeAnno{
             .ty_lookup_external = .{
                 .external_decl = @enumFromInt(node.data_1),
-                .region = node.region,
             },
         },
         .ty_malformed => return CIR.TypeAnno{ .malformed = .{
             .diagnostic = @enumFromInt(node.data_1),
-            .region = node.region,
         } },
         .malformed => return CIR.TypeAnno{ .malformed = .{
             .diagnostic = @enumFromInt(node.data_1),
-            .region = node.region,
         } },
         else => {
             std.debug.panic("Invalid node tag for TypeAnno: {}", .{node.tag});
@@ -985,17 +949,16 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
     return CIR.TypeHeader{
         .name = @bitCast(node.data_1),
         .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
-        .region = node.region,
     };
 }
 
 /// Retrieves an annotation record field from the store.
 pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.TypeAnno.RecordField.Idx) CIR.TypeAnno.RecordField {
-    const node = store.nodes.get(@enumFromInt(@intFromEnum(annoRecordField)));
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annoRecordField));
+    const node = store.nodes.get(node_idx);
     return .{
         .name = @bitCast(node.data_1),
         .ty = @enumFromInt(node.data_2),
-        .region = node.region,
     };
 }
 
@@ -1009,7 +972,6 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
     return CIR.Annotation{
         .type_anno = @enumFromInt(node.data_2),
         .signature = @enumFromInt(node.data_1),
-        .region = node.region,
     };
 }
 
@@ -1030,65 +992,59 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
     }
 }
 
-/// Adds a statement node to the store.
-pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.Idx {
+/// Adds a statement to the store.
+pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Region) CIR.Statement.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .region = base.Region.zero(),
-        .tag = @enumFromInt(0),
+        .tag = undefined,
     };
 
     switch (statement) {
         .s_decl => |s| {
             node.tag = .statement_decl;
-            node.region = s.region;
-            node.data_1 = @intFromEnum(s.expr);
-            node.data_2 = @intFromEnum(s.pattern);
+            node.data_1 = @intFromEnum(s.pattern);
+            node.data_2 = @intFromEnum(s.expr);
         },
         .s_var => |s| {
             node.tag = .statement_var;
-            node.region = s.region;
-            node.data_1 = @intFromEnum(s.expr);
-            node.data_2 = @intFromEnum(s.pattern_idx);
+            node.data_1 = @intFromEnum(s.pattern_idx);
+            node.data_2 = @intFromEnum(s.expr);
         },
         .s_reassign => |s| {
             node.tag = .statement_reassign;
-            node.region = s.region;
-            node.data_1 = @intFromEnum(s.expr);
-            node.data_2 = @intFromEnum(s.pattern_idx);
+            node.data_1 = @intFromEnum(s.pattern_idx);
+            node.data_2 = @intFromEnum(s.expr);
         },
         .s_crash => |s| {
             node.tag = .statement_crash;
-            node.region = s.region;
             node.data_1 = @intFromEnum(s.msg);
+        },
+        .s_dbg => |s| {
+            node.tag = .statement_dbg;
+            node.data_1 = @intFromEnum(s.expr);
         },
         .s_expr => |s| {
             node.tag = .statement_expr;
             node.data_1 = @intFromEnum(s.expr);
-            node.region = s.region;
         },
         .s_expect => |s| {
             node.tag = .statement_expect;
-            node.region = s.region;
             node.data_1 = @intFromEnum(s.body);
         },
         .s_for => |s| {
             node.tag = .statement_for;
-            node.region = s.region;
-            node.data_1 = @intFromEnum(s.body);
+            node.data_1 = @intFromEnum(s.patt);
             node.data_2 = @intFromEnum(s.expr);
-            node.data_3 = @intFromEnum(s.patt);
+            node.data_3 = @intFromEnum(s.body);
         },
         .s_return => |s| {
             node.tag = .statement_return;
-            node.region = s.region;
             node.data_1 = @intFromEnum(s.expr);
         },
         .s_import => |s| {
             node.tag = .statement_import;
-            node.region = s.region;
             node.data_1 = @bitCast(s.module_name_tok);
 
             // Store optional fields in extra_data
@@ -1120,20 +1076,24 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
         },
         .s_alias_decl => |s| {
             node.tag = .statement_alias_decl;
-            node.region = s.region;
 
             // Store type_decl data in extra_data
             const extra_start = @as(u32, @intCast(store.extra_data.items.len));
 
             // Store anno idx
             store.extra_data.append(store.gpa, @intFromEnum(s.anno)) catch |err| exitOnOom(err);
+            // Store anno var
+            store.extra_data.append(store.gpa, @intFromEnum(s.anno_var)) catch |err| exitOnOom(err);
             // Store header idx
             store.extra_data.append(store.gpa, @intFromEnum(s.header)) catch |err| exitOnOom(err);
             // Store where clause information
             if (s.where) |where_clause| {
                 // Store where clause span start and len
+                store.extra_data.append(store.gpa, @intFromBool(true)) catch |err| exitOnOom(err);
                 store.extra_data.append(store.gpa, where_clause.span.start) catch |err| exitOnOom(err);
                 store.extra_data.append(store.gpa, where_clause.span.len) catch |err| exitOnOom(err);
+            } else {
+                store.extra_data.append(store.gpa, @intFromBool(false)) catch |err| exitOnOom(err);
             }
 
             // Store the extra data start position in the node
@@ -1141,20 +1101,24 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
         },
         .s_nominal_decl => |s| {
             node.tag = .statement_nominal_decl;
-            node.region = s.region;
 
             // Store type_decl data in extra_data
             const extra_start = @as(u32, @intCast(store.extra_data.items.len));
 
             // Store anno idx
             store.extra_data.append(store.gpa, @intFromEnum(s.anno)) catch |err| exitOnOom(err);
+            // Store anno var
+            store.extra_data.append(store.gpa, @intFromEnum(s.anno_var)) catch |err| exitOnOom(err);
             // Store header idx
             store.extra_data.append(store.gpa, @intFromEnum(s.header)) catch |err| exitOnOom(err);
             // Store where clause information
             if (s.where) |where_clause| {
                 // Store where clause span start and len
+                store.extra_data.append(store.gpa, @intFromBool(true)) catch |err| exitOnOom(err);
                 store.extra_data.append(store.gpa, where_clause.span.start) catch |err| exitOnOom(err);
                 store.extra_data.append(store.gpa, where_clause.span.len) catch |err| exitOnOom(err);
+            } else {
+                store.extra_data.append(store.gpa, @intFromBool(false)) catch |err| exitOnOom(err);
             }
 
             // Store the extra data start position in the node
@@ -1162,7 +1126,6 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
         },
         .s_type_anno => |s| {
             node.tag = .statement_type_anno;
-            node.region = s.region;
 
             // Store type_anno data in extra_data
             const extra_start = @as(u32, @intCast(store.extra_data.items.len));
@@ -1188,34 +1151,32 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
         },
     }
 
-    return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
+    const node_idx = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
+    return @enumFromInt(@intFromEnum(node_idx));
 }
 
 /// Adds an expression node to the store.
-pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
+pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) CIR.Expr.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .region = base.Region.zero(),
         .tag = @enumFromInt(0),
     };
 
     switch (expr) {
         .e_lookup_local => |local| {
-            node.region = local.region;
             node.tag = .expr_var;
             node.data_1 = @intFromEnum(local.pattern_idx);
         },
-        .e_lookup_external => |external_idx| {
-            // For external lookups, store the external decl index
-            // Use external lookup tag to distinguish from local lookups
-            node.region = base.Region.zero();
+        .e_lookup_external => |e| {
+            // For external lookups, store the module index and target node index
             node.tag = .expr_external_lookup;
-            node.data_1 = @intFromEnum(external_idx);
+            node.data_1 = @intFromEnum(e.module_idx);
+            node.data_2 = e.target_node_idx;
         },
         .e_int => |e| {
-            node.region = e.region;
             node.tag = .expr_int;
 
             // Store i128 value in extra_data
@@ -1233,24 +1194,20 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = @intCast(extra_data_start);
         },
         .e_list => |e| {
-            node.region = e.region;
             node.tag = .expr_list;
             node.data_1 = e.elems.span.start;
             node.data_2 = e.elems.span.len;
             node.data_3 = @intFromEnum(e.elem_var);
         },
-        .e_empty_list => |e| {
-            node.region = e.region;
+        .e_empty_list => |_| {
             node.tag = .expr_empty_list;
         },
         .e_tuple => |e| {
-            node.region = e.region;
             node.tag = .expr_tuple;
             node.data_1 = e.elems.span.start;
             node.data_2 = e.elems.span.len;
         },
         .e_frac_f64 => |e| {
-            node.region = e.region;
             node.tag = .expr_frac_f64;
 
             // Store the f64 value in extra_data
@@ -1265,7 +1222,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = @intCast(extra_data_start);
         },
         .e_frac_dec => |e| {
-            node.region = e.region;
             node.tag = .expr_frac_dec;
 
             // Store the RocDec value in extra_data
@@ -1280,7 +1236,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = @intCast(extra_data_start);
         },
         .e_dec_small => |e| {
-            node.region = e.region;
             node.tag = .expr_dec_small;
 
             // Pack small dec data into data_1 and data_3
@@ -1290,30 +1245,27 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_3 = @as(u32, e.denominator_power_of_ten);
         },
         .e_str_segment => |e| {
-            node.region = e.region;
             node.tag = .expr_string_segment;
             node.data_1 = @intFromEnum(e.literal);
         },
         .e_str => |e| {
-            node.region = e.region;
             node.tag = .expr_string;
             node.data_1 = e.span.span.start;
             node.data_2 = e.span.span.len;
         },
         .e_tag => |e| {
-            node.region = e.region;
             node.tag = .expr_tag;
-
-            // Store tag data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            store.extra_data.append(store.gpa, @intFromEnum(e.ext_var)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(e.name)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, e.args.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, e.args.span.len) catch |err| exitOnOom(err);
-            node.data_1 = extra_data_start;
+            node.data_1 = @bitCast(e.name);
+            node.data_2 = e.args.span.start;
+            node.data_3 = e.args.span.len;
+        },
+        .e_nominal => |e| {
+            node.tag = .expr_nominal;
+            node.data_1 = @intFromEnum(e.nominal_type_decl);
+            node.data_2 = @intFromEnum(e.backing_expr);
+            node.data_3 = @intFromEnum(e.backing_type);
         },
         .e_dot_access => |e| {
-            node.region = e.region;
             node.tag = .expr_dot_access;
             node.data_1 = @intFromEnum(e.receiver);
             node.data_2 = @bitCast(e.field_name);
@@ -1327,12 +1279,21 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             }
         },
         .e_runtime_error => |e| {
-            node.region = e.region;
             node.data_1 = @intFromEnum(e.diagnostic);
             node.tag = .malformed;
         },
+        .e_crash => |c| {
+            node.tag = .expr_crash;
+            node.data_1 = @intFromEnum(c.msg);
+        },
+        .e_dbg => |d| {
+            node.tag = .expr_dbg;
+            node.data_1 = @intFromEnum(d.expr);
+        },
+        .e_ellipsis => |_| {
+            node.tag = .expr_ellipsis;
+        },
         .e_match => |e| {
-            node.region = e.region;
             node.tag = .expr_match;
 
             // Store when data in extra_data
@@ -1354,7 +1315,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             store.extra_data.append(store.gpa, e.branches.span.len) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, @intFromEnum(e.final_else)) catch |err| exitOnOom(err);
 
-            node.region = e.region;
             node.tag = .expr_if_then_else;
             node.data_1 = extra_start;
             node.data_2 = extra_start + num_extra_items;
@@ -1362,7 +1322,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             std.debug.assert(node.data_2 == store.extra_data.items.len);
         },
         .e_call => |e| {
-            node.region = e.region;
             node.tag = .expr_call;
 
             // Store call data in extra_data
@@ -1377,7 +1336,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_2 = @intFromEnum(e.called_via);
         },
         .e_record => |e| {
-            node.region = e.region;
             node.tag = .expr_record;
 
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
@@ -1393,12 +1351,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = extra_data_start;
             node.data_2 = 0; // Unused
         },
-        .e_empty_record => |e| {
-            node.region = e.region;
+        .e_empty_record => |_| {
             node.tag = .expr_empty_record;
         },
         .e_zero_argument_tag => |e| {
-            node.region = e.region;
             node.tag = .expr_zero_argument_tag;
 
             // Store zero argument tag data in extra_data
@@ -1410,7 +1366,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = extra_data_start;
         },
         .e_lambda => |e| {
-            node.region = e.region;
             node.tag = .expr_lambda;
 
             // Store lambda data in extra_data
@@ -1426,45 +1381,53 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = extra_data_start;
         },
         .e_binop => |e| {
-            node.region = e.region;
             node.tag = .expr_bin_op;
             node.data_1 = @intFromEnum(e.op);
             node.data_2 = @intFromEnum(e.lhs);
             node.data_3 = @intFromEnum(e.rhs);
         },
         .e_block => |e| {
-            node.region = e.region;
             node.tag = .expr_block;
             node.data_1 = e.stmts.span.start;
             node.data_2 = e.stmts.span.len;
             node.data_3 = @intFromEnum(e.final_expr);
         },
+        .e_expect => |e| {
+            node.tag = .expr_expect;
+            node.data_1 = @intFromEnum(e.body);
+        },
     }
 
-    return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
+    const node_idx = store.nodes.append(store.gpa, node);
+    // For e_lookup_external, use the region from the expression itself
+    const actual_region = switch (expr) {
+        .e_lookup_external => |e| e.region,
+        else => region,
+    };
+    _ = store.regions.append(store.gpa, actual_region);
+    return @enumFromInt(@intFromEnum(node_idx));
 }
 
 /// Adds a record field to the store.
-pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField) CIR.RecordField.Idx {
+pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: base.Region) CIR.RecordField.Idx {
     const node = Node{
         .data_1 = @bitCast(recordField.name),
         .data_2 = @intFromEnum(recordField.value),
         .data_3 = 0,
-        .region = base.Region.zero(),
         .tag = .record_field,
     };
 
     const nid = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a record destructuring to the store.
-pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordDestruct) CIR.Pattern.RecordDestruct.Idx {
+pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordDestruct, region: base.Region) CIR.Pattern.RecordDestruct.Idx {
     var node = Node{
         .data_1 = @bitCast(record_destruct.label),
         .data_2 = @bitCast(record_destruct.ident),
         .data_3 = 0,
-        .region = record_destruct.region,
         .tag = .record_destruct,
     };
 
@@ -1473,28 +1436,30 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
         .Required => {
             // No extra data needed
         },
-        .Guard => |guard_pattern| {
+
+        .SubPattern => |sub_pattern| {
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
 
-            // Store kind tag (1 for Guard)
+            // Store kind tag (1 for SubPattern)
             store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
-            // Store guard pattern index
-            store.extra_data.append(store.gpa, @intFromEnum(guard_pattern)) catch |err| exitOnOom(err);
+            // Store sub-pattern index
+            store.extra_data.append(store.gpa, @intFromEnum(sub_pattern)) catch |err| exitOnOom(err);
 
             node.data_3 = extra_data_start;
         },
     }
 
-    return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
+    const nid = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
+    return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a 'match' branch to the store.
-pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch) CIR.Expr.Match.Branch.Idx {
+pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: base.Region) CIR.Expr.Match.Branch.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .region = branch.region,
         .tag = .match_branch,
     };
 
@@ -1508,28 +1473,30 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch) CIR.Expr
     store.extra_data.append(store.gpa, @intFromEnum(branch.redundant)) catch |err| exitOnOom(err);
     node.data_1 = extra_data_start;
 
-    return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
+    const nid = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
+    return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a 'match' branch to the store.
-pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.BranchPattern) CIR.Expr.Match.BranchPattern.Idx {
+pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.BranchPattern, region: base.Region) CIR.Expr.Match.BranchPattern.Idx {
     const node = Node{
         .data_1 = @intFromEnum(branchPattern.pattern),
         .data_2 = @as(u32, @intFromBool(branchPattern.degenerate)),
         .data_3 = 0,
-        .region = branchPattern.region,
         .tag = .match_branch_pattern,
     };
-    return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
+    const nid = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
+    return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a 'where' clause to the store.
-pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause) CIR.WhereClause.Idx {
+pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: base.Region) CIR.WhereClause.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .region = base.Region.empty(),
         .tag = .where_clause,
     };
 
@@ -1537,51 +1504,43 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause) CIR.Where
     const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
 
     switch (whereClause) {
-        .alias => |alias| {
-            // Store discriminant (0 for alias)
-            store.extra_data.append(store.gpa, 0) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(alias.var_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(alias.alias_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, alias.region.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, alias.region.end) catch |err| exitOnOom(err);
-        },
-        .method => |method| {
-            // Store discriminant (1 for method)
-            store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(method.var_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(method.name_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, method.args.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, method.args.span.len) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(method.ret_anno)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, method.region.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, method.region.end) catch |err| exitOnOom(err);
-        },
         .mod_method => |mod_method| {
-            // Store discriminant (2 for mod_method)
-            store.extra_data.append(store.gpa, 2) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(mod_method.var_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(mod_method.name_tok)) catch |err| exitOnOom(err);
+            // Store discriminant (0 for mod_method)
+            store.extra_data.append(store.gpa, 0) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(mod_method.var_name)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(mod_method.method_name)) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, mod_method.args.span.start) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, mod_method.args.span.len) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, mod_method.ret_anno.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, mod_method.ret_anno.span.len) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, mod_method.region.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, mod_method.region.end) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(mod_method.ret_anno)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(mod_method.external_decl)) catch |err| exitOnOom(err);
+        },
+        .mod_alias => |mod_alias| {
+            // Store discriminant (1 for mod_alias)
+            store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(mod_alias.var_name)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(mod_alias.alias_name)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(mod_alias.external_decl)) catch |err| exitOnOom(err);
+        },
+        .malformed => |malformed| {
+            // Store discriminant (2 for malformed)
+            store.extra_data.append(store.gpa, 2) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(malformed.diagnostic)) catch |err| exitOnOom(err);
         },
     }
 
     node.data_1 = extra_data_start;
 
-    return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
+    const nid = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
+    return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a pattern to the store.
-pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Error!CIR.Pattern.Idx {
+pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) std.mem.Allocator.Error!CIR.Pattern.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .region = base.Region.zero(),
         .tag = @enumFromInt(0),
     };
 
@@ -1589,29 +1548,20 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
         .assign => |p| {
             node.data_1 = @bitCast(p.ident);
             node.tag = .pattern_identifier;
-            node.region = p.region;
         },
         .as => |p| {
             node.tag = .pattern_as;
-            node.region = p.region;
             node.data_1 = @bitCast(p.ident);
             node.data_2 = @intFromEnum(p.pattern);
         },
         .applied_tag => |p| {
             node.tag = .pattern_applied_tag;
-            node.region = p.region;
-
-            // Store applied tag data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, p.arguments.span.start);
-            try store.extra_data.append(store.gpa, p.arguments.span.len);
-            try store.extra_data.append(store.gpa, @bitCast(p.tag_name));
-            try store.extra_data.append(store.gpa, @intFromEnum(p.ext_var));
-            node.data_1 = extra_data_start;
+            node.data_1 = p.args.span.start;
+            node.data_2 = p.args.span.len;
+            node.data_3 = @bitCast(p.name);
         },
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;
-            node.region = p.region;
 
             // Store record destructure data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
@@ -1623,7 +1573,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
         },
         .list => |p| {
             node.tag = .pattern_list;
-            node.region = p.region;
 
             // Store list pattern data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
@@ -1650,13 +1599,11 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
         },
         .tuple => |p| {
             node.tag = .pattern_tuple;
-            node.region = p.region;
             node.data_1 = p.patterns.span.start;
             node.data_2 = p.patterns.span.len;
         },
         .int_literal => |p| {
             node.tag = .pattern_int_literal;
-            node.region = p.region;
             // Store the value in extra_data
             const extra_data_start = store.extra_data.items.len;
             const value_as_u32s: [4]u32 = @bitCast(p.value.bytes);
@@ -1667,7 +1614,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
         },
         .small_dec_literal => |p| {
             node.tag = .pattern_small_dec_literal;
-            node.region = p.region;
             // Pack small dec data into data_1 and data_3
             // data_1: numerator (i16) - fits in lower 16 bits
             // data_3: denominator_power_of_ten (u8) in lower 8 bits
@@ -1676,7 +1622,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
         },
         .dec_literal => |p| {
             node.tag = .pattern_dec_literal;
-            node.region = p.region;
             // Store the RocDec value in extra_data
             const extra_data_start = store.extra_data.items.len;
             const value_as_u32s: [4]u32 = @bitCast(p.value.num);
@@ -1687,33 +1632,21 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
         },
         .str_literal => |p| {
             node.tag = .pattern_str_literal;
-            node.region = p.region;
             node.data_1 = @intFromEnum(p.literal);
         },
-        .char_literal => |p| {
-            node.tag = .pattern_char_literal;
-            node.region = p.region;
 
-            // Store char literal data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, p.value);
-            try store.extra_data.append(store.gpa, @intFromEnum(p.num_var));
-            try store.extra_data.append(store.gpa, if (p.requirements.sign_needed) 1 else 0);
-            try store.extra_data.append(store.gpa, @intFromEnum(p.requirements.bits_needed));
-            node.data_1 = extra_data_start;
-        },
-        .underscore => |p| {
+        .underscore => {
             node.tag = .pattern_underscore;
-            node.region = p.region;
         },
         .runtime_error => |e| {
             node.tag = .malformed;
-            node.region = e.region;
             node.data_1 = @intFromEnum(e.diagnostic);
         },
     }
 
-    return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
+    const node_idx = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
+    return @enumFromInt(@intFromEnum(node_idx));
 }
 
 /// Adds a pattern record field to the store.
@@ -1725,147 +1658,135 @@ pub fn addPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternR
 }
 
 /// Adds a type annotation to the store.
-pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno) CIR.TypeAnno.Idx {
+pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Region) CIR.TypeAnno.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .region = base.Region.zero(),
         .tag = @enumFromInt(0),
     };
 
     switch (typeAnno) {
         .apply => |a| {
-            node.region = a.region;
             node.data_1 = @bitCast(a.symbol);
             node.data_2 = a.args.span.start;
             node.data_3 = a.args.span.len;
             node.tag = .ty_apply;
         },
         .ty_var => |tv| {
-            node.region = tv.region;
             node.data_1 = @bitCast(tv.name);
             node.tag = .ty_var;
         },
-        .underscore => |u| {
-            node.region = u.region;
+        .underscore => |_| {
             node.tag = .ty_underscore;
         },
         .ty => |t| {
-            node.region = t.region;
             node.data_1 = @bitCast(t.symbol);
             node.tag = .ty_ident;
         },
         .tag_union => |tu| {
-            node.region = tu.region;
             node.data_1 = tu.tags.span.start;
             node.data_2 = tu.tags.span.len;
-            node.data_3 = if (tu.open_anno) |open| @intFromEnum(open) else 0;
+            node.data_3 = if (tu.ext) |ext| @intFromEnum(ext) else 0;
             node.tag = .ty_tag_union;
         },
         .tuple => |t| {
-            node.region = t.region;
-            node.data_1 = t.annos.span.start;
-            node.data_2 = t.annos.span.len;
+            node.data_1 = t.elems.span.start;
+            node.data_2 = t.elems.span.len;
             node.tag = .ty_tuple;
         },
         .record => |r| {
-            node.region = r.region;
             node.data_1 = r.fields.span.start;
             node.data_2 = r.fields.span.len;
             node.tag = .ty_record;
         },
         .@"fn" => |f| {
-            node.region = f.region;
             node.data_1 = f.args.span.start;
             node.data_2 = f.args.span.len;
             node.data_3 = @intFromEnum(f.ret) | (if (f.effectful) @as(u32, 1) << 31 else 0);
             node.tag = .ty_fn;
         },
         .parens => |p| {
-            node.region = p.region;
             node.data_1 = @intFromEnum(p.anno);
             node.tag = .ty_parens;
         },
         .ty_lookup_external => |tle| {
-            node.region = tle.region;
             node.data_1 = @intFromEnum(tle.external_decl);
             node.tag = .ty_lookup_external;
         },
         .malformed => |m| {
-            node.region = m.region;
             node.data_1 = @intFromEnum(m.diagnostic);
             node.tag = .ty_malformed;
         },
     }
 
     const nid = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a type header to the store.
-pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader) CIR.TypeHeader.Idx {
+pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base.Region) CIR.TypeHeader.Idx {
     const node = Node{
         .data_1 = @bitCast(typeHeader.name),
         .data_2 = typeHeader.args.span.start,
         .data_3 = typeHeader.args.span.len,
-        .region = typeHeader.region,
         .tag = .type_header,
     };
 
     const nid = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds an annotation record field to the store.
-pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.RecordField) CIR.TypeAnno.RecordField.Idx {
+pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.RecordField, region: base.Region) CIR.TypeAnno.RecordField.Idx {
     const node = Node{
         .data_1 = @bitCast(annoRecordField.name),
         .data_2 = @intFromEnum(annoRecordField.ty),
         .data_3 = 0,
-        .region = annoRecordField.region,
         .tag = .ty_record_field,
     };
 
     const nid = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds an annotation to the store.
-pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation) CIR.Annotation.Idx {
+pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base.Region) CIR.Annotation.Idx {
     const node = Node{
         .data_1 = @intFromEnum(annotation.signature),
         .data_2 = @intFromEnum(annotation.type_anno),
         .data_3 = 0,
-        .region = annotation.region,
         .tag = .annotation,
     };
 
     const nid = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds an exposed item to the store.
-pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem) CIR.ExposedItem.Idx {
+pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: base.Region) CIR.ExposedItem.Idx {
     const node = Node{
         .data_1 = @bitCast(exposedItem.name),
         .data_2 = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
         .data_3 = @intFromBool(exposedItem.is_wildcard),
-        .region = base.Region.zero(),
         .tag = .exposed_item,
     };
 
     const nid = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a definition to the store.
-pub fn addDef(store: *NodeStore, def: CIR.Def) CIR.Def.Idx {
+pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) CIR.Def.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .region = def.pattern_region, // Use pattern region as the def's region
         .tag = .def,
     };
 
@@ -1883,15 +1804,14 @@ pub fn addDef(store: *NodeStore, def: CIR.Def) CIR.Def.Idx {
     // Store annotation idx (0 if null)
     const anno_idx = if (def.annotation) |anno| @intFromEnum(anno) else 0;
     store.extra_data.append(store.gpa, anno_idx) catch |err| exitOnOom(err);
-    // Store expr_region start and end
-    store.extra_data.append(store.gpa, def.expr_region.start.offset) catch |err| exitOnOom(err);
-    store.extra_data.append(store.gpa, def.expr_region.end.offset) catch |err| exitOnOom(err);
 
     // Store the extra data range in the node
     node.data_1 = extra_start;
-    node.data_2 = 7; // Number of extra data items
+    node.data_2 = 5; // Number of extra data items
 
-    return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
+    const nid = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
+    return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Retrieves a definition from the store.
@@ -1906,22 +1826,14 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
 
     const pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
     const expr: CIR.Expr.Idx = @enumFromInt(extra_data[1]);
-    const kind_encoded = .{ extra_data[2], extra_data[3] };
+    const kind_encoded = [_]u32{ extra_data[2], extra_data[3] };
     const kind = CIR.Def.Kind.decode(kind_encoded);
     const anno_idx = extra_data[4];
-    const expr_region_start = extra_data[5];
-    const expr_region_end = extra_data[6];
-
-    const annotation: ?CIR.Annotation.Idx = if (anno_idx == 0) null else @enumFromInt(anno_idx);
+    const annotation = if (anno_idx == 0) null else @as(CIR.Annotation.Idx, @enumFromInt(anno_idx));
 
     return CIR.Def{
         .pattern = pattern,
-        .pattern_region = node.region, // Stored as node region
         .expr = expr,
-        .expr_region = base.Region{
-            .start = .{ .offset = expr_region_start },
-            .end = .{ .offset = expr_region_end },
-        },
         .annotation = annotation,
         .kind = kind,
     };
@@ -1938,7 +1850,8 @@ pub fn getRecordField(store: *const NodeStore, idx: CIR.RecordField.Idx) CIR.Rec
 
 /// Retrieves a record destructure from the store.
 pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruct.Idx) CIR.Pattern.RecordDestruct {
-    const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
+    const node = store.nodes.get(node_idx);
 
     // Retrieve kind from extra_data if it exists
     const kind = if (node.data_3 != 0) blk: {
@@ -1948,15 +1861,14 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
 
         break :blk switch (kind_tag) {
             0 => CIR.Pattern.RecordDestruct.Kind.Required,
-            1 => CIR.Pattern.RecordDestruct.Kind{ .Guard = @enumFromInt(extra_data[1]) },
-            else => CIR.Pattern.RecordDestruct.Kind.Required,
+            1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
+            else => unreachable,
         };
     } else CIR.Pattern.RecordDestruct.Kind.Required;
 
     return CIR.Pattern.RecordDestruct{
         .label = @bitCast(node.data_1),
         .ident = @bitCast(node.data_2),
-        .region = node.region,
         .kind = kind,
     };
 }
@@ -1971,7 +1883,6 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx
     return CIR.Expr.IfBranch{
         .cond = @enumFromInt(node.data_1),
         .body = @enumFromInt(node.data_2),
-        .region = node.region,
     };
 }
 
@@ -2055,14 +1966,29 @@ pub fn addScratchTypeAnno(store: *NodeStore, idx: CIR.TypeAnno.Idx) void {
     store.addScratch("scratch_type_annos", idx);
 }
 
+/// Adds a where clause to the scratch buffer.
+pub fn addScratchWhereClause(store: *NodeStore, idx: CIR.WhereClause.Idx) void {
+    store.addScratch("scratch_where_clauses", idx);
+}
+
 /// Returns the current top of the scratch type annotations buffer.
 pub fn scratchTypeAnnoTop(store: *NodeStore) u32 {
     return store.scratchTop("scratch_type_annos");
 }
 
+/// Returns the current top of the scratch where clauses buffer.
+pub fn scratchWhereClauseTop(store: *NodeStore) u32 {
+    return store.scratchTop("scratch_where_clauses");
+}
+
 /// Clears scratch type annotations from the given index.
 pub fn clearScratchTypeAnnosFrom(store: *NodeStore, from: u32) void {
     store.clearScratchFrom("scratch_type_annos", from);
+}
+
+/// Clears scratch where clauses from the given index.
+pub fn clearScratchWhereClausesFrom(store: *NodeStore, from: u32) void {
+    store.clearScratchFrom("scratch_where_clauses", from);
 }
 
 /// Creates a span from the scratch type annotations starting at the given index.
@@ -2078,6 +2004,11 @@ pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) CIR.TypeAnno.Recor
 /// Returns a span from the scratch record fields starting at the given index.
 pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) CIR.RecordField.Span {
     return store.spanFrom("scratch_record_fields", CIR.RecordField.Span, start);
+}
+
+/// Returns a span from the scratch where clauses starting at the given index.
+pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) CIR.WhereClause.Span {
+    return store.spanFrom("scratch_where_clauses", CIR.WhereClause.Span, start);
 }
 
 /// Returns the current top of the scratch exposed items buffer.
@@ -2232,8 +2163,7 @@ pub fn scratchIfBranchTop(store: *NodeStore) u32 {
 }
 
 /// Adds an if branch to the scratch if branches list for building spans.
-pub fn addScratchIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch) void {
-    const if_branch_idx = store.addIfBranch(if_branch);
+pub fn addScratchIfBranch(store: *NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx) void {
     store.addScratch("scratch_if_branches", if_branch_idx);
 }
 
@@ -2243,15 +2173,15 @@ pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) CIR.Expr.IfBranch.Span {
 }
 
 /// Adds an if branch to the store and returns its index.
-pub fn addIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch) CIR.Expr.IfBranch.Idx {
+pub fn addIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch, region: base.Region) CIR.Expr.IfBranch.Idx {
     const node = Node{
         .data_1 = @intFromEnum(if_branch.cond),
         .data_2 = @intFromEnum(if_branch.body),
         .data_3 = 0,
-        .region = if_branch.region,
         .tag = .if_branch,
     };
     const node_idx = store.nodes.append(store.gpa, node);
+    _ = store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
@@ -2299,174 +2229,227 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .region = base.Region.zero(),
         .tag = @enumFromInt(0),
     };
+    var region = base.Region.zero();
 
     switch (reason) {
         .not_implemented => |r| {
             node.tag = .diag_not_implemented;
-            node.region = r.region;
+            region = r.region;
             node.data_1 = @intFromEnum(r.feature);
         },
         .invalid_num_literal => |r| {
             node.tag = .diag_invalid_num_literal;
-            node.region = r.region;
+            region = r.region;
         },
         .invalid_single_quote => |r| {
             node.tag = .diag_invalid_single_quote;
-            node.region = r.region;
+            region = r.region;
         },
         .too_long_single_quote => |r| {
             node.tag = .diag_too_long_single_quote;
-            node.region = r.region;
+            region = r.region;
         },
         .empty_single_quote => |r| {
             node.tag = .diag_empty_single_quote;
-            node.region = r.region;
+            region = r.region;
         },
         .empty_tuple => |r| {
             node.tag = .diag_empty_tuple;
-            node.region = r.region;
+            region = r.region;
         },
         .ident_already_in_scope => |r| {
             node.tag = .diag_ident_already_in_scope;
-            node.region = r.region;
+            region = r.region;
             node.data_1 = @bitCast(r.ident);
+        },
+        .exposed_but_not_implemented => |r| {
+            node.tag = .diagnostic_exposed_but_not_implemented;
+            region = r.region;
+            node.data_1 = @bitCast(r.ident);
+        },
+        .redundant_exposed => |r| {
+            node.tag = .diag_redundant_exposed;
+            region = r.region;
+            node.data_1 = @bitCast(r.ident);
+
+            // Store original region in extra_data
+            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, r.original_region.start.offset) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, r.original_region.end.offset) catch |err| exitOnOom(err);
+            node.data_2 = extra_start;
         },
         .ident_not_in_scope => |r| {
             node.tag = .diag_ident_not_in_scope;
-            node.region = r.region;
+            region = r.region;
             node.data_1 = @bitCast(r.ident);
         },
         .invalid_top_level_statement => |r| {
             node.tag = .diag_invalid_top_level_statement;
             node.data_1 = @intFromEnum(r.stmt);
+            region = r.region;
         },
         .expr_not_canonicalized => |r| {
             node.tag = .diag_expr_not_canonicalized;
-            node.region = r.region;
+            region = r.region;
         },
         .invalid_string_interpolation => |r| {
             node.tag = .diag_invalid_string_interpolation;
-            node.region = r.region;
+            region = r.region;
         },
         .pattern_arg_invalid => |r| {
             node.tag = .diag_pattern_arg_invalid;
-            node.region = r.region;
+            region = r.region;
         },
         .pattern_not_canonicalized => |r| {
             node.tag = .diag_pattern_not_canonicalized;
-            node.region = r.region;
+            region = r.region;
         },
         .can_lambda_not_implemented => |r| {
             node.tag = .diag_can_lambda_not_implemented;
-            node.region = r.region;
+            region = r.region;
         },
         .lambda_body_not_canonicalized => |r| {
             node.tag = .diag_lambda_body_not_canonicalized;
-            node.region = r.region;
+            region = r.region;
         },
         .if_condition_not_canonicalized => |r| {
             node.tag = .diag_if_condition_not_canonicalized;
-            node.region = r.region;
+            region = r.region;
         },
         .if_then_not_canonicalized => |r| {
             node.tag = .diag_if_then_not_canonicalized;
-            node.region = r.region;
+            region = r.region;
         },
         .if_else_not_canonicalized => |r| {
             node.tag = .diag_if_else_not_canonicalized;
-            node.region = r.region;
+            region = r.region;
         },
         .malformed_type_annotation => |r| {
             node.tag = .diag_malformed_type_annotation;
-            node.region = r.region;
+            region = r.region;
+        },
+        .malformed_where_clause => |r| {
+            node.tag = .diag_malformed_where_clause;
+            region = r.region;
         },
         .var_across_function_boundary => |r| {
             node.tag = .diag_var_across_function_boundary;
-            node.region = r.region;
+            region = r.region;
         },
         .shadowing_warning => |r| {
             node.tag = .diag_shadowing_warning;
-            node.region = r.region;
+            region = r.region;
             node.data_1 = @bitCast(r.ident);
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
         .type_redeclared => |r| {
             node.tag = .diag_type_redeclared;
-            node.region = r.redeclared_region;
+            region = r.redeclared_region;
             node.data_1 = @bitCast(r.name);
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
         .undeclared_type => |r| {
             node.tag = .diag_undeclared_type;
-            node.region = r.region;
+            region = r.region;
             node.data_1 = @bitCast(r.name);
         },
         .undeclared_type_var => |r| {
             node.tag = .diag_undeclared_type_var;
-            node.region = r.region;
+            region = r.region;
             node.data_1 = @bitCast(r.name);
         },
         .type_alias_redeclared => |r| {
             node.tag = .diag_type_alias_redeclared;
-            node.region = r.redeclared_region;
+            region = r.redeclared_region;
             node.data_1 = @bitCast(r.name);
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
         .tuple_elem_not_canonicalized => |r| {
             node.tag = .diag_tuple_elem_not_canonicalized;
-            node.region = r.region;
+            region = r.region;
+        },
+        .module_not_found => |r| {
+            node.tag = .diag_module_not_found;
+            region = r.region;
+            node.data_1 = @as(u32, @bitCast(r.module_name));
+        },
+        .value_not_exposed => |r| {
+            node.tag = .diag_value_not_exposed;
+            region = r.region;
+            node.data_1 = @as(u32, @bitCast(r.module_name));
+            node.data_2 = @as(u32, @bitCast(r.value_name));
+        },
+        .type_not_exposed => |r| {
+            node.tag = .diag_type_not_exposed;
+            region = r.region;
+            node.data_1 = @as(u32, @bitCast(r.module_name));
+            node.data_2 = @as(u32, @bitCast(r.type_name));
+        },
+        .module_not_imported => |r| {
+            node.tag = .diag_module_not_imported;
+            region = r.region;
+            node.data_1 = @as(u32, @bitCast(r.module_name));
+        },
+        .too_many_exports => |r| {
+            node.tag = .diag_too_many_exports;
+            region = r.region;
+            node.data_1 = r.count;
         },
         .nominal_type_redeclared => |r| {
             node.tag = .diag_nominal_type_redeclared;
-            node.region = r.redeclared_region;
+            region = r.redeclared_region;
             node.data_1 = @bitCast(r.name);
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
         .type_shadowed_warning => |r| {
             node.tag = .diag_type_shadowed_warning;
-            node.region = r.region;
+            region = r.region;
             node.data_1 = @bitCast(r.name);
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset | (@as(u32, @intFromBool(r.cross_scope)) << 31);
         },
         .type_parameter_conflict => |r| {
             node.tag = .diag_type_parameter_conflict;
-            node.region = r.region;
+            region = r.region;
             node.data_1 = @bitCast(r.name);
             node.data_2 = @bitCast(r.parameter_name);
             node.data_3 = r.original_region.start.offset;
         },
         .unused_variable => |r| {
             node.tag = .diag_unused_variable;
-            node.region = r.region;
+            region = r.region;
             node.data_1 = @bitCast(r.ident);
         },
         .used_underscore_variable => |r| {
             node.tag = .diag_used_underscore_variable;
-            node.region = r.region;
+            region = r.region;
             node.data_1 = @bitCast(r.ident);
         },
         .duplicate_record_field => |r| {
             node.tag = .diag_duplicate_record_field;
-            node.region = r.duplicate_region;
+            region = r.duplicate_region;
             node.data_1 = @bitCast(r.field_name);
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
+        .crash_expects_string => |r| {
+            node.tag = .diag_crash_expects_string;
+            region = r.region;
+        },
         .f64_pattern_literal => |r| {
             node.tag = .diag_f64_pattern_literal;
-            node.region = r.region;
+            region = r.region;
         },
     }
 
     const nid = @intFromEnum(store.nodes.append(store.gpa, node));
+    _ = store.regions.append(store.gpa, region);
 
     // append to our scratch so we can get a span later of all our diagnostics
     store.addScratch("scratch_diagnostics", @as(CIR.Diagnostic.Idx, @enumFromInt(nid)));
@@ -2496,12 +2479,11 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
         .data_1 = @intFromEnum(diagnostic_idx),
         .data_2 = 0,
         .data_3 = 0,
-
-        .region = reason.toRegion(),
         .tag = .malformed,
     };
 
     const malformed_nid = @intFromEnum(store.nodes.append(store.gpa, malformed_node));
+    _ = store.regions.append(store.gpa, reason.toRegion());
     return @enumFromInt(malformed_nid);
 }
 
@@ -2516,67 +2498,85 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
     switch (node.tag) {
         .diag_not_implemented => return CIR.Diagnostic{ .not_implemented = .{
             .feature = @enumFromInt(node.data_1),
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_num_literal => return CIR.Diagnostic{ .invalid_num_literal = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_single_quote => return CIR.Diagnostic{ .invalid_single_quote = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_too_long_single_quote => return CIR.Diagnostic{ .too_long_single_quote = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_empty_single_quote => return CIR.Diagnostic{ .empty_single_quote = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_empty_tuple => return CIR.Diagnostic{ .empty_tuple = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{
             .ident = @bitCast(node.data_1),
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
+        .diagnostic_exposed_but_not_implemented => return CIR.Diagnostic{ .exposed_but_not_implemented = .{
+            .ident = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_redundant_exposed => {
+            const extra_data = store.extra_data.items[node.data_2..];
+            const original_start = extra_data[0];
+            const original_end = extra_data[1];
+            return CIR.Diagnostic{ .redundant_exposed = .{
+                .ident = @bitCast(node.data_1),
+                .region = store.getRegionAt(node_idx),
+                .original_region = Region{
+                    .start = .{ .offset = original_start },
+                    .end = .{ .offset = original_end },
+                },
+            } };
+        },
         .diag_ident_not_in_scope => return CIR.Diagnostic{ .ident_not_in_scope = .{
             .ident = @bitCast(node.data_1),
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_top_level_statement => return CIR.Diagnostic{ .invalid_top_level_statement = .{
             .stmt = @enumFromInt(node.data_1),
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_expr_not_canonicalized => return CIR.Diagnostic{ .expr_not_canonicalized = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_string_interpolation => return CIR.Diagnostic{ .invalid_string_interpolation = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_pattern_arg_invalid => return CIR.Diagnostic{ .pattern_arg_invalid = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_pattern_not_canonicalized => return CIR.Diagnostic{ .pattern_not_canonicalized = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_can_lambda_not_implemented => return CIR.Diagnostic{ .can_lambda_not_implemented = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_lambda_body_not_canonicalized => return CIR.Diagnostic{ .lambda_body_not_canonicalized = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_if_condition_not_canonicalized => return CIR.Diagnostic{ .if_condition_not_canonicalized = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_if_then_not_canonicalized => return CIR.Diagnostic{ .if_then_not_canonicalized = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_if_else_not_canonicalized => return CIR.Diagnostic{ .if_else_not_canonicalized = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_var_across_function_boundary => return CIR.Diagnostic{ .var_across_function_boundary = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_shadowing_warning => return CIR.Diagnostic{ .shadowing_warning = .{
             .ident = @bitCast(node.data_1),
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = node.data_2 },
                 .end = .{ .offset = node.data_3 },
@@ -2584,7 +2584,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_type_redeclared => return CIR.Diagnostic{ .type_redeclared = .{
             .name = @bitCast(node.data_1),
-            .redeclared_region = node.region,
+            .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = node.data_2 },
                 .end = .{ .offset = node.data_3 },
@@ -2592,21 +2592,46 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_undeclared_type => return CIR.Diagnostic{ .undeclared_type = .{
             .name = @bitCast(node.data_1),
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_tuple_elem_not_canonicalized => return CIR.Diagnostic{ .tuple_elem_not_canonicalized = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_module_not_found => return CIR.Diagnostic{ .module_not_found = .{
+            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_value_not_exposed => return CIR.Diagnostic{ .value_not_exposed = .{
+            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .value_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_type_not_exposed => return CIR.Diagnostic{ .type_not_exposed = .{
+            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .type_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_module_not_imported => return CIR.Diagnostic{ .module_not_imported = .{
+            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_too_many_exports => return CIR.Diagnostic{ .too_many_exports = .{
+            .count = node.data_1,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_undeclared_type_var => return CIR.Diagnostic{ .undeclared_type_var = .{
             .name = @bitCast(node.data_1),
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_malformed_type_annotation => return CIR.Diagnostic{ .malformed_type_annotation = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_malformed_where_clause => return CIR.Diagnostic{ .malformed_where_clause = .{
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_type_alias_redeclared => return CIR.Diagnostic{ .type_alias_redeclared = .{
             .name = @bitCast(node.data_1),
-            .redeclared_region = node.region,
+            .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = @intCast(node.data_2) },
                 .end = .{ .offset = @intCast(node.data_3) },
@@ -2614,7 +2639,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_nominal_type_redeclared => return CIR.Diagnostic{ .nominal_type_redeclared = .{
             .name = @bitCast(node.data_1),
-            .redeclared_region = node.region,
+            .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = @intCast(node.data_2) },
                 .end = .{ .offset = @intCast(node.data_3 & 0x7FFFFFFF) },
@@ -2622,7 +2647,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_type_shadowed_warning => return CIR.Diagnostic{ .type_shadowed_warning = .{
             .name = @bitCast(node.data_1),
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = @intCast(node.data_2) },
                 .end = .{ .offset = @intCast(node.data_3 & 0x7FFFFFFF) },
@@ -2632,7 +2657,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_type_parameter_conflict => return CIR.Diagnostic{ .type_parameter_conflict = .{
             .name = @bitCast(node.data_1),
             .parameter_name = @bitCast(node.data_2),
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = @intCast(node.data_3) },
                 .end = .{ .offset = @intCast(node.data_3) },
@@ -2640,29 +2665,33 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_unused_variable => return CIR.Diagnostic{ .unused_variable = .{
             .ident = @bitCast(node.data_1),
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_used_underscore_variable => return CIR.Diagnostic{ .used_underscore_variable = .{
             .ident = @bitCast(node.data_1),
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_duplicate_record_field => return CIR.Diagnostic{ .duplicate_record_field = .{
             .field_name = @bitCast(node.data_1),
-            .duplicate_region = node.region,
+            .duplicate_region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = @intCast(node.data_2) },
                 .end = .{ .offset = @intCast(node.data_3) },
             },
         } },
+        .diag_crash_expects_string => return CIR.Diagnostic{ .crash_expects_string = .{
+            .region = store.getRegionAt(node_idx),
+        } },
         .diag_f64_pattern_literal => return CIR.Diagnostic{ .f64_pattern_literal = .{
-            .region = node.region,
+            .region = store.getRegionAt(node_idx),
         } },
         else => {
             std.debug.print("Error: getDiagnostic called with non-diagnostic node!\n", .{});
             std.debug.print("  Node tag: {}\n", .{node.tag});
             std.debug.print("  Diagnostic index: {}\n", .{diagnostic});
             std.debug.print("  Node index: {}\n", .{node_idx});
-            std.debug.print("  Region: {}..{}\n", .{ node.region.start.offset, node.region.end.offset });
+            const region = store.getRegionAt(node_idx);
+            std.debug.print("  Region: {}..{}\n", .{ region.start.offset, region.end.offset });
             std.debug.print("\nThis indicates that a non-diagnostic node was added to the diagnostics list.\n", .{});
             std.debug.print("Check that addDiagnostic is only called with CIR.Diagnostic values,\n", .{});
             std.debug.print("and that no other nodes are being added to scratch_diagnostics.\n", .{});
@@ -2692,9 +2721,27 @@ pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base
         .data_1 = @intFromEnum(parent_node_idx),
         .data_2 = 0,
         .data_3 = 0,
-        .region = region,
     });
+    _ = store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Given a target node idx, check that the it is in bounds
+/// If it is, do nothing
+/// If it's not, then fill in the store with type_var_slots for all missing
+/// intervening nodes, *up to and including* the provided node
+pub fn fillInTypeVarSlotsThru(store: *NodeStore, target_idx: Node.Idx, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!void {
+    const idx = @intFromEnum(target_idx);
+    try store.nodes.items.ensureTotalCapacity(store.gpa, idx);
+    while (store.nodes.items.len <= idx) {
+        store.nodes.items.appendAssumeCapacity(.{
+            .tag = .type_var_slot,
+            .data_1 = @intFromEnum(parent_node_idx),
+            .data_2 = 0,
+            .data_3 = 0,
+        });
+        _ = store.regions.append(store.gpa, region);
+    }
 }
 
 /// Return the current top index for scratch match branches.
@@ -2729,24 +2776,30 @@ pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) CIR.Expr.Match.
 
 /// Calculate the size needed to serialize this NodeStore
 pub fn serializedSize(self: *const NodeStore) usize {
-    // We only serialize nodes and extra_data (the scratch arrays are transient)
-    return self.nodes.serializedSize() +
+    // We only serialize nodes, regions, and extra_data (the scratch arrays are transient)
+    const raw_size = self.nodes.serializedSize() +
+        self.regions.serializedSize() +
         @sizeOf(u32) + // extra_data length
         (self.extra_data.items.len * @sizeOf(u32));
+    // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
+    return std.mem.alignForward(usize, raw_size, SERIALIZATION_ALIGNMENT);
 }
 
 /// Serialize this NodeStore into the provided buffer
 /// Buffer must be at least serializedSize() bytes and properly aligned
-pub fn serializeInto(self: *const NodeStore, buffer: []align(@alignOf(Node)) u8) ![]u8 {
+pub fn serializeInto(self: *const NodeStore, buffer: []align(SERIALIZATION_ALIGNMENT) u8) ![]u8 {
     const size = self.serializedSize();
     if (buffer.len < size) return error.BufferTooSmall;
 
     var offset: usize = 0;
 
     // Serialize nodes - cast to proper alignment for Node type
-    const nodes_buffer = @as([]align(@alignOf(Node)) u8, @alignCast(buffer[offset..]));
-    const nodes_slice = try self.nodes.serializeInto(nodes_buffer);
+    const nodes_slice = try self.nodes.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
     offset += nodes_slice.len;
+
+    // Serialize regions
+    const regions_slice = try self.regions.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
+    offset += regions_slice.len;
 
     // Serialize extra_data length
     const extra_len_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset)));
@@ -2760,7 +2813,12 @@ pub fn serializeInto(self: *const NodeStore, buffer: []align(@alignOf(Node)) u8)
         offset += self.extra_data.items.len * @sizeOf(u32);
     }
 
-    return buffer[0..offset];
+    // Zero out any padding bytes
+    if (offset < size) {
+        @memset(buffer[offset..size], 0);
+    }
+
+    return buffer[0..size];
 }
 
 /// Deserialize a NodeStore from the provided buffer
@@ -2771,6 +2829,11 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
     const nodes_buffer = @as([]align(@alignOf(Node)) const u8, @alignCast(buffer[offset..]));
     const nodes = try Node.List.deserializeFrom(nodes_buffer, allocator);
     offset += nodes.serializedSize();
+
+    // Deserialize regions
+    const regions_buffer = @as([]align(@alignOf(Region)) const u8, @alignCast(buffer[offset..]));
+    const regions = try Region.List.deserializeFrom(regions_buffer, allocator);
+    offset += regions.serializedSize();
 
     // Deserialize extra_data length
     if (buffer.len < offset + @sizeOf(u32)) return error.BufferTooSmall;
@@ -2792,6 +2855,7 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
     return NodeStore{
         .gpa = allocator,
         .nodes = nodes,
+        .regions = regions,
         .extra_data = extra_data,
         // All scratch arrays start empty
         .scratch_statements = base.Scratch(CIR.Statement.Idx){ .items = .{} },

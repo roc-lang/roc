@@ -19,6 +19,8 @@ type=expr
     0xDeAdBeEf,
 )
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UPPERCASE BASE**
 Number base prefixes must be lowercase (0x, 0o, 0b).

@@ -17,18 +17,9 @@ handleResult = |result| {
     }
 }
 ~~~
+# EXPECTED
+UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
-**UNDECLARED TYPE**
-The type ``MyResultModule.MyResultType`` is not declared in this scope.
-
-This type is referenced here:
-**nominal_external_fully_qualified.md:6:1:6:13:**
-```roc
-handleResult = |result| {
-```
-^^^^^^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable ``code`` is not used anywhere in your code.
 
@@ -117,17 +108,19 @@ handleResult = |result| {
 					(match @7.5-10.6
 						(cond
 							(e-lookup-local @7.11-7.17
-								(pattern @6.17-6.23)))
+								(p-assign @6.17-6.23 (ident "result"))))
 						(branches
 							(branch
 								(patterns
-									(p-applied-tag @8.9-8.46 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @8.9-8.46)))
 								(value
 									(e-lookup-local @8.50-8.55
-										(pattern @8.40-8.45))))
+										(p-assign @8.40-8.45 (ident "value")))))
 							(branch
 								(patterns
-									(p-applied-tag @9.9-9.46 (degenerate false)))
+									(pattern (degenerate false)
+										(p-applied-tag @9.9-9.46)))
 								(value
 									(e-string @9.50-9.74
 										(e-literal @9.51-9.73 (string "Error: $(code.toStr())"))))))))))
@@ -139,7 +132,8 @@ handleResult = |result| {
 						(ty @5.49-5.52 (name "I32")))
 					(ty @5.57-5.60 (name "Str"))))))
 	(s-import @3.1-3.22 (module "MyResultModule")
-		(exposes)))
+		(exposes))
+	(ext-decl @5.16-5.43 (ident "MyResultModule.MyResultType") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

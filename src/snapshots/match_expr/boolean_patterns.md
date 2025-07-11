@@ -10,10 +10,19 @@ match isReady {
 	False => "not ready yet"
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - boolean_patterns.md:1:7:1:14
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `isReady` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**boolean_patterns.md:1:7:1:14:**
+```roc
+match isReady {
+```
+      ^^^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -49,13 +58,15 @@ NO CHANGE
 		(branches
 			(branch
 				(patterns
-					(p-applied-tag @2.2-2.6 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @2.2-2.6)))
 				(value
 					(e-string @2.10-2.24
 						(e-literal @2.11-2.23 (string "ready to go!")))))
 			(branch
 				(patterns
-					(p-applied-tag @3.2-3.7 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @3.2-3.7)))
 				(value
 					(e-string @3.11-3.26
 						(e-literal @3.12-3.25 (string "not ready yet"))))))))

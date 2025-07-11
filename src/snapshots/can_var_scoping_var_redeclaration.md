@@ -17,6 +17,9 @@ redeclareTest = |_| {
 
 result = redeclareTest({})
 ~~~
+# EXPECTED
+DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:6:2:7:4
+UNUSED VARIABLE - can_var_scoping_var_redeclaration.md:6:2:7:4
 # PROBLEMS
 **DUPLICATE DEFINITION**
 The name `x_` is being redeclared in this scope.
@@ -112,12 +115,12 @@ NO CHANGE
 					(p-assign @5.2-6.5 (ident "x_"))
 					(e-int @7.7-7.9 (value "15")))
 				(e-lookup-local @8.2-8.4
-					(pattern @5.2-6.5)))))
+					(p-assign @5.2-6.5 (ident "x_"))))))
 	(d-let
 		(p-assign @11.1-11.7 (ident "result"))
 		(e-call @11.10-11.27
 			(e-lookup-local @11.10-11.23
-				(pattern @4.1-4.14))
+				(p-assign @4.1-4.14 (ident "redeclareTest")))
 			(e-empty_record @11.24-11.26))))
 ~~~
 # TYPES

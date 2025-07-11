@@ -11,6 +11,14 @@ match items {
     [x, ..rest, y] => x + y
 }
 ~~~
+# EXPECTED
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:2:13:2:19
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:3:6:3:12
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:4:9:4:15
+UNDEFINED VARIABLE - list_rest_scoping.md:1:7:1:12
+UNUSED VARIABLE - list_rest_scoping.md:2:15:2:19
+UNUSED VARIABLE - list_rest_scoping.md:3:8:3:12
+UNUSED VARIABLE - list_rest_scoping.md:4:11:4:15
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.
@@ -51,6 +59,13 @@ Here is the problematic code:
 **UNDEFINED VARIABLE**
 Nothing is named `items` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_rest_scoping.md:1:7:1:12:**
+```roc
+match items {
+```
+      ^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``rest`` is not used anywhere in your code.
@@ -141,42 +156,45 @@ match items {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.20 (degenerate false)
-						(patterns
-							(p-assign @2.6-2.11 (ident "first")))
-						(rest-at (index 1)
-							(p-assign @2.15-2.19 (ident "rest")))))
+					(pattern (degenerate false)
+						(p-list @2.5-2.20
+							(patterns
+								(p-assign @2.6-2.11 (ident "first")))
+							(rest-at (index 1)
+								(p-assign @2.15-2.19 (ident "rest"))))))
 				(value
 					(e-binop @2.24-3.6 (op "add")
 						(e-lookup-local @2.24-2.29
-							(pattern @2.6-2.11))
+							(p-assign @2.6-2.11 (ident "first")))
 						(e-int @2.32-2.33 (value "1")))))
 			(branch
 				(patterns
-					(p-list @3.5-3.19 (degenerate false)
-						(patterns
-							(p-assign @3.14-3.18 (ident "last")))
-						(rest-at (index 0)
-							(p-assign @3.8-3.12 (ident "rest")))))
+					(pattern (degenerate false)
+						(p-list @3.5-3.19
+							(patterns
+								(p-assign @3.14-3.18 (ident "last")))
+							(rest-at (index 0)
+								(p-assign @3.8-3.12 (ident "rest"))))))
 				(value
 					(e-binop @3.23-4.6 (op "add")
 						(e-lookup-local @3.23-3.27
-							(pattern @3.14-3.18))
+							(p-assign @3.14-3.18 (ident "last")))
 						(e-int @3.30-3.31 (value "2")))))
 			(branch
 				(patterns
-					(p-list @4.5-4.19 (degenerate false)
-						(patterns
-							(p-assign @4.6-4.7 (ident "x"))
-							(p-assign @4.17-4.18 (ident "y")))
-						(rest-at (index 1)
-							(p-assign @4.11-4.15 (ident "rest")))))
+					(pattern (degenerate false)
+						(p-list @4.5-4.19
+							(patterns
+								(p-assign @4.6-4.7 (ident "x"))
+								(p-assign @4.17-4.18 (ident "y")))
+							(rest-at (index 1)
+								(p-assign @4.11-4.15 (ident "rest"))))))
 				(value
 					(e-binop @4.23-5.2 (op "add")
 						(e-lookup-local @4.23-4.24
-							(pattern @4.6-4.7))
+							(p-assign @4.6-4.7 (ident "x")))
 						(e-lookup-local @4.27-4.28
-							(pattern @4.17-4.18))))))))
+							(p-assign @4.17-4.18 (ident "y")))))))))
 ~~~
 # TYPES
 ~~~clojure

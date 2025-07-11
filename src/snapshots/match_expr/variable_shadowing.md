@@ -10,14 +10,31 @@ match (value, other) {
     (None, x) => x * 2
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - variable_shadowing.md:1:8:1:13
+UNDEFINED VARIABLE - variable_shadowing.md:1:15:1:20
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `value` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**variable_shadowing.md:1:8:1:13:**
+```roc
+match (value, other) {
+```
+       ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `other` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**variable_shadowing.md:1:15:1:20:**
+```roc
+match (value, other) {
+```
+              ^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -68,26 +85,28 @@ match (value, other) {
 		(branches
 			(branch
 				(patterns
-					(p-tuple @2.5-2.17 (degenerate false)
-						(patterns
-							(p-applied-tag @2.6-2.13)
-							(p-assign @2.15-2.16 (ident "y")))))
+					(pattern (degenerate false)
+						(p-tuple @2.5-2.17
+							(patterns
+								(p-applied-tag @2.6-2.13)
+								(p-assign @2.15-2.16 (ident "y"))))))
 				(value
 					(e-binop @2.21-3.6 (op "add")
 						(e-lookup-local @2.21-2.22
-							(pattern @2.11-2.12))
+							(p-assign @2.11-2.12 (ident "x")))
 						(e-lookup-local @2.25-2.26
-							(pattern @2.15-2.16)))))
+							(p-assign @2.15-2.16 (ident "y"))))))
 			(branch
 				(patterns
-					(p-tuple @3.5-3.14 (degenerate false)
-						(patterns
-							(p-applied-tag @3.6-3.10)
-							(p-assign @3.12-3.13 (ident "x")))))
+					(pattern (degenerate false)
+						(p-tuple @3.5-3.14
+							(patterns
+								(p-applied-tag @3.6-3.10)
+								(p-assign @3.12-3.13 (ident "x"))))))
 				(value
 					(e-binop @3.18-4.2 (op "mul")
 						(e-lookup-local @3.18-3.19
-							(pattern @3.12-3.13))
+							(p-assign @3.12-3.13 (ident "x")))
 						(e-int @3.22-3.23 (value "2"))))))))
 ~~~
 # TYPES

@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 { ..person, age: 31 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_field_update.md:1:5:1:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_field_update.md:1:5:1:11:**
+```roc
+{ ..person, age: 31 }
+```
+    ^^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -21,7 +30,7 @@ OpenCurly(1:1-1:2),DoubleDot(1:3-1:5),LowerIdent(1:5-1:11),Comma(1:11-1:12),Lowe
 (e-record @1.1-1.22
 	(ext
 		(e-ident @1.5-1.11 (raw "person")))
-	(field (field "age") (optional false)
+	(field (field "age")
 		(e-int @1.18-1.20 (raw "31"))))
 ~~~
 # FORMATTED

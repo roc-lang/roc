@@ -9,6 +9,8 @@ app # This comment is here
 	[main!]
 	{ pf: platform "../main.roc", somePkg: "../main.roc" }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

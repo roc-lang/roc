@@ -26,13 +26,13 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
     parse_ast.store.emptyScratch();
 
     const cir = try allocator.create(CIR);
-    cir.* = CIR.init(module_env);
+    cir.* = CIR.init(module_env, "Test");
 
     const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(cir, parse_ast);
+    can.* = try canonicalize.init(cir, parse_ast, null);
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
         const diagnostic_idx = cir.store.addDiagnostic(.{ .not_implemented = .{
             .feature = cir.env.strings.insert(allocator, "canonicalization failed"),
             .region = base.Region.zero(),
@@ -44,8 +44,7 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
             .can = can,
             .expr_idx = cir.store.addExpr(CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
-                .region = base.Region.zero(),
-            } }),
+            } }, base.Region.zero()),
         };
     };
 

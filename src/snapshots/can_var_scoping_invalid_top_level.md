@@ -10,6 +10,8 @@ module []
 # This should cause an error - var not allowed at top level
 var topLevelVar_ = 0
 ~~~
+# EXPECTED
+PARSE ERROR - can_var_scoping_invalid_top_level.md:4:1:4:17
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `var_only_allowed_in_a_body`

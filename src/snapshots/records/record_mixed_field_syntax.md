@@ -7,18 +7,43 @@ type=expr
 ~~~roc
 { name, age: 30, email, status: "active", balance }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:3:1:8
+UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:18:1:24
+UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:43:1:52
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `name` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**record_mixed_field_syntax.md:1:3:1:8:**
+```roc
+{ name, age: 30, email, status: "active", balance }
+```
+  ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `email` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**record_mixed_field_syntax.md:1:18:1:24:**
+```roc
+{ name, age: 30, email, status: "active", balance }
+```
+                 ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `balance` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_mixed_field_syntax.md:1:43:1:52:**
+```roc
+{ name, age: 30, email, status: "active", balance }
+```
+                                          ^^^^^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -27,14 +52,14 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),OpCol
 # PARSE
 ~~~clojure
 (e-record @1.1-1.52
-	(field (field "name") (optional false))
-	(field (field "age") (optional false)
+	(field (field "name"))
+	(field (field "age")
 		(e-int @1.14-1.16 (raw "30")))
-	(field (field "email") (optional false))
-	(field (field "status") (optional false)
+	(field (field "email"))
+	(field (field "status")
 		(e-string @1.33-1.41
 			(e-string-part @1.34-1.40 (raw "active"))))
-	(field (field "balance") (optional false)))
+	(field (field "balance")))
 ~~~
 # FORMATTED
 ~~~roc

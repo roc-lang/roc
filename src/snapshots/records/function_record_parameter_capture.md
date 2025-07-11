@@ -7,22 +7,20 @@ type=expr
 ~~~roc
 |{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
 ~~~
+# EXPECTED
+UNUSED VARIABLE - function_record_parameter_capture.md:1:15:1:20
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
+**UNUSED VARIABLE**
+Variable ``a`` is not used anywhere in your code.
 
-**UNDEFINED VARIABLE**
-Nothing is named `name` in this scope.
-Is there an `import` or `exposing` missing up-top?
+If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
+The unused variable is declared here:
+**function_record_parameter_capture.md:1:15:1:20:**
+```roc
+|{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
+```
+              ^^^^^
 
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `age` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -38,14 +36,14 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 				(field @1.10-1.14 (name "age") (rest false))
 				(field @1.15-1.20 (name "a") (rest true)))))
 	(e-record @1.32-1.103
-		(field (field "greeting") (optional false)
+		(field (field "greeting")
 			(e-string @1.44-1.59
 				(e-string-part @1.45-1.51 (raw "Hello "))
 				(e-ident @1.53-1.57 (raw "name"))
 				(e-string-part @1.58-1.58 (raw ""))))
-		(field (field "full_record") (optional false)
+		(field (field "full_record")
 			(e-ident @1.74-1.80 (raw "person")))
-		(field (field "is_adult") (optional false)
+		(field (field "is_adult")
 			(e-binop @1.92-1.103 (op ">=")
 				(e-ident @1.92-1.95 (raw "age"))
 				(e-int @1.99-1.101 (raw "18"))))))
@@ -58,22 +56,41 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 ~~~clojure
 (e-lambda @1.1-1.103
 	(args
-		(p-runtime-error @1.1-1.1 (tag "not_implemented")))
+		(p-as @1.2-1.30 (as "person")
+			(p-record-destructure @1.2-1.20
+				(destructs
+					(record-destruct @1.4-1.9 (label "name") (ident "name")
+						(required))
+					(record-destruct @1.10-1.14 (label "age") (ident "age")
+						(required))
+					(record-destruct @1.15-1.20 (label "a") (ident "a")
+						(required))))))
 	(e-record @1.32-1.103
 		(fields
 			(field (name "greeting")
 				(e-string @1.44-1.59
 					(e-literal @1.45-1.51 (string "Hello "))
-					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local @1.53-1.57
+						(p-assign @1.4-1.9 (ident "name")))
 					(e-literal @1.58-1.58 (string ""))))
 			(field (name "full_record")
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-lookup-local @1.74-1.80
+					(p-as @1.2-1.30 (as "person")
+						(p-record-destructure @1.2-1.20
+							(destructs
+								(record-destruct @1.4-1.9 (label "name") (ident "name")
+									(required))
+								(record-destruct @1.10-1.14 (label "age") (ident "age")
+									(required))
+								(record-destruct @1.15-1.20 (label "a") (ident "a")
+									(required)))))))
 			(field (name "is_adult")
 				(e-binop @1.92-1.103 (op "ge")
-					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local @1.92-1.95
+						(p-assign @1.10-1.14 (ident "age")))
 					(e-int @1.99-1.101 (value "18")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.103 (type "Error -> { greeting: Str, full_record: Error, is_adult: * }"))
+(expr @1.1-1.103 (type "* -> { greeting: Str, full_record: *, is_adult: * }"))
 ~~~

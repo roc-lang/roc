@@ -9,6 +9,14 @@ Fli/main.roc" }
 
 Pair(a, b+ : (
 ~~~
+# EXPECTED
+UNCLOSED STRING - fuzz_crash_021.md:1:1:1:5
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_021.md:1:4:1:9
+PARSE ERROR - fuzz_crash_021.md:3:1:3:6
+PARSE ERROR - fuzz_crash_021.md:3:15:3:15
+INVALID STATEMENT - fuzz_crash_021.md:1:4:1:9
+INVALID STATEMENT - fuzz_crash_021.md:1:5:1:14
+INVALID STATEMENT - fuzz_crash_021.md:1:1:1:1
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -72,13 +80,34 @@ This type annotation is malformed or contains invalid syntax.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_021.md:1:4:1:9:**
+```roc
+Fli/main.roc" }
+```
+   ^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_021.md:1:5:1:14:**
+```roc
+Fli/main.roc" }
+```
+    ^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_021.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 # TOKENS
 ~~~zig
@@ -111,7 +140,7 @@ main.roc" }"
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @3.1-3.15 (where "TODO")
+	(s-alias-decl @3.1-3.15
 		(ty-header @3.1-3.13 (name "Fli"))
 		(ty-malformed @3.14-3.15)))
 ~~~
@@ -119,5 +148,8 @@ main.roc" }"
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(alias @3.1-3.15 (type "Fli")
+			(ty-header @3.1-3.13 (name "Fli"))))
 	(expressions))
 ~~~

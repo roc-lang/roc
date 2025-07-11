@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 [[1, "hello"], [2, 3]]
 ~~~
+# EXPECTED
+INCOMPATIBLE LIST ELEMENTS - can_nested_heterogeneous_lists.md:1:3:1:3
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The two elements in this list have incompatible types:

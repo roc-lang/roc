@@ -12,6 +12,8 @@ processList = |list| list.len()
 
 main! = |_| processList(["one","two"])
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -85,7 +87,7 @@ main! = |_| processList(["one", "two"])
 			(e-dot-access @4.22-6.6 (field "len")
 				(receiver
 					(e-lookup-local @4.22-4.26
-						(pattern @4.16-4.20)))
+						(p-assign @4.16-4.20 (ident "list"))))
 				(args)))
 		(annotation @4.1-4.12
 			(declared-type
@@ -100,7 +102,7 @@ main! = |_| processList(["one", "two"])
 				(p-underscore @6.10-6.11))
 			(e-call @6.13-6.39
 				(e-lookup-local @6.13-6.24
-					(pattern @4.1-4.12))
+					(p-assign @4.1-4.12 (ident "processList")))
 				(e-list @6.25-6.38
 					(elems
 						(e-string @6.26-6.31

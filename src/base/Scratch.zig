@@ -34,6 +34,16 @@ pub fn Scratch(comptime T: type) type {
             self.items.append(gpa, idx) catch |err| exitOnOom(err);
         }
 
+        /// Creates slice from the provided indexes
+        pub fn slice(self: *Self, start: u32, end: u32) []T {
+            return self.items.items[@intCast(start)..@intCast(end)];
+        }
+
+        /// Creates slice from the provided start index
+        pub fn sliceFromStart(self: *Self, start: u32) []T {
+            return self.items.items[@intCast(start)..];
+        }
+
         /// Creates a new span starting at start.  Moves the items from scratch
         /// to extra_data as appropriate.
         pub fn spanFromStart(self: *Self, start: u32, gpa: std.mem.Allocator, data: *std.ArrayListUnmanaged(u32)) base.DataSpan {

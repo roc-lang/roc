@@ -11,14 +11,31 @@ module []
 
 "two"
 ~~~
+# EXPECTED
+INVALID STATEMENT - string.md:1:1:1:1
+INVALID STATEMENT - string.md:5:1:5:6
 # PROBLEMS
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**string.md:1:1:1:1:**
+```roc
+
+```
+
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**string.md:5:1:5:6:**
+```roc
+"two"
+```
+^^^^^
+
 
 # TOKENS
 ~~~zig

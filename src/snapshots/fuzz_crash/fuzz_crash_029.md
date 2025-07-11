@@ -23,6 +23,26 @@ pkg: "..l", mmen		} # Cose
 ar,
 		]
 ~~~
+# EXPECTED
+PARSE ERROR - fuzz_crash_029.md:4:4:4:9
+PARSE ERROR - fuzz_crash_029.md:5:14:5:18
+PARSE ERROR - fuzz_crash_029.md:5:9:5:14
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:5:24:5:31
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:6:4:6:10
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:7:2:7:13
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:10:2:10:15
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:14:2:14:15
+PARSE ERROR - fuzz_crash_029.md:17:3:17:4
+INVALID STATEMENT - fuzz_crash_029.md:5:22:5:25
+INVALID STATEMENT - fuzz_crash_029.md:5:24:5:31
+INVALID STATEMENT - fuzz_crash_029.md:6:4:6:10
+INVALID STATEMENT - fuzz_crash_029.md:7:2:7:13
+INVALID STATEMENT - fuzz_crash_029.md:8:3:10:10
+INVALID STATEMENT - fuzz_crash_029.md:10:2:10:15
+INVALID STATEMENT - fuzz_crash_029.md:11:3:12:4
+INVALID STATEMENT - fuzz_crash_029.md:12:3:14:10
+INVALID STATEMENT - fuzz_crash_029.md:14:2:14:15
+INVALID STATEMENT - fuzz_crash_029.md:15:3:17:4
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.
@@ -164,41 +184,114 @@ Here is the problematic code:
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_029.md:5:22:5:25:**
+```roc
+			n! : List(Str) => {}, # ure
+```
+                     ^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_029.md:5:24:5:31:**
+```roc
+			n! : List(Str) => {}, # ure
+```
+                       ^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_029.md:6:4:6:10:**
+```roc
+			} #Ce
+```
+   ^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_029.md:7:2:7:13:**
+```roc
+	exposes #rd
+```
+ ^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**fuzz_crash_029.md:8:3:10:10:**
+```roc
+		[ #
+		] # Cse
+	packages # Cd
+```
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_029.md:10:2:10:15:**
+```roc
+	packages # Cd
+```
+ ^^^^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_029.md:11:3:12:4:**
+```roc
+		vides # Cd
+		{ # pen
+```
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_029.md:12:3:14:10:**
+```roc
+		{ # pen
+pkg: "..l", mmen		} # Cose
+	provides # Cd
+```
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_029.md:14:2:14:15:**
+```roc
+	provides # Cd
+```
+ ^^^^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_029.md:15:3:17:4:**
+```roc
+		[ Ok(world), (n # pen
+ar,
+		]
+```
+
 
 # TOKENS
 ~~~zig
@@ -234,10 +327,10 @@ CloseRound(17:3-17:4),EndOfFile(17:4-17:4),
 		(e-malformed @10.2-10.15 (reason "expr_unexpected_token"))
 		(e-ident @11.3-11.8 (raw "vides"))
 		(e-record @12.3-13.20
-			(field (field "pkg") (optional false)
+			(field (field "pkg")
 				(e-string @13.6-13.11
 					(e-string-part @13.7-13.10 (raw "..l"))))
-			(field (field "mmen") (optional false)))
+			(field (field "mmen")))
 		(e-malformed @14.2-14.15 (reason "expr_unexpected_token"))
 		(e-malformed @17.4-17.4 (reason "expected_expr_close_square_or_comma"))))
 ~~~

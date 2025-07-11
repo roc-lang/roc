@@ -49,6 +49,31 @@ transform = \result ->
         Result.Ok rgb -> TypeC.fromColor rgb
         Result.Err err -> TypeC.default
 ~~~
+# EXPECTED
+PARSE ERROR - qualified_type_canonicalization.md:8:1:8:14
+PARSE ERROR - qualified_type_canonicalization.md:8:14:8:14
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:15:10:32
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:24:10:34
+PARSE ERROR - qualified_type_canonicalization.md:26:32:26:32
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:31:12:31:14
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:31:24:31:30
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:35:16:35:22
+PARSE ERROR - qualified_type_canonicalization.md:36:5:36:21
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:36:6:36:22
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:36:21:36:21
+PARSE ERROR - qualified_type_canonicalization.md:39:32:39:43
+PARSE ERROR - qualified_type_canonicalization.md:39:43:39:52
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:50:39:60
+PARSE ERROR - qualified_type_canonicalization.md:39:60:39:74
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:68:39:68
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:40:13:40:20
+PARSE ERROR - qualified_type_canonicalization.md:42:15:42:22
+PARSE ERROR - qualified_type_canonicalization.md:43:15:43:23
+INVALID STATEMENT - qualified_type_canonicalization.md:10:15:10:32
+INVALID STATEMENT - qualified_type_canonicalization.md:10:24:10:34
+INVALID STATEMENT - qualified_type_canonicalization.md:10:33:11:7
+UNDEFINED VARIABLE - qualified_type_canonicalization.md:15:19:15:24
+INVALID STATEMENT - qualified_type_canonicalization.md:15:29:18:17
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `import_exposing_no_close`
@@ -366,25 +391,93 @@ Here is the problematic code:
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**qualified_type_canonicalization.md:10:15:10:32:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+```
+              ^^^^^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**qualified_type_canonicalization.md:10:24:10:34:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+```
+                       ^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:10:33:11:7:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+import ExternalModule as ExtMod
+```
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Color` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**qualified_type_canonicalization.md:15:19:15:24:**
+```roc
+simpleQualified = Color.RGB { r: 255, g: 0, b: 0 }
+```
+                  ^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:15:29:18:17:**
+```roc
+simpleQualified = Color.RGB { r: 255, g: 0, b: 0 }
+
+# Aliased qualified type
+aliasedQualified : ExtMod.DataType
+```
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `DataType` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**qualified_type_canonicalization.md:19:26:19:35:**
+```roc
+aliasedQualified = ExtMod.DataType.Default
+```
+                         ^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `new` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**qualified_type_canonicalization.md:23:23:23:32:**
+```roc
+multiLevelQualified = TypeC.new
+```
+                      ^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:27:24:30:9:**
+```roc
+resultType = Result.Ok 42
+
+# Function returning qualified type
+getColor : {} -> Color.RGB
+```
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -394,13 +487,36 @@ Check the spelling and make sure you're using a valid Roc operator.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**qualified_type_canonicalization.md:31:13:31:28:**
+```roc
+getColor = \{} -> Color.RGB { r: 0, g: 255, b: 0 }
+```
+            ^^^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:31:24:31:30:**
+```roc
+getColor = \{} -> Color.RGB { r: 0, g: 255, b: 0 }
+```
+                       ^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:31:29:34:13:**
+```roc
+getColor = \{} -> Color.RGB { r: 0, g: 255, b: 0 }
+
+# Function accepting qualified type
+processColor : Color.RGB -> Str
+```
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -410,21 +526,56 @@ Check the spelling and make sure you're using a valid Roc operator.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**qualified_type_canonicalization.md:35:17:36:21:**
+```roc
+processColor = \color ->
+    "Color processed"
+```
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**qualified_type_canonicalization.md:36:6:36:22:**
+```roc
+    "Color processed"
+```
+     ^^^^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:1:1:1:1:**
+```roc
+
+```
+
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:39:50:39:60:**
+```roc
+transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
+```
+                                                 ^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -434,25 +585,67 @@ Check the spelling and make sure you're using a valid Roc operator.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**qualified_type_canonicalization.md:40:14:41:16:**
+```roc
+transform = \result ->
+    when result is
+```
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**qualified_type_canonicalization.md:41:10:41:19:**
+```roc
+    when result is
+```
+         ^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**qualified_type_canonicalization.md:41:17:42:15:**
+```roc
+    when result is
+        Result.Ok rgb -> TypeC.fromColor rgb
+```
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:42:19:42:45:**
+```roc
+        Result.Ok rgb -> TypeC.fromColor rgb
+```
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:42:42:43:15:**
+```roc
+        Result.Ok rgb -> TypeC.fromColor rgb
+        Result.Err err -> TypeC.default
+```
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:43:20:43:40:**
+```roc
+        Result.Err err -> TypeC.default
+```
+                   ^^^^^^^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -519,11 +712,11 @@ UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),LowerIdent(43:20-43:23)
 			(p-ident @15.1-15.16 (raw "simpleQualified"))
 			(e-tag @15.19-15.28 (raw "Color.RGB")))
 		(e-record @15.29-15.51
-			(field (field "r") (optional false)
+			(field (field "r")
 				(e-int @15.34-15.37 (raw "255")))
-			(field (field "g") (optional false)
+			(field (field "g")
 				(e-int @15.42-15.43 (raw "0")))
-			(field (field "b") (optional false)
+			(field (field "b")
 				(e-int @15.48-15.49 (raw "0"))))
 		(s-type-anno @1.1-1.1 (name "aliasedQualified")
 			(ty @18.20-18.35 (name "ExtMod.DataType")))
@@ -554,11 +747,11 @@ UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),LowerIdent(43:20-43:23)
 			(e-tag @31.19-31.24 (raw "Color")))
 		(e-malformed @31.24-31.30 (reason "expr_unexpected_token"))
 		(e-record @31.29-31.51
-			(field (field "r") (optional false)
+			(field (field "r")
 				(e-int @31.34-31.35 (raw "0")))
-			(field (field "g") (optional false)
+			(field (field "g")
 				(e-int @31.40-31.43 (raw "255")))
-			(field (field "b") (optional false)
+			(field (field "b")
 				(e-int @31.48-31.49 (raw "0"))))
 		(s-type-anno @1.1-1.1 (name "processColor")
 			(ty-fn @34.16-34.32
@@ -644,14 +837,14 @@ err->TypeC.default
 (can-ir
 	(d-let
 		(p-assign @15.1-15.16 (ident "simpleQualified"))
-		(e-tag @15.19-15.28 (name "RGB"))
+		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @15.1-15.16
 			(declared-type
 				(ty-lookup-external @14.19-14.28
 					(ext-decl @14.19-14.28 (ident "Color.RGB") (kind "type"))))))
 	(d-let
 		(p-assign @19.1-19.17 (ident "aliasedQualified"))
-		(e-tag @19.20-19.43 (name "Default"))
+		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @19.1-19.17
 			(declared-type
 				(ty-lookup-external @18.20-18.35
@@ -665,7 +858,8 @@ err->TypeC.default
 					(ext-decl @22.23-22.44 (ident "ModuleA.ModuleB.TypeC") (kind "type"))))))
 	(d-let
 		(p-assign @27.1-27.11 (ident "resultType"))
-		(e-tag @27.14-27.23 (name "Ok")))
+		(e-nominal @27.14-27.20 (nominal "<malformed>")
+			(e-tag @27.14-27.23 (name "Ok"))))
 	(d-let
 		(p-assign @31.1-31.9 (ident "getColor"))
 		(e-runtime-error (tag "expr_not_canonicalized"))
@@ -692,24 +886,31 @@ err->TypeC.default
 	(s-import @10.1-10.15 (module "ModuleA")
 		(exposes))
 	(s-import @11.1-11.32 (module "ExternalModule") (alias "ExtMod")
-		(exposes)))
+		(exposes))
+	(ext-decl @14.19-14.28 (ident "Color.RGB") (kind "type"))
+	(ext-decl @18.20-18.35 (ident "ExtMod.DataType") (kind "type"))
+	(ext-decl @22.23-22.44 (ident "ModuleA.ModuleB.TypeC") (kind "type"))
+	(ext-decl @26.14-26.27 (ident "Result.Result") (kind "type"))
+	(ext-decl @30.18-30.27 (ident "Color.RGB") (kind "type"))
+	(ext-decl @34.16-34.25 (ident "Color.RGB") (kind "type"))
+	(ext-decl @39.13-39.26 (ident "Result.Result") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @15.1-15.16 (type "[RGB]*"))
-		(patt @19.1-19.17 (type "[Default]*"))
+		(patt @15.1-15.16 (type "Error"))
+		(patt @19.1-19.17 (type "Error"))
 		(patt @23.1-23.20 (type "Error"))
-		(patt @27.1-27.11 (type "[Ok]*"))
+		(patt @27.1-27.11 (type "Error"))
 		(patt @31.1-31.9 (type "Error"))
 		(patt @35.1-35.13 (type "Error"))
 		(patt @40.1-40.10 (type "Error")))
 	(expressions
-		(expr @15.19-15.28 (type "[RGB]*"))
-		(expr @19.20-19.43 (type "[Default]*"))
+		(expr @15.19-15.24 (type "Error"))
+		(expr @19.26-19.35 (type "Error"))
 		(expr @23.23-23.32 (type "Error"))
-		(expr @27.14-27.23 (type "[Ok]*"))
+		(expr @27.14-27.20 (type "Error"))
 		(expr @31.12-31.14 (type "Error"))
 		(expr @35.16-35.22 (type "Error"))
 		(expr @40.13-40.20 (type "Error"))))

@@ -12,6 +12,13 @@ import design.Styles.Color exposing [Encoder as CE]
 red : CE
 red = ... # not implemented
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:21:3:36
+UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:28:3:38
+INVALID STATEMENT - nominal_import_long_package.md:3:21:3:36
+INVALID STATEMENT - nominal_import_long_package.md:3:28:3:38
+INVALID STATEMENT - nominal_import_long_package.md:1:1:1:1
+UNDECLARED TYPE - nominal_import_long_package.md:5:7:5:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.Color exposing** is not expected in an expression.
@@ -54,13 +61,34 @@ import design.Styles.Color exposing [Encoder as CE]
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**nominal_import_long_package.md:3:21:3:36:**
+```roc
+import design.Styles.Color exposing [Encoder as CE]
+```
+                    ^^^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**nominal_import_long_package.md:3:28:3:38:**
+```roc
+import design.Styles.Color exposing [Encoder as CE]
+```
+                           ^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**nominal_import_long_package.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **UNDECLARED TYPE**
 The type ``CE`` is not declared in this scope.
@@ -72,10 +100,6 @@ red : CE
 ```
       ^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: ...
-Let us know if you want to help!
 
 # TOKENS
 ~~~zig
@@ -117,7 +141,7 @@ red = ...
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "red"))
-		(e-runtime-error (tag "not_implemented"))
+		(e-not-implemented @6.7-6.10)
 		(annotation @6.1-6.4
 			(declared-type
 				(ty @5.7-5.9 (name "CE")))))

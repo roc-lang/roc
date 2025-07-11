@@ -23,21 +23,10 @@ main! = |_| {
 	get_user_name(user)
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_multiple_aliases.md:16:16:16:20:**
-```roc
-	get_user_name(user)
-```
-               ^^^^
-
-It is of type:
-    _{ id: UserId, name: UserName, age: UserAge }_
-
-But you are trying to use it as:
-    _{ name: UserName }_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -108,9 +97,9 @@ CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 					(p-ident @9.20-9.24 (raw "name"))
 					(p-ident @9.26-9.29 (raw "age")))
 				(e-record @9.31-9.46
-					(field (field "id") (optional false))
-					(field (field "name") (optional false))
-					(field (field "age") (optional false)))))
+					(field (field "id"))
+					(field (field "name"))
+					(field (field "age")))))
 		(s-type-anno @1.1-1.1 (name "get_user_name")
 			(ty-fn @11.17-11.33
 				(ty @11.17-11.21 (name "User"))
@@ -160,13 +149,13 @@ NO CHANGE
 				(fields
 					(field (name "id")
 						(e-lookup-local @9.32-9.35
-							(pattern @9.16-9.18)))
+							(p-assign @9.16-9.18 (ident "id"))))
 					(field (name "name")
 						(e-lookup-local @9.36-9.41
-							(pattern @9.20-9.24)))
+							(p-assign @9.20-9.24 (ident "name"))))
 					(field (name "age")
 						(e-lookup-local @9.42-9.46
-							(pattern @9.26-9.29))))))
+							(p-assign @9.26-9.29 (ident "age")))))))
 		(annotation @9.1-9.12
 			(declared-type
 				(ty-fn @8.15-8.48 (effectful false)
@@ -182,7 +171,7 @@ NO CHANGE
 			(e-dot-access @12.24-14.6 (field "name")
 				(receiver
 					(e-lookup-local @12.24-12.28
-						(pattern @12.18-12.22)))))
+						(p-assign @12.18-12.22 (ident "user"))))))
 		(annotation @12.1-12.14
 			(declared-type
 				(ty-fn @11.17-11.33 (effectful false)
@@ -198,26 +187,26 @@ NO CHANGE
 					(p-assign @15.2-15.6 (ident "user"))
 					(e-call @15.9-15.38
 						(e-lookup-local @15.9-15.20
-							(pattern @9.1-9.12))
+							(p-assign @9.1-9.12 (ident "create_user")))
 						(e-int @15.21-15.24 (value "123"))
 						(e-string @15.26-15.33
 							(e-literal @15.27-15.32 (string "Alice")))
 						(e-int @15.35-15.37 (value "25"))))
 				(e-call @16.2-16.21
 					(e-lookup-local @16.2-16.15
-						(pattern @12.1-12.14))
+						(p-assign @12.1-12.14 (ident "get_user_name")))
 					(e-lookup-local @16.16-16.20
-						(pattern @15.2-15.6))))))
-	(s-alias-decl @3.1-3.13 (where "TODO")
+						(p-assign @15.2-15.6 (ident "user")))))))
+	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64")))
-	(s-alias-decl @4.1-4.15 (where "TODO")
+	(s-alias-decl @4.1-4.15
 		(ty-header @4.1-4.9 (name "UserName"))
 		(ty @4.12-4.15 (name "Str")))
-	(s-alias-decl @5.1-5.13 (where "TODO")
+	(s-alias-decl @5.1-5.13
 		(ty-header @5.1-5.8 (name "UserAge"))
 		(ty @5.11-5.13 (name "U8")))
-	(s-alias-decl @6.1-6.55 (where "TODO")
+	(s-alias-decl @6.1-6.55
 		(ty-header @6.1-6.5 (name "User"))
 		(ty-record @6.8-6.55
 			(field (field "id")
@@ -231,11 +220,20 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> { id: UserId, name: UserName, age: UserAge }"))
-		(patt @12.1-12.14 (type "{ name: UserName } -> UserName"))
+		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> User"))
+		(patt @12.1-12.14 (type "User -> UserName"))
 		(patt @14.1-14.6 (type "* -> UserName")))
+	(type_decls
+		(alias @3.1-3.13 (type "UserId")
+			(ty-header @3.1-3.7 (name "UserId")))
+		(alias @4.1-4.15 (type "UserName")
+			(ty-header @4.1-4.9 (name "UserName")))
+		(alias @5.1-5.13 (type "UserAge")
+			(ty-header @5.1-5.8 (name "UserAge")))
+		(alias @6.1-6.55 (type "User")
+			(ty-header @6.1-6.5 (name "User"))))
 	(expressions
-		(expr @9.15-9.46 (type "UserId, UserName, UserAge -> { id: UserId, name: UserName, age: UserAge }"))
-		(expr @12.17-14.6 (type "{ name: UserName } -> UserName"))
+		(expr @9.15-9.46 (type "UserId, UserName, UserAge -> User"))
+		(expr @12.17-14.6 (type "User -> UserName"))
 		(expr @14.9-17.2 (type "* -> UserName"))))
 ~~~

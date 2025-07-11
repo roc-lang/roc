@@ -15,6 +15,8 @@ type=expr
 	3, # Third
 ]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

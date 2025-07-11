@@ -12,6 +12,16 @@ match data {
     [first, ..items, last] => first + last
 }
 ~~~
+# EXPECTED
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:2:6:2:13
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:3:13:3:20
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:4:6:4:13
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:5:13:5:20
+UNDEFINED VARIABLE - list_rest_scoping_variables.md:1:7:1:11
+UNUSED VARIABLE - list_rest_scoping_variables.md:2:8:2:13
+UNUSED VARIABLE - list_rest_scoping_variables.md:3:15:3:20
+UNUSED VARIABLE - list_rest_scoping_variables.md:4:8:4:13
+UNUSED VARIABLE - list_rest_scoping_variables.md:5:15:5:20
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.
@@ -64,6 +74,13 @@ Here is the problematic code:
 **UNDEFINED VARIABLE**
 Nothing is named `data` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_rest_scoping_variables.md:1:7:1:11:**
+```roc
+match data {
+```
+      ^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``items`` is not used anywhere in your code.
@@ -168,46 +185,50 @@ match data {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.14 (degenerate false)
-						(patterns)
-						(rest-at (index 0)
-							(p-assign @2.8-2.13 (ident "items")))))
+					(pattern (degenerate false)
+						(p-list @2.5-2.14
+							(patterns)
+							(rest-at (index 0)
+								(p-assign @2.8-2.13 (ident "items"))))))
 				(value
 					(e-int @2.18-2.19 (value "1"))))
 			(branch
 				(patterns
-					(p-list @3.5-3.21 (degenerate false)
-						(patterns
-							(p-assign @3.6-3.11 (ident "first")))
-						(rest-at (index 1)
-							(p-assign @3.15-3.20 (ident "items")))))
+					(pattern (degenerate false)
+						(p-list @3.5-3.21
+							(patterns
+								(p-assign @3.6-3.11 (ident "first")))
+							(rest-at (index 1)
+								(p-assign @3.15-3.20 (ident "items"))))))
 				(value
 					(e-lookup-local @3.25-3.30
-						(pattern @3.6-3.11))))
+						(p-assign @3.6-3.11 (ident "first")))))
 			(branch
 				(patterns
-					(p-list @4.5-4.20 (degenerate false)
-						(patterns
-							(p-assign @4.15-4.19 (ident "last")))
-						(rest-at (index 0)
-							(p-assign @4.8-4.13 (ident "items")))))
+					(pattern (degenerate false)
+						(p-list @4.5-4.20
+							(patterns
+								(p-assign @4.15-4.19 (ident "last")))
+							(rest-at (index 0)
+								(p-assign @4.8-4.13 (ident "items"))))))
 				(value
 					(e-lookup-local @4.24-4.28
-						(pattern @4.15-4.19))))
+						(p-assign @4.15-4.19 (ident "last")))))
 			(branch
 				(patterns
-					(p-list @5.5-5.27 (degenerate false)
-						(patterns
-							(p-assign @5.6-5.11 (ident "first"))
-							(p-assign @5.22-5.26 (ident "last")))
-						(rest-at (index 1)
-							(p-assign @5.15-5.20 (ident "items")))))
+					(pattern (degenerate false)
+						(p-list @5.5-5.27
+							(patterns
+								(p-assign @5.6-5.11 (ident "first"))
+								(p-assign @5.22-5.26 (ident "last")))
+							(rest-at (index 1)
+								(p-assign @5.15-5.20 (ident "items"))))))
 				(value
 					(e-binop @5.31-6.2 (op "add")
 						(e-lookup-local @5.31-5.36
-							(pattern @5.6-5.11))
+							(p-assign @5.6-5.11 (ident "first")))
 						(e-lookup-local @5.39-5.43
-							(pattern @5.22-5.26))))))))
+							(p-assign @5.22-5.26 (ident "last")))))))))
 ~~~
 # TYPES
 ~~~clojure

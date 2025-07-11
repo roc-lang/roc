@@ -7,22 +7,55 @@ type=expr
 ~~~roc
 { name, age, email, active }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_shorthand_fields.md:1:3:1:8
+UNDEFINED VARIABLE - record_shorthand_fields.md:1:9:1:13
+UNDEFINED VARIABLE - record_shorthand_fields.md:1:14:1:20
+UNDEFINED VARIABLE - record_shorthand_fields.md:1:21:1:29
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `name` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**record_shorthand_fields.md:1:3:1:8:**
+```roc
+{ name, age, email, active }
+```
+  ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `age` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_shorthand_fields.md:1:9:1:13:**
+```roc
+{ name, age, email, active }
+```
+        ^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `email` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**record_shorthand_fields.md:1:14:1:20:**
+```roc
+{ name, age, email, active }
+```
+             ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `active` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_shorthand_fields.md:1:21:1:29:**
+```roc
+{ name, age, email, active }
+```
+                    ^^^^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -31,10 +64,10 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),Comma
 # PARSE
 ~~~clojure
 (e-record @1.1-1.29
-	(field (field "name") (optional false))
-	(field (field "age") (optional false))
-	(field (field "email") (optional false))
-	(field (field "active") (optional false)))
+	(field (field "name"))
+	(field (field "age"))
+	(field (field "email"))
+	(field (field "active")))
 ~~~
 # FORMATTED
 ~~~roc

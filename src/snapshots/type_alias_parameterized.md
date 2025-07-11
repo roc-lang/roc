@@ -14,6 +14,8 @@ swapPair = |(x, y)| (y, x)
 
 main! = |_| swapPair(1, 2)
 ~~~
+# EXPECTED
+TYPE MISMATCH - type_alias_parameterized.md:8:13:8:21
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -24,7 +26,7 @@ main! = |_| swapPair(1, 2)
             ^^^^^^^^
 
 It is of type:
-    _Pair(a, *) -> Pair(b, a)_
+    _Pair(a, b) -> Pair(b, a)_
 
 But you are trying to use it as:
     _Num(*), Num(*) -> *_
@@ -110,9 +112,9 @@ NO CHANGE
 			(e-tuple @6.21-6.27
 				(elems
 					(e-lookup-local @6.22-6.23
-						(pattern @6.17-6.18))
+						(p-assign @6.17-6.18 (ident "y")))
 					(e-lookup-local @6.25-6.26
-						(pattern @6.14-6.15)))))
+						(p-assign @6.14-6.15 (ident "x"))))))
 		(annotation @6.1-6.9
 			(declared-type
 				(ty-fn @5.12-5.36 (effectful false)
@@ -129,10 +131,10 @@ NO CHANGE
 				(p-underscore @8.10-8.11))
 			(e-call @8.13-8.27
 				(e-lookup-local @8.13-8.21
-					(pattern @6.1-6.9))
+					(p-assign @6.1-6.9 (ident "swapPair")))
 				(e-int @8.22-8.23 (value "1"))
 				(e-int @8.25-8.26 (value "2")))))
-	(s-alias-decl @3.1-3.20 (where "TODO")
+	(s-alias-decl @3.1-3.20
 		(ty-header @3.1-3.11 (name "Pair")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))
@@ -147,6 +149,12 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.9 (type "Error"))
 		(patt @8.1-8.6 (type "* -> *")))
+	(type_decls
+		(alias @3.1-3.20 (type "Pair(a, b)")
+			(ty-header @3.1-3.11 (name "Pair")
+				(ty-args
+					(ty-var @3.6-3.7 (name "a"))
+					(ty-var @3.9-3.10 (name "b"))))))
 	(expressions
 		(expr @6.12-6.27 (type "Error"))
 		(expr @8.9-8.27 (type "* -> *"))))

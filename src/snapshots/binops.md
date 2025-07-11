@@ -18,11 +18,13 @@ type=expr
     4 == 2,
     4 != 2,
     4 // 2,
-    True and True,
-    True or True,
+    Bool.True and Bool.False,
+    Bool.False or Bool.True,
     None ?? 0,
 )
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -40,8 +42,8 @@ Int(10:5-10:6),OpGreaterThanOrEq(10:7-10:9),Int(10:10-10:11),Comma(10:11-10:12),
 Int(11:5-11:6),OpEquals(11:7-11:9),Int(11:10-11:11),Comma(11:11-11:12),Newline(1:1-1:1),
 Int(12:5-12:6),OpNotEquals(12:7-12:9),Int(12:10-12:11),Comma(12:11-12:12),Newline(1:1-1:1),
 Int(13:5-13:6),OpDoubleSlash(13:7-13:9),Int(13:10-13:11),Comma(13:11-13:12),Newline(1:1-1:1),
-UpperIdent(14:5-14:9),OpAnd(14:10-14:13),UpperIdent(14:14-14:18),Comma(14:18-14:19),Newline(1:1-1:1),
-UpperIdent(15:5-15:9),OpOr(15:10-15:12),UpperIdent(15:13-15:17),Comma(15:17-15:18),Newline(1:1-1:1),
+UpperIdent(14:5-14:9),NoSpaceDotUpperIdent(14:9-14:14),OpAnd(14:15-14:18),UpperIdent(14:19-14:23),NoSpaceDotUpperIdent(14:23-14:29),Comma(14:29-14:30),Newline(1:1-1:1),
+UpperIdent(15:5-15:9),NoSpaceDotUpperIdent(15:9-15:15),OpOr(15:16-15:18),UpperIdent(15:19-15:23),NoSpaceDotUpperIdent(15:23-15:28),Comma(15:28-15:29),Newline(1:1-1:1),
 UpperIdent(16:5-16:9),OpDoubleQuestion(16:10-16:12),Int(16:13-16:14),Comma(16:14-16:15),Newline(1:1-1:1),
 CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
 ~~~
@@ -84,12 +86,12 @@ CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
 	(e-binop @13.5-13.12 (op "//")
 		(e-int @13.5-13.6 (raw "4"))
 		(e-int @13.10-13.11 (raw "2")))
-	(e-binop @14.5-14.19 (op "and")
-		(e-tag @14.5-14.9 (raw "True"))
-		(e-tag @14.14-14.18 (raw "True")))
-	(e-binop @15.5-15.18 (op "or")
-		(e-tag @15.5-15.9 (raw "True"))
-		(e-tag @15.13-15.17 (raw "True")))
+	(e-binop @14.5-14.30 (op "and")
+		(e-tag @14.5-14.14 (raw "Bool.True"))
+		(e-tag @14.19-14.29 (raw "Bool.False")))
+	(e-binop @15.5-15.29 (op "or")
+		(e-tag @15.5-15.15 (raw "Bool.False"))
+		(e-tag @15.19-15.28 (raw "Bool.True")))
 	(e-binop @16.5-16.15 (op "??")
 		(e-tag @16.5-16.9 (raw "None"))
 		(e-int @16.13-16.14 (raw "0"))))
@@ -109,8 +111,8 @@ CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
 	4 == 2,
 	4 != 2,
 	4 // 2,
-	True and True,
-	True or True,
+	True and False,
+	False or True,
 	None ?? 0,
 )
 ~~~
@@ -154,12 +156,16 @@ CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
 		(e-binop @13.5-13.12 (op "div_trunc")
 			(e-int @13.5-13.6 (value "4"))
 			(e-int @13.10-13.11 (value "2")))
-		(e-binop @14.5-14.19 (op "and")
-			(e-tag @14.5-14.9 (name "True"))
-			(e-tag @14.14-14.18 (name "True")))
-		(e-binop @15.5-15.18 (op "or")
-			(e-tag @15.5-15.9 (name "True"))
-			(e-tag @15.13-15.17 (name "True")))
+		(e-binop @14.5-14.30 (op "and")
+			(e-nominal @14.5-14.9 (nominal "Bool")
+				(e-tag @14.5-14.14 (name "True")))
+			(e-nominal @14.19-14.23 (nominal "Bool")
+				(e-tag @14.19-14.29 (name "False"))))
+		(e-binop @15.5-15.29 (op "or")
+			(e-nominal @15.5-15.9 (nominal "Bool")
+				(e-tag @15.5-15.15 (name "False")))
+			(e-nominal @15.19-15.23 (nominal "Bool")
+				(e-tag @15.19-15.28 (name "True"))))
 		(e-binop @16.5-16.15 (op "null_coalesce")
 			(e-tag @16.5-16.9 (name "None"))
 			(e-int @16.13-16.14 (value "0")))))

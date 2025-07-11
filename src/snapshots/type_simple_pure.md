@@ -12,6 +12,8 @@ identity = |x| x
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -67,7 +69,7 @@ NO CHANGE
 			(args
 				(p-assign @4.13-4.14 (ident "x")))
 			(e-lookup-local @4.16-4.17
-				(pattern @4.13-4.14)))
+				(p-assign @4.13-4.14 (ident "x"))))
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.22 (effectful false)

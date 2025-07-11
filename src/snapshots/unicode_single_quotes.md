@@ -17,6 +17,8 @@ type=expr
     'hello'
 )
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **INVALID SCALAR**
 I am part way through parsing this scalar literal (character literal), but it contains more than one character.

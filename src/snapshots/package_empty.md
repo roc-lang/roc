@@ -7,6 +7,8 @@ type=header
 ~~~roc
 package [] {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

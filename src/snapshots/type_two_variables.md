@@ -12,6 +12,8 @@ swap = |(x, y)| (y, x)
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -80,9 +82,9 @@ NO CHANGE
 			(e-tuple @4.17-4.23
 				(elems
 					(e-lookup-local @4.18-4.19
-						(pattern @4.13-4.14))
+						(p-assign @4.13-4.14 (ident "y")))
 					(e-lookup-local @4.21-4.22
-						(pattern @4.10-4.11)))))
+						(p-assign @4.10-4.11 (ident "x"))))))
 		(annotation @4.1-4.5
 			(declared-type
 				(ty-fn @3.8-3.24 (effectful false)
@@ -103,9 +105,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.5 (type "(*, *) -> (*, *)"))
+		(patt @4.1-4.5 (type "(a, b) -> (b, a)"))
 		(patt @6.1-6.6 (type "* -> {}")))
 	(expressions
-		(expr @4.8-4.23 (type "(*, *) -> (*, *)"))
+		(expr @4.8-4.23 (type "(a, b) -> (b, a)"))
 		(expr @6.9-6.15 (type "* -> {}"))))
 ~~~

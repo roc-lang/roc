@@ -2,12 +2,12 @@
 
 This table provides a summary of progress for the zig compiler re-write and should be updated with the PR that includes new features.
 
-|                          | Str & Num * | Functions  | Modules | Collections | Records &  Tuples | Recursive  Types | Static  Dispatch |
+|                          | Str & Num | Functions  | Modules | Collections | Records &  Tuples | Recursive  Types | Static  Dispatch |
 |--------------------------|:-----------:|:----------:|:-------:|:-----------:|:-----------------:|:----------------:|:----------------:|
-| **Parse**                | 🪫          | 🪫         | 🚧      | 🪫          |  🪫               |  🪫              |  🪫              |
-| **Canonicalize**         | 🚧          | 🚧         |         |             |                   |                  |                  |
-| **Resolve Imports**      |             |            |         |             |                   |                  |                  |
-| **Check Types**          |             |            |         |             |                   |                  |                  |
+| **Parse**                | 🔋          | 🔋         | 🪫      | 🪫          |  🔋               |  🪫              |  🚧              |
+| **Canonicalize**         | 🪫          | 🪫         | 🪫      | 🪫          |  🪫               |  🪫              |  🚧              |
+| **Resolve Imports**      | 🚧          | 🚧         | 🪫      | 🚧          |  🚧               |  🚧              |  🚧              |
+| **Check Types**          | 🪫          | 🚧         | 🚧      | 🚧          |  🚧               |  🚧              |                  |
 | **Interpreter**          |             |            |         |             |                   |                  |                  |
 | **Specialize Types**     |             |            |         |             |                   |                  |                  |
 | **Lift Functions**       |             |            |         |             |                   |                  |                  |

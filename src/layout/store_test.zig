@@ -3423,7 +3423,7 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
 
     // Verify the ArrayListMap was initialized with capacity
     // The length should be at least as large as the types store
-    try testing.expect(layout_store.layouts_by_var.entries.len >= type_store.slots.backing.items.len);
+    try testing.expect(layout_store.layouts_by_var.entries.len >= type_store.slots.backing.len());
 }
 
 test "idxFromScalar - arithmetic mapping with no branches" {

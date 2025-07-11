@@ -11,10 +11,19 @@ match shape {
     Triangle(base, height) => 0.5 * base * height
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - tag_with_payload.md:1:7:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `shape` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tag_with_payload.md:1:7:1:12:**
+```roc
+match shape {
+```
+      ^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -71,35 +80,38 @@ match shape {
 		(branches
 			(branch
 				(patterns
-					(p-applied-tag @2.5-2.19 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @2.5-2.19)))
 				(value
 					(e-binop @2.23-3.14 (op "mul")
 						(e-dec-small @2.23-2.27 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
 						(e-binop @2.30-3.14 (op "mul")
 							(e-lookup-local @2.30-2.36
-								(pattern @2.12-2.18))
+								(p-assign @2.12-2.18 (ident "radius")))
 							(e-lookup-local @2.39-2.45
-								(pattern @2.12-2.18))))))
+								(p-assign @2.12-2.18 (ident "radius")))))))
 			(branch
 				(patterns
-					(p-applied-tag @3.5-3.29 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @3.5-3.29)))
 				(value
 					(e-binop @3.33-4.13 (op "mul")
 						(e-lookup-local @3.33-3.38
-							(pattern @3.15-3.20))
+							(p-assign @3.15-3.20 (ident "width")))
 						(e-lookup-local @3.41-3.47
-							(pattern @3.22-3.28)))))
+							(p-assign @3.22-3.28 (ident "height"))))))
 			(branch
 				(patterns
-					(p-applied-tag @4.5-4.27 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @4.5-4.27)))
 				(value
 					(e-binop @4.31-5.2 (op "mul")
 						(e-dec-small @4.31-4.34 (numerator "5") (denominator-power-of-ten "1") (value "0.5"))
 						(e-binop @4.37-5.2 (op "mul")
 							(e-lookup-local @4.37-4.41
-								(pattern @4.14-4.18))
+								(p-assign @4.14-4.18 (ident "base")))
 							(e-lookup-local @4.44-4.50
-								(pattern @4.20-4.26)))))))))
+								(p-assign @4.20-4.26 (ident "height"))))))))))
 ~~~
 # TYPES
 ~~~clojure

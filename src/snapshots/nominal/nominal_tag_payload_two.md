@@ -14,12 +14,27 @@ ok = |a| MyResult.Ok(a)
 
 is_ok : MyResult(ok, err) -> Bool
 is_ok = |result| match result {
-    MyResult.Ok(_) => True
-    MyResult.Err(_) => False
+    MyResult.Ok(_) => Bool.True
+    MyResult.Err(_) => Bool.False
 }
 ~~~
+# EXPECTED
+TYPE MISMATCH - nominal_tag_payload_two.md:8:9:8:26
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_tag_payload_two.md:8:9:8:26:**
+```roc
+is_ok : MyResult(ok, err) -> Bool
+```
+        ^^^^^^^^^^^^^^^^^
+
+It is of type:
+    _MyResult(ok, err)_
+
+But you are trying to use it as:
+    _[Ok(*), Err(*)]*_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),CloseSquare(1:28-1:29),Newline(1:1-1:1),
@@ -31,8 +46,8 @@ LowerIdent(6:1-6:3),OpAssign(6:4-6:5),OpBar(6:6-6:7),LowerIdent(6:7-6:8),OpBar(6
 Newline(1:1-1:1),
 LowerIdent(8:1-8:6),OpColon(8:7-8:8),UpperIdent(8:9-8:17),NoSpaceOpenRound(8:17-8:18),LowerIdent(8:18-8:20),Comma(8:20-8:21),LowerIdent(8:22-8:25),CloseRound(8:25-8:26),OpArrow(8:27-8:29),UpperIdent(8:30-8:34),Newline(1:1-1:1),
 LowerIdent(9:1-9:6),OpAssign(9:7-9:8),OpBar(9:9-9:10),LowerIdent(9:10-9:16),OpBar(9:16-9:17),KwMatch(9:18-9:23),LowerIdent(9:24-9:30),OpenCurly(9:31-9:32),Newline(1:1-1:1),
-UpperIdent(10:5-10:13),NoSpaceDotUpperIdent(10:13-10:16),NoSpaceOpenRound(10:16-10:17),Underscore(10:17-10:18),CloseRound(10:18-10:19),OpFatArrow(10:20-10:22),UpperIdent(10:23-10:27),Newline(1:1-1:1),
-UpperIdent(11:5-11:13),NoSpaceDotUpperIdent(11:13-11:17),NoSpaceOpenRound(11:17-11:18),Underscore(11:18-11:19),CloseRound(11:19-11:20),OpFatArrow(11:21-11:23),UpperIdent(11:24-11:29),Newline(1:1-1:1),
+UpperIdent(10:5-10:13),NoSpaceDotUpperIdent(10:13-10:16),NoSpaceOpenRound(10:16-10:17),Underscore(10:17-10:18),CloseRound(10:18-10:19),OpFatArrow(10:20-10:22),UpperIdent(10:23-10:27),NoSpaceDotUpperIdent(10:27-10:32),Newline(1:1-1:1),
+UpperIdent(11:5-11:13),NoSpaceDotUpperIdent(11:13-11:17),NoSpaceOpenRound(11:17-11:18),Underscore(11:18-11:19),CloseRound(11:19-11:20),OpFatArrow(11:21-11:23),UpperIdent(11:24-11:28),NoSpaceDotUpperIdent(11:28-11:34),Newline(1:1-1:1),
 CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # PARSE
@@ -90,17 +105,17 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 						(branch @1.1-1.1
 							(p-tag @10.5-10.19 (raw ".Ok")
 								(p-underscore))
-							(e-tag @10.23-10.27 (raw "True")))
+							(e-tag @10.23-10.32 (raw "Bool.True")))
 						(branch @1.1-1.1
 							(p-tag @11.5-11.20 (raw ".Err")
 								(p-underscore))
-							(e-tag @11.24-11.29 (raw "False")))))))))
+							(e-tag @11.24-11.34 (raw "Bool.False")))))))))
 ~~~
 # FORMATTED
 ~~~roc
 module [MyResult, ok, is_ok]
 
-MyResult(ok, err) : [Ok(ok), Err(err)]
+MyResult(ok, err) := [Ok(ok), Err(err)]
 
 ok : ok -> MyResult(ok, b)
 ok = |a| Ok(a)
@@ -119,10 +134,11 @@ is_ok = |result| match result {
 		(e-lambda @6.6-6.24
 			(args
 				(p-assign @6.7-6.8 (ident "a")))
-			(e-tag @6.10-6.24 (name "Ok")
-				(args
-					(e-lookup-local @6.22-6.23
-						(pattern @6.7-6.8)))))
+			(e-nominal @6.10-6.18 (nominal "MyResult")
+				(e-tag @6.10-6.21 (name "Ok")
+					(args
+						(e-lookup-local @6.22-6.23
+							(p-assign @6.7-6.8 (ident "a")))))))
 		(annotation @6.1-6.3
 			(declared-type
 				(ty-fn @5.6-5.27 (effectful false)
@@ -139,18 +155,22 @@ is_ok = |result| match result {
 				(match @9.18-12.2
 					(cond
 						(e-lookup-local @9.24-9.30
-							(pattern @9.10-9.16)))
+							(p-assign @9.10-9.16 (ident "result"))))
 					(branches
 						(branch
 							(patterns
-								(p-applied-tag @10.5-10.19 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @10.5-10.19)))
 							(value
-								(e-tag @10.23-10.27 (name "True"))))
+								(e-nominal @10.23-10.27 (nominal "Bool")
+									(e-tag @10.23-10.32 (name "True")))))
 						(branch
 							(patterns
-								(p-applied-tag @11.5-11.20 (degenerate false)))
+								(pattern (degenerate false)
+									(p-applied-tag @11.5-11.20)))
 							(value
-								(e-tag @11.24-11.29 (name "False"))))))))
+								(e-nominal @11.24-11.28 (nominal "Bool")
+									(e-tag @11.24-11.34 (name "False")))))))))
 		(annotation @9.1-9.6
 			(declared-type
 				(ty-fn @8.9-8.34 (effectful false)
@@ -158,7 +178,7 @@ is_ok = |result| match result {
 						(ty-var @8.18-8.20 (name "ok"))
 						(ty-var @8.22-8.25 (name "err")))
 					(ty @8.30-8.34 (name "Bool"))))))
-	(s-nominal-decl @3.1-3.40 (match "TODO")
+	(s-nominal-decl @3.1-3.40
 		(ty-header @3.1-3.18 (name "MyResult")
 			(ty-args
 				(ty-var @3.10-3.12 (name "ok"))
@@ -173,9 +193,15 @@ is_ok = |result| match result {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.3 (type "ok -> MyResult(ok, b)"))
-		(patt @9.1-9.6 (type "MyResult(ok, err) -> [True, False]*")))
+		(patt @6.1-6.3 (type "ok -> MyResult(ok, err)"))
+		(patt @9.1-9.6 (type "Error -> Bool")))
+	(type_decls
+		(nominal @3.1-3.40 (type "MyResult(ok, err)")
+			(ty-header @3.1-3.18 (name "MyResult")
+				(ty-args
+					(ty-var @3.10-3.12 (name "ok"))
+					(ty-var @3.14-3.17 (name "err"))))))
 	(expressions
-		(expr @6.6-6.24 (type "ok -> MyResult(ok, b)"))
-		(expr @9.9-12.2 (type "MyResult(ok, err) -> [True, False]*"))))
+		(expr @6.6-6.24 (type "ok -> MyResult(ok, err)"))
+		(expr @9.9-12.2 (type "Error -> Bool"))))
 ~~~

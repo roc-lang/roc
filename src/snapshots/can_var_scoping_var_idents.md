@@ -16,6 +16,8 @@ testFunc = |input| {
 	sum + sum_ # Both should be accessible
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -76,25 +78,25 @@ NO CHANGE
 				(s-let @5.2-5.13
 					(p-assign @5.2-5.5 (ident "sum"))
 					(e-lookup-local @5.8-5.13
-						(pattern @4.13-4.18)))
+						(p-assign @4.13-4.18 (ident "input"))))
 				(s-var @6.2-8.6
 					(p-assign @6.2-8.6 (ident "sum_"))
 					(e-binop @6.13-8.6 (op "mul")
 						(e-lookup-local @6.13-6.18
-							(pattern @4.13-4.18))
+							(p-assign @4.13-4.18 (ident "input")))
 						(e-int @6.21-6.22 (value "2"))))
 				(s-reassign @8.2-8.6
 					(p-assign @6.2-8.6 (ident "sum_"))
 					(e-binop @8.9-9.5 (op "add")
 						(e-lookup-local @8.9-8.13
-							(pattern @6.2-8.6))
+							(p-assign @6.2-8.6 (ident "sum_")))
 						(e-lookup-local @8.16-8.19
-							(pattern @5.2-5.5))))
+							(p-assign @5.2-5.5 (ident "sum")))))
 				(e-binop @9.2-10.2 (op "add")
 					(e-lookup-local @9.2-9.5
-						(pattern @5.2-5.5))
+						(p-assign @5.2-5.5 (ident "sum")))
 					(e-lookup-local @9.8-9.12
-						(pattern @6.2-8.6)))))))
+						(p-assign @6.2-8.6 (ident "sum_"))))))))
 ~~~
 # TYPES
 ~~~clojure

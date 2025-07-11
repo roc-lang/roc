@@ -12,10 +12,20 @@ match coord {
     (x, y) => x
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - tuple_patterns.md:1:7:1:12
+UNUSED VARIABLE - tuple_patterns.md:5:9:5:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `coord` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tuple_patterns.md:1:7:1:12:**
+```roc
+match coord {
+```
+      ^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``y`` is not used anywhere in your code.
@@ -83,40 +93,44 @@ match coord {
 		(branches
 			(branch
 				(patterns
-					(p-tuple @2.5-2.17 (degenerate false)
-						(patterns
-							(p-applied-tag @2.6-2.10)
-							(p-applied-tag @2.12-2.16))))
+					(pattern (degenerate false)
+						(p-tuple @2.5-2.17
+							(patterns
+								(p-applied-tag @2.6-2.10)
+								(p-applied-tag @2.12-2.16)))))
 				(value
 					(e-string @2.21-2.29
 						(e-literal @2.22-2.28 (string "origin")))))
 			(branch
 				(patterns
-					(p-tuple @3.5-3.14 (degenerate false)
-						(patterns
-							(p-assign @3.6-3.7 (ident "x"))
-							(p-applied-tag @3.9-3.13))))
+					(pattern (degenerate false)
+						(p-tuple @3.5-3.14
+							(patterns
+								(p-assign @3.6-3.7 (ident "x"))
+								(p-applied-tag @3.9-3.13)))))
 				(value
 					(e-lookup-local @3.18-3.19
-						(pattern @3.6-3.7))))
+						(p-assign @3.6-3.7 (ident "x")))))
 			(branch
 				(patterns
-					(p-tuple @4.5-4.14 (degenerate false)
-						(patterns
-							(p-applied-tag @4.6-4.10)
-							(p-assign @4.12-4.13 (ident "y")))))
+					(pattern (degenerate false)
+						(p-tuple @4.5-4.14
+							(patterns
+								(p-applied-tag @4.6-4.10)
+								(p-assign @4.12-4.13 (ident "y"))))))
 				(value
 					(e-lookup-local @4.18-4.19
-						(pattern @4.12-4.13))))
+						(p-assign @4.12-4.13 (ident "y")))))
 			(branch
 				(patterns
-					(p-tuple @5.5-5.11 (degenerate false)
-						(patterns
-							(p-assign @5.6-5.7 (ident "x"))
-							(p-assign @5.9-5.10 (ident "y")))))
+					(pattern (degenerate false)
+						(p-tuple @5.5-5.11
+							(patterns
+								(p-assign @5.6-5.7 (ident "x"))
+								(p-assign @5.9-5.10 (ident "y"))))))
 				(value
 					(e-lookup-local @5.15-5.16
-						(pattern @5.6-5.7)))))))
+						(p-assign @5.6-5.7 (ident "x"))))))))
 ~~~
 # TYPES
 ~~~clojure

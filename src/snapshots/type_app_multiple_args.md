@@ -12,10 +12,19 @@ processDict = |_dict| []
 
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - type_app_multiple_args.md:6:25:6:35
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `empty` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_app_multiple_args.md:6:25:6:35:**
+```roc
+main! = |_| processDict(Dict.empty().insert("one", 1))
+```
+                        ^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -99,7 +108,7 @@ NO CHANGE
 				(p-underscore @6.10-6.11))
 			(e-call @6.13-6.55
 				(e-lookup-local @6.13-6.24
-					(pattern @4.1-4.12))
+					(p-assign @4.1-4.12 (ident "processDict")))
 				(e-dot-access @6.25-6.55 (field "insert")
 					(receiver
 						(e-call @6.25-6.37

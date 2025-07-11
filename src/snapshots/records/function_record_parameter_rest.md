@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 |{ first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -46,12 +48,12 @@ NO CHANGE
 	(e-string @1.26-1.65
 		(e-literal @1.27-1.33 (string "Hello "))
 		(e-lookup-local @1.35-1.45
-			(pattern @1.4-1.15))
+			(p-assign @1.4-1.15 (ident "first_name")))
 		(e-literal @1.46-1.47 (string " "))
 		(e-dot-access @1.49-1.64 (field "last_name")
 			(receiver
 				(e-lookup-local @1.49-1.53
-					(pattern @1.16-1.24))))
+					(p-assign @1.16-1.24 (ident "rest")))))
 		(e-literal @1.64-1.64 (string ""))))
 ~~~
 # TYPES

@@ -14,6 +14,8 @@ type=expr
 		* # Times
 		3
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

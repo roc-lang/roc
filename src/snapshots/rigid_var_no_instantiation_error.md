@@ -30,6 +30,16 @@ main! = |_| {
     {}
 }
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - rigid_var_no_instantiation_error.md:6:12:6:18
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:6:6:6:7
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:6:9:6:10
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:7:6:7:7
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:7:9:7:10
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:17:21:17:30
+UNUSED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
+UNUSED VARIABLE - rigid_var_no_instantiation_error.md:17:5:17:12
+UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= pair** is not expected in an expression.
@@ -47,21 +57,56 @@ Here is the problematic code:
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**rigid_var_no_instantiation_error.md:6:6:6:7:**
+```roc
+    (x, y) = pair
+```
+     ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `y` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**rigid_var_no_instantiation_error.md:6:9:6:10:**
+```roc
+    (x, y) = pair
+```
+        ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `y` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**rigid_var_no_instantiation_error.md:7:6:7:7:**
+```roc
+    (y, x)
+```
+     ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**rigid_var_no_instantiation_error.md:7:9:7:10:**
+```roc
+    (y, x)
+```
+        ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `true` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**rigid_var_no_instantiation_error.md:17:21:17:30:**
+```roc
+    result2 = swap((Bool.true, [1, 2, 3]))
+```
+                    ^^^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``result1`` is not used anywhere in your code.
@@ -244,7 +289,7 @@ main! = |_| {
 							(e-runtime-error (tag "ident_not_in_scope")))))
 				(s-expr @6.14-7.6
 					(e-lookup-local @6.14-6.18
-						(pattern @5.9-5.13)))
+						(p-assign @5.9-5.13 (ident "pair"))))
 				(e-tuple @7.5-7.11
 					(elems
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -268,7 +313,7 @@ main! = |_| {
 					(p-assign @13.5-13.12 (ident "result1"))
 					(e-call @13.15-13.34
 						(e-lookup-local @13.15-13.19
-							(pattern @5.1-5.5))
+							(p-assign @5.1-5.5 (ident "swap")))
 						(e-tuple @13.20-13.33
 							(elems
 								(e-int @13.21-13.23 (value "42"))
@@ -278,7 +323,7 @@ main! = |_| {
 					(p-assign @17.5-17.12 (ident "result2"))
 					(e-call @17.15-17.43
 						(e-lookup-local @17.15-17.19
-							(pattern @5.1-5.5))
+							(p-assign @5.1-5.5 (ident "swap")))
 						(e-tuple @17.20-17.42
 							(elems
 								(e-runtime-error (tag "ident_not_in_scope"))
@@ -291,7 +336,7 @@ main! = |_| {
 					(p-assign @21.5-21.12 (ident "result3"))
 					(e-call @21.15-21.35
 						(e-lookup-local @21.15-21.19
-							(pattern @5.1-5.5))
+							(p-assign @5.1-5.5 (ident "swap")))
 						(e-tuple @21.20-21.34
 							(elems
 								(e-string @21.21-21.26
@@ -304,9 +349,9 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "* -> (Error, Error)"))
+		(patt @5.1-5.5 (type "(a, b) -> (Error, Error)"))
 		(patt @11.1-11.6 (type "* -> {}")))
 	(expressions
-		(expr @5.8-8.2 (type "* -> (Error, Error)"))
+		(expr @5.8-8.2 (type "(a, b) -> (Error, Error)"))
 		(expr @11.9-24.2 (type "* -> {}"))))
 ~~~

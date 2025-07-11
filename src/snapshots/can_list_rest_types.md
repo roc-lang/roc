@@ -10,10 +10,20 @@ match numbers {
     [] => []
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - can_list_rest_types.md:1:7:1:14
+UNUSED VARIABLE - can_list_rest_types.md:2:6:2:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `numbers` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**can_list_rest_types.md:1:7:1:14:**
+```roc
+match numbers {
+```
+      ^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``first`` is not used anywhere in your code.
@@ -64,18 +74,20 @@ match numbers {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.28 (degenerate false)
-						(patterns
-							(p-assign @2.6-2.11 (ident "first")))
-						(rest-at (index 1)
-							(p-assign @2.19-2.27 (ident "restNums")))))
+					(pattern (degenerate false)
+						(p-list @2.5-2.28
+							(patterns
+								(p-assign @2.6-2.11 (ident "first")))
+							(rest-at (index 1)
+								(p-assign @2.19-2.27 (ident "restNums"))))))
 				(value
 					(e-lookup-local @2.32-2.40
-						(pattern @2.19-2.27))))
+						(p-assign @2.19-2.27 (ident "restNums")))))
 			(branch
 				(patterns
-					(p-list @3.5-3.7 (degenerate false)
-						(patterns)))
+					(pattern (degenerate false)
+						(p-list @3.5-3.7
+							(patterns))))
 				(value
 					(e-empty_list @3.11-3.13))))))
 ~~~

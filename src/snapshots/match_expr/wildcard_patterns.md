@@ -11,10 +11,20 @@ match value {
     other => "something else"
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - wildcard_patterns.md:1:7:1:12
+UNUSED VARIABLE - wildcard_patterns.md:4:5:4:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `value` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**wildcard_patterns.md:1:7:1:12:**
+```roc
+match value {
+```
+      ^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``other`` is not used anywhere in your code.
@@ -71,19 +81,22 @@ match value {
 		(branches
 			(branch
 				(patterns
-					(p-applied-tag @2.5-2.11 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @2.5-2.11)))
 				(value
 					(e-string @2.15-2.27
 						(e-literal @2.16-2.26 (string "the answer")))))
 			(branch
 				(patterns
-					(p-applied-tag @3.5-3.9 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @3.5-3.9)))
 				(value
 					(e-string @3.13-3.19
 						(e-literal @3.14-3.18 (string "zero")))))
 			(branch
 				(patterns
-					(p-assign @4.5-4.10 (ident "other") (degenerate false)))
+					(pattern (degenerate false)
+						(p-assign @4.5-4.10 (ident "other"))))
 				(value
 					(e-string @4.14-4.30
 						(e-literal @4.15-4.29 (string "something else"))))))))

@@ -13,10 +13,19 @@ if # Comment after if
 			2
 		}
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - if_then_else_comments_block.md:2:2:2:6
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**if_then_else_comments_block.md:2:2:2:6:**
+```roc
+	bool
+```
+ ^^^^
+
 
 # TOKENS
 ~~~zig

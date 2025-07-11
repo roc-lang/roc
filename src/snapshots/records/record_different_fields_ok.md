@@ -11,6 +11,8 @@ type=expr
     camelCase: "camel",
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -24,13 +26,13 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 # PARSE
 ~~~clojure
 (e-record @1.1-5.2
-	(field (field "field_with_underscores") (optional false)
+	(field (field "field_with_underscores")
 		(e-string @2.29-2.41
 			(e-string-part @2.30-2.40 (raw "underscore"))))
-	(field (field "field123") (optional false)
+	(field (field "field123")
 		(e-string @3.15-3.24
 			(e-string-part @3.16-3.23 (raw "numbers"))))
-	(field (field "camelCase") (optional false)
+	(field (field "camelCase")
 		(e-string @4.16-4.23
 			(e-string-part @4.17-4.22 (raw "camel")))))
 ~~~

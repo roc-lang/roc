@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 List.map
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - simple_external_lookup.md:1:1:1:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `map` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**simple_external_lookup.md:1:1:1:9:**
+```roc
+List.map
+```
+^^^^^^^^
+
 
 # TOKENS
 ~~~zig

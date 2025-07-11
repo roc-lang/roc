@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 |x| x + 1
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -33,7 +35,7 @@ NO CHANGE
 		(p-assign @1.2-1.3 (ident "x")))
 	(e-binop @1.5-1.10 (op "add")
 		(e-lookup-local @1.5-1.6
-			(pattern @1.2-1.3))
+			(p-assign @1.2-1.3 (ident "x")))
 		(e-int @1.9-1.10 (value "1"))))
 ~~~
 # TYPES

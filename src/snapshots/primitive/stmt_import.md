@@ -9,10 +9,19 @@ module []
 
 import json.Json [foo, BAR]
 ~~~
+# EXPECTED
+INVALID STATEMENT - stmt_import.md:3:18:3:28
 # PROBLEMS
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**stmt_import.md:3:18:3:28:**
+```roc
+import json.Json [foo, BAR]
+```
+                 ^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

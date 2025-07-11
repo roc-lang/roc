@@ -16,6 +16,12 @@ swap = |pair| {
 
 main! = |_| {}
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - type_var_multiple.md:6:21:6:27
+UNDEFINED VARIABLE - type_var_multiple.md:6:6:6:11
+UNDEFINED VARIABLE - type_var_multiple.md:6:13:6:19
+UNDEFINED VARIABLE - type_var_multiple.md:7:6:7:12
+UNDEFINED VARIABLE - type_var_multiple.md:7:14:7:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= pair** is not expected in an expression.
@@ -33,17 +39,45 @@ Here is the problematic code:
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `second` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**type_var_multiple.md:6:6:6:11:**
+```roc
+    (first, second) = pair
+```
+     ^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `second` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_var_multiple.md:6:13:6:19:**
+```roc
+    (first, second) = pair
+```
+            ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `second` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**type_var_multiple.md:7:6:7:12:**
+```roc
+    (second, first)
+```
+     ^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_var_multiple.md:7:14:7:19:**
+```roc
+    (second, first)
+```
+             ^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -133,7 +167,7 @@ main! = |_| {}
 							(e-runtime-error (tag "ident_not_in_scope")))))
 				(s-expr @6.23-7.6
 					(e-lookup-local @6.23-6.27
-						(pattern @5.9-5.13)))
+						(p-assign @5.9-5.13 (ident "pair"))))
 				(e-tuple @7.5-7.20
 					(elems
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -158,9 +192,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "* -> (Error, Error)"))
+		(patt @5.1-5.5 (type "(a, b) -> (Error, Error)"))
 		(patt @10.1-10.6 (type "* -> {}")))
 	(expressions
-		(expr @5.8-8.2 (type "* -> (Error, Error)"))
+		(expr @5.8-8.2 (type "(a, b) -> (Error, Error)"))
 		(expr @10.9-10.15 (type "* -> {}"))))
 ~~~

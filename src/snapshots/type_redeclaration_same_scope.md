@@ -10,6 +10,8 @@ module [Maybe]
 Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ~~~
+# EXPECTED
+TYPE REDECLARED - type_redeclaration_same_scope.md:4:1:4:24
 # PROBLEMS
 **TYPE REDECLARED**
 The type ``Maybe`` is being redeclared.
@@ -71,7 +73,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @3.1-3.27 (where "TODO")
+	(s-alias-decl @3.1-3.27
 		(ty-header @3.1-3.9 (name "Maybe")
 			(ty-args
 				(ty-var @3.7-3.8 (name "a"))))
@@ -79,7 +81,7 @@ NO CHANGE
 			(ty-apply @3.13-3.20 (symbol "Some")
 				(ty-var @3.18-3.19 (name "a")))
 			(ty @3.22-3.26 (name "None"))))
-	(s-alias-decl @4.1-4.24 (where "TODO")
+	(s-alias-decl @4.1-4.24
 		(ty-header @4.1-4.9 (name "Maybe")
 			(ty-args
 				(ty-var @4.7-4.8 (name "a"))))
@@ -92,5 +94,14 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(alias @3.1-3.27 (type "Maybe(a)")
+			(ty-header @3.1-3.9 (name "Maybe")
+				(ty-args
+					(ty-var @3.7-3.8 (name "a")))))
+		(alias @4.1-4.24 (type "Maybe(a)")
+			(ty-header @4.1-4.9 (name "Maybe")
+				(ty-args
+					(ty-var @4.7-4.8 (name "a"))))))
 	(expressions))
 ~~~

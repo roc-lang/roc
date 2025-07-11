@@ -9,6 +9,8 @@ app
 	[main!,]
 	{ somePkg: "../main.roc", pf: platform "../main.roc", }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

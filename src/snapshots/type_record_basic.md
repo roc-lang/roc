@@ -12,6 +12,8 @@ getName = |_person| "hello"
 
 main! = |_| getName({name: "luke", age:21})
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -60,10 +62,10 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-apply @6.13-6.44
 					(e-ident @6.13-6.20 (raw "getName"))
 					(e-record @6.21-6.43
-						(field (field "name") (optional false)
+						(field (field "name")
 							(e-string @6.28-6.34
 								(e-string-part @6.29-6.33 (raw "luke"))))
-						(field (field "age") (optional false)
+						(field (field "age")
 							(e-int @6.40-6.42 (raw "21")))))))))
 ~~~
 # FORMATTED
@@ -101,7 +103,7 @@ main! = |_| getName({name: "luke", age: 21})
 				(p-underscore @6.10-6.11))
 			(e-call @6.13-6.44
 				(e-lookup-local @6.13-6.20
-					(pattern @4.1-4.8))
+					(p-assign @4.1-4.8 (ident "getName")))
 				(e-record @6.21-6.43
 					(fields
 						(field (name "name")

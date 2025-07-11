@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 |{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -47,12 +49,12 @@ NO CHANGE
 	(e-string @1.17-1.67
 		(e-literal @1.18-1.24 (string "Hello "))
 		(e-lookup-local @1.26-1.30
-			(pattern @1.4-1.9))
+			(p-assign @1.4-1.9 (ident "name")))
 		(e-literal @1.31-1.41 (string ", you are "))
 		(e-dot-access @1.43-1.56 (field "to_str")
 			(receiver
 				(e-lookup-local @1.43-1.46
-					(pattern @1.10-1.15)))
+					(p-assign @1.10-1.15 (ident "age"))))
 			(args))
 		(e-literal @1.56-1.66 (string " years old"))))
 ~~~

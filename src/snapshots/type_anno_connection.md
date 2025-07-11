@@ -13,6 +13,8 @@ add_one = |x| x + 1
 my_number : U64
 my_number = add_one(42)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -67,7 +69,7 @@ NO CHANGE
 				(p-assign @4.12-4.13 (ident "x")))
 			(e-binop @4.15-6.10 (op "add")
 				(e-lookup-local @4.15-4.16
-					(pattern @4.12-4.13))
+					(p-assign @4.12-4.13 (ident "x")))
 				(e-int @4.19-4.20 (value "1"))))
 		(annotation @4.1-4.8
 			(declared-type
@@ -78,7 +80,7 @@ NO CHANGE
 		(p-assign @7.1-7.10 (ident "my_number"))
 		(e-call @7.13-7.24
 			(e-lookup-local @7.13-7.20
-				(pattern @4.1-4.8))
+				(p-assign @4.1-4.8 (ident "add_one")))
 			(e-int @7.21-7.23 (value "42")))
 		(annotation @7.1-7.10
 			(declared-type

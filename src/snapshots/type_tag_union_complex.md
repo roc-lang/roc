@@ -30,6 +30,8 @@ handleResponse = |_response| "handled"
 
 main! = |_| {}
 ~~~
+# EXPECTED
+TYPE REDECLARED - type_tag_union_complex.md:7:1:7:55
 # PROBLEMS
 **TYPE REDECLARED**
 The type ``Result`` is being redeclared.
@@ -211,13 +213,13 @@ NO CHANGE
 			(args
 				(p-underscore @24.10-24.11))
 			(e-empty_record @24.13-24.15)))
-	(s-alias-decl @4.1-4.37 (where "TODO")
+	(s-alias-decl @4.1-4.37
 		(ty-header @4.1-4.7 (name "Status"))
 		(ty-tag-union @4.10-4.37
 			(ty @4.11-4.18 (name "Loading"))
 			(ty @4.20-4.28 (name "Complete"))
 			(ty @4.30-4.36 (name "Failed"))))
-	(s-alias-decl @7.1-7.55 (where "TODO")
+	(s-alias-decl @7.1-7.55
 		(ty-header @7.1-7.7 (name "Result"))
 		(ty-tag-union @7.10-7.55
 			(ty-apply @7.11-7.23 (symbol "Success")
@@ -227,14 +229,14 @@ NO CHANGE
 			(ty-apply @7.37-7.54 (symbol "Warning")
 				(ty @7.45-7.48 (name "Str"))
 				(ty @7.50-7.53 (name "I32")))))
-	(s-alias-decl @10.1-10.50 (where "TODO")
+	(s-alias-decl @10.1-10.50
 		(ty-header @10.1-10.9 (name "Response"))
 		(ty-tag-union @10.12-10.50
 			(ty-apply @10.13-10.23 (symbol "Ok")
 				(ty @10.16-10.22 (name "Result")))
 			(ty @10.25-10.37 (name "NetworkError"))
 			(ty @10.39-10.49 (name "ParseError"))))
-	(s-alias-decl @13.1-13.52 (where "TODO")
+	(s-alias-decl @13.1-13.52
 		(ty-header @13.1-13.10 (name "UserState"))
 		(ty-tag-union @13.13-13.52
 			(ty-apply @13.14-13.25 (symbol "Active")
@@ -242,7 +244,7 @@ NO CHANGE
 			(ty @13.27-13.35 (name "Inactive"))
 			(ty-apply @13.37-13.51 (symbol "Suspended")
 				(ty @13.47-13.50 (name "Str")))))
-	(s-alias-decl @14.1-14.58 (where "TODO")
+	(s-alias-decl @14.1-14.58
 		(ty-header @14.1-14.16 (name "ConnectionState"))
 		(ty-tag-union @14.19-14.58
 			(ty @14.20-14.26 (name "Active"))
@@ -257,6 +259,17 @@ NO CHANGE
 		(patt @18.1-18.14 (type "Result -> Str"))
 		(patt @22.1-22.15 (type "Response -> Str"))
 		(patt @24.1-24.6 (type "* -> {}")))
+	(type_decls
+		(alias @4.1-4.37 (type "Status")
+			(ty-header @4.1-4.7 (name "Status")))
+		(alias @7.1-7.55 (type "Result")
+			(ty-header @7.1-7.7 (name "Result")))
+		(alias @10.1-10.50 (type "Response")
+			(ty-header @10.1-10.9 (name "Response")))
+		(alias @13.1-13.52 (type "UserState")
+			(ty-header @13.1-13.10 (name "UserState")))
+		(alias @14.1-14.58 (type "ConnectionState")
+			(ty-header @14.1-14.16 (name "ConnectionState"))))
 	(expressions
 		(expr @18.17-18.38 (type "Result -> Str"))
 		(expr @22.18-22.39 (type "Response -> Str"))

@@ -7,6 +7,10 @@ type=file
 ~~~roc
 0|
 ~~~
+# EXPECTED
+MISSING HEADER - fuzz_crash_016.md:1:1:1:3
+PARSE ERROR - fuzz_crash_016.md:1:3:1:3
+INVALID STATEMENT - fuzz_crash_016.md:1:2:1:3
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -39,6 +43,13 @@ Here is the problematic code:
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_016.md:1:2:1:3:**
+```roc
+0|
+```
+ ^
+
 
 # TOKENS
 ~~~zig

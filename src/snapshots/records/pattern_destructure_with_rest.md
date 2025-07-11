@@ -9,18 +9,43 @@ match person {
     { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - pattern_destructure_with_rest.md:1:7:1:13
+UNDEFINED VARIABLE - pattern_destructure_with_rest.md:2:33:2:40
+UNDEFINED VARIABLE - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `len` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**pattern_destructure_with_rest.md:1:7:1:13:**
+```roc
+match person {
+```
+      ^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `len` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_destructure_with_rest.md:2:33:2:40:**
+```roc
+    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
+```
+                                ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `len` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**pattern_destructure_with_rest.md:2:55:2:62:**
+```roc
+    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
+```
+                                                      ^^^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -62,24 +87,25 @@ match person {
 		(branches
 			(branch
 				(patterns
-					(p-record-destructure @2.5-2.29 (degenerate false)
-						(destructs
-							(record-destruct @2.7-2.18 (label "first_name") (ident "first_name")
-								(required))
-							(record-destruct @2.19-2.29 (label "others") (ident "others")
-								(required)))))
+					(pattern (degenerate false)
+						(p-record-destructure @2.5-2.29
+							(destructs
+								(record-destruct @2.7-2.18 (label "first_name") (ident "first_name")
+									(required))
+								(record-destruct @2.19-2.29 (label "others") (ident "others")
+									(required))))))
 				(value
 					(e-binop @2.33-3.2 (op "gt")
 						(e-call @2.33-2.52
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @2.41-2.51
-								(pattern @2.7-2.18)))
+								(p-assign @2.7-2.18 (ident "first_name"))))
 						(e-call @2.55-2.80
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-dot-access @2.63-2.80 (field "last_name")
 								(receiver
 									(e-lookup-local @2.63-2.69
-										(pattern @2.19-2.29)))))))))))
+										(p-assign @2.19-2.29 (ident "others"))))))))))))
 ~~~
 # TYPES
 ~~~clojure

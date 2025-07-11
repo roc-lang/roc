@@ -16,6 +16,8 @@ b = 2.71828
 c : Dec
 c = 123.456
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

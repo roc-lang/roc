@@ -7,6 +7,8 @@ type=statement
 ~~~roc
 person = { name: "Alice", age: 30, email: "alice@example.com" }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -18,12 +20,12 @@ LowerIdent(1:1-1:7),OpAssign(1:8-1:9),OpenCurly(1:10-1:11),LowerIdent(1:12-1:16)
 (s-decl @1.1-1.64
 	(p-ident @1.1-1.7 (raw "person"))
 	(e-record @1.10-1.64
-		(field (field "name") (optional false)
+		(field (field "name")
 			(e-string @1.18-1.25
 				(e-string-part @1.19-1.24 (raw "Alice"))))
-		(field (field "age") (optional false)
+		(field (field "age")
 			(e-int @1.32-1.34 (raw "30")))
-		(field (field "email") (optional false)
+		(field (field "email")
 			(e-string @1.43-1.62
 				(e-string-part @1.44-1.61 (raw "alice@example.com"))))))
 ~~~

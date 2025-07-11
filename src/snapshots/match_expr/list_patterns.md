@@ -10,6 +10,12 @@ match numbers {
     [first, ..rest] => 0 # invalid rest pattern should error
 }
 ~~~
+# EXPECTED
+BAD LIST REST PATTERN SYNTAX - list_patterns.md:3:13:3:19
+UNDEFINED VARIABLE - list_patterns.md:1:7:1:14
+UNDEFINED VARIABLE - list_patterns.md:2:11:2:14
+UNUSED VARIABLE - list_patterns.md:3:15:3:19
+UNUSED VARIABLE - list_patterns.md:3:6:3:11
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.
@@ -27,9 +33,23 @@ Here is the problematic code:
 Nothing is named `numbers` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**list_patterns.md:1:7:1:14:**
+```roc
+match numbers {
+```
+      ^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `acc` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_patterns.md:2:11:2:14:**
+```roc
+    [] => acc
+```
+          ^^^
+
 
 **UNUSED VARIABLE**
 Variable ``rest`` is not used anywhere in your code.
@@ -92,17 +112,19 @@ match numbers {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.7 (degenerate false)
-						(patterns)))
+					(pattern (degenerate false)
+						(p-list @2.5-2.7
+							(patterns))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
 				(patterns
-					(p-list @3.5-3.20 (degenerate false)
-						(patterns
-							(p-assign @3.6-3.11 (ident "first")))
-						(rest-at (index 1)
-							(p-assign @3.15-3.19 (ident "rest")))))
+					(pattern (degenerate false)
+						(p-list @3.5-3.20
+							(patterns
+								(p-assign @3.6-3.11 (ident "first")))
+							(rest-at (index 1)
+								(p-assign @3.15-3.19 (ident "rest"))))))
 				(value
 					(e-int @3.24-3.25 (value "0")))))))
 ~~~

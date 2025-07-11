@@ -26,6 +26,8 @@ getNumber = |_opt| 0
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -186,7 +188,7 @@ NO CHANGE
 			(args
 				(p-underscore @20.10-20.11))
 			(e-empty_record @20.13-20.15)))
-	(s-alias-decl @4.1-4.41 (where "TODO")
+	(s-alias-decl @4.1-4.41
 		(ty-header @4.1-4.18 (name "MyResult")
 			(ty-args
 				(ty-var @4.10-4.12 (name "ok"))
@@ -196,7 +198,7 @@ NO CHANGE
 				(ty-var @4.27-4.29 (name "ok")))
 			(ty-apply @4.32-4.40 (symbol "Bad")
 				(ty-var @4.36-4.39 (name "err")))))
-	(s-alias-decl @11.1-11.28 (where "TODO")
+	(s-alias-decl @11.1-11.28
 		(ty-header @11.1-11.10 (name "Option")
 			(ty-args
 				(ty-var @11.8-11.9 (name "a"))))
@@ -213,6 +215,16 @@ NO CHANGE
 		(patt @15.1-15.10 (type "Option(Str) -> Str"))
 		(patt @18.1-18.10 (type "Option(I32) -> I32"))
 		(patt @20.1-20.6 (type "* -> {}")))
+	(type_decls
+		(alias @4.1-4.41 (type "MyResult(ok, err)")
+			(ty-header @4.1-4.18 (name "MyResult")
+				(ty-args
+					(ty-var @4.10-4.12 (name "ok"))
+					(ty-var @4.14-4.17 (name "err")))))
+		(alias @11.1-11.28 (type "Option(a)")
+			(ty-header @11.1-11.10 (name "Option")
+				(ty-args
+					(ty-var @11.8-11.9 (name "a"))))))
 	(expressions
 		(expr @8.11-8.32 (type "MyResult(Str, I32) -> Str"))
 		(expr @15.13-15.29 (type "Option(Str) -> Str"))

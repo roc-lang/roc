@@ -101,7 +101,7 @@ pub const Store = struct {
         type_store: *const types_store.Store,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
-        const capacity = type_store.slots.backing.items.len;
+        const capacity = type_store.slots.backing.len();
         const layouts_by_var = try collections.ArrayListMap(Var, Idx).init(env.gpa, capacity);
 
         var layouts = collections.SafeMultiList(Layout){};
@@ -290,7 +290,7 @@ pub const Store = struct {
                     else => return LayoutError.InvalidRecordExtension,
                 },
                 .alias => |alias| {
-                    current_ext = alias.getBackingVar(current_ext);
+                    current_ext = self.types_store.getAliasBackingVar(alias);
                 },
                 else => return LayoutError.InvalidRecordExtension,
             }
@@ -588,7 +588,7 @@ pub const Store = struct {
 
                         // From a layout perspective, nominal types are identical to type aliases:
                         // all we care about is what's inside, so just unroll it.
-                        const backing_var = nominal_type.getBackingVar(current.var_);
+                        const backing_var = self.types_store.getNominalBackingVar(nominal_type);
                         current = self.types_store.resolveVar(backing_var);
                         continue;
                     },
@@ -846,7 +846,7 @@ pub const Store = struct {
                 },
                 .alias => |alias| {
                     // Follow the alias by updating the work item
-                    const backing_var = alias.getBackingVar(current.var_);
+                    const backing_var = self.types_store.getAliasBackingVar(alias);
                     current = self.types_store.resolveVar(backing_var);
                     continue;
                 },

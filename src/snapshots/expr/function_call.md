@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 add(5, 3)
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - function_call.md:1:1:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `add` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**function_call.md:1:1:1:4:**
+```roc
+add(5, 3)
+```
+^^^
+
 
 # TOKENS
 ~~~zig

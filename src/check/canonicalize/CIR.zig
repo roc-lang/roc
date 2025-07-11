@@ -8,6 +8,7 @@ const tracy = @import("../../tracy.zig");
 const types = @import("../../types.zig");
 const collections = @import("../../collections.zig");
 const reporting = @import("../../reporting.zig");
+const serialization = @import("../../serialization/mod.zig");
 const exitOnOom = collections.utils.exitOnOom;
 const SExpr = base.SExpr;
 const Scratch = base.Scratch;
@@ -18,11 +19,12 @@ const ModuleImport = base.ModuleImport;
 const ModuleEnv = base.ModuleEnv;
 const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
+const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
-const Node = @import("Node.zig");
-const NodeStore = @import("NodeStore.zig");
 
 pub const RocDec = @import("../../builtins/dec.zig").RocDec;
+pub const Node = @import("Node.zig");
+pub const NodeStore = @import("NodeStore.zig");
 pub const Expr = @import("Expression.zig").Expr;
 pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
@@ -57,7 +59,12 @@ all_defs: Def.Span,
 /// All the top-level statements in the module, populated by calling `canonicalize_file`
 all_statements: Statement.Span,
 /// All external declarations referenced in this module
-external_decls: std.ArrayList(ExternalDecl),
+external_decls: ExternalDecl.SafeList,
+/// Store for interned module imports
+imports: Import.Store,
+/// The module's name as a string
+/// This is needed for import resolution to match import names to modules
+module_name: []const u8,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -66,23 +73,41 @@ external_decls: std.ArrayList(ExternalDecl),
 /// the entirety of the IR into an arena that holds nothing besides
 /// the IR. We can then load the cached binary data back into memory
 /// with only 2 syscalls.
+/// Initialize the IR for a module's canonicalization info.
 ///
 /// Since the can IR holds indices into the `ModuleEnv`, we need
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
-pub fn init(env: *ModuleEnv) CIR {
+pub fn init(env: *ModuleEnv, module_name: []const u8) CIR {
     return CIR{
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
-        .external_decls = std.ArrayList(ExternalDecl).init(env.gpa),
+        .external_decls = ExternalDecl.SafeList.initCapacity(env.gpa, 16),
+        .imports = Import.Store.init(),
+        .module_name = module_name,
+    };
+}
+
+/// Create a CIR from cached data, completely rehydrating from cache
+pub fn fromCache(env: *ModuleEnv, cached_store: NodeStore, all_defs: Def.Span, all_statements: Statement.Span, module_name: []const u8) CIR {
+    return CIR{
+        .env = env,
+        .store = cached_store,
+        .temp_source_for_sexpr = null,
+        .all_defs = all_defs,
+        .all_statements = all_statements,
+        .external_decls = ExternalDecl.SafeList.initCapacity(env.gpa, 16),
+        .imports = Import.Store.init(),
+        .module_name = module_name,
     };
 }
 
 /// Deinit the IR's memory.
 pub fn deinit(self: *CIR) void {
     self.store.deinit();
-    self.external_decls.deinit();
+    self.external_decls.deinit(self.env.gpa);
+    self.imports.deinit(self.env.gpa);
 }
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
@@ -131,7 +156,7 @@ pub fn pushMalformed(self: *CIR, comptime t: type, reason: CIR.Diagnostic) t {
 pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
     const all = self.store.diagnosticSpanFrom(0);
 
-    var list = std.ArrayList(CIR.Diagnostic).init(self.env.gpa);
+    var list = std.ArrayList(CIR.Diagnostic).init(self.store.gpa);
 
     for (self.store.sliceDiagnostics(all)) |idx| {
         list.append(self.store.getDiagnostic(idx)) catch |err| exitOnOom(err);
@@ -158,6 +183,28 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             const feature_text = self.env.strings.get(data.feature);
             break :blk Diagnostic.buildNotImplementedReport(allocator, feature_text);
         },
+        .exposed_but_not_implemented => |data| blk: {
+            const ident_name = self.env.idents.getText(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildExposedButNotImplementedReport(
+                allocator,
+                ident_name,
+                region_info,
+                filename,
+            );
+        },
+        .redundant_exposed => |data| blk: {
+            const ident_name = self.env.idents.getText(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            break :blk Diagnostic.buildRedundantExposedReport(
+                allocator,
+                ident_name,
+                region_info,
+                original_region_info,
+                filename,
+            );
+        },
         .invalid_num_literal => |data| blk: {
             break :blk Diagnostic.buildInvalidNumLiteralReport(
                 allocator,
@@ -174,16 +221,22 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         },
         .ident_not_in_scope => |data| blk: {
             const ident_name = self.env.idents.getText(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
             break :blk Diagnostic.buildIdentNotInScopeReport(
                 allocator,
                 ident_name,
+                region_info,
+                filename,
             );
         },
         .invalid_top_level_statement => |data| blk: {
             const stmt_name = self.env.strings.get(data.stmt);
+            const region_info = self.calcRegionInfo(data.region);
             break :blk Diagnostic.buildInvalidTopLevelStatementReport(
                 allocator,
                 stmt_name,
+                region_info,
+                filename,
             );
         },
         .f64_pattern_literal => |data| blk: {
@@ -196,6 +249,10 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .invalid_single_quote => Diagnostic.buildInvalidSingleQuoteReport(allocator),
         .too_long_single_quote => Diagnostic.buildTooLongSingleQuoteReport(allocator),
         .empty_single_quote => Diagnostic.buildEmptySingleQuoteReport(allocator),
+        .crash_expects_string => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildCrashExpectsStringReport(allocator, region_info, filename);
+        },
         .empty_tuple => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
             break :blk Diagnostic.buildEmptyTupleReport(allocator, region_info, filename);
@@ -211,6 +268,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .if_else_not_canonicalized => Diagnostic.buildIfElseNotCanonicalizedReport(allocator),
         .var_across_function_boundary => Diagnostic.buildVarAcrossFunctionBoundaryReport(allocator),
         .malformed_type_annotation => Diagnostic.buildMalformedTypeAnnotationReport(allocator),
+        .malformed_where_clause => Diagnostic.buildMalformedWhereClauseReport(allocator),
         .shadowing_warning => |data| blk: {
             const ident_name = self.env.idents.getText(data.ident);
             const new_region_info = self.calcRegionInfo(data.region);
@@ -236,6 +294,59 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             );
         },
         .tuple_elem_not_canonicalized => Diagnostic.buildTupleElemNotCanonicalizedReport(allocator),
+        .module_not_found => |data| blk: {
+            const module_name = self.env.idents.getText(data.module_name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildModuleNotFoundReport(
+                allocator,
+                module_name,
+                region_info,
+                filename,
+            );
+        },
+        .value_not_exposed => |data| blk: {
+            const module_name = self.env.idents.getText(data.module_name);
+            const value_name = self.env.idents.getText(data.value_name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildValueNotExposedReport(
+                allocator,
+                module_name,
+                value_name,
+                region_info,
+                filename,
+            );
+        },
+        .type_not_exposed => |data| blk: {
+            const module_name = self.env.idents.getText(data.module_name);
+            const type_name = self.env.idents.getText(data.type_name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildTypeNotExposedReport(
+                allocator,
+                module_name,
+                type_name,
+                region_info,
+                filename,
+            );
+        },
+        .module_not_imported => |data| blk: {
+            const module_name = self.env.idents.getText(data.module_name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildModuleNotImportedReport(
+                allocator,
+                module_name,
+                region_info,
+                filename,
+            );
+        },
+        .too_many_exports => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildTooManyExportsReport(
+                allocator,
+                data.count,
+                region_info,
+                filename,
+            );
+        },
         .undeclared_type => |data| blk: {
             const type_name = self.env.idents.getText(data.name);
             const region_info = self.calcRegionInfo(data.region);
@@ -342,6 +453,16 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
     };
 }
 
+/// Convert a type into a node index
+pub fn nodeIdxFrom(idx: anytype) Node.Idx {
+    return @enumFromInt(@intFromEnum(idx));
+}
+
+/// Convert a type into a type var
+pub fn varFrom(idx: anytype) TypeVar {
+    return @enumFromInt(@intFromEnum(idx));
+}
+
 /// Creates a fresh flexible type variable for type inference.
 ///
 /// This is a convenience wrapper around `pushTypeVar(.{ .flex_var = null }, ...)`.
@@ -376,10 +497,24 @@ pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx
     return var_;
 }
 
+/// Creates a fresh flexible type var that redirects to another tyype var
+pub fn pushRedirectTypeVar(self: *CIR, redirect_to: TypeVar, parent_node_idx: Node.Idx, region: base.Region) Allocator.Error!types.Var {
+    const var_ = try self.pushTypeVar(.{ .flex_var = null }, parent_node_idx, region);
+    try self.env.types.setVarRedirect(var_, redirect_to);
+    return var_;
+}
+
 /// Associates a type with an existing definition node.
 ///
 /// Use this to set the concrete type of a definition after type inference.
 pub fn setTypeVarAtDef(self: *CIR, at_idx: Def.Idx, content: types.Content) types.Var {
+    return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
+}
+
+/// Associates a type with an existing definition node.
+///
+/// Use this to set the concrete type of a definition after type inference.
+pub fn setTypeVarAtStmt(self: *CIR, at_idx: Statement.Idx, content: types.Content) types.Var {
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
@@ -407,13 +542,23 @@ pub fn setTypeVarAtPat(self: *CIR, at_idx: Pattern.Idx, content: types.Content) 
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
+/// Function that redirects an existing CIR node to the provided var.
+pub fn setTypeRedirectAt(self: *CIR, at_idx: Node.Idx, redirect_to: types.Var) types.Var {
+    // if the new can node idx is greater than the types store length, backfill
+    const var_: types.Var = @enumFromInt(@intFromEnum(at_idx));
+    self.env.types.fillInSlotsThru(var_) catch |err| exitOnOom(err);
+
+    // set the type store slot based on the placeholder node idx
+    self.env.types.setVarRedirect(var_, redirect_to) catch |err| exitOnOom(err);
+
+    return var_;
+}
+
 /// Core function that associates a type with any existing CIR node.
 ///
 /// This is used by all the `setTypeVarAt*` wrapper functions. Node indices
 /// correspond directly to type variable indices, allowing direct conversion.
 /// Usually called indirectly through the typed wrappers rather than directly.
-///
-/// **Note**: The node must already exist - this only sets types; it does not create nodes.
 pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.Var {
     // if the new can node idx is greater than the types store length, backfill
     const var_: types.Var = @enumFromInt(@intFromEnum(at_idx));
@@ -427,28 +572,29 @@ pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.
 
 /// Adds an external declaration to the CIR and returns its index
 pub fn pushExternalDecl(self: *CIR, decl: ExternalDecl) ExternalDecl.Idx {
-    const idx = @as(u32, @intCast(self.external_decls.items.len));
-    self.external_decls.append(decl) catch |err| exitOnOom(err);
+    const idx = @as(u32, @intCast(self.external_decls.len()));
+    _ = self.external_decls.append(self.env.gpa, decl);
     return @enumFromInt(idx);
 }
 
 /// Retrieves an external declaration by its index
 pub fn getExternalDecl(self: *const CIR, idx: ExternalDecl.Idx) *const ExternalDecl {
-    return &self.external_decls.items[@intFromEnum(idx)];
+    return self.external_decls.get(@as(ExternalDecl.SafeList.Idx, @enumFromInt(@intFromEnum(idx))));
 }
 
 /// Adds multiple external declarations and returns a span
 pub fn pushExternalDecls(self: *CIR, decls: []const ExternalDecl) ExternalDecl.Span {
-    const start = @as(u32, @intCast(self.external_decls.items.len));
+    const start = @as(u32, @intCast(self.external_decls.len()));
     for (decls) |decl| {
-        self.external_decls.append(decl) catch |err| exitOnOom(err);
+        _ = self.external_decls.append(self.env.gpa, decl);
     }
-    return .{ .span = .{ .start = start, .len = @as(u32, @intCast(decls.len)) } };
+    return ExternalDecl.Span{ .span = .{ .start = start, .len = @as(u32, @intCast(decls.len)) } };
 }
 
 /// Gets a slice of external declarations from a span
 pub fn sliceExternalDecls(self: *const CIR, span: ExternalDecl.Span) []const ExternalDecl {
-    return self.external_decls.items[span.span.start .. span.span.start + span.span.len];
+    const range = ExternalDecl.SafeList.Range{ .start = @enumFromInt(span.span.start), .end = @enumFromInt(span.span.start + span.span.len) };
+    return self.external_decls.rangeToSlice(range);
 }
 
 /// Retrieves the text of an identifier by its index
@@ -463,8 +609,109 @@ fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: Pattern.Idx) SExpr 
     return node;
 }
 
-test "Node is 24 bytes" {
-    try testing.expectEqual(24, @sizeOf(Node));
+test "Node is 16 bytes" {
+    try std.testing.expectEqual(16, @sizeOf(Node));
+}
+
+test "ExternalDecl serialization round-trip" {
+    const gpa = std.testing.allocator;
+
+    // Create original external declaration
+    const original = ExternalDecl{
+        .qualified_name = @bitCast(@as(u32, 123)),
+        .module_name = @bitCast(@as(u32, 456)),
+        .local_name = @bitCast(@as(u32, 789)),
+        .type_var = @enumFromInt(999),
+        .kind = .value,
+        .region = Region{
+            .start = .{ .offset = 10 },
+            .end = .{ .offset = 20 },
+        },
+    };
+
+    // Serialize
+    const serialized_size = original.serializedSize();
+    const buffer = try gpa.alloc(u8, serialized_size);
+    defer gpa.free(buffer);
+
+    const serialized = try original.serializeInto(buffer);
+    try std.testing.expectEqual(serialized_size, serialized.len);
+
+    // Deserialize
+    const restored = try ExternalDecl.deserializeFrom(serialized);
+
+    // Verify all fields are identical
+    try std.testing.expectEqual(original.qualified_name, restored.qualified_name);
+    try std.testing.expectEqual(original.module_name, restored.module_name);
+    try std.testing.expectEqual(original.local_name, restored.local_name);
+    try std.testing.expectEqual(original.type_var, restored.type_var);
+    try std.testing.expectEqual(original.kind, restored.kind);
+    try std.testing.expectEqual(original.region.start.offset, restored.region.start.offset);
+    try std.testing.expectEqual(original.region.end.offset, restored.region.end.offset);
+}
+
+test "ExternalDecl serialization comprehensive" {
+    const gpa = std.testing.allocator;
+
+    // Test various external declarations including edge cases
+    const decl1 = ExternalDecl{
+        .qualified_name = @bitCast(@as(u32, 0)), // minimum value
+        .module_name = @bitCast(@as(u32, 1)),
+        .local_name = @bitCast(@as(u32, 2)),
+        .type_var = @enumFromInt(0),
+        .kind = .value,
+        .region = Region{
+            .start = .{ .offset = 0 },
+            .end = .{ .offset = 1 },
+        },
+    };
+
+    const decl2 = ExternalDecl{
+        .qualified_name = @bitCast(@as(u32, 0xFFFFFFFF)), // maximum value
+        .module_name = @bitCast(@as(u32, 0xFFFFFFFE)),
+        .local_name = @bitCast(@as(u32, 0xFFFFFFFD)),
+        .type_var = @enumFromInt(0xFFFFFFFF),
+        .kind = .type,
+        .region = Region{
+            .start = .{ .offset = 0xFFFFFFFF },
+            .end = .{ .offset = 0xFFFFFFFE },
+        },
+    };
+
+    // Test serialization using the testing framework
+    try serialization.testing.testSerialization(ExternalDecl, &decl1, gpa);
+    try serialization.testing.testSerialization(ExternalDecl, &decl2, gpa);
+}
+
+test "ExternalDecl different kinds serialization" {
+    const gpa = std.testing.allocator;
+
+    const value_decl = ExternalDecl{
+        .qualified_name = @bitCast(@as(u32, 100)),
+        .module_name = @bitCast(@as(u32, 200)),
+        .local_name = @bitCast(@as(u32, 300)),
+        .type_var = @enumFromInt(400),
+        .kind = .value,
+        .region = Region{
+            .start = .{ .offset = 50 },
+            .end = .{ .offset = 75 },
+        },
+    };
+
+    const type_decl = ExternalDecl{
+        .qualified_name = @bitCast(@as(u32, 100)),
+        .module_name = @bitCast(@as(u32, 200)),
+        .local_name = @bitCast(@as(u32, 300)),
+        .type_var = @enumFromInt(400),
+        .kind = .type,
+        .region = Region{
+            .start = .{ .offset = 50 },
+            .end = .{ .offset = 75 },
+        },
+    };
+
+    try serialization.testing.testSerialization(ExternalDecl, &value_decl, gpa);
+    try serialization.testing.testSerialization(ExternalDecl, &type_decl, gpa);
 }
 
 /// A working representation of a record field
@@ -475,44 +722,97 @@ pub const RecordField = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
-        var node = SExpr.init(gpa, "field");
-
-        node.appendStringAttr(gpa, "name", ir.getIdentText(self.name));
-
-        var value_node = ir.store.getExpr(self.value).toSExpr(ir);
-        node.appendNode(gpa, &value_node);
-
-        return node;
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("field");
+        tree.pushStringPair("name", ir.env.idents.getText(self.name));
+        const attrs = tree.beginNode();
+        ir.store.getExpr(self.value).pushToSExprTree(ir, tree, self.value);
+        tree.endNode(begin, attrs);
     }
 };
 
-/// TODO: implement WhereClause
+/// Canonical representation of where clauses in Roc.
+///
+/// Where clauses specify constraints on type variables, typically requiring that
+/// a type comes from a module that provides specific methods or satisfies certain
+/// type aliases.
 pub const WhereClause = union(enum) {
-    alias: WhereClause.Alias,
-    method: Method,
+    /// Module method constraint: `module(a).method : Args -> RetType`
+    ///
+    /// Specifies that type variable `a` must come from a module that provides
+    /// a method with the given signature.
     mod_method: ModuleMethod,
 
-    pub const Alias = struct {
-        var_tok: Ident.Idx,
-        alias_tok: Ident.Idx,
-        region: Region,
-    };
-    pub const Method = struct {
-        var_tok: Ident.Idx,
-        name_tok: Ident.Idx,
-        args: TypeAnno.Span,
-        ret_anno: TypeAnno.Idx,
-        region: Region,
-    };
+    /// Module alias constraint: `module(a).AliasName`
+    ///
+    /// Specifies that type variable `a` must satisfy the constraints defined
+    /// by the given type alias.
+    mod_alias: ModuleAlias,
+
+    /// Malformed where clause that couldn't be canonicalized correctly.
+    ///
+    /// Contains diagnostic information about what went wrong.
+    malformed: struct {
+        diagnostic: Diagnostic.Idx,
+    },
+
     pub const ModuleMethod = struct {
-        var_tok: Ident.Idx,
-        name_tok: Ident.Idx,
-        args: TypeAnno.Span,
-        ret_anno: TypeAnno.Span,
-        region: Region,
+        var_name: Ident.Idx, // Type variable identifier (e.g., "a")
+        method_name: Ident.Idx, // Method name without leading dot (e.g., "decode")
+        args: TypeAnno.Span, // Method argument types
+        ret_anno: TypeAnno.Idx, // Method return type
+        external_decl: ExternalDecl.Idx, // External declaration for module lookup
     };
+
+    pub const ModuleAlias = struct {
+        var_name: Ident.Idx, // Type variable identifier (e.g., "elem")
+        alias_name: Ident.Idx, // Alias name without leading dot (e.g., "Sort")
+        external_decl: ExternalDecl.Idx, // External declaration for module lookup
+    };
+
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, where_idx: WhereClause.Idx) void {
+        switch (self.*) {
+            .mod_method => |mm| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("method");
+                const region = ir.store.getNodeRegion(@enumFromInt(@intFromEnum(where_idx)));
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                tree.pushStringPair("module-of", ir.env.idents.getText(mm.var_name));
+                tree.pushStringPair("ident", ir.env.idents.getText(mm.method_name));
+                const attrs = tree.beginNode();
+
+                const args_begin = tree.beginNode();
+                tree.pushStaticAtom("args");
+                const attrs2 = tree.beginNode();
+                for (ir.store.sliceTypeAnnos(mm.args)) |arg_idx| {
+                    ir.store.getTypeAnno(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                tree.endNode(args_begin, attrs2);
+
+                ir.store.getTypeAnno(mm.ret_anno).pushToSExprTree(ir, tree, mm.ret_anno);
+                tree.endNode(begin, attrs);
+            },
+            .mod_alias => |ma| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("alias");
+                const region = ir.store.getNodeRegion(@enumFromInt(@intFromEnum(where_idx)));
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                tree.pushStringPair("module-of", ir.env.idents.getText(ma.var_name));
+                tree.pushStringPair("ident", ir.env.idents.getText(ma.alias_name));
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .malformed => |_| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("malformed");
+                const region = ir.store.getNodeRegion(@enumFromInt(@intFromEnum(where_idx)));
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+        }
+    }
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
@@ -538,32 +838,29 @@ pub const PatternRecordField = struct {
 pub const TypeHeader = struct {
     name: Ident.Idx, // The type name (e.g., "Map", "List", "Dict")
     args: TypeAnno.Span, // Type parameters (e.g., [a, b] for generic types)
-    region: Region, // Source location of the entire header
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
-        var node = SExpr.init(gpa, "ty-header");
-        ir.appendRegionInfoToSexprNodeFromRegion(&node, self.region);
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, header_idx: TypeHeader.Idx) void {
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("ty-header");
+        const region = ir.store.getRegionAt(@enumFromInt(@intFromEnum(header_idx)));
+        ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+        tree.pushStringPair("name", ir.env.idents.getText(self.name));
+        const attrs = tree.beginNode();
 
-        // Add the type name
-        node.appendStringAttr(gpa, "name", ir.getIdentText(self.name));
-
-        // Add the type arguments
-        const args_slice = ir.store.sliceTypeAnnos(self.args);
-        if (args_slice.len > 0) {
-            var args_node = SExpr.init(gpa, "ty-args");
-            for (args_slice) |arg_idx| {
-                const arg = ir.store.getTypeAnno(arg_idx);
-                var arg_node = arg.toSExpr(ir);
-                args_node.appendNode(gpa, &arg_node);
+        if (self.args.span.len > 0) {
+            const args_begin = tree.beginNode();
+            tree.pushStaticAtom("ty-args");
+            const attrs2 = tree.beginNode();
+            for (ir.store.sliceTypeAnnos(self.args)) |arg_idx| {
+                ir.store.getTypeAnno(arg_idx).pushToSExprTree(ir, tree, arg_idx);
             }
-            node.appendNode(gpa, &args_node);
+            tree.endNode(args_begin, attrs2);
         }
 
-        return node;
+        tree.endNode(begin, attrs);
     }
 };
 
@@ -580,24 +877,62 @@ pub const ExposedItem = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: ExposedItem, ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
+    pub fn pushToSExprTree(self: ExposedItem, env: *base.ModuleEnv, ir: *const CIR, tree: *SExprTree) void {
+        _ = ir; // Unused in this function, but could be used for more complex logic
 
-        var node = SExpr.init(gpa, "exposed");
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("exposed");
+        tree.pushStringPair("name", env.idents.getText(self.name));
 
-        // Add the original name
-        node.appendStringAttr(gpa, "name", ir.env.idents.getText(self.name));
-
-        // Add the alias if present
         if (self.alias) |alias_idx| {
-            node.appendStringAttr(gpa, "alias", ir.env.idents.getText(alias_idx));
+            tree.pushStringPair("alias", env.idents.getText(alias_idx));
         }
 
-        // Add wildcard indicator if needed
-        node.appendBoolAttr(gpa, "wildcard", self.is_wildcard);
-
-        return node;
+        tree.pushBoolPair("wildcard", self.is_wildcard);
+        const attrs = tree.beginNode();
+        tree.endNode(begin, attrs);
     }
+};
+
+/// An imported module
+pub const Import = struct {
+    pub const Idx = enum(u16) { _ };
+
+    /// A store for interning imported module names
+    pub const Store = struct {
+        /// Map from module name string to Import.Idx
+        map: std.StringHashMapUnmanaged(Import.Idx) = .{},
+        /// List of imports indexed by Import.Idx
+        imports: std.ArrayListUnmanaged([]u8) = .{},
+        /// Storage for module name strings
+        strings: std.ArrayListUnmanaged(u8) = .{},
+
+        pub fn init() Store {
+            return .{};
+        }
+
+        pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
+            self.map.deinit(gpa);
+            self.imports.deinit(gpa);
+            self.strings.deinit(gpa);
+        }
+
+        /// Get or create an Import.Idx for a module name
+        pub fn getOrPut(self: *Store, gpa: std.mem.Allocator, module_name: []const u8) !Import.Idx {
+            const gop = try self.map.getOrPut(gpa, module_name);
+            if (!gop.found_existing) {
+                // Store the string
+                const start = self.strings.items.len;
+                try self.strings.appendSlice(gpa, module_name);
+                const stored_name = self.strings.items[start..];
+
+                const import_idx: Import.Idx = @enumFromInt(self.imports.items.len);
+                try self.imports.append(gpa, stored_name);
+                gop.value_ptr.* = import_idx;
+            }
+            return gop.value_ptr.*;
+        }
+    };
 };
 
 /// A file of any type that has been ingested into a Roc module
@@ -615,18 +950,15 @@ pub const IngestedFile = struct {
     pub const Range = List.Range;
     pub const NonEmptyRange = List.NonEmptyRange;
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
-        _ = line_starts;
-        const gpa = ir.env.gpa;
-        var node = SExpr.init(gpa, "ingested-file");
-        node.appendStringAttr(gpa, "path", "TODO");
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("ingested-file");
+        tree.pushStringPair("path", ir.env.strings.get(self.relative_path));
+        tree.pushStringPair("ident", ir.env.idents.getText(self.ident));
 
-        const ident_text = ir.env.idents.getText(self.ident);
-        node.appendStringAttr(gpa, "ident", ident_text);
-
-        var type_node = self.type.toSExpr(ir);
-        node.appendNode(gpa, &type_node);
-        return node;
+        const attrs = tree.beginNode();
+        self.type.pushToSExprTree(ir, tree);
+        tree.endNode(begin, attrs);
     }
 };
 
@@ -634,9 +966,7 @@ pub const IngestedFile = struct {
 /// takes its value from an expression.
 pub const Def = struct {
     pattern: Pattern.Idx,
-    pattern_region: Region,
     expr: Expr.Idx,
-    expr_region: Region,
     // TODO:
     // pattern_vars: SendMap<Symbol, Variable>,
     annotation: ?Annotation.Idx,
@@ -696,29 +1026,26 @@ pub const Def = struct {
     pub const Span = struct { span: DataSpan };
     pub const Range = struct { start: u32, len: u32 };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
-
-        const kind = switch (self.kind) {
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        const begin = tree.beginNode();
+        const name: []const u8 = switch (self.kind) {
             .let => "d-let",
             .stmt => "d-stmt",
             .ignored => "d-ignored",
         };
+        tree.pushStaticAtom(name);
+        const attrs = tree.beginNode();
 
-        var node = SExpr.init(gpa, kind);
+        ir.store.getPattern(self.pattern).pushToSExprTree(ir, tree, self.pattern);
 
-        var pattern_node = ir.store.getPattern(self.pattern).toSExpr(ir);
-        node.appendNode(gpa, &pattern_node);
-
-        var expr_node = ir.store.getExpr(self.expr).toSExpr(ir);
-        node.appendNode(gpa, &expr_node);
+        ir.store.getExpr(self.expr).pushToSExprTree(ir, tree, self.expr);
 
         if (self.annotation) |anno_idx| {
-            var anno_node = ir.store.getAnnotation(anno_idx).toSExpr(ir, ir.env.line_starts);
-            node.appendNode(gpa, &anno_node);
+            const anno = ir.store.getAnnotation(anno_idx);
+            anno.pushToSExprTree(ir, tree, anno_idx);
         }
 
-        return node;
+        tree.endNode(begin, attrs);
     }
 };
 
@@ -730,25 +1057,24 @@ pub const Annotation = struct {
     type_anno: TypeAnno.Idx,
     /// The canonical type signature as a type variable (for type inference)
     signature: TypeVar,
-    /// Source region of the annotation
-    region: Region,
 
     pub const Idx = enum(u32) { _ };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
-        _ = line_starts;
-        const gpa = ir.env.gpa;
-        var node = SExpr.init(gpa, "annotation");
-        ir.appendRegionInfoToSexprNodeFromRegion(&node, self.region);
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, anno_idx: Annotation.Idx) void {
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("annotation");
+        const region = ir.store.getRegionAt(@enumFromInt(@intFromEnum(anno_idx)));
+        ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+        const attrs = tree.beginNode();
 
         // Add the declared type annotation structure
-        var type_anno_node = SExpr.init(gpa, "declared-type");
-        const type_anno = ir.store.getTypeAnno(self.type_anno);
-        var anno_sexpr = type_anno.toSExpr(ir);
-        type_anno_node.appendNode(gpa, &anno_sexpr);
-        node.appendNode(gpa, &type_anno_node);
+        const type_begin = tree.beginNode();
+        tree.pushStaticAtom("declared-type");
+        const type_attrs = tree.beginNode();
+        ir.store.getTypeAnno(self.type_anno).pushToSExprTree(ir, tree, self.type_anno);
+        tree.endNode(type_begin, type_attrs);
 
-        return node;
+        tree.endNode(begin, attrs);
     }
 };
 
@@ -774,29 +1100,146 @@ pub const ExternalDecl = struct {
     /// Whether this is a value or type declaration
     kind: enum { value, type },
 
-    /// Region where this was referenced
+    /// Region where this external declaration was referenced
     region: Region,
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
-        const gpa = ir.env.gpa;
+    /// A safe list of external declarations
+    pub const SafeList = collections.SafeList(ExternalDecl);
 
-        var node = SExpr.init(gpa, "ext-decl");
-        ir.appendRegionInfoToSexprNodeFromRegion(&node, self.region);
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("ext-decl");
+        ir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
 
         // Add fully qualified name
-        const qualified_name_str = ir.getIdentText(self.qualified_name);
-        node.appendStringAttr(gpa, "ident", qualified_name_str);
+        tree.pushStringPair("ident", ir.env.idents.getText(self.qualified_name));
 
         // Add kind
         switch (self.kind) {
-            .value => node.appendStringAttr(gpa, "kind", "value"),
-            .type => node.appendStringAttr(gpa, "kind", "type"),
+            .value => tree.pushStringPair("kind", "value"),
+            .type => tree.pushStringPair("kind", "type"),
         }
 
-        return node;
+        const attrs = tree.beginNode();
+        tree.endNode(begin, attrs);
+    }
+
+    pub fn pushToSExprTreeWithRegion(self: *const @This(), ir: *const CIR, tree: *SExprTree, region: Region) void {
+        const begin = tree.beginNode();
+        tree.pushStaticAtom("ext-decl");
+        ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+        // Add fully qualified name
+        tree.pushStringPair("ident", ir.env.idents.getText(self.qualified_name));
+
+        // Add kind
+        switch (self.kind) {
+            .value => tree.pushStringPair("kind", "value"),
+            .type => tree.pushStringPair("kind", "type"),
+        }
+
+        const attrs = tree.beginNode();
+        tree.endNode(begin, attrs);
+    }
+
+    /// Calculate the serialized size of this external declaration
+    pub fn serializedSize(self: *const @This()) usize {
+        _ = self;
+        return @sizeOf(u32) + // qualified_name
+            @sizeOf(u32) + // module_name
+            @sizeOf(u32) + // local_name
+            @sizeOf(u32) + // type_var
+            @sizeOf(u8) + // kind (enum)
+            @sizeOf(u32) + // region.start.offset
+            @sizeOf(u32); // region.end.offset
+    }
+
+    /// Serialize this external declaration into the provided buffer
+    pub fn serializeInto(self: *const @This(), buffer: []u8) ![]const u8 {
+        const size = self.serializedSize();
+        if (buffer.len < size) return error.BufferTooSmall;
+
+        var offset: usize = 0;
+
+        // Serialize qualified_name
+        std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], @bitCast(self.qualified_name), .little);
+        offset += 4;
+
+        // Serialize module_name
+        std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], @bitCast(self.module_name), .little);
+        offset += 4;
+
+        // Serialize local_name
+        std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], @bitCast(self.local_name), .little);
+        offset += 4;
+
+        // Serialize type_var
+        std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], @intFromEnum(self.type_var), .little);
+        offset += 4;
+
+        // Serialize kind
+        buffer[offset] = switch (self.kind) {
+            .value => 0,
+            .type => 1,
+        };
+        offset += 1;
+
+        // Serialize region
+        std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], self.region.start.offset, .little);
+        offset += 4;
+        std.mem.writeInt(u32, buffer[offset .. offset + 4][0..4], self.region.end.offset, .little);
+        offset += 4;
+
+        return buffer[0..offset];
+    }
+
+    /// Deserialize an external declaration from the provided buffer
+    pub fn deserializeFrom(buffer: []const u8) !@This() {
+        var offset: usize = 0;
+        const needed_size = @sizeOf(u32) * 6 + @sizeOf(u8);
+        if (buffer.len < needed_size) return error.BufferTooSmall;
+
+        const qualified_name: Ident.Idx = @bitCast(std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little));
+        offset += 4;
+
+        const module_name: Ident.Idx = @bitCast(std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little));
+        offset += 4;
+
+        const local_name: Ident.Idx = @bitCast(std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little));
+        offset += 4;
+
+        const type_var: TypeVar = @enumFromInt(std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little));
+        offset += 4;
+
+        const kind_byte = buffer[offset];
+        offset += 1;
+        const kind: @TypeOf(@as(@This(), undefined).kind) = switch (kind_byte) {
+            0 => .value,
+            1 => .type,
+            else => return error.InvalidKind,
+        };
+
+        const start_offset = std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little);
+        offset += 4;
+        const end_offset = std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little);
+        offset += 4;
+
+        const region = Region{
+            .start = .{ .offset = start_offset },
+            .end = .{ .offset = end_offset },
+        };
+
+        return @This(){
+            .qualified_name = qualified_name,
+            .module_name = module_name,
+            .local_name = local_name,
+            .type_var = type_var,
+            .kind = kind,
+            .region = region,
+        };
     }
 };
 
@@ -921,49 +1364,42 @@ pub const IntValue = struct {
 
 /// Helper function to generate the S-expression node for the entire Canonical IR.
 /// If a single expression is provided, only that expression is returned.
-pub fn toSExpr(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SExpr {
+pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: []const u8) void {
     // Set temporary source for region info calculation during SExpr generation
     ir.temp_source_for_sexpr = source;
     defer ir.temp_source_for_sexpr = null;
-    const gpa = ir.env.gpa;
 
     if (maybe_expr_idx) |expr_idx| {
-        // Get the expression from the store
-        return ir.store.getExpr(expr_idx).toSExpr(ir);
+        // Only output the given expression
+        ir.store.getExpr(expr_idx).pushToSExprTree(ir, tree, expr_idx);
     } else {
-        var root_node = SExpr.init(gpa, "can-ir");
+        const root_begin = tree.beginNode();
+        tree.pushStaticAtom("can-ir");
 
-        // Iterate over all the definitions in the file and convert each to an S-expression
+        // Iterate over all the definitions in the file and convert each to an S-expression tree
         const defs_slice = ir.store.sliceDefs(ir.all_defs);
         const statements_slice = ir.store.sliceStatements(ir.all_statements);
 
-        if (defs_slice.len == 0 and statements_slice.len == 0) {
-            root_node.appendBoolAttr(gpa, "empty", true);
+        if (defs_slice.len == 0 and statements_slice.len == 0 and ir.external_decls.len() == 0) {
+            tree.pushBoolPair("empty", true);
         }
+        const attrs = tree.beginNode();
 
         for (defs_slice) |def_idx| {
-            var def_node = ir.store.getDef(def_idx).toSExpr(ir);
-            root_node.appendNode(gpa, &def_node);
+            ir.store.getDef(def_idx).pushToSExprTree(ir, tree);
         }
 
         for (statements_slice) |stmt_idx| {
-            var stmt_node = ir.store.getStatement(stmt_idx).toSExpr(ir);
-            root_node.appendNode(gpa, &stmt_node);
+            ir.store.getStatement(stmt_idx).pushToSExprTree(ir, tree, stmt_idx);
         }
 
-        return root_node;
-    }
-}
+        for (0..ir.external_decls.len()) |i| {
+            const external_decl = ir.external_decls.get(@enumFromInt(i));
+            external_decl.pushToSExprTree(ir, tree);
+        }
 
-/// Helper function to convert the entire Canonical IR to a string in S-expression format
-/// and write it to the given writer.
-///
-/// If a single expression is provided we only print that expression
-pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
-    const gpa = ir.env.gpa;
-    var node = toSExpr(ir, env, maybe_expr_idx, source);
-    defer node.deinit(gpa);
-    node.toStringPretty(writer);
+        tree.endNode(root_begin, attrs);
+    }
 }
 
 test "NodeStore - init and deinit" {
@@ -993,7 +1429,7 @@ pub fn calcRegionInfo(self: *const CIR, region: Region) base.RegionInfo {
         return empty;
     };
 
-    const info = base.RegionInfo.position(source, self.env.line_starts.items, region.start.offset, region.end.offset) catch {
+    const info = base.RegionInfo.position(source, self.env.line_starts.items.items, region.start.offset, region.end.offset) catch {
         // Return a zero position if we can't calculate it
         return empty;
     };
@@ -1018,6 +1454,22 @@ pub fn appendRegionInfoToSexprNodeFromRegion(ir: *const CIR, node: *SExpr, regio
     );
 }
 
+/// Append region information to an S-expression node for a given index in the Canonical IR.
+pub fn appendRegionInfoToSExprTree(ir: *const CIR, tree: *SExprTree, idx: anytype) void {
+    const region = ir.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
+    ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+}
+
+/// Append region information to an S-expression node from a specific region.
+pub fn appendRegionInfoToSExprTreeFromRegion(ir: *const CIR, tree: *SExprTree, region: Region) void {
+    const info = ir.calcRegionInfo(region);
+    tree.pushBytesRange(
+        region.start.offset,
+        region.end.offset,
+        info,
+    );
+}
+
 /// Get region information for a node in the Canonical IR.
 pub fn getNodeRegionInfo(ir: *const CIR, idx: anytype) base.RegionInfo {
     const region = ir.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
@@ -1027,7 +1479,7 @@ pub fn getNodeRegionInfo(ir: *const CIR, idx: anytype) base.RegionInfo {
 /// Helper function to convert type information from the Canonical IR to an SExpr node
 /// in S-expression format for snapshot testing. Implements the definition-focused
 /// format showing final types for defs, expressions, and builtins.
-pub fn toSexprTypes(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SExpr {
+pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: []const u8) std.mem.Allocator.Error!void {
     // Set temporary source for region info calculation during SExpr generation
     ir.temp_source_for_sexpr = source;
     defer ir.temp_source_for_sexpr = null;
@@ -1035,35 +1487,43 @@ pub fn toSexprTypes(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SEx
     const gpa = ir.env.gpa;
 
     // Create TypeWriter for converting types to strings
-    var type_string_buf = std.ArrayList(u8).init(gpa);
-    defer type_string_buf.deinit();
-
-    var type_writer = types.writers.TypeWriter.init(type_string_buf.writer(), ir.env);
+    var type_writer = try types.writers.TypeWriter.init(gpa, ir.env);
+    defer type_writer.deinit();
 
     if (maybe_expr_idx) |expr_idx| {
         const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
 
-        var expr_node = SExpr.init(gpa, "expr");
+        const expr_begin = tree.beginNode();
+        tree.pushStaticAtom("expr");
 
-        ir.appendRegionInfoToSexprNode(&expr_node, expr_idx);
+        ir.appendRegionInfoToSExprTree(tree, expr_idx);
 
-        if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
-            var unknown_node = SExpr.init(gpa, "unknown");
-            expr_node.appendNode(gpa, &unknown_node);
+        if (@intFromEnum(expr_var) > ir.env.types.slots.backing.len()) {
+            const unknown_begin = tree.beginNode();
+            tree.pushStaticAtom("unknown");
+            const unknown_attrs = tree.beginNode();
+            tree.endNode(unknown_begin, unknown_attrs);
         } else {
-            if (type_writer.writeVar(expr_var)) {
-                expr_node.appendStringAttr(gpa, "type", type_string_buf.items);
+            if (type_writer.write(expr_var)) {
+                tree.pushStringPair("type", type_writer.get());
             } else |err| {
                 exitOnOom(err);
             }
         }
 
-        return expr_node;
+        const expr_attrs = tree.beginNode();
+        tree.endNode(expr_begin, expr_attrs);
     } else {
-        var root_node = SExpr.init(gpa, "inferred-types");
+        const root_begin = tree.beginNode();
+        tree.pushStaticAtom("inferred-types");
+
+        const attrs = tree.beginNode();
 
         // Collect definitions
-        var defs_node = SExpr.init(gpa, "defs");
+        const defs_begin = tree.beginNode();
+        tree.pushStaticAtom("defs");
+        const defs_attrs = tree.beginNode();
+
         const all_defs = ir.store.sliceDefs(ir.all_defs);
 
         for (all_defs) |def_idx| {
@@ -1072,21 +1532,23 @@ pub fn toSexprTypes(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SEx
             // Extract identifier name from the pattern (assuming it's an assign pattern)
             const pattern = ir.store.getPattern(def.pattern);
             switch (pattern) {
-                .assign => |assign_pat| {
-                    var def_node = SExpr.init(gpa, "patt");
+                .assign => |_| {
+                    const patt_begin = tree.beginNode();
+                    tree.pushStaticAtom("patt");
 
-                    ir.appendRegionInfoToSexprNodeFromRegion(&def_node, assign_pat.region);
+                    // Get the pattern region instead of the whole def region
+                    const pattern_region = ir.store.getPatternRegion(def.pattern);
+                    ir.appendRegionInfoToSExprTreeFromRegion(tree, pattern_region);
 
                     // Get the type variable for this definition
-                    // Each definition has a type_var at its node index which represents the type of the definition
-                    const def_var = ir.idxToTypeVar(&ir.env.types, def_idx) catch |err| exitOnOom(err);
+                    const def_var = try ir.idxToTypeVar(&ir.env.types, def_idx);
 
                     // Clear the buffer and write the type
-                    type_string_buf.clearRetainingCapacity();
-                    type_writer.writeVar(def_var) catch |err| exitOnOom(err);
-                    def_node.appendStringAttr(gpa, "type", type_string_buf.items);
+                    try type_writer.write(def_var);
+                    tree.pushStringPair("type", type_writer.get());
 
-                    defs_node.appendNode(gpa, &def_node);
+                    const patt_attrs = tree.beginNode();
+                    tree.endNode(patt_begin, patt_attrs);
                 },
                 else => {
                     // For non-assign patterns, we could handle destructuring, but for now skip
@@ -1095,46 +1557,126 @@ pub fn toSexprTypes(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SEx
             }
         }
 
-        root_node.appendNode(gpa, &defs_node);
+        tree.endNode(defs_begin, defs_attrs);
+
+        const all_stmts = ir.store.sliceStatements(ir.all_statements);
+
+        var has_type_decl = false;
+        for (all_stmts) |stmt_idx| {
+            const stmt = ir.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .s_alias_decl => |_| {
+                    has_type_decl = true;
+                    break;
+                },
+                .s_nominal_decl => |_| {
+                    has_type_decl = true;
+                    break;
+                },
+
+                else => {
+                    // For non-assign patterns, we could handle destructuring, but for now skip
+                    continue;
+                },
+            }
+        }
+
+        // Collect statements
+        if (has_type_decl) {
+            const stmts_begin = tree.beginNode();
+            tree.pushStaticAtom("type_decls");
+            const stmts_attrs = tree.beginNode();
+
+            for (all_stmts) |stmt_idx| {
+                const stmt = ir.store.getStatement(stmt_idx);
+
+                // Get the type variable for this definition
+                const stmt_var = ir.idxToTypeVar(&ir.env.types, stmt_idx) catch |err| exitOnOom(err);
+
+                switch (stmt) {
+                    .s_alias_decl => |alias| {
+                        has_type_decl = true;
+
+                        const stmt_node_begin = tree.beginNode();
+                        tree.pushStaticAtom("alias");
+                        const alias_region = ir.store.getStatementRegion(stmt_idx);
+                        ir.appendRegionInfoToSExprTreeFromRegion(tree, alias_region);
+
+                        // Clear the buffer and write the type
+                        try type_writer.write(stmt_var);
+                        tree.pushStringPair("type", type_writer.get());
+                        const stmt_node_attrs = tree.beginNode();
+
+                        const header = ir.store.getTypeHeader(alias.header);
+                        header.pushToSExprTree(ir, tree, alias.header);
+
+                        tree.endNode(stmt_node_begin, stmt_node_attrs);
+                    },
+                    .s_nominal_decl => |nominal| {
+                        has_type_decl = true;
+
+                        const stmt_node_begin = tree.beginNode();
+                        tree.pushStaticAtom("nominal");
+                        const nominal_region = ir.store.getStatementRegion(stmt_idx);
+                        ir.appendRegionInfoToSExprTreeFromRegion(tree, nominal_region);
+
+                        // Clear the buffer and write the type
+                        try type_writer.write(stmt_var);
+                        tree.pushStringPair("type", type_writer.get());
+
+                        const stmt_node_attrs = tree.beginNode();
+
+                        const header = ir.store.getTypeHeader(nominal.header);
+                        header.pushToSExprTree(ir, tree, nominal.header);
+
+                        tree.endNode(stmt_node_begin, stmt_node_attrs);
+                    },
+
+                    else => {
+                        // For non-assign patterns, we could handle destructuring, but for now skip
+                        continue;
+                    },
+                }
+            }
+
+            tree.endNode(stmts_begin, stmts_attrs);
+        }
 
         // Collect expression types (for significant expressions with regions)
-        var expressions_node = SExpr.init(gpa, "expressions");
+        const exprs_begin = tree.beginNode();
+        tree.pushStaticAtom("expressions");
+        const exprs_attrs = tree.beginNode();
 
-        // Walk through all expressions and collect those with meaningful types
-        // We'll collect expressions that have regions and aren't just intermediate nodes
         for (all_defs) |def_idx| {
             const def = ir.store.getDef(def_idx);
 
             // Get the expression type
             const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(def.expr)));
 
-            var expr_node = SExpr.init(gpa, "expr");
-            ir.appendRegionInfoToSexprNodeFromRegion(&expr_node, def.expr_region);
+            const expr_node_begin = tree.beginNode();
+            tree.pushStaticAtom("expr");
 
-            if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
-                var unknown_node = SExpr.init(gpa, "unknown");
-                expr_node.appendNode(gpa, &unknown_node);
+            // Add region info for the expression
+            const expr_region = ir.store.getExprRegion(def.expr);
+            ir.appendRegionInfoToSExprTreeFromRegion(tree, expr_region);
+
+            if (@intFromEnum(expr_var) > ir.env.types.slots.backing.len()) {
+                const unknown_begin = tree.beginNode();
+                tree.pushStaticAtom("unknown");
+                const unknown_attrs = tree.beginNode();
+                tree.endNode(unknown_begin, unknown_attrs);
             } else {
                 // Clear the buffer and write the type
-                type_string_buf.clearRetainingCapacity();
-                type_writer.writeVar(expr_var) catch |err| exitOnOom(err);
-                expr_node.appendStringAttr(gpa, "type", type_string_buf.items);
+                try type_writer.write(expr_var);
+                tree.pushStringPair("type", type_writer.get());
             }
 
-            expressions_node.appendNode(gpa, &expr_node);
+            const expr_node_attrs = tree.beginNode();
+            tree.endNode(expr_node_begin, expr_node_attrs);
         }
 
-        root_node.appendNode(gpa, &expressions_node);
+        tree.endNode(exprs_begin, exprs_attrs);
 
-        return root_node;
+        tree.endNode(root_begin, attrs);
     }
-}
-
-/// Helper function to convert type information from the Canonical IR to a string
-/// in S-expression format for snapshot testing. Calls `toSexprTypes` and writes the result.
-pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
-    const gpa = ir.env.gpa;
-    var node = toSexprTypes(ir, maybe_expr_idx, source);
-    defer node.deinit(gpa);
-    node.toStringPretty(writer);
 }

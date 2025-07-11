@@ -12,10 +12,19 @@ match data {
     Err(y) => y / 2
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - mixed_pattern_scoping.md:1:7:1:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `data` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**mixed_pattern_scoping.md:1:7:1:11:**
+```roc
+match data {
+```
+      ^^^^
+
 
 # TOKENS
 ~~~zig
@@ -77,36 +86,40 @@ match data {
 		(branches
 			(branch
 				(patterns
-					(p-applied-tag @2.5-2.15 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @2.5-2.15)))
 				(value
 					(e-binop @2.19-3.8 (op "add")
 						(e-lookup-local @2.19-2.20
-							(pattern @2.9-2.10))
+							(p-assign @2.9-2.10 (ident "x")))
 						(e-lookup-local @2.23-2.24
-							(pattern @2.12-2.13)))))
+							(p-assign @2.12-2.13 (ident "y"))))))
 			(branch
 				(patterns
-					(p-applied-tag @3.5-3.11 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @3.5-3.11)))
 				(value
 					(e-binop @3.15-4.7 (op "sub")
 						(e-lookup-local @3.15-3.16
-							(pattern @3.9-3.10))
+							(p-assign @3.9-3.10 (ident "x")))
 						(e-int @3.19-3.20 (value "1")))))
 			(branch
 				(patterns
-					(p-applied-tag @4.5-4.12 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @4.5-4.12)))
 				(value
 					(e-binop @4.16-5.8 (op "mul")
 						(e-lookup-local @4.16-4.17
-							(pattern @4.9-4.10))
+							(p-assign @4.9-4.10 (ident "x")))
 						(e-int @4.20-4.21 (value "2")))))
 			(branch
 				(patterns
-					(p-applied-tag @5.5-5.11 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @5.5-5.11)))
 				(value
 					(e-binop @5.15-6.2 (op "div")
 						(e-lookup-local @5.15-5.16
-							(pattern @5.9-5.10))
+							(p-assign @5.9-5.10 (ident "y")))
 						(e-int @5.19-5.20 (value "2"))))))))
 ~~~
 # TYPES

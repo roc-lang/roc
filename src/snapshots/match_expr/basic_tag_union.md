@@ -11,10 +11,19 @@ match color {
 	Green => "3"
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - basic_tag_union.md:1:7:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `color` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**basic_tag_union.md:1:7:1:12:**
+```roc
+match color {
+```
+      ^^^^^
+
 
 **INCOMPATIBLE MATCH BRANCHES**
 The third branch's type in this `match` is different from the previous ones:
@@ -75,17 +84,20 @@ NO CHANGE
 		(branches
 			(branch
 				(patterns
-					(p-applied-tag @2.2-2.5 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @2.2-2.5)))
 				(value
 					(e-int @2.9-2.10 (value "1"))))
 			(branch
 				(patterns
-					(p-applied-tag @3.2-3.6 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @3.2-3.6)))
 				(value
 					(e-int @3.10-3.11 (value "2"))))
 			(branch
 				(patterns
-					(p-applied-tag @4.2-4.7 (degenerate false)))
+					(pattern (degenerate false)
+						(p-applied-tag @4.2-4.7)))
 				(value
 					(e-string @4.11-4.14
 						(e-literal @4.12-4.13 (string "3"))))))))

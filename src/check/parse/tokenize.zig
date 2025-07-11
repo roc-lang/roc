@@ -421,6 +421,18 @@ pub const TokenizedBuffer = struct {
             return null;
         }
     }
+
+    /// Loads the current token & region if it is an identifier.
+    /// Otherwise returns null.
+    pub fn resolveIdentifierAndRegion(self: *TokenizedBuffer, token: Token.Idx) ?struct { base.Ident.Idx, base.Region } {
+        const tag = self.tokens.items(.tag)[@intCast(token)];
+        if (tag.isInterned()) {
+            const extra = self.tokens.items(.extra)[@intCast(token)];
+            return .{ extra.interned, self.env.idents.getRegion(extra.interned) };
+        } else {
+            return null;
+        }
+    }
 };
 
 /// Represents a comment in roc source e.g. `## some comment`
@@ -452,6 +464,7 @@ pub const Diagnostic = struct {
         OverClosedBrace,
         MismatchedBrace,
         NonPrintableUnicodeInStrLiteral,
+        InvalidUtf8InSource,
     };
 };
 
@@ -1462,11 +1475,51 @@ pub const Tokenizer = struct {
                 } else {
                     escape = c == '\\';
 
-                    if (!std.ascii.isPrint(c)) {
-                        self.cursor.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
-                    }
+                    // Check if this is the start of a UTF-8 sequence
+                    const utf8_len = std.unicode.utf8ByteSequenceLength(c) catch {
+                        // Invalid UTF-8 start byte
+                        self.cursor.pushMessageHere(.InvalidUtf8InSource);
+                        self.cursor.pos += 1;
+                        continue;
+                    };
 
-                    self.cursor.pos += 1;
+                    // For single-byte UTF-8 (ASCII), check if it's printable
+                    if (utf8_len == 1) {
+                        // Allow tab (0x09) in addition to standard printable ASCII
+                        if (!std.ascii.isPrint(c) and c != '\t') {
+                            self.cursor.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
+                        }
+                        self.cursor.pos += 1;
+                    } else {
+                        // Multi-byte UTF-8 sequence - validate it
+                        if (self.cursor.pos + utf8_len > self.cursor.buf.len) {
+                            // Incomplete UTF-8 sequence at end of input
+                            self.cursor.pushMessageHere(.InvalidUtf8InSource);
+                            self.cursor.pos += 1;
+                            continue;
+                        }
+
+                        const utf8_bytes = self.cursor.buf[self.cursor.pos .. self.cursor.pos + utf8_len];
+                        const codepoint = std.unicode.utf8Decode(utf8_bytes) catch {
+                            // Invalid UTF-8 sequence
+                            self.cursor.pushMessageHere(.InvalidUtf8InSource);
+                            self.cursor.pos += 1;
+                            continue;
+                        };
+
+                        // Check if the Unicode codepoint is printable
+                        // Unicode categories: Cc (control), Cn (unassigned), Co (private use), Cs (surrogate)
+                        if (codepoint < 0x20 or // C0 control characters
+                            (codepoint >= 0x7F and codepoint <= 0x9F) or // C1 control characters
+                            (codepoint >= 0xD800 and codepoint <= 0xDFFF) or // Surrogate pairs (invalid in UTF-8)
+                            codepoint == 0xFFFE or codepoint == 0xFFFF) // Non-characters
+                        {
+                            self.cursor.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
+                        }
+
+                        // Valid UTF-8 sequence - advance by the full sequence length
+                        self.cursor.pos += utf8_len;
+                    }
                 }
             }
         }
@@ -2133,4 +2186,99 @@ test "tokenizer" {
             .StringPart,
         },
     );
+}
+
+test "tokenizer with invalid UTF-8" {
+    const gpa = std.testing.allocator;
+
+    // Invalid UTF-8 start byte
+    {
+        const invalid_utf8 = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xFF, ' ', 'w', 'o', 'r', 'l', 'd', '"' };
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var tokenizer = Tokenizer.init(&env, &invalid_utf8, &diagnostics);
+        defer tokenizer.deinit();
+        tokenizer.tokenize();
+
+        // Should have reported InvalidUtf8InSource
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.InvalidUtf8InSource, messages[0].tag);
+    }
+
+    // Incomplete UTF-8 sequence at end
+    {
+        const incomplete_utf8 = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xC3, '"' }; // 0xC3 expects another byte
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var tokenizer = Tokenizer.init(&env, &incomplete_utf8, &diagnostics);
+        defer tokenizer.deinit();
+        tokenizer.tokenize();
+
+        // Should have reported InvalidUtf8InSource
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.InvalidUtf8InSource, messages[0].tag);
+    }
+}
+
+test "non-printable characters in string literal" {
+    const gpa = std.testing.allocator;
+
+    // Non-printable ASCII
+    {
+        const non_printable = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', '\x01', 'w', 'o', 'r', 'l', 'd', '"' }; // 0x01 is SOH (non-printable)
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var tokenizer = Tokenizer.init(&env, &non_printable, &diagnostics);
+        defer tokenizer.deinit();
+        tokenizer.tokenize();
+
+        // Should have reported NonPrintableUnicodeInStrLiteral
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.NonPrintableUnicodeInStrLiteral, messages[0].tag);
+    }
+
+    // Non-printable (but valid) non-ASCII Unicode characters
+    {
+        const control_char = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xC2, 0x80, ' ', 'w', 'o', 'r', 'l', 'd', '"' }; // U+0080 (C1 control)
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var tokenizer = Tokenizer.init(&env, &control_char, &diagnostics);
+        defer tokenizer.deinit();
+        tokenizer.tokenize();
+
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.NonPrintableUnicodeInStrLiteral, messages[0].tag);
+    }
+
+    // No errors should be reported for these
+    {
+        const valid_chars = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', '\t', ' ', 'w', 'o', 'r', 'l', 'd', '"' };
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var tokenizer = Tokenizer.init(&env, &valid_chars, &diagnostics);
+        defer tokenizer.deinit();
+        tokenizer.tokenize();
+
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len == 0);
+    }
 }

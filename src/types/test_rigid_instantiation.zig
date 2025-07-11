@@ -2,13 +2,16 @@
 
 const std = @import("std");
 const types = @import("types.zig");
-const TypesStore = @import("store.zig").Store;
-const check_types = @import("../check/check_types.zig");
+const Store = @import("store.zig").Store;
 const instantiate = @import("../check/check_types/instantiate.zig");
+const base = @import("../base.zig");
 
 test "rigid variables need instantiation - polymorphic identity function" {
-    var store = TypesStore.init(std.testing.allocator);
+    var store = Store.init(std.testing.allocator);
     defer store.deinit();
+
+    var regions = base.Region.List.initCapacity(std.testing.allocator, 256);
+    defer regions.deinit(std.testing.allocator);
 
     // Create a rigid type variable 'a' (like in `identity : a -> a`)
     const rigid_var = store.fresh();
@@ -23,7 +26,7 @@ test "rigid variables need instantiation - polymorphic identity function" {
     try std.testing.expect(store.needsInstantiation(func_var));
 
     // First call site: instantiate for use with integers
-    const inst1_var = try instantiate.instantiateVar(&store, func_var, std.testing.allocator);
+    const inst1_var = try instantiate.instantiateVarAlloc(&store, func_var, std.testing.allocator);
 
     // The instantiated function should still need instantiation
     // (because it has fresh type variables that could be instantiated again)
@@ -33,7 +36,7 @@ test "rigid variables need instantiation - polymorphic identity function" {
     try std.testing.expect(inst1_var != func_var);
 
     // Second call site: instantiate again for use with strings
-    const inst2_var = try instantiate.instantiateVar(&store, func_var, std.testing.allocator);
+    const inst2_var = try instantiate.instantiateVarAlloc(&store, func_var, std.testing.allocator);
 
     // Should also need instantiation
     try std.testing.expect(store.needsInstantiation(inst2_var));
@@ -48,8 +51,11 @@ test "rigid variables need instantiation - polymorphic identity function" {
 }
 
 test "rigid variables need instantiation - multiple type parameters" {
-    var store = TypesStore.init(std.testing.allocator);
+    var store = Store.init(std.testing.allocator);
     defer store.deinit();
+
+    var regions = base.Region.List.initCapacity(std.testing.allocator, 256);
+    defer regions.deinit(std.testing.allocator);
 
     // Create rigid type variables 'a' and 'b' (like in `swap : (a, b) -> (b, a)`)
     const rigid_a = store.fresh();
@@ -79,17 +85,17 @@ test "rigid variables need instantiation - multiple type parameters" {
     try std.testing.expect(store.needsInstantiation(func_var));
 
     // Instantiate for first use
-    const inst1_var = try instantiate.instantiateVar(&store, func_var, std.testing.allocator);
+    const inst1_var = try instantiate.instantiateVarAlloc(&store, func_var, std.testing.allocator);
     try std.testing.expect(inst1_var != func_var);
 
     // Instantiate for second use
-    const inst2_var = try instantiate.instantiateVar(&store, func_var, std.testing.allocator);
+    const inst2_var = try instantiate.instantiateVarAlloc(&store, func_var, std.testing.allocator);
     try std.testing.expect(inst2_var != func_var);
     try std.testing.expect(inst2_var != inst1_var);
 }
 
 test "rigid vs flex variable instantiation behavior" {
-    var store = TypesStore.init(std.testing.allocator);
+    var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
     // Test that both rigid and flex variables need instantiation

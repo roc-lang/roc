@@ -9,6 +9,8 @@ module [nums]
 
 nums : List U8
 ~~~
+# EXPECTED
+PARSE ERROR - type_annotation_missing_parens.md:3:15:3:15
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -33,6 +35,16 @@ nums : List U8
 ```
               
 
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that ``nums`` is exposed, but it is not defined anywhere in this module.
+
+**type_annotation_missing_parens.md:1:9:1:13:**
+```roc
+module [nums]
+```
+        ^^^^
+You can fix this by either defining ``nums`` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig

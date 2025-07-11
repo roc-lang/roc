@@ -13,6 +13,10 @@ extract_age = |person| {
     age
 }
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - module_record_destructure.md:5:13:5:21
+UNDEFINED VARIABLE - module_record_destructure.md:5:7:5:10
+UNDEFINED VARIABLE - module_record_destructure.md:6:5:6:8
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= person** is not expected in an expression.
@@ -30,9 +34,23 @@ Here is the problematic code:
 Nothing is named `age` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**module_record_destructure.md:5:7:5:10:**
+```roc
+    { age } = person
+```
+      ^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `age` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**module_record_destructure.md:6:5:6:8:**
+```roc
+    age
+```
+    ^^^
+
 
 # TOKENS
 ~~~zig
@@ -97,7 +115,7 @@ extract_age = |person| {
 						(e-runtime-error (tag "ident_not_in_scope"))))
 				(s-expr @5.15-6.8
 					(e-lookup-local @5.15-5.21
-						(pattern @4.16-4.22)))
+						(p-assign @4.16-4.22 (ident "person"))))
 				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation @4.1-4.12
 			(declared-type
@@ -111,7 +129,7 @@ extract_age = |person| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "{ age: U64 } -> Error")))
+		(patt @4.1-4.12 (type "{ age: Error } -> Error")))
 	(expressions
-		(expr @4.15-7.2 (type "{ age: U64 } -> Error"))))
+		(expr @4.15-7.2 (type "{ age: Error } -> Error"))))
 ~~~

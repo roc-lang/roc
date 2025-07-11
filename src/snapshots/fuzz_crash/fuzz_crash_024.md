@@ -13,6 +13,18 @@ var t= ]
 #el
 var t= 0
 ~~~
+# EXPECTED
+PARSE ERROR - fuzz_crash_024.md:1:9:1:17
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:24:1:34
+PARSE ERROR - fuzz_crash_024.md:1:33:1:53
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:34:1:53
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:53:1:53
+PARSE ERROR - fuzz_crash_024.md:4:1:4:6
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:8
+PARSE ERROR - fuzz_crash_024.md:7:1:7:6
+INVALID STATEMENT - fuzz_crash_024.md:1:18:1:53
+INVALID STATEMENT - fuzz_crash_024.md:1:34:1:53
+INVALID STATEMENT - fuzz_crash_024.md:1:1:1:1
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -120,13 +132,34 @@ var t= 0
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_024.md:1:18:1:53:**
+```roc
+module [module ] { pf: platform ".-/main._]where # A
+```
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_024.md:1:34:1:53:**
+```roc
+module [module ] { pf: platform ".-/main._]where # A
+```
+                                 ^^^^^^^^^^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_024.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!

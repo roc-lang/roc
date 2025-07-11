@@ -7,6 +7,8 @@ type=file
 ~~~roc
 platform "foo" requires {} {} exposes [] packages {} provides []
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

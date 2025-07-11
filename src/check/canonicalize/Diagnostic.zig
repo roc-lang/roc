@@ -17,6 +17,15 @@ pub const Diagnostic = union(enum) {
         feature: StringLiteral.Idx,
         region: Region,
     },
+    exposed_but_not_implemented: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
+    redundant_exposed: struct {
+        ident: Ident.Idx,
+        region: Region,
+        original_region: Region,
+    },
     invalid_num_literal: struct {
         region: Region,
     },
@@ -42,6 +51,7 @@ pub const Diagnostic = union(enum) {
     },
     invalid_top_level_statement: struct {
         stmt: StringLiteral.Idx,
+        region: Region,
     },
     expr_not_canonicalized: struct {
         region: Region,
@@ -73,6 +83,9 @@ pub const Diagnostic = union(enum) {
     malformed_type_annotation: struct {
         region: Region,
     },
+    malformed_where_clause: struct {
+        region: Region,
+    },
     var_across_function_boundary: struct {
         region: Region,
     },
@@ -89,12 +102,37 @@ pub const Diagnostic = union(enum) {
     tuple_elem_not_canonicalized: struct {
         region: Region,
     },
+    module_not_found: struct {
+        module_name: Ident.Idx,
+        region: Region,
+    },
+    value_not_exposed: struct {
+        module_name: Ident.Idx,
+        value_name: Ident.Idx,
+        region: Region,
+    },
+    type_not_exposed: struct {
+        module_name: Ident.Idx,
+        type_name: Ident.Idx,
+        region: Region,
+    },
+    module_not_imported: struct {
+        module_name: Ident.Idx,
+        region: Region,
+    },
+    too_many_exports: struct {
+        count: u32,
+        region: Region,
+    },
     undeclared_type: struct {
         name: Ident.Idx,
         region: Region,
     },
     undeclared_type_var: struct {
         name: Ident.Idx,
+        region: Region,
+    },
+    crash_expects_string: struct {
         region: Region,
     },
     type_alias_redeclared: struct {
@@ -143,10 +181,12 @@ pub const Diagnostic = union(enum) {
     pub fn toRegion(self: Diagnostic) Region {
         return switch (self) {
             .not_implemented => |d| d.region,
+            .exposed_but_not_implemented => |d| d.region,
+            .redundant_exposed => |d| d.region,
             .invalid_num_literal => |d| d.region,
             .ident_already_in_scope => |d| d.region,
             .ident_not_in_scope => |d| d.region,
-            .invalid_top_level_statement => base.Region.zero(),
+            .invalid_top_level_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
             .invalid_string_interpolation => |d| d.region,
             .pattern_arg_invalid => |d| d.region,
@@ -157,12 +197,19 @@ pub const Diagnostic = union(enum) {
             .if_then_not_canonicalized => |d| d.region,
             .if_else_not_canonicalized => |d| d.region,
             .malformed_type_annotation => |d| d.region,
+            .malformed_where_clause => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,
             .tuple_elem_not_canonicalized => |d| d.region,
+            .module_not_found => |d| d.region,
+            .value_not_exposed => |d| d.region,
+            .type_not_exposed => |d| d.region,
+            .module_not_imported => |d| d.region,
+            .too_many_exports => |d| d.region,
             .undeclared_type => |d| d.region,
             .undeclared_type_var => |d| d.region,
+            .crash_expects_string => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,
             .nominal_type_redeclared => |d| d.redeclared_region,
             .type_shadowed_warning => |d| d.region,
@@ -170,11 +217,11 @@ pub const Diagnostic = union(enum) {
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
             .duplicate_record_field => |d| d.duplicate_region,
-            .f64_pattern_literal => |d| d.region,
             .invalid_single_quote => |d| d.region,
             .too_long_single_quote => |d| d.region,
             .empty_single_quote => |d| d.region,
             .empty_tuple => |d| d.region,
+            .f64_pattern_literal => |d| d.region,
         };
     }
 
@@ -186,6 +233,15 @@ pub const Diagnostic = union(enum) {
         try report.document.addText(owned_feature);
         try report.document.addLineBreak();
         try report.document.addReflowingText("Let us know if you want to help!");
+        return report;
+    }
+
+    /// Build a report for "malformed where clause" diagnostic
+    pub fn buildMalformedWhereClauseReport(allocator: Allocator) !Report {
+        var report = Report.init(allocator, "MALFORMED WHERE CLAUSE", .runtime_error);
+        try report.document.addReflowingText("This where clause could not be parsed correctly.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Please check the syntax of your where clause constraint.");
         return report;
     }
 
@@ -213,8 +269,76 @@ pub const Diagnostic = union(enum) {
         return report;
     }
 
+    /// Build a report for "exposed but not implemented" diagnostic
+    pub fn buildExposedButNotImplementedReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "EXPOSED BUT NOT DEFINED", .runtime_error);
+        const owned_ident = try report.addOwnedString(ident_name);
+
+        try report.document.addReflowingText("The module header says that `");
+        try report.document.addInlineCode(owned_ident);
+        try report.document.addReflowingText("` is exposed, but it is not defined anywhere in this module.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addReflowingText("You can fix this by either defining `");
+        try report.document.addInlineCode(owned_ident);
+        try report.document.addReflowingText("` in this module, or by removing it from the list of exposed values.");
+
+        return report;
+    }
+
+    /// Build a report for "redundant exposed" diagnostic
+    pub fn buildRedundantExposedReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        region_info: base.RegionInfo,
+        original_region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "REDUNDANT EXPOSED", .warning);
+        const owned_ident = try report.addOwnedString(ident_name);
+
+        try report.document.addReflowingText("The identifier `");
+        try report.document.addInlineCode(owned_ident);
+        try report.document.addReflowingText("` is exposed multiple times in the module header.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addReflowingText("It was already exposed here:");
+
+        try report.document.addSourceRegion(
+            original_region_info,
+            .dimmed,
+            filename,
+        );
+
+        try report.document.addReflowingText("You can remove the duplicate entry to fix this warning.");
+
+        return report;
+    }
+
     /// Build a report for "identifier not in scope" diagnostic
-    pub fn buildIdentNotInScopeReport(allocator: Allocator, ident_name: []const u8) !Report {
+    pub fn buildIdentNotInScopeReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
         var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error);
         const owned_ident = try report.addOwnedString(ident_name);
         try report.document.addText("Nothing is named ");
@@ -226,11 +350,23 @@ pub const Diagnostic = union(enum) {
         try report.document.addText(" or ");
         try report.document.addKeyword("exposing");
         try report.document.addReflowingText(" missing up-top?");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
         return report;
     }
 
     /// Build a report for "invalid top level statement" diagnostic
-    pub fn buildInvalidTopLevelStatementReport(allocator: Allocator, stmt_name: []const u8) !Report {
+    pub fn buildInvalidTopLevelStatementReport(
+        allocator: Allocator,
+        stmt_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
         var report = Report.init(allocator, "INVALID STATEMENT", .runtime_error);
         const owned_stmt = try report.addOwnedString(stmt_name);
         try report.document.addText("The statement ");
@@ -238,6 +374,13 @@ pub const Diagnostic = union(enum) {
         try report.document.addText(" is not allowed at the top level.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
         return report;
     }
 
@@ -395,6 +538,28 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("I am part way through parsing this scalar literal (character literal), but it is empty.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("A single-quoted literal must contain exactly one character, e.g. 'a'.");
+        return report;
+    }
+
+    /// Build a report for "crash expects string" diagnostic
+    pub fn buildCrashExpectsStringReport(
+        allocator: Allocator,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "CRASH EXPECTS STRING", .runtime_error);
+        try report.document.addReflowingText("The ");
+        try report.document.addAnnotated("crash", .inline_code);
+        try report.document.addReflowingText(" keyword expects a string literal as its argument.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("For example: ");
+        try report.document.addAnnotated("crash \"Something went wrong\"", .inline_code);
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
         return report;
     }
 
@@ -891,6 +1056,148 @@ pub const Diagnostic = union(enum) {
         try report.document.addText("Use a guard:");
         try report.document.addLineBreak();
         try report.document.addInlineCode("n if n > 1e99 => ...");
+
+        return report;
+    }
+    /// Build a report for "module not found" diagnostic
+    pub fn buildModuleNotFoundReport(
+        allocator: Allocator,
+        module_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
+
+        const owned_module = try report.addOwnedString(module_name);
+        try report.document.addText("The module ");
+        try report.document.addAnnotated(owned_module, .module_name);
+        try report.document.addText(" was not found.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Make sure this module is imported and available in your project.");
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "value not exposed" diagnostic
+    pub fn buildValueNotExposedReport(
+        allocator: Allocator,
+        module_name: []const u8,
+        value_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "VALUE NOT EXPOSED", .runtime_error);
+
+        const owned_module = try report.addOwnedString(module_name);
+        const owned_value = try report.addOwnedString(value_name);
+        try report.document.addText("The ");
+        try report.document.addAnnotated(owned_module, .module_name);
+        try report.document.addText(" module does not expose anything named ");
+        try report.document.addUnqualifiedSymbol(owned_value);
+        try report.document.addText(".");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Make sure the module exports this value, or use a value that is exposed.");
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "type not exposed" diagnostic
+    pub fn buildTypeNotExposedReport(
+        allocator: Allocator,
+        module_name: []const u8,
+        type_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "TYPE NOT EXPOSED", .runtime_error);
+
+        const owned_module = try report.addOwnedString(module_name);
+        const owned_type = try report.addOwnedString(type_name);
+        try report.document.addText("The ");
+        try report.document.addAnnotated(owned_module, .module_name);
+        try report.document.addText(" module does not expose anything named ");
+        try report.document.addAnnotated(owned_type, .emphasized);
+        try report.document.addText(".");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Make sure the module exports this type, or use a type that is exposed.");
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "module not imported" diagnostic
+    pub fn buildModuleNotImportedReport(
+        allocator: Allocator,
+        module_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "MODULE NOT IMPORTED", .runtime_error);
+
+        const owned_module = try report.addOwnedString(module_name);
+        try report.document.addText("The module ");
+        try report.document.addAnnotated(owned_module, .module_name);
+        try report.document.addText(" is not imported in the current scope.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Try adding an import statement like: ");
+        try report.document.addKeyword("import");
+        try report.document.addText(" ");
+        try report.document.addAnnotated(owned_module, .module_name);
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "too many exports" diagnostic
+    pub fn buildTooManyExportsReport(
+        allocator: Allocator,
+        count: u32,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "TOO MANY EXPORTS", .runtime_error);
+
+        const max_exports = std.math.maxInt(u16);
+
+        try report.document.addText("This module has ");
+        const count_str = try std.fmt.allocPrint(allocator, "{}", .{count});
+        defer allocator.free(count_str);
+        try report.document.addAnnotated(count_str, .emphasized);
+        try report.document.addText(" exports, but the maximum allowed is ");
+        const max_str = try std.fmt.allocPrint(allocator, "{}", .{max_exports});
+        defer allocator.free(max_str);
+        try report.document.addAnnotated(max_str, .emphasized);
+        try report.document.addText(".");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Consider splitting this module into smaller modules with fewer exports.");
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
 
         return report;
     }

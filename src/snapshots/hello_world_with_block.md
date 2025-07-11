@@ -18,6 +18,8 @@ main! = |_| {
 	Stdout.line!("Hello, world!")
 }
 ~~~
+# EXPECTED
+UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``world`` is not used anywhere in your code.
@@ -95,8 +97,9 @@ NO CHANGE
 					(e-string @9.10-9.17
 						(e-literal @9.11-9.16 (string "World"))))
 				(e-call @11.2-11.31
-					(e-lookup-external
-						(ext-decl @11.2-11.14 (ident "pf.Stdout.line!") (kind "value")))
+					(e-lookup-external @11.2-11.14
+						(module-idx "0")
+						(target-node-idx "0"))
 					(e-string @11.15-11.30
 						(e-literal @11.16-11.29 (string "Hello, world!")))))))
 	(s-import @6.1-6.17 (module "pf.Stdout") (qualifier "pf")

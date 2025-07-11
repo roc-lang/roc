@@ -11,6 +11,9 @@ foo =
 
     "on        (string 'onmo %')))
 ~~~
+# EXPECTED
+ASCII CONTROL CHARACTER - fuzz_crash_010.md:1:1:1:3
+INVALID STATEMENT - fuzz_crash_010.md:1:2:3:4
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -41,6 +44,14 @@ H{o,
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**fuzz_crash_010.md:1:2:3:4:**
+```roc
+H{o,
+    ]
+foo =
+```
+
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),Newline(1:1-1:1),
@@ -55,7 +66,7 @@ StringStart(5:5-5:6),StringPart(5:6-5:35),EndOfFile(5:35-5:35),
 	(malformed-header @1.1-1.3 (tag "missing_header"))
 	(statements
 		(e-record @1.2-2.7
-			(field (field "o") (optional false)))
+			(field (field "o")))
 		(s-decl @3.1-5.35
 			(p-ident @3.1-3.4 (raw "foo"))
 			(e-string @5.5-5.35

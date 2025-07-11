@@ -22,6 +22,10 @@ process = |list| {
 
 main! = |_| {}
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:40
+UNDEFINED VARIABLE - type_var_namespace.md:11:14:11:24
+UNDEFINED VARIABLE - type_var_namespace.md:11:34:11:52
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **|> Result** is not expected in an expression.
@@ -39,9 +43,23 @@ Here is the problematic code:
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**type_var_namespace.md:11:14:11:24:**
+```roc
+    result = List.first(list) |> Result.withDefault(elem)
+```
+             ^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `withDefault` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_var_namespace.md:11:34:11:52:**
+```roc
+    result = List.first(list) |> Result.withDefault(elem)
+```
+                                 ^^^^^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -151,14 +169,14 @@ main! = |_| {}
 					(e-call @11.14-11.30
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11.25-11.29
-							(pattern @5.12-5.16))))
+							(p-assign @5.12-5.16 (ident "list")))))
 				(s-expr @11.34-13.11
 					(e-call @11.34-11.58
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11.53-11.57
-							(pattern @7.5-7.9))))
+							(p-assign @7.5-7.9 (ident "elem")))))
 				(e-lookup-local @13.5-13.11
-					(pattern @11.5-11.11))))
+					(p-assign @11.5-11.11 (ident "result")))))
 		(annotation @5.1-5.8
 			(declared-type
 				(ty-fn @4.11-4.29 (effectful false)

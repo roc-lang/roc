@@ -14,10 +14,22 @@ match list {
     [x, y, z, .. as more] => x + y + z
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - list_destructure_variations.md:1:7:1:11
+UNUSED VARIABLE - list_destructure_variations.md:5:18:5:22
+UNUSED VARIABLE - list_destructure_variations.md:6:22:6:26
+UNUSED VARIABLE - list_destructure_variations.md:7:21:7:25
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `list` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_destructure_variations.md:1:7:1:11:**
+```roc
+match list {
+```
+      ^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``tail`` is not used anywhere in your code.
@@ -128,68 +140,74 @@ match list {
 		(branches
 			(branch
 				(patterns
-					(p-list @2.5-2.7 (degenerate false)
-						(patterns)))
+					(pattern (degenerate false)
+						(p-list @2.5-2.7
+							(patterns))))
 				(value
 					(e-int @2.11-2.12 (value "0"))))
 			(branch
 				(patterns
-					(p-list @3.5-3.8 (degenerate false)
-						(patterns
-							(p-assign @3.6-3.7 (ident "x")))))
+					(pattern (degenerate false)
+						(p-list @3.5-3.8
+							(patterns
+								(p-assign @3.6-3.7 (ident "x"))))))
 				(value
 					(e-lookup-local @3.12-3.13
-						(pattern @3.6-3.7))))
+						(p-assign @3.6-3.7 (ident "x")))))
 			(branch
 				(patterns
-					(p-list @4.5-4.20 (degenerate false)
-						(patterns
-							(p-assign @4.6-4.11 (ident "first"))
-							(p-assign @4.13-4.19 (ident "second")))))
+					(pattern (degenerate false)
+						(p-list @4.5-4.20
+							(patterns
+								(p-assign @4.6-4.11 (ident "first"))
+								(p-assign @4.13-4.19 (ident "second"))))))
 				(value
 					(e-binop @4.24-5.6 (op "add")
 						(e-lookup-local @4.24-4.29
-							(pattern @4.6-4.11))
+							(p-assign @4.6-4.11 (ident "first")))
 						(e-lookup-local @4.32-4.38
-							(pattern @4.13-4.19)))))
+							(p-assign @4.13-4.19 (ident "second"))))))
 			(branch
 				(patterns
-					(p-list @5.5-5.23 (degenerate false)
-						(patterns
-							(p-assign @5.6-5.10 (ident "head")))
-						(rest-at (index 1)
-							(p-assign @5.18-5.22 (ident "tail")))))
+					(pattern (degenerate false)
+						(p-list @5.5-5.23
+							(patterns
+								(p-assign @5.6-5.10 (ident "head")))
+							(rest-at (index 1)
+								(p-assign @5.18-5.22 (ident "tail"))))))
 				(value
 					(e-lookup-local @5.27-5.31
-						(pattern @5.6-5.10))))
+						(p-assign @5.6-5.10 (ident "head")))))
 			(branch
 				(patterns
-					(p-list @6.5-6.27 (degenerate false)
-						(patterns
-							(p-applied-tag @6.6-6.9)
-							(p-applied-tag @6.11-6.14))
-						(rest-at (index 2)
-							(p-assign @6.22-6.26 (ident "rest")))))
+					(pattern (degenerate false)
+						(p-list @6.5-6.27
+							(patterns
+								(p-applied-tag @6.6-6.9)
+								(p-applied-tag @6.11-6.14))
+							(rest-at (index 2)
+								(p-assign @6.22-6.26 (ident "rest"))))))
 				(value
 					(e-int @6.31-6.32 (value "3"))))
 			(branch
 				(patterns
-					(p-list @7.5-7.26 (degenerate false)
-						(patterns
-							(p-assign @7.6-7.7 (ident "x"))
-							(p-assign @7.9-7.10 (ident "y"))
-							(p-assign @7.12-7.13 (ident "z")))
-						(rest-at (index 3)
-							(p-assign @7.21-7.25 (ident "more")))))
+					(pattern (degenerate false)
+						(p-list @7.5-7.26
+							(patterns
+								(p-assign @7.6-7.7 (ident "x"))
+								(p-assign @7.9-7.10 (ident "y"))
+								(p-assign @7.12-7.13 (ident "z")))
+							(rest-at (index 3)
+								(p-assign @7.21-7.25 (ident "more"))))))
 				(value
 					(e-binop @7.30-8.2 (op "add")
 						(e-lookup-local @7.30-7.31
-							(pattern @7.6-7.7))
+							(p-assign @7.6-7.7 (ident "x")))
 						(e-binop @7.34-8.2 (op "add")
 							(e-lookup-local @7.34-7.35
-								(pattern @7.9-7.10))
+								(p-assign @7.9-7.10 (ident "y")))
 							(e-lookup-local @7.38-7.39
-								(pattern @7.12-7.13)))))))))
+								(p-assign @7.12-7.13 (ident "z"))))))))))
 ~~~
 # TYPES
 ~~~clojure

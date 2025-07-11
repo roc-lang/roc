@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 !isValid
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - unary_op_not.md:1:1:1:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **!isValid** is not expected in an expression.

@@ -64,6 +64,7 @@ pub fn renderReport(report: *const Report, writer: anytype, target: RenderTarget
 pub fn renderReportToTerminal(report: *const Report, writer: anytype, palette: ColorPalette, config: ReportingConfig) !void {
     // Render title with appropriate severity styling
     const title_color = switch (report.severity) {
+        .info => palette.info,
         .fatal => palette.error_color,
         .runtime_error => palette.error_color,
         .warning => palette.warning,
@@ -107,6 +108,7 @@ pub fn renderReportToMarkdown(report: *const Report, writer: anytype, config: Re
 /// Render a report to HTML.
 pub fn renderReportToHtml(report: *const Report, writer: anytype, config: ReportingConfig) !void {
     const title_class = switch (report.severity) {
+        .info => "info",
         .fatal => "error",
         .runtime_error => "error",
         .warning => "warning",

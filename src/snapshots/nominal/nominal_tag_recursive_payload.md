@@ -12,6 +12,8 @@ ConsList(a) := [Nil, Node(ConsList(a))]
 empty : ConsList(a)
 empty = ConsList.Nil
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -55,7 +57,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:17),NoSpaceDotUpperIdent(
 ~~~roc
 module [ConsList, empty]
 
-ConsList(a) : [Nil, Node(ConsList(a))]
+ConsList(a) := [Nil, Node(ConsList(a))]
 
 empty : ConsList(a)
 empty = Nil
@@ -65,12 +67,13 @@ empty = Nil
 (can-ir
 	(d-let
 		(p-assign @6.1-6.6 (ident "empty"))
-		(e-tag @6.9-6.21 (name "Nil"))
+		(e-nominal @6.9-6.17 (nominal "ConsList")
+			(e-tag @6.9-6.21 (name "Nil")))
 		(annotation @6.1-6.6
 			(declared-type
 				(ty-apply @5.9-5.20 (symbol "ConsList")
 					(ty-var @5.18-5.19 (name "a"))))))
-	(s-nominal-decl @3.1-3.40 (match "TODO")
+	(s-nominal-decl @3.1-3.40
 		(ty-header @3.1-3.12 (name "ConsList")
 			(ty-args
 				(ty-var @3.10-3.11 (name "a"))))
@@ -84,7 +87,12 @@ empty = Nil
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "[Nil]*")))
+		(patt @6.1-6.6 (type "ConsList(a)")))
+	(type_decls
+		(nominal @3.1-3.40 (type "ConsList(a)")
+			(ty-header @3.1-3.12 (name "ConsList")
+				(ty-args
+					(ty-var @3.10-3.11 (name "a"))))))
 	(expressions
-		(expr @6.9-6.21 (type "[Nil]*"))))
+		(expr @6.9-6.17 (type "ConsList(a)"))))
 ~~~

@@ -7,6 +7,43 @@ type=file
 ~~~roc
 modu:;::::::::::::::le[%
 ~~~
+# EXPECTED
+MISSING HEADER - fuzz_crash_002.md:1:1:1:6
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:5:1:7
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:6:1:8
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:7:1:9
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:8:1:10
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:9:1:11
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:10:1:12
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:11:1:13
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:12:1:14
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:13:1:15
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:14:1:16
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:15:1:17
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:16:1:18
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:17:1:19
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:18:1:20
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:19:1:21
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:20:1:23
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:24:1:25
+INVALID STATEMENT - fuzz_crash_002.md:1:5:1:7
+INVALID STATEMENT - fuzz_crash_002.md:1:6:1:8
+INVALID STATEMENT - fuzz_crash_002.md:1:7:1:9
+INVALID STATEMENT - fuzz_crash_002.md:1:8:1:10
+INVALID STATEMENT - fuzz_crash_002.md:1:9:1:11
+INVALID STATEMENT - fuzz_crash_002.md:1:10:1:12
+INVALID STATEMENT - fuzz_crash_002.md:1:11:1:13
+INVALID STATEMENT - fuzz_crash_002.md:1:12:1:14
+INVALID STATEMENT - fuzz_crash_002.md:1:13:1:15
+INVALID STATEMENT - fuzz_crash_002.md:1:14:1:16
+INVALID STATEMENT - fuzz_crash_002.md:1:15:1:17
+INVALID STATEMENT - fuzz_crash_002.md:1:16:1:18
+INVALID STATEMENT - fuzz_crash_002.md:1:17:1:19
+INVALID STATEMENT - fuzz_crash_002.md:1:18:1:20
+INVALID STATEMENT - fuzz_crash_002.md:1:19:1:21
+INVALID STATEMENT - fuzz_crash_002.md:1:20:1:23
+INVALID STATEMENT - fuzz_crash_002.md:1:21:1:24
+INVALID STATEMENT - fuzz_crash_002.md:1:23:1:25
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -245,73 +282,199 @@ modu:;::::::::::::::le[%
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_002.md:1:5:1:7:**
+```roc
+modu:;::::::::::::::le[%
+```
+    ^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_002.md:1:6:1:8:**
+```roc
+modu:;::::::::::::::le[%
+```
+     ^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_002.md:1:7:1:9:**
+```roc
+modu:;::::::::::::::le[%
+```
+      ^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_002.md:1:8:1:10:**
+```roc
+modu:;::::::::::::::le[%
+```
+       ^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_002.md:1:9:1:11:**
+```roc
+modu:;::::::::::::::le[%
+```
+        ^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_002.md:1:10:1:12:**
+```roc
+modu:;::::::::::::::le[%
+```
+         ^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_002.md:1:11:1:13:**
+```roc
+modu:;::::::::::::::le[%
+```
+          ^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_002.md:1:12:1:14:**
+```roc
+modu:;::::::::::::::le[%
+```
+           ^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**fuzz_crash_002.md:1:13:1:15:**
+```roc
+modu:;::::::::::::::le[%
+```
+            ^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_002.md:1:14:1:16:**
+```roc
+modu:;::::::::::::::le[%
+```
+             ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_002.md:1:15:1:17:**
+```roc
+modu:;::::::::::::::le[%
+```
+              ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_002.md:1:16:1:18:**
+```roc
+modu:;::::::::::::::le[%
+```
+               ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_002.md:1:17:1:19:**
+```roc
+modu:;::::::::::::::le[%
+```
+                ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_002.md:1:18:1:20:**
+```roc
+modu:;::::::::::::::le[%
+```
+                 ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_002.md:1:19:1:21:**
+```roc
+modu:;::::::::::::::le[%
+```
+                  ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_002.md:1:20:1:23:**
+```roc
+modu:;::::::::::::::le[%
+```
+                   ^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_002.md:1:21:1:24:**
+```roc
+modu:;::::::::::::::le[%
+```
+                    ^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_002.md:1:23:1:25:**
+```roc
+modu:;::::::::::::::le[%
+```
+                      ^^
+
 
 # TOKENS
 ~~~zig

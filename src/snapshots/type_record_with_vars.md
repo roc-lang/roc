@@ -12,6 +12,8 @@ getField = |record| record.field
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
@@ -80,7 +82,7 @@ main! = |_| {}
 			(e-dot-access @4.21-6.6 (field "field")
 				(receiver
 					(e-lookup-local @4.21-4.27
-						(pattern @4.13-4.19)))))
+						(p-assign @4.13-4.19 (ident "record"))))))
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.39 (effectful false)

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 [1, 2, "hello"]
 ~~~
+# EXPECTED
+INCOMPATIBLE LIST ELEMENTS - list_type_err.md:1:5:1:5
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The second and third elements in this list have incompatible types:

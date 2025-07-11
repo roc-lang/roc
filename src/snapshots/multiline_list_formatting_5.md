@@ -8,6 +8,8 @@ type=expr
 [1, 2, # Foo
   3]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

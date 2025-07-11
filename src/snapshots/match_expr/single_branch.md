@@ -9,10 +9,19 @@ match value {
     x => x + 1
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - single_branch.md:1:7:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `value` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**single_branch.md:1:7:1:12:**
+```roc
+match value {
+```
+      ^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -46,11 +55,12 @@ match value {
 		(branches
 			(branch
 				(patterns
-					(p-assign @2.5-2.6 (ident "x") (degenerate false)))
+					(pattern (degenerate false)
+						(p-assign @2.5-2.6 (ident "x"))))
 				(value
 					(e-binop @2.10-3.2 (op "add")
 						(e-lookup-local @2.10-2.11
-							(pattern @2.5-2.6))
+							(p-assign @2.5-2.6 (ident "x")))
 						(e-int @2.14-2.15 (value "1"))))))))
 ~~~
 # TYPES

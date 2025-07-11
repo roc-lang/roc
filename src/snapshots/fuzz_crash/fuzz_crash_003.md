@@ -7,6 +7,9 @@ type=file
 ~~~roc
 = "te
 ~~~
+# EXPECTED
+UNCLOSED STRING - fuzz_crash_003.md:1:1:1:4
+INVALID STATEMENT - fuzz_crash_003.md:1:3:1:6
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -30,6 +33,13 @@ Here is the problematic code:
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_003.md:1:3:1:6:**
+```roc
+= "te
+```
+  ^^^
+
 
 # TOKENS
 ~~~zig
