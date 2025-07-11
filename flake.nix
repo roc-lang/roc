@@ -1,5 +1,5 @@
 {
-  description = "Roc flake";
+  description = "Roc flake for the old compiler, written in Rust.";
 
   inputs = {
     nixpkgs.url =
