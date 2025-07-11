@@ -462,3 +462,195 @@ test "NodeStore round trip - TypeAnno" {
         return error.IncompleteTypeAnnoTestCoverage;
     }
 }
+
+test "NodeStore round trip - Expr" {
+    const gpa = testing.allocator;
+    var store = NodeStore.initCapacity(gpa, NodeStore.AST_EXPR_NODE_COUNT);
+    defer store.deinit();
+
+    var expected_test_count: usize = NodeStore.AST_EXPR_NODE_COUNT;
+
+    var expressions = std.ArrayList(AST.Expr).init(gpa);
+    defer expressions.deinit();
+
+    try expressions.append(AST.Expr{
+        .int = .{
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .frac = .{
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .single_quote = .{
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .string_part = .{
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .string = .{
+            .parts = AST.Expr.Span{ .span = rand_span() },
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .list = .{
+            .items = AST.Expr.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .tuple = .{
+            .items = AST.Expr.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .record = .{
+            .ext = rand_idx(AST.Expr.Idx),
+            .fields = AST.RecordField.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .tag = .{
+            .qualifiers = AST.Token.Span{ .span = rand_span() },
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .lambda = .{
+            .args = AST.Pattern.Span{ .span = rand_span() },
+            .region = rand_region(),
+            .body = rand_idx(AST.Expr.Idx),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .apply = .{
+            .@"fn" = rand_idx(AST.Expr.Idx),
+            .args = AST.Expr.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .record_updater = .{
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .field_access = .{
+            .left = rand_idx(AST.Expr.Idx),
+            .right = rand_idx(AST.Expr.Idx),
+            .operator = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .local_dispatch = .{
+            .left = rand_idx(AST.Expr.Idx),
+            .right = rand_idx(AST.Expr.Idx),
+            .operator = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .bin_op = .{
+            .left = rand_idx(AST.Expr.Idx),
+            .right = rand_idx(AST.Expr.Idx),
+            .operator = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .suffix_single_question = .{
+            .expr = rand_idx(AST.Expr.Idx),
+            .operator = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .unary_op = .{
+            .expr = rand_idx(AST.Expr.Idx),
+            .operator = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .if_then_else = .{
+            .@"else" = rand_idx(AST.Expr.Idx),
+            .condition = rand_idx(AST.Expr.Idx),
+            .then = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .match = .{
+            .branches = AST.MatchBranch.Span{ .span = rand_span() },
+            .expr = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .ident = .{
+            .qualifiers = AST.Token.Span{ .span = rand_span() },
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .dbg = .{
+            .expr = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .record_builder = .{
+            .fields = rand_idx(AST.RecordField.Idx),
+            .mapper = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(AST.Expr{
+        .ellipsis = .{ .region = rand_region() },
+    });
+    try expressions.append(AST.Expr{
+        .block = .{
+            .region = rand_region(),
+            .statements = AST.Statement.Span{ .span = rand_span() },
+        },
+    });
+
+    // We don't include .malformed variant
+    expected_test_count -= 1;
+
+    for (expressions.items) |expr| {
+        const idx = store.addExpr(expr);
+        const retrieved = store.getExpr(idx);
+
+        testing.expectEqualDeep(expr, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal:  {any}\n\n", .{expr});
+            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
+            return err;
+        };
+    }
+
+    const actual_test_count = expressions.items.len;
+    if (actual_test_count != expected_test_count) {
+        std.debug.print("AST.Expr test coverage insufficient! Expected {d} test cases but found {d}.\n", .{ expected_test_count, actual_test_count });
+        std.debug.print("Please add or remove test cases for missing expression variants.\n", .{});
+        return error.IncompleteExprTestCoverage;
+    }
+}
