@@ -854,7 +854,13 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
         .tag_union => |tu| {
             node.tag = .ty_union;
             node.region = tu.region;
-            node.data.lhs = tu.tags.span.start;
+
+            // Store all tag_union data in flat format:
+            // [tags.span.start, tags.span.len, open_anno?]
+            const data_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, tu.tags.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, tu.tags.span.len) catch |err| exitOnOom(err);
+
             var rhs = AST.TypeAnno.TagUnionRhs{
                 .open = 0,
                 .tags_len = @as(u31, @intCast(tu.tags.span.len)),
@@ -863,6 +869,8 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
                 rhs.open = 1;
                 store.extra_data.append(store.gpa, @intFromEnum(a)) catch |err| exitOnOom(err);
             }
+
+            node.data.lhs = data_start;
             node.data.rhs = @as(u32, @bitCast(rhs));
         },
         .tuple => |t| {
@@ -1599,14 +1607,22 @@ pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnn
         },
         .ty_union => {
             const rhs = @as(AST.TypeAnno.TagUnionRhs, @bitCast(node.data.rhs));
-            const tags_ed_end = node.data.lhs + rhs.tags_len;
+
+            // Read flat data format: [tags.span.start, tags.span.len, open_anno?]
+            var extra_data_pos = node.data.lhs;
+            const tags_start = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const tags_len = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+
+            const open_anno = if (rhs.open == 1) @as(AST.TypeAnno.Idx, @enumFromInt(store.extra_data.items[extra_data_pos])) else null;
 
             return .{ .tag_union = .{
                 .region = node.region,
-                .open_anno = if (rhs.open == 1) @enumFromInt(store.extra_data.items[tags_ed_end]) else null,
+                .open_anno = open_anno,
                 .tags = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = @as(u32, @intCast(rhs.tags_len)),
+                    .start = tags_start,
+                    .len = tags_len,
                 } },
             } };
         },
