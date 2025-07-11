@@ -544,17 +544,6 @@ Some(a) : { foo : Ok(a), bar : Something }
 The type ``Ok`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:43:19:43:24:**
-```roc
-Some(a) : { foo : Ok(a), bar : Something }
-```
-                  ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Ok`` is not declared in this scope.
-
-This type is referenced here:
 **syntax_grab_bag.md:45:8:45:10:**
 ```roc
 	foo : Ok(a), # After field
@@ -577,17 +566,6 @@ This type is referenced here:
 The type ``Ok`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:45:8:45:13:**
-```roc
-	foo : Ok(a), # After field
-```
-       ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Ok`` is not declared in this scope.
-
-This type is referenced here:
 **syntax_grab_bag.md:52:4:52:6:**
 ```roc
 			Ok(a), # Comment after pattern record field
@@ -604,17 +582,6 @@ This type is referenced here:
 	bar : Something, # Another after pattern record field
 ```
        ^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Ok`` is not declared in this scope.
-
-This type is referenced here:
-**syntax_grab_bag.md:52:4:52:9:**
-```roc
-			Ok(a), # Comment after pattern record field
-```
-   ^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -1013,29 +980,6 @@ It is of type:
 
 But you are trying to use it as:
     _* -> *_
-
-**INCOMPATIBLE LIST ELEMENTS**
-The first two elements in this list have incompatible types:
-**syntax_grab_bag.md:167:3:**
-```roc
-		add_one(
-			dbg # After dbg in list
-				number, # after dbg expr as arg
-		), # Comment one
-		456, # Comment two
-```
-  ^^^
-
-The first element has this type:
-    _U64_
-
-However, the second element has this type:
-    _Num(*)_
-
-All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -2309,7 +2253,7 @@ expect {
 				(s-crash @162.2-163.49 (msg "Unreachable!"))
 				(s-let @164.2-164.31
 					(p-assign @164.2-164.18 (ident "tag_with_payload"))
-					(e-tag @164.21-164.31 (name "Ok")
+					(e-tag @164.21-164.23 (name "Ok")
 						(args
 							(e-lookup-local @164.24-164.30
 								(p-assign @146.2-147.8 (ident "number"))))))
@@ -2345,7 +2289,7 @@ expect {
 								(e-lookup-local @178.42-178.45
 									(p-assign @148.2-148.5 (ident "tag"))))
 							(field (name "qux")
-								(e-tag @178.52-178.61 (name "Ok")
+								(e-tag @178.52-178.54 (name "Ok")
 									(args
 										(e-lookup-local @178.55-178.60
 											(p-assign @145.2-145.7 (ident "world"))))))
@@ -2360,7 +2304,7 @@ expect {
 								(e-literal @179.17-179.22 (string "World")))
 							(e-lookup-local @179.25-179.28
 								(p-assign @148.2-148.5 (ident "tag")))
-							(e-tag @179.30-179.39 (name "Ok")
+							(e-tag @179.30-179.32 (name "Ok")
 								(args
 									(e-lookup-local @179.33-179.38
 										(p-assign @145.2-145.7 (ident "world")))))
@@ -2382,7 +2326,7 @@ expect {
 							(e-string @182.3-182.10
 								(e-literal @182.4-182.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @184.3-184.12 (name "Ok")
+							(e-tag @184.3-184.5 (name "Ok")
 								(args
 									(e-lookup-local @184.6-184.11
 										(p-assign @145.2-145.7 (ident "world")))))
@@ -2402,7 +2346,7 @@ expect {
 						(e-binop @188.18-188.74 (op "or")
 							(e-binop @188.18-188.43 (op "gt")
 								(e-binop @188.18-188.34 (op "null_coalesce")
-									(e-tag @188.18-188.26 (name "Err")
+									(e-tag @188.18-188.21 (name "Err")
 										(args
 											(e-runtime-error (tag "ident_not_in_scope"))))
 									(e-int @188.30-188.32 (value "12")))

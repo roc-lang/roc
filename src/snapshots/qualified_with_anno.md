@@ -59,7 +59,7 @@ value = TagA
 (can-ir
 	(d-let
 		(p-assign @6.1-6.6 (ident "value"))
-		(e-nominal @6.9-6.20 (nominal "MyType")
+		(e-nominal @6.9-6.15 (nominal "MyType")
 			(e-tag @6.9-6.20 (name "TagA")))
 		(annotation @6.1-6.6
 			(declared-type
@@ -79,5 +79,5 @@ value = TagA
 		(nominal @3.1-3.23 (type "MyType")
 			(ty-header @3.1-3.7 (name "MyType"))))
 	(expressions
-		(expr @6.9-6.20 (type "MyType"))))
+		(expr @6.9-6.15 (type "MyType"))))
 ~~~

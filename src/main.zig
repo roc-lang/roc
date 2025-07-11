@@ -177,6 +177,17 @@ fn formatElapsedTime(writer: anytype, elapsed_ns: u64) !void {
     try writer.print("{d:.1} ms", .{elapsed_ms_float});
 }
 
+fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noreturn {
+    stderr.print("Failed to check {s}: ", .{path}) catch {};
+    switch (err) {
+        error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
+        error.AccessDenied => stderr.print("Access denied\n", .{}) catch {},
+        error.FileReadError => stderr.print("Could not read file\n", .{}) catch {},
+        else => stderr.print("{}\n", .{err}) catch {},
+    }
+    std.process.exit(1);
+}
+
 fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -199,17 +210,9 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     } else null;
 
     // Process the file and get Reports
-    var result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path, if (cache_manager) |*cm| cm else null) catch |err| {
-        stderr.print("Failed to check {s}: ", .{args.path}) catch {};
-        switch (err) {
-            error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
-            error.AccessDenied => stderr.print("Access denied\n", .{}) catch {},
-            error.FileReadError => stderr.print("Could not read file\n", .{}) catch {},
-            else => stderr.print("{}\n", .{err}) catch {},
-        }
-        std.process.exit(1);
-    };
-    defer result.deinit(gpa);
+    var process_result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path, if (cache_manager) |*cm| cm else null, args.time) catch |err| handleProcessFileError(err, stderr, args.path);
+
+    defer process_result.deinit(gpa);
 
     const elapsed = timer.read();
 
@@ -221,10 +224,10 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     }
 
     // Handle cached results vs fresh compilation results differently
-    if (result.was_cached) {
+    if (process_result.was_cached) {
         // For cached results, use the stored diagnostic counts
-        const total_errors = result.error_count;
-        const total_warnings = result.warning_count;
+        const total_errors = process_result.error_count;
+        const total_warnings = process_result.warning_count;
 
         if (total_errors > 0 or total_warnings > 0) {
             stderr.print("Found {} error(s) and {} warning(s) in ", .{
@@ -241,13 +244,13 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         }
     } else {
         // For fresh compilation, process and display reports normally
-        if (result.reports.len > 0) {
+        if (process_result.reports.len > 0) {
             var fatal_errors: usize = 0;
             var runtime_errors: usize = 0;
             var warnings: usize = 0;
 
             // Render each report
-            for (result.reports) |*report| {
+            for (process_result.reports) |*report| {
 
                 // Render the diagnostic report to stderr
                 reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
@@ -277,12 +280,36 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
             }) catch {};
             formatElapsedTime(stderr, elapsed) catch {};
             stderr.print(" for {s}.\n", .{args.path}) catch {};
+
             std.process.exit(1);
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};
             stdout.print(" for {s}\n", .{args.path}) catch {};
         }
+    }
+
+    printTimingBreakdown(stderr, process_result.timing);
+}
+
+fn printTimingBreakdown(writer: anytype, timing: ?coordinate_simple.TimingInfo) void {
+    if (timing) |t| {
+        writer.print("\nTiming breakdown:\n", .{}) catch {};
+        writer.print("  tokenize + parse:             ", .{}) catch {};
+        formatElapsedTime(writer, t.tokenize_parse_ns) catch {};
+        writer.print("\n", .{}) catch {};
+        writer.print("  canonicalize:                 ", .{}) catch {};
+        formatElapsedTime(writer, t.canonicalize_ns) catch {};
+        writer.print("\n", .{}) catch {};
+        writer.print("  can diagnostics:              ", .{}) catch {};
+        formatElapsedTime(writer, t.canonicalize_diagnostics_ns) catch {};
+        writer.print("\n", .{}) catch {};
+        writer.print("  type checking:                ", .{}) catch {};
+        formatElapsedTime(writer, t.type_checking_ns) catch {};
+        writer.print("\n", .{}) catch {};
+        writer.print("  type checking diagnostics:    ", .{}) catch {};
+        formatElapsedTime(writer, t.check_diagnostics_ns) catch {};
+        writer.print("\n", .{}) catch {};
     }
 }
 

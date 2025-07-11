@@ -25,10 +25,10 @@ test {
     // If it went up, please make sure your changes are absolutely required!
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(24, @sizeOf(Content));
-    try std.testing.expectEqual(8, @sizeOf(Alias));
+    try std.testing.expectEqual(12, @sizeOf(Alias));
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
-    try std.testing.expectEqual(12, @sizeOf(NominalType));
+    try std.testing.expectEqual(16, @sizeOf(NominalType));
 }
 
 /// A type variable
@@ -47,9 +47,30 @@ pub const Var = enum(u32) {
 /// A type descriptor
 pub const Descriptor = struct { content: Content, rank: Rank, mark: Mark };
 
-/// A type variable rank
+/// In general, the rank tracks the number of let-bindings a variable is "under".
+/// Top-level definitions have rank 1. A let inside a top-level definition gets rank 2, and so on.
+///
+/// An example:
+/// ```
+/// foo = 3
+///
+/// plus_five = |arg| {
+///    x = 5
+///    arg + x
+/// }
+/// ```
+/// Here the rank of `foo` is 1 because it is at the top level and the rank of `x` is 2 because it is under or inside `plus_five`.
+///
+/// Imported variables get rank 2.
+///
+/// Rank 0 is special, it is used for variables that are generalized (generic).
+///
+/// Keeping track of ranks makes type inference faster.
+///
 pub const Rank = enum(u4) {
+    /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
+
     top_level = 1,
     _,
 
@@ -145,43 +166,7 @@ pub const Content = union(enum) {
 /// A named alias to a different type
 pub const Alias = struct {
     ident: TypeIdent,
-    num_args: u32,
-
-    /// Get the backing var for this alias given the alias var
-    pub fn getBackingVar(self: Alias, alias_var: Var) Var {
-        _ = self;
-        const backing_var = @as(Var, @enumFromInt(@intFromEnum(alias_var) + 1));
-
-        // Debug assertion: verify the backing var index is reasonable
-        if (std.debug.runtime_safety) {
-            std.debug.assert(@intFromEnum(backing_var) > @intFromEnum(alias_var));
-        }
-
-        return backing_var;
-    }
-
-    /// Iterator for getting all argument vars
-    pub const ArgIterator = struct {
-        alias_var: Var,
-        num_args: u32,
-        current: u32,
-
-        pub fn next(self: *ArgIterator) ?Var {
-            if (self.current >= self.num_args) return null;
-            const result = @as(Var, @enumFromInt(@intFromEnum(self.alias_var) + 2 + self.current));
-            self.current += 1;
-            return result;
-        }
-    };
-
-    /// Get an iterator over all argument vars
-    pub fn argIterator(self: Alias, alias_var: Var) ArgIterator {
-        return ArgIterator{
-            .alias_var = alias_var,
-            .num_args = self.num_args,
-            .current = 0,
-        };
-    }
+    vars: Var.SafeList.NonEmptySpan,
 };
 
 /// Represents an ident of a type
@@ -560,46 +545,10 @@ pub const Num = union(enum) {
 /// A nominal user-defined type
 pub const NominalType = struct {
     ident: TypeIdent,
-    num_args: u32,
+    vars: Var.SafeList.NonEmptySpan,
     /// The full module path where this nominal type was originally defined
     /// (e.g., "Json.Decode" or "mypackage.Data.Person")
     origin_module: Ident.Idx,
-
-    /// Get the backing var for this nominal type given the nominal type var
-    pub fn getBackingVar(self: NominalType, nominal_var: Var) Var {
-        _ = self;
-        const backing_var = @as(Var, @enumFromInt(@intFromEnum(nominal_var) + 1));
-
-        // Debug assertion: verify the backing var index is reasonable
-        if (std.debug.runtime_safety) {
-            std.debug.assert(@intFromEnum(backing_var) > @intFromEnum(nominal_var));
-        }
-
-        return backing_var;
-    }
-
-    /// Iterator for getting all argument vars
-    pub const ArgIterator = struct {
-        nominal_var: Var,
-        num_args: u32,
-        current: u32,
-
-        pub fn next(self: *ArgIterator) ?Var {
-            if (self.current >= self.num_args) return null;
-            const result = @as(Var, @enumFromInt(@intFromEnum(self.nominal_var) + 2 + self.current));
-            self.current += 1;
-            return result;
-        }
-    };
-
-    /// Get an iterator over all argument vars
-    pub fn argIterator(self: NominalType, nominal_var: Var) ArgIterator {
-        return ArgIterator{
-            .nominal_var = nominal_var,
-            .num_args = self.num_args,
-            .current = 0,
-        };
-    }
 };
 
 // functions //
