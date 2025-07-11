@@ -21,6 +21,11 @@ fn rand_token_idx() AST.Token.Idx {
     return rand.random().int(u32);
 }
 
+/// Generate a random identifier index.
+fn rand_ident_idx() base.Ident.Idx {
+    return @bitCast(rand.random().int(u32));
+}
+
 /// Helper to create a `TokenizedRegion` from raw start and end positions.
 fn rand_region() AST.TokenizedRegion {
     const start = rand.random().int(u32);
@@ -358,5 +363,102 @@ test "NodeStore round trip - Pattern" {
         std.debug.print("Pattern test coverage insufficient! Expected {d} test cases but found {d}.\n", .{ expected_test_count, actual_test_count });
         std.debug.print("Please add or remove test cases for missing pattern variants.\n", .{});
         return error.IncompletePatternTestCoverage;
+    }
+}
+
+test "NodeStore round trip - TypeAnno" {
+    const gpa = testing.allocator;
+    var store = NodeStore.initCapacity(gpa, NodeStore.AST_TYPE_ANNO_NODE_COUNT);
+    defer store.deinit();
+
+    var expected_test_count: usize = NodeStore.AST_TYPE_ANNO_NODE_COUNT;
+
+    var ty_annos = std.ArrayList(AST.TypeAnno).init(gpa);
+    defer ty_annos.deinit();
+
+    try ty_annos.append(AST.TypeAnno{
+        .apply = .{
+            .args = AST.TypeAnno.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(AST.TypeAnno{
+        .ty_var = .{
+            .region = rand_region(),
+            .tok = rand_token_idx(),
+        },
+    });
+    try ty_annos.append(AST.TypeAnno{
+        .underscore = .{
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(AST.TypeAnno{
+        .ty = .{
+            .qualifiers = AST.Token.Span{ .span = rand_span() },
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try ty_annos.append(AST.TypeAnno{
+        .mod_ty = .{
+            .mod_ident = rand_ident_idx(),
+            .ty_ident = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(AST.TypeAnno{
+        .tag_union = .{
+            .open_anno = rand_idx(AST.TypeAnno.Idx),
+            .tags = AST.TypeAnno.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(AST.TypeAnno{
+        .tuple = .{
+            .annos = AST.TypeAnno.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(AST.TypeAnno{
+        .record = .{
+            .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(AST.TypeAnno{
+        .@"fn" = .{
+            .args = AST.TypeAnno.Span{ .span = rand_span() },
+            .ret = rand_idx(AST.TypeAnno.Idx),
+            .effectful = true,
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(AST.TypeAnno{
+        .parens = .{
+            .anno = rand_idx(AST.TypeAnno.Idx),
+            .region = rand_region(),
+        },
+    });
+
+    // We don't include .malformed variant
+    expected_test_count -= 1;
+
+    for (ty_annos.items) |anno| {
+        const idx = store.addTypeAnno(anno);
+        const retrieved = store.getTypeAnno(idx);
+
+        testing.expectEqualDeep(anno, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal:  {any}\n\n", .{anno});
+            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
+            return err;
+        };
+    }
+
+    const actual_test_count = ty_annos.items.len;
+    if (actual_test_count != expected_test_count) {
+        std.debug.print("TypeAnno test coverage insufficient! Expected {d} test cases but found {d}.\n", .{ expected_test_count, actual_test_count });
+        std.debug.print("Please add or remove test cases for missing type annotation variants.\n", .{});
+        return error.IncompleteTypeAnnoTestCoverage;
     }
 }

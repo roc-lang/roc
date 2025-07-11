@@ -42,6 +42,8 @@ pub const AST_HEADER_NODE_COUNT = 6;
 pub const AST_STATEMENT_NODE_COUNT = 12;
 /// Count of the pattern nodes in the AST
 pub const AST_PATTERN_NODE_COUNT = 14;
+/// Count of the type annotation nodes in the AST
+pub const AST_TYPE_ANNO_NODE_COUNT = 11;
 
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens
