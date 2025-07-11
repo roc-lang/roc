@@ -119,22 +119,22 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     var exit_code: u8 = 0;
 
     if (args.check) {
-        var files_to_reformat = std.ArrayList([]const u8).init(gpa);
-        defer files_to_reformat.deinit();
+        var unformatted_files = std.ArrayList([]const u8).init(gpa);
+        defer unformatted_files.deinit();
 
         for (args.paths) |path| {
             var result = try fmt.formatPath(gpa, arena, std.fs.cwd(), path, true);
             defer result.deinit();
-            if (result.files_to_reformat) |files| {
-                try files_to_reformat.appendSlice(files.items);
+            if (result.unformatted_files) |files| {
+                try unformatted_files.appendSlice(files.items);
             }
             failure_count += result.failure;
         }
 
         elapsed = timer.read();
-        if (files_to_reformat.items.len > 0) {
+        if (unformatted_files.items.len > 0) {
             try stdout.writer().print("The following file(s) failed `roc format --check`:\n", .{});
-            for (files_to_reformat.items) |file_name| {
+            for (unformatted_files.items) |file_name| {
                 try stdout.writer().print("    {s}\n", .{file_name});
             }
             try stdout.writer().print("You can fix this with `roc format FILENAME.roc`.\n", .{});
