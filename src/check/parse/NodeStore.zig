@@ -38,6 +38,8 @@ scratch_where_clauses: base.Scratch(AST.WhereClause.Idx),
 ///
 /// Count of the header nodes in the AST
 pub const AST_HEADER_NODE_COUNT = 6;
+/// Count of the statement nodes in the AST
+pub const AST_STATEMENT_NODE_COUNT = 12;
 
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens

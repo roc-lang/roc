@@ -34,7 +34,7 @@ fn rand_region() AST.TokenizedRegion {
 /// Helper to create a `DataSpan` from raw start and length positions.
 fn rand_span() base.DataSpan {
     const start = rand.random().int(u32);
-    const len = rand.random().int(u32);
+    const len = rand.random().int(u30); // Constrain len to fit within u30 (used by ImportRhs.num_exposes)
     return base.DataSpan{
         .start = start,
         .len = len,
@@ -111,5 +111,145 @@ test "NodeStore round trip - Headers" {
         std.debug.print("Header test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.AST_HEADER_NODE_COUNT, actual_test_count });
         std.debug.print("Please add test cases for missing header variants.\n", .{});
         return error.IncompleteHeaderTestCoverage;
+    }
+}
+
+test "NodeStore round trip - Statement" {
+    const gpa = testing.allocator;
+    var store = NodeStore.initCapacity(gpa, NodeStore.AST_STATEMENT_NODE_COUNT);
+    defer store.deinit();
+
+    var statements = std.ArrayList(AST.Statement).init(gpa);
+    defer statements.deinit();
+
+    try statements.append(AST.Statement{
+        .decl = .{
+            .body = rand_idx(AST.Expr.Idx),
+            .pattern = rand_idx(AST.Pattern.Idx),
+            .region = rand_region(),
+        },
+    });
+    try statements.append(AST.Statement{
+        .@"var" = .{
+            .name = rand_token_idx(),
+            .body = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try statements.append(AST.Statement{
+        .expr = .{
+            .expr = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try statements.append(AST.Statement{
+        .crash = .{
+            .expr = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try statements.append(AST.Statement{
+        .dbg = .{
+            .expr = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try statements.append(AST.Statement{
+        .expect = .{
+            .body = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try statements.append(AST.Statement{
+        .@"for" = .{
+            .patt = rand_idx(AST.Pattern.Idx),
+            .expr = rand_idx(AST.Expr.Idx),
+            .body = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try statements.append(AST.Statement{
+        .@"return" = .{
+            .expr = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    // Simple import with no tokens
+    try statements.append(AST.Statement{
+        .import = .{
+            .alias_tok = null,
+            .module_name_tok = rand_token_idx(),
+            .qualifier_tok = null,
+            .region = rand_region(),
+            .exposes = AST.ExposedItem.Span{ .span = rand_span() },
+        },
+    });
+    // Import with alias
+    try statements.append(AST.Statement{
+        .import = .{
+            .alias_tok = rand_token_idx(),
+            .module_name_tok = rand_token_idx(),
+            .qualifier_tok = null,
+            .region = rand_region(),
+            .exposes = AST.ExposedItem.Span{ .span = rand_span() },
+        },
+    });
+    // Import with qualifier but no alias
+    try statements.append(AST.Statement{
+        .import = .{
+            .alias_tok = null,
+            .module_name_tok = rand_token_idx(),
+            .qualifier_tok = rand_token_idx(),
+            .region = rand_region(),
+            .exposes = AST.ExposedItem.Span{ .span = rand_span() },
+        },
+    });
+    // Import with both qualifier and alias
+    try statements.append(AST.Statement{
+        .import = .{
+            .alias_tok = rand_token_idx(),
+            .module_name_tok = rand_token_idx(),
+            .qualifier_tok = rand_token_idx(),
+            .region = rand_region(),
+            .exposes = AST.ExposedItem.Span{ .span = rand_span() },
+        },
+    });
+    try statements.append(AST.Statement{
+        .type_decl = .{
+            .anno = rand_idx(AST.TypeAnno.Idx),
+            .header = rand_idx(AST.TypeHeader.Idx),
+            .kind = AST.TypeDeclKind.nominal,
+            .region = rand_region(),
+            .where = rand_idx(AST.Collection.Idx),
+        },
+    });
+    try statements.append(AST.Statement{
+        .type_anno = .{
+            .name = rand_token_idx(),
+            .anno = rand_idx(AST.TypeAnno.Idx),
+            .where = rand_idx(AST.Collection.Idx),
+            .region = rand_region(),
+        },
+    });
+
+    for (statements.items) |statement| {
+        const idx = store.addStatement(statement);
+        const retrieved = store.getStatement(idx);
+
+        testing.expectEqualDeep(statement, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal:  {any}\n\n", .{statement});
+            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
+            return err;
+        };
+    }
+
+    // Note + 1 here because we don't include the malformed header type
+    // there is an assertion if we use store.addStatement telling us to use addMalformed instead
+    const actual_test_count = statements.items.len + 1;
+
+    if (actual_test_count < NodeStore.AST_STATEMENT_NODE_COUNT) {
+        std.debug.print("Statement test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.AST_STATEMENT_NODE_COUNT, actual_test_count });
+        std.debug.print("Please add test cases for missing statement variants.\n", .{});
+        return error.IncompleteStatementTestCoverage;
     }
 }
