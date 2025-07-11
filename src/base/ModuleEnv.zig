@@ -32,16 +32,16 @@ exposed_nodes: collections.SafeStringHashMap(u16),
 /// this is a more compact representation at the expense of extra computation only when generating error diagnostics.
 line_starts: collections.SafeList(u32),
 
-/// The source code of this module. Owned by ModuleEnv.
+/// The source code of this module.
 source: []const u8 = "",
 
-/// Whether the source is owned by this ModuleEnv (should be freed in deinit)
+/// Whether the source code memory is owned by this ModuleEnv (and thus will be freed in deinit)
 owns_source: bool = false,
 
-/// The module path (filename). Owned by ModuleEnv.
+/// The module path (filename)
 module_path: []const u8 = "",
 
-/// Whether the module_path is owned by this ModuleEnv (should be freed in deinit)
+/// Whether the module_path memory is owned by this ModuleEnv (and thus will be freed in deinit)
 owns_module_path: bool = false,
 
 /// Initialize the module environment.
