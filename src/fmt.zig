@@ -190,6 +190,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     }
 }
 
+/// Format the contents of stdin and output the result to stdout
 pub fn formatStdin(gpa: std.mem.Allocator) !void {
     const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
     defer gpa.free(contents);
