@@ -19,7 +19,7 @@ const reporting = @import("../../reporting.zig");
 
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
-const Token = tokenize.Token;
+pub const Token = tokenize.Token;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const exitOnOom = collections.utils.exitOnOom;
 

@@ -33,6 +33,12 @@ scratch_anno_record_fields: base.Scratch(AST.AnnoRecordField.Idx),
 scratch_exposed_items: base.Scratch(AST.ExposedItem.Idx),
 scratch_where_clauses: base.Scratch(AST.WhereClause.Idx),
 
+/// Compile-time constants for union variant counts to ensure we don't miss cases
+/// when adding/removing variants from AST unions. Update these when modifying the unions.
+///
+/// Count of the header nodes in the AST
+pub const AST_HEADER_NODE_COUNT = 6;
+
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens
 /// very rarely.
