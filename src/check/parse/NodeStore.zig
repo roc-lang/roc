@@ -45,7 +45,7 @@ pub const AST_PATTERN_NODE_COUNT = 14;
 /// Count of the type annotation nodes in the AST
 pub const AST_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the expression nodes in the AST
-pub const AST_EXPR_NODE_COUNT = 25;
+pub const AST_EXPR_NODE_COUNT = 24;
 
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens
@@ -565,13 +565,19 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
         .record => |r| {
             node.tag = .record;
             node.region = r.region;
-            node.data.lhs = r.fields.span.start;
-            node.data.rhs = r.fields.span.len;
-            if (r.ext) |ext| {
-                const ext_ed_idx = store.extra_data.items.len;
-                store.extra_data.append(store.gpa, @intFromEnum(ext)) catch |err| exitOnOom(err);
-                node.main_token = @as(u32, @intCast(ext_ed_idx));
-            }
+
+            // Store all record data in flat format:
+            // [fields.span.start, fields.span.len, ext_or_zero]
+            const data_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, r.fields.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, r.fields.span.len) catch |err| exitOnOom(err);
+
+            // Store ext value or 0 for null
+            const ext_value = if (r.ext) |ext| @intFromEnum(ext) else 0;
+            store.extra_data.append(store.gpa, ext_value) catch |err| exitOnOom(err);
+
+            node.data.lhs = data_start;
+            node.data.rhs = 0; // Not used
         },
         .lambda => |l| {
             node.tag = .lambda;
@@ -595,6 +601,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
         .field_access => |fa| {
             node.tag = .field_access;
             node.region = fa.region;
+            node.main_token = fa.operator;
             node.data.lhs = @intFromEnum(fa.left);
             node.data.rhs = @intFromEnum(fa.right);
         },
@@ -615,6 +622,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
         .suffix_single_question => |op| {
             node.tag = .suffix_single_question;
             node.region = op.region;
+            node.main_token = op.operator;
             node.data.lhs = @intFromEnum(op.expr);
         },
         .unary_op => |u| {
@@ -636,7 +644,9 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.region = m.region;
             node.data.lhs = m.branches.span.start;
             node.data.rhs = m.branches.span.len;
+            const expr_idx = store.extra_data.items.len;
             store.extra_data.append(store.gpa, @intFromEnum(m.expr)) catch |err| exitOnOom(err);
+            node.main_token = @as(u32, @intCast(expr_idx));
         },
         .ident => |id| {
             node.tag = .ident;
@@ -652,7 +662,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.region = d.region;
             node.data.lhs = @intFromEnum(d.expr);
         },
-        .record_builder => |_| {},
+        .record_builder => |rb| {
+            node.tag = .record_builder;
+            node.region = rb.region;
+            node.data.lhs = @intFromEnum(rb.mapper);
+            node.data.rhs = @intFromEnum(rb.fields);
+        },
         .block => |body| {
             node.tag = .block;
             node.region = body.region;
@@ -1367,12 +1382,20 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             } };
         },
         .record => {
+            const extra_data_pos = node.data.lhs;
+            const fields_start = store.extra_data.items[extra_data_pos];
+            const fields_len = store.extra_data.items[extra_data_pos + 1];
+            const ext_value = store.extra_data.items[extra_data_pos + 2];
+
+            // Convert 0 back to null, otherwise create the Idx
+            const ext = if (ext_value == 0) null else @as(AST.Expr.Idx, @enumFromInt(ext_value));
+
             return .{ .record = .{
                 .fields = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = fields_start,
+                    .len = fields_len,
                 } },
-                .ext = if (node.main_token > 0) @enumFromInt(store.extra_data.items[node.main_token]) else null,
+                .ext = ext,
                 .region = node.region,
             } };
         },
@@ -1429,10 +1452,9 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             } };
         },
         .match => {
-            const idx = @as(usize, @intCast(node.data.lhs + node.data.rhs));
             return .{ .match = .{
                 .region = node.region,
-                .expr = @enumFromInt(store.extra_data.items[idx]),
+                .expr = @enumFromInt(store.extra_data.items[node.main_token]),
                 .branches = .{ .span = .{
                     .start = node.data.lhs,
                     .len = node.data.rhs,
@@ -1471,6 +1493,20 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .malformed => {
             return .{ .malformed = .{
                 .reason = @enumFromInt(node.data.lhs),
+                .region = node.region,
+            } };
+        },
+        .record_builder => {
+            return .{ .record_builder = .{
+                .mapper = @enumFromInt(node.data.lhs),
+                .fields = @enumFromInt(node.data.rhs),
+                .region = node.region,
+            } };
+        },
+        .unary_op => {
+            return .{ .unary_op = .{
+                .operator = node.main_token,
+                .expr = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
         },

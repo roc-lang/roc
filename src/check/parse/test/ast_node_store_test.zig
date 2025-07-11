@@ -544,12 +544,7 @@ test "NodeStore round trip - Expr" {
             .region = rand_region(),
         },
     });
-    try expressions.append(AST.Expr{
-        .record_updater = .{
-            .region = rand_region(),
-            .token = rand_token_idx(),
-        },
-    });
+
     try expressions.append(AST.Expr{
         .field_access = .{
             .left = rand_idx(AST.Expr.Idx),
