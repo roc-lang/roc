@@ -123,9 +123,11 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
         defer files_to_reformat.deinit();
 
         for (args.paths) |path| {
-            const result = try fmt.formatPath(gpa, arena, std.fs.cwd(), path, true);
-            defer gpa.free(result.files_to_reformat);
-            try files_to_reformat.appendSlice(result.files_to_reformat);
+            var result = try fmt.formatPath(gpa, arena, std.fs.cwd(), path, true);
+            defer result.deinit();
+            if (result.files_to_reformat) |files| {
+                try files_to_reformat.appendSlice(files.items);
+            }
             failure_count += result.failure;
         }
 
