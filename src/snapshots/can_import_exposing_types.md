@@ -61,10 +61,26 @@ combineResults = |jsonResult, httpStatus|
     }
 ~~~
 # EXPECTED
-PARSE ERROR - can_import_exposing_types.md:52:45:52:51
-PARSE ERROR - can_import_exposing_types.md:52:22:52:25
-UNEXPECTED TOKEN IN EXPRESSION - can_import_exposing_types.md:52:71:52:73
-UNEXPECTED TOKEN IN PATTERN - can_import_exposing_types.md:52:72:52:72
+UNDECLARED TYPE - can_import_exposing_types.md:31:18:31:24
+UNDECLARED TYPE - can_import_exposing_types.md:32:18:32:24
+UNDECLARED TYPE - can_import_exposing_types.md:33:23:33:31
+UNDECLARED TYPE - can_import_exposing_types.md:8:27:8:32
+UNDECLARED TYPE - can_import_exposing_types.md:8:34:8:39
+UNDECLARED TYPE - can_import_exposing_types.md:12:17:12:24
+UNDECLARED TYPE - can_import_exposing_types.md:12:28:12:36
+UNDECLARED TYPE - can_import_exposing_types.md:22:15:22:21
+UNDECLARED TYPE - can_import_exposing_types.md:22:28:22:33
+UNDECLARED TYPE - can_import_exposing_types.md:22:50:22:55
+UNDECLARED TYPE - can_import_exposing_types.md:22:58:22:63
+UNDEFINED VARIABLE - can_import_exposing_types.md:24:5:24:16
+UNDECLARED TYPE - can_import_exposing_types.md:37:16:37:22
+UNDECLARED TYPE - can_import_exposing_types.md:41:18:41:26
+UNDEFINED VARIABLE - can_import_exposing_types.md:45:23:45:37
+UNDECLARED TYPE - can_import_exposing_types.md:49:25:49:30
+UNDECLARED TYPE - can_import_exposing_types.md:49:32:49:37
+UNDECLARED TYPE - can_import_exposing_types.md:49:40:49:46
+UNDECLARED TYPE - can_import_exposing_types.md:49:57:49:65
+UNDECLARED TYPE - can_import_exposing_types.md:49:67:49:72
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``Config`` is not declared in this scope.

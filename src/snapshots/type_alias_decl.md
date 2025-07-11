@@ -46,7 +46,9 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE REDECLARED - type_alias_decl.md:7:1:7:37
+UNUSED VARIABLE - type_alias_decl.md:36:5:36:10
+UNUSED VARIABLE - type_alias_decl.md:33:5:33:11
 # PROBLEMS
 **TYPE REDECLARED**
 The type ``Result`` is being redeclared.

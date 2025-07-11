@@ -21,12 +21,12 @@ UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:3:54:3:58
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:3:56:3:61
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:3:69:3:71
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:3:70:3:72
-UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:3:71:3:71
+UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:3:71:4:6
 PARSE ERROR - complex_list_tags.md:4:36:4:41
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:4:83:4:85
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:4:84:4:97
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:4:85:4:98
-UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:4:97:4:97
+UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:4:97:5:6
 PARSE ERROR - complex_list_tags.md:5:53:5:60
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:5:74:5:76
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:75:5:78
@@ -39,7 +39,7 @@ UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:113:5:116
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:5:114:5:119
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:129:5:130
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:5:130:5:131
-UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:130:5:130
+UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:130:6:6
 PARSE ERROR - complex_list_tags.md:6:55:6:63
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:81:6:97
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:6:82:6:99
@@ -49,8 +49,9 @@ UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:111:6:114
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:6:112:6:117
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:125:6:126
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:6:126:6:127
-UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:126:6:126
-UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:1:1:7:6
+UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:126:7:6
+UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:7:5:7:9
+UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:7:7:7:11
 UNDEFINED VARIABLE - complex_list_tags.md:1:7:1:13
 UNUSED VARIABLE - complex_list_tags.md:3:15:3:16
 UNUSED VARIABLE - complex_list_tags.md:3:12:3:13

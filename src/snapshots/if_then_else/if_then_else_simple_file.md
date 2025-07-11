@@ -14,10 +14,7 @@ foo = if 1 A
     }
 ~~~
 # EXPECTED
-PARSE ERROR - if_then_else_simple_file.md:1:1:1:1
-UNEXPECTED TOKEN IN EXPRESSION - if_then_else_simple_file.md:5:5:5:11
-INVALID STATEMENT - if_then_else_simple_file.md:5:5:5:11
-INVALID STATEMENT - if_then_else_simple_file.md:5:10:7:6
+INVALID IF CONDITION - if_then_else_simple_file.md:3:10:3:10
 # PROBLEMS
 **INVALID IF CONDITION**
 This `if` condition needs to be a _Bool_:

@@ -15,16 +15,9 @@ var t= 0
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_024.md:1:9:1:17
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:24:1:34
-PARSE ERROR - fuzz_crash_024.md:1:33:1:53
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:34:1:53
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:53:1:53
-PARSE ERROR - fuzz_crash_024.md:4:1:4:6
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:8
-PARSE ERROR - fuzz_crash_024.md:7:1:7:6
-INVALID STATEMENT - fuzz_crash_024.md:1:18:1:53
-INVALID STATEMENT - fuzz_crash_024.md:1:34:1:53
-INVALID STATEMENT - fuzz_crash_024.md:1:1:1:1
+UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_024.md:1:24:1:34
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:7:4
+INVALID STATEMENT - fuzz_crash_024.md:1:18:7:9
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.

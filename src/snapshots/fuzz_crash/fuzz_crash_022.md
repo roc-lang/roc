@@ -17,11 +17,11 @@ getUser = |id| if (id > 1!) "big" else "l"
 # EXPECTED
 PARSE ERROR - fuzz_crash_022.md:1:1:1:6
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:29
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:1:32
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:3:7
 PARSE ERROR - fuzz_crash_022.md:6:27:6:30
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:1:8:6
 INVALID STATEMENT - fuzz_crash_022.md:1:28:1:33
-INVALID STATEMENT - fuzz_crash_022.md:1:1:1:1
+INVALID STATEMENT - fuzz_crash_022.md:1:32:3:7
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
 INVALID STATEMENT - fuzz_crash_022.md:8:1:8:6
 # PROBLEMS

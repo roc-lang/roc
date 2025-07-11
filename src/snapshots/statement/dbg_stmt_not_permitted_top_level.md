@@ -13,7 +13,7 @@ dbg "foo"
 foo = ...
 ~~~
 # EXPECTED
-INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:1:1:1:1
+INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:4:1:6:4
 # PROBLEMS
 **INVALID STATEMENT**
 The statement **dbg** is not allowed at the top level.

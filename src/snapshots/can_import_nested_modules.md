@@ -33,14 +33,14 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:3:19:3:19
+UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:3:19:4:7
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:4:19:4:27
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:4:25:4:36
-PARSE ERROR - can_import_nested_modules.md:4:28:4:28
+PARSE ERROR - can_import_nested_modules.md:5:1:5:13
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:13:5:27
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:20:5:36
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:28:5:38
-INVALID STATEMENT - can_import_nested_modules.md:1:1:1:1
+INVALID STATEMENT - can_import_nested_modules.md:3:19:4:7
 INVALID STATEMENT - can_import_nested_modules.md:4:19:4:27
 INVALID STATEMENT - can_import_nested_modules.md:4:25:4:36
 INVALID STATEMENT - can_import_nested_modules.md:5:8:5:20

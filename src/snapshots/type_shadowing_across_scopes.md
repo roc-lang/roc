@@ -21,11 +21,11 @@ InnerModule : {
 # EXPECTED
 PARSE ERROR - type_shadowing_across_scopes.md:11:5:11:13
 PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:32
-UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:11:31
+UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:12:2
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:12:1:12:2
 TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
-INVALID STATEMENT - type_shadowing_across_scopes.md:1:1:1:1
+INVALID STATEMENT - type_shadowing_across_scopes.md:11:31:12:2
 INVALID STATEMENT - type_shadowing_across_scopes.md:12:1:12:2
 # PROBLEMS
 **PARSE ERROR**

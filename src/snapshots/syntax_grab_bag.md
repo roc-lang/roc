@@ -214,10 +214,45 @@ expect {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - syntax_grab_bag.md:89:9:90:4
-UNEXPECTED TOKEN IN PATTERN - syntax_grab_bag.md:90:3:90:28
-UNEXPECTED TOKEN IN EXPRESSION - syntax_grab_bag.md:90:6:91:9
-UNEXPECTED TOKEN IN EXPRESSION - syntax_grab_bag.md:1:1:92:4
+UNDECLARED TYPE - syntax_grab_bag.md:36:8:36:11
+UNDECLARED TYPE - syntax_grab_bag.md:36:13:36:16
+UNDECLARED TYPE - syntax_grab_bag.md:39:2:39:5
+UNDECLARED TYPE - syntax_grab_bag.md:40:2:40:5
+UNDECLARED TYPE - syntax_grab_bag.md:43:19:43:21
+UNDECLARED TYPE - syntax_grab_bag.md:43:32:43:41
+UNDECLARED TYPE - syntax_grab_bag.md:45:8:45:10
+UNDECLARED TYPE - syntax_grab_bag.md:46:8:46:17
+UNDECLARED TYPE - syntax_grab_bag.md:52:4:52:6
+UNDECLARED TYPE - syntax_grab_bag.md:53:8:53:17
+UNDEFINED VARIABLE - syntax_grab_bag.md:72:4:72:13
+UNUSED VARIABLE - syntax_grab_bag.md:97:3:97:8
+UNUSED VARIABLE - syntax_grab_bag.md:102:19:102:23
+UNUSED VARIABLE - syntax_grab_bag.md:108:23:108:27
+UNUSED VARIABLE - syntax_grab_bag.md:115:6:115:10
+UNUSED VARIABLE - syntax_grab_bag.md:121:21:121:29
+UNUSED VARIABLE - syntax_grab_bag.md:127:4:128:10
+UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
+UNDEFINED VARIABLE - syntax_grab_bag.md:141:2:141:6
+UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
+UNDEFINED VARIABLE - syntax_grab_bag.md:147:9:147:13
+UNDEFINED VARIABLE - syntax_grab_bag.md:158:2:158:11
+UNDEFINED VARIABLE - syntax_grab_bag.md:178:63:178:71
+UNDEFINED VARIABLE - syntax_grab_bag.md:179:42:179:48
+UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
+UNDEFINED VARIABLE - syntax_grab_bag.md:185:4:185:10
+UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
+UNDEFINED VARIABLE - syntax_grab_bag.md:193:4:193:13
+UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
+UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
+UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
+UNUSED VARIABLE - syntax_grab_bag.md:166:2:166:6
+UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
+UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
+UNUSED VARIABLE - syntax_grab_bag.md:165:2:165:14
+UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
+TYPE MISMATCH - syntax_grab_bag.md:67:11:67:14
+INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
+TYPE MISMATCH - syntax_grab_bag.md:155:2:155:12
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``Bar`` is not declared in this scope.

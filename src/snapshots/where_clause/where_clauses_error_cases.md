@@ -23,8 +23,7 @@ broken_fn3 : a -> b
 ~~~
 # EXPECTED
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:12
-WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:3
-INVALID STATEMENT - where_clauses_error_cases.md:6:25:9:11
+WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:13:11
 # PROBLEMS
 **WHERE CLAUSE ERROR**
 Expected a colon **:** after the method name in this where clause constraint.

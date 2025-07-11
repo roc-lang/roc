@@ -32,7 +32,7 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
-INVALID STATEMENT - type_app_complex_nested.md:1:1:1:1
+INVALID STATEMENT - type_app_complex_nested.md:13:24:16:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **crash "** is not expected in an expression.

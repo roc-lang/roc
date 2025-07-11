@@ -18,23 +18,23 @@ type=expr
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:2:20:2:39
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:21:2:40
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:39:2:41
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:40:2:40
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:40:3:11
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:3:13:3:33
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:14:3:34
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:33:3:35
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:34:3:34
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:34:4:15
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:15:4:18
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:25:4:25
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:25:5:10
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:15:5:18
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:24:5:24
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:24:6:10
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:10:6:18
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:6:20:6:27
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:21:6:28
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:27:6:29
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:6:28
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:7:10
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:10:7:18
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:17:7:20
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:7:30
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:8:2
 UNDEFINED VARIABLE - record_different_fields_error.md:5:5:5:10
 UNDEFINED VARIABLE - record_different_fields_error.md:5:11:5:15
 UNDEFINED VARIABLE - record_different_fields_error.md:6:5:6:10

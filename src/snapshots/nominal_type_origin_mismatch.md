@@ -20,11 +20,11 @@ main =
 UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:17:6:19
 PARSE ERROR - nominal_type_origin_mismatch.md:6:23:6:36
 UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:24:6:37
-UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:36:6:36
+UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:36:8:5
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
 INVALID STATEMENT - nominal_type_origin_mismatch.md:6:18:6:36
 INVALID STATEMENT - nominal_type_origin_mismatch.md:6:24:6:37
-INVALID STATEMENT - nominal_type_origin_mismatch.md:1:1:1:1
+INVALID STATEMENT - nominal_type_origin_mismatch.md:6:36:8:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\p** is not expected in an expression.

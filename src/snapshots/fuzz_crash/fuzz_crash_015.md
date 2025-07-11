@@ -12,11 +12,11 @@ type=file
 ~~~
 # EXPECTED
 LEADING ZERO - fuzz_crash_015.md:1:1:1:6
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_015.md:1:4:1:4
-PARSE ERROR - fuzz_crash_015.md:3:4:3:4
-INVALID STATEMENT - fuzz_crash_015.md:1:1:1:1
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_015.md:1:4:2:4
+PARSE ERROR - fuzz_crash_015.md:3:4:4:3
+INVALID STATEMENT - fuzz_crash_015.md:1:4:2:4
 INVALID STATEMENT - fuzz_crash_015.md:2:1:3:4
-INVALID STATEMENT - fuzz_crash_015.md:1:1:1:1
+INVALID STATEMENT - fuzz_crash_015.md:3:1:4:3
 INVALID STATEMENT - fuzz_crash_015.md:4:1:4:3
 # PROBLEMS
 **LEADING ZERO**

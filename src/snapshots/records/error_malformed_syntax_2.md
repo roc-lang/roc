@@ -8,7 +8,9 @@ type=expr
 { age: 42, name = "Alice" }
 ~~~
 # EXPECTED
-PARSE ERROR - error_malformed_syntax_2.md:1:17:1:20
+UNEXPECTED TOKEN IN TYPE ANNOTATION - error_malformed_syntax_2.md:1:8:1:11
+UNEXPECTED TOKEN IN EXPRESSION - error_malformed_syntax_2.md:1:10:1:16
+UNUSED VARIABLE - error_malformed_syntax_2.md:1:12:1:16
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **42,** is not expected in a type annotation.

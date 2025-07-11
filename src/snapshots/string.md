@@ -12,7 +12,7 @@ module []
 "two"
 ~~~
 # EXPECTED
-INVALID STATEMENT - string.md:1:1:1:1
+INVALID STATEMENT - string.md:3:1:5:2
 INVALID STATEMENT - string.md:5:1:5:6
 # PROBLEMS
 **INVALID STATEMENT**

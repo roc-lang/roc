@@ -51,29 +51,15 @@ transform = \result ->
 ~~~
 # EXPECTED
 PARSE ERROR - qualified_type_canonicalization.md:8:1:8:14
-PARSE ERROR - qualified_type_canonicalization.md:8:14:8:14
+PARSE ERROR - qualified_type_canonicalization.md:8:14:9:7
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:15:10:32
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:24:10:34
-PARSE ERROR - qualified_type_canonicalization.md:26:32:26:32
+PARSE ERROR - qualified_type_canonicalization.md:26:32:27:11
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:31:12:31:14
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:31:24:31:30
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:35:16:35:22
 PARSE ERROR - qualified_type_canonicalization.md:36:5:36:21
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:36:6:36:22
-UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:36:21:36:21
-PARSE ERROR - qualified_type_canonicalization.md:39:32:39:43
-PARSE ERROR - qualified_type_canonicalization.md:39:43:39:52
-UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:50:39:60
-PARSE ERROR - qualified_type_canonicalization.md:39:60:39:74
-UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:68:39:68
-UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:40:13:40:20
-PARSE ERROR - qualified_type_canonicalization.md:42:15:42:22
-PARSE ERROR - qualified_type_canonicalization.md:43:15:43:23
-INVALID STATEMENT - qualified_type_canonicalization.md:10:15:10:32
-INVALID STATEMENT - qualified_type_canonicalization.md:10:24:10:34
-INVALID STATEMENT - qualified_type_canonicalization.md:10:33:11:7
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:15:19:15:24
-INVALID STATEMENT - qualified_type_canonicalization.md:15:29:18:17
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `import_exposing_no_close`
