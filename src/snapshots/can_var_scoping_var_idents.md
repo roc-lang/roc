@@ -22,15 +22,12 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:2-3:58),
-LowerIdent(4:1-4:9),OpAssign(4:10-4:11),OpBar(4:12-4:13),LowerIdent(4:13-4:18),OpBar(4:18-4:19),OpenCurly(4:20-4:21),Newline(1:1-1:1),
-LowerIdent(5:2-5:5),OpAssign(5:6-5:7),LowerIdent(5:8-5:13),Newline(5:15-5:34),
-KwVar(6:2-6:5),LowerIdent(6:6-6:10),OpAssign(6:11-6:12),LowerIdent(6:13-6:18),OpStar(6:19-6:20),Int(6:21-6:22),Newline(6:24-6:66),
-Newline(1:1-1:1),
-LowerIdent(8:2-8:6),OpAssign(8:7-8:8),LowerIdent(8:9-8:13),OpPlus(8:14-8:15),LowerIdent(8:16-8:19),Newline(8:21-8:48),
-LowerIdent(9:2-9:5),OpPlus(9:6-9:7),LowerIdent(9:8-9:12),Newline(9:14-9:40),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+LowerIdent(4:1-4:9),OpAssign(4:10-4:11),OpBar(4:12-4:13),LowerIdent(4:13-4:18),OpBar(4:18-4:19),OpenCurly(4:20-4:21),
+LowerIdent(5:2-5:5),OpAssign(5:6-5:7),LowerIdent(5:8-5:13),
+KwVar(6:2-6:5),LowerIdent(6:6-6:10),OpAssign(6:11-6:12),LowerIdent(6:13-6:18),OpStar(6:19-6:20),Int(6:21-6:22),
+LowerIdent(8:2-8:6),OpAssign(8:7-8:8),LowerIdent(8:9-8:13),OpPlus(8:14-8:15),LowerIdent(8:16-8:19),
+LowerIdent(9:2-9:5),OpPlus(9:6-9:7),LowerIdent(9:8-9:12),
 CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~
 # PARSE

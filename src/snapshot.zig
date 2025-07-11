@@ -1317,7 +1317,6 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
     for (tokens, 0..) |tok, i| {
         const region = tokenizedBuffer.resolve(@intCast(i));
         const info = try module_env.calcRegionInfo(content.source, region.start.offset, region.end.offset);
-        // const category = tokenToCategory(tok);
 
         // Markdown token output
         try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
@@ -1328,6 +1327,13 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
             info.end_line_idx + 1,
             info.end_col_idx + 1,
         });
+
+        if (i + 1 < tokenizedBuffer.tokens.len) {
+            const next_region = tokenizedBuffer.resolve(@intCast(i + 1));
+            if (source_contains_newline_in_range(parse_ast.source, region.end.offset, next_region.start.offset)) {
+                try output.md_writer.writeAll("\n");
+            }
+        }
 
         // HTML token output as JavaScript array element: [token_kind_str, start_byte, end_byte]
         if (output.html_writer) |writer| {
@@ -1343,15 +1349,8 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
             }
         }
 
-        if (tok == .Newline) {
-            try output.md_writer.writeAll("\n");
-            if (output.html_writer) |writer| {
-                try writer.writeAll("\n");
-            }
-        } else {
-            if (output.html_writer) |writer| {
-                try writer.writeAll(" ");
-            }
+        if (output.html_writer) |writer| {
+            try writer.writeAll(" ");
         }
     }
 
@@ -1366,6 +1365,13 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
     }
     try output.end_code_block();
     try output.end_section();
+}
+
+fn source_contains_newline_in_range(source: []const u8, start: usize, end: usize) bool {
+    for (source[start..end]) |c| {
+        if (c == '\n') return true;
+    }
+    return false;
 }
 
 /// Generate PARSE2 section using SExprTree for both markdown and HTML

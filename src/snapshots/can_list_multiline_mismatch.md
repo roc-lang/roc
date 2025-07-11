@@ -37,10 +37,10 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Newline(1:1-1:1),
-Int(2:5-2:7),Comma(2:7-2:8),Newline(1:1-1:1),
-StringStart(3:5-3:6),StringPart(3:6-3:17),StringEnd(3:17-3:18),Comma(3:18-3:19),Newline(1:1-1:1),
-Int(4:5-4:8),Newline(1:1-1:1),
+OpenSquare(1:1-1:2),
+Int(2:5-2:7),Comma(2:7-2:8),
+StringStart(3:5-3:6),StringPart(3:6-3:17),StringEnd(3:17-3:18),Comma(3:18-3:19),
+Int(4:5-4:8),
 CloseSquare(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE

@@ -12,18 +12,19 @@ module []
 "two"
 ~~~
 # EXPECTED
-INVALID STATEMENT - string.md:1:1:1:1
+INVALID STATEMENT - string.md:3:1:5:2
 INVALID STATEMENT - string.md:5:1:5:6
 # PROBLEMS
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**string.md:1:1:1:1:**
+**string.md:3:1:5:2:**
 ```roc
+"one"
 
+"two"
 ```
-
 
 
 **INVALID STATEMENT**
@@ -39,10 +40,8 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-StringStart(3:1-3:2),StringPart(3:2-3:5),StringEnd(3:5-3:6),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+StringStart(3:1-3:2),StringPart(3:2-3:5),StringEnd(3:5-3:6),
 StringStart(5:1-5:2),StringPart(5:2-5:5),StringEnd(5:5-5:6),EndOfFile(5:6-5:6),
 ~~~
 # PARSE

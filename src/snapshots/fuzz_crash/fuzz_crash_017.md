@@ -13,7 +13,7 @@ MISSING HEADER - fuzz_crash_017.md:1:1:1:5
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_017.md:1:4:1:7
 PARSE ERROR - fuzz_crash_017.md:2:7:2:14
 INVALID STATEMENT - fuzz_crash_017.md:1:4:1:7
-INVALID STATEMENT - fuzz_crash_017.md:1:1:1:1
+INVALID STATEMENT - fuzz_crash_017.md:1:6:2:4
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -70,11 +70,11 @@ me = "luc"
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_017.md:1:1:1:1:**
+**fuzz_crash_017.md:1:6:2:4:**
 ```roc
-
+me = "luc"
+foo = "hello ${namF
 ```
-
 
 
 **UNKNOWN OPERATOR**
@@ -83,7 +83,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:3),OpAssign(1:4-1:5),StringStart(1:6-1:7),StringPart(1:7-1:10),StringEnd(1:10-1:11),Newline(1:1-1:1),
+LowerIdent(1:1-1:3),OpAssign(1:4-1:5),StringStart(1:6-1:7),StringPart(1:7-1:10),StringEnd(1:10-1:11),
 LowerIdent(2:1-2:4),OpAssign(2:5-2:6),StringStart(2:7-2:8),StringPart(2:8-2:14),OpenStringInterpolation(2:14-2:16),LowerIdent(2:16-2:20),EndOfFile(2:20-2:20),
 ~~~
 # PARSE

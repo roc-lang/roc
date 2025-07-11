@@ -30,8 +30,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
 LowerIdent(3:1-3:4),OpAssign(3:5-3:6),KwIf(3:7-3:9),LowerIdent(3:10-3:13),LowerIdent(3:14-3:18),Int(3:19-3:20),EndOfFile(3:20-3:20),
 ~~~
 # PARSE

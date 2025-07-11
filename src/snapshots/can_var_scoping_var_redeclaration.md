@@ -53,16 +53,13 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:2-3:60),
-LowerIdent(4:1-4:14),OpAssign(4:15-4:16),OpBar(4:17-4:18),Underscore(4:18-4:19),OpBar(4:19-4:20),OpenCurly(4:21-4:22),Newline(1:1-1:1),
-KwVar(5:2-5:5),LowerIdent(5:6-5:8),OpAssign(5:9-5:10),Int(5:11-5:12),Newline(1:1-1:1),
-KwVar(6:2-6:5),LowerIdent(6:6-6:8),OpAssign(6:9-6:10),Int(6:11-6:13),Newline(6:15-6:55),
-LowerIdent(7:2-7:4),OpAssign(7:5-7:6),Int(7:7-7:9),Newline(7:11-7:50),
-LowerIdent(8:2-8:4),Newline(1:1-1:1),
-CloseCurly(9:1-9:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+LowerIdent(4:1-4:14),OpAssign(4:15-4:16),OpBar(4:17-4:18),Underscore(4:18-4:19),OpBar(4:19-4:20),OpenCurly(4:21-4:22),
+KwVar(5:2-5:5),LowerIdent(5:6-5:8),OpAssign(5:9-5:10),Int(5:11-5:12),
+KwVar(6:2-6:5),LowerIdent(6:6-6:8),OpAssign(6:9-6:10),Int(6:11-6:13),
+LowerIdent(7:2-7:4),OpAssign(7:5-7:6),Int(7:7-7:9),
+LowerIdent(8:2-8:4),
+CloseCurly(9:1-9:2),
 LowerIdent(11:1-11:7),OpAssign(11:8-11:9),LowerIdent(11:10-11:23),NoSpaceOpenRound(11:23-11:24),OpenCurly(11:24-11:25),CloseCurly(11:25-11:26),CloseRound(11:26-11:27),EndOfFile(11:27-11:27),
 ~~~
 # PARSE

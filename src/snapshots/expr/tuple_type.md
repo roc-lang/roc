@@ -18,11 +18,10 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),Newline(1:1-1:1),
-LowerIdent(2:5-2:6),OpColon(2:7-2:8),OpenRound(2:9-2:10),UpperIdent(2:10-2:13),Comma(2:13-2:14),UpperIdent(2:15-2:18),CloseRound(2:18-2:19),OpArrow(2:20-2:22),OpenRound(2:23-2:24),UpperIdent(2:24-2:27),Comma(2:27-2:28),UpperIdent(2:29-2:32),CloseRound(2:32-2:33),Newline(1:1-1:1),
-LowerIdent(3:5-3:6),OpAssign(3:7-3:8),OpBar(3:9-3:10),LowerIdent(3:10-3:11),OpBar(3:11-3:12),LowerIdent(3:13-3:14),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(5:5-5:6),NoSpaceOpenRound(5:6-5:7),NoSpaceOpenRound(5:7-5:8),Int(5:8-5:9),Comma(5:9-5:10),Int(5:11-5:12),CloseRound(5:12-5:13),CloseRound(5:13-5:14),Newline(1:1-1:1),
+OpenCurly(1:1-1:2),
+LowerIdent(2:5-2:6),OpColon(2:7-2:8),OpenRound(2:9-2:10),UpperIdent(2:10-2:13),Comma(2:13-2:14),UpperIdent(2:15-2:18),CloseRound(2:18-2:19),OpArrow(2:20-2:22),OpenRound(2:23-2:24),UpperIdent(2:24-2:27),Comma(2:27-2:28),UpperIdent(2:29-2:32),CloseRound(2:32-2:33),
+LowerIdent(3:5-3:6),OpAssign(3:7-3:8),OpBar(3:9-3:10),LowerIdent(3:10-3:11),OpBar(3:11-3:12),LowerIdent(3:13-3:14),
+LowerIdent(5:5-5:6),NoSpaceOpenRound(5:6-5:7),NoSpaceOpenRound(5:7-5:8),Int(5:8-5:9),Comma(5:9-5:10),Int(5:11-5:12),CloseRound(5:12-5:13),CloseRound(5:13-5:14),
 CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # PARSE

@@ -56,179 +56,32 @@ handleResponse = |response|
 combineResults : Result(Value, Error), Status -> Result(Response, Error)
 combineResults = |jsonResult, httpStatus|
     match jsonResult {
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
+        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
         Err(error) => Err(error)
     }
 ~~~
 # EXPECTED
-PARSE ERROR - can_import_exposing_types.md:52:45:52:51
-PARSE ERROR - can_import_exposing_types.md:52:22:52:25
-UNEXPECTED TOKEN IN EXPRESSION - can_import_exposing_types.md:52:71:52:73
-UNEXPECTED TOKEN IN PATTERN - can_import_exposing_types.md:52:72:52:72
+UNDECLARED TYPE - can_import_exposing_types.md:31:18:31:24
+UNDECLARED TYPE - can_import_exposing_types.md:32:18:32:24
+UNDECLARED TYPE - can_import_exposing_types.md:33:23:33:31
+UNDECLARED TYPE - can_import_exposing_types.md:8:27:8:32
+UNDECLARED TYPE - can_import_exposing_types.md:8:34:8:39
+UNDECLARED TYPE - can_import_exposing_types.md:12:17:12:24
+UNDECLARED TYPE - can_import_exposing_types.md:12:28:12:36
+UNDECLARED TYPE - can_import_exposing_types.md:22:15:22:21
+UNDECLARED TYPE - can_import_exposing_types.md:22:28:22:33
+UNDECLARED TYPE - can_import_exposing_types.md:22:50:22:55
+UNDECLARED TYPE - can_import_exposing_types.md:22:58:22:63
+UNDEFINED VARIABLE - can_import_exposing_types.md:24:5:24:16
+UNDECLARED TYPE - can_import_exposing_types.md:37:16:37:22
+UNDECLARED TYPE - can_import_exposing_types.md:41:18:41:26
+UNDEFINED VARIABLE - can_import_exposing_types.md:45:23:45:37
+UNDECLARED TYPE - can_import_exposing_types.md:49:25:49:30
+UNDECLARED TYPE - can_import_exposing_types.md:49:32:49:37
+UNDECLARED TYPE - can_import_exposing_types.md:49:40:49:46
+UNDECLARED TYPE - can_import_exposing_types.md:49:57:49:65
+UNDECLARED TYPE - can_import_exposing_types.md:49:67:49:72
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**can_import_exposing_types.md:52:45:52:51:**
-```roc
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-```
-                                            ^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_apply_close_round`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**can_import_exposing_types.md:52:22:52:25:**
-```roc
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-```
-                     ^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **})** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**can_import_exposing_types.md:52:71:52:73:**
-```roc
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-```
-                                                                      ^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token  is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**can_import_exposing_types.md:52:72:52:72:**
-```roc
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-```
-                                                                       
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **module []
-
-import json.Json exposing [Value, Error, Config]
-import http.Client as Http exposing [Request, Response, Status]
-import utils.Result exposing [Result]
-
-# Test using exposed types directly in annotations
-parseJson : Str -> Result(Value, Error)
-parseJson = |input| Json.parse(input)
-
-# Test mixing exposed types with qualified access
-handleRequest : Request -> Response
-handleRequest = |req| {
-    result = Json.decode(req.body)
-    match result {
-        Ok(value) => Http.ok(value)
-        Err(error) => Http.badRequest(error)
-    }
-}
-
-# Test using exposed types in complex signatures
-processData : Config, List(Value) -> Result(List(Value), Error)
-processData = |config, values|
-    List.mapTry(
-        values,
-        |v| Json.validateWith(config, v),
-    )
-
-# Test exposed types in record fields
-ServerConfig : {
-    jsonConfig : Config,
-    httpStatus : Status,
-    defaultResponse : Response,
-}
-
-# Test exposed types with module-qualified usage
-createClient : Config -> Http.Client
-createClient = |config| Http.clientWith(config)
-
-# Test nested type usage
-handleResponse : Response -> Str
-handleResponse = |response|
-    match response.status {
-        Ok(status) => Http.statusToString(status)
-        Err(error) => Error.toString(error)
-    }
-
-# Test mixing exposed and qualified in same expression
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-combineResults = |jsonResult, httpStatus|
-    match jsonResult {
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-        Err** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**can_import_exposing_types.md:1:1:53:12:**
-```roc
-module []
-
-import json.Json exposing [Value, Error, Config]
-import http.Client as Http exposing [Request, Response, Status]
-import utils.Result exposing [Result]
-
-# Test using exposed types directly in annotations
-parseJson : Str -> Result(Value, Error)
-parseJson = |input| Json.parse(input)
-
-# Test mixing exposed types with qualified access
-handleRequest : Request -> Response
-handleRequest = |req| {
-    result = Json.decode(req.body)
-    match result {
-        Ok(value) => Http.ok(value)
-        Err(error) => Http.badRequest(error)
-    }
-}
-
-# Test using exposed types in complex signatures
-processData : Config, List(Value) -> Result(List(Value), Error)
-processData = |config, values|
-    List.mapTry(
-        values,
-        |v| Json.validateWith(config, v),
-    )
-
-# Test exposed types in record fields
-ServerConfig : {
-    jsonConfig : Config,
-    httpStatus : Status,
-    defaultResponse : Response,
-}
-
-# Test exposed types with module-qualified usage
-createClient : Config -> Http.Client
-createClient = |config| Http.clientWith(config)
-
-# Test nested type usage
-handleResponse : Response -> Str
-handleResponse = |response|
-    match response.status {
-        Ok(status) => Http.statusToString(status)
-        Err(error) => Error.toString(error)
-    }
-
-# Test mixing exposed and qualified in same expression
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-combineResults = |jsonResult, httpStatus|
-    match jsonResult {
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-        Err(error) => Err(error)
-```
-
-
 **UNDECLARED TYPE**
 The type ``Config`` is not declared in this scope.
 
@@ -449,130 +302,46 @@ combineResults : Result(Value, Error), Status -> Result(Response, Error)
                                                                   ^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNUSED VARIABLE**
-Variable ``value`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
-The unused variable is declared here:
-**can_import_exposing_types.md:52:12:52:17:**
-```roc
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-```
-           ^^^^^
-
-
-**DUPLICATE DEFINITION**
-The name `httpStatus` is being redeclared in this scope.
-
-The redeclaration is here:
-**can_import_exposing_types.md:52:60:52:70:**
-```roc
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-```
-                                                           ^^^^^^^^^^
-
-But `httpStatus` was already defined here:
-**can_import_exposing_types.md:50:31:50:41:**
-```roc
-combineResults = |jsonResult, httpStatus|
-```
-                              ^^^^^^^^^^
-
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNUSED VARIABLE**
-Variable ``httpStatus`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_httpStatus` to suppress this warning.
-The unused variable is declared here:
-**can_import_exposing_types.md:52:60:52:70:**
-```roc
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-```
-                                                           ^^^^^^^^^^
-
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNUSED VARIABLE**
-Variable ``httpStatus`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_httpStatus` to suppress this warning.
-The unused variable is declared here:
-**can_import_exposing_types.md:50:31:50:41:**
-```roc
-combineResults = |jsonResult, httpStatus|
-```
-                              ^^^^^^^^^^
-
-
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),KwExposing(3:18-3:26),OpenSquare(3:27-3:28),UpperIdent(3:28-3:33),Comma(3:33-3:34),UpperIdent(3:35-3:40),Comma(3:40-3:41),UpperIdent(3:42-3:48),CloseSquare(3:48-3:49),Newline(1:1-1:1),
-KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:19),KwAs(4:20-4:22),UpperIdent(4:23-4:27),KwExposing(4:28-4:36),OpenSquare(4:37-4:38),UpperIdent(4:38-4:45),Comma(4:45-4:46),UpperIdent(4:47-4:55),Comma(4:55-4:56),UpperIdent(4:57-4:63),CloseSquare(4:63-4:64),Newline(1:1-1:1),
-KwImport(5:1-5:7),LowerIdent(5:8-5:13),NoSpaceDotUpperIdent(5:13-5:20),KwExposing(5:21-5:29),OpenSquare(5:30-5:31),UpperIdent(5:31-5:37),CloseSquare(5:37-5:38),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(7:2-7:51),
-LowerIdent(8:1-8:10),OpColon(8:11-8:12),UpperIdent(8:13-8:16),OpArrow(8:17-8:19),UpperIdent(8:20-8:26),NoSpaceOpenRound(8:26-8:27),UpperIdent(8:27-8:32),Comma(8:32-8:33),UpperIdent(8:34-8:39),CloseRound(8:39-8:40),Newline(1:1-1:1),
-LowerIdent(9:1-9:10),OpAssign(9:11-9:12),OpBar(9:13-9:14),LowerIdent(9:14-9:19),OpBar(9:19-9:20),UpperIdent(9:21-9:25),NoSpaceDotLowerIdent(9:25-9:31),NoSpaceOpenRound(9:31-9:32),LowerIdent(9:32-9:37),CloseRound(9:37-9:38),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(11:2-11:50),
-LowerIdent(12:1-12:14),OpColon(12:15-12:16),UpperIdent(12:17-12:24),OpArrow(12:25-12:27),UpperIdent(12:28-12:36),Newline(1:1-1:1),
-LowerIdent(13:1-13:14),OpAssign(13:15-13:16),OpBar(13:17-13:18),LowerIdent(13:18-13:21),OpBar(13:21-13:22),OpenCurly(13:23-13:24),Newline(1:1-1:1),
-LowerIdent(14:5-14:11),OpAssign(14:12-14:13),UpperIdent(14:14-14:18),NoSpaceDotLowerIdent(14:18-14:25),NoSpaceOpenRound(14:25-14:26),LowerIdent(14:26-14:29),NoSpaceDotLowerIdent(14:29-14:34),CloseRound(14:34-14:35),Newline(1:1-1:1),
-KwMatch(15:5-15:10),LowerIdent(15:11-15:17),OpenCurly(15:18-15:19),Newline(1:1-1:1),
-UpperIdent(16:9-16:11),NoSpaceOpenRound(16:11-16:12),LowerIdent(16:12-16:17),CloseRound(16:17-16:18),OpFatArrow(16:19-16:21),UpperIdent(16:22-16:26),NoSpaceDotLowerIdent(16:26-16:29),NoSpaceOpenRound(16:29-16:30),LowerIdent(16:30-16:35),CloseRound(16:35-16:36),Newline(1:1-1:1),
-UpperIdent(17:9-17:12),NoSpaceOpenRound(17:12-17:13),LowerIdent(17:13-17:18),CloseRound(17:18-17:19),OpFatArrow(17:20-17:22),UpperIdent(17:23-17:27),NoSpaceDotLowerIdent(17:27-17:38),NoSpaceOpenRound(17:38-17:39),LowerIdent(17:39-17:44),CloseRound(17:44-17:45),Newline(1:1-1:1),
-CloseCurly(18:5-18:6),Newline(1:1-1:1),
-CloseCurly(19:1-19:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(21:2-21:49),
-LowerIdent(22:1-22:12),OpColon(22:13-22:14),UpperIdent(22:15-22:21),Comma(22:21-22:22),UpperIdent(22:23-22:27),NoSpaceOpenRound(22:27-22:28),UpperIdent(22:28-22:33),CloseRound(22:33-22:34),OpArrow(22:35-22:37),UpperIdent(22:38-22:44),NoSpaceOpenRound(22:44-22:45),UpperIdent(22:45-22:49),NoSpaceOpenRound(22:49-22:50),UpperIdent(22:50-22:55),CloseRound(22:55-22:56),Comma(22:56-22:57),UpperIdent(22:58-22:63),CloseRound(22:63-22:64),Newline(1:1-1:1),
-LowerIdent(23:1-23:12),OpAssign(23:13-23:14),OpBar(23:15-23:16),LowerIdent(23:16-23:22),Comma(23:22-23:23),LowerIdent(23:24-23:30),OpBar(23:30-23:31),Newline(1:1-1:1),
-UpperIdent(24:5-24:9),NoSpaceDotLowerIdent(24:9-24:16),NoSpaceOpenRound(24:16-24:17),Newline(1:1-1:1),
-LowerIdent(25:9-25:15),Comma(25:15-25:16),Newline(1:1-1:1),
-OpBar(26:9-26:10),LowerIdent(26:10-26:11),OpBar(26:11-26:12),UpperIdent(26:13-26:17),NoSpaceDotLowerIdent(26:17-26:30),NoSpaceOpenRound(26:30-26:31),LowerIdent(26:31-26:37),Comma(26:37-26:38),LowerIdent(26:39-26:40),CloseRound(26:40-26:41),Comma(26:41-26:42),Newline(1:1-1:1),
-CloseRound(27:5-27:6),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(29:2-29:38),
-UpperIdent(30:1-30:13),OpColon(30:14-30:15),OpenCurly(30:16-30:17),Newline(1:1-1:1),
-LowerIdent(31:5-31:15),OpColon(31:16-31:17),UpperIdent(31:18-31:24),Comma(31:24-31:25),Newline(1:1-1:1),
-LowerIdent(32:5-32:15),OpColon(32:16-32:17),UpperIdent(32:18-32:24),Comma(32:24-32:25),Newline(1:1-1:1),
-LowerIdent(33:5-33:20),OpColon(33:21-33:22),UpperIdent(33:23-33:31),Comma(33:31-33:32),Newline(1:1-1:1),
-CloseCurly(34:1-34:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(36:2-36:49),
-LowerIdent(37:1-37:13),OpColon(37:14-37:15),UpperIdent(37:16-37:22),OpArrow(37:23-37:25),UpperIdent(37:26-37:30),NoSpaceDotUpperIdent(37:30-37:37),Newline(1:1-1:1),
-LowerIdent(38:1-38:13),OpAssign(38:14-38:15),OpBar(38:16-38:17),LowerIdent(38:17-38:23),OpBar(38:23-38:24),UpperIdent(38:25-38:29),NoSpaceDotLowerIdent(38:29-38:40),NoSpaceOpenRound(38:40-38:41),LowerIdent(38:41-38:47),CloseRound(38:47-38:48),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(40:2-40:25),
-LowerIdent(41:1-41:15),OpColon(41:16-41:17),UpperIdent(41:18-41:26),OpArrow(41:27-41:29),UpperIdent(41:30-41:33),Newline(1:1-1:1),
-LowerIdent(42:1-42:15),OpAssign(42:16-42:17),OpBar(42:18-42:19),LowerIdent(42:19-42:27),OpBar(42:27-42:28),Newline(1:1-1:1),
-KwMatch(43:5-43:10),LowerIdent(43:11-43:19),NoSpaceDotLowerIdent(43:19-43:26),OpenCurly(43:27-43:28),Newline(1:1-1:1),
-UpperIdent(44:9-44:11),NoSpaceOpenRound(44:11-44:12),LowerIdent(44:12-44:18),CloseRound(44:18-44:19),OpFatArrow(44:20-44:22),UpperIdent(44:23-44:27),NoSpaceDotLowerIdent(44:27-44:42),NoSpaceOpenRound(44:42-44:43),LowerIdent(44:43-44:49),CloseRound(44:49-44:50),Newline(1:1-1:1),
-UpperIdent(45:9-45:12),NoSpaceOpenRound(45:12-45:13),LowerIdent(45:13-45:18),CloseRound(45:18-45:19),OpFatArrow(45:20-45:22),UpperIdent(45:23-45:28),NoSpaceDotLowerIdent(45:28-45:37),NoSpaceOpenRound(45:37-45:38),LowerIdent(45:38-45:43),CloseRound(45:43-45:44),Newline(1:1-1:1),
-CloseCurly(46:5-46:6),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(48:2-48:55),
-LowerIdent(49:1-49:15),OpColon(49:16-49:17),UpperIdent(49:18-49:24),NoSpaceOpenRound(49:24-49:25),UpperIdent(49:25-49:30),Comma(49:30-49:31),UpperIdent(49:32-49:37),CloseRound(49:37-49:38),Comma(49:38-49:39),UpperIdent(49:40-49:46),OpArrow(49:47-49:49),UpperIdent(49:50-49:56),NoSpaceOpenRound(49:56-49:57),UpperIdent(49:57-49:65),Comma(49:65-49:66),UpperIdent(49:67-49:72),CloseRound(49:72-49:73),Newline(1:1-1:1),
-LowerIdent(50:1-50:15),OpAssign(50:16-50:17),OpBar(50:18-50:19),LowerIdent(50:19-50:29),Comma(50:29-50:30),LowerIdent(50:31-50:41),OpBar(50:41-50:42),Newline(1:1-1:1),
-KwMatch(51:5-51:10),LowerIdent(51:11-51:21),OpenCurly(51:22-51:23),Newline(1:1-1:1),
-UpperIdent(52:9-52:11),NoSpaceOpenRound(52:11-52:12),LowerIdent(52:12-52:17),CloseRound(52:17-52:18),OpFatArrow(52:19-52:21),UpperIdent(52:22-52:24),NoSpaceOpenRound(52:24-52:25),OpenCurly(52:25-52:26),LowerIdent(52:27-52:31),OpColon(52:31-52:32),UpperIdent(52:33-52:37),NoSpaceDotLowerIdent(52:37-52:44),LowerIdent(52:45-52:50),Comma(52:50-52:51),LowerIdent(52:52-52:58),OpColon(52:58-52:59),LowerIdent(52:60-52:70),CloseCurly(52:71-52:72),CloseRound(52:72-52:73),Newline(1:1-1:1),
-UpperIdent(53:9-53:12),NoSpaceOpenRound(53:12-53:13),LowerIdent(53:13-53:18),CloseRound(53:18-53:19),OpFatArrow(53:20-53:22),UpperIdent(53:23-53:26),NoSpaceOpenRound(53:26-53:27),LowerIdent(53:27-53:32),CloseRound(53:32-53:33),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),KwExposing(3:18-3:26),OpenSquare(3:27-3:28),UpperIdent(3:28-3:33),Comma(3:33-3:34),UpperIdent(3:35-3:40),Comma(3:40-3:41),UpperIdent(3:42-3:48),CloseSquare(3:48-3:49),
+KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:19),KwAs(4:20-4:22),UpperIdent(4:23-4:27),KwExposing(4:28-4:36),OpenSquare(4:37-4:38),UpperIdent(4:38-4:45),Comma(4:45-4:46),UpperIdent(4:47-4:55),Comma(4:55-4:56),UpperIdent(4:57-4:63),CloseSquare(4:63-4:64),
+KwImport(5:1-5:7),LowerIdent(5:8-5:13),NoSpaceDotUpperIdent(5:13-5:20),KwExposing(5:21-5:29),OpenSquare(5:30-5:31),UpperIdent(5:31-5:37),CloseSquare(5:37-5:38),
+LowerIdent(8:1-8:10),OpColon(8:11-8:12),UpperIdent(8:13-8:16),OpArrow(8:17-8:19),UpperIdent(8:20-8:26),NoSpaceOpenRound(8:26-8:27),UpperIdent(8:27-8:32),Comma(8:32-8:33),UpperIdent(8:34-8:39),CloseRound(8:39-8:40),
+LowerIdent(9:1-9:10),OpAssign(9:11-9:12),OpBar(9:13-9:14),LowerIdent(9:14-9:19),OpBar(9:19-9:20),UpperIdent(9:21-9:25),NoSpaceDotLowerIdent(9:25-9:31),NoSpaceOpenRound(9:31-9:32),LowerIdent(9:32-9:37),CloseRound(9:37-9:38),
+LowerIdent(12:1-12:14),OpColon(12:15-12:16),UpperIdent(12:17-12:24),OpArrow(12:25-12:27),UpperIdent(12:28-12:36),
+LowerIdent(13:1-13:14),OpAssign(13:15-13:16),OpBar(13:17-13:18),LowerIdent(13:18-13:21),OpBar(13:21-13:22),OpenCurly(13:23-13:24),
+LowerIdent(14:5-14:11),OpAssign(14:12-14:13),UpperIdent(14:14-14:18),NoSpaceDotLowerIdent(14:18-14:25),NoSpaceOpenRound(14:25-14:26),LowerIdent(14:26-14:29),NoSpaceDotLowerIdent(14:29-14:34),CloseRound(14:34-14:35),
+KwMatch(15:5-15:10),LowerIdent(15:11-15:17),OpenCurly(15:18-15:19),
+UpperIdent(16:9-16:11),NoSpaceOpenRound(16:11-16:12),LowerIdent(16:12-16:17),CloseRound(16:17-16:18),OpFatArrow(16:19-16:21),UpperIdent(16:22-16:26),NoSpaceDotLowerIdent(16:26-16:29),NoSpaceOpenRound(16:29-16:30),LowerIdent(16:30-16:35),CloseRound(16:35-16:36),
+UpperIdent(17:9-17:12),NoSpaceOpenRound(17:12-17:13),LowerIdent(17:13-17:18),CloseRound(17:18-17:19),OpFatArrow(17:20-17:22),UpperIdent(17:23-17:27),NoSpaceDotLowerIdent(17:27-17:38),NoSpaceOpenRound(17:38-17:39),LowerIdent(17:39-17:44),CloseRound(17:44-17:45),
+CloseCurly(18:5-18:6),
+CloseCurly(19:1-19:2),
+LowerIdent(22:1-22:12),OpColon(22:13-22:14),UpperIdent(22:15-22:21),Comma(22:21-22:22),UpperIdent(22:23-22:27),NoSpaceOpenRound(22:27-22:28),UpperIdent(22:28-22:33),CloseRound(22:33-22:34),OpArrow(22:35-22:37),UpperIdent(22:38-22:44),NoSpaceOpenRound(22:44-22:45),UpperIdent(22:45-22:49),NoSpaceOpenRound(22:49-22:50),UpperIdent(22:50-22:55),CloseRound(22:55-22:56),Comma(22:56-22:57),UpperIdent(22:58-22:63),CloseRound(22:63-22:64),
+LowerIdent(23:1-23:12),OpAssign(23:13-23:14),OpBar(23:15-23:16),LowerIdent(23:16-23:22),Comma(23:22-23:23),LowerIdent(23:24-23:30),OpBar(23:30-23:31),
+UpperIdent(24:5-24:9),NoSpaceDotLowerIdent(24:9-24:16),NoSpaceOpenRound(24:16-24:17),
+LowerIdent(25:9-25:15),Comma(25:15-25:16),
+OpBar(26:9-26:10),LowerIdent(26:10-26:11),OpBar(26:11-26:12),UpperIdent(26:13-26:17),NoSpaceDotLowerIdent(26:17-26:30),NoSpaceOpenRound(26:30-26:31),LowerIdent(26:31-26:37),Comma(26:37-26:38),LowerIdent(26:39-26:40),CloseRound(26:40-26:41),Comma(26:41-26:42),
+CloseRound(27:5-27:6),
+UpperIdent(30:1-30:13),OpColon(30:14-30:15),OpenCurly(30:16-30:17),
+LowerIdent(31:5-31:15),OpColon(31:16-31:17),UpperIdent(31:18-31:24),Comma(31:24-31:25),
+LowerIdent(32:5-32:15),OpColon(32:16-32:17),UpperIdent(32:18-32:24),Comma(32:24-32:25),
+LowerIdent(33:5-33:20),OpColon(33:21-33:22),UpperIdent(33:23-33:31),Comma(33:31-33:32),
+CloseCurly(34:1-34:2),
+LowerIdent(37:1-37:13),OpColon(37:14-37:15),UpperIdent(37:16-37:22),OpArrow(37:23-37:25),UpperIdent(37:26-37:30),NoSpaceDotUpperIdent(37:30-37:37),
+LowerIdent(38:1-38:13),OpAssign(38:14-38:15),OpBar(38:16-38:17),LowerIdent(38:17-38:23),OpBar(38:23-38:24),UpperIdent(38:25-38:29),NoSpaceDotLowerIdent(38:29-38:40),NoSpaceOpenRound(38:40-38:41),LowerIdent(38:41-38:47),CloseRound(38:47-38:48),
+LowerIdent(41:1-41:15),OpColon(41:16-41:17),UpperIdent(41:18-41:26),OpArrow(41:27-41:29),UpperIdent(41:30-41:33),
+LowerIdent(42:1-42:15),OpAssign(42:16-42:17),OpBar(42:18-42:19),LowerIdent(42:19-42:27),OpBar(42:27-42:28),
+KwMatch(43:5-43:10),LowerIdent(43:11-43:19),NoSpaceDotLowerIdent(43:19-43:26),OpenCurly(43:27-43:28),
+UpperIdent(44:9-44:11),NoSpaceOpenRound(44:11-44:12),LowerIdent(44:12-44:18),CloseRound(44:18-44:19),OpFatArrow(44:20-44:22),UpperIdent(44:23-44:27),NoSpaceDotLowerIdent(44:27-44:42),NoSpaceOpenRound(44:42-44:43),LowerIdent(44:43-44:49),CloseRound(44:49-44:50),
+UpperIdent(45:9-45:12),NoSpaceOpenRound(45:12-45:13),LowerIdent(45:13-45:18),CloseRound(45:18-45:19),OpFatArrow(45:20-45:22),UpperIdent(45:23-45:28),NoSpaceDotLowerIdent(45:28-45:37),NoSpaceOpenRound(45:37-45:38),LowerIdent(45:38-45:43),CloseRound(45:43-45:44),
+CloseCurly(46:5-46:6),
+LowerIdent(49:1-49:15),OpColon(49:16-49:17),UpperIdent(49:18-49:24),NoSpaceOpenRound(49:24-49:25),UpperIdent(49:25-49:30),Comma(49:30-49:31),UpperIdent(49:32-49:37),CloseRound(49:37-49:38),Comma(49:38-49:39),UpperIdent(49:40-49:46),OpArrow(49:47-49:49),UpperIdent(49:50-49:56),NoSpaceOpenRound(49:56-49:57),UpperIdent(49:57-49:65),Comma(49:65-49:66),UpperIdent(49:67-49:72),CloseRound(49:72-49:73),
+LowerIdent(50:1-50:15),OpAssign(50:16-50:17),OpBar(50:18-50:19),LowerIdent(50:19-50:29),Comma(50:29-50:30),LowerIdent(50:31-50:41),OpBar(50:41-50:42),
+KwMatch(51:5-51:10),LowerIdent(51:11-51:21),OpenCurly(51:22-51:23),
+UpperIdent(52:9-52:11),NoSpaceOpenRound(52:11-52:12),LowerIdent(52:12-52:17),CloseRound(52:17-52:18),OpFatArrow(52:19-52:21),UpperIdent(52:22-52:24),NoSpaceOpenRound(52:24-52:25),OpenCurly(52:25-52:26),LowerIdent(52:27-52:31),OpColon(52:31-52:32),UpperIdent(52:33-52:37),NoSpaceDotLowerIdent(52:37-52:44),NoSpaceOpenRound(52:44-52:45),LowerIdent(52:45-52:50),CloseRound(52:50-52:51),Comma(52:51-52:52),LowerIdent(52:53-52:59),OpColon(52:59-52:60),LowerIdent(52:61-52:71),CloseCurly(52:72-52:73),CloseRound(52:73-52:74),
+UpperIdent(53:9-53:12),NoSpaceOpenRound(53:12-53:13),LowerIdent(53:13-53:18),CloseRound(53:18-53:19),OpFatArrow(53:20-53:22),UpperIdent(53:23-53:26),NoSpaceOpenRound(53:26-53:27),LowerIdent(53:27-53:32),CloseRound(53:32-53:33),
 CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 ~~~
 # PARSE
@@ -609,7 +378,7 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 				(e-apply @9.21-9.38
 					(e-ident @9.21-9.31 (raw "Json.parse"))
 					(e-ident @9.32-9.37 (raw "input")))))
-		(s-type-anno @1.1-1.1 (name "handleRequest")
+		(s-type-anno @12.1-13.14 (name "handleRequest")
 			(ty-fn @12.17-12.36
 				(ty @12.17-12.24 (name "Request"))
 				(ty @12.28-12.36 (name "Response"))))
@@ -680,7 +449,7 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 					(ty @32.18-32.24 (name "Status")))
 				(anno-record-field @33.5-33.32 (name "defaultResponse")
 					(ty @33.23-33.31 (name "Response")))))
-		(s-type-anno @1.1-1.1 (name "createClient")
+		(s-type-anno @37.1-38.13 (name "createClient")
 			(ty-fn @37.16-37.37
 				(ty @37.16-37.22 (name "Config"))
 				(ty @37.26-37.37 (name "Http.Client"))))
@@ -692,7 +461,7 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 				(e-apply @38.25-38.48
 					(e-ident @38.25-38.40 (raw "Http.clientWith"))
 					(e-ident @38.41-38.47 (raw "config")))))
-		(s-type-anno @1.1-1.1 (name "handleResponse")
+		(s-type-anno @41.1-42.15 (name "handleResponse")
 			(ty-fn @41.18-41.33
 				(ty @41.18-41.26 (name "Response"))
 				(ty @41.30-41.33 (name "Str"))))
@@ -738,16 +507,18 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 				(e-match
 					(e-ident @51.11-51.21 (raw "jsonResult"))
 					(branches
-						(branch @52.9-52.70
+						(branch @52.9-53.12
 							(p-tag @52.9-52.18 (raw "Ok")
 								(p-ident @52.12-52.17 (raw "value")))
-							(e-malformed @52.22-52.70 (reason "expected_expr_apply_close_round")))
-						(branch @52.60-52.73
-							(p-ident @52.60-52.70 (raw "httpStatus"))
-							(e-malformed @52.71-52.73 (reason "expr_unexpected_token")))
-						(branch @52.72-53.12
-							(p-malformed @1.1-1.1 (tag "pattern_unexpected_token"))
-							(e-malformed @1.1-53.12 (reason "expr_unexpected_token")))
+							(e-apply @52.22-52.74
+								(e-tag @52.22-52.24 (raw "Ok"))
+								(e-record @52.25-52.73
+									(field (field "body")
+										(e-apply @52.33-52.51
+											(e-ident @52.33-52.44 (raw "Json.encode"))
+											(e-ident @52.45-52.50 (raw "value"))))
+									(field (field "status")
+										(e-ident @52.61-52.71 (raw "httpStatus"))))))
 						(branch @53.9-54.6
 							(p-tag @53.9-53.19 (raw "Err")
 								(p-ident @53.13-53.18 (raw "error")))
@@ -808,7 +579,7 @@ handleResponse = |response|
 combineResults : Result(Value, Error), Status -> Result(Response, Error)
 combineResults = |jsonResult, httpStatus|
 	match jsonResult {
-		Ok(value) => 		httpStatus => 		 => 
+		Ok(value) => Ok({body: Json.encode(value), status: httpStatus})
 		Err(error) => Err(error)
 	}
 ~~~
@@ -985,19 +756,20 @@ combineResults = |jsonResult, httpStatus|
 								(pattern (degenerate false)
 									(p-applied-tag @52.9-52.18)))
 							(value
-								(e-runtime-error (tag "expr_not_canonicalized"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign @52.60-52.70 (ident "httpStatus"))))
-							(value
-								(e-runtime-error (tag "expr_not_canonicalized"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
-							(value
-								(e-runtime-error (tag "expr_not_canonicalized"))))
+								(e-tag @52.22-52.24 (name "Ok")
+									(args
+										(e-record @52.25-52.73
+											(fields
+												(field (name "body")
+													(e-call @52.33-52.51
+														(e-lookup-external @52.33-52.44
+															(module-idx "0")
+															(target-node-idx "0"))
+														(e-lookup-local @52.45-52.50
+															(p-assign @52.12-52.17 (ident "value")))))
+												(field (name "status")
+													(e-lookup-local @52.61-52.71
+														(p-assign @50.31-50.41 (ident "httpStatus"))))))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)

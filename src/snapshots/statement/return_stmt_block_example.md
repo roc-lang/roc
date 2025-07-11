@@ -46,16 +46,15 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),OpArrow(3:11-3:13),UpperIdent(3:14-3:20),NoSpaceOpenRound(3:20-3:21),UpperIdent(3:21-3:24),Comma(3:24-3:25),OpenSquare(3:26-3:27),UpperIdent(3:27-3:33),CloseSquare(3:33-3:34),CloseRound(3:34-3:35),Newline(1:1-1:1),
-LowerIdent(4:1-4:4),OpAssign(4:5-4:6),OpBar(4:7-4:8),LowerIdent(4:8-4:11),OpBar(4:11-4:12),OpenCurly(4:13-4:14),Newline(1:1-1:1),
-LowerIdent(5:5-5:8),OpAssign(5:9-5:10),KwIf(5:11-5:13),OpenRound(5:14-5:15),LowerIdent(5:15-5:18),OpGreaterThan(5:19-5:20),Int(5:21-5:23),CloseRound(5:23-5:24),OpenCurly(5:25-5:26),Newline(1:1-1:1),
-KwReturn(6:9-6:15),UpperIdent(6:16-6:19),NoSpaceOpenRound(6:19-6:20),UpperIdent(6:20-6:26),CloseRound(6:26-6:27),Newline(1:1-1:1),
-CloseCurly(7:5-7:6),KwElse(7:7-7:11),OpenCurly(7:12-7:13),Newline(1:1-1:1),
-StringStart(8:9-8:10),StringPart(8:10-8:15),StringEnd(8:15-8:16),Newline(1:1-1:1),
-CloseCurly(9:5-9:6),Newline(1:1-1:1),
-UpperIdent(10:5-10:7),NoSpaceOpenRound(10:7-10:8),LowerIdent(10:8-10:11),CloseRound(10:11-10:12),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
+LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),OpArrow(3:11-3:13),UpperIdent(3:14-3:20),NoSpaceOpenRound(3:20-3:21),UpperIdent(3:21-3:24),Comma(3:24-3:25),OpenSquare(3:26-3:27),UpperIdent(3:27-3:33),CloseSquare(3:33-3:34),CloseRound(3:34-3:35),
+LowerIdent(4:1-4:4),OpAssign(4:5-4:6),OpBar(4:7-4:8),LowerIdent(4:8-4:11),OpBar(4:11-4:12),OpenCurly(4:13-4:14),
+LowerIdent(5:5-5:8),OpAssign(5:9-5:10),KwIf(5:11-5:13),OpenRound(5:14-5:15),LowerIdent(5:15-5:18),OpGreaterThan(5:19-5:20),Int(5:21-5:23),CloseRound(5:23-5:24),OpenCurly(5:25-5:26),
+KwReturn(6:9-6:15),UpperIdent(6:16-6:19),NoSpaceOpenRound(6:19-6:20),UpperIdent(6:20-6:26),CloseRound(6:26-6:27),
+CloseCurly(7:5-7:6),KwElse(7:7-7:11),OpenCurly(7:12-7:13),
+StringStart(8:9-8:10),StringPart(8:10-8:15),StringEnd(8:15-8:16),
+CloseCurly(9:5-9:6),
+UpperIdent(10:5-10:7),NoSpaceOpenRound(10:7-10:8),LowerIdent(10:8-10:11),CloseRound(10:11-10:12),
 CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
 ~~~
 # PARSE

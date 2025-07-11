@@ -19,33 +19,37 @@ green : Color
 green = Green
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - nominal_import_wildcard.md:3:13:3:13
-INVALID STATEMENT - nominal_import_wildcard.md:1:1:1:1
+UNEXPECTED TOKEN IN EXPRESSION - nominal_import_wildcard.md:3:13:5:4
+INVALID STATEMENT - nominal_import_wildcard.md:3:13:5:4
 UNDECLARED TYPE - nominal_import_wildcard.md:5:7:5:12
 UNDECLARED TYPE - nominal_import_wildcard.md:8:8:8:13
 UNDECLARED TYPE - nominal_import_wildcard.md:11:9:11:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **.*
+
+red** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**nominal_import_wildcard.md:3:13:3:13:**
+**nominal_import_wildcard.md:3:13:5:4:**
 ```roc
 import Color.*
+
+red : Color
 ```
-            
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**nominal_import_wildcard.md:1:1:1:1:**
+**nominal_import_wildcard.md:3:13:5:4:**
 ```roc
+import Color.*
 
+red : Color
 ```
-
 
 
 **UNDECLARED TYPE**
@@ -83,17 +87,13 @@ green : Color
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:25),CloseSquare(1:25-1:26),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwImport(3:1-3:7),UpperIdent(3:8-3:13),DotStar(3:13-3:15),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:12),Newline(1:1-1:1),
-LowerIdent(6:1-6:4),OpAssign(6:5-6:6),UpperIdent(6:7-6:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(8:1-8:5),OpColon(8:6-8:7),UpperIdent(8:8-8:13),Newline(1:1-1:1),
-LowerIdent(9:1-9:5),OpAssign(9:6-9:7),UpperIdent(9:8-9:12),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(11:1-11:6),OpColon(11:7-11:8),UpperIdent(11:9-11:14),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:25),CloseSquare(1:25-1:26),
+KwImport(3:1-3:7),UpperIdent(3:8-3:13),DotStar(3:13-3:15),
+LowerIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:12),
+LowerIdent(6:1-6:4),OpAssign(6:5-6:6),UpperIdent(6:7-6:10),
+LowerIdent(8:1-8:5),OpColon(8:6-8:7),UpperIdent(8:8-8:13),
+LowerIdent(9:1-9:5),OpAssign(9:6-9:7),UpperIdent(9:8-9:12),
+LowerIdent(11:1-11:6),OpColon(11:7-11:8),UpperIdent(11:9-11:14),
 LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:14),EndOfFile(12:14-12:14),
 ~~~
 # PARSE
@@ -106,18 +106,18 @@ LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:14),EndOfFile(12:14
 			(exposed-lower-ident (text "blue"))))
 	(statements
 		(s-import @3.1-3.13 (raw "Color"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
-		(s-type-anno @1.1-1.1 (name "red")
+		(e-malformed @3.13-5.4 (reason "expr_unexpected_token"))
+		(s-type-anno @5.1-6.4 (name "red")
 			(ty @5.7-5.12 (name "Color")))
 		(s-decl @6.1-6.10
 			(p-ident @6.1-6.4 (raw "red"))
 			(e-tag @6.7-6.10 (raw "Red")))
-		(s-type-anno @1.1-1.1 (name "blue")
+		(s-type-anno @8.1-9.5 (name "blue")
 			(ty @8.8-8.13 (name "Color")))
 		(s-decl @9.1-9.12
 			(p-ident @9.1-9.5 (raw "blue"))
 			(e-tag @9.8-9.12 (raw "Blue")))
-		(s-type-anno @1.1-1.1 (name "green")
+		(s-type-anno @11.1-12.6 (name "green")
 			(ty @11.9-11.14 (name "Color")))
 		(s-decl @12.1-12.14
 			(p-ident @12.1-12.6 (raw "green"))

@@ -15,8 +15,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),Newline(1:1-1:1),
-OpenSquare(2:2-2:3),LowerIdent(2:3-2:8),Comma(2:8-2:9),CloseSquare(2:9-2:10),Newline(1:1-1:1),
+KwApp(1:1-1:4),
+OpenSquare(2:2-2:3),LowerIdent(2:3-2:8),Comma(2:8-2:9),CloseSquare(2:9-2:10),
 OpenCurly(3:2-3:3),LowerIdent(3:4-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14),StringPart(3:14-3:25),StringEnd(3:25-3:26),Comma(3:26-3:27),LowerIdent(3:28-3:30),OpColon(3:30-3:31),KwPlatform(3:32-3:40),StringStart(3:41-3:42),StringPart(3:42-3:53),StringEnd(3:53-3:54),Comma(3:54-3:55),CloseCurly(3:56-3:57),EndOfFile(3:57-3:57),
 ~~~
 # PARSE

@@ -39,13 +39,27 @@ parse_diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 
 /// Calculate whether this region is - or will be - multiline
 pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
+    if (region.start >= region.end) return false;
+
+    // Check if there's a newline in the source text between start and end tokens
+    const start_region = self.tokens.resolve(region.start);
+    const end_region = self.tokens.resolve(region.end);
+
+    const source_start = start_region.start.offset;
+    const source_end = end_region.end.offset;
+
+    // Look for newlines in the source text
+    for (self.source[source_start..source_end]) |c| {
+        if (c == '\n') {
+            return true;
+        }
+    }
+
+    // Also check for trailing comma patterns that indicate multiline
     var i = region.start;
     const tags = self.tokens.tokens.items(.tag);
     while (i <= region.end) {
-        if (tags[i] == .Newline) {
-            return true;
-        }
-        if (tags[i] == .Comma and (tags[i + 1] == .CloseSquare or
+        if (tags[i] == .Comma and i + 1 < self.tokens.tokens.len and (tags[i + 1] == .CloseSquare or
             tags[i + 1] == .CloseRound or
             tags[i + 1] == .CloseCurly))
         {

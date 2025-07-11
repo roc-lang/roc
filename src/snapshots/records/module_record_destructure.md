@@ -54,12 +54,11 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:20),CloseSquare(1:20-1:21),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:12),OpColon(3:13-3:14),OpenCurly(3:15-3:16),LowerIdent(3:17-3:20),OpColon(3:21-3:22),UpperIdent(3:23-3:26),CloseCurly(3:27-3:28),OpArrow(3:29-3:31),UpperIdent(3:32-3:35),Newline(1:1-1:1),
-LowerIdent(4:1-4:12),OpAssign(4:13-4:14),OpBar(4:15-4:16),LowerIdent(4:16-4:22),OpBar(4:22-4:23),OpenCurly(4:24-4:25),Newline(1:1-1:1),
-OpenCurly(5:5-5:6),LowerIdent(5:7-5:10),CloseCurly(5:11-5:12),OpAssign(5:13-5:14),LowerIdent(5:15-5:21),Newline(1:1-1:1),
-LowerIdent(6:5-6:8),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:20),CloseSquare(1:20-1:21),
+LowerIdent(3:1-3:12),OpColon(3:13-3:14),OpenCurly(3:15-3:16),LowerIdent(3:17-3:20),OpColon(3:21-3:22),UpperIdent(3:23-3:26),CloseCurly(3:27-3:28),OpArrow(3:29-3:31),UpperIdent(3:32-3:35),
+LowerIdent(4:1-4:12),OpAssign(4:13-4:14),OpBar(4:15-4:16),LowerIdent(4:16-4:22),OpBar(4:22-4:23),OpenCurly(4:24-4:25),
+OpenCurly(5:5-5:6),LowerIdent(5:7-5:10),CloseCurly(5:11-5:12),OpAssign(5:13-5:14),LowerIdent(5:15-5:21),
+LowerIdent(6:5-6:8),
 CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 ~~~
 # PARSE
@@ -69,7 +68,7 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 		(exposes @1.8-1.21
 			(exposed-lower-ident (text "extract_age"))))
 	(statements
-		(s-type-anno @1.1-1.1 (name "extract_age")
+		(s-type-anno @3.1-4.12 (name "extract_age")
 			(ty-fn @3.15-3.35
 				(ty-record @3.15-3.28
 					(anno-record-field @3.17-3.28 (name "age")
