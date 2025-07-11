@@ -395,15 +395,11 @@ fn loadFile(self: *Self, path: []const u8, module_id: ModuleId) !void {
     errdefer self.config.allocator.free(source);
 
     // Try to load from cache
-    const cache_result = try self.cache_manager.lookup(source, @import("build_options").compiler_version);
+    const cache_result = try self.cache_manager.lookup(source, path, @import("build_options").compiler_version);
 
     switch (cache_result) {
         .hit => |cached_data| {
             // Cache hit! The cached_data contains a ProcessResult that was restored from cache
-
-            // Update the cached ModuleEnv to use the actual file path
-            const module_path_copy = try self.config.allocator.dupe(u8, path);
-            cached_data.result.cir.env.module_path = module_path_copy;
 
             // Create module with cached data
             const module = Module{
@@ -418,7 +414,7 @@ fn loadFile(self: *Self, path: []const u8, module_id: ModuleId) !void {
                         .diagnostics = &[_]canonicalize.CIR.Diagnostic{}, // No diagnostics from cache
                     },
                 },
-                .module_path = module_path_copy,
+                .module_path = cached_data.result.cir.env.module_path,
             };
 
             if (self.mutex) |*mutex| {
@@ -458,19 +454,15 @@ fn loadFile(self: *Self, path: []const u8, module_id: ModuleId) !void {
 /// Create a module and parse it
 pub fn createAndParseModule(self: *Self, module_id: ModuleId, source: []const u8, path: []const u8) !void {
     // Create module environment
+    // Duplicate path since the caller will free it
+    const owned_path = try self.config.allocator.dupe(u8, path);
+
     var module_env = try self.config.allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(self.config.allocator);
+    module_env.* = ModuleEnv.init(self.config.allocator, source, owned_path);
     errdefer {
         module_env.deinit();
         self.config.allocator.destroy(module_env);
     }
-
-    // Transfer ownership of source to ModuleEnv
-    module_env.source = source;
-    module_env.owns_source = true;
-    // Duplicate path since the caller will free it
-    module_env.module_path = try self.config.allocator.dupe(u8, path);
-    module_env.owns_module_path = true;
 
     // Create module in created phase
     const module = Module{

@@ -57,7 +57,12 @@ pub const CacheManager = struct {
     ///
     /// Returns CacheResult indicating hit, miss, or invalid entry.
     /// On cache hit, the returned ProcessResult owns all its data.
-    pub fn lookup(self: *Self, content: []const u8, compiler_version: []const u8) !CacheResult {
+    pub fn lookup(
+        self: *Self,
+        content: []const u8,
+        module_path: []const u8,
+        compiler_version: []const u8,
+    ) !CacheResult {
         if (!self.config.enabled) {
             return CacheResult.miss;
         }
@@ -90,7 +95,11 @@ pub const CacheManager = struct {
         defer mapped_cache.deinit(self.allocator);
 
         // Validate and restore from cache
-        const result = self.restoreFromCache(mapped_cache.data()) catch |err| {
+        const result = self.restoreFromCache(
+            mapped_cache.data(),
+            content,
+            module_path,
+        ) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
             }
@@ -257,7 +266,12 @@ pub const CacheManager = struct {
     }
 
     /// Restore a ProcessResult from cache data with diagnostic counts.
-    fn restoreFromCache(self: *Self, cache_data: []align(SERIALIZATION_ALIGNMENT) const u8) !struct {
+    fn restoreFromCache(
+        self: *Self,
+        cache_data: []align(SERIALIZATION_ALIGNMENT) const u8,
+        source: []const u8,
+        module_path: []const u8,
+    ) !struct {
         result: coordinate_simple.ProcessResult,
         error_count: u32,
         warning_count: u32,
@@ -282,14 +296,9 @@ pub const CacheManager = struct {
         const module_env = try self.allocator.create(ModuleEnv);
         module_env.* = restored.module_env;
 
-        // Fix source and module_path pointers since they weren't cached
-        // Create a placeholder source that won't cause crashes when displayed
-        const placeholder_source = try self.allocator.dupe(u8, "# Source not available (loaded from cache)");
-        module_env.source = placeholder_source;
-
-        // Use a generic module path for cached modules
-        const cached_module_path = try self.allocator.dupe(u8, "<cached_module>");
-        module_env.module_path = cached_module_path;
+        // Always duplicate source and module_path since ModuleEnv owns them
+        module_env.source = try self.allocator.dupe(u8, source);
+        module_env.module_path = try self.allocator.dupe(u8, module_path);
 
         // Allocate CIR to heap for ownership
         const cir = try self.allocator.create(CIR);
@@ -393,7 +402,7 @@ test "CacheManager lookup miss" {
     const content = "module [test]\n\ntest = 42";
     const compiler_version = "roc-zig-0.11.0-debug";
 
-    const result = try manager.lookup(content, compiler_version);
+    const result = try manager.lookup(content, "test.roc", compiler_version);
     try testing.expect(result == .miss);
     try testing.expect(manager.stats.misses == 1);
 }
@@ -408,7 +417,7 @@ test "CacheManager disabled" {
     const content = "module [test]\n\ntest = 42";
     const compiler_version = "roc-zig-0.11.0-debug";
 
-    const result = try manager.lookup(content, compiler_version);
+    const result = try manager.lookup(content, "test.roc", compiler_version);
     try testing.expect(result == .miss);
     try testing.expect(manager.stats.getTotalOps() == 0); // No stats recorded when disabled
 }

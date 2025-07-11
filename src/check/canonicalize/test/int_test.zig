@@ -18,11 +18,7 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
     expr_idx: CIR.Expr.Idx,
 } {
     const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = base.ModuleEnv.init(allocator);
-
-    // Set the source in module_env so canonicalization can access it
-    module_env.source = try allocator.dupe(u8, source);
-    module_env.owns_source = true;
+    module_env.* = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
 
     const parse_ast = try allocator.create(parse.AST);
     parse_ast.* = parse.parseExpr(module_env, source);

@@ -23,11 +23,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(allocator);
-
-    // Set the source in module_env so canonicalization can access it
-    module_env.source = try allocator.dupe(u8, source);
-    module_env.owns_source = true;
+    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
@@ -94,11 +90,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(allocator);
-
-    // Set the source in module_env so canonicalization can access it
-    module_env.source = try allocator.dupe(u8, source);
-    module_env.owns_source = true;
+    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
@@ -170,11 +162,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(allocator);
-
-    // Set the source in module_env so canonicalization can access it
-    module_env.source = try allocator.dupe(u8, source);
-    module_env.owns_source = true;
+    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);

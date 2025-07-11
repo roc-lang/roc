@@ -1533,7 +1533,7 @@ pub const Tokenizer = struct {
 fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) !void {
     var messages: [10]Diagnostic = undefined;
 
-    var env = base.ModuleEnv.init(gpa);
+    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
     defer env.deinit();
 
     var tokenizer = Tokenizer.init(&env, input, &messages);
@@ -1551,7 +1551,7 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
 
 /// Assert the invariants of the tokenizer are held.
 pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug: bool) void {
-    var env = base.ModuleEnv.init(gpa);
+    var env = base.ModuleEnv.init(gpa, gpa.dupe(u8, "") catch unreachable, gpa.dupe(u8, "test.roc") catch unreachable);
     defer env.deinit();
 
     // Initial tokenization.
@@ -2196,7 +2196,7 @@ test "tokenizer with invalid UTF-8" {
         const invalid_utf8 = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xFF, ' ', 'w', 'o', 'r', 'l', 'd', '"' };
         var diagnostics: [10]Diagnostic = undefined;
 
-        var env = base.ModuleEnv.init(gpa);
+        var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
         defer env.deinit();
 
         var tokenizer = Tokenizer.init(&env, &invalid_utf8, &diagnostics);
@@ -2214,7 +2214,7 @@ test "tokenizer with invalid UTF-8" {
         const incomplete_utf8 = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xC3, '"' }; // 0xC3 expects another byte
         var diagnostics: [10]Diagnostic = undefined;
 
-        var env = base.ModuleEnv.init(gpa);
+        var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
         defer env.deinit();
 
         var tokenizer = Tokenizer.init(&env, &incomplete_utf8, &diagnostics);
@@ -2236,7 +2236,7 @@ test "non-printable characters in string literal" {
         const non_printable = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', '\x01', 'w', 'o', 'r', 'l', 'd', '"' }; // 0x01 is SOH (non-printable)
         var diagnostics: [10]Diagnostic = undefined;
 
-        var env = base.ModuleEnv.init(gpa);
+        var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
         defer env.deinit();
 
         var tokenizer = Tokenizer.init(&env, &non_printable, &diagnostics);
@@ -2254,7 +2254,7 @@ test "non-printable characters in string literal" {
         const control_char = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xC2, 0x80, ' ', 'w', 'o', 'r', 'l', 'd', '"' }; // U+0080 (C1 control)
         var diagnostics: [10]Diagnostic = undefined;
 
-        var env = base.ModuleEnv.init(gpa);
+        var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
         defer env.deinit();
 
         var tokenizer = Tokenizer.init(&env, &control_char, &diagnostics);
@@ -2271,7 +2271,7 @@ test "non-printable characters in string literal" {
         const valid_chars = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', '\t', ' ', 'w', 'o', 'r', 'l', 'd', '"' };
         var diagnostics: [10]Diagnostic = undefined;
 
-        var env = base.ModuleEnv.init(gpa);
+        var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
         defer env.deinit();
 
         var tokenizer = Tokenizer.init(&env, &valid_chars, &diagnostics);

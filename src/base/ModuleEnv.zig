@@ -33,19 +33,13 @@ exposed_nodes: collections.SafeStringHashMap(u16),
 line_starts: collections.SafeList(u32),
 
 /// The source code of this module.
-source: []const u8 = "",
-
-/// Whether the source code memory is owned by this ModuleEnv (and thus will be freed in deinit)
-owns_source: bool = false,
+source: []const u8,
 
 /// The module path (filename)
-module_path: []const u8 = "",
-
-/// Whether the module_path memory is owned by this ModuleEnv (and thus will be freed in deinit)
-owns_module_path: bool = false,
+module_path: []const u8,
 
 /// Initialize the module environment.
-pub fn init(gpa: std.mem.Allocator) Self {
+pub fn init(gpa: std.mem.Allocator, source: []const u8, module_path: []const u8) Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
 
     return Self{
@@ -57,8 +51,8 @@ pub fn init(gpa: std.mem.Allocator) Self {
         .exposed_by_str = collections.SafeStringHashMap(void).initCapacity(gpa, 64),
         .exposed_nodes = collections.SafeStringHashMap(u16).initCapacity(gpa, 64),
         .line_starts = collections.SafeList(u32).initCapacity(gpa, 256),
-        .owns_source = false,
-        .owns_module_path = false,
+        .source = source,
+        .module_path = module_path,
     };
 }
 
@@ -72,10 +66,10 @@ pub fn deinit(self: *Self) void {
     self.exposed_by_str.deinit(self.gpa);
     self.exposed_nodes.deinit(self.gpa);
 
-    if (self.owns_source and self.source.len > 0) {
+    if (self.source.len > 0) {
         self.gpa.free(self.source);
     }
-    if (self.owns_module_path and self.module_path.len > 0) {
+    if (self.module_path.len > 0) {
         self.gpa.free(self.module_path);
     }
 }

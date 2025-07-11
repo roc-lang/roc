@@ -370,12 +370,8 @@ fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []con
     log("Generating snapshot for: {s}", .{output_path});
 
     // Process the content through the compilation pipeline
-    var module_env = base.ModuleEnv.init(allocator);
+    var module_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, roc_content), try allocator.dupe(u8, output_path));
     defer module_env.deinit();
-
-    // Duplicate source for ModuleEnv to own (it will free it in deinit)
-    module_env.source = try allocator.dupe(u8, roc_content);
-    module_env.owns_source = true;
 
     // Parse the content
     var ast = parse.parse(&module_env, roc_content);
@@ -1565,12 +1561,10 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
         }
     };
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, content.source), try gpa.dupe(u8, snapshot_path));
     defer module_env.deinit();
 
     // Duplicate source for ModuleEnv to own (it will free it in deinit)
-    module_env.source = try gpa.dupe(u8, content.source);
-    module_env.owns_source = true;
 
     var parse_ast = switch (content.meta.node_type) {
         .file => parse.parse(&module_env, content.source),

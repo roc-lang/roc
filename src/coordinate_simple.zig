@@ -82,7 +82,7 @@ pub fn processFile(
         const compiler_version = getCompilerVersion();
 
         // Check cache
-        switch (cache.lookup(source, compiler_version) catch .miss) {
+        switch (cache.lookup(source, filepath, compiler_version) catch .miss) {
             .hit => |cache_hit| {
                 // Cache hit! Free the source we just read since cached result has its own
                 gpa.free(source);
@@ -151,14 +151,15 @@ fn processSourceInternal(
 
     // Initialize the ModuleEnv (heap-allocated for ownership transfer)
     var module_env = try gpa.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(gpa);
+
+    // Always duplicate source and filename since ModuleEnv owns them
+    const owned_source_for_env = try gpa.dupe(u8, source);
+    const owned_filename = try gpa.dupe(u8, filename);
+
+    module_env.* = ModuleEnv.init(gpa, owned_source_for_env, owned_filename);
 
     // Calculate line starts for region info
     try module_env.*.calcLineStarts(source);
-
-    // Set the source in module_env so canonicalization can access it
-    module_env.source = try gpa.dupe(u8, source);
-    module_env.owns_source = true;
 
     // Parse the source code
     var parse_ast = parse.parse(module_env, source);
