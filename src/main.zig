@@ -124,13 +124,13 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
             count.failure += inner_count.failure;
         }
         const elapsed = timer.read();
-        try std.io.getStdOut().writer().print("Successfully formatted {} files\n", .{count.success});
+        try stdout.writer().print("Successfully formatted {} files\n", .{count.success});
         if (count.failure > 0) {
-            try std.io.getStdOut().writer().print("Failed to format {} files.\n", .{count.failure});
+            try stdout.writer().print("Failed to format {} files.\n", .{count.failure});
         }
-        try std.io.getStdOut().writer().print("Took ", .{});
-        try formatElapsedTime(std.io.getStdOut().writer(), elapsed);
-        try std.io.getStdOut().writer().print(".\n", .{});
+        try stdout.writer().print("Took ", .{});
+        try formatElapsedTime(stdout.writer(), elapsed);
+        try stdout.writer().print(".\n", .{});
     }
 }
 
