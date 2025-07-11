@@ -273,10 +273,10 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                     for (diagnostics) |diagnostic| {
                         // Create report with owned data to avoid dangling references
                         const report = @constCast(cir).diagnosticToReport(diagnostic, gpa, module.env.source, filename) catch |err| {
-                                stderr.print("Error converting diagnostic to report: {}\n", .{err}) catch {};
-                                continue;
-                            };
-                            try all_reports.append(report);
+                            stderr.print("Error converting diagnostic to report: {}\n", .{err}) catch {};
+                            continue;
+                        };
+                        try all_reports.append(report);
                     }
                 }
             }
