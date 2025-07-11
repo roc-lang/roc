@@ -68,6 +68,7 @@ pub const RunArgs = struct {
 pub const CheckArgs = struct {
     path: []const u8, // the path of the roc file to be checked
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolved dependencies
+    time: bool = false, // whether to print timing information
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
 };
@@ -147,8 +148,10 @@ const main_help =
 fn parseCheck(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var main: ?[]const u8 = null;
+    var time: bool = false;
     var no_cache: bool = false;
     var verbose: bool = false;
+
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
@@ -161,6 +164,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --main=<main>  The .roc file of the main app/package module to resolve dependencies from
+            \\      --time         Print timing information for each compilation phase. Will not print anything if everything is cached.
             \\      --no-cache     Disable caching
             \\      --verbose      Enable verbose output including cache statistics
             \\  -h, --help         Print help
@@ -172,6 +176,8 @@ fn parseCheck(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--main" } } };
             }
+        } else if (mem.eql(u8, arg, "--time")) {
+            time = true;
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
         } else if (mem.eql(u8, arg, "--verbose")) {
@@ -183,7 +189,8 @@ fn parseCheck(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .no_cache = no_cache, .verbose = verbose } };
+
+    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .no_cache = no_cache, .verbose = verbose } };
 }
 
 fn parseBuild(args: []const []const u8) CliArgs {
@@ -748,6 +755,19 @@ test "roc check" {
         const result = parse(gpa, &[_][]const u8{ "check", "foo.roc", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(gpa, &[_][]const u8{ "check", "--time" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("main.roc", result.check.path);
+        try testing.expectEqual(true, result.check.time);
+    }
+    {
+        const result = parse(gpa, &[_][]const u8{ "check", "foo.roc", "--time", "--main=bar.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.check.path);
+        try testing.expectEqualStrings("bar.roc", result.check.main.?);
+        try testing.expectEqual(true, result.check.time);
     }
 }
 
