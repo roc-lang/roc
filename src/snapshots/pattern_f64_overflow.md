@@ -87,12 +87,12 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:8),OpenCurly(1:9-1:10),Newline(1:1-1:1),
-Float(2:5-2:10),OpFatArrow(2:11-2:13),StringStart(2:14-2:15),StringPart(2:15-2:32),StringEnd(2:32-2:33),Newline(1:1-1:1),
-Float(3:5-3:10),OpFatArrow(3:11-3:13),StringStart(3:14-3:15),StringPart(3:15-3:32),StringEnd(3:32-3:33),Newline(1:1-1:1),
-Float(4:5-4:27),OpFatArrow(4:28-4:30),StringStart(4:31-4:32),StringPart(4:32-4:44),StringEnd(4:44-4:45),Newline(1:1-1:1),
-Float(5:5-5:8),OpFatArrow(5:9-5:11),StringStart(5:12-5:13),StringPart(5:13-5:17),StringEnd(5:17-5:18),Newline(1:1-1:1),
-LowerIdent(6:5-6:10),OpFatArrow(6:11-6:13),StringStart(6:14-6:15),StringPart(6:15-6:20),StringEnd(6:20-6:21),Newline(1:1-1:1),
+KwMatch(1:1-1:6),LowerIdent(1:7-1:8),OpenCurly(1:9-1:10),
+Float(2:5-2:10),OpFatArrow(2:11-2:13),StringStart(2:14-2:15),StringPart(2:15-2:32),StringEnd(2:32-2:33),
+Float(3:5-3:10),OpFatArrow(3:11-3:13),StringStart(3:14-3:15),StringPart(3:15-3:32),StringEnd(3:32-3:33),
+Float(4:5-4:27),OpFatArrow(4:28-4:30),StringStart(4:31-4:32),StringPart(4:32-4:44),StringEnd(4:44-4:45),
+Float(5:5-5:8),OpFatArrow(5:9-5:11),StringStart(5:12-5:13),StringPart(5:13-5:17),StringEnd(5:17-5:18),
+LowerIdent(6:5-6:10),OpFatArrow(6:11-6:13),StringStart(6:14-6:15),StringPart(6:15-6:20),StringEnd(6:20-6:21),
 CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 ~~~
 # PARSE
@@ -100,23 +100,23 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 (e-match
 	(e-ident @1.7-1.8 (raw "x"))
 	(branches
-		(branch @1.1-1.1
+		(branch @2.5-3.10
 			(p-frac @2.5-2.10 (raw "1e100"))
 			(e-string @2.14-2.33
 				(e-string-part @2.15-2.32 (raw "very large number"))))
-		(branch @1.1-1.1
+		(branch @3.5-4.27
 			(p-frac @3.5-3.10 (raw "1e-40"))
 			(e-string @3.14-3.33
 				(e-string-part @3.15-3.32 (raw "very small number"))))
-		(branch @1.1-1.1
+		(branch @4.5-5.8
 			(p-frac @4.5-4.27 (raw "1.7976931348623157e308"))
 			(e-string @4.31-4.45
 				(e-string-part @4.32-4.44 (raw "near f64 max"))))
-		(branch @1.1-1.1
+		(branch @5.5-6.10
 			(p-frac @5.5-5.8 (raw "0.0"))
 			(e-string @5.12-5.18
 				(e-string-part @5.13-5.17 (raw "zero"))))
-		(branch @1.1-1.1
+		(branch @6.5-7.2
 			(p-ident @6.5-6.10 (raw "value"))
 			(e-string @6.14-6.21
 				(e-string-part @6.15-6.20 (raw "other"))))))

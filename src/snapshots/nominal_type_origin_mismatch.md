@@ -63,15 +63,18 @@ expectsPerson = \p -> "Got a person"
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **"
+
+main** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**nominal_type_origin_mismatch.md:6:36:6:36:**
+**nominal_type_origin_mismatch.md:6:36:8:5:**
 ```roc
 expectsPerson = \p -> "Got a person"
+
+main =
 ```
-                                   
 
 
 **UNDECLARED TYPE**
@@ -115,24 +118,21 @@ expectsPerson = \p -> "Got a person"
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**nominal_type_origin_mismatch.md:1:1:1:1:**
+**nominal_type_origin_mismatch.md:6:36:8:5:**
 ```roc
+expectsPerson = \p -> "Got a person"
 
+main =
 ```
-
 
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwImport(3:1-3:7),UpperIdent(3:8-3:12),KwExposing(3:13-3:21),OpenSquare(3:22-3:23),UpperIdent(3:23-3:29),CloseSquare(3:29-3:30),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(5:1-5:14),OpColon(5:15-5:16),UpperIdent(5:17-5:23),OpArrow(5:24-5:26),UpperIdent(5:27-5:30),Newline(1:1-1:1),
-LowerIdent(6:1-6:14),OpAssign(6:15-6:16),OpBackslash(6:17-6:18),LowerIdent(6:18-6:19),OpArrow(6:20-6:22),StringStart(6:23-6:24),StringPart(6:24-6:36),StringEnd(6:36-6:37),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(8:1-8:5),OpAssign(8:6-8:7),Newline(1:1-1:1),
-Newline(9:6-9:38),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+KwImport(3:1-3:7),UpperIdent(3:8-3:12),KwExposing(3:13-3:21),OpenSquare(3:22-3:23),UpperIdent(3:23-3:29),CloseSquare(3:29-3:30),
+LowerIdent(5:1-5:14),OpColon(5:15-5:16),UpperIdent(5:17-5:23),OpArrow(5:24-5:26),UpperIdent(5:27-5:30),
+LowerIdent(6:1-6:14),OpAssign(6:15-6:16),OpBackslash(6:17-6:18),LowerIdent(6:18-6:19),OpArrow(6:20-6:22),StringStart(6:23-6:24),StringPart(6:24-6:36),StringEnd(6:36-6:37),
+LowerIdent(8:1-8:5),OpAssign(8:6-8:7),
 LowerIdent(10:5-10:18),NoSpaceOpenRound(10:18-10:19),StringStart(10:19-10:20),StringPart(10:20-10:32),StringEnd(10:32-10:33),CloseRound(10:33-10:34),EndOfFile(10:34-10:34),
 ~~~
 # PARSE
@@ -144,7 +144,7 @@ LowerIdent(10:5-10:18),NoSpaceOpenRound(10:18-10:19),StringStart(10:19-10:20),St
 		(s-import @3.1-3.30 (raw "Data")
 			(exposing
 				(exposed-upper-ident (text "Person"))))
-		(s-type-anno @1.1-1.1 (name "expectsPerson")
+		(s-type-anno @5.1-6.14 (name "expectsPerson")
 			(ty-fn @5.17-5.30
 				(ty @5.17-5.23 (name "Person"))
 				(ty @5.27-5.30 (name "Str"))))
@@ -153,7 +153,7 @@ LowerIdent(10:5-10:18),NoSpaceOpenRound(10:18-10:19),StringStart(10:19-10:20),St
 			(e-malformed @6.17-6.19 (reason "expr_unexpected_token")))
 		(e-malformed @6.23-6.36 (reason "expr_arrow_expects_ident"))
 		(e-malformed @6.24-6.37 (reason "expr_unexpected_token"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @6.36-8.5 (reason "expr_unexpected_token"))
 		(s-decl @8.1-10.34
 			(p-ident @8.1-8.5 (raw "main"))
 			(e-apply @10.5-10.34

@@ -28,11 +28,11 @@ match result {
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),Newline(1:1-1:1),
-UpperIdent(2:5-2:7),NoSpaceOpenRound(2:7-2:8),LowerIdent(2:8-2:13),CloseRound(2:13-2:14),OpFatArrow(2:15-2:17),LowerIdent(2:18-2:23),OpPlus(2:24-2:25),Int(2:26-2:27),Newline(1:1-1:1),
-UpperIdent(3:5-3:8),NoSpaceOpenRound(3:8-3:9),LowerIdent(3:9-3:14),CloseRound(3:14-3:15),OpFatArrow(3:16-3:18),LowerIdent(3:19-3:24),OpBinaryMinus(3:25-3:26),Int(3:27-3:28),Newline(1:1-1:1),
-UpperIdent(4:5-4:7),NoSpaceOpenRound(4:7-4:8),LowerIdent(4:8-4:17),CloseRound(4:17-4:18),OpFatArrow(4:19-4:21),LowerIdent(4:22-4:31),OpStar(4:32-4:33),Int(4:34-4:35),Newline(1:1-1:1),
-UpperIdent(5:5-5:8),NoSpaceOpenRound(5:8-5:9),LowerIdent(5:9-5:18),CloseRound(5:18-5:19),OpFatArrow(5:20-5:22),LowerIdent(5:23-5:32),OpSlash(5:33-5:34),Int(5:35-5:36),Newline(1:1-1:1),
+KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),
+UpperIdent(2:5-2:7),NoSpaceOpenRound(2:7-2:8),LowerIdent(2:8-2:13),CloseRound(2:13-2:14),OpFatArrow(2:15-2:17),LowerIdent(2:18-2:23),OpPlus(2:24-2:25),Int(2:26-2:27),
+UpperIdent(3:5-3:8),NoSpaceOpenRound(3:8-3:9),LowerIdent(3:9-3:14),CloseRound(3:14-3:15),OpFatArrow(3:16-3:18),LowerIdent(3:19-3:24),OpBinaryMinus(3:25-3:26),Int(3:27-3:28),
+UpperIdent(4:5-4:7),NoSpaceOpenRound(4:7-4:8),LowerIdent(4:8-4:17),CloseRound(4:17-4:18),OpFatArrow(4:19-4:21),LowerIdent(4:22-4:31),OpStar(4:32-4:33),Int(4:34-4:35),
+UpperIdent(5:5-5:8),NoSpaceOpenRound(5:8-5:9),LowerIdent(5:9-5:18),CloseRound(5:18-5:19),OpFatArrow(5:20-5:22),LowerIdent(5:23-5:32),OpSlash(5:33-5:34),Int(5:35-5:36),
 CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # PARSE

@@ -35,27 +35,29 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **.0
+0bu22** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_014.md:1:3:1:3:**
+**fuzz_crash_014.md:1:3:2:6:**
 ```roc
 0b.0
-```
-  
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_014.md:2:1:2:1:**
-```roc
 0bu22
 ```
 
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **0bu22
+0u22** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_014.md:2:1:3:5:**
+```roc
+0bu22
+0u22
+```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -74,22 +76,22 @@ Here is the problematic code:
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_014.md:1:1:1:1:**
+**fuzz_crash_014.md:1:3:2:6:**
 ```roc
-
+0b.0
+0bu22
 ```
-
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_014.md:1:1:1:1:**
+**fuzz_crash_014.md:2:1:3:5:**
 ```roc
-
+0bu22
+0u22
 ```
-
 
 
 **INVALID STATEMENT**
@@ -105,8 +107,8 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
-MalformedNumberNoDigits(1:1-1:3),NoSpaceDotInt(1:3-1:5),Newline(1:1-1:1),
-MalformedNumberNoDigits(2:1-2:6),Newline(1:1-1:1),
+MalformedNumberNoDigits(1:1-1:3),NoSpaceDotInt(1:3-1:5),
+MalformedNumberNoDigits(2:1-2:6),
 MalformedNumberBadSuffix(3:1-3:5),EndOfFile(3:5-3:5),
 ~~~
 # PARSE
@@ -114,8 +116,8 @@ MalformedNumberBadSuffix(3:1-3:5),EndOfFile(3:5-3:5),
 (file @1.1-3.5
 	(malformed-header @1.1-1.5 (tag "missing_header"))
 	(statements
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @1.3-2.6 (reason "expr_unexpected_token"))
+		(e-malformed @2.1-3.5 (reason "expr_unexpected_token"))
 		(e-malformed @3.1-3.5 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED

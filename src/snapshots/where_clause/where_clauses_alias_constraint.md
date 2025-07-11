@@ -19,12 +19,10 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),Comma(1:13-1:14),LowerIdent(1:15-1:19),CloseSquare(1:19-1:20),Newline(1:1-1:1),
-Newline(1:1-1:1),
-UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),CloseRound(3:7-3:8),OpColon(3:9-3:10),LowerIdent(3:11-3:12),Newline(1:1-1:1),
-KwWhere(4:2-4:7),KwModule(4:8-4:14),NoSpaceOpenRound(4:14-4:15),LowerIdent(4:15-4:16),CloseRound(4:16-4:17),NoSpaceDotLowerIdent(4:17-4:23),OpColon(4:24-4:25),OpenRound(4:26-4:27),LowerIdent(4:27-4:28),Comma(4:28-4:29),LowerIdent(4:30-4:31),CloseRound(4:31-4:32),OpArrow(4:33-4:35),OpenSquare(4:36-4:37),UpperIdent(4:37-4:39),Comma(4:39-4:40),UpperIdent(4:41-4:43),Comma(4:43-4:44),UpperIdent(4:45-4:47),CloseSquare(4:47-4:48),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(6:1-6:5),OpColon(6:6-6:7),UpperIdent(6:8-6:12),NoSpaceOpenRound(6:12-6:13),LowerIdent(6:13-6:17),CloseRound(6:17-6:18),OpArrow(6:19-6:21),UpperIdent(6:22-6:26),NoSpaceOpenRound(6:26-6:27),LowerIdent(6:27-6:31),CloseRound(6:31-6:32),KwWhere(6:33-6:38),KwModule(6:39-6:45),NoSpaceOpenRound(6:45-6:46),LowerIdent(6:46-6:50),CloseRound(6:50-6:51),NoSpaceDotUpperIdent(6:51-6:56),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),Comma(1:13-1:14),LowerIdent(1:15-1:19),CloseSquare(1:19-1:20),
+UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),CloseRound(3:7-3:8),OpColon(3:9-3:10),LowerIdent(3:11-3:12),
+KwWhere(4:2-4:7),KwModule(4:8-4:14),NoSpaceOpenRound(4:14-4:15),LowerIdent(4:15-4:16),CloseRound(4:16-4:17),NoSpaceDotLowerIdent(4:17-4:23),OpColon(4:24-4:25),OpenRound(4:26-4:27),LowerIdent(4:27-4:28),Comma(4:28-4:29),LowerIdent(4:30-4:31),CloseRound(4:31-4:32),OpArrow(4:33-4:35),OpenSquare(4:36-4:37),UpperIdent(4:37-4:39),Comma(4:39-4:40),UpperIdent(4:41-4:43),Comma(4:43-4:44),UpperIdent(4:45-4:47),CloseSquare(4:47-4:48),
+LowerIdent(6:1-6:5),OpColon(6:6-6:7),UpperIdent(6:8-6:12),NoSpaceOpenRound(6:12-6:13),LowerIdent(6:13-6:17),CloseRound(6:17-6:18),OpArrow(6:19-6:21),UpperIdent(6:22-6:26),NoSpaceOpenRound(6:26-6:27),LowerIdent(6:27-6:31),CloseRound(6:31-6:32),KwWhere(6:33-6:38),KwModule(6:39-6:45),NoSpaceOpenRound(6:45-6:46),LowerIdent(6:46-6:50),CloseRound(6:50-6:51),NoSpaceDotUpperIdent(6:51-6:56),
 LowerIdent(7:1-7:5),OpAssign(7:6-7:7),TripleDot(7:8-7:11),EndOfFile(7:11-7:11),
 ~~~
 # PARSE

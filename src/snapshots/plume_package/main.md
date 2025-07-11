@@ -24,9 +24,9 @@ You can fix this by either defining ``Color`` in this module, or by removing it 
 
 # TOKENS
 ~~~zig
-KwPackage(1:1-1:8),OpenSquare(1:9-1:10),Newline(1:1-1:1),
-UpperIdent(2:5-2:10),Comma(2:10-2:11),Newline(1:1-1:1),
-CloseSquare(3:1-3:2),OpenCurly(3:3-3:4),CloseCurly(3:4-3:5),Newline(1:1-1:1),
+KwPackage(1:1-1:8),OpenSquare(1:9-1:10),
+UpperIdent(2:5-2:10),Comma(2:10-2:11),
+CloseSquare(3:1-3:2),OpenCurly(3:3-3:4),CloseCurly(3:4-3:5),
 EndOfFile(4:1-4:1),
 ~~~
 # PARSE

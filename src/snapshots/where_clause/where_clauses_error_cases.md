@@ -46,11 +46,13 @@ For example:
         module(a).method : a -> b
 
 Here is the problematic code:
-**where_clauses_error_cases.md:10:3:10:3:**
+**where_clauses_error_cases.md:10:3:13:11:**
 ```roc
   where
+
+# Referencing undefined type variable
+broken_fn3 : a -> b
 ```
-  
 
 
 **MALFORMED WHERE CLAUSE**
@@ -132,20 +134,14 @@ You can fix this by either defining ``broken_fn3`` in this module, or by removin
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:31),Comma(1:31-1:32),LowerIdent(1:33-1:43),CloseSquare(1:43-1:44),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:2-3:30),
-LowerIdent(4:1-4:11),OpColon(4:12-4:13),LowerIdent(4:14-4:15),OpArrow(4:16-4:18),LowerIdent(4:19-4:20),Newline(1:1-1:1),
-KwWhere(5:3-5:8),Newline(1:1-1:1),
-KwModule(6:5-6:11),NoSpaceOpenRound(6:11-6:12),LowerIdent(6:12-6:13),CloseRound(6:13-6:14),NoSpaceDotLowerIdent(6:14-6:21),OpArrow(6:22-6:24),LowerIdent(6:25-6:26),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(8:2-8:21),
-LowerIdent(9:1-9:11),OpColon(9:12-9:13),LowerIdent(9:14-9:15),OpArrow(9:16-9:18),LowerIdent(9:19-9:20),Newline(1:1-1:1),
-KwWhere(10:3-10:8),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(12:2-12:38),
-LowerIdent(13:1-13:11),OpColon(13:12-13:13),LowerIdent(13:14-13:15),OpArrow(13:16-13:18),LowerIdent(13:19-13:20),Newline(1:1-1:1),
-KwWhere(14:3-14:8),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:31),Comma(1:31-1:32),LowerIdent(1:33-1:43),CloseSquare(1:43-1:44),
+LowerIdent(4:1-4:11),OpColon(4:12-4:13),LowerIdent(4:14-4:15),OpArrow(4:16-4:18),LowerIdent(4:19-4:20),
+KwWhere(5:3-5:8),
+KwModule(6:5-6:11),NoSpaceOpenRound(6:11-6:12),LowerIdent(6:12-6:13),CloseRound(6:13-6:14),NoSpaceDotLowerIdent(6:14-6:21),OpArrow(6:22-6:24),LowerIdent(6:25-6:26),
+LowerIdent(9:1-9:11),OpColon(9:12-9:13),LowerIdent(9:14-9:15),OpArrow(9:16-9:18),LowerIdent(9:19-9:20),
+KwWhere(10:3-10:8),
+LowerIdent(13:1-13:11),OpColon(13:12-13:13),LowerIdent(13:14-13:15),OpArrow(13:16-13:18),LowerIdent(13:19-13:20),
+KwWhere(14:3-14:8),
 KwModule(15:5-15:11),NoSpaceOpenRound(15:11-15:12),LowerIdent(15:12-15:13),CloseRound(15:13-15:14),NoSpaceDotLowerIdent(15:14-15:21),OpColon(15:22-15:23),LowerIdent(15:24-15:25),OpArrow(15:26-15:28),LowerIdent(15:29-15:30),Comma(15:30-15:31),EndOfFile(15:31-15:31),
 ~~~
 # PARSE

@@ -104,11 +104,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**qualified_type_canonicalization.md:8:14:8:14:**
+**qualified_type_canonicalization.md:8:14:9:7:**
 ```roc
 import Basics.Result
+import Color
 ```
-             
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -152,11 +152,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**qualified_type_canonicalization.md:26:32:26:32:**
+**qualified_type_canonicalization.md:26:32:27:11:**
 ```roc
 resultType : Result.Result I32 Str
+resultType = Result.Ok 42
 ```
-                               
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -220,15 +220,20 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **"
+
+# Multiple qualified types in a function signature
+transform** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**qualified_type_canonicalization.md:36:21:36:21:**
+**qualified_type_canonicalization.md:36:21:39:10:**
 ```roc
     "Color processed"
+
+# Multiple qualified types in a function signature
+transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
 ```
-                    
 
 
 **PARSE ERROR**
@@ -316,15 +321,16 @@ transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **.TypeC
+transform** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**qualified_type_canonicalization.md:39:68:39:68:**
+**qualified_type_canonicalization.md:39:68:40:10:**
 ```roc
 transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
+transform = \result ->
 ```
-                                                                   
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -548,11 +554,13 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**qualified_type_canonicalization.md:1:1:1:1:**
+**qualified_type_canonicalization.md:36:21:39:10:**
 ```roc
+    "Color processed"
 
+# Multiple qualified types in a function signature
+transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
 ```
-
 
 
 **INVALID STATEMENT**
@@ -570,11 +578,11 @@ transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**qualified_type_canonicalization.md:1:1:1:1:**
+**qualified_type_canonicalization.md:39:68:40:10:**
 ```roc
-
+transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
+transform = \result ->
 ```
-
 
 
 **UNKNOWN OPERATOR**
@@ -649,48 +657,33 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),Newline(1:1-1:1),
-UpperIdent(2:5-2:10),Comma(2:10-2:11),Newline(1:1-1:1),
-UpperIdent(3:5-3:12),NoSpaceDotUpperIdent(3:12-3:20),NoSpaceDotUpperIdent(3:20-3:26),Comma(3:26-3:27),Newline(1:1-1:1),
-UpperIdent(4:5-4:11),Comma(4:11-4:12),Newline(1:1-1:1),
-UpperIdent(5:5-5:19),Comma(5:19-5:20),Newline(1:1-1:1),
-CloseSquare(6:1-6:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwImport(8:1-8:7),UpperIdent(8:8-8:14),NoSpaceDotUpperIdent(8:14-8:21),Newline(1:1-1:1),
-KwImport(9:1-9:7),UpperIdent(9:8-9:13),Newline(1:1-1:1),
-KwImport(10:1-10:7),UpperIdent(10:8-10:15),NoSpaceDotUpperIdent(10:15-10:23),KwExposing(10:24-10:32),OpenSquare(10:33-10:34),UpperIdent(10:34-10:39),CloseSquare(10:39-10:40),Newline(1:1-1:1),
-KwImport(11:1-11:7),UpperIdent(11:8-11:22),KwAs(11:23-11:25),UpperIdent(11:26-11:32),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(13:2-13:24),
-LowerIdent(14:1-14:16),OpColon(14:17-14:18),UpperIdent(14:19-14:24),NoSpaceDotUpperIdent(14:24-14:28),Newline(1:1-1:1),
-LowerIdent(15:1-15:16),OpAssign(15:17-15:18),UpperIdent(15:19-15:24),NoSpaceDotUpperIdent(15:24-15:28),OpenCurly(15:29-15:30),LowerIdent(15:31-15:32),OpColon(15:32-15:33),Int(15:34-15:37),Comma(15:37-15:38),LowerIdent(15:39-15:40),OpColon(15:40-15:41),Int(15:42-15:43),Comma(15:43-15:44),LowerIdent(15:45-15:46),OpColon(15:46-15:47),Int(15:48-15:49),CloseCurly(15:50-15:51),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(17:2-17:25),
-LowerIdent(18:1-18:17),OpColon(18:18-18:19),UpperIdent(18:20-18:26),NoSpaceDotUpperIdent(18:26-18:35),Newline(1:1-1:1),
-LowerIdent(19:1-19:17),OpAssign(19:18-19:19),UpperIdent(19:20-19:26),NoSpaceDotUpperIdent(19:26-19:35),NoSpaceDotUpperIdent(19:35-19:43),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(21:2-21:29),
-LowerIdent(22:1-22:20),OpColon(22:21-22:22),UpperIdent(22:23-22:30),NoSpaceDotUpperIdent(22:30-22:38),NoSpaceDotUpperIdent(22:38-22:44),Newline(1:1-1:1),
-LowerIdent(23:1-23:20),OpAssign(23:21-23:22),UpperIdent(23:23-23:28),NoSpaceDotLowerIdent(23:28-23:32),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(25:2-25:37),
-LowerIdent(26:1-26:11),OpColon(26:12-26:13),UpperIdent(26:14-26:20),NoSpaceDotUpperIdent(26:20-26:27),UpperIdent(26:28-26:31),UpperIdent(26:32-26:35),Newline(1:1-1:1),
-LowerIdent(27:1-27:11),OpAssign(27:12-27:13),UpperIdent(27:14-27:20),NoSpaceDotUpperIdent(27:20-27:23),Int(27:24-27:26),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(29:2-29:36),
-LowerIdent(30:1-30:9),OpColon(30:10-30:11),OpenCurly(30:12-30:13),CloseCurly(30:13-30:14),OpArrow(30:15-30:17),UpperIdent(30:18-30:23),NoSpaceDotUpperIdent(30:23-30:27),Newline(1:1-1:1),
-LowerIdent(31:1-31:9),OpAssign(31:10-31:11),OpBackslash(31:12-31:13),OpenCurly(31:13-31:14),CloseCurly(31:14-31:15),OpArrow(31:16-31:18),UpperIdent(31:19-31:24),NoSpaceDotUpperIdent(31:24-31:28),OpenCurly(31:29-31:30),LowerIdent(31:31-31:32),OpColon(31:32-31:33),Int(31:34-31:35),Comma(31:35-31:36),LowerIdent(31:37-31:38),OpColon(31:38-31:39),Int(31:40-31:43),Comma(31:43-31:44),LowerIdent(31:45-31:46),OpColon(31:46-31:47),Int(31:48-31:49),CloseCurly(31:50-31:51),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(33:2-33:36),
-LowerIdent(34:1-34:13),OpColon(34:14-34:15),UpperIdent(34:16-34:21),NoSpaceDotUpperIdent(34:21-34:25),OpArrow(34:26-34:28),UpperIdent(34:29-34:32),Newline(1:1-1:1),
-LowerIdent(35:1-35:13),OpAssign(35:14-35:15),OpBackslash(35:16-35:17),LowerIdent(35:17-35:22),OpArrow(35:23-35:25),Newline(1:1-1:1),
-StringStart(36:5-36:6),StringPart(36:6-36:21),StringEnd(36:21-36:22),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(38:2-38:51),
-LowerIdent(39:1-39:10),OpColon(39:11-39:12),UpperIdent(39:13-39:19),NoSpaceDotUpperIdent(39:19-39:26),UpperIdent(39:27-39:32),NoSpaceDotUpperIdent(39:32-39:36),UpperIdent(39:37-39:43),NoSpaceDotUpperIdent(39:43-39:49),OpArrow(39:50-39:52),UpperIdent(39:53-39:60),NoSpaceDotUpperIdent(39:60-39:68),NoSpaceDotUpperIdent(39:68-39:74),Newline(1:1-1:1),
-LowerIdent(40:1-40:10),OpAssign(40:11-40:12),OpBackslash(40:13-40:14),LowerIdent(40:14-40:20),OpArrow(40:21-40:23),Newline(1:1-1:1),
-LowerIdent(41:5-41:9),LowerIdent(41:10-41:16),LowerIdent(41:17-41:19),Newline(1:1-1:1),
-UpperIdent(42:9-42:15),NoSpaceDotUpperIdent(42:15-42:18),LowerIdent(42:19-42:22),OpArrow(42:23-42:25),UpperIdent(42:26-42:31),NoSpaceDotLowerIdent(42:31-42:41),LowerIdent(42:42-42:45),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),
+UpperIdent(2:5-2:10),Comma(2:10-2:11),
+UpperIdent(3:5-3:12),NoSpaceDotUpperIdent(3:12-3:20),NoSpaceDotUpperIdent(3:20-3:26),Comma(3:26-3:27),
+UpperIdent(4:5-4:11),Comma(4:11-4:12),
+UpperIdent(5:5-5:19),Comma(5:19-5:20),
+CloseSquare(6:1-6:2),
+KwImport(8:1-8:7),UpperIdent(8:8-8:14),NoSpaceDotUpperIdent(8:14-8:21),
+KwImport(9:1-9:7),UpperIdent(9:8-9:13),
+KwImport(10:1-10:7),UpperIdent(10:8-10:15),NoSpaceDotUpperIdent(10:15-10:23),KwExposing(10:24-10:32),OpenSquare(10:33-10:34),UpperIdent(10:34-10:39),CloseSquare(10:39-10:40),
+KwImport(11:1-11:7),UpperIdent(11:8-11:22),KwAs(11:23-11:25),UpperIdent(11:26-11:32),
+LowerIdent(14:1-14:16),OpColon(14:17-14:18),UpperIdent(14:19-14:24),NoSpaceDotUpperIdent(14:24-14:28),
+LowerIdent(15:1-15:16),OpAssign(15:17-15:18),UpperIdent(15:19-15:24),NoSpaceDotUpperIdent(15:24-15:28),OpenCurly(15:29-15:30),LowerIdent(15:31-15:32),OpColon(15:32-15:33),Int(15:34-15:37),Comma(15:37-15:38),LowerIdent(15:39-15:40),OpColon(15:40-15:41),Int(15:42-15:43),Comma(15:43-15:44),LowerIdent(15:45-15:46),OpColon(15:46-15:47),Int(15:48-15:49),CloseCurly(15:50-15:51),
+LowerIdent(18:1-18:17),OpColon(18:18-18:19),UpperIdent(18:20-18:26),NoSpaceDotUpperIdent(18:26-18:35),
+LowerIdent(19:1-19:17),OpAssign(19:18-19:19),UpperIdent(19:20-19:26),NoSpaceDotUpperIdent(19:26-19:35),NoSpaceDotUpperIdent(19:35-19:43),
+LowerIdent(22:1-22:20),OpColon(22:21-22:22),UpperIdent(22:23-22:30),NoSpaceDotUpperIdent(22:30-22:38),NoSpaceDotUpperIdent(22:38-22:44),
+LowerIdent(23:1-23:20),OpAssign(23:21-23:22),UpperIdent(23:23-23:28),NoSpaceDotLowerIdent(23:28-23:32),
+LowerIdent(26:1-26:11),OpColon(26:12-26:13),UpperIdent(26:14-26:20),NoSpaceDotUpperIdent(26:20-26:27),UpperIdent(26:28-26:31),UpperIdent(26:32-26:35),
+LowerIdent(27:1-27:11),OpAssign(27:12-27:13),UpperIdent(27:14-27:20),NoSpaceDotUpperIdent(27:20-27:23),Int(27:24-27:26),
+LowerIdent(30:1-30:9),OpColon(30:10-30:11),OpenCurly(30:12-30:13),CloseCurly(30:13-30:14),OpArrow(30:15-30:17),UpperIdent(30:18-30:23),NoSpaceDotUpperIdent(30:23-30:27),
+LowerIdent(31:1-31:9),OpAssign(31:10-31:11),OpBackslash(31:12-31:13),OpenCurly(31:13-31:14),CloseCurly(31:14-31:15),OpArrow(31:16-31:18),UpperIdent(31:19-31:24),NoSpaceDotUpperIdent(31:24-31:28),OpenCurly(31:29-31:30),LowerIdent(31:31-31:32),OpColon(31:32-31:33),Int(31:34-31:35),Comma(31:35-31:36),LowerIdent(31:37-31:38),OpColon(31:38-31:39),Int(31:40-31:43),Comma(31:43-31:44),LowerIdent(31:45-31:46),OpColon(31:46-31:47),Int(31:48-31:49),CloseCurly(31:50-31:51),
+LowerIdent(34:1-34:13),OpColon(34:14-34:15),UpperIdent(34:16-34:21),NoSpaceDotUpperIdent(34:21-34:25),OpArrow(34:26-34:28),UpperIdent(34:29-34:32),
+LowerIdent(35:1-35:13),OpAssign(35:14-35:15),OpBackslash(35:16-35:17),LowerIdent(35:17-35:22),OpArrow(35:23-35:25),
+StringStart(36:5-36:6),StringPart(36:6-36:21),StringEnd(36:21-36:22),
+LowerIdent(39:1-39:10),OpColon(39:11-39:12),UpperIdent(39:13-39:19),NoSpaceDotUpperIdent(39:19-39:26),UpperIdent(39:27-39:32),NoSpaceDotUpperIdent(39:32-39:36),UpperIdent(39:37-39:43),NoSpaceDotUpperIdent(39:43-39:49),OpArrow(39:50-39:52),UpperIdent(39:53-39:60),NoSpaceDotUpperIdent(39:60-39:68),NoSpaceDotUpperIdent(39:68-39:74),
+LowerIdent(40:1-40:10),OpAssign(40:11-40:12),OpBackslash(40:13-40:14),LowerIdent(40:14-40:20),OpArrow(40:21-40:23),
+LowerIdent(41:5-41:9),LowerIdent(41:10-41:16),LowerIdent(41:17-41:19),
+UpperIdent(42:9-42:15),NoSpaceDotUpperIdent(42:15-42:18),LowerIdent(42:19-42:22),OpArrow(42:23-42:25),UpperIdent(42:26-42:31),NoSpaceDotLowerIdent(42:31-42:41),LowerIdent(42:42-42:45),
 UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),LowerIdent(43:20-43:23),OpArrow(43:24-43:26),UpperIdent(43:27-43:32),NoSpaceDotLowerIdent(43:32-43:40),EndOfFile(43:40-43:40),
 ~~~
 # PARSE
@@ -698,7 +691,7 @@ UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),LowerIdent(43:20-43:23)
 (file @1.1-43.40
 	(malformed-header @8.1-8.14 (tag "import_exposing_no_close"))
 	(statements
-		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @8.8-9.7 (tag "expected_colon_after_type_annotation"))
 		(s-import @9.1-9.13 (raw "Color"))
 		(s-import @10.1-10.15 (raw "ModuleA"))
 		(e-malformed @10.15-10.32 (reason "expr_unexpected_token"))
@@ -706,7 +699,7 @@ UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),LowerIdent(43:20-43:23)
 		(e-list @10.33-10.40
 			(e-tag @10.34-10.39 (raw "TypeC")))
 		(s-import @11.1-11.32 (raw "ExternalModule") (alias "ExtMod"))
-		(s-type-anno @1.1-1.1 (name "simpleQualified")
+		(s-type-anno @14.1-15.16 (name "simpleQualified")
 			(ty @14.19-14.28 (name "Color.RGB")))
 		(s-decl @15.1-15.28
 			(p-ident @15.1-15.16 (raw "simpleQualified"))
@@ -718,24 +711,24 @@ UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),LowerIdent(43:20-43:23)
 				(e-int @15.42-15.43 (raw "0")))
 			(field (field "b")
 				(e-int @15.48-15.49 (raw "0"))))
-		(s-type-anno @1.1-1.1 (name "aliasedQualified")
+		(s-type-anno @18.1-19.17 (name "aliasedQualified")
 			(ty @18.20-18.35 (name "ExtMod.DataType")))
 		(s-decl @19.1-19.43
 			(p-ident @19.1-19.17 (raw "aliasedQualified"))
 			(e-tag @19.20-19.43 (raw "ExtMod.DataType.Default")))
-		(s-type-anno @1.1-1.1 (name "multiLevelQualified")
+		(s-type-anno @22.1-23.20 (name "multiLevelQualified")
 			(ty @22.23-22.44 (name "ModuleA.ModuleB.TypeC")))
 		(s-decl @23.1-23.32
 			(p-ident @23.1-23.20 (raw "multiLevelQualified"))
 			(e-ident @23.23-23.32 (raw "TypeC.new")))
 		(s-type-anno @26.1-26.31 (name "resultType")
 			(ty @26.14-26.27 (name "Result.Result")))
-		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @26.28-27.11 (tag "expected_colon_after_type_annotation"))
 		(s-decl @27.1-27.23
 			(p-ident @27.1-27.11 (raw "resultType"))
 			(e-tag @27.14-27.23 (raw "Result.Ok")))
 		(e-int @27.24-27.26 (raw "42"))
-		(s-type-anno @1.1-1.1 (name "getColor")
+		(s-type-anno @30.1-31.9 (name "getColor")
 			(ty-fn @30.12-30.27
 				(ty-record @30.12-30.14)
 				(ty @30.18-30.27 (name "Color.RGB"))))
@@ -753,7 +746,7 @@ UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),LowerIdent(43:20-43:23)
 				(e-int @31.40-31.43 (raw "255")))
 			(field (field "b")
 				(e-int @31.48-31.49 (raw "0"))))
-		(s-type-anno @1.1-1.1 (name "processColor")
+		(s-type-anno @34.1-35.13 (name "processColor")
 			(ty-fn @34.16-34.32
 				(ty @34.16-34.25 (name "Color.RGB"))
 				(ty @34.29-34.32 (name "Str"))))
@@ -762,14 +755,14 @@ UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),LowerIdent(43:20-43:23)
 			(e-malformed @35.16-35.22 (reason "expr_unexpected_token")))
 		(e-malformed @36.5-36.21 (reason "expr_arrow_expects_ident"))
 		(e-malformed @36.6-36.22 (reason "expr_unexpected_token"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @36.21-39.10 (reason "expr_unexpected_token"))
 		(s-type-anno @39.1-39.32 (name "transform")
 			(ty @39.13-39.26 (name "Result.Result")))
 		(s-malformed @39.27-39.43 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @39.37-39.52 (tag "expected_colon_after_type_annotation"))
 		(e-malformed @39.50-39.60 (reason "expr_unexpected_token"))
 		(s-malformed @39.53-39.74 (tag "expected_colon_after_type_annotation"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @39.68-40.10 (reason "expr_unexpected_token"))
 		(s-decl @40.1-40.20
 			(p-ident @40.1-40.10 (raw "transform"))
 			(e-malformed @40.13-40.20 (reason "expr_unexpected_token")))

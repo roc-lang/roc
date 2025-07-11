@@ -40,33 +40,22 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:40),StringEnd(1:40-1:41),CloseCurly(1:42-1:43),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:2-3:23),
-LowerIdent(4:1-4:11),OpColon(4:12-4:13),UpperIdent(4:14-4:20),NoSpaceOpenRound(4:20-4:21),LowerIdent(4:21-4:22),Comma(4:22-4:23),LowerIdent(4:24-4:25),CloseRound(4:25-4:26),Comma(4:26-4:27),OpenRound(4:28-4:29),LowerIdent(4:29-4:30),OpArrow(4:31-4:33),LowerIdent(4:34-4:35),CloseRound(4:35-4:36),OpArrow(4:37-4:39),UpperIdent(4:40-4:46),NoSpaceOpenRound(4:46-4:47),LowerIdent(4:47-4:48),Comma(4:48-4:49),LowerIdent(4:50-4:51),CloseRound(4:51-4:52),Newline(1:1-1:1),
-LowerIdent(5:1-5:11),OpAssign(5:12-5:13),OpBar(5:14-5:15),LowerIdent(5:15-5:21),Comma(5:21-5:22),LowerIdent(5:23-5:32),OpBar(5:32-5:33),OpenCurly(5:34-5:35),Newline(1:1-1:1),
-KwMatch(6:5-6:10),LowerIdent(6:11-6:17),OpenCurly(6:18-6:19),Newline(1:1-1:1),
-UpperIdent(7:9-7:11),NoSpaceOpenRound(7:11-7:12),LowerIdent(7:12-7:17),CloseRound(7:17-7:18),OpFatArrow(7:19-7:21),UpperIdent(7:22-7:24),NoSpaceOpenRound(7:24-7:25),LowerIdent(7:25-7:34),NoSpaceOpenRound(7:34-7:35),LowerIdent(7:35-7:40),CloseRound(7:40-7:41),CloseRound(7:41-7:42),Newline(1:1-1:1),
-UpperIdent(8:9-8:12),NoSpaceOpenRound(8:12-8:13),LowerIdent(8:13-8:18),CloseRound(8:18-8:19),OpFatArrow(8:20-8:22),UpperIdent(8:23-8:26),NoSpaceOpenRound(8:26-8:27),LowerIdent(8:27-8:32),CloseRound(8:32-8:33),Newline(1:1-1:1),
-CloseCurly(9:5-9:6),Newline(1:1-1:1),
-CloseCurly(10:1-10:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(12:2-12:46),
-LowerIdent(13:1-13:9),OpColon(13:10-13:11),LowerIdent(13:12-13:13),OpArrow(13:14-13:16),LowerIdent(13:17-13:18),Newline(1:1-1:1),
-LowerIdent(14:1-14:9),OpAssign(14:10-14:11),OpBar(14:12-14:13),LowerIdent(14:13-14:14),OpBar(14:14-14:15),LowerIdent(14:16-14:17),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(16:2-16:35),
-LowerIdent(17:1-17:10),OpColon(17:11-17:12),LowerIdent(17:13-17:14),Comma(17:14-17:15),LowerIdent(17:16-17:17),OpArrow(17:18-17:20),OpenCurly(17:21-17:22),LowerIdent(17:23-17:28),OpColon(17:28-17:29),LowerIdent(17:30-17:31),Comma(17:31-17:32),LowerIdent(17:33-17:39),OpColon(17:39-17:40),LowerIdent(17:41-17:42),CloseCurly(17:43-17:44),Newline(1:1-1:1),
-LowerIdent(18:1-18:10),OpAssign(18:11-18:12),OpBar(18:13-18:14),LowerIdent(18:14-18:15),Comma(18:15-18:16),LowerIdent(18:17-18:18),OpBar(18:18-18:19),OpenCurly(18:20-18:21),LowerIdent(18:22-18:27),OpColon(18:27-18:28),LowerIdent(18:29-18:30),Comma(18:30-18:31),LowerIdent(18:32-18:38),OpColon(18:38-18:39),LowerIdent(18:40-18:41),CloseCurly(18:42-18:43),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(20:2-20:45),
-LowerIdent(21:1-21:12),OpColon(21:13-21:14),UpperIdent(21:15-21:19),NoSpaceOpenRound(21:19-21:20),LowerIdent(21:20-21:21),CloseRound(21:21-21:22),OpArrow(21:23-21:25),UpperIdent(21:26-21:29),Newline(1:1-1:1),
-LowerIdent(22:1-22:12),OpAssign(22:13-22:14),OpBar(22:15-22:16),NamedUnderscore(22:16-22:20),OpBar(22:20-22:21),Int(22:22-22:24),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(24:2-24:22),
-LowerIdent(25:1-25:15),OpColon(25:16-25:17),LowerIdent(25:18-25:19),OpArrow(25:20-25:22),UpperIdent(25:23-25:29),NoSpaceOpenRound(25:29-25:30),UpperIdent(25:30-25:36),NoSpaceOpenRound(25:36-25:37),LowerIdent(25:37-25:38),Comma(25:38-25:39),UpperIdent(25:40-25:43),CloseRound(25:43-25:44),Comma(25:44-25:45),UpperIdent(25:46-25:49),CloseRound(25:49-25:50),Newline(1:1-1:1),
-LowerIdent(26:1-26:15),OpAssign(26:16-26:17),OpBar(26:18-26:19),LowerIdent(26:19-26:24),OpBar(26:24-26:25),UpperIdent(26:26-26:28),NoSpaceOpenRound(26:28-26:29),UpperIdent(26:29-26:31),NoSpaceOpenRound(26:31-26:32),LowerIdent(26:32-26:37),CloseRound(26:37-26:38),CloseRound(26:38-26:39),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:40),StringEnd(1:40-1:41),CloseCurly(1:42-1:43),
+LowerIdent(4:1-4:11),OpColon(4:12-4:13),UpperIdent(4:14-4:20),NoSpaceOpenRound(4:20-4:21),LowerIdent(4:21-4:22),Comma(4:22-4:23),LowerIdent(4:24-4:25),CloseRound(4:25-4:26),Comma(4:26-4:27),OpenRound(4:28-4:29),LowerIdent(4:29-4:30),OpArrow(4:31-4:33),LowerIdent(4:34-4:35),CloseRound(4:35-4:36),OpArrow(4:37-4:39),UpperIdent(4:40-4:46),NoSpaceOpenRound(4:46-4:47),LowerIdent(4:47-4:48),Comma(4:48-4:49),LowerIdent(4:50-4:51),CloseRound(4:51-4:52),
+LowerIdent(5:1-5:11),OpAssign(5:12-5:13),OpBar(5:14-5:15),LowerIdent(5:15-5:21),Comma(5:21-5:22),LowerIdent(5:23-5:32),OpBar(5:32-5:33),OpenCurly(5:34-5:35),
+KwMatch(6:5-6:10),LowerIdent(6:11-6:17),OpenCurly(6:18-6:19),
+UpperIdent(7:9-7:11),NoSpaceOpenRound(7:11-7:12),LowerIdent(7:12-7:17),CloseRound(7:17-7:18),OpFatArrow(7:19-7:21),UpperIdent(7:22-7:24),NoSpaceOpenRound(7:24-7:25),LowerIdent(7:25-7:34),NoSpaceOpenRound(7:34-7:35),LowerIdent(7:35-7:40),CloseRound(7:40-7:41),CloseRound(7:41-7:42),
+UpperIdent(8:9-8:12),NoSpaceOpenRound(8:12-8:13),LowerIdent(8:13-8:18),CloseRound(8:18-8:19),OpFatArrow(8:20-8:22),UpperIdent(8:23-8:26),NoSpaceOpenRound(8:26-8:27),LowerIdent(8:27-8:32),CloseRound(8:32-8:33),
+CloseCurly(9:5-9:6),
+CloseCurly(10:1-10:2),
+LowerIdent(13:1-13:9),OpColon(13:10-13:11),LowerIdent(13:12-13:13),OpArrow(13:14-13:16),LowerIdent(13:17-13:18),
+LowerIdent(14:1-14:9),OpAssign(14:10-14:11),OpBar(14:12-14:13),LowerIdent(14:13-14:14),OpBar(14:14-14:15),LowerIdent(14:16-14:17),
+LowerIdent(17:1-17:10),OpColon(17:11-17:12),LowerIdent(17:13-17:14),Comma(17:14-17:15),LowerIdent(17:16-17:17),OpArrow(17:18-17:20),OpenCurly(17:21-17:22),LowerIdent(17:23-17:28),OpColon(17:28-17:29),LowerIdent(17:30-17:31),Comma(17:31-17:32),LowerIdent(17:33-17:39),OpColon(17:39-17:40),LowerIdent(17:41-17:42),CloseCurly(17:43-17:44),
+LowerIdent(18:1-18:10),OpAssign(18:11-18:12),OpBar(18:13-18:14),LowerIdent(18:14-18:15),Comma(18:15-18:16),LowerIdent(18:17-18:18),OpBar(18:18-18:19),OpenCurly(18:20-18:21),LowerIdent(18:22-18:27),OpColon(18:27-18:28),LowerIdent(18:29-18:30),Comma(18:30-18:31),LowerIdent(18:32-18:38),OpColon(18:38-18:39),LowerIdent(18:40-18:41),CloseCurly(18:42-18:43),
+LowerIdent(21:1-21:12),OpColon(21:13-21:14),UpperIdent(21:15-21:19),NoSpaceOpenRound(21:19-21:20),LowerIdent(21:20-21:21),CloseRound(21:21-21:22),OpArrow(21:23-21:25),UpperIdent(21:26-21:29),
+LowerIdent(22:1-22:12),OpAssign(22:13-22:14),OpBar(22:15-22:16),NamedUnderscore(22:16-22:20),OpBar(22:20-22:21),Int(22:22-22:24),
+LowerIdent(25:1-25:15),OpColon(25:16-25:17),LowerIdent(25:18-25:19),OpArrow(25:20-25:22),UpperIdent(25:23-25:29),NoSpaceOpenRound(25:29-25:30),UpperIdent(25:30-25:36),NoSpaceOpenRound(25:36-25:37),LowerIdent(25:37-25:38),Comma(25:38-25:39),UpperIdent(25:40-25:43),CloseRound(25:43-25:44),Comma(25:44-25:45),UpperIdent(25:46-25:49),CloseRound(25:49-25:50),
+LowerIdent(26:1-26:15),OpAssign(26:16-26:17),OpBar(26:18-26:19),LowerIdent(26:19-26:24),OpBar(26:24-26:25),UpperIdent(26:26-26:28),NoSpaceOpenRound(26:28-26:29),UpperIdent(26:29-26:31),NoSpaceOpenRound(26:31-26:32),LowerIdent(26:32-26:37),CloseRound(26:37-26:38),CloseRound(26:38-26:39),
 LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10),OpBar(28:10-28:11),StringStart(28:12-28:13),StringPart(28:13-28:17),StringEnd(28:17-28:18),EndOfFile(28:18-28:18),
 ~~~
 # PARSE
@@ -151,7 +140,7 @@ LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10
 						(e-ident @18.29-18.30 (raw "x")))
 					(field (field "second")
 						(e-ident @18.40-18.41 (raw "y"))))))
-		(s-type-anno @1.1-1.1 (name "list_length")
+		(s-type-anno @21.1-22.12 (name "list_length")
 			(ty-fn @21.15-21.29
 				(ty-apply @21.15-21.22
 					(ty @21.15-21.19 (name "List"))

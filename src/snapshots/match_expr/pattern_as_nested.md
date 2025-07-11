@@ -39,9 +39,9 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),Newline(1:1-1:1),
-OpenCurly(2:5-2:6),LowerIdent(2:7-2:11),Comma(2:11-2:12),LowerIdent(2:13-2:20),OpColon(2:20-2:21),OpenCurly(2:22-2:23),LowerIdent(2:24-2:28),CloseCurly(2:29-2:30),KwAs(2:31-2:33),LowerIdent(2:34-2:38),CloseCurly(2:39-2:40),KwAs(2:41-2:43),LowerIdent(2:44-2:54),OpFatArrow(2:55-2:57),OpenRound(2:58-2:59),LowerIdent(2:59-2:69),Comma(2:69-2:70),LowerIdent(2:71-2:75),Comma(2:75-2:76),LowerIdent(2:77-2:81),CloseRound(2:81-2:82),Newline(1:1-1:1),
-OpenCurly(3:5-3:6),LowerIdent(3:7-3:11),CloseCurly(3:12-3:13),KwAs(3:14-3:16),LowerIdent(3:17-3:29),OpFatArrow(3:30-3:32),OpenRound(3:33-3:34),LowerIdent(3:34-3:46),Comma(3:46-3:47),LowerIdent(3:48-3:52),Comma(3:52-3:53),StringStart(3:54-3:55),StringPart(3:55-3:62),StringEnd(3:62-3:63),CloseRound(3:63-3:64),Newline(1:1-1:1),
+KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),
+OpenCurly(2:5-2:6),LowerIdent(2:7-2:11),Comma(2:11-2:12),LowerIdent(2:13-2:20),OpColon(2:20-2:21),OpenCurly(2:22-2:23),LowerIdent(2:24-2:28),CloseCurly(2:29-2:30),KwAs(2:31-2:33),LowerIdent(2:34-2:38),CloseCurly(2:39-2:40),KwAs(2:41-2:43),LowerIdent(2:44-2:54),OpFatArrow(2:55-2:57),OpenRound(2:58-2:59),LowerIdent(2:59-2:69),Comma(2:69-2:70),LowerIdent(2:71-2:75),Comma(2:75-2:76),LowerIdent(2:77-2:81),CloseRound(2:81-2:82),
+OpenCurly(3:5-3:6),LowerIdent(3:7-3:11),CloseCurly(3:12-3:13),KwAs(3:14-3:16),LowerIdent(3:17-3:29),OpFatArrow(3:30-3:32),OpenRound(3:33-3:34),LowerIdent(3:34-3:46),Comma(3:46-3:47),LowerIdent(3:48-3:52),Comma(3:52-3:53),StringStart(3:54-3:55),StringPart(3:55-3:62),StringEnd(3:62-3:63),CloseRound(3:63-3:64),
 CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE

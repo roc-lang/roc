@@ -51,11 +51,11 @@ A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:2:22:2:22:**
+**record_different_fields_reserved_error.md:2:22:3:9:**
 ```roc
     if: "conditional",
+    when: "pattern match",
 ```
-                     
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -95,15 +95,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+    expect** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:3:26:3:26:**
+**record_different_fields_reserved_error.md:3:26:4:11:**
 ```roc
     when: "pattern match",
+    expect: "test assertion",
 ```
-                         
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -119,15 +120,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+    import** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:4:29:4:29:**
+**record_different_fields_reserved_error.md:4:29:5:11:**
 ```roc
     expect: "test assertion",
+    import: "module load",
 ```
-                            
 
 
 **IMPORT MUST BE TOP LEVEL**
@@ -155,15 +157,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+    and** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:5:26:5:26:**
+**record_different_fields_reserved_error.md:5:26:6:8:**
 ```roc
     import: "module load",
+    and: Bool.true,
 ```
-                         
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -191,15 +194,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+    or** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:6:19:6:19:**
+**record_different_fields_reserved_error.md:6:19:7:7:**
 ```roc
     and: Bool.true,
+    or: Bool.false,
 ```
-                  
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -227,15 +231,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:7:19:7:19:**
+**record_different_fields_reserved_error.md:7:19:8:2:**
 ```roc
     or: Bool.false,
+}
 ```
-                  
 
 
 **MALFORMED TYPE**
@@ -269,43 +274,43 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),Newline(1:1-1:1),
-KwIf(2:5-2:7),OpColon(2:7-2:8),StringStart(2:9-2:10),StringPart(2:10-2:21),StringEnd(2:21-2:22),Comma(2:22-2:23),Newline(1:1-1:1),
-LowerIdent(3:5-3:9),OpColon(3:9-3:10),StringStart(3:11-3:12),StringPart(3:12-3:25),StringEnd(3:25-3:26),Comma(3:26-3:27),Newline(1:1-1:1),
-KwExpect(4:5-4:11),OpColon(4:11-4:12),StringStart(4:13-4:14),StringPart(4:14-4:28),StringEnd(4:28-4:29),Comma(4:29-4:30),Newline(1:1-1:1),
-KwImport(5:5-5:11),OpColon(5:11-5:12),StringStart(5:13-5:14),StringPart(5:14-5:25),StringEnd(5:25-5:26),Comma(5:26-5:27),Newline(1:1-1:1),
-OpAnd(6:5-6:8),OpColon(6:8-6:9),UpperIdent(6:10-6:14),NoSpaceDotLowerIdent(6:14-6:19),Comma(6:19-6:20),Newline(1:1-1:1),
-OpOr(7:5-7:7),OpColon(7:7-7:8),UpperIdent(7:9-7:13),NoSpaceDotLowerIdent(7:13-7:19),Comma(7:19-7:20),Newline(1:1-1:1),
+OpenCurly(1:1-1:2),
+KwIf(2:5-2:7),OpColon(2:7-2:8),StringStart(2:9-2:10),StringPart(2:10-2:21),StringEnd(2:21-2:22),Comma(2:22-2:23),
+LowerIdent(3:5-3:9),OpColon(3:9-3:10),StringStart(3:11-3:12),StringPart(3:12-3:25),StringEnd(3:25-3:26),Comma(3:26-3:27),
+KwExpect(4:5-4:11),OpColon(4:11-4:12),StringStart(4:13-4:14),StringPart(4:14-4:28),StringEnd(4:28-4:29),Comma(4:29-4:30),
+KwImport(5:5-5:11),OpColon(5:11-5:12),StringStart(5:13-5:14),StringPart(5:14-5:25),StringEnd(5:25-5:26),Comma(5:26-5:27),
+OpAnd(6:5-6:8),OpColon(6:8-6:9),UpperIdent(6:10-6:14),NoSpaceDotLowerIdent(6:14-6:19),Comma(6:19-6:20),
+OpOr(7:5-7:7),OpColon(7:7-7:8),UpperIdent(7:9-7:13),NoSpaceDotLowerIdent(7:13-7:19),Comma(7:19-7:20),
 CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # PARSE
 ~~~clojure
 (e-block @1.1-8.2
 	(statements
-		(e-malformed @1.1-1.1 (reason "no_else"))
+		(e-malformed @2.22-3.9 (reason "no_else"))
 		(s-type-anno @3.5-3.25 (name "when")
 			(ty-malformed @3.11-3.25 (tag "ty_anno_unexpected_token")))
 		(e-malformed @3.12-3.26 (reason "expr_unexpected_token"))
 		(e-malformed @3.25-3.27 (reason "expr_unexpected_token"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @3.26-4.11 (reason "expr_unexpected_token"))
 		(s-expect @4.5-4.14
 			(e-malformed @4.11-4.14 (reason "expr_unexpected_token")))
 		(e-string @4.13-4.29
 			(e-string-part @4.14-4.28 (raw "test assertion")))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @4.29-5.11 (reason "expr_unexpected_token"))
 		(s-malformed @5.5-5.12 (tag "import_must_be_top_level"))
 		(e-malformed @5.11-5.14 (reason "expr_unexpected_token"))
 		(e-string @5.13-5.26
 			(e-string-part @5.14-5.25 (raw "module load")))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @5.26-6.8 (reason "expr_unexpected_token"))
 		(e-malformed @6.5-6.9 (reason "expr_unexpected_token"))
 		(e-malformed @6.8-6.14 (reason "expr_unexpected_token"))
 		(e-ident @6.10-6.19 (raw "Bool.true"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @6.19-7.7 (reason "expr_unexpected_token"))
 		(e-malformed @7.5-7.8 (reason "expr_unexpected_token"))
 		(e-malformed @7.7-7.13 (reason "expr_unexpected_token"))
 		(e-ident @7.9-7.19 (raw "Bool.false"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))))
+		(e-malformed @7.19-8.2 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

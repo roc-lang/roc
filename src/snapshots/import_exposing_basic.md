@@ -22,15 +22,13 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),KwExposing(3:18-3:26),OpenSquare(3:27-3:28),LowerIdent(3:28-3:34),Comma(3:34-3:35),LowerIdent(3:36-3:42),CloseSquare(3:42-3:43),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(5:1-5:5),OpAssign(5:6-5:7),OpenCurly(5:8-5:9),Newline(1:1-1:1),
-LowerIdent(6:5-6:9),OpAssign(6:10-6:11),OpenCurly(6:12-6:13),LowerIdent(6:14-6:18),OpColon(6:18-6:19),StringStart(6:20-6:21),StringPart(6:21-6:26),StringEnd(6:26-6:27),Comma(6:27-6:28),LowerIdent(6:29-6:32),OpColon(6:32-6:33),Int(6:34-6:36),CloseCurly(6:37-6:38),Newline(1:1-1:1),
-LowerIdent(7:5-7:12),OpAssign(7:13-7:14),LowerIdent(7:15-7:21),NoSpaceOpenRound(7:21-7:22),LowerIdent(7:22-7:26),CloseRound(7:26-7:27),Newline(1:1-1:1),
-LowerIdent(8:5-8:12),OpAssign(8:13-8:14),LowerIdent(8:15-8:21),NoSpaceOpenRound(8:21-8:22),LowerIdent(8:22-8:29),CloseRound(8:29-8:30),Newline(1:1-1:1),
-LowerIdent(9:5-9:12),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
+KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),KwExposing(3:18-3:26),OpenSquare(3:27-3:28),LowerIdent(3:28-3:34),Comma(3:34-3:35),LowerIdent(3:36-3:42),CloseSquare(3:42-3:43),
+LowerIdent(5:1-5:5),OpAssign(5:6-5:7),OpenCurly(5:8-5:9),
+LowerIdent(6:5-6:9),OpAssign(6:10-6:11),OpenCurly(6:12-6:13),LowerIdent(6:14-6:18),OpColon(6:18-6:19),StringStart(6:20-6:21),StringPart(6:21-6:26),StringEnd(6:26-6:27),Comma(6:27-6:28),LowerIdent(6:29-6:32),OpColon(6:32-6:33),Int(6:34-6:36),CloseCurly(6:37-6:38),
+LowerIdent(7:5-7:12),OpAssign(7:13-7:14),LowerIdent(7:15-7:21),NoSpaceOpenRound(7:21-7:22),LowerIdent(7:22-7:26),CloseRound(7:26-7:27),
+LowerIdent(8:5-8:12),OpAssign(8:13-8:14),LowerIdent(8:15-8:21),NoSpaceOpenRound(8:21-8:22),LowerIdent(8:22-8:29),CloseRound(8:29-8:30),
+LowerIdent(9:5-9:12),
 CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~
 # PARSE

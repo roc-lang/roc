@@ -25,18 +25,13 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:2-3:40),
-LowerIdent(4:1-4:6),OpColon(4:7-4:8),LowerIdent(4:9-4:10),OpArrow(4:11-4:13),LowerIdent(4:14-4:15),Newline(1:1-1:1),
-LowerIdent(5:1-5:6),OpAssign(5:7-5:8),OpBar(5:9-5:10),LowerIdent(5:10-5:11),OpBar(5:11-5:12),OpenCurly(5:13-5:14),Newline(1:1-1:1),
-Newline(6:6-6:56),
-LowerIdent(7:5-7:10),OpColon(7:11-7:12),LowerIdent(7:13-7:14),OpArrow(7:15-7:17),LowerIdent(7:18-7:19),Newline(1:1-1:1),
-LowerIdent(8:5-8:10),OpAssign(8:11-8:12),OpBar(8:13-8:14),LowerIdent(8:14-8:15),OpBar(8:15-8:16),LowerIdent(8:17-8:18),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(10:5-10:10),NoSpaceOpenRound(10:10-10:11),LowerIdent(10:11-10:12),CloseRound(10:12-10:13),Newline(1:1-1:1),
-CloseCurly(11:1-11:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
+LowerIdent(4:1-4:6),OpColon(4:7-4:8),LowerIdent(4:9-4:10),OpArrow(4:11-4:13),LowerIdent(4:14-4:15),
+LowerIdent(5:1-5:6),OpAssign(5:7-5:8),OpBar(5:9-5:10),LowerIdent(5:10-5:11),OpBar(5:11-5:12),OpenCurly(5:13-5:14),
+LowerIdent(7:5-7:10),OpColon(7:11-7:12),LowerIdent(7:13-7:14),OpArrow(7:15-7:17),LowerIdent(7:18-7:19),
+LowerIdent(8:5-8:10),OpAssign(8:11-8:12),OpBar(8:13-8:14),LowerIdent(8:14-8:15),OpBar(8:15-8:16),LowerIdent(8:17-8:18),
+LowerIdent(10:5-10:10),NoSpaceOpenRound(10:10-10:11),LowerIdent(10:11-10:12),CloseRound(10:12-10:13),
+CloseCurly(11:1-11:2),
 LowerIdent(13:1-13:6),OpAssign(13:7-13:8),OpBar(13:9-13:10),Underscore(13:10-13:11),OpBar(13:11-13:12),OpenCurly(13:13-13:14),CloseCurly(13:14-13:15),EndOfFile(13:15-13:15),
 ~~~
 # PARSE

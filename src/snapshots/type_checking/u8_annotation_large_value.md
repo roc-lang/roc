@@ -26,9 +26,8 @@ Its inferred type is:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:2),OpColon(3:3-3:4),UpperIdent(3:5-3:7),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+LowerIdent(3:1-3:2),OpColon(3:3-3:4),UpperIdent(3:5-3:7),
 LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Int(4:5-4:8),EndOfFile(4:8-4:8),
 ~~~
 # PARSE
@@ -37,7 +36,7 @@ LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Int(4:5-4:8),EndOfFile(4:8-4:8),
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
-		(s-type-anno @1.1-1.1 (name "x")
+		(s-type-anno @3.1-4.2 (name "x")
 			(ty @3.5-3.7 (name "U8")))
 		(s-decl @4.1-4.8
 			(p-ident @4.1-4.2 (raw "x"))

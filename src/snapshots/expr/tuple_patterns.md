@@ -262,24 +262,13 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:6-3:33),
-OpenRound(4:5-4:6),LowerIdent(4:6-4:7),Comma(4:7-4:8),LowerIdent(4:9-4:10),CloseRound(4:10-4:11),OpAssign(4:12-4:13),OpenRound(4:14-4:15),Int(4:15-4:16),Comma(4:16-4:17),Int(4:18-4:19),CloseRound(4:19-4:20),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(6:6-6:28),
-OpenRound(7:5-7:6),NoSpaceOpenRound(7:6-7:7),LowerIdent(7:7-7:8),Comma(7:8-7:9),LowerIdent(7:10-7:11),CloseRound(7:11-7:12),Comma(7:12-7:13),OpenRound(7:14-7:15),LowerIdent(7:15-7:16),Comma(7:16-7:17),LowerIdent(7:18-7:19),CloseRound(7:19-7:20),CloseRound(7:20-7:21),OpAssign(7:22-7:23),OpenRound(7:24-7:25),NoSpaceOpenRound(7:25-7:26),Int(7:26-7:28),Comma(7:28-7:29),Int(7:30-7:32),CloseRound(7:32-7:33),Comma(7:33-7:34),OpenRound(7:35-7:36),Int(7:36-7:38),Comma(7:38-7:39),Int(7:40-7:42),CloseRound(7:42-7:43),CloseRound(7:43-7:44),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(9:6-9:35),
-OpenRound(10:5-10:6),LowerIdent(10:6-10:11),Comma(10:11-10:12),LowerIdent(10:13-10:19),Comma(10:19-10:20),LowerIdent(10:21-10:26),CloseRound(10:26-10:27),OpAssign(10:28-10:29),OpenRound(10:30-10:31),Int(10:31-10:34),Comma(10:34-10:35),Int(10:36-10:38),Comma(10:38-10:39),Int(10:40-10:43),CloseRound(10:43-10:44),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(12:6-12:41),
-OpenRound(13:5-13:6),LowerIdent(13:6-13:10),Comma(13:10-13:11),LowerIdent(13:12-13:18),Comma(13:18-13:19),LowerIdent(13:20-13:27),CloseRound(13:27-13:28),OpAssign(13:29-13:30),OpenRound(13:31-13:32),StringStart(13:32-13:33),StringPart(13:33-13:38),StringEnd(13:38-13:39),Comma(13:39-13:40),StringStart(13:41-13:42),StringPart(13:42-13:47),StringEnd(13:47-13:48),Comma(13:48-13:49),UpperIdent(13:50-13:54),CloseRound(13:54-13:55),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(15:6-15:30),
-OpenRound(16:5-16:6),LowerIdent(16:6-16:10),Comma(16:10-16:11),LowerIdent(16:12-16:17),CloseRound(16:17-16:18),OpAssign(16:19-16:20),OpenRound(16:21-16:22),OpenSquare(16:22-16:23),Int(16:23-16:24),Comma(16:24-16:25),Int(16:26-16:27),Comma(16:27-16:28),Int(16:29-16:30),CloseSquare(16:30-16:31),Comma(16:31-16:32),StringStart(16:33-16:34),StringPart(16:34-16:39),StringEnd(16:39-16:40),CloseRound(16:40-16:41),Newline(1:1-1:1),
-Newline(1:1-1:1),
-OpenCurly(18:5-18:6),CloseCurly(18:6-18:7),Newline(1:1-1:1),
+OpenCurly(1:1-1:2),
+OpenRound(4:5-4:6),LowerIdent(4:6-4:7),Comma(4:7-4:8),LowerIdent(4:9-4:10),CloseRound(4:10-4:11),OpAssign(4:12-4:13),OpenRound(4:14-4:15),Int(4:15-4:16),Comma(4:16-4:17),Int(4:18-4:19),CloseRound(4:19-4:20),
+OpenRound(7:5-7:6),NoSpaceOpenRound(7:6-7:7),LowerIdent(7:7-7:8),Comma(7:8-7:9),LowerIdent(7:10-7:11),CloseRound(7:11-7:12),Comma(7:12-7:13),OpenRound(7:14-7:15),LowerIdent(7:15-7:16),Comma(7:16-7:17),LowerIdent(7:18-7:19),CloseRound(7:19-7:20),CloseRound(7:20-7:21),OpAssign(7:22-7:23),OpenRound(7:24-7:25),NoSpaceOpenRound(7:25-7:26),Int(7:26-7:28),Comma(7:28-7:29),Int(7:30-7:32),CloseRound(7:32-7:33),Comma(7:33-7:34),OpenRound(7:35-7:36),Int(7:36-7:38),Comma(7:38-7:39),Int(7:40-7:42),CloseRound(7:42-7:43),CloseRound(7:43-7:44),
+OpenRound(10:5-10:6),LowerIdent(10:6-10:11),Comma(10:11-10:12),LowerIdent(10:13-10:19),Comma(10:19-10:20),LowerIdent(10:21-10:26),CloseRound(10:26-10:27),OpAssign(10:28-10:29),OpenRound(10:30-10:31),Int(10:31-10:34),Comma(10:34-10:35),Int(10:36-10:38),Comma(10:38-10:39),Int(10:40-10:43),CloseRound(10:43-10:44),
+OpenRound(13:5-13:6),LowerIdent(13:6-13:10),Comma(13:10-13:11),LowerIdent(13:12-13:18),Comma(13:18-13:19),LowerIdent(13:20-13:27),CloseRound(13:27-13:28),OpAssign(13:29-13:30),OpenRound(13:31-13:32),StringStart(13:32-13:33),StringPart(13:33-13:38),StringEnd(13:38-13:39),Comma(13:39-13:40),StringStart(13:41-13:42),StringPart(13:42-13:47),StringEnd(13:47-13:48),Comma(13:48-13:49),UpperIdent(13:50-13:54),CloseRound(13:54-13:55),
+OpenRound(16:5-16:6),LowerIdent(16:6-16:10),Comma(16:10-16:11),LowerIdent(16:12-16:17),CloseRound(16:17-16:18),OpAssign(16:19-16:20),OpenRound(16:21-16:22),OpenSquare(16:22-16:23),Int(16:23-16:24),Comma(16:24-16:25),Int(16:26-16:27),Comma(16:27-16:28),Int(16:29-16:30),CloseSquare(16:30-16:31),Comma(16:31-16:32),StringStart(16:33-16:34),StringPart(16:34-16:39),StringEnd(16:39-16:40),CloseRound(16:40-16:41),
+OpenCurly(18:5-18:6),CloseCurly(18:6-18:7),
 CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # PARSE

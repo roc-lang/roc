@@ -24,17 +24,17 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),Newline(1:1-1:1),
-LowerIdent(2:5-2:11),OpColon(2:11-2:12),OpenCurly(2:13-2:14),LowerIdent(2:15-2:19),OpColon(2:19-2:20),StringStart(2:21-2:22),StringPart(2:22-2:27),StringEnd(2:27-2:28),Comma(2:28-2:29),LowerIdent(2:30-2:33),OpColon(2:33-2:34),Int(2:35-2:37),CloseCurly(2:38-2:39),Comma(2:39-2:40),Newline(1:1-1:1),
-LowerIdent(3:5-3:12),OpColon(3:12-3:13),OpenCurly(3:14-3:15),Newline(1:1-1:1),
-LowerIdent(4:9-4:15),OpColon(4:15-4:16),StringStart(4:17-4:18),StringPart(4:18-4:29),StringEnd(4:29-4:30),Comma(4:30-4:31),Newline(1:1-1:1),
-LowerIdent(5:9-5:13),OpColon(5:13-5:14),StringStart(5:15-5:16),StringPart(5:16-5:27),StringEnd(5:27-5:28),Comma(5:28-5:29),Newline(1:1-1:1),
-LowerIdent(6:9-6:20),OpColon(6:20-6:21),OpenCurly(6:22-6:23),LowerIdent(6:24-6:27),OpColon(6:27-6:28),Float(6:29-6:36),Comma(6:36-6:37),LowerIdent(6:38-6:41),OpColon(6:41-6:42),Float(6:43-6:51),CloseCurly(6:52-6:53),Comma(6:53-6:54),Newline(1:1-1:1),
-CloseCurly(7:5-7:6),Comma(7:6-7:7),Newline(1:1-1:1),
-LowerIdent(8:5-8:12),OpColon(8:12-8:13),OpenCurly(8:14-8:15),Newline(1:1-1:1),
-LowerIdent(9:9-9:14),OpColon(9:14-9:15),StringStart(9:16-9:17),StringPart(9:17-9:34),StringEnd(9:34-9:35),Comma(9:35-9:36),Newline(1:1-1:1),
-LowerIdent(10:9-10:14),OpColon(10:14-10:15),OpenCurly(10:16-10:17),LowerIdent(10:18-10:22),OpColon(10:22-10:23),StringStart(10:24-10:25),StringPart(10:25-10:33),StringEnd(10:33-10:34),Comma(10:34-10:35),LowerIdent(10:36-10:40),OpColon(10:40-10:41),StringStart(10:42-10:43),StringPart(10:43-10:51),StringEnd(10:51-10:52),CloseCurly(10:53-10:54),Comma(10:54-10:55),Newline(1:1-1:1),
-CloseCurly(11:5-11:6),Comma(11:6-11:7),Newline(1:1-1:1),
+OpenCurly(1:1-1:2),
+LowerIdent(2:5-2:11),OpColon(2:11-2:12),OpenCurly(2:13-2:14),LowerIdent(2:15-2:19),OpColon(2:19-2:20),StringStart(2:21-2:22),StringPart(2:22-2:27),StringEnd(2:27-2:28),Comma(2:28-2:29),LowerIdent(2:30-2:33),OpColon(2:33-2:34),Int(2:35-2:37),CloseCurly(2:38-2:39),Comma(2:39-2:40),
+LowerIdent(3:5-3:12),OpColon(3:12-3:13),OpenCurly(3:14-3:15),
+LowerIdent(4:9-4:15),OpColon(4:15-4:16),StringStart(4:17-4:18),StringPart(4:18-4:29),StringEnd(4:29-4:30),Comma(4:30-4:31),
+LowerIdent(5:9-5:13),OpColon(5:13-5:14),StringStart(5:15-5:16),StringPart(5:16-5:27),StringEnd(5:27-5:28),Comma(5:28-5:29),
+LowerIdent(6:9-6:20),OpColon(6:20-6:21),OpenCurly(6:22-6:23),LowerIdent(6:24-6:27),OpColon(6:27-6:28),Float(6:29-6:36),Comma(6:36-6:37),LowerIdent(6:38-6:41),OpColon(6:41-6:42),Float(6:43-6:51),CloseCurly(6:52-6:53),Comma(6:53-6:54),
+CloseCurly(7:5-7:6),Comma(7:6-7:7),
+LowerIdent(8:5-8:12),OpColon(8:12-8:13),OpenCurly(8:14-8:15),
+LowerIdent(9:9-9:14),OpColon(9:14-9:15),StringStart(9:16-9:17),StringPart(9:17-9:34),StringEnd(9:34-9:35),Comma(9:35-9:36),
+LowerIdent(10:9-10:14),OpColon(10:14-10:15),OpenCurly(10:16-10:17),LowerIdent(10:18-10:22),OpColon(10:22-10:23),StringStart(10:24-10:25),StringPart(10:25-10:33),StringEnd(10:33-10:34),Comma(10:34-10:35),LowerIdent(10:36-10:40),OpColon(10:40-10:41),StringStart(10:42-10:43),StringPart(10:43-10:51),StringEnd(10:51-10:52),CloseCurly(10:53-10:54),Comma(10:54-10:55),
+CloseCurly(11:5-11:6),Comma(11:6-11:7),
 CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # PARSE

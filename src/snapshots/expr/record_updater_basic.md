@@ -16,9 +16,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:24),CloseSquare(1:24-1:25),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:7),OpAssign(3:8-3:9),OpenCurly(3:10-3:11),LowerIdent(3:12-3:16),OpColon(3:16-3:17),StringStart(3:18-3:19),StringPart(3:19-3:24),StringEnd(3:24-3:25),Comma(3:25-3:26),LowerIdent(3:27-3:30),OpColon(3:30-3:31),Int(3:32-3:34),CloseCurly(3:35-3:36),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:24),CloseSquare(1:24-1:25),
+LowerIdent(3:1-3:7),OpAssign(3:8-3:9),OpenCurly(3:10-3:11),LowerIdent(3:12-3:16),OpColon(3:16-3:17),StringStart(3:18-3:19),StringPart(3:19-3:24),StringEnd(3:24-3:25),Comma(3:25-3:26),LowerIdent(3:27-3:30),OpColon(3:30-3:31),Int(3:32-3:34),CloseCurly(3:35-3:36),
 LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpenCurly(4:11-4:12),DoubleDot(4:13-4:15),LowerIdent(4:15-4:21),Comma(4:21-4:22),LowerIdent(4:23-4:26),OpColon(4:26-4:27),Int(4:28-4:30),CloseCurly(4:31-4:32),EndOfFile(4:32-4:32),
 ~~~
 # PARSE

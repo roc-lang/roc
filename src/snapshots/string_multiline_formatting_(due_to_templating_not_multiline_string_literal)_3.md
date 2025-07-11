@@ -52,11 +52,11 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:24),OpenStringInterpolation(1:24-1:26),Newline(1:1-1:1),
-LowerIdent(2:2-2:11),NoSpaceOpenRound(2:11-2:12),Newline(1:1-1:1),
-LowerIdent(3:3-3:4),Comma(3:4-3:5),Newline(3:7-3:25),
-LowerIdent(4:3-4:4),Comma(4:4-4:5),Newline(1:1-1:1),
-CloseRound(5:2-5:3),Newline(1:1-1:1),
+StringStart(1:1-1:2),StringPart(1:2-1:24),OpenStringInterpolation(1:24-1:26),
+LowerIdent(2:2-2:11),NoSpaceOpenRound(2:11-2:12),
+LowerIdent(3:3-3:4),Comma(3:4-3:5),
+LowerIdent(4:3-4:4),Comma(4:4-4:5),
+CloseRound(5:2-5:3),
 CloseStringInterpolation(6:1-6:2),StringPart(6:2-6:42),StringEnd(6:42-6:43),EndOfFile(6:43-6:43),
 ~~~
 # PARSE

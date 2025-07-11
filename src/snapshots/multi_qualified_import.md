@@ -151,11 +151,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**multi_qualified_import.md:9:37:9:37:**
+**multi_qualified_import.md:10:1:10:10:**
 ```roc
-process : json.Core.Utf8.Encoder -> Str
+process = \encoder -> "processing"
 ```
-                                    
+^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -207,15 +207,20 @@ process = \encoder -> "processing"
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **"
+
+# Test with multiple qualifiers
+data** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**multi_qualified_import.md:10:34:10:34:**
+**multi_qualified_import.md:10:34:13:5:**
 ```roc
 process = \encoder -> "processing"
+
+# Test with multiple qualifiers
+data : json.Core.Utf8.EncodedData
 ```
-                                 
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -243,15 +248,16 @@ data : json.Core.Utf8.EncodedData
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **.EncodedData
+data** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**multi_qualified_import.md:13:22:13:22:**
+**multi_qualified_import.md:13:22:14:5:**
 ```roc
 data : json.Core.Utf8.EncodedData
+data = json.Core.Utf8.encode "hello"
 ```
-                     
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -438,11 +444,13 @@ process = \encoder -> "processing"
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**multi_qualified_import.md:1:1:1:1:**
+**multi_qualified_import.md:10:34:13:5:**
 ```roc
+process = \encoder -> "processing"
 
+# Test with multiple qualifiers
+data : json.Core.Utf8.EncodedData
 ```
-
 
 
 **INVALID STATEMENT**
@@ -471,11 +479,11 @@ data : json.Core.Utf8.EncodedData
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**multi_qualified_import.md:1:1:1:1:**
+**multi_qualified_import.md:13:22:14:5:**
 ```roc
-
+data : json.Core.Utf8.EncodedData
+data = json.Core.Utf8.encode "hello"
 ```
-
 
 
 **UNDEFINED VARIABLE**
@@ -535,19 +543,13 @@ data = json.Core.Utf8.encode "hello"
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),NoSpaceDotUpperIdent(3:17-3:22),KwExposing(3:23-3:31),OpenSquare(3:32-3:33),UpperIdent(3:33-3:40),CloseSquare(3:40-3:41),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(5:1-5:13),OpColon(5:14-5:15),UpperIdent(5:16-5:23),Newline(1:1-1:1),
-LowerIdent(6:1-6:13),OpAssign(6:14-6:15),UpperIdent(6:16-6:20),NoSpaceDotUpperIdent(6:20-6:25),NoSpaceDotUpperIdent(6:25-6:30),NoSpaceDotLowerIdent(6:30-6:45),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(8:2-8:41),
-LowerIdent(9:1-9:8),OpColon(9:9-9:10),LowerIdent(9:11-9:15),NoSpaceDotUpperIdent(9:15-9:20),NoSpaceDotUpperIdent(9:20-9:25),NoSpaceDotUpperIdent(9:25-9:33),OpArrow(9:34-9:36),UpperIdent(9:37-9:40),Newline(1:1-1:1),
-LowerIdent(10:1-10:8),OpAssign(10:9-10:10),OpBackslash(10:11-10:12),LowerIdent(10:12-10:19),OpArrow(10:20-10:22),StringStart(10:23-10:24),StringPart(10:24-10:34),StringEnd(10:34-10:35),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(12:2-12:32),
-LowerIdent(13:1-13:5),OpColon(13:6-13:7),LowerIdent(13:8-13:12),NoSpaceDotUpperIdent(13:12-13:17),NoSpaceDotUpperIdent(13:17-13:22),NoSpaceDotUpperIdent(13:22-13:34),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),
+KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),NoSpaceDotUpperIdent(3:17-3:22),KwExposing(3:23-3:31),OpenSquare(3:32-3:33),UpperIdent(3:33-3:40),CloseSquare(3:40-3:41),
+LowerIdent(5:1-5:13),OpColon(5:14-5:15),UpperIdent(5:16-5:23),
+LowerIdent(6:1-6:13),OpAssign(6:14-6:15),UpperIdent(6:16-6:20),NoSpaceDotUpperIdent(6:20-6:25),NoSpaceDotUpperIdent(6:25-6:30),NoSpaceDotLowerIdent(6:30-6:45),
+LowerIdent(9:1-9:8),OpColon(9:9-9:10),LowerIdent(9:11-9:15),NoSpaceDotUpperIdent(9:15-9:20),NoSpaceDotUpperIdent(9:20-9:25),NoSpaceDotUpperIdent(9:25-9:33),OpArrow(9:34-9:36),UpperIdent(9:37-9:40),
+LowerIdent(10:1-10:8),OpAssign(10:9-10:10),OpBackslash(10:11-10:12),LowerIdent(10:12-10:19),OpArrow(10:20-10:22),StringStart(10:23-10:24),StringPart(10:24-10:34),StringEnd(10:34-10:35),
+LowerIdent(13:1-13:5),OpColon(13:6-13:7),LowerIdent(13:8-13:12),NoSpaceDotUpperIdent(13:12-13:17),NoSpaceDotUpperIdent(13:17-13:22),NoSpaceDotUpperIdent(13:22-13:34),
 LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpperIdent(14:12-14:17),NoSpaceDotUpperIdent(14:17-14:22),NoSpaceDotLowerIdent(14:22-14:29),StringStart(14:30-14:31),StringPart(14:31-14:36),StringEnd(14:36-14:37),EndOfFile(14:37-14:37),
 ~~~
 # PARSE
@@ -562,7 +564,7 @@ LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpper
 		(e-malformed @3.23-3.33 (reason "expr_unexpected_token"))
 		(e-list @3.32-3.41
 			(e-tag @3.33-3.40 (raw "Encoder")))
-		(s-type-anno @1.1-1.1 (name "json_encoder")
+		(s-type-anno @5.1-6.13 (name "json_encoder")
 			(ty @5.16-5.23 (name "Encoder")))
 		(s-decl @6.1-6.45
 			(p-ident @6.1-6.13 (raw "json_encoder"))
@@ -578,12 +580,12 @@ LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpper
 		(e-malformed @10.11-10.19 (reason "expr_unexpected_token"))
 		(e-malformed @10.23-10.34 (reason "expr_arrow_expects_ident"))
 		(e-malformed @10.24-10.35 (reason "expr_unexpected_token"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @10.34-13.5 (reason "expr_unexpected_token"))
 		(s-type-anno @13.1-13.17 (name "data")
 			(ty-var @13.8-13.12 (raw "json")))
 		(e-malformed @13.12-13.22 (reason "expr_unexpected_token"))
 		(e-malformed @13.17-13.34 (reason "expr_unexpected_token"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @13.22-14.5 (reason "expr_unexpected_token"))
 		(s-decl @14.1-14.12
 			(p-ident @14.1-14.5 (raw "data"))
 			(e-ident @14.8-14.12 (raw "json")))

@@ -46,15 +46,16 @@ compose : (b -> c), (a -> b) -> (a -> c)
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **)
+compose** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_higher_order_multiple_vars.md:3:40:3:40:**
+**type_higher_order_multiple_vars.md:3:40:4:8:**
 ```roc
 compose : (b -> c), (a -> b) -> (a -> c)
+compose = |f, g| |x| f(g(x))
 ```
-                                       
 
 
 **INVALID STATEMENT**
@@ -94,20 +95,18 @@ compose : (b -> c), (a -> b) -> (a -> c)
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_higher_order_multiple_vars.md:1:1:1:1:**
+**type_higher_order_multiple_vars.md:3:40:4:8:**
 ```roc
-
+compose : (b -> c), (a -> b) -> (a -> c)
+compose = |f, g| |x| f(g(x))
 ```
-
 
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:8),OpColon(3:9-3:10),OpenRound(3:11-3:12),LowerIdent(3:12-3:13),OpArrow(3:14-3:16),LowerIdent(3:17-3:18),CloseRound(3:18-3:19),Comma(3:19-3:20),OpenRound(3:21-3:22),LowerIdent(3:22-3:23),OpArrow(3:24-3:26),LowerIdent(3:27-3:28),CloseRound(3:28-3:29),OpArrow(3:30-3:32),OpenRound(3:33-3:34),LowerIdent(3:34-3:35),OpArrow(3:36-3:38),LowerIdent(3:39-3:40),CloseRound(3:40-3:41),Newline(1:1-1:1),
-LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:13),Comma(4:13-4:14),LowerIdent(4:15-4:16),OpBar(4:16-4:17),OpBar(4:18-4:19),LowerIdent(4:19-4:20),OpBar(4:20-4:21),LowerIdent(4:22-4:23),NoSpaceOpenRound(4:23-4:24),LowerIdent(4:24-4:25),NoSpaceOpenRound(4:25-4:26),LowerIdent(4:26-4:27),CloseRound(4:27-4:28),CloseRound(4:28-4:29),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
+LowerIdent(3:1-3:8),OpColon(3:9-3:10),OpenRound(3:11-3:12),LowerIdent(3:12-3:13),OpArrow(3:14-3:16),LowerIdent(3:17-3:18),CloseRound(3:18-3:19),Comma(3:19-3:20),OpenRound(3:21-3:22),LowerIdent(3:22-3:23),OpArrow(3:24-3:26),LowerIdent(3:27-3:28),CloseRound(3:28-3:29),OpArrow(3:30-3:32),OpenRound(3:33-3:34),LowerIdent(3:34-3:35),OpArrow(3:36-3:38),LowerIdent(3:39-3:40),CloseRound(3:40-3:41),
+LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:13),Comma(4:13-4:14),LowerIdent(4:15-4:16),OpBar(4:16-4:17),OpBar(4:18-4:19),LowerIdent(4:19-4:20),OpBar(4:20-4:21),LowerIdent(4:22-4:23),NoSpaceOpenRound(4:23-4:24),LowerIdent(4:24-4:25),NoSpaceOpenRound(4:25-4:26),LowerIdent(4:26-4:27),CloseRound(4:27-4:28),CloseRound(4:28-4:29),
 LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),EndOfFile(6:15-6:15),
 ~~~
 # PARSE
@@ -133,7 +132,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 		(e-local-dispatch @3.34-3.41
 			(e-ident @3.34-3.35 (raw "a"))
 			(e-ident @3.39-3.40 (raw "c")))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @3.40-4.8 (reason "expr_unexpected_token"))
 		(s-decl @4.1-4.29
 			(p-ident @4.1-4.8 (raw "compose"))
 			(e-lambda @4.11-4.29

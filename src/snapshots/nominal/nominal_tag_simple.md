@@ -34,14 +34,11 @@ But it should be one of:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),LowerIdent(1:16-1:20),CloseSquare(1:20-1:21),Newline(1:1-1:1),
-Newline(1:1-1:1),
-UpperIdent(3:1-3:6),OpColonEqual(3:7-3:9),OpenSquare(3:10-3:11),UpperIdent(3:11-3:14),Comma(3:14-3:15),UpperIdent(3:16-3:21),Comma(3:21-3:22),UpperIdent(3:23-3:27),CloseSquare(3:27-3:28),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(5:1-5:5),OpColon(5:6-5:7),UpperIdent(5:8-5:13),Newline(1:1-1:1),
-LowerIdent(6:1-6:5),OpAssign(6:6-6:7),UpperIdent(6:8-6:13),NoSpaceDotUpperIdent(6:13-6:18),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(8:1-8:7),OpColon(8:8-8:9),UpperIdent(8:10-8:15),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),LowerIdent(1:16-1:20),CloseSquare(1:20-1:21),
+UpperIdent(3:1-3:6),OpColonEqual(3:7-3:9),OpenSquare(3:10-3:11),UpperIdent(3:11-3:14),Comma(3:14-3:15),UpperIdent(3:16-3:21),Comma(3:21-3:22),UpperIdent(3:23-3:27),CloseSquare(3:27-3:28),
+LowerIdent(5:1-5:5),OpColon(5:6-5:7),UpperIdent(5:8-5:13),
+LowerIdent(6:1-6:5),OpAssign(6:6-6:7),UpperIdent(6:8-6:13),NoSpaceDotUpperIdent(6:13-6:18),
+LowerIdent(8:1-8:7),OpColon(8:8-8:9),UpperIdent(8:10-8:15),
 LowerIdent(9:1-9:7),OpAssign(9:8-9:9),UpperIdent(9:10-9:15),NoSpaceDotUpperIdent(9:15-9:22),EndOfFile(9:22-9:22),
 ~~~
 # PARSE
@@ -60,12 +57,12 @@ LowerIdent(9:1-9:7),OpAssign(9:8-9:9),UpperIdent(9:10-9:15),NoSpaceDotUpperIdent
 					(ty @3.11-3.14 (name "Red"))
 					(ty @3.16-3.21 (name "Green"))
 					(ty @3.23-3.27 (name "Blue")))))
-		(s-type-anno @1.1-1.1 (name "blue")
+		(s-type-anno @5.1-6.5 (name "blue")
 			(ty @5.8-5.13 (name "Color")))
 		(s-decl @6.1-6.18
 			(p-ident @6.1-6.5 (raw "blue"))
 			(e-tag @6.8-6.18 (raw "Color.Blue")))
-		(s-type-anno @1.1-1.1 (name "yellow")
+		(s-type-anno @8.1-9.7 (name "yellow")
 			(ty @8.10-8.15 (name "Color")))
 		(s-decl @9.1-9.22
 			(p-ident @9.1-9.7 (raw "yellow"))

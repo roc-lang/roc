@@ -77,15 +77,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+    field_** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_error.md:2:40:2:40:**
+**record_different_fields_error.md:2:40:3:11:**
 ```roc
     _privateField: "leading underscore",
+    field_: "trailing underscore",
 ```
-                                       
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -125,15 +126,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+    PascalCase** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_error.md:3:34:3:34:**
+**record_different_fields_error.md:3:34:4:15:**
 ```roc
     field_: "trailing underscore",
+    PascalCase: "pascal",
 ```
-                                 
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -149,15 +151,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+    kebab** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_error.md:4:25:4:25:**
+**record_different_fields_error.md:4:25:5:10:**
 ```roc
     PascalCase: "pascal",
+    kebab-case: "kebab",
 ```
-                        
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -173,15 +176,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+    field** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_error.md:5:24:5:24:**
+**record_different_fields_error.md:5:24:6:10:**
 ```roc
     kebab-case: "kebab",
+    field$special: "dollar",
 ```
-                       
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -233,15 +237,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+    field** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_error.md:6:28:6:28:**
+**record_different_fields_error.md:6:28:7:10:**
 ```roc
     field$special: "dollar",
+    field@symbol: "at symbol",
 ```
-                           
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -269,15 +274,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_error.md:7:30:7:30:**
+**record_different_fields_error.md:7:30:8:2:**
 ```roc
     field@symbol: "at symbol",
+}
 ```
-                             
 
 
 **MALFORMED TYPE**
@@ -335,13 +341,13 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),Newline(1:1-1:1),
-NamedUnderscore(2:5-2:18),OpColon(2:18-2:19),StringStart(2:20-2:21),StringPart(2:21-2:39),StringEnd(2:39-2:40),Comma(2:40-2:41),Newline(1:1-1:1),
-LowerIdent(3:5-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14),StringPart(3:14-3:33),StringEnd(3:33-3:34),Comma(3:34-3:35),Newline(1:1-1:1),
-UpperIdent(4:5-4:15),OpColon(4:15-4:16),StringStart(4:17-4:18),StringPart(4:18-4:24),StringEnd(4:24-4:25),Comma(4:25-4:26),Newline(1:1-1:1),
-LowerIdent(5:5-5:10),OpBinaryMinus(5:10-5:11),LowerIdent(5:11-5:15),OpColon(5:15-5:16),StringStart(5:17-5:18),StringPart(5:18-5:23),StringEnd(5:23-5:24),Comma(5:24-5:25),Newline(1:1-1:1),
-LowerIdent(6:5-6:10),MalformedUnknownToken(6:10-6:11),LowerIdent(6:11-6:18),OpColon(6:18-6:19),StringStart(6:20-6:21),StringPart(6:21-6:27),StringEnd(6:27-6:28),Comma(6:28-6:29),Newline(1:1-1:1),
-LowerIdent(7:5-7:10),OpaqueName(7:10-7:17),OpColon(7:17-7:18),StringStart(7:19-7:20),StringPart(7:20-7:29),StringEnd(7:29-7:30),Comma(7:30-7:31),Newline(1:1-1:1),
+OpenCurly(1:1-1:2),
+NamedUnderscore(2:5-2:18),OpColon(2:18-2:19),StringStart(2:20-2:21),StringPart(2:21-2:39),StringEnd(2:39-2:40),Comma(2:40-2:41),
+LowerIdent(3:5-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14),StringPart(3:14-3:33),StringEnd(3:33-3:34),Comma(3:34-3:35),
+UpperIdent(4:5-4:15),OpColon(4:15-4:16),StringStart(4:17-4:18),StringPart(4:18-4:24),StringEnd(4:24-4:25),Comma(4:25-4:26),
+LowerIdent(5:5-5:10),OpBinaryMinus(5:10-5:11),LowerIdent(5:11-5:15),OpColon(5:15-5:16),StringStart(5:17-5:18),StringPart(5:18-5:23),StringEnd(5:23-5:24),Comma(5:24-5:25),
+LowerIdent(6:5-6:10),MalformedUnknownToken(6:10-6:11),LowerIdent(6:11-6:18),OpColon(6:18-6:19),StringStart(6:20-6:21),StringPart(6:21-6:27),StringEnd(6:27-6:28),Comma(6:28-6:29),
+LowerIdent(7:5-7:10),OpaqueName(7:10-7:17),OpColon(7:17-7:18),StringStart(7:19-7:20),StringPart(7:20-7:29),StringEnd(7:29-7:30),Comma(7:30-7:31),
 CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # PARSE
@@ -352,37 +358,37 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 			(ty-malformed @2.20-2.39 (tag "ty_anno_unexpected_token")))
 		(e-malformed @2.21-2.40 (reason "expr_unexpected_token"))
 		(e-malformed @2.39-2.41 (reason "expr_unexpected_token"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @2.40-3.11 (reason "expr_unexpected_token"))
 		(s-type-anno @3.5-3.33 (name "field_")
 			(ty-malformed @3.13-3.33 (tag "ty_anno_unexpected_token")))
 		(e-malformed @3.14-3.34 (reason "expr_unexpected_token"))
 		(e-malformed @3.33-3.35 (reason "expr_unexpected_token"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @3.34-4.15 (reason "expr_unexpected_token"))
 		(e-tag @4.5-4.15 (raw "PascalCase"))
 		(e-malformed @4.15-4.18 (reason "expr_unexpected_token"))
 		(e-string @4.17-4.25
 			(e-string-part @4.18-4.24 (raw "pascal")))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @4.25-5.10 (reason "expr_unexpected_token"))
 		(e-binop @5.5-5.16 (op "-")
 			(e-ident @5.5-5.10 (raw "kebab"))
 			(e-ident @5.11-5.15 (raw "case")))
 		(e-malformed @5.15-5.18 (reason "expr_unexpected_token"))
 		(e-string @5.17-5.24
 			(e-string-part @5.18-5.23 (raw "kebab")))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @5.24-6.10 (reason "expr_unexpected_token"))
 		(e-ident @6.5-6.10 (raw "field"))
 		(e-malformed @6.10-6.18 (reason "expr_unexpected_token"))
 		(s-type-anno @6.11-6.27 (name "special")
 			(ty-malformed @6.20-6.27 (tag "ty_anno_unexpected_token")))
 		(e-malformed @6.21-6.28 (reason "expr_unexpected_token"))
 		(e-malformed @6.27-6.29 (reason "expr_unexpected_token"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @6.28-7.10 (reason "expr_unexpected_token"))
 		(e-ident @7.5-7.10 (raw "field"))
 		(e-malformed @7.10-7.18 (reason "expr_unexpected_token"))
 		(e-malformed @7.17-7.20 (reason "expr_unexpected_token"))
 		(e-string @7.19-7.30
 			(e-string-part @7.20-7.29 (raw "at symbol")))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))))
+		(e-malformed @7.30-8.2 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

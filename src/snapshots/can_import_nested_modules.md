@@ -50,15 +50,16 @@ INVALID STATEMENT - can_import_nested_modules.md:5:28:5:38
 INVALID STATEMENT - can_import_nested_modules.md:5:37:8:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **.Config
+import** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**can_import_nested_modules.md:3:19:3:19:**
+**can_import_nested_modules.md:3:19:4:7:**
 ```roc
 import json.Parser.Config
+import http.Client.Auth as HttpAuth
 ```
-                  
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -102,11 +103,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**can_import_nested_modules.md:4:28:4:28:**
+**can_import_nested_modules.md:5:1:5:13:**
 ```roc
-import http.Client.Auth as HttpAuth
+import utils.String.Format exposing [padLeft]
 ```
-                           
+^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -149,11 +150,11 @@ import utils.String.Format exposing [padLeft]
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**can_import_nested_modules.md:1:1:1:1:**
+**can_import_nested_modules.md:3:19:4:7:**
 ```roc
-
+import json.Parser.Config
+import http.Client.Auth as HttpAuth
 ```
-
 
 
 **INVALID STATEMENT**
@@ -303,31 +304,20 @@ validateAuth = |creds| HttpAuth.validate(creds)
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:19),NoSpaceDotUpperIdent(3:19-3:26),Newline(1:1-1:1),
-KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:19),NoSpaceDotUpperIdent(4:19-4:24),KwAs(4:25-4:27),UpperIdent(4:28-4:36),Newline(1:1-1:1),
-KwImport(5:1-5:7),LowerIdent(5:8-5:13),NoSpaceDotUpperIdent(5:13-5:20),NoSpaceDotUpperIdent(5:20-5:27),KwExposing(5:28-5:36),OpenSquare(5:37-5:38),LowerIdent(5:38-5:45),CloseSquare(5:45-5:46),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(7:2-7:38),
-LowerIdent(8:1-8:12),OpColon(8:13-8:14),UpperIdent(8:15-8:21),NoSpaceDotUpperIdent(8:21-8:30),OpArrow(8:31-8:33),UpperIdent(8:34-8:37),Newline(1:1-1:1),
-LowerIdent(9:1-9:12),OpAssign(9:13-9:14),OpBar(9:15-9:16),LowerIdent(9:16-9:24),OpBar(9:24-9:25),UpperIdent(9:26-9:32),NoSpaceDotLowerIdent(9:32-9:41),NoSpaceOpenRound(9:41-9:42),LowerIdent(9:42-9:50),CloseRound(9:50-9:51),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(11:2-11:39),
-LowerIdent(12:1-12:13),OpColon(12:14-12:15),UpperIdent(12:16-12:19),Comma(12:19-12:20),UpperIdent(12:21-12:24),OpArrow(12:25-12:27),UpperIdent(12:28-12:36),NoSpaceDotUpperIdent(12:36-12:42),Newline(1:1-1:1),
-LowerIdent(13:1-13:13),OpAssign(13:14-13:15),OpBar(13:16-13:17),LowerIdent(13:17-13:21),Comma(13:21-13:22),LowerIdent(13:23-13:27),OpBar(13:27-13:28),UpperIdent(13:29-13:37),NoSpaceDotLowerIdent(13:37-13:43),NoSpaceOpenRound(13:43-13:44),LowerIdent(13:44-13:48),Comma(13:48-13:49),LowerIdent(13:50-13:54),CloseRound(13:54-13:55),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(15:2-15:35),
-LowerIdent(16:1-16:12),OpColon(16:13-16:14),UpperIdent(16:15-16:21),NoSpaceDotUpperIdent(16:21-16:28),NoSpaceDotUpperIdent(16:28-16:37),Comma(16:37-16:38),UpperIdent(16:39-16:42),OpArrow(16:43-16:45),UpperIdent(16:46-16:52),NoSpaceOpenRound(16:52-16:53),UpperIdent(16:53-16:56),Comma(16:56-16:57),UpperIdent(16:58-16:64),NoSpaceDotUpperIdent(16:64-16:71),NoSpaceDotUpperIdent(16:71-16:77),CloseRound(16:77-16:78),Newline(1:1-1:1),
-LowerIdent(17:1-17:12),OpAssign(17:13-17:14),OpBar(17:15-17:16),LowerIdent(17:16-17:30),Comma(17:30-17:31),LowerIdent(17:32-17:37),OpBar(17:37-17:38),Newline(1:1-1:1),
-UpperIdent(18:5-18:11),NoSpaceDotUpperIdent(18:11-18:18),NoSpaceDotUpperIdent(18:18-18:27),NoSpaceDotLowerIdent(18:27-18:37),NoSpaceOpenRound(18:37-18:38),LowerIdent(18:38-18:52),Comma(18:52-18:53),LowerIdent(18:54-18:59),CloseRound(18:59-18:60),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(20:2-20:54),
-LowerIdent(21:1-21:13),OpColon(21:14-21:15),UpperIdent(21:16-21:19),OpArrow(21:20-21:22),UpperIdent(21:23-21:26),Newline(1:1-1:1),
-LowerIdent(22:1-22:13),OpAssign(22:14-22:15),OpBar(22:16-22:17),LowerIdent(22:17-22:21),OpBar(22:21-22:22),LowerIdent(22:23-22:30),NoSpaceOpenRound(22:30-22:31),LowerIdent(22:31-22:35),Comma(22:35-22:36),UpperIdent(22:37-22:43),NoSpaceDotLowerIdent(22:43-22:58),CloseRound(22:58-22:59),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(24:2-24:44),
-LowerIdent(25:1-25:13),OpColon(25:14-25:15),UpperIdent(25:16-25:24),NoSpaceDotUpperIdent(25:24-25:36),OpArrow(25:37-25:39),UpperIdent(25:40-25:46),NoSpaceOpenRound(25:46-25:47),UpperIdent(25:47-25:55),NoSpaceDotUpperIdent(25:55-25:61),Comma(25:61-25:62),UpperIdent(25:63-25:71),NoSpaceDotUpperIdent(25:71-25:77),CloseRound(25:77-25:78),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:19),NoSpaceDotUpperIdent(3:19-3:26),
+KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:19),NoSpaceDotUpperIdent(4:19-4:24),KwAs(4:25-4:27),UpperIdent(4:28-4:36),
+KwImport(5:1-5:7),LowerIdent(5:8-5:13),NoSpaceDotUpperIdent(5:13-5:20),NoSpaceDotUpperIdent(5:20-5:27),KwExposing(5:28-5:36),OpenSquare(5:37-5:38),LowerIdent(5:38-5:45),CloseSquare(5:45-5:46),
+LowerIdent(8:1-8:12),OpColon(8:13-8:14),UpperIdent(8:15-8:21),NoSpaceDotUpperIdent(8:21-8:30),OpArrow(8:31-8:33),UpperIdent(8:34-8:37),
+LowerIdent(9:1-9:12),OpAssign(9:13-9:14),OpBar(9:15-9:16),LowerIdent(9:16-9:24),OpBar(9:24-9:25),UpperIdent(9:26-9:32),NoSpaceDotLowerIdent(9:32-9:41),NoSpaceOpenRound(9:41-9:42),LowerIdent(9:42-9:50),CloseRound(9:50-9:51),
+LowerIdent(12:1-12:13),OpColon(12:14-12:15),UpperIdent(12:16-12:19),Comma(12:19-12:20),UpperIdent(12:21-12:24),OpArrow(12:25-12:27),UpperIdent(12:28-12:36),NoSpaceDotUpperIdent(12:36-12:42),
+LowerIdent(13:1-13:13),OpAssign(13:14-13:15),OpBar(13:16-13:17),LowerIdent(13:17-13:21),Comma(13:21-13:22),LowerIdent(13:23-13:27),OpBar(13:27-13:28),UpperIdent(13:29-13:37),NoSpaceDotLowerIdent(13:37-13:43),NoSpaceOpenRound(13:43-13:44),LowerIdent(13:44-13:48),Comma(13:48-13:49),LowerIdent(13:50-13:54),CloseRound(13:54-13:55),
+LowerIdent(16:1-16:12),OpColon(16:13-16:14),UpperIdent(16:15-16:21),NoSpaceDotUpperIdent(16:21-16:28),NoSpaceDotUpperIdent(16:28-16:37),Comma(16:37-16:38),UpperIdent(16:39-16:42),OpArrow(16:43-16:45),UpperIdent(16:46-16:52),NoSpaceOpenRound(16:52-16:53),UpperIdent(16:53-16:56),Comma(16:56-16:57),UpperIdent(16:58-16:64),NoSpaceDotUpperIdent(16:64-16:71),NoSpaceDotUpperIdent(16:71-16:77),CloseRound(16:77-16:78),
+LowerIdent(17:1-17:12),OpAssign(17:13-17:14),OpBar(17:15-17:16),LowerIdent(17:16-17:30),Comma(17:30-17:31),LowerIdent(17:32-17:37),OpBar(17:37-17:38),
+UpperIdent(18:5-18:11),NoSpaceDotUpperIdent(18:11-18:18),NoSpaceDotUpperIdent(18:18-18:27),NoSpaceDotLowerIdent(18:27-18:37),NoSpaceOpenRound(18:37-18:38),LowerIdent(18:38-18:52),Comma(18:52-18:53),LowerIdent(18:54-18:59),CloseRound(18:59-18:60),
+LowerIdent(21:1-21:13),OpColon(21:14-21:15),UpperIdent(21:16-21:19),OpArrow(21:20-21:22),UpperIdent(21:23-21:26),
+LowerIdent(22:1-22:13),OpAssign(22:14-22:15),OpBar(22:16-22:17),LowerIdent(22:17-22:21),OpBar(22:21-22:22),LowerIdent(22:23-22:30),NoSpaceOpenRound(22:30-22:31),LowerIdent(22:31-22:35),Comma(22:35-22:36),UpperIdent(22:37-22:43),NoSpaceDotLowerIdent(22:43-22:58),CloseRound(22:58-22:59),
+LowerIdent(25:1-25:13),OpColon(25:14-25:15),UpperIdent(25:16-25:24),NoSpaceDotUpperIdent(25:24-25:36),OpArrow(25:37-25:39),UpperIdent(25:40-25:46),NoSpaceOpenRound(25:46-25:47),UpperIdent(25:47-25:55),NoSpaceDotUpperIdent(25:55-25:61),Comma(25:61-25:62),UpperIdent(25:63-25:71),NoSpaceDotUpperIdent(25:71-25:77),CloseRound(25:77-25:78),
 LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17-26:22),OpBar(26:22-26:23),UpperIdent(26:24-26:32),NoSpaceDotLowerIdent(26:32-26:41),NoSpaceOpenRound(26:41-26:42),LowerIdent(26:42-26:47),CloseRound(26:47-26:48),EndOfFile(26:48-26:48),
 ~~~
 # PARSE
@@ -337,7 +327,7 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 		(exposes @1.8-1.10))
 	(statements
 		(s-import @3.1-3.19 (raw "json.Parser"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @3.19-4.7 (reason "expr_unexpected_token"))
 		(s-import @4.1-4.19 (raw "http.Client"))
 		(e-malformed @4.19-4.27 (reason "expr_unexpected_token"))
 		(e-malformed @4.25-4.36 (reason "expr_unexpected_token"))
@@ -348,7 +338,7 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 		(e-malformed @5.28-5.38 (reason "expr_unexpected_token"))
 		(e-list @5.37-5.46
 			(e-ident @5.38-5.45 (raw "padLeft")))
-		(s-type-anno @1.1-1.1 (name "parseConfig")
+		(s-type-anno @8.1-9.12 (name "parseConfig")
 			(ty-fn @8.15-8.37
 				(ty @8.15-8.30 (name "Config.Settings"))
 				(ty @8.34-8.37 (name "Str"))))
@@ -360,7 +350,7 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 				(e-apply @9.26-9.51
 					(e-ident @9.26-9.41 (raw "Config.toString"))
 					(e-ident @9.42-9.50 (raw "settings")))))
-		(s-type-anno @1.1-1.1 (name "authenticate")
+		(s-type-anno @12.1-13.13 (name "authenticate")
 			(ty-fn @12.16-12.42
 				(ty @12.16-12.19 (name "Str"))
 				(ty @12.21-12.24 (name "Str"))
@@ -393,7 +383,7 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 					(e-ident @18.5-18.37 (raw "Config.Parser.Advanced.parseWith"))
 					(e-ident @18.38-18.52 (raw "advancedConfig"))
 					(e-ident @18.54-18.59 (raw "input")))))
-		(s-type-anno @1.1-1.1 (name "formatOutput")
+		(s-type-anno @21.1-22.13 (name "formatOutput")
 			(ty-fn @21.16-21.26
 				(ty @21.16-21.19 (name "Str"))
 				(ty @21.23-21.26 (name "Str"))))

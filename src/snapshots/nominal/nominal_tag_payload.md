@@ -25,18 +25,13 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),LowerIdent(1:16-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),Comma(1:28-1:29),LowerIdent(1:30-1:35),Comma(1:35-1:36),LowerIdent(1:37-1:42),CloseSquare(1:42-1:43),Newline(1:1-1:1),
-Newline(1:1-1:1),
-UpperIdent(3:1-3:6),NoSpaceOpenRound(3:6-3:7),LowerIdent(3:7-3:8),CloseRound(3:8-3:9),OpColonEqual(3:10-3:12),OpenSquare(3:13-3:14),UpperIdent(3:14-3:18),NoSpaceOpenRound(3:18-3:19),LowerIdent(3:19-3:20),CloseRound(3:20-3:21),Comma(3:21-3:22),UpperIdent(3:23-3:27),CloseSquare(3:27-3:28),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(5:1-5:6),OpColon(5:7-5:8),LowerIdent(5:9-5:10),OpArrow(5:11-5:13),UpperIdent(5:14-5:19),NoSpaceOpenRound(5:19-5:20),LowerIdent(5:20-5:21),CloseRound(5:21-5:22),Newline(1:1-1:1),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),LowerIdent(6:10-6:11),OpBar(6:11-6:12),UpperIdent(6:13-6:18),NoSpaceDotUpperIdent(6:18-6:23),NoSpaceOpenRound(6:23-6:24),LowerIdent(6:24-6:25),CloseRound(6:25-6:26),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(8:1-8:6),OpColon(8:7-8:8),UpperIdent(8:9-8:14),NoSpaceOpenRound(8:14-8:15),LowerIdent(8:15-8:16),CloseRound(8:16-8:17),Newline(1:1-1:1),
-LowerIdent(9:1-9:6),OpAssign(9:7-9:8),UpperIdent(9:9-9:14),NoSpaceDotUpperIdent(9:14-9:19),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(11:1-11:6),OpAssign(11:7-11:8),OpBar(11:9-11:10),LowerIdent(11:10-11:11),OpBar(11:11-11:12),UpperIdent(11:13-11:18),NoSpaceDotUpperIdent(11:18-11:23),NoSpaceOpenRound(11:23-11:24),LowerIdent(11:24-11:25),CloseRound(11:25-11:26),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),LowerIdent(1:16-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),Comma(1:28-1:29),LowerIdent(1:30-1:35),Comma(1:35-1:36),LowerIdent(1:37-1:42),CloseSquare(1:42-1:43),
+UpperIdent(3:1-3:6),NoSpaceOpenRound(3:6-3:7),LowerIdent(3:7-3:8),CloseRound(3:8-3:9),OpColonEqual(3:10-3:12),OpenSquare(3:13-3:14),UpperIdent(3:14-3:18),NoSpaceOpenRound(3:18-3:19),LowerIdent(3:19-3:20),CloseRound(3:20-3:21),Comma(3:21-3:22),UpperIdent(3:23-3:27),CloseSquare(3:27-3:28),
+LowerIdent(5:1-5:6),OpColon(5:7-5:8),LowerIdent(5:9-5:10),OpArrow(5:11-5:13),UpperIdent(5:14-5:19),NoSpaceOpenRound(5:19-5:20),LowerIdent(5:20-5:21),CloseRound(5:21-5:22),
+LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),LowerIdent(6:10-6:11),OpBar(6:11-6:12),UpperIdent(6:13-6:18),NoSpaceDotUpperIdent(6:18-6:23),NoSpaceOpenRound(6:23-6:24),LowerIdent(6:24-6:25),CloseRound(6:25-6:26),
+LowerIdent(8:1-8:6),OpColon(8:7-8:8),UpperIdent(8:9-8:14),NoSpaceOpenRound(8:14-8:15),LowerIdent(8:15-8:16),CloseRound(8:16-8:17),
+LowerIdent(9:1-9:6),OpAssign(9:7-9:8),UpperIdent(9:9-9:14),NoSpaceDotUpperIdent(9:14-9:19),
+LowerIdent(11:1-11:6),OpAssign(11:7-11:8),OpBar(11:9-11:10),LowerIdent(11:10-11:11),OpBar(11:11-11:12),UpperIdent(11:13-11:18),NoSpaceDotUpperIdent(11:18-11:23),NoSpaceOpenRound(11:23-11:24),LowerIdent(11:24-11:25),CloseRound(11:25-11:26),
 LowerIdent(13:1-13:6),OpAssign(13:7-13:8),UpperIdent(13:9-13:14),NoSpaceDotUpperIdent(13:14-13:19),EndOfFile(13:19-13:19),
 ~~~
 # PARSE

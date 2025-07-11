@@ -23,16 +23,13 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:6),OpColon(3:7-3:8),LowerIdent(3:9-3:10),OpArrow(3:11-3:13),LowerIdent(3:14-3:15),Newline(1:1-1:1),
-LowerIdent(4:1-4:6),OpAssign(4:7-4:8),OpBar(4:9-4:10),LowerIdent(4:10-4:11),OpBar(4:11-4:12),OpenCurly(4:13-4:14),Newline(1:1-1:1),
-LowerIdent(5:5-5:10),OpColon(5:11-5:12),LowerIdent(5:13-5:14),OpArrow(5:15-5:17),LowerIdent(5:18-5:19),Newline(5:22-5:40),
-LowerIdent(6:5-6:10),OpAssign(6:11-6:12),OpBar(6:13-6:14),LowerIdent(6:14-6:15),OpBar(6:15-6:16),LowerIdent(6:17-6:18),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(8:5-8:10),NoSpaceOpenRound(8:10-8:11),LowerIdent(8:11-8:12),CloseRound(8:12-8:13),Newline(1:1-1:1),
-CloseCurly(9:1-9:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
+LowerIdent(3:1-3:6),OpColon(3:7-3:8),LowerIdent(3:9-3:10),OpArrow(3:11-3:13),LowerIdent(3:14-3:15),
+LowerIdent(4:1-4:6),OpAssign(4:7-4:8),OpBar(4:9-4:10),LowerIdent(4:10-4:11),OpBar(4:11-4:12),OpenCurly(4:13-4:14),
+LowerIdent(5:5-5:10),OpColon(5:11-5:12),LowerIdent(5:13-5:14),OpArrow(5:15-5:17),LowerIdent(5:18-5:19),
+LowerIdent(6:5-6:10),OpAssign(6:11-6:12),OpBar(6:13-6:14),LowerIdent(6:14-6:15),OpBar(6:15-6:16),LowerIdent(6:17-6:18),
+LowerIdent(8:5-8:10),NoSpaceOpenRound(8:10-8:11),LowerIdent(8:11-8:12),CloseRound(8:12-8:13),
+CloseCurly(9:1-9:2),
 LowerIdent(11:1-11:6),OpAssign(11:7-11:8),OpBar(11:9-11:10),Underscore(11:10-11:11),OpBar(11:11-11:12),OpenCurly(11:13-11:14),CloseCurly(11:14-11:15),EndOfFile(11:15-11:15),
 ~~~
 # PARSE

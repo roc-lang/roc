@@ -120,15 +120,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **else
+        Err** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**Color.md:64:5:64:5:**
+**Color.md:64:5:65:12:**
 ```roc
     else
+        Err(UnknownColor("Unknown color ${str}"))
 ```
-    
 
 
 **PARSE ERROR**
@@ -252,15 +253,18 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **)
+
+is_named_color** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**Color.md:65:49:65:49:**
+**Color.md:65:49:67:15:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
+
+is_named_color = |str|{
 ```
-                                                
 
 
 **UNUSED VARIABLE**
@@ -305,11 +309,11 @@ Is there an `import` or `exposing` missing up-top?
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**Color.md:1:1:1:1:**
+**Color.md:64:5:65:12:**
 ```roc
-
+    else
+        Err(UnknownColor("Unknown color ${str}"))
 ```
-
 
 
 **INVALID STATEMENT**
@@ -393,11 +397,12 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**Color.md:1:1:1:1:**
+**Color.md:65:49:67:15:**
 ```roc
+        Err(UnknownColor("Unknown color ${str}"))
 
+is_named_color = |str|{
 ```
-
 
 
 **UNDEFINED VARIABLE**
@@ -455,77 +460,65 @@ But you are trying to use it as:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),Newline(1:1-1:1),
-UpperIdent(2:5-2:10),Comma(2:10-2:11),Newline(1:1-1:1),
-LowerIdent(3:5-3:11),Comma(3:11-3:12),Newline(1:1-1:1),
-LowerIdent(4:5-4:8),Comma(4:8-4:9),Newline(1:1-1:1),
-LowerIdent(5:5-5:9),Comma(5:9-5:10),Newline(1:1-1:1),
-LowerIdent(6:5-6:8),Comma(6:8-6:9),Newline(1:1-1:1),
-LowerIdent(7:5-7:10),Comma(7:10-7:11),Newline(1:1-1:1),
-CloseSquare(8:1-8:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
-UpperIdent(10:1-10:6),OpColonEqual(10:7-10:9),OpenSquare(10:10-10:11),Newline(1:1-1:1),
-UpperIdent(11:5-11:8),NoSpaceOpenRound(11:8-11:9),UpperIdent(11:9-11:11),Comma(11:11-11:12),UpperIdent(11:13-11:15),Comma(11:15-11:16),UpperIdent(11:17-11:19),CloseRound(11:19-11:20),Comma(11:20-11:21),Newline(1:1-1:1),
-UpperIdent(12:5-12:9),NoSpaceOpenRound(12:9-12:10),UpperIdent(12:10-12:12),Comma(12:12-12:13),UpperIdent(12:14-12:16),Comma(12:16-12:17),UpperIdent(12:18-12:20),Comma(12:20-12:21),UpperIdent(12:22-12:25),CloseRound(12:25-12:26),Comma(12:26-12:27),Newline(1:1-1:1),
-UpperIdent(13:5-13:10),NoSpaceOpenRound(13:10-13:11),UpperIdent(13:11-13:14),CloseRound(13:14-13:15),Comma(13:15-13:16),Newline(1:1-1:1),
-UpperIdent(14:5-14:8),NoSpaceOpenRound(14:8-14:9),UpperIdent(14:9-14:12),CloseRound(14:12-14:13),Comma(14:13-14:14),Newline(1:1-1:1),
-CloseSquare(15:1-15:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(17:1-17:4),OpColon(17:5-17:6),UpperIdent(17:7-17:9),Comma(17:9-17:10),UpperIdent(17:11-17:13),Comma(17:13-17:14),UpperIdent(17:15-17:17),OpArrow(17:18-17:20),UpperIdent(17:21-17:26),Newline(1:1-1:1),
-LowerIdent(18:1-18:4),OpAssign(18:5-18:6),OpBar(18:7-18:8),LowerIdent(18:8-18:9),Comma(18:9-18:10),LowerIdent(18:11-18:12),Comma(18:12-18:13),LowerIdent(18:14-18:15),OpBar(18:15-18:16),UpperIdent(18:17-18:22),NoSpaceDotUpperIdent(18:22-18:26),NoSpaceOpenRound(18:26-18:27),LowerIdent(18:27-18:28),Comma(18:28-18:29),LowerIdent(18:30-18:31),Comma(18:31-18:32),LowerIdent(18:33-18:34),CloseRound(18:34-18:35),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(20:1-20:5),OpColon(20:6-20:7),UpperIdent(20:8-20:10),Comma(20:10-20:11),UpperIdent(20:12-20:14),Comma(20:14-20:15),UpperIdent(20:16-20:18),Comma(20:18-20:19),UpperIdent(20:20-20:22),OpArrow(20:23-20:25),UpperIdent(20:26-20:31),Newline(1:1-1:1),
-LowerIdent(21:1-21:5),OpAssign(21:6-21:7),OpBar(21:8-21:9),LowerIdent(21:9-21:10),Comma(21:10-21:11),LowerIdent(21:12-21:13),Comma(21:13-21:14),LowerIdent(21:15-21:16),Comma(21:16-21:17),LowerIdent(21:18-21:19),OpBar(21:19-21:20),OpenCurly(21:21-21:22),Newline(1:1-1:1),
-LowerIdent(22:5-22:12),OpAssign(22:13-22:14),LowerIdent(22:15-22:16),NoSpaceDotLowerIdent(22:16-22:24),NoSpaceOpenRound(22:24-22:25),CloseRound(22:25-22:26),OpSlash(22:27-22:28),Float(22:29-22:34),Newline(1:1-1:1),
-UpperIdent(23:5-23:10),NoSpaceDotUpperIdent(23:10-23:15),NoSpaceOpenRound(23:15-23:16),LowerIdent(23:16-23:17),Comma(23:17-23:18),LowerIdent(23:19-23:20),Comma(23:20-23:21),LowerIdent(23:22-23:23),Comma(23:23-23:24),LowerIdent(23:25-23:32),CloseRound(23:32-23:33),Newline(1:1-1:1),
-CloseCurly(24:1-24:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(26:1-26:4),OpColon(26:5-26:6),UpperIdent(26:7-26:10),OpArrow(26:11-26:13),UpperIdent(26:14-26:20),NoSpaceOpenRound(26:20-26:21),UpperIdent(26:21-26:26),Comma(26:26-26:27),OpenSquare(26:28-26:29),UpperIdent(26:29-26:39),NoSpaceOpenRound(26:39-26:40),UpperIdent(26:40-26:43),CloseRound(26:43-26:44),CloseSquare(26:44-26:45),CloseRound(26:45-26:46),Newline(1:1-1:1),
-LowerIdent(27:1-27:4),OpAssign(27:5-27:6),OpBar(27:7-27:8),LowerIdent(27:8-27:11),OpBar(27:11-27:12),OpenCurly(27:13-27:14),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(29:5-29:10),OpAssign(29:11-29:12),LowerIdent(29:13-29:16),NoSpaceDotLowerIdent(29:16-29:24),NoSpaceOpenRound(29:24-29:25),CloseRound(29:25-29:26),Newline(1:1-1:1),
-LowerIdent(30:5-30:25),OpAssign(30:26-30:27),OpBar(30:28-30:29),LowerIdent(30:29-30:30),OpBar(30:30-30:31),OpenRound(30:32-30:33),LowerIdent(30:33-30:34),OpGreaterThanOrEq(30:35-30:37),SingleQuote(30:38-30:41),OpAnd(30:42-30:45),LowerIdent(30:46-30:47),OpLessThanOrEq(30:48-30:50),SingleQuote(30:51-30:54),CloseRound(30:54-30:55),OpOr(30:56-30:58),OpenRound(30:59-30:60),LowerIdent(30:60-30:61),OpGreaterThanOrEq(30:62-30:64),SingleQuote(30:65-30:68),OpAnd(30:69-30:72),LowerIdent(30:73-30:74),OpLessThanOrEq(30:75-30:77),SingleQuote(30:78-30:81),CloseRound(30:81-30:82),OpOr(30:83-30:85),OpenRound(30:86-30:87),LowerIdent(30:87-30:88),OpGreaterThanOrEq(30:89-30:91),SingleQuote(30:92-30:95),OpAnd(30:96-30:99),LowerIdent(30:100-30:101),OpLessThanOrEq(30:102-30:104),SingleQuote(30:105-30:108),CloseRound(30:108-30:109),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwMatch(32:5-32:10),LowerIdent(32:11-32:16),OpenCurly(32:17-32:18),Newline(1:1-1:1),
-OpenSquare(33:9-33:10),SingleQuote(33:10-33:13),Comma(33:13-33:14),LowerIdent(33:15-33:16),Comma(33:16-33:17),LowerIdent(33:18-33:19),Comma(33:19-33:20),LowerIdent(33:21-33:22),Comma(33:22-33:23),LowerIdent(33:24-33:25),Comma(33:25-33:26),LowerIdent(33:27-33:28),Comma(33:28-33:29),LowerIdent(33:30-33:31),CloseSquare(33:31-33:32),OpFatArrow(33:33-33:35),OpenCurly(33:36-33:37),Newline(1:1-1:1),
-LowerIdent(34:13-34:21),OpAssign(34:22-34:23),Newline(1:1-1:1),
-LowerIdent(35:17-35:18),NoSpaceDotLowerIdent(35:18-35:39),NoSpaceOpenRound(35:39-35:40),CloseRound(35:40-35:41),Newline(1:1-1:1),
-OpAnd(36:17-36:20),LowerIdent(36:21-36:22),NoSpaceDotLowerIdent(36:22-36:43),NoSpaceOpenRound(36:43-36:44),CloseRound(36:44-36:45),Newline(1:1-1:1),
-OpAnd(37:17-37:20),LowerIdent(37:21-37:22),NoSpaceDotLowerIdent(37:22-37:43),NoSpaceOpenRound(37:43-37:44),CloseRound(37:44-37:45),Newline(1:1-1:1),
-OpAnd(38:17-38:20),LowerIdent(38:21-38:22),NoSpaceDotLowerIdent(38:22-38:43),NoSpaceOpenRound(38:43-38:44),CloseRound(38:44-38:45),Newline(1:1-1:1),
-OpAnd(39:17-39:20),LowerIdent(39:21-39:22),NoSpaceDotLowerIdent(39:22-39:43),NoSpaceOpenRound(39:43-39:44),CloseRound(39:44-39:45),Newline(1:1-1:1),
-OpAnd(40:17-40:20),LowerIdent(40:21-40:22),NoSpaceDotLowerIdent(40:22-40:43),NoSpaceOpenRound(40:43-40:44),CloseRound(40:44-40:45),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwIf(42:13-42:15),LowerIdent(42:16-42:24),UpperIdent(42:25-42:27),NoSpaceOpenRound(42:27-42:28),UpperIdent(42:28-42:33),NoSpaceDotUpperIdent(42:33-42:37),NoSpaceOpenRound(42:37-42:38),LowerIdent(42:38-42:41),CloseRound(42:41-42:42),CloseRound(42:42-42:43),KwElse(42:44-42:48),UpperIdent(42:49-42:52),NoSpaceOpenRound(42:52-42:53),UpperIdent(42:53-42:63),NoSpaceOpenRound(42:63-42:64),StringStart(42:64-42:65),StringPart(42:65-42:116),OpenStringInterpolation(42:116-42:118),LowerIdent(42:118-42:121),CloseStringInterpolation(42:121-42:122),StringPart(42:122-42:122),StringEnd(42:122-42:123),CloseRound(42:123-42:124),CloseRound(42:124-42:125),Newline(1:1-1:1),
-CloseCurly(43:9-43:10),Newline(1:1-1:1),
-Underscore(44:9-44:10),OpFatArrow(44:11-44:13),UpperIdent(44:14-44:17),NoSpaceOpenRound(44:17-44:18),UpperIdent(44:18-44:28),NoSpaceOpenRound(44:28-44:29),StringStart(44:29-44:30),StringPart(44:30-44:91),OpenStringInterpolation(44:91-44:93),LowerIdent(44:93-44:96),CloseStringInterpolation(44:96-44:97),StringPart(44:97-44:97),StringEnd(44:97-44:98),CloseRound(44:98-44:99),CloseRound(44:99-44:100),Newline(1:1-1:1),
-CloseCurly(45:5-45:6),Newline(1:1-1:1),
-CloseCurly(46:1-46:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(48:1-48:7),OpColon(48:8-48:9),UpperIdent(48:10-48:15),OpArrow(48:16-48:18),UpperIdent(48:19-48:22),Newline(1:1-1:1),
-LowerIdent(49:1-49:7),OpAssign(49:8-49:9),OpBar(49:10-49:11),LowerIdent(49:11-49:16),OpBar(49:16-49:17),KwMatch(49:18-49:23),LowerIdent(49:24-49:29),OpenCurly(49:30-49:31),Newline(1:1-1:1),
-UpperIdent(50:5-50:10),NoSpaceDotUpperIdent(50:10-50:14),NoSpaceOpenRound(50:14-50:15),LowerIdent(50:15-50:16),Comma(50:16-50:17),LowerIdent(50:18-50:19),Comma(50:19-50:20),LowerIdent(50:21-50:22),CloseRound(50:22-50:23),OpFatArrow(50:24-50:26),StringStart(50:27-50:28),StringPart(50:28-50:32),OpenStringInterpolation(50:32-50:34),UpperIdent(50:34-50:37),NoSpaceDotLowerIdent(50:37-50:44),NoSpaceOpenRound(50:44-50:45),LowerIdent(50:45-50:46),CloseRound(50:46-50:47),CloseStringInterpolation(50:47-50:48),StringPart(50:48-50:50),OpenStringInterpolation(50:50-50:52),UpperIdent(50:52-50:55),NoSpaceDotLowerIdent(50:55-50:62),NoSpaceOpenRound(50:62-50:63),LowerIdent(50:63-50:64),CloseRound(50:64-50:65),CloseStringInterpolation(50:65-50:66),StringPart(50:66-50:68),OpenStringInterpolation(50:68-50:70),UpperIdent(50:70-50:73),NoSpaceDotLowerIdent(50:73-50:80),NoSpaceOpenRound(50:80-50:81),LowerIdent(50:81-50:82),CloseRound(50:82-50:83),CloseStringInterpolation(50:83-50:84),StringPart(50:84-50:85),StringEnd(50:85-50:86),Newline(1:1-1:1),
-UpperIdent(51:5-51:10),NoSpaceDotUpperIdent(51:10-51:15),NoSpaceOpenRound(51:15-51:16),LowerIdent(51:16-51:17),Comma(51:17-51:18),LowerIdent(51:19-51:20),Comma(51:20-51:21),LowerIdent(51:22-51:23),Comma(51:23-51:24),LowerIdent(51:25-51:26),CloseRound(51:26-51:27),OpFatArrow(51:28-51:30),StringStart(51:31-51:32),StringPart(51:32-51:37),OpenStringInterpolation(51:37-51:39),UpperIdent(51:39-51:42),NoSpaceDotLowerIdent(51:42-51:49),NoSpaceOpenRound(51:49-51:50),LowerIdent(51:50-51:51),CloseRound(51:51-51:52),CloseStringInterpolation(51:52-51:53),StringPart(51:53-51:55),OpenStringInterpolation(51:55-51:57),UpperIdent(51:57-51:60),NoSpaceDotLowerIdent(51:60-51:67),NoSpaceOpenRound(51:67-51:68),LowerIdent(51:68-51:69),CloseRound(51:69-51:70),CloseStringInterpolation(51:70-51:71),StringPart(51:71-51:73),OpenStringInterpolation(51:73-51:75),UpperIdent(51:75-51:78),NoSpaceDotLowerIdent(51:78-51:85),NoSpaceOpenRound(51:85-51:86),LowerIdent(51:86-51:87),CloseRound(51:87-51:88),CloseStringInterpolation(51:88-51:89),StringPart(51:89-51:91),OpenStringInterpolation(51:91-51:93),UpperIdent(51:93-51:96),NoSpaceDotLowerIdent(51:96-51:103),NoSpaceOpenRound(51:103-51:104),LowerIdent(51:104-51:105),CloseRound(51:105-51:106),CloseStringInterpolation(51:106-51:107),StringPart(51:107-51:108),StringEnd(51:108-51:109),Newline(1:1-1:1),
-UpperIdent(52:5-52:10),NoSpaceDotUpperIdent(52:10-52:16),NoSpaceOpenRound(52:16-52:17),LowerIdent(52:17-52:22),CloseRound(52:22-52:23),OpFatArrow(52:24-52:26),LowerIdent(52:27-52:32),Newline(1:1-1:1),
-UpperIdent(53:5-53:10),NoSpaceDotUpperIdent(53:10-53:14),NoSpaceOpenRound(53:14-53:15),LowerIdent(53:15-53:20),CloseRound(53:20-53:21),OpFatArrow(53:22-53:24),LowerIdent(53:25-53:30),Newline(1:1-1:1),
-CloseCurly(54:1-54:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwExpect(56:1-56:7),LowerIdent(56:8-56:11),NoSpaceOpenRound(56:11-56:12),Int(56:12-56:15),Comma(56:15-56:16),Int(56:17-56:19),Comma(56:19-56:20),Int(56:21-56:24),CloseRound(56:24-56:25),NoSpaceDotLowerIdent(56:25-56:32),NoSpaceOpenRound(56:32-56:33),CloseRound(56:33-56:34),OpEquals(56:35-56:37),StringStart(56:38-56:39),StringPart(56:39-56:56),StringEnd(56:56-56:57),Newline(1:1-1:1),
-KwExpect(57:1-57:7),LowerIdent(57:8-57:12),NoSpaceOpenRound(57:12-57:13),Int(57:13-57:16),Comma(57:16-57:17),Int(57:18-57:20),Comma(57:20-57:21),Int(57:22-57:25),Comma(57:25-57:26),Int(57:27-57:30),CloseRound(57:30-57:31),NoSpaceDotLowerIdent(57:31-57:38),NoSpaceOpenRound(57:38-57:39),CloseRound(57:39-57:40),OpEquals(57:41-57:43),StringStart(57:44-57:45),StringPart(57:45-57:68),StringEnd(57:68-57:69),Newline(1:1-1:1),
-KwExpect(58:1-58:7),LowerIdent(58:8-58:11),NoSpaceOpenRound(58:11-58:12),StringStart(58:12-58:13),StringPart(58:13-58:20),StringEnd(58:20-58:21),CloseRound(58:21-58:22),NoSpaceDotLowerIdent(58:22-58:29),NoSpaceOpenRound(58:29-58:30),LowerIdent(58:30-58:36),CloseRound(58:36-58:37),OpEquals(58:38-58:40),UpperIdent(58:41-58:43),NoSpaceOpenRound(58:43-58:44),StringStart(58:44-58:45),StringPart(58:45-58:52),StringEnd(58:52-58:53),CloseRound(58:53-58:54),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(60:1-60:6),OpColon(60:7-60:8),UpperIdent(60:9-60:12),OpArrow(60:13-60:15),UpperIdent(60:16-60:22),NoSpaceOpenRound(60:22-60:23),UpperIdent(60:23-60:28),Comma(60:28-60:29),OpenSquare(60:30-60:31),UpperIdent(60:31-60:43),NoSpaceOpenRound(60:43-60:44),UpperIdent(60:44-60:47),CloseRound(60:47-60:48),CloseSquare(60:48-60:49),CloseRound(60:49-60:50),Newline(1:1-1:1),
-LowerIdent(61:1-61:6),OpAssign(61:7-61:8),OpBar(61:9-61:10),LowerIdent(61:10-61:13),OpBar(61:13-61:14),Newline(1:1-1:1),
-KwIf(62:5-62:7),LowerIdent(62:8-62:11),NoSpaceDotLowerIdent(62:11-62:26),NoSpaceOpenRound(62:26-62:27),CloseRound(62:27-62:28),LowerIdent(62:29-62:33),Newline(1:1-1:1),
-UpperIdent(63:9-63:11),NoSpaceOpenRound(63:11-63:12),UpperIdent(63:12-63:17),NoSpaceDotUpperIdent(63:17-63:23),NoSpaceOpenRound(63:23-63:24),LowerIdent(63:24-63:27),CloseRound(63:27-63:28),CloseRound(63:28-63:29),Newline(1:1-1:1),
-KwElse(64:5-64:9),Newline(1:1-1:1),
-UpperIdent(65:9-65:12),NoSpaceOpenRound(65:12-65:13),UpperIdent(65:13-65:25),NoSpaceOpenRound(65:25-65:26),StringStart(65:26-65:27),StringPart(65:27-65:41),OpenStringInterpolation(65:41-65:43),LowerIdent(65:43-65:46),CloseStringInterpolation(65:46-65:47),StringPart(65:47-65:47),StringEnd(65:47-65:48),CloseRound(65:48-65:49),CloseRound(65:49-65:50),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(67:1-67:15),OpAssign(67:16-67:17),OpBar(67:18-67:19),LowerIdent(67:19-67:22),OpBar(67:22-67:23),OpenCurly(67:23-67:24),Newline(1:1-1:1),
-LowerIdent(68:5-68:11),OpAssign(68:12-68:13),UpperIdent(68:14-68:17),NoSpaceDotLowerIdent(68:17-68:27),NoSpaceOpenRound(68:27-68:28),OpenSquare(68:28-68:29),StringStart(68:29-68:30),StringPart(68:30-68:39),StringEnd(68:39-68:40),Comma(68:40-68:41),StringStart(68:42-68:43),StringPart(68:43-68:55),StringEnd(68:55-68:56),Comma(68:56-68:57),StringStart(68:58-68:59),StringPart(68:59-68:63),StringEnd(68:63-68:64),CloseSquare(68:64-68:65),CloseRound(68:65-68:66),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(70:5-70:11),NoSpaceDotLowerIdent(70:11-70:20),NoSpaceOpenRound(70:20-70:21),LowerIdent(70:21-70:24),CloseRound(70:24-70:25),Newline(1:1-1:1),
-CloseCurly(71:1-71:2),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),
+UpperIdent(2:5-2:10),Comma(2:10-2:11),
+LowerIdent(3:5-3:11),Comma(3:11-3:12),
+LowerIdent(4:5-4:8),Comma(4:8-4:9),
+LowerIdent(5:5-5:9),Comma(5:9-5:10),
+LowerIdent(6:5-6:8),Comma(6:8-6:9),
+LowerIdent(7:5-7:10),Comma(7:10-7:11),
+CloseSquare(8:1-8:2),
+UpperIdent(10:1-10:6),OpColonEqual(10:7-10:9),OpenSquare(10:10-10:11),
+UpperIdent(11:5-11:8),NoSpaceOpenRound(11:8-11:9),UpperIdent(11:9-11:11),Comma(11:11-11:12),UpperIdent(11:13-11:15),Comma(11:15-11:16),UpperIdent(11:17-11:19),CloseRound(11:19-11:20),Comma(11:20-11:21),
+UpperIdent(12:5-12:9),NoSpaceOpenRound(12:9-12:10),UpperIdent(12:10-12:12),Comma(12:12-12:13),UpperIdent(12:14-12:16),Comma(12:16-12:17),UpperIdent(12:18-12:20),Comma(12:20-12:21),UpperIdent(12:22-12:25),CloseRound(12:25-12:26),Comma(12:26-12:27),
+UpperIdent(13:5-13:10),NoSpaceOpenRound(13:10-13:11),UpperIdent(13:11-13:14),CloseRound(13:14-13:15),Comma(13:15-13:16),
+UpperIdent(14:5-14:8),NoSpaceOpenRound(14:8-14:9),UpperIdent(14:9-14:12),CloseRound(14:12-14:13),Comma(14:13-14:14),
+CloseSquare(15:1-15:2),
+LowerIdent(17:1-17:4),OpColon(17:5-17:6),UpperIdent(17:7-17:9),Comma(17:9-17:10),UpperIdent(17:11-17:13),Comma(17:13-17:14),UpperIdent(17:15-17:17),OpArrow(17:18-17:20),UpperIdent(17:21-17:26),
+LowerIdent(18:1-18:4),OpAssign(18:5-18:6),OpBar(18:7-18:8),LowerIdent(18:8-18:9),Comma(18:9-18:10),LowerIdent(18:11-18:12),Comma(18:12-18:13),LowerIdent(18:14-18:15),OpBar(18:15-18:16),UpperIdent(18:17-18:22),NoSpaceDotUpperIdent(18:22-18:26),NoSpaceOpenRound(18:26-18:27),LowerIdent(18:27-18:28),Comma(18:28-18:29),LowerIdent(18:30-18:31),Comma(18:31-18:32),LowerIdent(18:33-18:34),CloseRound(18:34-18:35),
+LowerIdent(20:1-20:5),OpColon(20:6-20:7),UpperIdent(20:8-20:10),Comma(20:10-20:11),UpperIdent(20:12-20:14),Comma(20:14-20:15),UpperIdent(20:16-20:18),Comma(20:18-20:19),UpperIdent(20:20-20:22),OpArrow(20:23-20:25),UpperIdent(20:26-20:31),
+LowerIdent(21:1-21:5),OpAssign(21:6-21:7),OpBar(21:8-21:9),LowerIdent(21:9-21:10),Comma(21:10-21:11),LowerIdent(21:12-21:13),Comma(21:13-21:14),LowerIdent(21:15-21:16),Comma(21:16-21:17),LowerIdent(21:18-21:19),OpBar(21:19-21:20),OpenCurly(21:21-21:22),
+LowerIdent(22:5-22:12),OpAssign(22:13-22:14),LowerIdent(22:15-22:16),NoSpaceDotLowerIdent(22:16-22:24),NoSpaceOpenRound(22:24-22:25),CloseRound(22:25-22:26),OpSlash(22:27-22:28),Float(22:29-22:34),
+UpperIdent(23:5-23:10),NoSpaceDotUpperIdent(23:10-23:15),NoSpaceOpenRound(23:15-23:16),LowerIdent(23:16-23:17),Comma(23:17-23:18),LowerIdent(23:19-23:20),Comma(23:20-23:21),LowerIdent(23:22-23:23),Comma(23:23-23:24),LowerIdent(23:25-23:32),CloseRound(23:32-23:33),
+CloseCurly(24:1-24:2),
+LowerIdent(26:1-26:4),OpColon(26:5-26:6),UpperIdent(26:7-26:10),OpArrow(26:11-26:13),UpperIdent(26:14-26:20),NoSpaceOpenRound(26:20-26:21),UpperIdent(26:21-26:26),Comma(26:26-26:27),OpenSquare(26:28-26:29),UpperIdent(26:29-26:39),NoSpaceOpenRound(26:39-26:40),UpperIdent(26:40-26:43),CloseRound(26:43-26:44),CloseSquare(26:44-26:45),CloseRound(26:45-26:46),
+LowerIdent(27:1-27:4),OpAssign(27:5-27:6),OpBar(27:7-27:8),LowerIdent(27:8-27:11),OpBar(27:11-27:12),OpenCurly(27:13-27:14),
+LowerIdent(29:5-29:10),OpAssign(29:11-29:12),LowerIdent(29:13-29:16),NoSpaceDotLowerIdent(29:16-29:24),NoSpaceOpenRound(29:24-29:25),CloseRound(29:25-29:26),
+LowerIdent(30:5-30:25),OpAssign(30:26-30:27),OpBar(30:28-30:29),LowerIdent(30:29-30:30),OpBar(30:30-30:31),OpenRound(30:32-30:33),LowerIdent(30:33-30:34),OpGreaterThanOrEq(30:35-30:37),SingleQuote(30:38-30:41),OpAnd(30:42-30:45),LowerIdent(30:46-30:47),OpLessThanOrEq(30:48-30:50),SingleQuote(30:51-30:54),CloseRound(30:54-30:55),OpOr(30:56-30:58),OpenRound(30:59-30:60),LowerIdent(30:60-30:61),OpGreaterThanOrEq(30:62-30:64),SingleQuote(30:65-30:68),OpAnd(30:69-30:72),LowerIdent(30:73-30:74),OpLessThanOrEq(30:75-30:77),SingleQuote(30:78-30:81),CloseRound(30:81-30:82),OpOr(30:83-30:85),OpenRound(30:86-30:87),LowerIdent(30:87-30:88),OpGreaterThanOrEq(30:89-30:91),SingleQuote(30:92-30:95),OpAnd(30:96-30:99),LowerIdent(30:100-30:101),OpLessThanOrEq(30:102-30:104),SingleQuote(30:105-30:108),CloseRound(30:108-30:109),
+KwMatch(32:5-32:10),LowerIdent(32:11-32:16),OpenCurly(32:17-32:18),
+OpenSquare(33:9-33:10),SingleQuote(33:10-33:13),Comma(33:13-33:14),LowerIdent(33:15-33:16),Comma(33:16-33:17),LowerIdent(33:18-33:19),Comma(33:19-33:20),LowerIdent(33:21-33:22),Comma(33:22-33:23),LowerIdent(33:24-33:25),Comma(33:25-33:26),LowerIdent(33:27-33:28),Comma(33:28-33:29),LowerIdent(33:30-33:31),CloseSquare(33:31-33:32),OpFatArrow(33:33-33:35),OpenCurly(33:36-33:37),
+LowerIdent(34:13-34:21),OpAssign(34:22-34:23),
+LowerIdent(35:17-35:18),NoSpaceDotLowerIdent(35:18-35:39),NoSpaceOpenRound(35:39-35:40),CloseRound(35:40-35:41),
+OpAnd(36:17-36:20),LowerIdent(36:21-36:22),NoSpaceDotLowerIdent(36:22-36:43),NoSpaceOpenRound(36:43-36:44),CloseRound(36:44-36:45),
+OpAnd(37:17-37:20),LowerIdent(37:21-37:22),NoSpaceDotLowerIdent(37:22-37:43),NoSpaceOpenRound(37:43-37:44),CloseRound(37:44-37:45),
+OpAnd(38:17-38:20),LowerIdent(38:21-38:22),NoSpaceDotLowerIdent(38:22-38:43),NoSpaceOpenRound(38:43-38:44),CloseRound(38:44-38:45),
+OpAnd(39:17-39:20),LowerIdent(39:21-39:22),NoSpaceDotLowerIdent(39:22-39:43),NoSpaceOpenRound(39:43-39:44),CloseRound(39:44-39:45),
+OpAnd(40:17-40:20),LowerIdent(40:21-40:22),NoSpaceDotLowerIdent(40:22-40:43),NoSpaceOpenRound(40:43-40:44),CloseRound(40:44-40:45),
+KwIf(42:13-42:15),LowerIdent(42:16-42:24),UpperIdent(42:25-42:27),NoSpaceOpenRound(42:27-42:28),UpperIdent(42:28-42:33),NoSpaceDotUpperIdent(42:33-42:37),NoSpaceOpenRound(42:37-42:38),LowerIdent(42:38-42:41),CloseRound(42:41-42:42),CloseRound(42:42-42:43),KwElse(42:44-42:48),UpperIdent(42:49-42:52),NoSpaceOpenRound(42:52-42:53),UpperIdent(42:53-42:63),NoSpaceOpenRound(42:63-42:64),StringStart(42:64-42:65),StringPart(42:65-42:116),OpenStringInterpolation(42:116-42:118),LowerIdent(42:118-42:121),CloseStringInterpolation(42:121-42:122),StringPart(42:122-42:122),StringEnd(42:122-42:123),CloseRound(42:123-42:124),CloseRound(42:124-42:125),
+CloseCurly(43:9-43:10),
+Underscore(44:9-44:10),OpFatArrow(44:11-44:13),UpperIdent(44:14-44:17),NoSpaceOpenRound(44:17-44:18),UpperIdent(44:18-44:28),NoSpaceOpenRound(44:28-44:29),StringStart(44:29-44:30),StringPart(44:30-44:91),OpenStringInterpolation(44:91-44:93),LowerIdent(44:93-44:96),CloseStringInterpolation(44:96-44:97),StringPart(44:97-44:97),StringEnd(44:97-44:98),CloseRound(44:98-44:99),CloseRound(44:99-44:100),
+CloseCurly(45:5-45:6),
+CloseCurly(46:1-46:2),
+LowerIdent(48:1-48:7),OpColon(48:8-48:9),UpperIdent(48:10-48:15),OpArrow(48:16-48:18),UpperIdent(48:19-48:22),
+LowerIdent(49:1-49:7),OpAssign(49:8-49:9),OpBar(49:10-49:11),LowerIdent(49:11-49:16),OpBar(49:16-49:17),KwMatch(49:18-49:23),LowerIdent(49:24-49:29),OpenCurly(49:30-49:31),
+UpperIdent(50:5-50:10),NoSpaceDotUpperIdent(50:10-50:14),NoSpaceOpenRound(50:14-50:15),LowerIdent(50:15-50:16),Comma(50:16-50:17),LowerIdent(50:18-50:19),Comma(50:19-50:20),LowerIdent(50:21-50:22),CloseRound(50:22-50:23),OpFatArrow(50:24-50:26),StringStart(50:27-50:28),StringPart(50:28-50:32),OpenStringInterpolation(50:32-50:34),UpperIdent(50:34-50:37),NoSpaceDotLowerIdent(50:37-50:44),NoSpaceOpenRound(50:44-50:45),LowerIdent(50:45-50:46),CloseRound(50:46-50:47),CloseStringInterpolation(50:47-50:48),StringPart(50:48-50:50),OpenStringInterpolation(50:50-50:52),UpperIdent(50:52-50:55),NoSpaceDotLowerIdent(50:55-50:62),NoSpaceOpenRound(50:62-50:63),LowerIdent(50:63-50:64),CloseRound(50:64-50:65),CloseStringInterpolation(50:65-50:66),StringPart(50:66-50:68),OpenStringInterpolation(50:68-50:70),UpperIdent(50:70-50:73),NoSpaceDotLowerIdent(50:73-50:80),NoSpaceOpenRound(50:80-50:81),LowerIdent(50:81-50:82),CloseRound(50:82-50:83),CloseStringInterpolation(50:83-50:84),StringPart(50:84-50:85),StringEnd(50:85-50:86),
+UpperIdent(51:5-51:10),NoSpaceDotUpperIdent(51:10-51:15),NoSpaceOpenRound(51:15-51:16),LowerIdent(51:16-51:17),Comma(51:17-51:18),LowerIdent(51:19-51:20),Comma(51:20-51:21),LowerIdent(51:22-51:23),Comma(51:23-51:24),LowerIdent(51:25-51:26),CloseRound(51:26-51:27),OpFatArrow(51:28-51:30),StringStart(51:31-51:32),StringPart(51:32-51:37),OpenStringInterpolation(51:37-51:39),UpperIdent(51:39-51:42),NoSpaceDotLowerIdent(51:42-51:49),NoSpaceOpenRound(51:49-51:50),LowerIdent(51:50-51:51),CloseRound(51:51-51:52),CloseStringInterpolation(51:52-51:53),StringPart(51:53-51:55),OpenStringInterpolation(51:55-51:57),UpperIdent(51:57-51:60),NoSpaceDotLowerIdent(51:60-51:67),NoSpaceOpenRound(51:67-51:68),LowerIdent(51:68-51:69),CloseRound(51:69-51:70),CloseStringInterpolation(51:70-51:71),StringPart(51:71-51:73),OpenStringInterpolation(51:73-51:75),UpperIdent(51:75-51:78),NoSpaceDotLowerIdent(51:78-51:85),NoSpaceOpenRound(51:85-51:86),LowerIdent(51:86-51:87),CloseRound(51:87-51:88),CloseStringInterpolation(51:88-51:89),StringPart(51:89-51:91),OpenStringInterpolation(51:91-51:93),UpperIdent(51:93-51:96),NoSpaceDotLowerIdent(51:96-51:103),NoSpaceOpenRound(51:103-51:104),LowerIdent(51:104-51:105),CloseRound(51:105-51:106),CloseStringInterpolation(51:106-51:107),StringPart(51:107-51:108),StringEnd(51:108-51:109),
+UpperIdent(52:5-52:10),NoSpaceDotUpperIdent(52:10-52:16),NoSpaceOpenRound(52:16-52:17),LowerIdent(52:17-52:22),CloseRound(52:22-52:23),OpFatArrow(52:24-52:26),LowerIdent(52:27-52:32),
+UpperIdent(53:5-53:10),NoSpaceDotUpperIdent(53:10-53:14),NoSpaceOpenRound(53:14-53:15),LowerIdent(53:15-53:20),CloseRound(53:20-53:21),OpFatArrow(53:22-53:24),LowerIdent(53:25-53:30),
+CloseCurly(54:1-54:2),
+KwExpect(56:1-56:7),LowerIdent(56:8-56:11),NoSpaceOpenRound(56:11-56:12),Int(56:12-56:15),Comma(56:15-56:16),Int(56:17-56:19),Comma(56:19-56:20),Int(56:21-56:24),CloseRound(56:24-56:25),NoSpaceDotLowerIdent(56:25-56:32),NoSpaceOpenRound(56:32-56:33),CloseRound(56:33-56:34),OpEquals(56:35-56:37),StringStart(56:38-56:39),StringPart(56:39-56:56),StringEnd(56:56-56:57),
+KwExpect(57:1-57:7),LowerIdent(57:8-57:12),NoSpaceOpenRound(57:12-57:13),Int(57:13-57:16),Comma(57:16-57:17),Int(57:18-57:20),Comma(57:20-57:21),Int(57:22-57:25),Comma(57:25-57:26),Int(57:27-57:30),CloseRound(57:30-57:31),NoSpaceDotLowerIdent(57:31-57:38),NoSpaceOpenRound(57:38-57:39),CloseRound(57:39-57:40),OpEquals(57:41-57:43),StringStart(57:44-57:45),StringPart(57:45-57:68),StringEnd(57:68-57:69),
+KwExpect(58:1-58:7),LowerIdent(58:8-58:11),NoSpaceOpenRound(58:11-58:12),StringStart(58:12-58:13),StringPart(58:13-58:20),StringEnd(58:20-58:21),CloseRound(58:21-58:22),NoSpaceDotLowerIdent(58:22-58:29),NoSpaceOpenRound(58:29-58:30),LowerIdent(58:30-58:36),CloseRound(58:36-58:37),OpEquals(58:38-58:40),UpperIdent(58:41-58:43),NoSpaceOpenRound(58:43-58:44),StringStart(58:44-58:45),StringPart(58:45-58:52),StringEnd(58:52-58:53),CloseRound(58:53-58:54),
+LowerIdent(60:1-60:6),OpColon(60:7-60:8),UpperIdent(60:9-60:12),OpArrow(60:13-60:15),UpperIdent(60:16-60:22),NoSpaceOpenRound(60:22-60:23),UpperIdent(60:23-60:28),Comma(60:28-60:29),OpenSquare(60:30-60:31),UpperIdent(60:31-60:43),NoSpaceOpenRound(60:43-60:44),UpperIdent(60:44-60:47),CloseRound(60:47-60:48),CloseSquare(60:48-60:49),CloseRound(60:49-60:50),
+LowerIdent(61:1-61:6),OpAssign(61:7-61:8),OpBar(61:9-61:10),LowerIdent(61:10-61:13),OpBar(61:13-61:14),
+KwIf(62:5-62:7),LowerIdent(62:8-62:11),NoSpaceDotLowerIdent(62:11-62:26),NoSpaceOpenRound(62:26-62:27),CloseRound(62:27-62:28),LowerIdent(62:29-62:33),
+UpperIdent(63:9-63:11),NoSpaceOpenRound(63:11-63:12),UpperIdent(63:12-63:17),NoSpaceDotUpperIdent(63:17-63:23),NoSpaceOpenRound(63:23-63:24),LowerIdent(63:24-63:27),CloseRound(63:27-63:28),CloseRound(63:28-63:29),
+KwElse(64:5-64:9),
+UpperIdent(65:9-65:12),NoSpaceOpenRound(65:12-65:13),UpperIdent(65:13-65:25),NoSpaceOpenRound(65:25-65:26),StringStart(65:26-65:27),StringPart(65:27-65:41),OpenStringInterpolation(65:41-65:43),LowerIdent(65:43-65:46),CloseStringInterpolation(65:46-65:47),StringPart(65:47-65:47),StringEnd(65:47-65:48),CloseRound(65:48-65:49),CloseRound(65:49-65:50),
+LowerIdent(67:1-67:15),OpAssign(67:16-67:17),OpBar(67:18-67:19),LowerIdent(67:19-67:22),OpBar(67:22-67:23),OpenCurly(67:23-67:24),
+LowerIdent(68:5-68:11),OpAssign(68:12-68:13),UpperIdent(68:14-68:17),NoSpaceDotLowerIdent(68:17-68:27),NoSpaceOpenRound(68:27-68:28),OpenSquare(68:28-68:29),StringStart(68:29-68:30),StringPart(68:30-68:39),StringEnd(68:39-68:40),Comma(68:40-68:41),StringStart(68:42-68:43),StringPart(68:43-68:55),StringEnd(68:55-68:56),Comma(68:56-68:57),StringStart(68:58-68:59),StringPart(68:59-68:63),StringEnd(68:63-68:64),CloseSquare(68:64-68:65),CloseRound(68:65-68:66),
+LowerIdent(70:5-70:11),NoSpaceDotLowerIdent(70:11-70:20),NoSpaceOpenRound(70:20-70:21),LowerIdent(70:21-70:24),CloseRound(70:24-70:25),
+CloseCurly(71:1-71:2),
 EndOfFile(72:1-72:1),
 ~~~
 # PARSE
@@ -562,7 +555,7 @@ EndOfFile(72:1-72:1),
 					(ty-apply @14.5-14.13
 						(ty @14.5-14.8 (name "Hex"))
 						(ty @14.9-14.12 (name "Str"))))))
-		(s-type-anno @1.1-1.1 (name "rgb")
+		(s-type-anno @17.1-18.4 (name "rgb")
 			(ty-fn @17.7-17.26
 				(ty @17.7-17.9 (name "U8"))
 				(ty @17.11-17.13 (name "U8"))
@@ -580,7 +573,7 @@ EndOfFile(72:1-72:1),
 					(e-ident @18.27-18.28 (raw "r"))
 					(e-ident @18.30-18.31 (raw "g"))
 					(e-ident @18.33-18.34 (raw "b")))))
-		(s-type-anno @1.1-1.1 (name "rgba")
+		(s-type-anno @20.1-21.5 (name "rgba")
 			(ty-fn @20.8-20.31
 				(ty @20.8-20.10 (name "U8"))
 				(ty @20.12-20.14 (name "U8"))
@@ -736,7 +729,7 @@ EndOfFile(72:1-72:1),
 												(e-string-part @44.30-44.91 (raw "Expected Hex must start with # and be 7 characters long, got "))
 												(e-ident @44.93-44.96 (raw "str"))
 												(e-string-part @44.97-44.97 (raw ""))))))))))))
-		(s-type-anno @1.1-1.1 (name "to_str")
+		(s-type-anno @48.1-49.7 (name "to_str")
 			(ty-fn @48.10-48.22
 				(ty @48.10-48.15 (name "Color"))
 				(ty @48.19-48.22 (name "Str"))))
@@ -748,7 +741,7 @@ EndOfFile(72:1-72:1),
 				(e-match
 					(e-ident @49.24-49.29 (raw "color"))
 					(branches
-						(branch @1.1-1.1
+						(branch @50.5-51.10
 							(p-tag @50.5-50.23 (raw ".RGB")
 								(p-ident @50.15-50.16 (raw "r"))
 								(p-ident @50.18-50.19 (raw "g"))
@@ -767,7 +760,7 @@ EndOfFile(72:1-72:1),
 									(e-ident @50.70-50.80 (raw "Num.to_str"))
 									(e-ident @50.81-50.82 (raw "b")))
 								(e-string-part @50.84-50.85 (raw ")"))))
-						(branch @1.1-1.1
+						(branch @51.5-52.10
 							(p-tag @51.5-51.27 (raw ".RGBA")
 								(p-ident @51.16-51.17 (raw "r"))
 								(p-ident @51.19-51.20 (raw "g"))
@@ -799,8 +792,8 @@ EndOfFile(72:1-72:1),
 							(p-tag @53.5-53.21 (raw ".Hex")
 								(p-ident @53.15-53.20 (raw "inner")))
 							(e-ident @53.25-53.30 (raw "inner")))))))
-		(s-expect @1.1-1.1
-			(e-binop @1.1-1.1 (op "==")
+		(s-expect @56.1-57.7
+			(e-binop @56.8-57.7 (op "==")
 				(e-field-access @56.8-56.37
 					(e-apply @56.8-56.25
 						(e-ident @56.8-56.11 (raw "rgb"))
@@ -811,8 +804,8 @@ EndOfFile(72:1-72:1),
 						(e-ident @56.25-56.32 (raw "to_str"))))
 				(e-string @56.38-56.57
 					(e-string-part @56.39-56.56 (raw "rgb(124, 56, 245)")))))
-		(s-expect @1.1-1.1
-			(e-binop @1.1-1.1 (op "==")
+		(s-expect @57.1-58.7
+			(e-binop @57.8-58.7 (op "==")
 				(e-field-access @57.8-57.43
 					(e-apply @57.8-57.31
 						(e-ident @57.8-57.12 (raw "rgba"))
@@ -859,7 +852,7 @@ EndOfFile(72:1-72:1),
 				(e-apply @63.12-63.28
 					(e-tag @63.12-63.23 (raw "Color.Named"))
 					(e-ident @63.24-63.27 (raw "str")))))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @64.5-65.12 (reason "expr_unexpected_token"))
 		(s-malformed @65.9-65.41 (tag "expected_colon_after_type_annotation"))
 		(e-malformed @65.27-65.43 (reason "expr_unexpected_token"))
 		(e-malformed @65.41-65.46 (reason "expr_unexpected_token"))
@@ -868,7 +861,7 @@ EndOfFile(72:1-72:1),
 		(e-malformed @65.47-65.48 (reason "expr_unexpected_token"))
 		(e-malformed @65.47-65.49 (reason "expr_unexpected_token"))
 		(e-malformed @65.48-65.50 (reason "expr_unexpected_token"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @65.49-67.15 (reason "expr_unexpected_token"))
 		(s-decl @67.1-71.2
 			(p-ident @67.1-67.15 (raw "is_named_color"))
 			(e-lambda @67.18-71.2
@@ -1327,8 +1320,8 @@ is_named_color = |str| {
 				(ty @13.11-13.14 (name "Str")))
 			(ty-apply @14.5-14.13 (symbol "Hex")
 				(ty @14.9-14.12 (name "Str")))))
-	(s-expect @1.1-1.1
-		(e-binop @1.1-1.1 (op "eq")
+	(s-expect @56.1-57.7
+		(e-binop @56.8-57.7 (op "eq")
 			(e-dot-access @56.8-56.37 (field "to_str")
 				(receiver
 					(e-call @56.8-56.25
@@ -1340,8 +1333,8 @@ is_named_color = |str| {
 				(args))
 			(e-string @56.38-56.57
 				(e-literal @56.39-56.56 (string "rgb(124, 56, 245)")))))
-	(s-expect @1.1-1.1
-		(e-binop @1.1-1.1 (op "eq")
+	(s-expect @57.1-58.7
+		(e-binop @57.8-58.7 (op "eq")
 			(e-dot-access @57.8-57.43 (field "to_str")
 				(receiver
 					(e-call @57.8-57.31

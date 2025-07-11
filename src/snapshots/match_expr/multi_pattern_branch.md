@@ -27,10 +27,10 @@ match color {
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),
-UpperIdent(2:5-2:9),OpBar(2:10-2:11),UpperIdent(2:12-2:17),OpBar(2:18-2:19),UpperIdent(2:20-2:23),OpFatArrow(2:24-2:26),Int(2:27-2:28),Newline(1:1-1:1),
-UpperIdent(3:5-3:10),OpFatArrow(3:11-3:13),Int(3:14-3:15),Newline(1:1-1:1),
-UpperIdent(4:5-4:10),OpFatArrow(4:11-4:13),Int(4:14-4:15),Newline(1:1-1:1),
+KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),
+UpperIdent(2:5-2:9),OpBar(2:10-2:11),UpperIdent(2:12-2:17),OpBar(2:18-2:19),UpperIdent(2:20-2:23),OpFatArrow(2:24-2:26),Int(2:27-2:28),
+UpperIdent(3:5-3:10),OpFatArrow(3:11-3:13),Int(3:14-3:15),
+UpperIdent(4:5-4:10),OpFatArrow(4:11-4:13),Int(4:14-4:15),
 CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE

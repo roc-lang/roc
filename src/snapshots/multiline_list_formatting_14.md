@@ -21,14 +21,10 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Newline(1:4-1:9),
-Int(2:2-2:3),Comma(2:3-2:4),Newline(2:6-2:12),
-Newline(1:1-1:1),
-Newline(4:3-4:27),
-Newline(1:1-1:1),
-Int(6:2-6:3),Comma(6:3-6:4),Newline(6:6-6:13),
-Newline(7:3-7:40),
-Int(8:2-8:3),Comma(8:3-8:4),Newline(8:6-8:12),
+OpenSquare(1:1-1:2),
+Int(2:2-2:3),Comma(2:3-2:4),
+Int(6:2-6:3),Comma(6:3-6:4),
+Int(8:2-8:3),Comma(8:3-8:4),
 CloseSquare(9:1-9:2),EndOfFile(9:2-9:2),
 ~~~
 # PARSE

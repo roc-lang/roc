@@ -53,29 +53,16 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:2-3:41),
-UpperIdent(4:1-4:7),OpColon(4:8-4:9),OpenSquare(4:10-4:11),UpperIdent(4:11-4:18),Comma(4:18-4:19),UpperIdent(4:20-4:28),Comma(4:28-4:29),UpperIdent(4:30-4:36),CloseSquare(4:36-4:37),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(6:2-6:38),
-UpperIdent(7:1-7:7),OpColon(7:8-7:9),OpenSquare(7:10-7:11),UpperIdent(7:11-7:18),NoSpaceOpenRound(7:18-7:19),UpperIdent(7:19-7:22),CloseRound(7:22-7:23),Comma(7:23-7:24),UpperIdent(7:25-7:30),NoSpaceOpenRound(7:30-7:31),UpperIdent(7:31-7:34),CloseRound(7:34-7:35),Comma(7:35-7:36),UpperIdent(7:37-7:44),NoSpaceOpenRound(7:44-7:45),UpperIdent(7:45-7:48),Comma(7:48-7:49),UpperIdent(7:50-7:53),CloseRound(7:53-7:54),CloseSquare(7:54-7:55),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(9:2-9:20),
-UpperIdent(10:1-10:9),OpColon(10:10-10:11),OpenSquare(10:12-10:13),UpperIdent(10:13-10:15),NoSpaceOpenRound(10:15-10:16),UpperIdent(10:16-10:22),CloseRound(10:22-10:23),Comma(10:23-10:24),UpperIdent(10:25-10:37),Comma(10:37-10:38),UpperIdent(10:39-10:49),CloseSquare(10:49-10:50),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(12:2-12:46),
-UpperIdent(13:1-13:10),OpColon(13:11-13:12),OpenSquare(13:13-13:14),UpperIdent(13:14-13:20),NoSpaceOpenRound(13:20-13:21),UpperIdent(13:21-13:24),CloseRound(13:24-13:25),Comma(13:25-13:26),UpperIdent(13:27-13:35),Comma(13:35-13:36),UpperIdent(13:37-13:46),NoSpaceOpenRound(13:46-13:47),UpperIdent(13:47-13:50),CloseRound(13:50-13:51),CloseSquare(13:51-13:52),Newline(1:1-1:1),
-UpperIdent(14:1-14:16),OpColon(14:17-14:18),OpenSquare(14:19-14:20),UpperIdent(14:20-14:26),Comma(14:26-14:27),UpperIdent(14:28-14:40),Comma(14:40-14:41),UpperIdent(14:42-14:52),NoSpaceOpenRound(14:52-14:53),UpperIdent(14:53-14:56),CloseRound(14:56-14:57),CloseSquare(14:57-14:58),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(16:2-16:28),
-LowerIdent(17:1-17:14),OpColon(17:15-17:16),UpperIdent(17:17-17:23),OpArrow(17:24-17:26),UpperIdent(17:27-17:30),Newline(1:1-1:1),
-LowerIdent(18:1-18:14),OpAssign(18:15-18:16),OpBar(18:17-18:18),NamedUnderscore(18:18-18:25),OpBar(18:25-18:26),StringStart(18:27-18:28),StringPart(18:28-18:37),StringEnd(18:37-18:38),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(20:2-20:33),
-LowerIdent(21:1-21:15),OpColon(21:16-21:17),UpperIdent(21:18-21:26),OpArrow(21:27-21:29),UpperIdent(21:30-21:33),Newline(1:1-1:1),
-LowerIdent(22:1-22:15),OpAssign(22:16-22:17),OpBar(22:18-22:19),NamedUnderscore(22:19-22:28),OpBar(22:28-22:29),StringStart(22:30-22:31),StringPart(22:31-22:38),StringEnd(22:38-22:39),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
+UpperIdent(4:1-4:7),OpColon(4:8-4:9),OpenSquare(4:10-4:11),UpperIdent(4:11-4:18),Comma(4:18-4:19),UpperIdent(4:20-4:28),Comma(4:28-4:29),UpperIdent(4:30-4:36),CloseSquare(4:36-4:37),
+UpperIdent(7:1-7:7),OpColon(7:8-7:9),OpenSquare(7:10-7:11),UpperIdent(7:11-7:18),NoSpaceOpenRound(7:18-7:19),UpperIdent(7:19-7:22),CloseRound(7:22-7:23),Comma(7:23-7:24),UpperIdent(7:25-7:30),NoSpaceOpenRound(7:30-7:31),UpperIdent(7:31-7:34),CloseRound(7:34-7:35),Comma(7:35-7:36),UpperIdent(7:37-7:44),NoSpaceOpenRound(7:44-7:45),UpperIdent(7:45-7:48),Comma(7:48-7:49),UpperIdent(7:50-7:53),CloseRound(7:53-7:54),CloseSquare(7:54-7:55),
+UpperIdent(10:1-10:9),OpColon(10:10-10:11),OpenSquare(10:12-10:13),UpperIdent(10:13-10:15),NoSpaceOpenRound(10:15-10:16),UpperIdent(10:16-10:22),CloseRound(10:22-10:23),Comma(10:23-10:24),UpperIdent(10:25-10:37),Comma(10:37-10:38),UpperIdent(10:39-10:49),CloseSquare(10:49-10:50),
+UpperIdent(13:1-13:10),OpColon(13:11-13:12),OpenSquare(13:13-13:14),UpperIdent(13:14-13:20),NoSpaceOpenRound(13:20-13:21),UpperIdent(13:21-13:24),CloseRound(13:24-13:25),Comma(13:25-13:26),UpperIdent(13:27-13:35),Comma(13:35-13:36),UpperIdent(13:37-13:46),NoSpaceOpenRound(13:46-13:47),UpperIdent(13:47-13:50),CloseRound(13:50-13:51),CloseSquare(13:51-13:52),
+UpperIdent(14:1-14:16),OpColon(14:17-14:18),OpenSquare(14:19-14:20),UpperIdent(14:20-14:26),Comma(14:26-14:27),UpperIdent(14:28-14:40),Comma(14:40-14:41),UpperIdent(14:42-14:52),NoSpaceOpenRound(14:52-14:53),UpperIdent(14:53-14:56),CloseRound(14:56-14:57),CloseSquare(14:57-14:58),
+LowerIdent(17:1-17:14),OpColon(17:15-17:16),UpperIdent(17:17-17:23),OpArrow(17:24-17:26),UpperIdent(17:27-17:30),
+LowerIdent(18:1-18:14),OpAssign(18:15-18:16),OpBar(18:17-18:18),NamedUnderscore(18:18-18:25),OpBar(18:25-18:26),StringStart(18:27-18:28),StringPart(18:28-18:37),StringEnd(18:37-18:38),
+LowerIdent(21:1-21:15),OpColon(21:16-21:17),UpperIdent(21:18-21:26),OpArrow(21:27-21:29),UpperIdent(21:30-21:33),
+LowerIdent(22:1-22:15),OpAssign(22:16-22:17),OpBar(22:18-22:19),NamedUnderscore(22:19-22:28),OpBar(22:28-22:29),StringStart(22:30-22:31),StringPart(22:31-22:38),StringEnd(22:38-22:39),
 LowerIdent(24:1-24:6),OpAssign(24:7-24:8),OpBar(24:9-24:10),Underscore(24:10-24:11),OpBar(24:11-24:12),OpenCurly(24:13-24:14),CloseCurly(24:14-24:15),EndOfFile(24:15-24:15),
 ~~~
 # PARSE
@@ -147,7 +134,7 @@ LowerIdent(24:1-24:6),OpAssign(24:7-24:8),OpBar(24:9-24:10),Underscore(24:10-24:
 					(ty-apply @14.42-14.57
 						(ty @14.42-14.52 (name "Connecting"))
 						(ty @14.53-14.56 (name "Str"))))))
-		(s-type-anno @1.1-1.1 (name "processResult")
+		(s-type-anno @17.1-18.14 (name "processResult")
 			(ty-fn @17.17-17.30
 				(ty @17.17-17.23 (name "Result"))
 				(ty @17.27-17.30 (name "Str"))))
@@ -158,7 +145,7 @@ LowerIdent(24:1-24:6),OpAssign(24:7-24:8),OpBar(24:9-24:10),Underscore(24:10-24:
 					(p-ident @18.18-18.25 (raw "_result")))
 				(e-string @18.27-18.38
 					(e-string-part @18.28-18.37 (raw "processed")))))
-		(s-type-anno @1.1-1.1 (name "handleResponse")
+		(s-type-anno @21.1-22.15 (name "handleResponse")
 			(ty-fn @21.18-21.33
 				(ty @21.18-21.26 (name "Response"))
 				(ty @21.30-21.33 (name "Str"))))

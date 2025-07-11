@@ -26,19 +26,11 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwImport(3:1-3:7),LowerIdent(3:8-3:10),NoSpaceDotUpperIdent(3:10-3:17),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(5:2-5:35),
-LowerIdent(6:1-6:9),OpAssign(6:10-6:11),OpBar(6:12-6:13),LowerIdent(6:13-6:14),Comma(6:14-6:15),LowerIdent(6:16-6:17),OpBar(6:17-6:18),LowerIdent(6:19-6:20),OpStar(6:21-6:22),LowerIdent(6:23-6:24),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(8:2-8:74),
-LowerIdent(9:1-9:14),OpAssign(9:15-9:16),OpBar(9:17-9:18),LowerIdent(9:18-9:19),OpBar(9:19-9:20),UpperIdent(9:21-9:27),NoSpaceDotLowerIdent(9:27-9:33),NoSpaceOpenRound(9:33-9:34),LowerIdent(9:34-9:35),CloseRound(9:35-9:36),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(11:2-11:48),
-LowerIdent(12:1-12:9),OpAssign(12:10-12:11),OpBar(12:12-12:13),LowerIdent(12:13-12:14),OpBar(12:14-12:15),LowerIdent(12:16-12:29),NoSpaceOpenRound(12:29-12:30),LowerIdent(12:30-12:38),NoSpaceOpenRound(12:38-12:39),LowerIdent(12:39-12:40),Comma(12:40-12:41),Int(12:42-12:43),CloseRound(12:43-12:44),CloseRound(12:44-12:45),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
+KwImport(3:1-3:7),LowerIdent(3:8-3:10),NoSpaceDotUpperIdent(3:10-3:17),
+LowerIdent(6:1-6:9),OpAssign(6:10-6:11),OpBar(6:12-6:13),LowerIdent(6:13-6:14),Comma(6:14-6:15),LowerIdent(6:16-6:17),OpBar(6:17-6:18),LowerIdent(6:19-6:20),OpStar(6:21-6:22),LowerIdent(6:23-6:24),
+LowerIdent(9:1-9:14),OpAssign(9:15-9:16),OpBar(9:17-9:18),LowerIdent(9:18-9:19),OpBar(9:19-9:20),UpperIdent(9:21-9:27),NoSpaceDotLowerIdent(9:27-9:33),NoSpaceOpenRound(9:33-9:34),LowerIdent(9:34-9:35),CloseRound(9:35-9:36),
+LowerIdent(12:1-12:9),OpAssign(12:10-12:11),OpBar(12:12-12:13),LowerIdent(12:13-12:14),OpBar(12:14-12:15),LowerIdent(12:16-12:29),NoSpaceOpenRound(12:29-12:30),LowerIdent(12:30-12:38),NoSpaceOpenRound(12:38-12:39),LowerIdent(12:39-12:40),Comma(12:40-12:41),Int(12:42-12:43),CloseRound(12:43-12:44),CloseRound(12:44-12:45),
 LowerIdent(14:1-14:6),OpAssign(14:7-14:8),LowerIdent(14:9-14:17),NoSpaceOpenRound(14:17-14:18),Int(14:18-14:20),CloseRound(14:20-14:21),EndOfFile(14:21-14:21),
 ~~~
 # PARSE
