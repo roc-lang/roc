@@ -132,6 +132,17 @@ fn formatElapsedTime(writer: anytype, elapsed_ns: u64) !void {
     try writer.print("{d:.1} ms", .{elapsed_ms_float});
 }
 
+fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noreturn {
+    stderr.print("Failed to check {s}: ", .{path}) catch {};
+    switch (err) {
+        error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
+        error.AccessDenied => stderr.print("Access denied\n", .{}) catch {},
+        error.FileReadError => stderr.print("Could not read file\n", .{}) catch {},
+        else => stderr.print("{}\n", .{err}) catch {},
+    }
+    std.process.exit(1);
+}
+
 fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -146,16 +157,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     var result = (if (args.time)
         coordinate_simple.processFileWithTiming(gpa, Filesystem.default(), args.path)
     else
-        coordinate_simple.processFile(gpa, Filesystem.default(), args.path)) catch |err| {
-        stderr.print("Failed to check {s}: ", .{args.path}) catch {};
-        switch (err) {
-            error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
-            error.AccessDenied => stderr.print("Access denied\n", .{}) catch {},
-            error.FileReadError => stderr.print("Could not read file\n", .{}) catch {},
-            else => stderr.print("{}\n", .{err}) catch {},
-        }
-        std.process.exit(1);
-    };
+        coordinate_simple.processFile(gpa, Filesystem.default(), args.path)) catch |err| handleProcessFileError(err, stderr, args.path);
     defer result.deinit(gpa);
 
     const elapsed = timer.read();
@@ -196,42 +198,37 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         formatElapsedTime(stderr, elapsed) catch {};
         stderr.print(" for {s}.\n", .{args.path}) catch {};
 
-        // Print timing breakdown if requested
-        if (args.time and result.timing != null) {
-            const timing = result.timing.?;
-            printTimingBreakdown(stderr, timing);
-        }
+        printTimingBreakdown(stderr, result.timing);
+
         std.process.exit(1);
     } else {
         stdout.print("No errors found in ", .{}) catch {};
         formatElapsedTime(stdout, elapsed) catch {};
         stdout.print(" for {s}\n", .{args.path}) catch {};
 
-        // Print timing breakdown if requested
-        if (args.time and result.timing != null) {
-            const timing = result.timing.?;
-            printTimingBreakdown(stdout, timing);
-        }
+        printTimingBreakdown(stdout, result.timing);
     }
 }
 
-fn printTimingBreakdown(writer: anytype, timing: anytype) void {
-    writer.print("\nTiming breakdown:\n", .{}) catch {};
-    writer.print("  tokenize + parse:             ", .{}) catch {};
-    formatElapsedTime(writer, timing.tokenize_parse_ns) catch {};
-    writer.print("\n", .{}) catch {};
-    writer.print("  canonicalize:                 ", .{}) catch {};
-    formatElapsedTime(writer, timing.canonicalize_ns) catch {};
-    writer.print("\n", .{}) catch {};
-    writer.print("  can diagnostics:              ", .{}) catch {};
-    formatElapsedTime(writer, timing.canonicalize_diagnostics_ns) catch {};
-    writer.print("\n", .{}) catch {};
-    writer.print("  type checking:                ", .{}) catch {};
-    formatElapsedTime(writer, timing.type_checking_ns) catch {};
-    writer.print("\n", .{}) catch {};
-    writer.print("  type checking diagnostics:    ", .{}) catch {};
-    formatElapsedTime(writer, timing.check_diagnostics_ns) catch {};
-    writer.print("\n", .{}) catch {};
+fn printTimingBreakdown(writer: anytype, timing: ?coordinate_simple.TimingInfo) void {
+    if (timing) |t| {
+        writer.print("\nTiming breakdown:\n", .{}) catch {};
+        writer.print("  tokenize + parse:             ", .{}) catch {};
+        formatElapsedTime(writer, t.tokenize_parse_ns) catch {};
+        writer.print("\n", .{}) catch {};
+        writer.print("  canonicalize:                 ", .{}) catch {};
+        formatElapsedTime(writer, t.canonicalize_ns) catch {};
+        writer.print("\n", .{}) catch {};
+        writer.print("  can diagnostics:              ", .{}) catch {};
+        formatElapsedTime(writer, t.canonicalize_diagnostics_ns) catch {};
+        writer.print("\n", .{}) catch {};
+        writer.print("  type checking:                ", .{}) catch {};
+        formatElapsedTime(writer, t.type_checking_ns) catch {};
+        writer.print("\n", .{}) catch {};
+        writer.print("  type checking diagnostics:    ", .{}) catch {};
+        formatElapsedTime(writer, t.check_diagnostics_ns) catch {};
+        writer.print("\n", .{}) catch {};
+    }
 }
 
 fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {

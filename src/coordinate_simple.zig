@@ -70,7 +70,7 @@ pub fn processFile(
     };
 
     // Note: We transfer ownership of source to ProcessResult, avoiding an unnecessary copy
-    return try processSourceInternal(gpa, source, filepath, true, false);
+    return try processSourceInternal(gpa, source, filepath, .{ .take_ownership = true, .collect_timing = false });
 }
 
 /// Process a single file with timing information.
@@ -90,7 +90,7 @@ pub fn processFileWithTiming(
     };
 
     // Note: We transfer ownership of source to ProcessResult, avoiding an unnecessary copy
-    return try processSourceInternal(gpa, source, filepath, true, true);
+    return try processSourceInternal(gpa, source, filepath, .{ .take_ownership = true, .collect_timing = true });
 }
 
 /// Process source code directly and return both CIR and reports for proper reporting.
@@ -105,16 +105,41 @@ pub fn processSource(
     source: []const u8,
     filename: []const u8,
 ) !ProcessResult {
-    return try processSourceInternal(gpa, source, filename, false, false);
+    return try processSourceInternal(gpa, source, filename, .{ .take_ownership = false, .collect_timing = false });
+}
+
+/// Configuration for processSourceInternal
+pub const ProcessConfig = struct {
+    take_ownership: bool = false,
+    collect_timing: bool = false,
+};
+
+/// Helper function to collect timing information and reset timer
+fn collectTiming(config: ProcessConfig, timer: *?std.time.Timer, timing_info: *?TimingInfo, field: []const u8) void {
+    if (config.collect_timing and timer.* != null and timing_info.* != null) {
+        const elapsed = timer.*.?.read();
+        if (std.mem.eql(u8, field, "tokenize_parse_ns")) {
+            timing_info.*.?.tokenize_parse_ns = elapsed;
+        } else if (std.mem.eql(u8, field, "canonicalize_ns")) {
+            timing_info.*.?.canonicalize_ns = elapsed;
+        } else if (std.mem.eql(u8, field, "canonicalize_diagnostics_ns")) {
+            timing_info.*.?.canonicalize_diagnostics_ns = elapsed;
+        } else if (std.mem.eql(u8, field, "type_checking_ns")) {
+            timing_info.*.?.type_checking_ns = elapsed;
+        } else if (std.mem.eql(u8, field, "check_diagnostics_ns")) {
+            timing_info.*.?.check_diagnostics_ns = elapsed;
+        }
+        timer.*.?.reset();
+    }
 }
 
 /// Internal helper that processes source code and produces a ProcessResult.
 ///
-/// The take_ownership parameter controls memory management:
+/// The config.take_ownership parameter controls memory management:
 /// - true: Transfer ownership of 'source' to ProcessResult (no allocation)
 /// - false: Clone 'source' so ProcessResult has its own copy
 ///
-/// The collect_timing parameter controls whether to collect timing information:
+/// The config.collect_timing parameter controls whether to collect timing information:
 /// - true: Collect timing information for each compilation phase
 /// - false: Skip timing collection for faster processing
 ///
@@ -124,8 +149,7 @@ fn processSourceInternal(
     gpa: std.mem.Allocator,
     source: []const u8,
     filename: []const u8,
-    take_ownership: bool,
-    collect_timing: bool,
+    config: ProcessConfig,
 ) !ProcessResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -133,7 +157,7 @@ fn processSourceInternal(
     var timing_info: ?TimingInfo = null;
     var timer: ?std.time.Timer = null;
 
-    if (collect_timing) {
+    if (config.collect_timing) {
         timer = std.time.Timer.start() catch null;
         timing_info = TimingInfo{
             .tokenize_parse_ns = 0,
@@ -171,10 +195,7 @@ fn processSourceInternal(
         reports.append(report) catch continue;
     }
 
-    if (collect_timing and timer != null and timing_info != null) {
-        timing_info.?.tokenize_parse_ns = timer.?.read();
-        timer.?.reset();
-    }
+    collectTiming(config, &timer, &timing_info, "tokenize_parse_ns");
 
     // Initialize the Can IR (heap-allocated)
     var cir = try gpa.create(CIR);
@@ -186,10 +207,7 @@ fn processSourceInternal(
     defer canonicalizer.deinit();
     try canonicalizer.canonicalizeFile();
 
-    if (collect_timing and timer != null and timing_info != null) {
-        timing_info.?.canonicalize_ns = timer.?.read();
-        timer.?.reset();
-    }
+    collectTiming(config, &timer, &timing_info, "canonicalize_ns");
 
     // Get diagnostic Reports from CIR
     const diagnostics = cir.getDiagnostics();
@@ -199,10 +217,7 @@ fn processSourceInternal(
         reports.append(report) catch continue;
     }
 
-    if (collect_timing and timer != null and timing_info != null) {
-        timing_info.?.canonicalize_diagnostics_ns = timer.?.read();
-        timer.?.reset();
-    }
+    collectTiming(config, &timer, &timing_info, "canonicalize_diagnostics_ns");
 
     // Type checking
     var solver = try Solver.init(gpa, &module_env.types, cir);
@@ -211,17 +226,14 @@ fn processSourceInternal(
     // Check for type errors
     try solver.checkDefs();
 
-    if (collect_timing and timer != null and timing_info != null) {
-        timing_info.?.type_checking_ns = timer.?.read();
-        timer.?.reset();
-    }
+    collectTiming(config, &timer, &timing_info, "type_checking_ns");
 
     // Ensure ProcessResult owns the source
     // We have two cases:
     // 1. processFile already allocated the source memory - we take ownership to avoid a copy
     // 2. processSource borrows the caller's source - we must clone it
     // This optimization matters because source files can be large and we process many of them.
-    const owned_source = if (take_ownership)
+    const owned_source = if (config.take_ownership)
         source // Transfer existing ownership (no allocation)
     else
         try gpa.dupe(u8, source); // Clone to get our own copy
@@ -244,9 +256,7 @@ fn processSourceInternal(
         reports.append(report) catch continue;
     }
 
-    if (collect_timing and timer != null and timing_info != null) {
-        timing_info.?.check_diagnostics_ns = timer.?.read();
-    }
+    collectTiming(config, &timer, &timing_info, "check_diagnostics_ns");
 
     return ProcessResult{
         .cir = cir,
