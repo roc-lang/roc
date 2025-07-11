@@ -113,6 +113,10 @@ test "redundant exposed entries" {
         \\MyType : [A]
     ;
 
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
+
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
 
@@ -253,6 +257,10 @@ test "exposed items correctly tracked across shadowing" {
         \\
         \\# z is exposed but never defined
     ;
+
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -458,6 +466,10 @@ test "exposed_by_str never has entries removed" {
         \\bar = "hello"
         \\# baz is not implemented
     ;
+
+    // Set the source in module_env so canonicalization can access it
+    env.source = try allocator.dupe(u8, source);
+    env.owns_source = true;
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);

@@ -6571,6 +6571,10 @@ test "integer literals with uppercase base prefixes" {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
+        // Set the source in module_env so canonicalization can access it
+        env.source = try gpa.dupe(u8, tc.literal);
+        env.owns_source = true;
+
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
 
