@@ -2918,64 +2918,56 @@ fn canonicalizePattern(
             const tag_union_type = try self.can_ir.env.types.mkTagUnion(&[_]Tag{tag}, ext_var);
 
             // Create the pattern node with type var
-            const pattern_idx = try self.can_ir.addPatternAndTypeVar(CIR.Pattern{
+            const tag_pattern_idx = try self.can_ir.addPatternAndTypeVar(CIR.Pattern{
                 .applied_tag = .{
                     .name = tag_name,
                     .args = args,
                 },
             }, tag_union_type, region);
 
-            return pattern_idx;
+            if (e.qualifiers.span.len == 0) {
+                // If this is a tag without a prefix, then is it an
+                // anonymous tag and we can just return it
+                return tag_pattern_idx;
+            } else {
+                // If this is a tag with a prefix, then is it a nominal tag.
+                //
+                // TODO: Currently this just get the last qualified, then
+                // looks up the associated type. Is this right?
 
-            // TODO: Need to parse & pass in qualifiers here...
+                // Get the last token of the qualifiers
+                const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
+                const last_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
+                const last_tok_ident, const last_tok_region = self.parse_ir.tokens.resolveIdentifierAndRegion(last_tok_idx) orelse {
+                    const feature = try self.can_ir.env.strings.insert(
+                        self.can_ir.env.gpa,
+                        "tag qualifier token is not an ident",
+                    );
+                    return try self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    } });
+                };
 
-            // if (e.qualifiers.span.len == 0) {
-            //     // If this is a tag without a prefix, then is it an
-            //     // anonymous tag and we can just return it
-            //     return tag_expr_idx;
-            // } else {
-            //     // If this is a tag with a prefix, then is it a nominal tag.
-            //     //
-            //     // TODO: Currently this just get the last qualified, then
-            //     // looks up the associated type. Is this right?
+                // Lookup last token (assumed to be a type decl) in scope
+                const nominal_type_decl = self.scopeLookupTypeDecl(last_tok_ident) orelse
+                    return try self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_not_in_scope = .{
+                        .ident = last_tok_ident,
+                        .region = last_tok_region,
+                    } });
 
-            //     // Get the last token of the qualifiers
-            //     const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
-            //     const last_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
-            //     const last_tok_ident, const last_tok_region = self.parse_ir.tokens.resolveIdentifierAndRegion(last_tok_idx) orelse {
-            //         const feature = try self.can_ir.env.strings.insert(
-            //             self.can_ir.env.gpa,
-            //             "tag qualifier token is not an ident",
-            //         );
-            //         return try self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-            //             .feature = feature,
-            //             .region = region,
-            //         } });
-            //     };
+                // Create the nominal pattern
+                // In type checking, this will be unified with the nominal type if the `tag` is valid
+                const pattern_idx = try self.can_ir.addPatternAndTypeVar(CIR.Pattern{
+                    .nominal = .{
+                        .nominal_type_decl = nominal_type_decl,
+                        .backing_pattern = tag_pattern_idx,
+                        .backing_type = .tag,
+                    },
+                }, Content{ .flex_var = null }, last_tok_region);
 
-            //     // Lookup last token (assumed to be a type decl) in scope
-            //     const nominal_type_decl = self.scopeLookupTypeDecl(last_tok_ident) orelse
-            //         return try self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .ident_not_in_scope = .{
-            //             .ident = last_tok_ident,
-            //             .region = last_tok_region,
-            //         } });
-
-            //     // Create the expr
-            //     const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-            //         .e_nominal = .{
-            //             .nominal_type_decl = nominal_type_decl,
-            //             .backing_expr = tag_expr_idx,
-            //             .backing_type = .tag,
-            //         },
-            //     }, last_tok_region);
-
-            //     // Initially set the root expr to be a flex var
-            //     // In type checking, this will be unified with the nominal type if the `tag` is valid
-            //     _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
-
-            //     return expr_idx;
-            // }
-
+                return pattern_idx;
+            }
         },
         .record => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -4138,7 +4130,6 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             // Resolve the fully qualified type name
             const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
 
-            // TODO(jared)
             const type_name_text = self.parse_ir.resolveQualifiedName(ty.qualifiers, ty.token, &strip_tokens);
 
             // Check if this is a qualified type name (contains dots)

@@ -82,7 +82,6 @@ UNUSED VARIABLE - Color.md:30:5:30:25
 UNDEFINED VARIABLE - Color.md:68:14:68:27
 TYPE MISMATCH - Color.md:20:20:20:22
 TYPE MISMATCH - Color.md:26:7:26:10
-TYPE MISMATCH - Color.md:48:10:48:15
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `is_char_in_hex_range` is not used anywhere in your code.
@@ -134,20 +133,6 @@ It is of type:
 
 But you are trying to use it as:
     _{ to_utf8: List(Num(_size)) }_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Color.md:48:10:48:15:**
-```roc
-to_str : Color -> Str
-```
-         ^^^^^
-
-It is of type:
-    _Color_
-
-But you are trying to use it as:
-    _[Named(Str), RGB(_h, _i, _j), RGBA(_k, _l, _m, _n), Hex(Str)]_others_
 
 # TOKENS
 ~~~zig
@@ -885,7 +870,8 @@ is_named_color = |str| {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @50.5-50.23)))
+									(p-nominal @50.5-50.10
+										(p-applied-tag @50.5-50.23))))
 							(value
 								(e-string @50.27-50.86
 									(e-literal @50.28-50.32 (string "rgb("))
@@ -910,7 +896,8 @@ is_named_color = |str| {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @51.5-51.27)))
+									(p-nominal @51.5-51.10
+										(p-applied-tag @51.5-51.27))))
 							(value
 								(e-string @51.31-51.109
 									(e-literal @51.32-51.37 (string "rgba("))
@@ -941,14 +928,16 @@ is_named_color = |str| {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @52.5-52.23)))
+									(p-nominal @52.5-52.10
+										(p-applied-tag @52.5-52.23))))
 							(value
 								(e-lookup-local @52.27-52.32
 									(p-assign @52.17-52.22 (ident "inner")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @53.5-53.21)))
+									(p-nominal @53.5-53.10
+										(p-applied-tag @53.5-53.21))))
 							(value
 								(e-lookup-local @53.25-53.30
 									(p-assign @53.15-53.20 (ident "inner")))))))))
@@ -1085,20 +1074,20 @@ is_named_color = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.4 (type "Error, Error, Error -> Error"))
-		(patt @21.1-21.5 (type "Error, Error, Error, Error -> Error"))
+		(patt @18.1-18.4 (type "Error, Error, Error -> Color"))
+		(patt @21.1-21.5 (type "Error, Error, Error, Error -> Color"))
 		(patt @27.1-27.4 (type "Error -> Error"))
-		(patt @49.1-49.7 (type "Error -> Error"))
+		(patt @49.1-49.7 (type "Color -> Error"))
 		(patt @61.1-61.6 (type "Error -> Error"))
 		(patt @67.1-67.15 (type "_arg -> _ret")))
 	(type_decls
-		(nominal @10.1-15.2 (type "Error")
+		(nominal @10.1-15.2 (type "Color")
 			(ty-header @10.1-10.6 (name "Color"))))
 	(expressions
-		(expr @18.7-18.35 (type "Error, Error, Error -> Error"))
-		(expr @21.8-24.2 (type "Error, Error, Error, Error -> Error"))
+		(expr @18.7-18.35 (type "Error, Error, Error -> Color"))
+		(expr @21.8-24.2 (type "Error, Error, Error, Error -> Color"))
 		(expr @27.7-46.2 (type "Error -> Error"))
-		(expr @49.10-54.2 (type "Error -> Error"))
+		(expr @49.10-54.2 (type "Color -> Error"))
 		(expr @61.9-65.50 (type "Error -> Error"))
 		(expr @67.18-71.2 (type "_arg -> _ret"))))
 ~~~

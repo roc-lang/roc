@@ -1297,6 +1297,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator
                                 .len = 0,
                             } },
                             .tag_tok = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
                         } });
                     } else {
                         // Tag with args
@@ -1319,6 +1320,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator
                             .region = .{ .start = start, .end = self.pos },
                             .args = args,
                             .tag_tok = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
                         } });
                     }
                 } else {

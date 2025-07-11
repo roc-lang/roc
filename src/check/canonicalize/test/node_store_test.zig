@@ -860,6 +860,13 @@ test "NodeStore round trip - Pattern" {
             .diagnostic = @enumFromInt(2123),
         },
     });
+    try patterns.append(CIR.Pattern{
+        .nominal = .{
+            .nominal_type_decl = @enumFromInt(567),
+            .backing_pattern = @enumFromInt(567),
+            .backing_type = .tag,
+        },
+    });
 
     // Test the round-trip for all patterns with their original regions
     const regions = [_]base.Region{
@@ -875,6 +882,7 @@ test "NodeStore round trip - Pattern" {
         from_raw_offsets(210, 220), // str_literal
         from_raw_offsets(230, 240), // underscore
         from_raw_offsets(250, 260), // runtime_error
+        from_raw_offsets(260, 270), // nominal
     };
 
     for (patterns.items, regions) |pattern, region| {
