@@ -1730,9 +1730,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
         .OpenCurly => {
             self.advance();
 
-            if (self.peek() == .EndOfFile) {
-                return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
-            } else if (self.peek() == .CloseCurly) {
+            if (self.peek() == .CloseCurly) {
                 // Empty - treat as empty record
                 const scratch_top = self.store.scratchRecordFieldTop();
                 self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
@@ -1877,10 +1875,16 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                     const statement = self.parseStmt() orelse break;
                     self.store.addScratchStatement(statement);
                     if (self.peek() == .CloseCurly) {
-                        self.advance();
                         break;
                     }
                 }
+
+                self.expect(.CloseCurly) catch {
+                    self.pushDiagnostic(.expected_expr_close_curly_or_comma, .{
+                        .start = self.pos,
+                        .end = self.pos,
+                    });
+                };
 
                 const statements = self.store.statementSpanFrom(scratch_top);
                 expr = self.store.addExpr(.{ .block = .{
