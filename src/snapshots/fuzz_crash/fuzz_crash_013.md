@@ -60,11 +60,12 @@ Int(1:1-1:2),OpenCurly(1:2-1:3),EndOfFile(1:3-1:3),
 (file @1.1-1.3
 	(malformed-header @1.1-1.2 (tag "missing_header"))
 	(statements
-		(e-malformed @1.3-1.3 (reason "expected_expr_close_curly_or_comma"))))
+		(e-block @1.2-1.3
+			(statements))))
 ~~~
 # FORMATTED
 ~~~roc
-
+{}
 ~~~
 # CANONICALIZE
 ~~~clojure
