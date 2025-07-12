@@ -72,10 +72,10 @@ If you don't need this variable, prefix it with an underscore like `_value` to s
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:8),OpenCurly(1:9-1:10),Newline(1:1-1:1),
-MalformedNumberBadSuffix(2:5-2:12),OpFatArrow(2:13-2:15),StringStart(2:16-2:17),StringPart(2:17-2:19),StringEnd(2:19-2:20),Newline(1:1-1:1),
-MalformedNumberBadSuffix(3:5-3:11),OpFatArrow(3:12-3:14),StringStart(3:15-3:16),StringPart(3:16-3:20),StringEnd(3:20-3:21),Newline(1:1-1:1),
-LowerIdent(4:5-4:10),OpFatArrow(4:11-4:13),StringStart(4:14-4:15),StringPart(4:15-4:20),StringEnd(4:20-4:21),Newline(1:1-1:1),
+KwMatch(1:1-1:6),LowerIdent(1:7-1:8),OpenCurly(1:9-1:10),
+MalformedNumberBadSuffix(2:5-2:12),OpFatArrow(2:13-2:15),StringStart(2:16-2:17),StringPart(2:17-2:19),StringEnd(2:19-2:20),
+MalformedNumberBadSuffix(3:5-3:11),OpFatArrow(3:12-3:14),StringStart(3:15-3:16),StringPart(3:16-3:20),StringEnd(3:20-3:21),
+LowerIdent(4:5-4:10),OpFatArrow(4:11-4:13),StringStart(4:14-4:15),StringPart(4:15-4:20),StringEnd(4:20-4:21),
 CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
@@ -83,15 +83,15 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 (e-match
 	(e-ident @1.7-1.8 (raw "x"))
 	(branches
-		(branch @1.1-1.1
+		(branch @2.5-3.11
 			(p-malformed @2.5-2.15 (tag "pattern_unexpected_token"))
 			(e-string @2.16-2.20
 				(e-string-part @2.17-2.19 (raw "pi"))))
-		(branch @1.1-1.1
+		(branch @3.5-4.10
 			(p-malformed @3.5-3.14 (tag "pattern_unexpected_token"))
 			(e-string @3.15-3.21
 				(e-string-part @3.16-3.20 (raw "zero"))))
-		(branch @1.1-1.1
+		(branch @4.5-5.2
 			(p-ident @4.5-4.10 (raw "value"))
 			(e-string @4.14-4.21
 				(e-string-part @4.15-4.20 (raw "other"))))))

@@ -146,10 +146,8 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     };
     defer gpa.free(contents);
 
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents), try gpa.dupe(u8, path));
     defer module_env.deinit();
-
-    // Set the source in module_env so canonicalization can access it
 
     var parse_ast = parse.parse(&module_env, contents);
     defer parse_ast.deinit(gpa);
@@ -403,10 +401,18 @@ const Formatter = struct {
                             if (items_multiline) {
                                 try fmt.push(',');
                             }
+                            if (items_multiline) {
+                                if (arg_region.end + 1 < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[arg_region.end + 1] == .Comma) {
+                                    _ = try fmt.flushCommentsAfter(arg_region.end);
+                                }
+                            }
                             x += 1;
                         }
                         if (items_multiline) {
                             _ = try fmt.flushCommentsAfter(arg_region.end);
+                            if (arg_region.end + 1 < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[arg_region.end + 1] == .Comma) {
+                                _ = try fmt.flushCommentsAfter(arg_region.end + 1);
+                            }
                             fmt.curr_indent -= 1;
                             try fmt.pushIndent();
                         }
@@ -550,18 +556,44 @@ const Formatter = struct {
 
     fn whereClauseHasTrailingComma(fmt: *Formatter, region: AST.TokenizedRegion) bool {
         const tags = fmt.ast.tokens.tokens.items(.tag);
-        var i = region.end;
-        // Walk backwards from the end, skipping newlines
-        while (i >= region.start) {
-            const tag = tags[i];
-            if (tag == .Comma) {
+        // Just check if the last token is a comma
+        return tags[region.end] == .Comma;
+    }
+
+    /// Check if there's a newline in the source text before the given token
+    fn hasNewlineBefore(fmt: *Formatter, token_idx: Token.Idx) bool {
+        if (token_idx == 0) return false;
+
+        const current_region = fmt.ast.tokens.resolve(token_idx);
+        const prev_region = fmt.ast.tokens.resolve(token_idx - 1);
+
+        // Check if there's a newline in the source between the previous and current token
+        const between_start = prev_region.end.offset;
+        const between_end = current_region.start.offset;
+
+        for (fmt.ast.env.source[between_start..between_end]) |c| {
+            if (c == '\n') {
                 return true;
             }
-            if (tag != .Newline) {
-                return false;
+        }
+        return false;
+    }
+
+    /// Check if there's a newline in the source text after the given token
+    fn hasNewlineAfter(fmt: *Formatter, token_idx: Token.Idx) bool {
+        if (token_idx + 1 >= fmt.ast.tokens.tokens.len) return false;
+
+        const current_region = fmt.ast.tokens.resolve(token_idx);
+        const next_region = fmt.ast.tokens.resolve(token_idx + 1);
+
+        // Check if there's a newline in the source between the current and next token
+        const between_start = current_region.end.offset;
+        const between_end = next_region.start.offset;
+
+        for (fmt.ast.env.source[between_start..between_end]) |c| {
+            if (c == '\n') {
+                return true;
             }
-            if (i == 0) break;
-            i -= 1;
         }
         return false;
     }
@@ -673,6 +705,9 @@ const Formatter = struct {
             }
             if (multiline) {
                 try fmt.push(',');
+            }
+            if (item_region.end + 1 < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[item_region.end + 1] == .Comma) {
+                _ = try fmt.flushCommentsAfter(item_region.end);
             }
             i += 1;
         }
@@ -885,6 +920,9 @@ const Formatter = struct {
                     if (args_are_multiline) {
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(arg_region.end);
+                        if (arg_region.end + 1 < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[arg_region.end + 1] == .Comma) {
+                            _ = try fmt.flushCommentsAfter(arg_region.end + 1);
+                        }
                         try fmt.ensureNewline();
                         if (i < args.len - 1) {
                             try fmt.pushIndent();
@@ -1629,8 +1667,7 @@ const Formatter = struct {
         switch (clause) {
             .mod_method => |c| {
                 try fmt.pushAll("module(");
-                const tags = fmt.ast.tokens.tokens.items(.tag);
-                const varNeedsFlush = tags[c.var_tok - 1] == .Newline or (tags.len > (c.var_tok + 1) and tags[c.var_tok + 1] == .Newline);
+                const varNeedsFlush = fmt.hasNewlineBefore(c.var_tok) or fmt.hasNewlineAfter(c.var_tok);
                 if (varNeedsFlush) {
                     _ = try fmt.flushCommentsBefore(c.var_tok);
                     fmt.curr_indent += 1;
@@ -1692,8 +1729,7 @@ const Formatter = struct {
             },
             .mod_alias => |c| {
                 try fmt.pushAll("module(");
-                const tags = fmt.ast.tokens.tokens.items(.tag);
-                const varNeedsFlush = tags[c.var_tok - 1] == .Newline or (tags.len > (c.var_tok + 1) and tags[c.var_tok + 1] == .Newline);
+                const varNeedsFlush = fmt.hasNewlineBefore(c.var_tok) or fmt.hasNewlineAfter(c.var_tok);
                 if (varNeedsFlush) {
                     _ = try fmt.flushCommentsBefore(c.var_tok);
                     fmt.curr_indent += 1;
@@ -1851,74 +1887,61 @@ const Formatter = struct {
     }
 
     fn flushCommentsBefore(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
-        if (tokenIdx == 0) {
-            return false;
-        }
-        const tags = fmt.ast.tokens.tokens.items(.tag);
-        const prevNewline = tokenIdx - 1;
-        if (tags[prevNewline] != .Newline) {
-            return false;
-        }
-        var first = prevNewline;
-        // Go back as long as we see newlines
-        while (first > 0 and tags[first - 1] == .Newline) {
-            first -= 1;
-        }
-        var i = first;
-        // Now print them in order
-        while (i <= prevNewline) {
-            const newline_tok = fmt.ast.tokens.tokens.get(i);
-            std.debug.assert(newline_tok.tag == .Newline);
-            const region = fmt.ast.tokens.resolve(i);
-            const start = region.start.offset;
-            const end = region.end.offset;
-            if (end > start) {
-                if (i == 0 or i > first) {
-                    try fmt.pushIndent();
-                    try fmt.push('#');
-                } else {
-                    try fmt.pushAll(" #");
-                }
-                const comment_text = fmt.ast.env.source[start..end];
-                if (comment_text[0] != ' ') {
-                    try fmt.push(' ');
-                }
-                try fmt.pushAll(comment_text);
-            }
-            try fmt.newline();
-            i += 1;
-        }
-        return true;
+        const start = if (tokenIdx == 0) 0 else fmt.ast.tokens.resolve(tokenIdx - 1).end.offset;
+        const end = fmt.ast.tokens.resolve(tokenIdx).start.offset;
+        return fmt.flushComments(fmt.ast.env.source[start..end]);
     }
 
     fn flushCommentsAfter(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
-        const tags = fmt.ast.tokens.tokens.items(.tag);
-        var nextNewline = tokenIdx + 1;
-        if (nextNewline >= tags.len) {
-            return false;
-        }
-        if (tags[nextNewline] == .Comma) {
-            nextNewline += 1;
-        }
-        if (nextNewline >= tags.len or tags[nextNewline] != .Newline) {
-            return false;
-        }
-        while (nextNewline < tags.len and tags[nextNewline] == .Newline) {
-            const region = fmt.ast.tokens.resolve(nextNewline);
-            const start = region.start.offset;
-            const end = region.end.offset;
-            if (end > start) {
-                try fmt.pushAll(" #");
-                const comment_text = fmt.ast.env.source[start..end];
-                if (comment_text[0] != ' ') {
-                    try fmt.push(' ');
+        const start = fmt.ast.tokens.resolve(tokenIdx).end.offset;
+        const end = fmt.ast.tokens.resolve(tokenIdx + 1).start.offset;
+        return fmt.flushComments(fmt.ast.env.source[start..end]);
+    }
+
+    fn flushComments(fmt: *Formatter, between_text: []const u8) !bool {
+        var found_comment = false;
+        var newline_count: usize = 0;
+        var i: usize = 0;
+        while (i < between_text.len) {
+            if (between_text[i] == '#') {
+                // Found a comment, extract it
+                const comment_start = i + 1; // Skip the #
+                var comment_end = comment_start;
+                while (comment_end < between_text.len and between_text[comment_end] != '\n' and between_text[comment_end] != '\r') {
+                    comment_end += 1;
                 }
-                try fmt.pushAll(comment_text);
+
+                if (comment_end > comment_start) {
+                    if (found_comment or newline_count > 0) {
+                        try fmt.pushIndent();
+                    } else if (!fmt.has_newline) {
+                        try fmt.pushAll(" ");
+                    }
+                    try fmt.push('#');
+                    const comment_text = between_text[comment_start..comment_end];
+                    if (comment_text.len > 0 and comment_text[0] != ' ') {
+                        try fmt.push(' ');
+                    }
+                    try fmt.pushAll(comment_text);
+                    found_comment = true;
+                }
+                try fmt.newline();
+                newline_count += 1;
+                i = comment_end;
+                if (i < between_text.len and (between_text[i] == '\n' or between_text[i] == '\r')) {
+                    i += 1; // Skip any additional newlines
+                }
+            } else if (between_text[i] == '\n') {
+                try fmt.newline();
+                newline_count += 1;
+                i += 1;
+            } else {
+                i += 1;
             }
-            try fmt.newline();
-            nextNewline += 1;
         }
-        return true;
+
+        // Return true if there was a newline, whether or not there was a comment
+        return newline_count > 0 or found_comment;
     }
 
     fn push(fmt: *Formatter, c: u8) !void {
@@ -1978,7 +2001,7 @@ const Formatter = struct {
 fn moduleFmtsSame(source: []const u8) !void {
     const gpa = std.testing.allocator;
 
-    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
+    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source), try gpa.dupe(u8, "test.roc"));
     defer env.deinit();
 
     var parse_ast = parse(&env, source);
@@ -2009,7 +2032,7 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
 
     const gpa = std.testing.allocator;
 
-    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
+    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source), try gpa.dupe(u8, "test.roc"));
     defer env.deinit();
 
     var messages: [1]tokenize.Diagnostic = undefined;
@@ -2079,10 +2102,8 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, input), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
-
-    // Set the source in module_env so canonicalization can access it
 
     var parse_ast = parse.parse(&module_env, input);
     defer parse_ast.deinit(gpa);

@@ -71,15 +71,8 @@ You can fix this by either defining ``OtherType`` in this module, or by removing
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:25),Comma(1:25-1:26),UpperIdent(1:27-1:36),Comma(1:36-1:37),LowerIdent(1:38-1:41),Comma(1:41-1:42),UpperIdent(1:43-1:49),CloseSquare(1:49-1:50),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:2-3:54),
-Newline(4:2-4:37),
-Newline(5:2-5:82),
-Newline(6:2-6:58),
-Newline(1:1-1:1),
-LowerIdent(8:1-8:4),OpAssign(8:5-8:6),Int(8:7-8:9),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:25),Comma(1:25-1:26),UpperIdent(1:27-1:36),Comma(1:36-1:37),LowerIdent(1:38-1:41),Comma(1:41-1:42),UpperIdent(1:43-1:49),CloseSquare(1:49-1:50),
+LowerIdent(8:1-8:4),OpAssign(8:5-8:6),Int(8:7-8:9),
 UpperIdent(10:1-10:7),OpColon(10:8-10:9),OpenSquare(10:10-10:11),UpperIdent(10:11-10:12),Comma(10:12-10:13),UpperIdent(10:14-10:15),Comma(10:15-10:16),UpperIdent(10:17-10:18),CloseSquare(10:18-10:19),EndOfFile(10:19-10:19),
 ~~~
 # PARSE

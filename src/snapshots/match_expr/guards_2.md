@@ -18,25 +18,24 @@ UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:51:2:77
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:75:2:80
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:92:2:93
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:93:2:94
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:93:2:93
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:1:1:3:6
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:22:3:26
+UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:93:3:6
+UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:12:3:16
+UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:22:3:26
 PARSE ERROR - guards_2.md:3:25:3:48
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:26:3:50
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:48:3:53
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:61:3:62
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:62:3:63
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:62:3:62
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:1:1:4:6
+UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:62:4:6
+UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:4:5:4:9
+UNEXPECTED TOKEN IN PATTERN - guards_2.md:4:7:4:11
 UNDEFINED VARIABLE - guards_2.md:1:7:1:12
 UNUSED VARIABLE - guards_2.md:2:6:2:11
 UNUSED VARIABLE - guards_2.md:2:19:2:23
 UNDEFINED VARIABLE - guards_2.md:2:87:2:92
 UNUSED VARIABLE - guards_2.md:2:77:2:86
-UNUSED VARIABLE - guards_2.md:3:6:3:7
-UNUSED VARIABLE - guards_2.md:3:9:3:10
-UNDEFINED VARIABLE - guards_2.md:3:60:3:61
-UNUSED VARIABLE - guards_2.md:3:50:3:59
+UNDEFINED VARIABLE - guards_2.md:3:6:3:7
+UNDEFINED VARIABLE - guards_2.md:3:9:3:10
+UNDEFINED VARIABLE - guards_2.md:3:15:3:16
+UNDEFINED VARIABLE - guards_2.md:3:20:3:21
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=> "** is not expected in an expression.
@@ -111,35 +110,33 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token  is not expected in a pattern.
+The token **"
+    [** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**guards_2.md:2:93:2:93:**
+**guards_2.md:2:93:3:6:**
 ```roc
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-```
-                                                                                            
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **match value {
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-    [** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**guards_2.md:1:1:3:6:**
-```roc
-match value {
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=> "** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNEXPECTED TOKEN IN PATTERN**
+The token **if x** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
+
+Here is the problematic code:
+**guards_2.md:3:12:3:16:**
+```roc
+    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
+```
+           ^^^^
+
+
+**UNEXPECTED TOKEN IN PATTERN**
+The token **=> "** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **guards_2.md:3:22:3:26:**
@@ -150,7 +147,7 @@ Here is the problematic code:
 
 
 **PARSE ERROR**
-A parsing error occurred: `no_else`
+A parsing error occurred: `string_expected_close_interpolation`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -159,30 +156,6 @@ Here is the problematic code:
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
                         ^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **pair of equal values: ${** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**guards_2.md:3:26:3:50:**
-```roc
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
-```
-                         ^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **${Num** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**guards_2.md:3:48:3:53:**
-```roc
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
-```
-                                               ^^^^^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
@@ -210,32 +183,40 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token  is not expected in a pattern.
+The token **"
+    _** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**guards_2.md:3:62:3:62:**
+**guards_2.md:3:62:4:6:**
 ```roc
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
-```
-                                                             
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **match value {
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
-    _** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**guards_2.md:1:1:4:6:**
-```roc
-match value {
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
     _ => "other"
 ```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **_ =>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**guards_2.md:4:5:4:9:**
+```roc
+    _ => "other"
+```
+    ^^^^
+
+
+**UNEXPECTED TOKEN IN PATTERN**
+The token **=> "** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
+
+Here is the problematic code:
+**guards_2.md:4:7:4:11:**
+```roc
+    _ => "other"
+```
+      ^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -317,18 +298,9 @@ Check the spelling and make sure you're using a valid Roc operator.
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **guards_2.md:3:6:3:7:**
 ```roc
@@ -337,10 +309,9 @@ If you don't need this variable, prefix it with an underscore like `_x` to suppr
      ^
 
 
-**UNUSED VARIABLE**
-Variable ``y`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+**UNDEFINED VARIABLE**
+Nothing is named `y` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **guards_2.md:3:9:3:10:**
 ```roc
@@ -352,31 +323,26 @@ If you don't need this variable, prefix it with an underscore like `_y` to suppr
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**guards_2.md:3:60:3:61:**
+**guards_2.md:3:15:3:16:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
-                                                           ^
+              ^
 
 
-**UNUSED VARIABLE**
-Variable ``toStr`` is not used anywhere in your code.
+**UNDEFINED VARIABLE**
+Nothing is named `y` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
-
-**guards_2.md:3:50:3:59:**
+**guards_2.md:3:20:3:21:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
-                                                 ^^^^^^^^^
+                   ^
 
 
 **INVALID PATTERN**
@@ -392,13 +358,23 @@ This pattern contains invalid syntax or uses unsupported features.
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),
-OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),Comma(2:11-2:12),DoubleDot(2:13-2:15),KwAs(2:16-2:18),LowerIdent(2:19-2:23),CloseSquare(2:23-2:24),KwIf(2:25-2:27),UpperIdent(2:28-2:32),NoSpaceDotLowerIdent(2:32-2:36),NoSpaceOpenRound(2:36-2:37),LowerIdent(2:37-2:41),CloseRound(2:41-2:42),OpGreaterThan(2:43-2:44),Int(2:45-2:46),OpFatArrow(2:47-2:49),StringStart(2:50-2:51),StringPart(2:51-2:75),OpenStringInterpolation(2:75-2:77),UpperIdent(2:77-2:80),NoSpaceDotLowerIdent(2:80-2:86),LowerIdent(2:87-2:92),CloseStringInterpolation(2:92-2:93),StringPart(2:93-2:93),StringEnd(2:93-2:94),Newline(1:1-1:1),
-OpenSquare(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:10),CloseSquare(3:10-3:11),KwIf(3:12-3:14),LowerIdent(3:15-3:16),OpEquals(3:17-3:19),LowerIdent(3:20-3:21),OpFatArrow(3:22-3:24),StringStart(3:25-3:26),StringPart(3:26-3:48),OpenStringInterpolation(3:48-3:50),UpperIdent(3:50-3:53),NoSpaceDotLowerIdent(3:53-3:59),LowerIdent(3:60-3:61),CloseStringInterpolation(3:61-3:62),StringPart(3:62-3:62),StringEnd(3:62-3:63),Newline(1:1-1:1),
-Underscore(4:5-4:6),OpFatArrow(4:7-4:9),StringStart(4:10-4:11),StringPart(4:11-4:16),StringEnd(4:16-4:17),Newline(1:1-1:1),
+KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),
+OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),Comma(2:11-2:12),DoubleDot(2:13-2:15),KwAs(2:16-2:18),LowerIdent(2:19-2:23),CloseSquare(2:23-2:24),KwIf(2:25-2:27),UpperIdent(2:28-2:32),NoSpaceDotLowerIdent(2:32-2:36),NoSpaceOpenRound(2:36-2:37),LowerIdent(2:37-2:41),CloseRound(2:41-2:42),OpGreaterThan(2:43-2:44),Int(2:45-2:46),OpFatArrow(2:47-2:49),StringStart(2:50-2:51),StringPart(2:51-2:75),OpenStringInterpolation(2:75-2:77),UpperIdent(2:77-2:80),NoSpaceDotLowerIdent(2:80-2:86),LowerIdent(2:87-2:92),CloseStringInterpolation(2:92-2:93),StringPart(2:93-2:93),StringEnd(2:93-2:94),
+OpenSquare(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:10),CloseSquare(3:10-3:11),KwIf(3:12-3:14),LowerIdent(3:15-3:16),OpEquals(3:17-3:19),LowerIdent(3:20-3:21),OpFatArrow(3:22-3:24),StringStart(3:25-3:26),StringPart(3:26-3:48),OpenStringInterpolation(3:48-3:50),UpperIdent(3:50-3:53),NoSpaceDotLowerIdent(3:53-3:59),LowerIdent(3:60-3:61),CloseStringInterpolation(3:61-3:62),StringPart(3:62-3:62),StringEnd(3:62-3:63),
+Underscore(4:5-4:6),OpFatArrow(4:7-4:9),StringStart(4:10-4:11),StringPart(4:11-4:16),StringEnd(4:16-4:17),
 CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
@@ -420,37 +396,36 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 		(branch @2.92-2.94
 			(p-malformed @2.92-2.93 (tag "pattern_unexpected_token"))
 			(e-malformed @2.93-2.94 (reason "expr_unexpected_token")))
-		(branch @2.93-3.6
-			(p-malformed @1.1-1.1 (tag "pattern_unexpected_token"))
-			(e-malformed @1.1-3.6 (reason "expr_unexpected_token")))
-		(branch @3.5-3.48
-			(p-list @3.5-3.11
-				(p-ident @3.6-3.7 (raw "x"))
-				(p-ident @3.9-3.10 (raw "y")))
-			(e-malformed @3.25-3.48 (reason "no_else")))
-		(branch @3.26-3.53
-			(p-malformed @3.26-3.50 (tag "pattern_unexpected_token"))
-			(e-malformed @3.48-3.53 (reason "expr_unexpected_token")))
-		(branch @3.50-3.62
-			(p-ident @3.50-3.59 (raw ".toStr"))
-			(e-ident @3.60-3.61 (raw "x")))
+		(branch @2.93-3.14
+			(p-malformed @2.93-3.6 (tag "pattern_unexpected_token"))
+			(e-list @3.5-3.11
+				(e-ident @3.6-3.7 (raw "x"))
+				(e-ident @3.9-3.10 (raw "y"))))
+		(branch @3.12-3.24
+			(p-malformed @3.12-3.16 (tag "pattern_unexpected_token"))
+			(e-binop @3.15-3.24 (op "==")
+				(e-ident @3.15-3.16 (raw "x"))
+				(e-ident @3.20-3.21 (raw "y"))))
+		(branch @3.22-3.62
+			(p-malformed @3.22-3.26 (tag "pattern_unexpected_token"))
+			(e-malformed @3.25-3.62 (reason "string_expected_close_interpolation")))
 		(branch @3.61-3.63
 			(p-malformed @3.61-3.62 (tag "pattern_unexpected_token"))
 			(e-malformed @3.62-3.63 (reason "expr_unexpected_token")))
-		(branch @3.62-4.6
-			(p-malformed @1.1-1.1 (tag "pattern_unexpected_token"))
-			(e-malformed @1.1-4.6 (reason "expr_unexpected_token")))
-		(branch @1.1-1.1
-			(p-underscore)
+		(branch @3.62-4.9
+			(p-malformed @3.62-4.6 (tag "pattern_unexpected_token"))
+			(e-malformed @4.5-4.9 (reason "expr_unexpected_token")))
+		(branch @4.7-5.2
+			(p-malformed @4.7-4.11 (tag "pattern_unexpected_token"))
 			(e-string @4.10-4.17
 				(e-string-part @4.11-4.16 (raw "other"))))))
 ~~~
 # FORMATTED
 ~~~roc
 match value {
-	[first, .. as rest] => 	 => 	toStr => first	 => 	 => 
-	[x, y] => 	 => 	toStr => x	 => 	 => 
-	_ => "other"
+	[first, .. as rest] => 	 => 	toStr => first	 => 	 =>
+		[x, y]	 => x == y	 => 	 => 	 =>
+			 => "other"
 }
 ~~~
 # CANONICALIZE
@@ -491,30 +466,26 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @2.93-3.6 (tag "pattern_not_canonicalized"))))
 				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
+					(e-list @3.5-3.11
+						(elems
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "ident_not_in_scope"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @3.5-3.11
-							(patterns
-								(p-assign @3.6-3.7 (ident "x"))
-								(p-assign @3.9-3.10 (ident "y"))))))
+						(p-runtime-error @3.12-3.16 (tag "pattern_not_canonicalized"))))
 				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
+					(e-binop @3.15-3.24 (op "eq")
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-runtime-error (tag "ident_not_in_scope")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @3.26-3.50 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.22-3.26 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-assign @3.50-3.59 (ident "toStr"))))
-				(value
-					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -524,13 +495,13 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.62-4.6 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-underscore @4.5-4.6)))
+						(p-runtime-error @4.7-4.11 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-string @4.10-4.17
 						(e-literal @4.11-4.16 (string "other"))))))))

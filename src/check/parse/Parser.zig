@@ -66,14 +66,9 @@ fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) Test
     try run(parser);
 }
 
-/// helper to advance the parser until a non-newline token is encountered
+/// helper to advance the parser by one token
 pub fn advance(self: *Parser) void {
-    while (self.peek() != .EndOfFile) {
-        self.pos += 1;
-        if (self.peek() != .Newline) {
-            break;
-        }
-    }
+    self.pos += 1;
     // We have an EndOfFile token that we never expect to advance past
     std.debug.assert(self.pos < self.tok_buf.tokens.len);
 }
@@ -103,51 +98,25 @@ pub fn peek(self: *Parser) Token.Tag {
     return self.tok_buf.tokens.items(.tag)[self.pos];
 }
 
-/// Peek at the next significant token
+/// Peek at the next token
 pub fn peekNext(self: *Parser) Token.Tag {
-    var next = self.pos + 1;
-    const tags = self.tok_buf.tokens.items(.tag);
-    while (next < self.tok_buf.tokens.len and tags[next] == .Newline) {
-        next += 1;
-    }
+    const next = self.pos + 1;
     if (next >= self.tok_buf.tokens.len) {
         return .EndOfFile;
     }
-    return tags[next];
+    return self.tok_buf.tokens.items(.tag)[next];
 }
 
-/// Peek at `n` significant tokens forward
+/// Peek at `n` tokens forward
 pub fn peekN(self: *Parser, n: u32) Token.Tag {
     if (n == 0) {
         return self.peek();
     }
-    var left = n;
-    var next = self.pos;
-    const tags = self.tok_buf.tokens.items(.tag);
-    while (left > 0) {
-        next += 1;
-        while (next < self.tok_buf.tokens.len and tags[next] == .Newline) {
-            next += 1;
-        }
-        if (next >= self.tok_buf.tokens.len) {
-            return .EndOfFile;
-        }
-        left -= 1;
-    }
-    return tags[next];
-}
-
-/// Peek at the current token, skipping any leading newlines
-pub fn peekSkippingNewlines(self: *Parser) Token.Tag {
-    var pos = self.pos;
-    const tags = self.tok_buf.tokens.items(.tag);
-    while (pos < self.tok_buf.tokens.len and tags[pos] == .Newline) {
-        pos += 1;
-    }
-    if (pos >= self.tok_buf.tokens.len) {
+    const next = self.pos + n;
+    if (next >= self.tok_buf.tokens.len) {
         return .EndOfFile;
     }
-    return tags[pos];
+    return self.tok_buf.tokens.items(.tag)[next];
 }
 
 /// add a diagnostic error
@@ -173,7 +142,10 @@ pub fn pushMalformed(self: *Parser, comptime t: type, tag: AST.Diagnostic.Tag, s
         const diagnostic_start = if (self.pos > start and (self.pos - start) > 2) start else @min(pos, self.pos);
         const diagnostic_end = if (self.pos > start and (self.pos - start) > 2) start + 1 else @max(pos, self.pos);
         // If start equals end, make it a single-token region
-        const diagnostic_region = AST.TokenizedRegion{ .start = diagnostic_start, .end = if (diagnostic_start == diagnostic_end) diagnostic_start + 1 else diagnostic_end };
+        const diagnostic_region = AST.TokenizedRegion{
+            .start = diagnostic_start,
+            .end = if (diagnostic_start == diagnostic_end) diagnostic_start + 1 else diagnostic_end,
+        };
 
         // AST node should span the entire malformed expression
         const ast_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
@@ -214,24 +186,10 @@ pub fn parseFile(self: *Parser) void {
         .region = AST.TokenizedRegion.empty(),
     });
 
-    while (self.peek() == .Newline) {
-        self.advanceOne();
-    }
-
     const header = self.parseHeader();
     const scratch_top = self.store.scratchStatementTop();
 
     while (self.peek() != .EndOfFile) {
-        // Skip newlines before parsing each statement
-        while (self.peek() == .Newline) {
-            self.advanceOne();
-        }
-
-        // Check if we've reached the end after skipping newlines
-        if (self.peek() == .EndOfFile) {
-            break;
-        }
-
         const current_scratch_top = self.store.scratchStatementTop();
         if (self.parseTopLevelStatement()) |idx| {
             std.debug.assert(self.store.scratchStatementTop() == current_scratch_top);
@@ -618,8 +576,6 @@ pub fn parsePackageHeader(self: *Parser) AST.Header.Idx {
         },
     });
 
-    self.advance();
-
     const header = AST.Header{ .package = .{
         .exposes = exposes,
         .packages = packages,
@@ -804,9 +760,6 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
                 .region = .{ .start = entry_start, .end = self.pos },
             }));
         }
-        while (self.peek() == .Newline) {
-            self.advanceOne();
-        }
         self.expect(.Comma) catch {
             break;
         };
@@ -826,7 +779,6 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
             .end = packages_end,
         },
     });
-    self.advance();
 
     if (platform) |pidx| {
         const header = AST.Header{
@@ -991,13 +943,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                     .exposes = exposes,
                     .region = .{ .start = start, .end = end },
                 } });
-                if (self.peek() == .Newline) {
-                    self.advance();
-                }
                 return statement_idx;
-            }
-            if (self.peek() == .Newline) {
-                self.advance();
             }
             return null;
         },
@@ -1009,9 +955,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 .body = body,
                 .region = .{ .start = start, .end = self.pos },
             } });
-            if (self.peek() == .Newline) {
-                self.advance();
-            }
             return statement_idx;
         },
         .KwFor => {
@@ -1030,10 +973,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 .body = body,
             } });
 
-            if (self.peek() == .Newline) {
-                self.advance();
-            }
-
             return statement_idx;
         },
         .KwCrash => {
@@ -1044,9 +983,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 .expr = expr,
                 .region = .{ .start = start, .end = self.pos },
             } });
-            if (self.peek() == .Newline) {
-                self.advance();
-            }
             return statement_idx;
         },
         .KwDbg => {
@@ -1057,9 +993,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 .expr = expr,
                 .region = .{ .start = start, .end = self.pos },
             } });
-            if (self.peek() == .Newline) {
-                self.advance();
-            }
             return statement_idx;
         },
         .KwReturn => {
@@ -1070,9 +1003,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 .expr = expr,
                 .region = .{ .start = start, .end = self.pos },
             } });
-            if (self.peek() == .Newline) {
-                self.advance();
-            }
             return statement_idx;
         },
         .KwVar => {
@@ -1095,9 +1025,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 .body = body,
                 .region = .{ .start = start, .end = self.pos },
             } });
-            if (self.peek() == .Newline) {
-                self.advance();
-            }
             return statement_idx;
         },
         .LowerIdent => {
@@ -1116,9 +1043,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                     .body = idx,
                     .region = .{ .start = start, .end = expr_region.end },
                 } });
-                if (self.peek() == .Newline) {
-                    self.advance();
-                }
                 return statement_idx;
             } else if (self.peekNext() == .OpColon) {
                 self.advance(); // Advance past LowerIdent
@@ -1151,9 +1075,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                     .body = idx,
                     .region = .{ .start = start, .end = expr_region.end },
                 } });
-                if (self.peek() == .Newline) {
-                    self.advance();
-                }
                 return statement_idx;
             } else if (self.peekNext() == .OpColon) {
                 self.advance(); // Advance past NamedUnderscore
@@ -1193,9 +1114,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                     .kind = kind,
                     .region = .{ .start = start, .end = end_pos },
                 } });
-                if (self.peek() == .Newline) {
-                    self.advance();
-                }
                 return statement_idx;
             }
         },
@@ -1209,9 +1127,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
         .expr = expr,
         .region = .{ .start = start, .end = self.pos },
     } });
-    if (self.peek() == .Newline) {
-        self.advance();
-    }
     return statement_idx;
 }
 
@@ -1830,7 +1745,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
         .OpenCurly => {
             self.advance();
 
-            if (self.peekSkippingNewlines() == .CloseCurly) {
+            if (self.peek() == .CloseCurly) {
                 // Empty - treat as empty record
                 const scratch_top = self.store.scratchRecordFieldTop();
                 const record_end = self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
@@ -1843,7 +1758,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                     .ext = null,
                     .region = .{ .start = start, .end = record_end },
                 } });
-            } else if (self.peekSkippingNewlines() == .DoubleDot) {
+            } else if (self.peek() == .DoubleDot) {
                 // Record is being extended
 
                 self.advance(); // consume DoubleDot
@@ -1869,7 +1784,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                     .ext = ext_expr,
                     .region = .{ .start = start, .end = record_end },
                 } });
-            } else if (self.peekSkippingNewlines() == .LowerIdent and self.peekNext() == .Comma) {
+            } else if (self.peek() == .LowerIdent and self.peekNext() == .Comma) {
                 // Definitely a record - has comma-separated fields
                 const scratch_top = self.store.scratchRecordFieldTop();
                 const record_end = self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
@@ -1882,7 +1797,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                     .ext = null,
                     .region = .{ .start = start, .end = record_end },
                 } });
-            } else if (self.peekSkippingNewlines() == .LowerIdent and self.peekNext() == .OpColon) {
+            } else if (self.peek() == .LowerIdent and self.peekNext() == .OpColon) {
                 // Ambiguous case: could be record field or type annotation
                 // Use bounded lookahead to determine the context
                 var is_block = false;
@@ -1906,37 +1821,16 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                                 if (depth == 0) break;
                                 depth -= 1;
                             },
-                            .Newline => {
-                                // Skip newlines at depth 0 and check what follows
+                            .LowerIdent => {
+                                // At depth 0, check if this looks like an assignment (block) or record field
                                 if (depth == 0) {
-                                    var next_pos = lookahead_pos + 1;
-                                    // Skip multiple newlines
-                                    while (next_pos < self.tok_buf.tokens.len and
-                                        self.tok_buf.tokens.items(.tag)[next_pos] == .Newline)
-                                    {
-                                        next_pos += 1;
-                                    }
-                                    if (next_pos < self.tok_buf.tokens.len) {
-                                        const next_tok = self.tok_buf.tokens.items(.tag)[next_pos];
-                                        // Look for patterns that indicate a block vs record
-                                        if (next_tok == .LowerIdent) {
-                                            // Look ahead further to see if this is an assignment (block) or record field
-                                            var check_pos = next_pos + 1;
-                                            while (check_pos < self.tok_buf.tokens.len and
-                                                self.tok_buf.tokens.items(.tag)[check_pos] == .Newline)
-                                            {
-                                                check_pos += 1;
-                                            }
-                                            if (check_pos < self.tok_buf.tokens.len) {
-                                                const after_ident = self.tok_buf.tokens.items(.tag)[check_pos];
-                                                // If we see assignment, it's definitely a block
-                                                if (after_ident == .OpAssign) {
-                                                    is_block = true;
-                                                    break;
-                                                }
-                                                // If we see colon without comma later, it might be a block
-                                                // but for now, be conservative and assume record
-                                            }
+                                    const check_pos = lookahead_pos + 1;
+                                    if (check_pos < self.tok_buf.tokens.len) {
+                                        const after_ident = self.tok_buf.tokens.items(.tag)[check_pos];
+                                        // If we see assignment, it's definitely a block
+                                        if (after_ident == .OpAssign) {
+                                            is_block = true;
+                                            break;
                                         }
                                     }
                                 }
@@ -2056,8 +1950,6 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
             while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
                 self.store.addScratchMatchBranch(self.parseBranch());
                 if (self.peek() == .Comma) {
-                    self.advance();
-                } else if (self.peek() == .Newline) {
                     self.advance();
                 }
             }
@@ -2288,9 +2180,6 @@ pub fn parseStringExpr(self: *Parser) AST.Expr.Idx {
                 self.advance(); // Advance past OpenStringInterpolation
                 const ex = self.parseExpr();
                 self.store.addScratchExpr(ex);
-                while (self.peek() == .Newline) {
-                    self.advanceOne(); // Advance ONLY past the Newline
-                }
                 if (self.peek() != .CloseStringInterpolation) {
                     return self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, start);
                 }

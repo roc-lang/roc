@@ -120,7 +120,7 @@ pub const CacheManager = struct {
     ///
     /// Serializes the ProcessResult and stores it in the cache using BLAKE3-based
     /// filenames with subdirectory splitting.
-    pub fn store(self: *Self, content: []const u8, compiler_version: []const u8, result: *const coordinate_simple.ProcessResult) !void {
+    pub fn store(self: *Self, content: []const u8, compiler_version: []const u8, process_result: *const coordinate_simple.ProcessResult) !void {
         if (!self.config.enabled) {
             return;
         }
@@ -141,7 +141,7 @@ pub const CacheManager = struct {
         };
 
         // Serialize the result
-        const cache_data = self.serializeResult(result) catch |err| {
+        const cache_data = self.serializeResult(process_result) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }

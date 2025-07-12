@@ -20,13 +20,10 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-Int(1:1-1:2),Newline(1:4-1:8),
-OpPlus(2:2-2:3),Newline(2:5-2:10),
-Newline(1:1-1:1),
-Newline(4:3-4:24),
-Newline(1:1-1:1),
-Int(6:2-6:3),Newline(6:5-6:9),
-OpStar(7:3-7:4),Newline(7:6-7:12),
+Int(1:1-1:2),
+OpPlus(2:2-2:3),
+Int(6:2-6:3),
+OpStar(7:3-7:4),
 Int(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~
 # PARSE

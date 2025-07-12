@@ -54,10 +54,9 @@ foo =
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),Newline(1:1-1:1),
-CloseCurly(2:6-2:7),Newline(1:1-1:1),
-LowerIdent(3:1-3:4),OpAssign(3:5-3:6),Newline(1:1-1:1),
-Newline(1:1-1:1),
+UpperIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),
+CloseCurly(2:6-2:7),
+LowerIdent(3:1-3:4),OpAssign(3:5-3:6),
 StringStart(5:5-5:6),StringPart(5:6-5:35),EndOfFile(5:35-5:35),
 ~~~
 # PARSE

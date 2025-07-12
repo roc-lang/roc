@@ -15,8 +15,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-Int(1:1-1:2),Newline(1:1-1:1),
-OpBang(2:1-2:2),Newline(1:1-1:1),
+Int(1:1-1:2),
+OpBang(2:1-2:2),
 OpAmpersand(3:1-3:2),LowerIdent(3:2-3:3),NoSpaceDotLowerIdent(3:3-3:5),EndOfFile(3:5-3:5),
 ~~~
 # PARSE

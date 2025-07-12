@@ -33,18 +33,18 @@ Number base prefixes must be lowercase (0x, 0o, 0b).
 
 # TOKENS
 ~~~zig
-OpenRound(1:1-1:2),Newline(1:1-1:1),
-Int(2:5-2:9),Comma(2:9-2:10),Newline(1:1-1:1),
-Int(3:5-3:9),Comma(3:9-3:10),Newline(1:1-1:1),
-Int(4:5-4:9),Comma(4:9-4:10),Newline(1:1-1:1),
-Int(5:5-5:9),Comma(5:9-5:10),Newline(1:1-1:1),
-Int(6:5-6:9),Comma(6:9-6:10),Newline(1:1-1:1),
-Int(7:5-7:9),Comma(7:9-7:10),Newline(1:1-1:1),
-Float(8:5-8:11),Comma(8:11-8:12),Newline(1:1-1:1),
-Float(9:5-9:11),Comma(9:11-9:12),Newline(1:1-1:1),
-Int(10:5-10:15),Comma(10:15-10:16),Newline(1:1-1:1),
-Int(11:5-11:15),Comma(11:15-11:16),Newline(1:1-1:1),
-Int(12:5-12:15),Comma(12:15-12:16),Newline(1:1-1:1),
+OpenRound(1:1-1:2),
+Int(2:5-2:9),Comma(2:9-2:10),
+Int(3:5-3:9),Comma(3:9-3:10),
+Int(4:5-4:9),Comma(4:9-4:10),
+Int(5:5-5:9),Comma(5:9-5:10),
+Int(6:5-6:9),Comma(6:9-6:10),
+Int(7:5-7:9),Comma(7:9-7:10),
+Float(8:5-8:11),Comma(8:11-8:12),
+Float(9:5-9:11),Comma(9:11-9:12),
+Int(10:5-10:15),Comma(10:15-10:16),
+Int(11:5-11:15),Comma(11:15-11:16),
+Int(12:5-12:15),Comma(12:15-12:16),
 CloseRound(13:1-13:2),EndOfFile(13:2-13:2),
 ~~~
 # PARSE

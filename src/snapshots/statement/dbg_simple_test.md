@@ -18,11 +18,10 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:5),OpAssign(3:6-3:7),OpenCurly(3:8-3:9),Newline(1:1-1:1),
-LowerIdent(4:5-4:6),OpAssign(4:7-4:8),Int(4:9-4:11),Newline(1:1-1:1),
-KwDbg(5:5-5:8),NoSpaceOpenRound(5:8-5:9),LowerIdent(5:9-5:10),CloseRound(5:10-5:11),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
+LowerIdent(3:1-3:5),OpAssign(3:6-3:7),OpenCurly(3:8-3:9),
+LowerIdent(4:5-4:6),OpAssign(4:7-4:8),Int(4:9-4:11),
+KwDbg(5:5-5:8),NoSpaceOpenRound(5:8-5:9),LowerIdent(5:9-5:10),CloseRound(5:10-5:11),
 CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # PARSE

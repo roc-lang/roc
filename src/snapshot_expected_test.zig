@@ -531,6 +531,7 @@ fn validateSnapshotProblems(allocator: std.mem.Allocator, path: []const u8) !voi
         for (mismatches.items) |msg| {
             std.debug.print("  {s}\n", .{msg});
         }
+        std.debug.print("Note, you can update the expectations with `zig build update-expected`.", .{});
         return error.SnapshotValidationFailed;
     }
 }

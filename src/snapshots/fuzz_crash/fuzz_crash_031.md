@@ -63,9 +63,7 @@ I am part way through parsing this scalar literal (character literal), but it ap
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:5),OpenSquare(1:6-1:7),CloseSquare(1:7-1:8),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:2-3:4),
+LowerIdent(1:1-1:5),OpenSquare(1:6-1:7),CloseSquare(1:7-1:8),
 LowerIdent(4:1-4:6),LowerIdent(4:7-4:8),OpAssign(4:8-4:9),SingleQuote(4:10-4:11),EndOfFile(4:11-4:11),
 ~~~
 # PARSE

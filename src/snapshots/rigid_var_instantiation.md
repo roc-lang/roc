@@ -68,24 +68,14 @@ If you don't need this variable, prefix it with an underscore like `_lst` to sup
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:2-3:61),
-LowerIdent(4:1-4:9),OpColon(4:10-4:11),LowerIdent(4:12-4:13),OpArrow(4:14-4:16),LowerIdent(4:17-4:18),Newline(1:1-1:1),
-LowerIdent(5:1-5:9),OpAssign(5:10-5:11),OpBar(5:12-5:13),LowerIdent(5:13-5:14),OpBar(5:14-5:15),LowerIdent(5:16-5:17),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(7:2-7:60),
-LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBar(8:11-8:12),OpenCurly(8:13-8:14),Newline(1:1-1:1),
-Newline(9:6-9:29),
-LowerIdent(10:5-10:8),OpAssign(10:9-10:10),LowerIdent(10:11-10:19),NoSpaceOpenRound(10:19-10:20),Int(10:20-10:22),CloseRound(10:22-10:23),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(12:6-12:30),
-LowerIdent(13:5-13:8),OpAssign(13:9-13:10),LowerIdent(13:11-13:19),NoSpaceOpenRound(13:19-13:20),StringStart(13:20-13:21),StringPart(13:21-13:26),StringEnd(13:26-13:27),CloseRound(13:27-13:28),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(15:6-15:27),
-LowerIdent(16:5-16:8),OpAssign(16:9-16:10),LowerIdent(16:11-16:19),NoSpaceOpenRound(16:19-16:20),OpenSquare(16:20-16:21),Int(16:21-16:22),Comma(16:22-16:23),Int(16:24-16:25),Comma(16:25-16:26),Int(16:27-16:28),CloseSquare(16:28-16:29),CloseRound(16:29-16:30),Newline(1:1-1:1),
-Newline(1:1-1:1),
-OpenCurly(18:5-18:6),CloseCurly(18:6-18:7),Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
+LowerIdent(4:1-4:9),OpColon(4:10-4:11),LowerIdent(4:12-4:13),OpArrow(4:14-4:16),LowerIdent(4:17-4:18),
+LowerIdent(5:1-5:9),OpAssign(5:10-5:11),OpBar(5:12-5:13),LowerIdent(5:13-5:14),OpBar(5:14-5:15),LowerIdent(5:16-5:17),
+LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBar(8:11-8:12),OpenCurly(8:13-8:14),
+LowerIdent(10:5-10:8),OpAssign(10:9-10:10),LowerIdent(10:11-10:19),NoSpaceOpenRound(10:19-10:20),Int(10:20-10:22),CloseRound(10:22-10:23),
+LowerIdent(13:5-13:8),OpAssign(13:9-13:10),LowerIdent(13:11-13:19),NoSpaceOpenRound(13:19-13:20),StringStart(13:20-13:21),StringPart(13:21-13:26),StringEnd(13:26-13:27),CloseRound(13:27-13:28),
+LowerIdent(16:5-16:8),OpAssign(16:9-16:10),LowerIdent(16:11-16:19),NoSpaceOpenRound(16:19-16:20),OpenSquare(16:20-16:21),Int(16:21-16:22),Comma(16:22-16:23),Int(16:24-16:25),Comma(16:25-16:26),Int(16:27-16:28),CloseSquare(16:28-16:29),CloseRound(16:29-16:30),
+OpenCurly(18:5-18:6),CloseCurly(18:6-18:7),
 CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # PARSE

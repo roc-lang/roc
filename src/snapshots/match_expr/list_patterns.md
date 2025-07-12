@@ -77,9 +77,9 @@ If you don't need this variable, prefix it with an underscore like `_first` to s
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),Newline(1:1-1:1),
-OpenSquare(2:5-2:6),CloseSquare(2:6-2:7),OpFatArrow(2:8-2:10),LowerIdent(2:11-2:14),Newline(1:1-1:1),
-OpenSquare(3:5-3:6),LowerIdent(3:6-3:11),Comma(3:11-3:12),DoubleDot(3:13-3:15),LowerIdent(3:15-3:19),CloseSquare(3:19-3:20),OpFatArrow(3:21-3:23),Int(3:24-3:25),Newline(3:27-3:61),
+KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),
+OpenSquare(2:5-2:6),CloseSquare(2:6-2:7),OpFatArrow(2:8-2:10),LowerIdent(2:11-2:14),
+OpenSquare(3:5-3:6),LowerIdent(3:6-3:11),Comma(3:11-3:12),DoubleDot(3:13-3:15),LowerIdent(3:15-3:19),CloseSquare(3:19-3:20),OpFatArrow(3:21-3:23),Int(3:24-3:25),
 CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE

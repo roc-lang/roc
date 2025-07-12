@@ -41,11 +41,11 @@ If you don't need this variable, prefix it with an underscore like `_middle` to 
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),
-OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),Comma(2:11-2:12),DoubleDot(2:13-2:15),Comma(2:15-2:16),LowerIdent(2:17-2:21),CloseSquare(2:21-2:22),OpFatArrow(2:23-2:25),LowerIdent(2:26-2:31),OpPlus(2:32-2:33),LowerIdent(2:34-2:38),Newline(1:1-1:1),
-OpenSquare(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:10),Comma(3:10-3:11),DoubleDot(3:12-3:14),KwAs(3:15-3:17),LowerIdent(3:18-3:24),Comma(3:24-3:25),LowerIdent(3:26-3:27),Comma(3:27-3:28),LowerIdent(3:29-3:30),CloseSquare(3:30-3:31),OpFatArrow(3:32-3:34),LowerIdent(3:35-3:36),OpPlus(3:37-3:38),LowerIdent(3:39-3:40),OpPlus(3:41-3:42),LowerIdent(3:43-3:44),OpPlus(3:45-3:46),LowerIdent(3:47-3:48),Newline(1:1-1:1),
-OpenSquare(4:5-4:6),LowerIdent(4:6-4:12),CloseSquare(4:12-4:13),OpFatArrow(4:14-4:16),LowerIdent(4:17-4:23),Newline(1:1-1:1),
-OpenSquare(5:5-5:6),CloseSquare(5:6-5:7),OpFatArrow(5:8-5:10),Int(5:11-5:12),Newline(1:1-1:1),
+KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),
+OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),Comma(2:11-2:12),DoubleDot(2:13-2:15),Comma(2:15-2:16),LowerIdent(2:17-2:21),CloseSquare(2:21-2:22),OpFatArrow(2:23-2:25),LowerIdent(2:26-2:31),OpPlus(2:32-2:33),LowerIdent(2:34-2:38),
+OpenSquare(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:10),Comma(3:10-3:11),DoubleDot(3:12-3:14),KwAs(3:15-3:17),LowerIdent(3:18-3:24),Comma(3:24-3:25),LowerIdent(3:26-3:27),Comma(3:27-3:28),LowerIdent(3:29-3:30),CloseSquare(3:30-3:31),OpFatArrow(3:32-3:34),LowerIdent(3:35-3:36),OpPlus(3:37-3:38),LowerIdent(3:39-3:40),OpPlus(3:41-3:42),LowerIdent(3:43-3:44),OpPlus(3:45-3:46),LowerIdent(3:47-3:48),
+OpenSquare(4:5-4:6),LowerIdent(4:6-4:12),CloseSquare(4:12-4:13),OpFatArrow(4:14-4:16),LowerIdent(4:17-4:23),
+OpenSquare(5:5-5:6),CloseSquare(5:6-5:7),OpFatArrow(5:8-5:10),Int(5:11-5:12),
 CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # PARSE

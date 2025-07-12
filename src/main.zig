@@ -7,9 +7,9 @@ const fmt = @import("fmt.zig");
 const base = @import("base.zig");
 const collections = @import("collections.zig");
 const reporting = @import("reporting.zig");
-const load = @import("load/mod.zig");
-const cache = @import("cache/mod.zig");
-const canonicalize = @import("check/canonicalize.zig");
+const build_options = @import("build_options");
+// const coordinate = @import("coordinate.zig");
+const coordinate_simple = @import("coordinate_simple.zig");
 
 const tracy = @import("tracy.zig");
 const Filesystem = @import("fs/Filesystem.zig");
@@ -63,7 +63,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         .format => |format_args| rocFormat(gpa, arena, format_args),
         .test_cmd => |test_args| rocTest(gpa, test_args),
         .repl => rocRepl(gpa),
-        .version => rocVersion(gpa),
+        .version => try stdout.print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(gpa, docs_args),
         .help => |help_message| stdout.writeAll(help_message),
         .licenses => stdout.writeAll(legalDetailsFileContent),
@@ -125,15 +125,21 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     try std.io.getStdOut().writer().print(".\n", .{});
 }
 
-fn rocVersion(gpa: Allocator) !void {
-    _ = gpa;
-    fatal("version not implemented", .{});
-}
-
 /// Helper function to format elapsed time, showing decimal milliseconds
 fn formatElapsedTime(writer: anytype, elapsed_ns: u64) !void {
     const elapsed_ms_float = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, @floatFromInt(std.time.ns_per_ms));
     try writer.print("{d:.1} ms", .{elapsed_ms_float});
+}
+
+fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noreturn {
+    stderr.print("Failed to check {s}: ", .{path}) catch {};
+    switch (err) {
+        error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
+        error.AccessDenied => stderr.print("Access denied\n", .{}) catch {},
+        error.FileReadError => stderr.print("Could not read file\n", .{}) catch {},
+        else => stderr.print("{}\n", .{err}) catch {},
+    }
+    std.process.exit(1);
 }
 
 fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
@@ -146,230 +152,119 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     var timer = try std.time.Timer.start();
 
-    // Initialize builder configuration
-    const cache_config = cache.CacheConfig{
+    // Initialize cache if enabled
+    const cache_config = CacheConfig{
         .enabled = !args.no_cache,
         .verbose = args.verbose,
     };
 
-    const builder_config = load.Builder.Config{
-        .allocator = gpa,
-        .filesystem = Filesystem.default(),
-        .mode = .single_threaded,
-        .cache_config = cache_config,
-    };
+    var cache_manager = if (cache_config.enabled) blk: {
+        const manager = CacheManager.init(gpa, cache_config, Filesystem.default());
+        break :blk manager;
+    } else null;
 
-    // Create and initialize the builder
-    var builder = try load.Builder.init(builder_config);
+    // Process the file and get Reports
+    var process_result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path, if (cache_manager) |*cm| cm else null, args.time) catch |err| handleProcessFileError(err, stderr, args.path);
 
-    // Build the module
-    builder.build(args.path) catch |err| {
-        stderr.print("Failed to check {s}: {}\n", .{ args.path, err }) catch {};
-        builder.deinit();
-        std.process.exit(1);
-    };
+    defer process_result.deinit(gpa);
 
     const elapsed = timer.read();
 
-    // Collect all diagnostics from all modules
-    var all_reports = std.ArrayList(reporting.Report).init(gpa);
-    defer {
-        for (all_reports.items) |*report| {
-            report.deinit();
+    // Print cache statistics if verbose
+    if (cache_manager) |*cm| {
+        if (args.verbose) {
+            cm.printStats(gpa);
         }
-        all_reports.deinit();
     }
 
-    var total_errors: u32 = 0;
-    var total_warnings: u32 = 0;
-    var was_cached = false;
+    // Handle cached results vs fresh compilation results differently
+    if (process_result.was_cached) {
+        // For cached results, use the stored diagnostic counts
+        const total_errors = process_result.error_count;
+        const total_warnings = process_result.warning_count;
 
-    // Process diagnostics while builder is still alive
-    {
-        // Check if we have a module
-        if (builder.getModule(0)) |module| {
-            switch (module.phase_data) {
-                .created, .parsed => {
-                    // Module didn't make it past parsing
-                },
-                .canonicalized => |canon_data| {
-                    // Count errors and warnings from canonicalization
-                    total_errors += canon_data.error_count;
-                    total_warnings += canon_data.warning_count;
-                    was_cached = canon_data.was_cached;
-                },
-                .type_checked => |tc_data| {
-                    // Count errors and warnings from both phases
-                    total_errors += tc_data.canonicalize_error_count;
-                    total_warnings += tc_data.canonicalize_warning_count;
-                    total_errors += tc_data.type_error_count;
-                    was_cached = false; // Type checked means fresh compilation
-                },
-            }
+        if (total_errors > 0 or total_warnings > 0) {
+            stderr.print("Found {} error(s) and {} warning(s) in ", .{
+                total_errors,
+                total_warnings,
+            }) catch {};
+            formatElapsedTime(stderr, elapsed) catch {};
+            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).\n", .{args.path}) catch {};
+            std.process.exit(1);
+        } else {
+            stdout.print("No errors found in ", .{}) catch {};
+            formatElapsedTime(stdout, elapsed) catch {};
+            stdout.print(" for {s} (loaded from cache)\n", .{args.path}) catch {};
+        }
+    } else {
+        // For fresh compilation, process and display reports normally
+        if (process_result.reports.len > 0) {
+            var fatal_errors: usize = 0;
+            var runtime_errors: usize = 0;
+            var warnings: usize = 0;
 
-            // If loaded from cache, we're done with counting
-            if (was_cached) {
-                // For cached results, we don't generate detailed reports
-                // The user can use --no-cache to see detailed errors
-            } else {
-                // For fresh compilation, get AST for detailed error reporting
-                const ast = switch (module.phase_data) {
-                    .created => unreachable,
-                    .parsed => |data| data.ast,
-                    .canonicalized => |data| data.ast,
-                    .type_checked => |data| data.ast,
+            // Render each report
+            for (process_result.reports) |*report| {
+
+                // Render the diagnostic report to stderr
+                reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+                    stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
+                    // Fallback to just printing the title
+                    stderr.print("  {s}\n", .{report.title}) catch {};
                 };
 
-                // Make a copy of the filename to ensure it's not freed memory
-                const filename = try gpa.dupe(u8, module.module_path);
-                defer gpa.free(filename);
-
-                // Count parse errors
-                const tokenize_error_count = ast.tokenize_diagnostics.items.len;
-                const parse_error_count = ast.parse_diagnostics.items.len;
-                total_errors += @intCast(tokenize_error_count + parse_error_count);
-
-                // Convert tokenize diagnostics to reports
-                if (tokenize_error_count > 0) {
-                    for (ast.tokenize_diagnostics.items) |diagnostic| {
-                        const report = ast.tokenizeDiagnosticToReport(diagnostic, gpa) catch |err| {
-                            stderr.print("Error converting tokenize diagnostic to report: {}\n", .{err}) catch {};
-                            continue;
-                        };
-                        try all_reports.append(report);
-                    }
-                }
-
-                // Convert parse diagnostics to reports
-                if (parse_error_count > 0) {
-                    for (ast.parse_diagnostics.items) |diagnostic| {
-                        const report = ast.parseDiagnosticToReport(module.env, diagnostic, gpa, filename) catch |err| {
-                            stderr.print("Error converting parse diagnostic to report: {}\n", .{err}) catch {};
-                            continue;
-                        };
-                        try all_reports.append(report);
-                    }
-                }
-
-                // If there were no parse errors, convert CIR diagnostics
-                if (tokenize_error_count == 0 and parse_error_count == 0 and (total_errors > 0 or total_warnings > 0)) {
-                    // Get diagnostics from canonicalized or type checked phase
-                    const diagnostics = switch (module.phase_data) {
-                        .created, .parsed => unreachable,
-                        .canonicalized => |data| data.diagnostics,
-                        .type_checked => blk: {
-                            // For type checked, we might want both canon and type diagnostics
-                            // For now, just use empty since type errors aren't converted to reports yet
-                            break :blk &[_]canonicalize.CIR.Diagnostic{};
-                        },
-                    };
-
-                    const cir = switch (module.phase_data) {
-                        .created, .parsed => unreachable,
-                        .canonicalized => |data| data.cir,
-                        .type_checked => |data| data.cir,
-                    };
-
-                    for (diagnostics) |diagnostic| {
-                        // Create report with owned data to avoid dangling references
-                        const report = @constCast(cir).diagnosticToReport(diagnostic, gpa, module.env.source, filename) catch |err| {
-                            stderr.print("Error converting diagnostic to report: {}\n", .{err}) catch {};
-                            continue;
-                        };
-                        try all_reports.append(report);
-                    }
+                switch (report.severity) {
+                    .info => {}, // Informational messages don't affect error/warning counts
+                    .runtime_error => {
+                        runtime_errors += 1;
+                    },
+                    .fatal => {
+                        fatal_errors += 1;
+                    },
+                    .warning => {
+                        warnings += 1;
+                    },
                 }
             }
-        } else {
-            // No module found - file not found or other error
-            stderr.print("Error: Failed to load {s}\n", .{args.path}) catch {};
-            builder.deinit();
+            stderr.writeAll("\n") catch {};
+
+            stderr.print("Found {} error(s) and {} warning(s) in ", .{
+                (fatal_errors + runtime_errors),
+                warnings,
+            }) catch {};
+            formatElapsedTime(stderr, elapsed) catch {};
+            stderr.print(" for {s}.\n", .{args.path}) catch {};
+
             std.process.exit(1);
+        } else {
+            stdout.print("No errors found in ", .{}) catch {};
+            formatElapsedTime(stdout, elapsed) catch {};
+            stdout.print(" for {s}\n", .{args.path}) catch {};
         }
     }
 
-    // If we only got to parse phase, handle parse errors
-    if (builder.getModule(0)) |module| {
-        if (module.phase_data == .parsed) {
-            const ast = module.phase_data.parsed.ast;
-            // Make a copy of the filename to ensure it's not freed memory
-            const filename = try gpa.dupe(u8, module.module_path);
-            defer gpa.free(filename);
+    printTimingBreakdown(stderr, process_result.timing);
+}
 
-            // Count parse errors
-            const tokenize_error_count = ast.tokenize_diagnostics.items.len;
-            const parse_error_count = ast.parse_diagnostics.items.len;
-            total_errors += @intCast(tokenize_error_count + parse_error_count);
-
-            // Convert tokenize diagnostics to reports
-            if (tokenize_error_count > 0) {
-                for (ast.tokenize_diagnostics.items) |diagnostic| {
-                    const report = ast.tokenizeDiagnosticToReport(diagnostic, gpa) catch |err| {
-                        stderr.print("Error converting tokenize diagnostic to report: {}\n", .{err}) catch {};
-                        continue;
-                    };
-                    try all_reports.append(report);
-                }
-            }
-
-            // Convert parse diagnostics to reports
-            if (parse_error_count > 0) {
-                for (ast.parse_diagnostics.items) |diagnostic| {
-                    const report = ast.parseDiagnosticToReport(module.env, diagnostic, gpa, filename) catch |err| {
-                        stderr.print("Error converting parse diagnostic to report: {}\n", .{err}) catch {};
-                        continue;
-                    };
-                    try all_reports.append(report);
-                }
-            }
-        }
+fn printTimingBreakdown(writer: anytype, timing: ?coordinate_simple.TimingInfo) void {
+    if (timing) |t| {
+        writer.print("\nTiming breakdown:\n", .{}) catch {};
+        writer.print("  tokenize + parse:             ", .{}) catch {};
+        formatElapsedTime(writer, t.tokenize_parse_ns) catch {};
+        writer.print("\n", .{}) catch {};
+        writer.print("  canonicalize:                 ", .{}) catch {};
+        formatElapsedTime(writer, t.canonicalize_ns) catch {};
+        writer.print("\n", .{}) catch {};
+        writer.print("  can diagnostics:              ", .{}) catch {};
+        formatElapsedTime(writer, t.canonicalize_diagnostics_ns) catch {};
+        writer.print("\n", .{}) catch {};
+        writer.print("  type checking:                ", .{}) catch {};
+        formatElapsedTime(writer, t.type_checking_ns) catch {};
+        writer.print("\n", .{}) catch {};
+        writer.print("  type checking diagnostics:    ", .{}) catch {};
+        formatElapsedTime(writer, t.check_diagnostics_ns) catch {};
+        writer.print("\n", .{}) catch {};
     }
-
-    // Print cache statistics if verbose
-    if (args.verbose and cache_config.enabled) {
-        builder.cache_manager.printStats(gpa);
-    }
-
-    // Display results
-    if (was_cached and (total_errors > 0 or total_warnings > 0)) {
-        // For cached results with errors, just show the count
-        stderr.print("Found {} error(s) and {} warning(s) in ", .{
-            total_errors,
-            total_warnings,
-        }) catch {};
-        formatElapsedTime(stderr, elapsed) catch {};
-        stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).\n", .{args.path}) catch {};
-        std.process.exit(1);
-    } else if (all_reports.items.len > 0) {
-        // For fresh compilation, display the reports
-        for (all_reports.items) |*report| {
-            // Render the diagnostic report to stderr
-            reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
-                stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
-                // Fallback to just printing the title
-                stderr.print("  {s}\n", .{report.title}) catch {};
-            };
-        }
-        stderr.writeAll("\n") catch {};
-
-        stderr.print("Found {} error(s) and {} warning(s) in ", .{
-            total_errors,
-            total_warnings,
-        }) catch {};
-        formatElapsedTime(stderr, elapsed) catch {};
-        stderr.print(" for {s}.\n", .{args.path}) catch {};
-        std.process.exit(1);
-    } else {
-        // No errors found
-        stdout.print("No errors found in ", .{}) catch {};
-        formatElapsedTime(stdout, elapsed) catch {};
-        const cache_status = if (was_cached) " (loaded from cache)" else "";
-        stdout.print(" for {s}{s}\n", .{ args.path, cache_status }) catch {};
-    }
-
-    // Clean up the builder after we're done rendering reports
-    // This must be done after rendering because reports contain references to source text
-    builder.deinit();
 }
 
 fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {

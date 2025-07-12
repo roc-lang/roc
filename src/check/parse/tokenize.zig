@@ -26,8 +26,6 @@ pub const Token = struct {
     pub const Tag = enum(u8) {
         EndOfFile,
 
-        Newline,
-
         // primitives
         Float,
         StringStart, // the " that starts a string
@@ -190,7 +188,6 @@ pub const Token = struct {
             // This function explicitly lists all variants to ensure new malformed nodes aren't missed.
             return switch (tok) {
                 .EndOfFile,
-                .Newline,
                 .Float,
                 .StringStart,
                 .StringEnd,
@@ -990,18 +987,6 @@ pub const Tokenizer = struct {
         }) catch |err| exitOnOom(err);
     }
 
-    fn pushNewlineHere(self: *Tokenizer, comment: ?Comment) void {
-        var token = Token{
-            .tag = .Newline,
-            // TODO: should it be zero region?
-            .extra = .{ .region = base.Region.zero() },
-        };
-        if (comment) |c| {
-            token.extra = .{ .region = c.region };
-        }
-        self.output.tokens.append(self.env.gpa, token) catch |err| exitOnOom(err);
-    }
-
     fn pushTokenInternedHere(
         self: *Tokenizer,
         tag: Token.Tag,
@@ -1077,9 +1062,7 @@ pub const Tokenizer = struct {
             switch (b) {
                 // Whitespace & control characters
                 0...32, '#' => {
-                    if (self.cursor.chompTrivia()) |_| {
-                        self.pushNewlineHere(self.cursor.popComment());
-                    }
+                    _ = self.cursor.chompTrivia();
                     sawWhitespace = true;
                 },
 
@@ -1674,13 +1657,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
     var prev_token_tag: Token.Tag = .EndOfFile; // placeholder
     for (0..tokens.tokens.len) |token_index| {
         const token = tokens.tokens.get(token_index);
-        // EndOfFile and NewLine are special, handle them early.
-        // Unlike other tokens they do not store a correct offset and length
-        // EndOfFile consumes the entire file. Newline stores the indentation level of the next line.
-        if (token.tag == .Newline) {
-            // Newlines will be copied with other whitespace
-            continue;
-        }
+        // EndOfFile is special, handle it early.
+        // Unlike other tokens it does not store a correct offset and length
+        // EndOfFile consumes the entire file.
 
         // Copy over limited whitespace.
         // TODO: Long term, we should switch to dummy whitespace, but currently, Roc still has WSS.
@@ -1703,7 +1682,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
         last_end = region.end.offset;
         const length = region.end.offset - region.start.offset;
         switch (token.tag) {
-            .EndOfFile, .Newline => unreachable,
+            .EndOfFile => unreachable,
 
             .Float => {
                 try buf2.append(alloc, '0');
@@ -2161,7 +2140,7 @@ test "tokenizer" {
         \\"""abc
         \\"""def
     ,
-        &[_]Token.Tag{ .MultilineStringStart, .StringPart, .Newline, .MultilineStringStart, .StringPart },
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart, .MultilineStringStart, .StringPart },
     );
     try testTokenization(
         gpa,
@@ -2181,7 +2160,6 @@ test "tokenizer" {
             .LowerIdent,
             .CloseStringInterpolation,
             .StringPart,
-            .Newline,
             .MultilineStringStart,
             .StringPart,
         },

@@ -11,23 +11,24 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:15:1:15
+UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:15:2:6
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:2:8:2:10
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:9
+UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:3:6
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:10
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:9
+UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:4:2
 UNDEFINED VARIABLE - record_builder.md:1:3:1:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **<-
+    x** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_builder.md:1:15:1:15:**
+**record_builder.md:1:15:2:6:**
 ```roc
 { Foo.Bar.baz <-
+    x: 5,
 ```
-              
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -43,15 +44,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+    y** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_builder.md:2:9:2:9:**
+**record_builder.md:2:9:3:6:**
 ```roc
     x: 5,
+    y: 0,
 ```
-        
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -67,15 +69,16 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **,
+}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_builder.md:3:9:3:9:**
+**record_builder.md:3:9:4:2:**
 ```roc
     y: 0,
+}
 ```
-        
 
 
 **UNDEFINED VARIABLE**
@@ -97,9 +100,9 @@ This type annotation is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDotLowerIdent(1:10-1:14),OpBackArrow(1:15-1:17),Newline(1:1-1:1),
-LowerIdent(2:5-2:6),OpColon(2:6-2:7),Int(2:8-2:9),Comma(2:9-2:10),Newline(1:1-1:1),
-LowerIdent(3:5-3:6),OpColon(3:6-3:7),Int(3:8-3:9),Comma(3:9-3:10),Newline(1:1-1:1),
+OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDotLowerIdent(1:10-1:14),OpBackArrow(1:15-1:17),
+LowerIdent(2:5-2:6),OpColon(2:6-2:7),Int(2:8-2:9),Comma(2:9-2:10),
+LowerIdent(3:5-3:6),OpColon(3:6-3:7),Int(3:8-3:9),Comma(3:9-3:10),
 CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
@@ -107,13 +110,13 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 (e-block @1.1-4.2
 	(statements
 		(e-ident @1.3-1.14 (raw "Foo.Bar.baz"))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @1.15-2.6 (reason "expr_unexpected_token"))
 		(s-type-anno @2.5-2.10 (name "x")
 			(ty-malformed @2.8-2.10 (tag "ty_anno_unexpected_token")))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @2.9-3.6 (reason "expr_unexpected_token"))
 		(s-type-anno @3.5-3.10 (name "y")
 			(ty-malformed @3.8-3.10 (tag "ty_anno_unexpected_token")))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))))
+		(e-malformed @3.9-4.2 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

@@ -69,13 +69,13 @@ If you don't need this variable, prefix it with an underscore like `_more` to su
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:11),OpenCurly(1:12-1:13),Newline(1:1-1:1),
-OpenSquare(2:5-2:6),CloseSquare(2:6-2:7),OpFatArrow(2:8-2:10),Int(2:11-2:12),Newline(1:1-1:1),
-OpenSquare(3:5-3:6),LowerIdent(3:6-3:7),CloseSquare(3:7-3:8),OpFatArrow(3:9-3:11),LowerIdent(3:12-3:13),Newline(1:1-1:1),
-OpenSquare(4:5-4:6),LowerIdent(4:6-4:11),Comma(4:11-4:12),LowerIdent(4:13-4:19),CloseSquare(4:19-4:20),OpFatArrow(4:21-4:23),LowerIdent(4:24-4:29),OpPlus(4:30-4:31),LowerIdent(4:32-4:38),Newline(1:1-1:1),
-OpenSquare(5:5-5:6),LowerIdent(5:6-5:10),Comma(5:10-5:11),DoubleDot(5:12-5:14),KwAs(5:15-5:17),LowerIdent(5:18-5:22),CloseSquare(5:22-5:23),OpFatArrow(5:24-5:26),LowerIdent(5:27-5:31),Newline(1:1-1:1),
-OpenSquare(6:5-6:6),UpperIdent(6:6-6:9),Comma(6:9-6:10),UpperIdent(6:11-6:14),Comma(6:14-6:15),DoubleDot(6:16-6:18),KwAs(6:19-6:21),LowerIdent(6:22-6:26),CloseSquare(6:26-6:27),OpFatArrow(6:28-6:30),Int(6:31-6:32),Newline(1:1-1:1),
-OpenSquare(7:5-7:6),LowerIdent(7:6-7:7),Comma(7:7-7:8),LowerIdent(7:9-7:10),Comma(7:10-7:11),LowerIdent(7:12-7:13),Comma(7:13-7:14),DoubleDot(7:15-7:17),KwAs(7:18-7:20),LowerIdent(7:21-7:25),CloseSquare(7:25-7:26),OpFatArrow(7:27-7:29),LowerIdent(7:30-7:31),OpPlus(7:32-7:33),LowerIdent(7:34-7:35),OpPlus(7:36-7:37),LowerIdent(7:38-7:39),Newline(1:1-1:1),
+KwMatch(1:1-1:6),LowerIdent(1:7-1:11),OpenCurly(1:12-1:13),
+OpenSquare(2:5-2:6),CloseSquare(2:6-2:7),OpFatArrow(2:8-2:10),Int(2:11-2:12),
+OpenSquare(3:5-3:6),LowerIdent(3:6-3:7),CloseSquare(3:7-3:8),OpFatArrow(3:9-3:11),LowerIdent(3:12-3:13),
+OpenSquare(4:5-4:6),LowerIdent(4:6-4:11),Comma(4:11-4:12),LowerIdent(4:13-4:19),CloseSquare(4:19-4:20),OpFatArrow(4:21-4:23),LowerIdent(4:24-4:29),OpPlus(4:30-4:31),LowerIdent(4:32-4:38),
+OpenSquare(5:5-5:6),LowerIdent(5:6-5:10),Comma(5:10-5:11),DoubleDot(5:12-5:14),KwAs(5:15-5:17),LowerIdent(5:18-5:22),CloseSquare(5:22-5:23),OpFatArrow(5:24-5:26),LowerIdent(5:27-5:31),
+OpenSquare(6:5-6:6),UpperIdent(6:6-6:9),Comma(6:9-6:10),UpperIdent(6:11-6:14),Comma(6:14-6:15),DoubleDot(6:16-6:18),KwAs(6:19-6:21),LowerIdent(6:22-6:26),CloseSquare(6:26-6:27),OpFatArrow(6:28-6:30),Int(6:31-6:32),
+OpenSquare(7:5-7:6),LowerIdent(7:6-7:7),Comma(7:7-7:8),LowerIdent(7:9-7:10),Comma(7:10-7:11),LowerIdent(7:12-7:13),Comma(7:13-7:14),DoubleDot(7:15-7:17),KwAs(7:18-7:20),LowerIdent(7:21-7:25),CloseSquare(7:25-7:26),OpFatArrow(7:27-7:29),LowerIdent(7:30-7:31),OpPlus(7:32-7:33),LowerIdent(7:34-7:35),OpPlus(7:36-7:37),LowerIdent(7:38-7:39),
 CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # PARSE

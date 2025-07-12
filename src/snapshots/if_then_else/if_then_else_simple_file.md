@@ -14,70 +14,50 @@ foo = if 1 A
     }
 ~~~
 # EXPECTED
-PARSE ERROR - if_then_else_simple_file.md:1:1:1:1
-UNEXPECTED TOKEN IN EXPRESSION - if_then_else_simple_file.md:5:5:5:11
-INVALID STATEMENT - if_then_else_simple_file.md:5:5:5:11
-INVALID STATEMENT - if_then_else_simple_file.md:5:10:7:6
+INVALID IF CONDITION - if_then_else_simple_file.md:3:10:3:10
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `no_else`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**if_then_else_simple_file.md:1:1:1:1:**
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**if_then_else_simple_file.md:3:10:**
 ```roc
-module [foo]
+foo = if 1 A
 ```
+         ^
 
+Right now, it has the type:
+    _Num(*)_
 
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **else {** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**if_then_else_simple_file.md:5:5:5:11:**
+**INCOMPATIBLE IF BRANCHES**
+This `if` has an `else` branch with a different type from it's `then` branch:
+**if_then_else_simple_file.md:3:7:**
 ```roc
-    else {
-```
-    ^^^^^^
+foo = if 1 A
 
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**if_then_else_simple_file.md:5:5:5:11:**
-```roc
-    else {
-```
-    ^^^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**if_then_else_simple_file.md:5:10:7:6:**
-```roc
     else {
 	"hello"
     }
 ```
+ ^^^^^^^
 
+The `else` branch has the type:
+    _Str_
+
+But the `then` branch has the type:
+    _[A]*_
+
+All branches in an `if` must have compatible types.
+
+Note: You can wrap branches in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:4),OpAssign(3:5-3:6),KwIf(3:7-3:9),Int(3:10-3:11),UpperIdent(3:12-3:13),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwElse(5:5-5:9),OpenCurly(5:10-5:11),Newline(1:1-1:1),
-StringStart(6:2-6:3),StringPart(6:3-6:8),StringEnd(6:8-6:9),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
+LowerIdent(3:1-3:4),OpAssign(3:5-3:6),KwIf(3:7-3:9),Int(3:10-3:11),UpperIdent(3:12-3:13),
+KwElse(5:5-5:9),OpenCurly(5:10-5:11),
+StringStart(6:2-6:3),StringPart(6:3-6:8),StringEnd(6:8-6:9),
 CloseCurly(7:5-7:6),EndOfFile(7:6-7:6),
 ~~~
 # PARSE
@@ -87,31 +67,40 @@ CloseCurly(7:5-7:6),EndOfFile(7:6-7:6),
 		(exposes @1.8-1.13
 			(exposed-lower-ident (text "foo"))))
 	(statements
-		(s-decl @1.1-1.1
+		(s-decl @3.1-7.6
 			(p-ident @3.1-3.4 (raw "foo"))
-			(e-malformed @1.1-1.1 (reason "no_else")))
-		(e-malformed @5.5-5.11 (reason "expr_unexpected_token"))
-		(e-block @5.10-7.6
-			(statements
-				(e-string @6.2-6.9
-					(e-string-part @6.3-6.8 (raw "hello")))))))
+			(e-if-then-else @3.7-7.6
+				(e-int @3.10-3.11 (raw "1"))
+				(e-tag @3.12-3.13 (raw "A"))
+				(e-block @5.10-7.6
+					(statements
+						(e-string @6.2-6.9
+							(e-string-part @6.3-6.8 (raw "hello")))))))))
 ~~~
 # FORMATTED
 ~~~roc
 module [foo]
 
-foo = 
+foo = if 1 A
 
-{
-	"hello"
-}
+	else {
+		"hello"
+	}
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign @3.1-3.4 (ident "foo"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+		(e-if @3.7-7.6
+			(if-branches
+				(if-branch
+					(e-int @3.10-3.11 (value "1"))
+					(e-tag @3.12-3.13 (name "A"))))
+			(if-else
+				(e-block @5.10-7.6
+					(e-string @6.2-6.9
+						(e-literal @6.3-6.8 (string "hello"))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -119,5 +108,5 @@ foo =
 	(defs
 		(patt @3.1-3.4 (type "Error")))
 	(expressions
-		(expr @1.1-1.1 (type "Error"))))
+		(expr @3.7-7.6 (type "Error"))))
 ~~~

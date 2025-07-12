@@ -29,12 +29,12 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),Newline(1:5-1:22),
-LowerIdent(2:2-2:6),Newline(1:1-1:1),
-OpenCurly(3:3-3:4),Newline(1:1-1:1),
-Int(4:4-4:5),Newline(1:1-1:1),
-CloseCurly(5:3-5:4),KwElse(5:5-5:9),OpenCurly(5:10-5:11),Newline(1:1-1:1),
-Int(6:4-6:5),Newline(1:1-1:1),
+KwIf(1:1-1:3),
+LowerIdent(2:2-2:6),
+OpenCurly(3:3-3:4),
+Int(4:4-4:5),
+CloseCurly(5:3-5:4),KwElse(5:5-5:9),OpenCurly(5:10-5:11),
+Int(6:4-6:5),
 CloseCurly(7:3-7:4),EndOfFile(7:4-7:4),
 ~~~
 # PARSE

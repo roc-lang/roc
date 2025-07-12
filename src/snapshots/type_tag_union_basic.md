@@ -56,23 +56,19 @@ But you are trying to use it as:
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:8),OpColon(3:9-3:10),OpenSquare(3:11-3:12),UpperIdent(3:12-3:16),NoSpaceOpenRound(3:16-3:17),UpperIdent(3:17-3:20),CloseRound(3:20-3:21),Comma(3:21-3:22),UpperIdent(3:23-3:27),CloseSquare(3:27-3:28),OpArrow(3:29-3:31),UpperIdent(3:32-3:35),Newline(1:1-1:1),
-LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:17),OpBar(4:17-4:18),StringStart(4:19-4:20),StringPart(4:20-4:26),StringEnd(4:26-4:27),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(6:1-6:27),OpColon(6:28-6:29),OpenSquare(6:30-6:31),UpperIdent(6:31-6:33),NoSpaceOpenRound(6:33-6:34),LowerIdent(6:34-6:36),CloseRound(6:36-6:37),Comma(6:37-6:38),UpperIdent(6:39-6:42),NoSpaceOpenRound(6:42-6:43),LowerIdent(6:43-6:46),CloseRound(6:46-6:47),CloseSquare(6:47-6:48),OpArrow(6:49-6:51),UpperIdent(6:52-6:56),Newline(1:1-1:1),
-LowerIdent(7:1-7:27),OpAssign(7:28-7:29),OpBar(7:30-7:31),LowerIdent(7:31-7:37),OpBar(7:37-7:38),KwMatch(7:39-7:44),LowerIdent(7:45-7:51),OpenCurly(7:52-7:53),Newline(1:1-1:1),
-UpperIdent(8:5-8:7),NoSpaceOpenRound(8:7-8:8),Underscore(8:8-8:9),CloseRound(8:9-8:10),OpFatArrow(8:11-8:13),UpperIdent(8:14-8:18),Newline(1:1-1:1),
-UpperIdent(9:5-9:8),NoSpaceOpenRound(9:8-9:9),Underscore(9:9-9:10),CloseRound(9:10-9:11),OpFatArrow(9:12-9:14),UpperIdent(9:15-9:20),Newline(1:1-1:1),
-CloseCurly(10:1-10:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(12:1-12:15),OpColon(12:16-12:17),OpenSquare(12:18-12:19),UpperIdent(12:19-12:21),NoSpaceOpenRound(12:21-12:22),LowerIdent(12:22-12:25),CloseRound(12:25-12:26),Comma(12:26-12:27),UpperIdent(12:28-12:31),NoSpaceOpenRound(12:31-12:32),LowerIdent(12:32-12:36),CloseRound(12:36-12:37),CloseSquare(12:37-12:38),OpArrow(12:39-12:41),UpperIdent(12:42-12:46),Newline(1:1-1:1),
-LowerIdent(13:1-13:15),OpAssign(13:16-13:17),OpBar(13:18-13:19),LowerIdent(13:19-13:25),OpBar(13:25-13:26),KwMatch(13:27-13:32),LowerIdent(13:33-13:39),OpenCurly(13:40-13:41),Newline(1:1-1:1),
-UpperIdent(14:5-14:7),NoSpaceOpenRound(14:7-14:8),Underscore(14:8-14:9),CloseRound(14:9-14:10),OpFatArrow(14:11-14:13),UpperIdent(14:14-14:18),NoSpaceDotUpperIdent(14:18-14:23),Newline(1:1-1:1),
-UpperIdent(15:5-15:8),NoSpaceOpenRound(15:8-15:9),Underscore(15:9-15:10),CloseRound(15:10-15:11),OpFatArrow(15:12-15:14),UpperIdent(15:15-15:19),NoSpaceDotUpperIdent(15:19-15:25),Newline(1:1-1:1),
-CloseCurly(16:1-16:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
+LowerIdent(3:1-3:8),OpColon(3:9-3:10),OpenSquare(3:11-3:12),UpperIdent(3:12-3:16),NoSpaceOpenRound(3:16-3:17),UpperIdent(3:17-3:20),CloseRound(3:20-3:21),Comma(3:21-3:22),UpperIdent(3:23-3:27),CloseSquare(3:27-3:28),OpArrow(3:29-3:31),UpperIdent(3:32-3:35),
+LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:17),OpBar(4:17-4:18),StringStart(4:19-4:20),StringPart(4:20-4:26),StringEnd(4:26-4:27),
+LowerIdent(6:1-6:27),OpColon(6:28-6:29),OpenSquare(6:30-6:31),UpperIdent(6:31-6:33),NoSpaceOpenRound(6:33-6:34),LowerIdent(6:34-6:36),CloseRound(6:36-6:37),Comma(6:37-6:38),UpperIdent(6:39-6:42),NoSpaceOpenRound(6:42-6:43),LowerIdent(6:43-6:46),CloseRound(6:46-6:47),CloseSquare(6:47-6:48),OpArrow(6:49-6:51),UpperIdent(6:52-6:56),
+LowerIdent(7:1-7:27),OpAssign(7:28-7:29),OpBar(7:30-7:31),LowerIdent(7:31-7:37),OpBar(7:37-7:38),KwMatch(7:39-7:44),LowerIdent(7:45-7:51),OpenCurly(7:52-7:53),
+UpperIdent(8:5-8:7),NoSpaceOpenRound(8:7-8:8),Underscore(8:8-8:9),CloseRound(8:9-8:10),OpFatArrow(8:11-8:13),UpperIdent(8:14-8:18),
+UpperIdent(9:5-9:8),NoSpaceOpenRound(9:8-9:9),Underscore(9:9-9:10),CloseRound(9:10-9:11),OpFatArrow(9:12-9:14),UpperIdent(9:15-9:20),
+CloseCurly(10:1-10:2),
+LowerIdent(12:1-12:15),OpColon(12:16-12:17),OpenSquare(12:18-12:19),UpperIdent(12:19-12:21),NoSpaceOpenRound(12:21-12:22),LowerIdent(12:22-12:25),CloseRound(12:25-12:26),Comma(12:26-12:27),UpperIdent(12:28-12:31),NoSpaceOpenRound(12:31-12:32),LowerIdent(12:32-12:36),CloseRound(12:36-12:37),CloseSquare(12:37-12:38),OpArrow(12:39-12:41),UpperIdent(12:42-12:46),
+LowerIdent(13:1-13:15),OpAssign(13:16-13:17),OpBar(13:18-13:19),LowerIdent(13:19-13:25),OpBar(13:25-13:26),KwMatch(13:27-13:32),LowerIdent(13:33-13:39),OpenCurly(13:40-13:41),
+UpperIdent(14:5-14:7),NoSpaceOpenRound(14:7-14:8),Underscore(14:8-14:9),CloseRound(14:9-14:10),OpFatArrow(14:11-14:13),UpperIdent(14:14-14:18),NoSpaceDotUpperIdent(14:18-14:23),
+UpperIdent(15:5-15:8),NoSpaceOpenRound(15:8-15:9),Underscore(15:9-15:10),CloseRound(15:10-15:11),OpFatArrow(15:12-15:14),UpperIdent(15:15-15:19),NoSpaceDotUpperIdent(15:19-15:25),
+CloseCurly(16:1-16:2),
 LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:11),OpBar(18:11-18:12),OpenCurly(18:13-18:14),CloseCurly(18:14-18:15),EndOfFile(18:15-18:15),
 ~~~
 # PARSE
@@ -89,7 +85,7 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @1.1-1.1 (name "process")
+		(s-type-anno @3.1-4.8 (name "process")
 			(ty-fn @3.11-3.35
 				(ty-tag-union @3.11-3.28
 					(tags
@@ -105,7 +101,7 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 					(p-ident @4.12-4.17 (raw "maybe")))
 				(e-string @4.19-4.27
 					(e-string-part @4.20-4.26 (raw "result")))))
-		(s-type-anno @1.1-1.1 (name "is_ok_ret_unqualified_bool")
+		(s-type-anno @6.1-7.27 (name "is_ok_ret_unqualified_bool")
 			(ty-fn @6.30-6.56
 				(ty-tag-union @6.30-6.48
 					(tags
@@ -124,15 +120,15 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 				(e-match
 					(e-ident @7.45-7.51 (raw "result"))
 					(branches
-						(branch @1.1-1.1
+						(branch @8.5-9.8
 							(p-tag @8.5-8.10 (raw "Ok")
 								(p-underscore))
 							(e-tag @8.14-8.18 (raw "True")))
-						(branch @1.1-1.1
+						(branch @9.5-10.2
 							(p-tag @9.5-9.11 (raw "Err")
 								(p-underscore))
 							(e-tag @9.15-9.20 (raw "False")))))))
-		(s-type-anno @1.1-1.1 (name "is_ok_ret_bool")
+		(s-type-anno @12.1-13.15 (name "is_ok_ret_bool")
 			(ty-fn @12.18-12.46
 				(ty-tag-union @12.18-12.38
 					(tags
@@ -151,11 +147,11 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 				(e-match
 					(e-ident @13.33-13.39 (raw "result"))
 					(branches
-						(branch @1.1-1.1
+						(branch @14.5-15.8
 							(p-tag @14.5-14.10 (raw "Ok")
 								(p-underscore))
 							(e-tag @14.14-14.23 (raw "Bool.True")))
-						(branch @1.1-1.1
+						(branch @15.5-16.2
 							(p-tag @15.5-15.11 (raw "Err")
 								(p-underscore))
 							(e-tag @15.15-15.25 (raw "Bool.False")))))))

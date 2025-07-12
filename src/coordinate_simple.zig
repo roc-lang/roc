@@ -20,6 +20,15 @@ const CacheConfig = cache_mod.CacheConfig;
 const CacheResult = cache_mod.CacheResult;
 const CacheHit = cache_mod.CacheHit;
 
+/// Timing information for different compilation phases
+pub const TimingInfo = struct {
+    tokenize_parse_ns: u64,
+    canonicalize_ns: u64,
+    canonicalize_diagnostics_ns: u64,
+    type_checking_ns: u64,
+    check_diagnostics_ns: u64,
+};
+
 /// Result of processing source code, containing both CIR and Reports
 /// for proper diagnostic reporting.
 ///
@@ -34,6 +43,7 @@ pub const ProcessResult = struct {
     cir: *CIR,
     reports: []reporting.Report,
     source: []const u8,
+    timing: ?TimingInfo = null,
     error_count: u32 = 0,
     warning_count: u32 = 0,
     was_cached: bool = false,
@@ -66,6 +76,7 @@ pub fn processFile(
     fs: Filesystem,
     filepath: []const u8,
     cache_manager: ?*CacheManager,
+    collect_timing: bool,
 ) !ProcessResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -75,6 +86,11 @@ pub fn processFile(
         error.FileNotFound => return error.FileNotFound,
         error.AccessDenied => return error.AccessDenied,
         else => return error.FileReadError,
+    };
+
+    const config = ProcessConfig{
+        .take_ownership = true,
+        .collect_timing = collect_timing,
     };
 
     // If caching is enabled, try cache first
@@ -102,19 +118,19 @@ pub fn processFile(
         }
 
         // Cache miss - process normally and store result
-        var result = try processSourceInternal(gpa, source, filepath, true);
-        result.was_cached = false;
+        var process_result = try processSourceInternal(gpa, source, filepath, config);
+        process_result.was_cached = false;
 
         // Store in cache (don't fail compilation if cache store fails)
-        cache.store(source, compiler_version, &result) catch |err| {
+        cache.store(source, compiler_version, &process_result) catch |err| {
             std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
         };
 
-        return result;
+        return process_result;
     }
 
     // No caching - process normally
-    return try processSourceInternal(gpa, source, filepath, true);
+    return try processSourceInternal(gpa, source, filepath, config);
 }
 
 /// Process source code directly and return both CIR and reports for proper reporting.
@@ -124,19 +140,50 @@ pub fn processFile(
 /// in memory (e.g., from tests, REPL, or other tools).
 ///
 /// The returned ProcessResult owns its own copy of the source.
+///
+/// `processSource` is used by the fuzzer.
 pub fn processSource(
     gpa: std.mem.Allocator,
     source: []const u8,
     filename: []const u8,
 ) !ProcessResult {
-    return try processSourceInternal(gpa, source, filename, false);
+    return try processSourceInternal(gpa, source, filename, .{ .take_ownership = false, .collect_timing = false });
+}
+
+/// Configuration for processSourceInternal
+pub const ProcessConfig = struct {
+    take_ownership: bool = false,
+    collect_timing: bool = false,
+};
+
+/// Helper function to collect timing information and reset timer
+fn collectTiming(config: ProcessConfig, timer: *?std.time.Timer, timing_info: *?TimingInfo, field: []const u8) void {
+    if (config.collect_timing and timer.* != null and timing_info.* != null) {
+        const elapsed = timer.*.?.read();
+        if (std.mem.eql(u8, field, "tokenize_parse_ns")) {
+            timing_info.*.?.tokenize_parse_ns = elapsed;
+        } else if (std.mem.eql(u8, field, "canonicalize_ns")) {
+            timing_info.*.?.canonicalize_ns = elapsed;
+        } else if (std.mem.eql(u8, field, "canonicalize_diagnostics_ns")) {
+            timing_info.*.?.canonicalize_diagnostics_ns = elapsed;
+        } else if (std.mem.eql(u8, field, "type_checking_ns")) {
+            timing_info.*.?.type_checking_ns = elapsed;
+        } else if (std.mem.eql(u8, field, "check_diagnostics_ns")) {
+            timing_info.*.?.check_diagnostics_ns = elapsed;
+        }
+        timer.*.?.reset();
+    }
 }
 
 /// Internal helper that processes source code and produces a ProcessResult.
 ///
-/// The take_ownership parameter controls memory management:
+/// The config.take_ownership parameter controls memory management:
 /// - true: Transfer ownership of 'source' to ProcessResult (no allocation)
 /// - false: Clone 'source' so ProcessResult has its own copy
+///
+/// The config.collect_timing parameter controls whether to collect timing information:
+/// - true: Collect timing information for each compilation phase
+/// - false: Skip timing collection for faster processing
 ///
 /// This design allows processFile to avoid an unnecessary copy while
 /// processSource can safely work with borrowed memory.
@@ -144,10 +191,24 @@ fn processSourceInternal(
     gpa: std.mem.Allocator,
     source: []const u8,
     filename: []const u8,
-    take_ownership: bool,
+    config: ProcessConfig,
 ) !ProcessResult {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    var timing_info: ?TimingInfo = null;
+    var timer: ?std.time.Timer = null;
+
+    if (config.collect_timing) {
+        timer = std.time.Timer.start() catch null;
+        timing_info = TimingInfo{
+            .tokenize_parse_ns = 0,
+            .canonicalize_ns = 0,
+            .canonicalize_diagnostics_ns = 0,
+            .type_checking_ns = 0,
+            .check_diagnostics_ns = 0,
+        };
+    }
 
     // Initialize the ModuleEnv (heap-allocated for ownership transfer)
     var module_env = try gpa.create(ModuleEnv);
@@ -181,6 +242,8 @@ fn processSourceInternal(
         reports.append(report) catch continue;
     }
 
+    collectTiming(config, &timer, &timing_info, "tokenize_parse_ns");
+
     // Initialize the Can IR (heap-allocated)
     var cir = try gpa.create(CIR);
     // Extract module name from filename (remove path and extension)
@@ -197,6 +260,8 @@ fn processSourceInternal(
     defer canonicalizer.deinit();
     try canonicalizer.canonicalizeFile();
 
+    collectTiming(config, &timer, &timing_info, "canonicalize_ns");
+
     // Get diagnostic Reports from CIR
     const diagnostics = cir.getDiagnostics();
     defer gpa.free(diagnostics);
@@ -204,6 +269,8 @@ fn processSourceInternal(
         const report = cir.diagnosticToReport(diagnostic, gpa, source, filename) catch continue;
         reports.append(report) catch continue;
     }
+
+    collectTiming(config, &timer, &timing_info, "canonicalize_diagnostics_ns");
 
     // Type checking
     const empty_modules: []const *CIR = &.{};
@@ -213,12 +280,14 @@ fn processSourceInternal(
     // Check for type errors
     try solver.checkDefs();
 
+    collectTiming(config, &timer, &timing_info, "type_checking_ns");
+
     // Ensure ProcessResult owns the source
     // We have two cases:
     // 1. processFile already allocated the source memory - we take ownership to avoid a copy
     // 2. processSource borrows the caller's source - we must clone it
     // This optimization matters because source files can be large and we process many of them.
-    const owned_source = if (take_ownership)
+    const owned_source = if (config.take_ownership)
         source // Transfer existing ownership (no allocation)
     else
         try gpa.dupe(u8, source); // Clone to get our own copy
@@ -242,6 +311,8 @@ fn processSourceInternal(
         reports.append(report) catch continue;
     }
 
+    collectTiming(config, &timer, &timing_info, "check_diagnostics_ns");
+
     const final_reports = reports.toOwnedSlice() catch return error.OutOfMemory;
 
     // Count errors and warnings
@@ -259,6 +330,7 @@ fn processSourceInternal(
         .cir = cir,
         .reports = final_reports,
         .source = owned_source,
+        .timing = timing_info,
         .error_count = error_count,
         .warning_count = warning_count,
         .was_cached = false,

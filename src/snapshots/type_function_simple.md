@@ -53,11 +53,9 @@ apply = |fn, x| fn(x)
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:6),OpColon(3:7-3:8),OpenRound(3:9-3:10),LowerIdent(3:10-3:11),OpArrow(3:12-3:14),LowerIdent(3:15-3:16),CloseRound(3:16-3:17),Comma(3:17-3:18),LowerIdent(3:19-3:20),OpArrow(3:21-3:23),LowerIdent(3:24-3:25),Newline(1:1-1:1),
-LowerIdent(4:1-4:6),OpAssign(4:7-4:8),OpBar(4:9-4:10),LowerIdent(4:10-4:12),Comma(4:12-4:13),LowerIdent(4:14-4:15),OpBar(4:15-4:16),LowerIdent(4:17-4:19),NoSpaceOpenRound(4:19-4:20),LowerIdent(4:20-4:21),CloseRound(4:21-4:22),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
+LowerIdent(3:1-3:6),OpColon(3:7-3:8),OpenRound(3:9-3:10),LowerIdent(3:10-3:11),OpArrow(3:12-3:14),LowerIdent(3:15-3:16),CloseRound(3:16-3:17),Comma(3:17-3:18),LowerIdent(3:19-3:20),OpArrow(3:21-3:23),LowerIdent(3:24-3:25),
+LowerIdent(4:1-4:6),OpAssign(4:7-4:8),OpBar(4:9-4:10),LowerIdent(4:10-4:12),Comma(4:12-4:13),LowerIdent(4:14-4:15),OpBar(4:15-4:16),LowerIdent(4:17-4:19),NoSpaceOpenRound(4:19-4:20),LowerIdent(4:20-4:21),CloseRound(4:21-4:22),
 LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),EndOfFile(6:15-6:15),
 ~~~
 # PARSE

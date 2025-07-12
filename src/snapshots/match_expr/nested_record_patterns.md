@@ -19,12 +19,12 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),TripleDot(1:7-1:10),OpenCurly(1:11-1:12),Newline(1:1-1:1),
-OpenCurly(2:5-2:6),LowerIdent(2:7-2:11),Comma(2:11-2:12),LowerIdent(2:13-2:20),OpColon(2:20-2:21),OpenCurly(2:22-2:23),LowerIdent(2:24-2:28),Comma(2:28-2:29),LowerIdent(2:30-2:37),CloseCurly(2:38-2:39),CloseCurly(2:40-2:41),OpFatArrow(2:42-2:44),StringStart(2:45-2:46),StringPart(2:46-2:46),OpenStringInterpolation(2:46-2:48),LowerIdent(2:48-2:52),CloseStringInterpolation(2:52-2:53),StringPart(2:53-2:63),OpenStringInterpolation(2:63-2:65),LowerIdent(2:65-2:69),CloseStringInterpolation(2:69-2:70),StringPart(2:70-2:72),OpenStringInterpolation(2:72-2:74),LowerIdent(2:74-2:81),CloseStringInterpolation(2:81-2:82),StringPart(2:82-2:82),StringEnd(2:82-2:83),Newline(1:1-1:1),
-OpenCurly(3:5-3:6),LowerIdent(3:7-3:13),OpColon(3:13-3:14),OpenCurly(3:15-3:16),LowerIdent(3:17-3:21),Comma(3:21-3:22),LowerIdent(3:23-3:26),CloseCurly(3:27-3:28),Comma(3:28-3:29),LowerIdent(3:30-3:38),OpColon(3:38-3:39),OpenCurly(3:40-3:41),LowerIdent(3:42-3:46),CloseCurly(3:47-3:48),CloseCurly(3:49-3:50),OpFatArrow(3:51-3:53),StringStart(3:54-3:55),StringPart(3:55-3:55),OpenStringInterpolation(3:55-3:57),LowerIdent(3:57-3:61),CloseStringInterpolation(3:61-3:62),StringPart(3:62-3:64),OpenStringInterpolation(3:64-3:66),LowerIdent(3:66-3:69),NoSpaceDotLowerIdent(3:69-3:76),NoSpaceOpenRound(3:76-3:77),CloseRound(3:77-3:78),CloseStringInterpolation(3:78-3:79),StringPart(3:79-3:86),OpenStringInterpolation(3:86-3:88),LowerIdent(3:88-3:92),CloseStringInterpolation(3:92-3:93),StringPart(3:93-3:93),StringEnd(3:93-3:94),Newline(1:1-1:1),
-OpenCurly(4:5-4:6),LowerIdent(4:7-4:11),OpColon(4:11-4:12),OpenCurly(4:13-4:14),LowerIdent(4:15-4:19),OpColon(4:19-4:20),OpenCurly(4:21-4:22),LowerIdent(4:23-4:28),CloseCurly(4:29-4:30),CloseCurly(4:31-4:32),CloseCurly(4:33-4:34),OpFatArrow(4:35-4:37),StringStart(4:38-4:39),StringPart(4:39-4:52),OpenStringInterpolation(4:52-4:54),LowerIdent(4:54-4:59),CloseStringInterpolation(4:59-4:60),StringPart(4:60-4:60),StringEnd(4:60-4:61),Newline(1:1-1:1),
-OpenCurly(5:5-5:6),LowerIdent(5:7-5:13),CloseCurly(5:14-5:15),OpFatArrow(5:16-5:18),StringStart(5:19-5:20),StringPart(5:20-5:28),OpenStringInterpolation(5:28-5:30),LowerIdent(5:30-5:36),CloseStringInterpolation(5:36-5:37),StringPart(5:37-5:37),StringEnd(5:37-5:38),Newline(1:1-1:1),
-OpenCurly(6:5-6:6),CloseCurly(6:6-6:7),OpFatArrow(6:8-6:10),StringStart(6:11-6:12),StringPart(6:12-6:17),StringEnd(6:17-6:18),Newline(1:1-1:1),
+KwMatch(1:1-1:6),TripleDot(1:7-1:10),OpenCurly(1:11-1:12),
+OpenCurly(2:5-2:6),LowerIdent(2:7-2:11),Comma(2:11-2:12),LowerIdent(2:13-2:20),OpColon(2:20-2:21),OpenCurly(2:22-2:23),LowerIdent(2:24-2:28),Comma(2:28-2:29),LowerIdent(2:30-2:37),CloseCurly(2:38-2:39),CloseCurly(2:40-2:41),OpFatArrow(2:42-2:44),StringStart(2:45-2:46),StringPart(2:46-2:46),OpenStringInterpolation(2:46-2:48),LowerIdent(2:48-2:52),CloseStringInterpolation(2:52-2:53),StringPart(2:53-2:63),OpenStringInterpolation(2:63-2:65),LowerIdent(2:65-2:69),CloseStringInterpolation(2:69-2:70),StringPart(2:70-2:72),OpenStringInterpolation(2:72-2:74),LowerIdent(2:74-2:81),CloseStringInterpolation(2:81-2:82),StringPart(2:82-2:82),StringEnd(2:82-2:83),
+OpenCurly(3:5-3:6),LowerIdent(3:7-3:13),OpColon(3:13-3:14),OpenCurly(3:15-3:16),LowerIdent(3:17-3:21),Comma(3:21-3:22),LowerIdent(3:23-3:26),CloseCurly(3:27-3:28),Comma(3:28-3:29),LowerIdent(3:30-3:38),OpColon(3:38-3:39),OpenCurly(3:40-3:41),LowerIdent(3:42-3:46),CloseCurly(3:47-3:48),CloseCurly(3:49-3:50),OpFatArrow(3:51-3:53),StringStart(3:54-3:55),StringPart(3:55-3:55),OpenStringInterpolation(3:55-3:57),LowerIdent(3:57-3:61),CloseStringInterpolation(3:61-3:62),StringPart(3:62-3:64),OpenStringInterpolation(3:64-3:66),LowerIdent(3:66-3:69),NoSpaceDotLowerIdent(3:69-3:76),NoSpaceOpenRound(3:76-3:77),CloseRound(3:77-3:78),CloseStringInterpolation(3:78-3:79),StringPart(3:79-3:86),OpenStringInterpolation(3:86-3:88),LowerIdent(3:88-3:92),CloseStringInterpolation(3:92-3:93),StringPart(3:93-3:93),StringEnd(3:93-3:94),
+OpenCurly(4:5-4:6),LowerIdent(4:7-4:11),OpColon(4:11-4:12),OpenCurly(4:13-4:14),LowerIdent(4:15-4:19),OpColon(4:19-4:20),OpenCurly(4:21-4:22),LowerIdent(4:23-4:28),CloseCurly(4:29-4:30),CloseCurly(4:31-4:32),CloseCurly(4:33-4:34),OpFatArrow(4:35-4:37),StringStart(4:38-4:39),StringPart(4:39-4:52),OpenStringInterpolation(4:52-4:54),LowerIdent(4:54-4:59),CloseStringInterpolation(4:59-4:60),StringPart(4:60-4:60),StringEnd(4:60-4:61),
+OpenCurly(5:5-5:6),LowerIdent(5:7-5:13),CloseCurly(5:14-5:15),OpFatArrow(5:16-5:18),StringStart(5:19-5:20),StringPart(5:20-5:28),OpenStringInterpolation(5:28-5:30),LowerIdent(5:30-5:36),CloseStringInterpolation(5:36-5:37),StringPart(5:37-5:37),StringEnd(5:37-5:38),
+OpenCurly(6:5-6:6),CloseCurly(6:6-6:7),OpFatArrow(6:8-6:10),StringStart(6:11-6:12),StringPart(6:12-6:17),StringEnd(6:17-6:18),
 CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 ~~~
 # PARSE
@@ -32,7 +32,7 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 (e-match
 	(e-ellipsis)
 	(branches
-		(branch @1.1-1.1
+		(branch @2.5-3.6
 			(p-record @2.5-2.41
 				(field @2.7-2.12 (name "name") (rest false))
 				(field @2.13-2.41 (name "address") (rest false)
@@ -47,7 +47,7 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 				(e-string-part @2.70-2.72 (raw ", "))
 				(e-ident @2.74-2.81 (raw "country"))
 				(e-string-part @2.82-2.82 (raw ""))))
-		(branch @1.1-1.1
+		(branch @3.5-4.6
 			(p-record @3.5-3.50
 				(field @3.7-3.29 (name "person") (rest false)
 					(p-record @3.15-3.28
@@ -67,7 +67,7 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 				(e-string-part @3.79-3.86 (raw ") from "))
 				(e-ident @3.88-3.92 (raw "city"))
 				(e-string-part @3.93-3.93 (raw ""))))
-		(branch @1.1-1.1
+		(branch @4.5-5.6
 			(p-record @4.5-4.34
 				(field @4.7-4.34 (name "data") (rest false)
 					(p-record @4.13-4.32
@@ -78,14 +78,14 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 				(e-string-part @4.39-4.52 (raw "Deep nested: "))
 				(e-ident @4.54-4.59 (raw "value"))
 				(e-string-part @4.60-4.60 (raw ""))))
-		(branch @1.1-1.1
+		(branch @5.5-6.6
 			(p-record @5.5-5.15
 				(field @5.7-5.15 (name "simple") (rest false)))
 			(e-string @5.19-5.38
 				(e-string-part @5.20-5.28 (raw "Simple: "))
 				(e-ident @5.30-5.36 (raw "simple"))
 				(e-string-part @5.37-5.37 (raw ""))))
-		(branch @1.1-1.1
+		(branch @6.5-7.2
 			(p-record @6.5-6.7)
 			(e-string @6.11-6.18
 				(e-string-part @6.12-6.17 (raw "empty"))))))
