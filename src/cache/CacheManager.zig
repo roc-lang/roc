@@ -148,8 +148,7 @@ pub const CacheManager = struct {
             return;
         };
 
-        // Serialize the result
-        const cache_data = self.serializeResult(process_result) catch |err| {
+        const cache_data = Cache.create(self.allocator, process_result.cir.env, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }
@@ -258,18 +257,6 @@ pub const CacheManager = struct {
         CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, stderr) catch {
             // If we can't print stats, just continue
         };
-    }
-
-    /// Serialize a ProcessResult to cache data.
-    fn serializeResult(self: *Self, result: *const coordinate_simple.ProcessResult) ![]u8 {
-        // Store error and warning reports in cache
-        const error_count = result.error_count;
-        const warning_count = result.warning_count;
-
-        // Create cache data using the ModuleEnv from the CIR with diagnostic counts
-        const cache_data = try Cache.create(self.allocator, result.cir.env, result.cir, error_count, warning_count);
-
-        return cache_data;
     }
 
     /// Restore a ProcessResult from cache data with diagnostic counts.
