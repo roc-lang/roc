@@ -327,9 +327,6 @@ pub const CacheManager = struct {
         const module_env = try self.allocator.create(ModuleEnv);
         module_env.* = restored.module_env;
 
-        // Note: source and module_path ownership was already transferred to module_env by cache.restore()
-
-        // Allocate CIR to heap for ownership
         const cir = try self.allocator.create(CIR);
 
         // Copy CIR but don't copy the invalid env pointer
@@ -338,11 +335,9 @@ pub const CacheManager = struct {
         cir.env = module_env;
 
         // Create ProcessResult with proper ownership
-        // Use the same source as ModuleEnv to avoid inconsistency
         const process_result = coordinate_simple.ProcessResult{
             .cir = cir,
             .reports = reports,
-            .source = module_env.source,
             .was_cached = true,
         };
 

@@ -42,7 +42,6 @@ pub const TimingInfo = struct {
 pub const ProcessResult = struct {
     cir: *CIR,
     reports: []reporting.Report,
-    source: []const u8,
     timing: ?TimingInfo = null,
     error_count: u32 = 0,
     warning_count: u32 = 0,
@@ -53,7 +52,6 @@ pub const ProcessResult = struct {
             report.deinit();
         }
         gpa.free(self.reports);
-        gpa.free(self.source);
 
         // Clean up the heap-allocated ModuleEnv (only when loaded from cache)
         if (self.was_cached) {
@@ -89,7 +87,6 @@ pub fn processFile(
     };
 
     const config = ProcessConfig{
-        .take_ownership = true,
         .collect_timing = collect_timing,
     };
 
@@ -156,7 +153,7 @@ pub fn processFile(
 /// retains ownership of the input. Use this when you already have source text
 /// in memory (e.g., from tests, REPL, or other tools).
 ///
-/// The returned ProcessResult owns its own copy of the source.
+/// The source is duplicated and owned by the ModuleEnv in the returned ProcessResult.
 ///
 /// `processSource` is used by the fuzzer.
 pub fn processSource(
@@ -164,12 +161,11 @@ pub fn processSource(
     source: []const u8,
     filename: []const u8,
 ) !ProcessResult {
-    return try processSourceInternal(gpa, source, filename, .{ .take_ownership = false, .collect_timing = false });
+    return try processSourceInternal(gpa, source, filename, .{ .collect_timing = false });
 }
 
 /// Configuration for processSourceInternal
 pub const ProcessConfig = struct {
-    take_ownership: bool = false,
     collect_timing: bool = false,
 };
 
@@ -194,16 +190,11 @@ fn collectTiming(config: ProcessConfig, timer: *?std.time.Timer, timing_info: *?
 
 /// Internal helper that processes source code and produces a ProcessResult.
 ///
-/// The config.take_ownership parameter controls memory management:
-/// - true: Transfer ownership of 'source' to ProcessResult (no allocation)
-/// - false: Clone 'source' so ProcessResult has its own copy
-///
 /// The config.collect_timing parameter controls whether to collect timing information:
 /// - true: Collect timing information for each compilation phase
 /// - false: Skip timing collection for faster processing
 ///
-/// This design allows processFile to avoid an unnecessary copy while
-/// processSource can safely work with borrowed memory.
+/// The source is always duplicated for the ModuleEnv, which owns the copy.
 fn processSourceInternal(
     gpa: std.mem.Allocator,
     source: []const u8,
@@ -299,23 +290,13 @@ fn processSourceInternal(
 
     collectTiming(config, &timer, &timing_info, "type_checking_ns");
 
-    // Ensure ProcessResult owns the source
-    // We have two cases:
-    // 1. processFile already allocated the source memory - we take ownership to avoid a copy
-    // 2. processSource borrows the caller's source - we must clone it
-    // This optimization matters because source files can be large and we process many of them.
-    const owned_source = if (config.take_ownership)
-        source // Transfer existing ownership (no allocation)
-    else
-        try gpa.dupe(u8, source); // Clone to get our own copy
-
     // Get type checking diagnostic Reports
     var report_builder = types_problem_mod.ReportBuilder.init(
         gpa,
         module_env,
         cir,
         &solver.snapshots,
-        owned_source,
+        module_env.source,
         filename,
         empty_modules,
     );
@@ -346,7 +327,6 @@ fn processSourceInternal(
     return ProcessResult{
         .cir = cir,
         .reports = final_reports,
-        .source = owned_source,
         .timing = timing_info,
         .error_count = error_count,
         .warning_count = warning_count,
