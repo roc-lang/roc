@@ -13,7 +13,7 @@ pub const Diagnostics = @import("CacheModule.zig").Diagnostics;
 // Re-export new cache management components
 pub const CacheManager = @import("CacheManager.zig").CacheManager;
 pub const CacheResult = @import("CacheManager.zig").CacheResult;
-pub const CacheHit = @import("CacheManager.zig").CacheHit;
+
 pub const CacheConfig = @import("CacheConfig.zig").CacheConfig;
 pub const CacheStats = @import("CacheConfig.zig").CacheStats;
 

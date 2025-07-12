@@ -95,38 +95,60 @@ pub fn processFile(
 
     // If caching is enabled, try cache first
     if (cache_manager) |cache| {
-        const compiler_version = getCompilerVersion();
+        // Duplicate filepath and compiler_version since cache.lookup takes ownership
+        const filepath_copy = try gpa.dupe(u8, filepath);
+        errdefer gpa.free(filepath_copy);
 
-        // Check cache
-        switch (cache.lookup(source, filepath, compiler_version) catch .miss) {
-            .hit => |cache_hit| {
-                // Cache hit! The source ownership is transferred to the cached result
-                // so we don't free it here
+        const compiler_version = try gpa.dupe(u8, getCompilerVersion());
+        errdefer gpa.free(compiler_version);
 
-                // Create a ProcessResult with the cached diagnostic counts
-                var result = cache_hit.result;
-                result.error_count = cache_hit.error_count;
-                result.warning_count = cache_hit.warning_count;
-                return result;
-            },
-            .miss => {
-                // Fall through to normal processing
-            },
-            .invalid => {
-                // Fall through to normal processing
-            },
-        }
-
-        // Cache miss - process normally and store result
-        var process_result = try processSourceInternal(gpa, source, filepath, config);
-        process_result.was_cached = false;
-
-        // Store in cache (don't fail compilation if cache store fails)
-        cache.store(source, compiler_version, &process_result) catch |err| {
-            std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
+        // Check cache - lookup takes ownership of source, filepath_copy, and compiler_version
+        const cache_result = cache.lookup(source, filepath_copy, compiler_version) catch |err| {
+            // On error, free our copies and fall through
+            gpa.free(filepath_copy);
+            gpa.free(compiler_version);
+            return err;
         };
 
-        return process_result;
+        switch (cache_result) {
+            .hit => |process_result| {
+                // Cache hit! Ownership of source, filepath_copy, and compiler_version
+                // has been transferred to the cached result
+                return process_result;
+            },
+            .miss => |returned| {
+                // Cache miss - we get back ownership of source, filepath_copy and compiler_version
+                gpa.free(returned.module_path); // Free the filepath_copy
+                defer gpa.free(returned.compiler_version);
+
+                // Process normally with returned source and original filepath
+                var process_result = try processSourceInternal(gpa, returned.source, filepath, config);
+                process_result.was_cached = false;
+
+                // Store in cache (don't fail compilation if cache store fails)
+                cache.store(returned.source, returned.compiler_version, &process_result) catch |err| {
+                    std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
+                };
+
+                return process_result;
+            },
+            .invalid => |returned| {
+                // Cache invalid - we get back ownership of source, filepath_copy and compiler_version
+                gpa.free(returned.module_path); // Free the filepath_copy
+                defer gpa.free(returned.compiler_version);
+
+                // Process normally with returned source and original filepath
+                var process_result = try processSourceInternal(gpa, returned.source, filepath, config);
+                process_result.was_cached = false;
+
+                // Store in cache (don't fail compilation if cache store fails)
+                cache.store(returned.source, returned.compiler_version, &process_result) catch |err| {
+                    std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
+                };
+
+                return process_result;
+            },
+        }
     }
 
     // No caching - process normally

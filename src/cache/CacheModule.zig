@@ -264,6 +264,7 @@ pub const CacheModule = struct {
     };
 
     /// Restore ModuleEnv and CIR from the cached data
+    ///
     /// IMPORTANT: This function takes ownership of `source` and `module_path`.
     /// The caller must not free these after calling this function.
     pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8, module_path: []const u8) !RestoredData {
