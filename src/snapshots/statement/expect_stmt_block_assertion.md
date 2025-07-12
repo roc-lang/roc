@@ -31,9 +31,9 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 (file @1.1-7.2
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident (text "foo"))))
+			(exposed-lower-ident @1.9-1.12 (text "foo"))))
 	(statements
-		(s-type-anno @3.1-4.4 (name "foo")
+		(s-type-anno @3.1-3.19 (name "foo")
 			(ty-fn @3.7-3.19
 				(ty @3.7-3.11 (name "Bool"))
 				(ty @3.15-3.19 (name "Bool"))))
@@ -44,8 +44,8 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 					(p-ident @4.8-4.9 (raw "a")))
 				(e-block @4.11-7.2
 					(statements
-						(s-expect @5.5-6.6
-							(e-binop @5.12-6.6 (op "==")
+						(s-expect @5.5-5.26
+							(e-binop @5.12-5.26 (op "==")
 								(e-ident @5.12-5.13 (raw "a"))
 								(e-tag @5.17-5.26 (raw "Bool.True"))))
 						(e-ident @6.5-6.6 (raw "a"))))))))
@@ -69,8 +69,8 @@ foo = |a| {
 			(args
 				(p-assign @4.8-4.9 (ident "a")))
 			(e-block @4.11-7.2
-				(s-expect @5.5-6.6
-					(e-binop @5.12-6.6 (op "eq")
+				(s-expect @5.5-5.26
+					(e-binop @5.12-5.26 (op "eq")
 						(e-lookup-local @5.12-5.13
 							(p-assign @4.8-4.9 (ident "a")))
 						(e-nominal @5.17-5.21 (nominal "Bool")

@@ -134,11 +134,11 @@ CloseCurly(38:1-38:2),EndOfFile(38:2-38:2),
 (file @1.1-38.2
 	(module @1.1-1.43
 		(exposes @1.8-1.43
-			(exposed-upper-ident (text "MyU64"))
-			(exposed-upper-ident (text "Person"))
-			(exposed-upper-ident (text "Result"))
-			(exposed-upper-ident (text "Tree"))
-			(exposed-upper-ident (text "Node"))))
+			(exposed-upper-ident @1.9-1.14 (text "MyU64"))
+			(exposed-upper-ident @1.16-1.22 (text "Person"))
+			(exposed-upper-ident @1.24-1.30 (text "Result"))
+			(exposed-upper-ident @1.32-1.36 (text "Tree"))
+			(exposed-upper-ident @1.38-1.42 (text "Node"))))
 	(statements
 		(s-type-decl @4.1-4.12
 			(header @4.1-4.6 (name "MyU64")
@@ -156,9 +156,9 @@ CloseCurly(38:1-38:2),EndOfFile(38:2-38:2),
 			(header @9.1-9.7 (name "Person")
 				(args))
 			(ty-record @9.10-9.33
-				(anno-record-field @9.12-9.22 (name "name")
+				(anno-record-field @9.12-9.21 (name "name")
 					(ty @9.18-9.21 (name "Str")))
-				(anno-record-field @9.23-9.33 (name "age")
+				(anno-record-field @9.23-9.31 (name "age")
 					(ty @9.28-9.31 (name "U64")))))
 		(s-type-decl @12.1-12.37
 			(header @12.1-12.16 (name "Result")
@@ -169,10 +169,10 @@ CloseCurly(38:1-38:2),EndOfFile(38:2-38:2),
 				(tags
 					(ty-apply @12.20-12.26
 						(ty @12.20-12.22 (name "Ok"))
-						(ty-var @12.23-12.25 (raw "ok")))
+						(ty-var @12.23-12.23 (raw "ok")))
 					(ty-apply @12.28-12.36
 						(ty @12.28-12.31 (name "Err"))
-						(ty-var @12.32-12.35 (raw "err"))))))
+						(ty-var @12.32-12.32 (raw "err"))))))
 		(s-type-decl @15.1-15.37
 			(header @15.1-15.8 (name "Tree")
 				(args
@@ -183,23 +183,23 @@ CloseCurly(38:1-38:2),EndOfFile(38:2-38:2),
 						(ty @15.12-15.18 (name "Branch"))
 						(ty-apply @15.19-15.26
 							(ty @15.19-15.23 (name "Node"))
-							(ty-var @15.24-15.25 (raw "a"))))
+							(ty-var @15.24-15.24 (raw "a"))))
 					(ty-apply @15.29-15.36
 						(ty @15.29-15.33 (name "Leaf"))
-						(ty-var @15.34-15.35 (raw "a"))))))
+						(ty-var @15.34-15.34 (raw "a"))))))
 		(s-type-decl @18.1-18.48
 			(header @18.1-18.8 (name "Node")
 				(args
 					(ty-var @18.6-18.7 (raw "a"))))
 			(ty-record @18.11-18.48
-				(anno-record-field @18.13-18.22 (name "value")
-					(ty-var @18.20-18.21 (raw "a")))
-				(anno-record-field @18.23-18.48 (name "children")
+				(anno-record-field @18.13-18.21 (name "value")
+					(ty-var @1.1-1.1 (raw "a")))
+				(anno-record-field @18.23-18.46 (name "children")
 					(ty-apply @18.33-18.46
 						(ty @18.33-18.37 (name "List"))
 						(ty-apply @18.38-18.45
 							(ty @18.38-18.42 (name "Tree"))
-							(ty-var @18.43-18.44 (raw "a")))))))
+							(ty-var @18.43-18.43 (raw "a")))))))
 		(s-type-decl @21.1-21.28
 			(header @21.1-21.9 (name "MyResult")
 				(args))
@@ -232,14 +232,14 @@ CloseCurly(38:1-38:2),EndOfFile(38:2-38:2),
 			(header @34.1-34.8 (name "Complex")
 				(args))
 			(ty-record @34.11-38.2
-				(anno-record-field @35.5-35.20 (name "person")
+				(anno-record-field @35.5-35.19 (name "person")
 					(ty @35.13-35.19 (name "Person")))
-				(anno-record-field @36.5-36.31 (name "result")
+				(anno-record-field @36.5-36.30 (name "result")
 					(ty-apply @36.13-36.30
 						(ty @36.13-36.19 (name "Result"))
 						(ty @36.20-36.24 (name "Bool"))
 						(ty @36.26-36.29 (name "Str"))))
-				(anno-record-field @37.5-38.2 (name "tree")
+				(anno-record-field @37.5-37.20 (name "tree")
 					(ty-apply @37.11-37.20
 						(ty @37.11-37.15 (name "Tree"))
 						(ty @37.16-37.19 (name "U64"))))))))
@@ -311,9 +311,9 @@ Complex : {
 				(ty-var @12.12-12.15 (name "err"))))
 		(ty-tag-union @12.19-12.37
 			(ty-apply @12.20-12.26 (symbol "Ok")
-				(ty-var @12.23-12.25 (name "ok")))
+				(ty-var @12.23-12.23 (name "ok")))
 			(ty-apply @12.28-12.36 (symbol "Err")
-				(ty-var @12.32-12.35 (name "err")))))
+				(ty-var @12.32-12.32 (name "err")))))
 	(s-alias-decl @15.1-15.37
 		(ty-header @15.1-15.8 (name "Tree")
 			(ty-args
@@ -321,20 +321,20 @@ Complex : {
 		(ty-tag-union @15.11-15.37
 			(ty-apply @15.12-15.27 (symbol "Branch")
 				(ty-apply @15.19-15.26 (symbol "Node")
-					(ty-var @15.24-15.25 (name "a"))))
+					(ty-var @15.24-15.24 (name "a"))))
 			(ty-apply @15.29-15.36 (symbol "Leaf")
-				(ty-var @15.34-15.35 (name "a")))))
+				(ty-var @15.34-15.34 (name "a")))))
 	(s-alias-decl @18.1-18.48
 		(ty-header @18.1-18.8 (name "Node")
 			(ty-args
 				(ty-var @18.6-18.7 (name "a"))))
 		(ty-record @18.11-18.48
 			(field (field "value")
-				(ty-var @18.20-18.21 (name "a")))
+				(ty-var @1.1-1.1 (name "a")))
 			(field (field "children")
 				(ty-apply @18.33-18.46 (symbol "List")
 					(ty-apply @18.38-18.45 (symbol "Tree")
-						(ty-var @18.43-18.44 (name "a")))))))
+						(ty-var @18.43-18.43 (name "a")))))))
 	(s-alias-decl @21.1-21.28
 		(ty-header @21.1-21.9 (name "MyResult"))
 		(ty-apply @21.12-21.28 (symbol "Result")

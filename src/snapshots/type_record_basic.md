@@ -27,22 +27,22 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~clojure
 (file @1.1-6.44
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.8 (name "getName")
+		(s-type-anno @3.1-3.41 (name "getName")
 			(ty-fn @3.11-3.41
 				(ty-record @3.11-3.34
-					(anno-record-field @3.13-3.23 (name "name")
+					(anno-record-field @3.13-3.22 (name "name")
 						(ty @3.19-3.22 (name "Str")))
-					(anno-record-field @3.24-3.34 (name "age")
+					(anno-record-field @3.24-3.32 (name "age")
 						(ty @3.29-3.32 (name "U64"))))
 				(ty @3.38-3.41 (name "Str"))))
 		(s-decl @4.1-4.28

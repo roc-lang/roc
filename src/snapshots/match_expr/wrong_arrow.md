@@ -11,30 +11,30 @@ match l {
 }
 ~~~
 # EXPECTED
-PARSE ERROR - wrong_arrow.md:2:8:2:10
-PARSE ERROR - wrong_arrow.md:3:13:3:15
+PARSE ERROR - wrong_arrow.md:2:8:2:8
+PARSE ERROR - wrong_arrow.md:3:13:3:13
 UNDEFINED VARIABLE - wrong_arrow.md:1:7:1:8
 # PROBLEMS
 **PARSE ERROR**
 Match branches use `=>` instead of `->`.
 
 Here is the problematic code:
-**wrong_arrow.md:2:8:2:10:**
+**wrong_arrow.md:2:8:2:8:**
 ```roc
     [] -> Err(EmptyList)
 ```
-       ^^
+       
 
 
 **PARSE ERROR**
 Match branches use `=>` instead of `->`.
 
 Here is the problematic code:
-**wrong_arrow.md:3:13:3:15:**
+**wrong_arrow.md:3:13:3:13:**
 ```roc
     [.., e] -> Ok(e)
 ```
-            ^^
+            
 
 
 **UNDEFINED VARIABLE**
@@ -60,14 +60,14 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 (e-match
 	(e-ident @1.7-1.8 (raw "l"))
 	(branches
-		(branch @2.5-3.6
+		(branch @2.5-2.25
 			(p-list @2.5-2.7)
 			(e-apply @2.11-2.25
 				(e-tag @2.11-2.14 (raw "Err"))
 				(e-tag @2.15-2.24 (raw "EmptyList"))))
-		(branch @3.5-4.2
+		(branch @3.5-3.21
 			(p-list @3.5-3.12
-				(p-list-rest @3.6-3.9)
+				(p-list-rest @3.6-3.8)
 				(p-ident @3.10-3.11 (raw "e")))
 			(e-apply @3.16-3.21
 				(e-tag @3.16-3.18 (raw "Ok"))

@@ -215,10 +215,10 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(s-decl @16.2-16.31
 			(p-ident @16.2-16.13 (raw "with_lambda"))
 			(e-tuple @16.16-16.31
-				(e-lambda @16.17-16.27
+				(e-lambda @16.17-16.26
 					(args
 						(p-ident @16.18-16.19 (raw "n")))
-					(e-binop @16.21-16.27 (op "+")
+					(e-binop @16.21-16.26 (op "+")
 						(e-ident @16.21-16.22 (raw "n"))
 						(e-int @16.25-16.26 (raw "1"))))
 				(e-int @16.28-16.30 (raw "42"))))
@@ -325,10 +325,10 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(p-assign @16.2-16.13 (ident "with_lambda"))
 		(e-tuple @16.16-16.31
 			(elems
-				(e-lambda @16.17-16.27
+				(e-lambda @16.17-16.26
 					(args
 						(p-assign @16.18-16.19 (ident "n")))
-					(e-binop @16.21-16.27 (op "add")
+					(e-binop @16.21-16.26 (op "add")
 						(e-lookup-local @16.21-16.22
 							(p-assign @16.18-16.19 (ident "n")))
 						(e-int @16.25-16.26 (value "1"))))

@@ -24,7 +24,7 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 (e-match
 	(e-list @1.7-1.9)
 	(branches
-		(branch @2.5-3.2
+		(branch @2.5-2.70
 			(p-ident @2.5-2.10 (raw "empty"))
 			(e-record @2.14-2.70
 				(field (field "ints")

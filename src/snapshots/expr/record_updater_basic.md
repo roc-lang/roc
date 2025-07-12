@@ -25,8 +25,8 @@ LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpenCurly(4:11-4:12),DoubleDot(4:13-4:15)
 (file @1.1-4.32
 	(module @1.1-1.25
 		(exposes @1.8-1.25
-			(exposed-lower-ident (text "person"))
-			(exposed-lower-ident (text "updated"))))
+			(exposed-lower-ident @1.9-1.15 (text "person"))
+			(exposed-lower-ident @1.17-1.24 (text "updated"))))
 	(statements
 		(s-decl @3.1-3.36
 			(p-ident @3.1-3.7 (raw "person"))

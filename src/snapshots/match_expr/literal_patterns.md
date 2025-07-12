@@ -74,17 +74,17 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 (e-match
 	(e-tag @1.7-1.13 (raw "Answer"))
 	(branches
-		(branch @2.5-3.9
+		(branch @2.5-2.16
 			(p-tag @2.5-2.11 (raw "Answer"))
 			(e-int @2.15-2.16 (raw "1")))
-		(branch @3.5-4.13
+		(branch @3.5-3.20
 			(p-tag @3.5-3.9 (raw "Zero"))
 			(e-string @3.13-3.20
 				(e-string-part @3.14-3.19 (raw "hello"))))
-		(branch @4.5-5.7
+		(branch @4.5-4.18
 			(p-tag @4.5-4.13 (raw "Greeting"))
 			(e-int @4.17-4.18 (raw "3")))
-		(branch @5.5-6.2
+		(branch @5.5-5.12
 			(p-int @5.5-5.7 (raw "10"))
 			(e-int @5.11-5.12 (raw "4")))))
 ~~~

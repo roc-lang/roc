@@ -22,19 +22,19 @@ LowerIdent(1:1-1:11),OpAssign(1:12-1:13),OpBar(1:14-1:15),OpenCurly(1:15-1:16),L
 	(e-lambda @1.14-1.109
 		(args
 			(p-record @1.15-1.35
-				(field @1.17-1.22 (name "name") (rest false))
-				(field @1.23-1.27 (name "age") (rest false))
-				(field @1.28-1.35 (name "email") (rest false))))
+				(field @1.17-1.21 (name "name") (rest false))
+				(field @1.23-1.26 (name "age") (rest false))
+				(field @1.28-1.33 (name "email") (rest false))))
 		(e-string @1.37-1.109
 			(e-string-part @1.38-1.44 (raw "User: "))
 			(e-ident @1.46-1.50 (raw "name"))
 			(e-string-part @1.51-1.53 (raw " ("))
-			(e-field-access @1.55-1.67
+			(e-field-access @1.55-1.66
 				(e-ident @1.55-1.58 (raw "age"))
 				(e-apply @1.58-1.66
 					(e-ident @1.58-1.64 (raw "toStr"))))
 			(e-string-part @1.67-1.90 (raw " years old) - Contact: "))
-			(e-field-access @1.92-1.108
+			(e-field-access @1.92-1.107
 				(e-ident @1.92-1.97 (raw "email"))
 				(e-apply @1.97-1.107
 					(e-ident @1.97-1.105 (raw "display"))))
@@ -53,27 +53,27 @@ NO CHANGE
 			(args
 				(p-record-destructure @1.15-1.35
 					(destructs
-						(record-destruct @1.17-1.22 (label "name") (ident "name")
+						(record-destruct @1.17-1.21 (label "name") (ident "name")
 							(required))
-						(record-destruct @1.23-1.27 (label "age") (ident "age")
+						(record-destruct @1.23-1.26 (label "age") (ident "age")
 							(required))
-						(record-destruct @1.28-1.35 (label "email") (ident "email")
+						(record-destruct @1.28-1.33 (label "email") (ident "email")
 							(required)))))
 			(e-string @1.37-1.109
 				(e-literal @1.38-1.44 (string "User: "))
 				(e-lookup-local @1.46-1.50
-					(p-assign @1.17-1.22 (ident "name")))
+					(p-assign @1.17-1.21 (ident "name")))
 				(e-literal @1.51-1.53 (string " ("))
-				(e-dot-access @1.55-1.67 (field "toStr")
+				(e-dot-access @1.55-1.66 (field "toStr")
 					(receiver
 						(e-lookup-local @1.55-1.58
-							(p-assign @1.23-1.27 (ident "age"))))
+							(p-assign @1.23-1.26 (ident "age"))))
 					(args))
 				(e-literal @1.67-1.90 (string " years old) - Contact: "))
-				(e-dot-access @1.92-1.108 (field "display")
+				(e-dot-access @1.92-1.107 (field "display")
 					(receiver
 						(e-lookup-local @1.92-1.97
-							(p-assign @1.28-1.35 (ident "email"))))
+							(p-assign @1.28-1.33 (ident "email"))))
 					(args))
 				(e-literal @1.108-1.108 (string ""))))))
 ~~~

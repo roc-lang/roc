@@ -28,7 +28,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~clojure
 (e-block @1.1-6.2
 	(statements
-		(s-type-anno @2.2-3.7 (name "apple")
+		(s-type-anno @2.2-2.32 (name "apple")
 			(ty-tag-union @2.10-2.32
 				(tags
 					(ty @2.11-2.16 (name "Apple"))
@@ -47,7 +47,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-6.2
-	(s-type-anno @2.2-3.7 (name "apple")
+	(s-type-anno @2.2-2.32 (name "apple")
 		(ty-tag-union @2.10-2.32
 			(ty @2.11-2.16 (name "Apple"))
 			(ty-apply @2.18-2.31 (symbol "IsFruit")

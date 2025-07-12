@@ -69,13 +69,13 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~clojure
 (file @1.1-19.2
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -97,11 +97,11 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 							(e-string @11.22-11.29
 								(e-string-part @11.23-11.28 (raw "hello"))))
 						(s-decl @14.5-14.19
-							(p-ident @14.5-14.13 (raw "_ignored"))
+							(p-ident @14.5-14.19 (raw "_ignored"))
 							(e-int @14.16-14.19 (raw "999")))
-						(s-decl @17.5-18.11
+						(s-decl @17.5-17.27
 							(p-ident @17.5-17.11 (raw "result"))
-							(e-binop @17.14-18.11 (op "+")
+							(e-binop @17.14-17.27 (op "+")
 								(e-ident @17.14-17.22 (raw "used_var"))
 								(e-int @17.25-17.27 (raw "10"))))
 						(e-ident @18.5-18.11 (raw "result"))))))))
@@ -148,11 +148,11 @@ main! = |_| {
 					(e-string @11.22-11.29
 						(e-literal @11.23-11.28 (string "hello"))))
 				(s-let @14.5-14.19
-					(p-assign @14.5-14.13 (ident "_ignored"))
+					(p-assign @14.5-14.19 (ident "_ignored"))
 					(e-int @14.16-14.19 (value "999")))
-				(s-let @17.5-18.11
+				(s-let @17.5-17.27
 					(p-assign @17.5-17.11 (ident "result"))
-					(e-binop @17.14-18.11 (op "add")
+					(e-binop @17.14-17.27 (op "add")
 						(e-lookup-local @17.14-17.22
 							(p-assign @8.5-8.13 (ident "used_var")))
 						(e-int @17.25-17.27 (value "10"))))

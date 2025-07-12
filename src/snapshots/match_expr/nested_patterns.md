@@ -52,36 +52,36 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 (e-match
 	(e-ident @1.7-1.11 (raw "data"))
 	(branches
-		(branch @2.5-3.14
+		(branch @2.5-2.71
 			(p-tag @2.5-2.49 (raw "Container")
 				(p-record @2.15-2.48
-					(field @2.17-2.48 (name "items") (rest false)
+					(field @2.17-2.46 (name "items") (rest false)
 						(p-list @2.24-2.46
 							(p-tag @2.25-2.33 (raw "First")
 								(p-ident @2.31-2.32 (raw "x")))
-							(p-list-rest @2.35-2.46 (name "rest"))))))
-			(e-binop @2.53-3.14 (op "+")
+							(p-list-rest @2.35-2.45 (name "rest"))))))
+			(e-binop @2.53-2.71 (op "+")
 				(e-ident @2.53-2.54 (raw "x"))
 				(e-apply @2.57-2.71
 					(e-ident @2.57-2.65 (raw "List.len"))
 					(e-ident @2.66-2.70 (raw "rest")))))
-		(branch @3.5-4.12
+		(branch @3.5-3.34
 			(p-tag @3.5-3.29 (raw "Container")
 				(p-record @3.15-3.28
-					(field @3.17-3.28 (name "items") (rest false)
+					(field @3.17-3.26 (name "items") (rest false)
 						(p-list @3.24-3.26))))
 			(e-int @3.33-3.34 (raw "0")))
-		(branch @4.5-5.11
+		(branch @4.5-4.49
 			(p-tag @4.5-4.36 (raw "Wrapper")
 				(p-list @4.13-4.35
 					(p-tag @4.14-4.24 (raw "Tag")
 						(p-ident @4.18-4.23 (raw "value")))
 					(p-tag @4.26-4.34 (raw "Other")
 						(p-ident @4.32-4.33 (raw "y")))))
-			(e-binop @4.40-5.11 (op "+")
+			(e-binop @4.40-4.49 (op "+")
 				(e-ident @4.40-4.45 (raw "value"))
 				(e-ident @4.48-4.49 (raw "y"))))
-		(branch @5.5-6.2
+		(branch @5.5-5.19
 			(p-tag @5.5-5.14 (raw "Simple")
 				(p-ident @5.12-5.13 (raw "x")))
 			(e-ident @5.18-5.19 (raw "x")))))
@@ -107,13 +107,13 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag @2.5-2.49)))
 				(value
-					(e-binop @2.53-3.14 (op "add")
+					(e-binop @2.53-2.71 (op "add")
 						(e-lookup-local @2.53-2.54
 							(p-assign @2.31-2.32 (ident "x")))
 						(e-call @2.57-2.71
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @2.66-2.70
-								(p-assign @2.41-2.45 (ident "rest")))))))
+								(p-assign @1.1-1.1 (ident "rest")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -125,7 +125,7 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag @4.5-4.36)))
 				(value
-					(e-binop @4.40-5.11 (op "add")
+					(e-binop @4.40-4.49 (op "add")
 						(e-lookup-local @4.40-4.45
 							(p-assign @4.18-4.23 (ident "value")))
 						(e-lookup-local @4.48-4.49

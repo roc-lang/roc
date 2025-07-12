@@ -12,19 +12,18 @@ module []
 "two"
 ~~~
 # EXPECTED
-INVALID STATEMENT - string.md:3:1:5:2
+INVALID STATEMENT - string.md:3:1:3:6
 INVALID STATEMENT - string.md:5:1:5:6
 # PROBLEMS
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**string.md:3:1:5:2:**
+**string.md:3:1:3:6:**
 ```roc
 "one"
-
-"two"
 ```
+^^^^^
 
 
 **INVALID STATEMENT**

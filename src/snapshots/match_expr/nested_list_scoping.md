@@ -38,29 +38,29 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 (e-match
 	(e-ident @1.7-1.17 (raw "nestedList"))
 	(branches
-		(branch @2.5-3.6
+		(branch @2.5-2.24
 			(p-list @2.5-2.15
 				(p-list @2.6-2.9
 					(p-ident @2.7-2.8 (raw "x")))
 				(p-list @2.11-2.14
 					(p-ident @2.12-2.13 (raw "y"))))
-			(e-binop @2.19-3.6 (op "+")
+			(e-binop @2.19-2.24 (op "+")
 				(e-ident @2.19-2.20 (raw "x"))
 				(e-ident @2.23-2.24 (raw "y"))))
-		(branch @3.5-4.6
+		(branch @3.5-3.22
 			(p-list @3.5-3.13
 				(p-list @3.6-3.12
 					(p-ident @3.7-3.8 (raw "x"))
 					(p-ident @3.10-3.11 (raw "y"))))
-			(e-binop @3.17-4.6 (op "-")
+			(e-binop @3.17-3.22 (op "-")
 				(e-ident @3.17-3.18 (raw "x"))
 				(e-ident @3.21-3.22 (raw "y"))))
-		(branch @4.5-5.2
+		(branch @4.5-4.22
 			(p-list @4.5-4.13
 				(p-ident @4.6-4.7 (raw "x"))
 				(p-list @4.9-4.12
 					(p-ident @4.10-4.11 (raw "y"))))
-			(e-binop @4.17-5.2 (op "*")
+			(e-binop @4.17-4.22 (op "*")
 				(e-ident @4.17-4.18 (raw "x"))
 				(e-ident @4.21-4.22 (raw "y"))))))
 ~~~
@@ -91,7 +91,7 @@ match nestedList {
 									(patterns
 										(p-assign @2.12-2.13 (ident "y"))))))))
 				(value
-					(e-binop @2.19-3.6 (op "add")
+					(e-binop @2.19-2.24 (op "add")
 						(e-lookup-local @2.19-2.20
 							(p-assign @2.7-2.8 (ident "x")))
 						(e-lookup-local @2.23-2.24
@@ -106,7 +106,7 @@ match nestedList {
 										(p-assign @3.7-3.8 (ident "x"))
 										(p-assign @3.10-3.11 (ident "y"))))))))
 				(value
-					(e-binop @3.17-4.6 (op "sub")
+					(e-binop @3.17-3.22 (op "sub")
 						(e-lookup-local @3.17-3.18
 							(p-assign @3.7-3.8 (ident "x")))
 						(e-lookup-local @3.21-3.22
@@ -121,7 +121,7 @@ match nestedList {
 									(patterns
 										(p-assign @4.10-4.11 (ident "y"))))))))
 				(value
-					(e-binop @4.17-5.2 (op "mul")
+					(e-binop @4.17-4.22 (op "mul")
 						(e-lookup-local @4.17-4.18
 							(p-assign @4.6-4.7 (ident "x")))
 						(e-lookup-local @4.21-4.22

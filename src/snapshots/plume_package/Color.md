@@ -78,30 +78,30 @@ is_named_color = |str|{
 }
 ~~~
 # EXPECTED
-PARSE ERROR - Color.md:63:9:63:12
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:64:5:65:12
-PARSE ERROR - Color.md:65:13:65:26
-PARSE ERROR - Color.md:65:9:65:13
-PARSE ERROR - Color.md:65:9:65:13
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:27:65:43
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:41:65:46
+PARSE ERROR - Color.md:63:9:63:11
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:64:5:64:9
+PARSE ERROR - Color.md:65:13:65:25
+PARSE ERROR - Color.md:65:9:65:12
+PARSE ERROR - Color.md:65:9:65:12
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:27:65:41
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:41:65:43
 UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:46:65:47
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:47:65:47
 UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:47:65:48
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:47:65:49
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:48:65:50
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:49:67:15
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:48:65:49
+UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:49:65:50
 UNUSED VARIABLE - Color.md:30:5:30:25
 UNUSED VARIABLE - Color.md:61:10:61:13
 UNDEFINED VARIABLE - Color.md:63:24:63:27
-INVALID STATEMENT - Color.md:64:5:65:12
-INVALID STATEMENT - Color.md:65:27:65:43
-INVALID STATEMENT - Color.md:65:41:65:46
-INVALID STATEMENT - Color.md:65:43:65:47
+INVALID STATEMENT - Color.md:64:5:64:9
+INVALID STATEMENT - Color.md:65:27:65:41
+INVALID STATEMENT - Color.md:65:41:65:43
+INVALID STATEMENT - Color.md:65:43:65:46
 INVALID STATEMENT - Color.md:65:46:65:47
+INVALID STATEMENT - Color.md:65:47:65:47
 INVALID STATEMENT - Color.md:65:47:65:48
-INVALID STATEMENT - Color.md:65:47:65:49
-INVALID STATEMENT - Color.md:65:48:65:50
-INVALID STATEMENT - Color.md:65:49:67:15
+INVALID STATEMENT - Color.md:65:48:65:49
+INVALID STATEMENT - Color.md:65:49:65:50
 UNDEFINED VARIABLE - Color.md:68:14:68:27
 TYPE MISMATCH - Color.md:20:20:20:22
 TYPE MISMATCH - Color.md:26:7:26:10
@@ -112,24 +112,23 @@ A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**Color.md:63:9:63:12:**
+**Color.md:63:9:63:11:**
 ```roc
         Ok(Color.Named(str))
 ```
-        ^^^
+        ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **else
-        Err** is not expected in an expression.
+The token **else** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**Color.md:64:5:65:12:**
+**Color.md:64:5:64:9:**
 ```roc
     else
-        Err(UnknownColor("Unknown color ${str}"))
 ```
+    ^^^^
 
 
 **PARSE ERROR**
@@ -137,11 +136,11 @@ A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**Color.md:65:13:65:26:**
+**Color.md:65:13:65:25:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-            ^^^^^^^^^^^^^
+            ^^^^^^^^^^^^
 
 
 **PARSE ERROR**
@@ -149,11 +148,11 @@ A parsing error occurred: `expected_ty_anno_end`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**Color.md:65:9:65:13:**
+**Color.md:65:9:65:12:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-        ^^^^
+        ^^^
 
 
 **PARSE ERROR**
@@ -173,35 +172,35 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**Color.md:65:9:65:13:**
+**Color.md:65:9:65:12:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-        ^^^^
+        ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **Unknown color ${** is not expected in an expression.
+The token **Unknown color ** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**Color.md:65:27:65:43:**
+**Color.md:65:27:65:41:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-                          ^^^^^^^^^^^^^^^^
+                          ^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **${str** is not expected in an expression.
+The token **${** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**Color.md:65:41:65:46:**
+**Color.md:65:41:65:43:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-                                        ^^^^^
+                                        ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -217,6 +216,18 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
+The token  is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**Color.md:65:47:65:47:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                              
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
 The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
@@ -229,42 +240,27 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **")** is not expected in an expression.
+The token **)** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**Color.md:65:47:65:49:**
+**Color.md:65:48:65:49:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-                                              ^^
+                                               ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **))** is not expected in an expression.
+The token **)** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**Color.md:65:48:65:50:**
+**Color.md:65:49:65:50:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-                                               ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **)
-
-is_named_color** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**Color.md:65:49:67:15:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-
-is_named_color = |str|{
-```
+                                                ^
 
 
 **UNUSED VARIABLE**
@@ -309,44 +305,44 @@ Is there an `import` or `exposing` missing up-top?
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**Color.md:64:5:65:12:**
+**Color.md:64:5:64:9:**
 ```roc
     else
-        Err(UnknownColor("Unknown color ${str}"))
 ```
+    ^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**Color.md:65:27:65:43:**
+**Color.md:65:27:65:41:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-                          ^^^^^^^^^^^^^^^^
+                          ^^^^^^^^^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**Color.md:65:41:65:46:**
+**Color.md:65:41:65:43:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-                                        ^^^^^
+                                        ^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**Color.md:65:43:65:47:**
+**Color.md:65:43:65:46:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-                                          ^^^^
+                                          ^^^
 
 
 **INVALID STATEMENT**
@@ -364,6 +360,17 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**Color.md:65:47:65:47:**
+```roc
+        Err(UnknownColor("Unknown color ${str}"))
+```
+                                              
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 **Color.md:65:47:65:48:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
@@ -375,34 +382,22 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**Color.md:65:47:65:49:**
+**Color.md:65:48:65:49:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-                                              ^^
+                                               ^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**Color.md:65:48:65:50:**
+**Color.md:65:49:65:50:**
 ```roc
         Err(UnknownColor("Unknown color ${str}"))
 ```
-                                               ^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**Color.md:65:49:67:15:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-
-is_named_color = |str|{
-```
+                                                ^
 
 
 **UNDEFINED VARIABLE**
@@ -523,15 +518,15 @@ EndOfFile(72:1-72:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-72.1
+(file @1.1-71.2
 	(module @1.1-8.2
 		(exposes @1.8-8.2
-			(exposed-upper-ident (text "Color"))
-			(exposed-lower-ident (text "to_str"))
-			(exposed-lower-ident (text "rgb"))
-			(exposed-lower-ident (text "rgba"))
-			(exposed-lower-ident (text "hex"))
-			(exposed-lower-ident (text "named"))))
+			(exposed-upper-ident @2.5-2.10 (text "Color"))
+			(exposed-lower-ident @3.5-3.11 (text "to_str"))
+			(exposed-lower-ident @4.5-4.8 (text "rgb"))
+			(exposed-lower-ident @5.5-5.9 (text "rgba"))
+			(exposed-lower-ident @6.5-6.8 (text "hex"))
+			(exposed-lower-ident @7.5-7.10 (text "named"))))
 	(statements
 		(s-type-decl @10.1-15.2
 			(header @10.1-10.6 (name "Color")
@@ -555,7 +550,7 @@ EndOfFile(72:1-72:1),
 					(ty-apply @14.5-14.13
 						(ty @14.5-14.8 (name "Hex"))
 						(ty @14.9-14.12 (name "Str"))))))
-		(s-type-anno @17.1-18.4 (name "rgb")
+		(s-type-anno @17.1-17.26 (name "rgb")
 			(ty-fn @17.7-17.26
 				(ty @17.7-17.9 (name "U8"))
 				(ty @17.11-17.13 (name "U8"))
@@ -573,7 +568,7 @@ EndOfFile(72:1-72:1),
 					(e-ident @18.27-18.28 (raw "r"))
 					(e-ident @18.30-18.31 (raw "g"))
 					(e-ident @18.33-18.34 (raw "b")))))
-		(s-type-anno @20.1-21.5 (name "rgba")
+		(s-type-anno @20.1-20.31 (name "rgba")
 			(ty-fn @20.8-20.31
 				(ty @20.8-20.10 (name "U8"))
 				(ty @20.12-20.14 (name "U8"))
@@ -590,10 +585,10 @@ EndOfFile(72:1-72:1),
 					(p-ident @21.18-21.19 (raw "a")))
 				(e-block @21.21-24.2
 					(statements
-						(s-decl @22.5-23.10
+						(s-decl @22.5-22.34
 							(p-ident @22.5-22.12 (raw "rounded"))
-							(e-binop @22.15-23.10 (op "/")
-								(e-field-access @22.15-22.28
+							(e-binop @22.15-22.34 (op "/")
+								(e-field-access @22.15-22.26
 									(e-ident @22.15-22.16 (raw "a"))
 									(e-apply @22.16-22.26
 										(e-ident @22.16-22.24 (raw "to_frac"))))
@@ -604,7 +599,7 @@ EndOfFile(72:1-72:1),
 							(e-ident @23.19-23.20 (raw "g"))
 							(e-ident @23.22-23.23 (raw "b"))
 							(e-ident @23.25-23.32 (raw "rounded")))))))
-		(s-type-anno @26.1-27.4 (name "hex")
+		(s-type-anno @26.1-26.46 (name "hex")
 			(ty-fn @26.7-26.46
 				(ty @26.7-26.10 (name "Str"))
 				(ty-apply @26.14-26.46
@@ -622,47 +617,47 @@ EndOfFile(72:1-72:1),
 					(p-ident @27.8-27.11 (raw "str")))
 				(e-block @27.13-46.2
 					(statements
-						(s-decl @29.5-30.25
+						(s-decl @29.5-29.26
 							(p-ident @29.5-29.10 (raw "bytes"))
-							(e-field-access @29.13-30.25
+							(e-field-access @29.13-29.26
 								(e-ident @29.13-29.16 (raw "str"))
 								(e-apply @29.16-29.26
 									(e-ident @29.16-29.24 (raw "to_utf8")))))
-						(s-decl @30.5-32.10
+						(s-decl @30.5-30.109
 							(p-ident @30.5-30.25 (raw "is_char_in_hex_range"))
-							(e-lambda @30.28-32.10
+							(e-lambda @30.28-30.109
 								(args
 									(p-ident @30.29-30.30 (raw "b")))
-								(e-binop @30.32-32.10 (op "or")
-									(e-binop @30.32-30.85 (op "or")
+								(e-binop @30.32-30.109 (op "or")
+									(e-binop @30.32-30.82 (op "or")
 										(e-tuple @30.32-30.55
-											(e-binop @30.33-30.55 (op "and")
-												(e-binop @30.33-30.45 (op ">=")
+											(e-binop @30.33-30.54 (op "and")
+												(e-binop @30.33-30.41 (op ">=")
 													(e-ident @30.33-30.34 (raw "b"))
 													(e-single-quote @30.38-30.41 (raw "'0'")))
-												(e-binop @30.46-30.55 (op "<=")
+												(e-binop @30.46-30.54 (op "<=")
 													(e-ident @30.46-30.47 (raw "b"))
 													(e-single-quote @30.51-30.54 (raw "'9'")))))
 										(e-tuple @30.59-30.82
-											(e-binop @30.60-30.82 (op "and")
-												(e-binop @30.60-30.72 (op ">=")
+											(e-binop @30.60-30.81 (op "and")
+												(e-binop @30.60-30.68 (op ">=")
 													(e-ident @30.60-30.61 (raw "b"))
 													(e-single-quote @30.65-30.68 (raw "'a'")))
-												(e-binop @30.73-30.82 (op "<=")
+												(e-binop @30.73-30.81 (op "<=")
 													(e-ident @30.73-30.74 (raw "b"))
 													(e-single-quote @30.78-30.81 (raw "'f'"))))))
 									(e-tuple @30.86-30.109
-										(e-binop @30.87-30.109 (op "and")
-											(e-binop @30.87-30.99 (op ">=")
+										(e-binop @30.87-30.108 (op "and")
+											(e-binop @30.87-30.95 (op ">=")
 												(e-ident @30.87-30.88 (raw "b"))
 												(e-single-quote @30.92-30.95 (raw "'A'")))
-											(e-binop @30.100-30.109 (op "<=")
+											(e-binop @30.100-30.108 (op "<=")
 												(e-ident @30.100-30.101 (raw "b"))
 												(e-single-quote @30.105-30.108 (raw "'F'"))))))))
 						(e-match
 							(e-ident @32.11-32.16 (raw "bytes"))
 							(branches
-								(branch @33.9-44.10
+								(branch @33.9-43.10
 									(p-list @33.9-33.32
 										(p-single-quote @33.10-33.13 (raw "'#'"))
 										(p-ident @33.15-33.16 (raw "a"))
@@ -673,38 +668,38 @@ EndOfFile(72:1-72:1),
 										(p-ident @33.30-33.31 (raw "f")))
 									(e-block @33.36-43.10
 										(statements
-											(s-decl @34.13-42.15
+											(s-decl @34.13-40.45
 												(p-ident @34.13-34.21 (raw "is_valid"))
-												(e-binop @35.17-42.15 (op "and")
-													(e-binop @35.17-40.20 (op "and")
-														(e-binop @35.17-39.20 (op "and")
-															(e-binop @35.17-38.20 (op "and")
-																(e-binop @35.17-37.20 (op "and")
-																	(e-field-access @35.17-36.20
+												(e-binop @35.17-40.45 (op "and")
+													(e-binop @35.17-39.45 (op "and")
+														(e-binop @35.17-38.45 (op "and")
+															(e-binop @35.17-37.45 (op "and")
+																(e-binop @35.17-36.45 (op "and")
+																	(e-field-access @35.17-35.41
 																		(e-ident @35.17-35.18 (raw "a"))
 																		(e-apply @35.18-35.41
 																			(e-ident @35.18-35.39 (raw "is_char_in_hex_range"))))
-																	(e-field-access @36.21-37.20
+																	(e-field-access @36.21-36.45
 																		(e-ident @36.21-36.22 (raw "b"))
 																		(e-apply @36.22-36.45
 																			(e-ident @36.22-36.43 (raw "is_char_in_hex_range")))))
-																(e-field-access @37.21-38.20
+																(e-field-access @37.21-37.45
 																	(e-ident @37.21-37.22 (raw "c"))
 																	(e-apply @37.22-37.45
 																		(e-ident @37.22-37.43 (raw "is_char_in_hex_range")))))
-															(e-field-access @38.21-39.20
+															(e-field-access @38.21-38.45
 																(e-ident @38.21-38.22 (raw "d"))
 																(e-apply @38.22-38.45
 																	(e-ident @38.22-38.43 (raw "is_char_in_hex_range")))))
-														(e-field-access @39.21-40.20
+														(e-field-access @39.21-39.45
 															(e-ident @39.21-39.22 (raw "e"))
 															(e-apply @39.22-39.45
 																(e-ident @39.22-39.43 (raw "is_char_in_hex_range")))))
-													(e-field-access @40.21-42.15
+													(e-field-access @40.21-40.45
 														(e-ident @40.21-40.22 (raw "f"))
 														(e-apply @40.22-40.45
 															(e-ident @40.22-40.43 (raw "is_char_in_hex_range"))))))
-											(e-if-then-else @42.13-43.10
+											(e-if-then-else @42.13-42.125
 												(e-ident @42.16-42.24 (raw "is_valid"))
 												(e-apply @42.25-42.43
 													(e-tag @42.25-42.27 (raw "Ok"))
@@ -719,7 +714,7 @@ EndOfFile(72:1-72:1),
 															(e-string-part @42.65-42.116 (raw "Expected Hex to be in the range 0-9, a-f, A-F, got "))
 															(e-ident @42.118-42.121 (raw "str"))
 															(e-string-part @42.122-42.122 (raw "")))))))))
-								(branch @44.9-45.6
+								(branch @44.9-44.100
 									(p-underscore)
 									(e-apply @44.14-44.100
 										(e-tag @44.14-44.17 (raw "Err"))
@@ -729,7 +724,7 @@ EndOfFile(72:1-72:1),
 												(e-string-part @44.30-44.91 (raw "Expected Hex must start with # and be 7 characters long, got "))
 												(e-ident @44.93-44.96 (raw "str"))
 												(e-string-part @44.97-44.97 (raw ""))))))))))))
-		(s-type-anno @48.1-49.7 (name "to_str")
+		(s-type-anno @48.1-48.22 (name "to_str")
 			(ty-fn @48.10-48.22
 				(ty @48.10-48.15 (name "Color"))
 				(ty @48.19-48.22 (name "Str"))))
@@ -741,7 +736,7 @@ EndOfFile(72:1-72:1),
 				(e-match
 					(e-ident @49.24-49.29 (raw "color"))
 					(branches
-						(branch @50.5-51.10
+						(branch @50.5-50.86
 							(p-tag @50.5-50.23 (raw ".RGB")
 								(p-ident @50.15-50.16 (raw "r"))
 								(p-ident @50.18-50.19 (raw "g"))
@@ -760,7 +755,7 @@ EndOfFile(72:1-72:1),
 									(e-ident @50.70-50.80 (raw "Num.to_str"))
 									(e-ident @50.81-50.82 (raw "b")))
 								(e-string-part @50.84-50.85 (raw ")"))))
-						(branch @51.5-52.10
+						(branch @51.5-51.109
 							(p-tag @51.5-51.27 (raw ".RGBA")
 								(p-ident @51.16-51.17 (raw "r"))
 								(p-ident @51.19-51.20 (raw "g"))
@@ -784,17 +779,17 @@ EndOfFile(72:1-72:1),
 									(e-ident @51.93-51.103 (raw "Num.to_str"))
 									(e-ident @51.104-51.105 (raw "a")))
 								(e-string-part @51.107-51.108 (raw ")"))))
-						(branch @52.5-53.10
+						(branch @52.5-52.32
 							(p-tag @52.5-52.23 (raw ".Named")
 								(p-ident @52.17-52.22 (raw "inner")))
 							(e-ident @52.27-52.32 (raw "inner")))
-						(branch @53.5-54.2
+						(branch @53.5-53.30
 							(p-tag @53.5-53.21 (raw ".Hex")
 								(p-ident @53.15-53.20 (raw "inner")))
 							(e-ident @53.25-53.30 (raw "inner")))))))
-		(s-expect @56.1-57.7
-			(e-binop @56.8-57.7 (op "==")
-				(e-field-access @56.8-56.37
+		(s-expect @56.1-56.57
+			(e-binop @56.8-56.57 (op "==")
+				(e-field-access @56.8-56.34
 					(e-apply @56.8-56.25
 						(e-ident @56.8-56.11 (raw "rgb"))
 						(e-int @56.12-56.15 (raw "124"))
@@ -804,9 +799,9 @@ EndOfFile(72:1-72:1),
 						(e-ident @56.25-56.32 (raw "to_str"))))
 				(e-string @56.38-56.57
 					(e-string-part @56.39-56.56 (raw "rgb(124, 56, 245)")))))
-		(s-expect @57.1-58.7
-			(e-binop @57.8-58.7 (op "==")
-				(e-field-access @57.8-57.43
+		(s-expect @57.1-57.69
+			(e-binop @57.8-57.69 (op "==")
+				(e-field-access @57.8-57.40
 					(e-apply @57.8-57.31
 						(e-ident @57.8-57.12 (raw "rgba"))
 						(e-int @57.13-57.16 (raw "124"))
@@ -817,9 +812,9 @@ EndOfFile(72:1-72:1),
 						(e-ident @57.31-57.38 (raw "to_str"))))
 				(e-string @57.44-57.69
 					(e-string-part @57.45-57.68 (raw "rgba(124, 56, 245, 1.0)")))))
-		(s-expect @58.1-60.6
-			(e-binop @58.8-60.6 (op "==")
-				(e-field-access @58.8-58.40
+		(s-expect @58.1-58.54
+			(e-binop @58.8-58.54 (op "==")
+				(e-field-access @58.8-58.37
 					(e-apply @58.8-58.22
 						(e-ident @58.8-58.11 (raw "hex"))
 						(e-string @58.12-58.21
@@ -831,7 +826,7 @@ EndOfFile(72:1-72:1),
 					(e-tag @58.41-58.43 (raw "Ok"))
 					(e-string @58.44-58.53
 						(e-string-part @58.45-58.52 (raw "#ff00ff"))))))
-		(s-type-anno @60.1-61.6 (name "named")
+		(s-type-anno @60.1-60.50 (name "named")
 			(ty-fn @60.9-60.50
 				(ty @60.9-60.12 (name "Str"))
 				(ty-apply @60.16-60.50
@@ -845,23 +840,23 @@ EndOfFile(72:1-72:1),
 		(s-decl @61.1-63.29
 			(p-ident @61.1-61.6 (raw "named"))
 			(e-apply @61.9-63.29
-				(e-lambda @61.9-63.12
+				(e-lambda @61.9-63.11
 					(args
 						(p-ident @61.10-61.13 (raw "str")))
-					(e-malformed @63.9-63.12 (reason "no_else")))
+					(e-malformed @63.9-63.11 (reason "no_else")))
 				(e-apply @63.12-63.28
 					(e-tag @63.12-63.23 (raw "Color.Named"))
 					(e-ident @63.24-63.27 (raw "str")))))
-		(e-malformed @64.5-65.12 (reason "expr_unexpected_token"))
-		(s-malformed @65.9-65.41 (tag "expected_colon_after_type_annotation"))
-		(e-malformed @65.27-65.43 (reason "expr_unexpected_token"))
-		(e-malformed @65.41-65.46 (reason "expr_unexpected_token"))
+		(e-malformed @64.5-64.9 (reason "expr_unexpected_token"))
+		(s-malformed @65.9-65.27 (tag "expected_colon_after_type_annotation"))
+		(e-malformed @65.27-65.41 (reason "expr_unexpected_token"))
+		(e-malformed @65.41-65.43 (reason "expr_unexpected_token"))
 		(e-ident @65.43-65.46 (raw "str"))
 		(e-malformed @65.46-65.47 (reason "expr_unexpected_token"))
+		(e-malformed @65.47-65.47 (reason "expr_unexpected_token"))
 		(e-malformed @65.47-65.48 (reason "expr_unexpected_token"))
-		(e-malformed @65.47-65.49 (reason "expr_unexpected_token"))
-		(e-malformed @65.48-65.50 (reason "expr_unexpected_token"))
-		(e-malformed @65.49-67.15 (reason "expr_unexpected_token"))
+		(e-malformed @65.48-65.49 (reason "expr_unexpected_token"))
+		(e-malformed @65.49-65.50 (reason "expr_unexpected_token"))
 		(s-decl @67.1-71.2
 			(p-ident @67.1-67.15 (raw "is_named_color"))
 			(e-lambda @67.18-71.2
@@ -880,7 +875,7 @@ EndOfFile(72:1-72:1),
 										(e-string-part @68.43-68.55 (raw "AntiqueWhite")))
 									(e-string @68.58-68.64
 										(e-string-part @68.59-68.63 (raw "Aqua"))))))
-						(e-field-access @70.5-71.2
+						(e-field-access @70.5-70.25
 							(e-ident @70.5-70.11 (raw "colors"))
 							(e-apply @70.11-70.25
 								(e-ident @70.11-70.20 (raw "contains"))
@@ -911,6 +906,7 @@ rgba : U8, U8, U8, U8 -> Color
 rgba = |r, g, b, a| {
 	rounded = a.to_frac() / 255.0
 	RGBA(r, g, b, rounded)
+
 }
 
 hex : Str -> Result(Color, [InvalidHex(Str)])
@@ -933,6 +929,7 @@ hex = |str| {
 		}
 		_ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
 	}
+
 }
 
 to_str : Color -> Str
@@ -996,10 +993,10 @@ is_named_color = |str| {
 				(p-assign @21.15-21.16 (ident "b"))
 				(p-assign @21.18-21.19 (ident "a")))
 			(e-block @21.21-24.2
-				(s-let @22.5-23.10
+				(s-let @22.5-22.34
 					(p-assign @22.5-22.12 (ident "rounded"))
-					(e-binop @22.15-23.10 (op "div")
-						(e-dot-access @22.15-22.28 (field "to_frac")
+					(e-binop @22.15-22.34 (op "div")
+						(e-dot-access @22.15-22.26 (field "to_frac")
 							(receiver
 								(e-lookup-local @22.15-22.16
 									(p-assign @21.18-21.19 (ident "a"))))
@@ -1030,44 +1027,44 @@ is_named_color = |str| {
 			(args
 				(p-assign @27.8-27.11 (ident "str")))
 			(e-block @27.13-46.2
-				(s-let @29.5-30.25
+				(s-let @29.5-29.26
 					(p-assign @29.5-29.10 (ident "bytes"))
-					(e-dot-access @29.13-30.25 (field "to_utf8")
+					(e-dot-access @29.13-29.26 (field "to_utf8")
 						(receiver
 							(e-lookup-local @29.13-29.16
 								(p-assign @27.8-27.11 (ident "str"))))
 						(args)))
-				(s-let @30.5-32.10
+				(s-let @30.5-30.109
 					(p-assign @30.5-30.25 (ident "is_char_in_hex_range"))
-					(e-lambda @30.28-32.10
+					(e-lambda @30.28-30.109
 						(args
 							(p-assign @30.29-30.30 (ident "b")))
-						(e-binop @30.32-32.10 (op "or")
-							(e-binop @30.32-30.85 (op "or")
-								(e-binop @30.33-30.55 (op "and")
-									(e-binop @30.33-30.45 (op "ge")
+						(e-binop @30.32-30.109 (op "or")
+							(e-binop @30.32-30.82 (op "or")
+								(e-binop @30.33-30.54 (op "and")
+									(e-binop @30.33-30.41 (op "ge")
 										(e-lookup-local @30.33-30.34
 											(p-assign @30.29-30.30 (ident "b")))
 										(e-int @30.38-30.41 (value "48")))
-									(e-binop @30.46-30.55 (op "le")
+									(e-binop @30.46-30.54 (op "le")
 										(e-lookup-local @30.46-30.47
 											(p-assign @30.29-30.30 (ident "b")))
 										(e-int @30.51-30.54 (value "57"))))
-								(e-binop @30.60-30.82 (op "and")
-									(e-binop @30.60-30.72 (op "ge")
+								(e-binop @30.60-30.81 (op "and")
+									(e-binop @30.60-30.68 (op "ge")
 										(e-lookup-local @30.60-30.61
 											(p-assign @30.29-30.30 (ident "b")))
 										(e-int @30.65-30.68 (value "97")))
-									(e-binop @30.73-30.82 (op "le")
+									(e-binop @30.73-30.81 (op "le")
 										(e-lookup-local @30.73-30.74
 											(p-assign @30.29-30.30 (ident "b")))
 										(e-int @30.78-30.81 (value "102")))))
-							(e-binop @30.87-30.109 (op "and")
-								(e-binop @30.87-30.99 (op "ge")
+							(e-binop @30.87-30.108 (op "and")
+								(e-binop @30.87-30.95 (op "ge")
 									(e-lookup-local @30.87-30.88
 										(p-assign @30.29-30.30 (ident "b")))
 									(e-int @30.92-30.95 (value "65")))
-								(e-binop @30.100-30.109 (op "le")
+								(e-binop @30.100-30.108 (op "le")
 									(e-lookup-local @30.100-30.101
 										(p-assign @30.29-30.30 (ident "b")))
 									(e-int @30.105-30.108 (value "70")))))))
@@ -1091,44 +1088,44 @@ is_named_color = |str| {
 												(p-assign @33.30-33.31 (ident "f"))))))
 								(value
 									(e-block @33.36-43.10
-										(s-let @34.13-42.15
+										(s-let @34.13-40.45
 											(p-assign @34.13-34.21 (ident "is_valid"))
-											(e-binop @35.17-42.15 (op "and")
-												(e-binop @35.17-40.20 (op "and")
-													(e-binop @35.17-39.20 (op "and")
-														(e-binop @35.17-38.20 (op "and")
-															(e-binop @35.17-37.20 (op "and")
-																(e-dot-access @35.17-36.20 (field "is_char_in_hex_range")
+											(e-binop @35.17-40.45 (op "and")
+												(e-binop @35.17-39.45 (op "and")
+													(e-binop @35.17-38.45 (op "and")
+														(e-binop @35.17-37.45 (op "and")
+															(e-binop @35.17-36.45 (op "and")
+																(e-dot-access @35.17-35.41 (field "is_char_in_hex_range")
 																	(receiver
 																		(e-lookup-local @35.17-35.18
 																			(p-assign @33.15-33.16 (ident "a"))))
 																	(args))
-																(e-dot-access @36.21-37.20 (field "is_char_in_hex_range")
+																(e-dot-access @36.21-36.45 (field "is_char_in_hex_range")
 																	(receiver
 																		(e-lookup-local @36.21-36.22
 																			(p-assign @33.18-33.19 (ident "b"))))
 																	(args)))
-															(e-dot-access @37.21-38.20 (field "is_char_in_hex_range")
+															(e-dot-access @37.21-37.45 (field "is_char_in_hex_range")
 																(receiver
 																	(e-lookup-local @37.21-37.22
 																		(p-assign @33.21-33.22 (ident "c"))))
 																(args)))
-														(e-dot-access @38.21-39.20 (field "is_char_in_hex_range")
+														(e-dot-access @38.21-38.45 (field "is_char_in_hex_range")
 															(receiver
 																(e-lookup-local @38.21-38.22
 																	(p-assign @33.24-33.25 (ident "d"))))
 															(args)))
-													(e-dot-access @39.21-40.20 (field "is_char_in_hex_range")
+													(e-dot-access @39.21-39.45 (field "is_char_in_hex_range")
 														(receiver
 															(e-lookup-local @39.21-39.22
 																(p-assign @33.27-33.28 (ident "e"))))
 														(args)))
-												(e-dot-access @40.21-42.15 (field "is_char_in_hex_range")
+												(e-dot-access @40.21-40.45 (field "is_char_in_hex_range")
 													(receiver
 														(e-lookup-local @40.21-40.22
 															(p-assign @33.30-33.31 (ident "f"))))
 													(args))))
-										(e-if @42.13-43.10
+										(e-if @42.13-42.125
 											(if-branches
 												(if-branch
 													(e-lookup-local @42.16-42.24
@@ -1262,7 +1259,7 @@ is_named_color = |str| {
 	(d-let
 		(p-assign @61.1-61.6 (ident "named"))
 		(e-call @61.9-63.29
-			(e-lambda @61.9-63.12
+			(e-lambda @61.9-63.11
 				(args
 					(p-assign @61.10-61.13 (ident "str")))
 				(e-runtime-error (tag "lambda_body_not_canonicalized")))
@@ -1297,7 +1294,7 @@ is_named_color = |str| {
 									(e-literal @68.43-68.55 (string "AntiqueWhite")))
 								(e-string @68.58-68.64
 									(e-literal @68.59-68.63 (string "Aqua")))))))
-				(e-dot-access @70.5-71.2 (field "contains")
+				(e-dot-access @70.5-70.25 (field "contains")
 					(receiver
 						(e-lookup-local @70.5-70.11
 							(p-assign @68.5-68.11 (ident "colors"))))
@@ -1320,9 +1317,9 @@ is_named_color = |str| {
 				(ty @13.11-13.14 (name "Str")))
 			(ty-apply @14.5-14.13 (symbol "Hex")
 				(ty @14.9-14.12 (name "Str")))))
-	(s-expect @56.1-57.7
-		(e-binop @56.8-57.7 (op "eq")
-			(e-dot-access @56.8-56.37 (field "to_str")
+	(s-expect @56.1-56.57
+		(e-binop @56.8-56.57 (op "eq")
+			(e-dot-access @56.8-56.34 (field "to_str")
 				(receiver
 					(e-call @56.8-56.25
 						(e-lookup-local @56.8-56.11
@@ -1333,9 +1330,9 @@ is_named_color = |str| {
 				(args))
 			(e-string @56.38-56.57
 				(e-literal @56.39-56.56 (string "rgb(124, 56, 245)")))))
-	(s-expect @57.1-58.7
-		(e-binop @57.8-58.7 (op "eq")
-			(e-dot-access @57.8-57.43 (field "to_str")
+	(s-expect @57.1-57.69
+		(e-binop @57.8-57.69 (op "eq")
+			(e-dot-access @57.8-57.40 (field "to_str")
 				(receiver
 					(e-call @57.8-57.31
 						(e-lookup-local @57.8-57.12
@@ -1347,9 +1344,9 @@ is_named_color = |str| {
 				(args))
 			(e-string @57.44-57.69
 				(e-literal @57.45-57.68 (string "rgba(124, 56, 245, 1.0)")))))
-	(s-expect @58.1-60.6
-		(e-binop @58.8-60.6 (op "eq")
-			(e-dot-access @58.8-58.40 (field "map_ok")
+	(s-expect @58.1-58.54
+		(e-binop @58.8-58.54 (op "eq")
+			(e-dot-access @58.8-58.37 (field "map_ok")
 				(receiver
 					(e-call @58.8-58.22
 						(e-lookup-local @58.8-58.11

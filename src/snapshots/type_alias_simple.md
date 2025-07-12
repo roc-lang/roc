@@ -30,13 +30,13 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 ~~~clojure
 (file @1.1-8.25
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -44,18 +44,18 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 			(header @3.1-3.7 (name "UserId")
 				(args))
 			(ty @3.10-3.13 (name "U64")))
-		(s-type-anno @5.1-6.8 (name "getUser")
+		(s-type-anno @5.1-5.24 (name "getUser")
 			(ty-fn @5.11-5.24
 				(ty @5.11-5.17 (name "UserId"))
 				(ty @5.21-5.24 (name "Str"))))
-		(s-decl @6.1-8.6
+		(s-decl @6.1-6.47
 			(p-ident @6.1-6.8 (raw "getUser"))
-			(e-lambda @6.11-8.6
+			(e-lambda @6.11-6.47
 				(args
 					(p-ident @6.12-6.14 (raw "id")))
-				(e-if-then-else @6.16-8.6
+				(e-if-then-else @6.16-6.47
 					(e-tuple @6.19-6.28
-						(e-binop @6.20-6.28 (op ">")
+						(e-binop @6.20-6.27 (op ">")
 							(e-ident @6.20-6.22 (raw "id"))
 							(e-int @6.25-6.27 (raw "10"))))
 					(e-string @6.29-6.34
@@ -80,13 +80,13 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.8 (ident "getUser"))
-		(e-lambda @6.11-8.6
+		(e-lambda @6.11-6.47
 			(args
 				(p-assign @6.12-6.14 (ident "id")))
-			(e-if @6.16-8.6
+			(e-if @6.16-6.47
 				(if-branches
 					(if-branch
-						(e-binop @6.20-6.28 (op "gt")
+						(e-binop @6.20-6.27 (op "gt")
 							(e-lookup-local @6.20-6.22
 								(p-assign @6.12-6.14 (ident "id")))
 							(e-int @6.25-6.27 (value "10")))
@@ -123,6 +123,6 @@ NO CHANGE
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
-		(expr @6.11-8.6 (type "UserId -> Str"))
+		(expr @6.11-6.47 (type "UserId -> Str"))
 		(expr @8.9-8.25 (type "* -> Str"))))
 ~~~

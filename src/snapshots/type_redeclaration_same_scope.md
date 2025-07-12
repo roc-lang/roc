@@ -42,7 +42,7 @@ UpperIdent(4:1-4:6),NoSpaceOpenRound(4:6-4:7),LowerIdent(4:7-4:8),CloseRound(4:8
 (file @1.1-4.24
 	(module @1.1-1.15
 		(exposes @1.8-1.15
-			(exposed-upper-ident (text "Maybe"))))
+			(exposed-upper-ident @1.9-1.14 (text "Maybe"))))
 	(statements
 		(s-type-decl @3.1-3.27
 			(header @3.1-3.9 (name "Maybe")
@@ -52,7 +52,7 @@ UpperIdent(4:1-4:6),NoSpaceOpenRound(4:6-4:7),LowerIdent(4:7-4:8),CloseRound(4:8
 				(tags
 					(ty-apply @3.13-3.20
 						(ty @3.13-3.17 (name "Some"))
-						(ty-var @3.18-3.19 (raw "a")))
+						(ty-var @3.18-3.18 (raw "a")))
 					(ty @3.22-3.26 (name "None")))))
 		(s-type-decl @4.1-4.24
 			(header @4.1-4.9 (name "Maybe")
@@ -62,7 +62,7 @@ UpperIdent(4:1-4:6),NoSpaceOpenRound(4:6-4:7),LowerIdent(4:7-4:8),CloseRound(4:8
 				(tags
 					(ty-apply @4.13-4.18
 						(ty @4.13-4.15 (name "Ok"))
-						(ty-var @4.16-4.17 (raw "a")))
+						(ty-var @4.16-4.16 (raw "a")))
 					(ty @4.20-4.23 (name "Err")))))))
 ~~~
 # FORMATTED
@@ -78,7 +78,7 @@ NO CHANGE
 				(ty-var @3.7-3.8 (name "a"))))
 		(ty-tag-union @3.12-3.27
 			(ty-apply @3.13-3.20 (symbol "Some")
-				(ty-var @3.18-3.19 (name "a")))
+				(ty-var @3.18-3.18 (name "a")))
 			(ty @3.22-3.26 (name "None"))))
 	(s-alias-decl @4.1-4.24
 		(ty-header @4.1-4.9 (name "Maybe")
@@ -86,7 +86,7 @@ NO CHANGE
 				(ty-var @4.7-4.8 (name "a"))))
 		(ty-tag-union @4.12-4.24
 			(ty-apply @4.13-4.18 (symbol "Ok")
-				(ty-var @4.16-4.17 (name "a")))
+				(ty-var @4.16-4.16 (name "a")))
 			(ty @4.20-4.23 (name "Err")))))
 ~~~
 # TYPES

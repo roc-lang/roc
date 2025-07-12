@@ -44,36 +44,36 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 (e-match
 	(e-ident @1.7-1.12 (raw "items"))
 	(branches
-		(branch @2.5-3.6
+		(branch @2.5-2.13
 			(p-list @2.5-2.8
 				(p-underscore))
 			(e-int @2.12-2.13 (raw "1")))
-		(branch @3.5-4.6
+		(branch @3.5-3.23
 			(p-list @3.5-3.15
-				(p-list-rest @3.6-3.9)
+				(p-list-rest @3.6-3.8)
 				(p-ident @3.10-3.14 (raw "last")))
 			(e-ident @3.19-3.23 (raw "last")))
-		(branch @4.5-5.6
+		(branch @4.5-4.25
 			(p-list @4.5-4.16
 				(p-ident @4.6-4.11 (raw "first"))
-				(p-list-rest @4.13-4.16))
+				(p-list-rest @4.13-4.15))
 			(e-ident @4.20-4.25 (raw "first")))
-		(branch @5.5-6.6
+		(branch @5.5-5.27
 			(p-list @5.5-5.18
 				(p-underscore)
 				(p-underscore)
 				(p-ident @5.12-5.17 (raw "third")))
 			(e-ident @5.22-5.27 (raw "third")))
-		(branch @6.5-7.6
+		(branch @6.5-6.26
 			(p-list @6.5-6.17
 				(p-ident @6.6-6.7 (raw "x"))
 				(p-underscore)
 				(p-underscore)
 				(p-ident @6.15-6.16 (raw "y")))
-			(e-binop @6.21-7.6 (op "+")
+			(e-binop @6.21-6.26 (op "+")
 				(e-ident @6.21-6.22 (raw "x"))
 				(e-ident @6.25-6.26 (raw "y"))))
-		(branch @7.5-8.2
+		(branch @7.5-7.12
 			(p-list @7.5-7.7)
 			(e-int @7.11-7.12 (raw "0")))))
 ~~~
@@ -144,7 +144,7 @@ match items {
 								(p-underscore @6.12-6.13)
 								(p-assign @6.15-6.16 (ident "y"))))))
 				(value
-					(e-binop @6.21-7.6 (op "add")
+					(e-binop @6.21-6.26 (op "add")
 						(e-lookup-local @6.21-6.22
 							(p-assign @6.6-6.7 (ident "x")))
 						(e-lookup-local @6.25-6.26

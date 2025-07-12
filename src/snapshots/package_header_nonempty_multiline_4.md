@@ -53,10 +53,10 @@ CloseCurly(8:2-8:3),EndOfFile(8:3-8:3),
 (file @1.1-8.3
 	(package @1.1-8.3
 		(exposes @2.2-5.3
-			(exposed-lower-ident (text "something"))
-			(exposed-upper-ident (text "SomeType")))
+			(exposed-lower-ident @3.3-3.12 (text "something"))
+			(exposed-upper-ident @4.3-4.11 (text "SomeType")))
 		(packages @6.2-8.3
-			(record-field @7.3-7.26 (name "somePkg")
+			(record-field @7.3-7.25 (name "somePkg")
 				(e-string @7.12-7.25
 					(e-string-part @7.13-7.24 (raw "../main.roc"))))))
 	(statements))

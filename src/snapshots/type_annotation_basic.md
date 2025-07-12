@@ -69,33 +69,33 @@ CloseCurly(27:1-27:2),EndOfFile(27:2-27:2),
 ~~~clojure
 (file @1.1-27.2
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @4.1-5.9 (name "identity")
+		(s-type-anno @4.1-4.18 (name "identity")
 			(ty-fn @4.12-4.18
-				(ty-var @4.12-4.13 (raw "a"))
-				(ty-var @4.17-4.18 (raw "a"))))
+				(ty-var @1.1-1.1 (raw "a"))
+				(ty-var @1.1-1.1 (raw "a"))))
 		(s-decl @5.1-5.17
 			(p-ident @5.1-5.9 (raw "identity"))
 			(e-lambda @5.12-5.17
 				(args
 					(p-ident @5.13-5.14 (raw "x")))
 				(e-ident @5.16-5.17 (raw "x"))))
-		(s-type-anno @8.1-9.8 (name "combine")
+		(s-type-anno @8.1-8.25 (name "combine")
 			(ty-fn @8.11-8.25
-				(ty-var @8.11-8.12 (raw "a"))
-				(ty-var @8.14-8.15 (raw "b"))
+				(ty-var @1.1-1.1 (raw "a"))
+				(ty-var @1.1-1.1 (raw "b"))
 				(ty-tuple @8.19-8.25
-					(ty-var @8.20-8.21 (raw "a"))
-					(ty-var @8.23-8.24 (raw "b")))))
+					(ty-var @8.20-8.20 (raw "a"))
+					(ty-var @1.1-1.1 (raw "b")))))
 		(s-decl @9.1-9.42
 			(p-ident @9.1-9.8 (raw "combine"))
 			(e-lambda @9.11-9.42
@@ -105,16 +105,16 @@ CloseCurly(27:1-27:2),EndOfFile(27:2-27:2),
 				(e-tuple @9.27-9.42
 					(e-ident @9.28-9.33 (raw "first"))
 					(e-ident @9.35-9.41 (raw "second")))))
-		(s-type-anno @12.1-13.7 (name "addOne")
+		(s-type-anno @12.1-12.20 (name "addOne")
 			(ty-fn @12.10-12.20
 				(ty @12.10-12.13 (name "U64"))
 				(ty @12.17-12.20 (name "U64"))))
-		(s-decl @13.1-15.6
+		(s-decl @13.1-13.19
 			(p-ident @13.1-13.7 (raw "addOne"))
-			(e-lambda @13.10-15.6
+			(e-lambda @13.10-13.19
 				(args
 					(p-ident @13.11-13.12 (raw "n")))
-				(e-binop @13.14-15.6 (op "+")
+				(e-binop @13.14-13.19 (op "+")
 					(e-ident @13.14-13.15 (raw "n"))
 					(e-int @13.18-13.19 (raw "1")))))
 		(s-decl @15.1-27.2
@@ -191,8 +191,8 @@ main! = |_| {
 		(annotation @5.1-5.9
 			(declared-type
 				(ty-fn @4.12-4.18 (effectful false)
-					(ty-var @4.12-4.13 (name "a"))
-					(ty-var @4.17-4.18 (name "a"))))))
+					(ty-var @1.1-1.1 (name "a"))
+					(ty-var @1.1-1.1 (name "a"))))))
 	(d-let
 		(p-assign @9.1-9.8 (ident "combine"))
 		(e-lambda @9.11-9.42
@@ -208,17 +208,17 @@ main! = |_| {
 		(annotation @9.1-9.8
 			(declared-type
 				(ty-fn @8.11-8.25 (effectful false)
-					(ty-var @8.11-8.12 (name "a"))
-					(ty-var @8.14-8.15 (name "b"))
+					(ty-var @1.1-1.1 (name "a"))
+					(ty-var @1.1-1.1 (name "b"))
 					(ty-tuple @8.19-8.25
-						(ty-var @8.20-8.21 (name "a"))
-						(ty-var @8.23-8.24 (name "b")))))))
+						(ty-var @8.20-8.20 (name "a"))
+						(ty-var @1.1-1.1 (name "b")))))))
 	(d-let
 		(p-assign @13.1-13.7 (ident "addOne"))
-		(e-lambda @13.10-15.6
+		(e-lambda @13.10-13.19
 			(args
 				(p-assign @13.11-13.12 (ident "n")))
-			(e-binop @13.14-15.6 (op "add")
+			(e-binop @13.14-13.19 (op "add")
 				(e-lookup-local @13.14-13.15
 					(p-assign @13.11-13.12 (ident "n")))
 				(e-int @13.18-13.19 (value "1"))))
@@ -275,6 +275,6 @@ main! = |_| {
 	(expressions
 		(expr @5.12-5.17 (type "a -> a"))
 		(expr @9.11-9.42 (type "a, b -> (a, b)"))
-		(expr @13.10-15.6 (type "U64 -> U64"))
+		(expr @13.10-13.19 (type "U64 -> U64"))
 		(expr @15.9-27.2 (type "* -> U64"))))
 ~~~

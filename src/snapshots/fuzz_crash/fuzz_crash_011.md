@@ -8,7 +8,7 @@ type=file
 module P]F
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_011.md:1:8:1:11
+PARSE ERROR - fuzz_crash_011.md:1:8:1:9
 PARSE ERROR - fuzz_crash_011.md:1:11:1:11
 # PROBLEMS
 **OVER CLOSED BRACE**
@@ -19,11 +19,11 @@ A parsing error occurred: `header_expected_open_square`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_011.md:1:8:1:11:**
+**fuzz_crash_011.md:1:8:1:9:**
 ```roc
 module P]F
 ```
-       ^^^
+       ^
 
 
 **PARSE ERROR**
@@ -57,7 +57,7 @@ KwModule(1:1-1:7),UpperIdent(1:8-1:9),UpperIdent(1:10-1:11),EndOfFile(1:11-1:11)
 # PARSE
 ~~~clojure
 (file @1.1-1.11
-	(malformed-header @1.8-1.11 (tag "header_expected_open_square"))
+	(malformed-header @1.8-1.9 (tag "header_expected_open_square"))
 	(statements
 		(s-malformed @1.10-1.11 (tag "expected_colon_after_type_annotation"))))
 ~~~

@@ -35,23 +35,23 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 ~~~clojure
 (file @1.1-10.15
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
 		(s-import @3.1-3.17 (raw "pf.Stdout"))
-		(s-type-anno @5.1-6.10 (name "printName")
+		(s-type-anno @5.1-5.43 (name "printName")
 			(ty-fn @5.13-5.43
 				(ty-record @5.13-5.36
-					(anno-record-field @5.15-5.25 (name "name")
+					(anno-record-field @5.15-5.24 (name "name")
 						(ty @5.21-5.24 (name "Str")))
-					(anno-record-field @5.26-5.36 (name "age")
+					(anno-record-field @5.26-5.34 (name "age")
 						(ty @5.31-5.34 (name "U64"))))
 				(ty @5.40-5.43 (name "Str"))))
 		(s-decl @6.1-9.2
@@ -63,10 +63,10 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 					(statements
 						(e-apply @7.5-7.30
 							(e-ident @7.5-7.17 (raw "Stdout.line!"))
-							(e-field-access @7.18-7.30
+							(e-field-access @7.18-7.29
 								(e-ident @7.18-7.24 (raw "person"))
 								(e-ident @7.24-7.29 (raw "name"))))
-						(e-field-access @8.5-9.2
+						(e-field-access @8.5-8.16
 							(e-ident @8.5-8.11 (raw "person"))
 							(e-ident @8.11-8.16 (raw "name")))))))
 		(s-decl @10.1-10.15
@@ -98,16 +98,16 @@ main! = |_| {}
 			(args
 				(p-assign @6.14-6.20 (ident "person")))
 			(e-block @6.22-9.2
-				(s-expr @7.5-8.11
+				(s-expr @7.5-7.30
 					(e-call @7.5-7.30
 						(e-lookup-external @7.5-7.17
 							(module-idx "0")
 							(target-node-idx "0"))
-						(e-dot-access @7.18-7.30 (field "name")
+						(e-dot-access @7.18-7.29 (field "name")
 							(receiver
 								(e-lookup-local @7.18-7.24
 									(p-assign @6.14-6.20 (ident "person")))))))
-				(e-dot-access @8.5-9.2 (field "name")
+				(e-dot-access @8.5-8.16 (field "name")
 					(receiver
 						(e-lookup-local @8.5-8.11
 							(p-assign @6.14-6.20 (ident "person")))))))

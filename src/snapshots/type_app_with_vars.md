@@ -40,34 +40,34 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~clojure
 (file @1.1-6.33
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.8 (name "mapList")
+		(s-type-anno @3.1-3.39 (name "mapList")
 			(ty-fn @3.11-3.39
 				(ty-apply @3.11-3.18
 					(ty @3.11-3.15 (name "List"))
-					(ty-var @3.16-3.17 (raw "a")))
+					(ty-var @3.16-3.16 (raw "a")))
 				(ty-fn @3.21-3.27
-					(ty-var @3.21-3.22 (raw "a"))
-					(ty-var @3.26-3.27 (raw "b")))
+					(ty-var @3.21-3.21 (raw "a"))
+					(ty-var @1.1-1.1 (raw "b")))
 				(ty-apply @3.32-3.39
 					(ty @3.32-3.36 (name "List"))
-					(ty-var @3.37-3.38 (raw "b")))))
-		(s-decl @4.1-6.6
+					(ty-var @3.37-3.37 (raw "b")))))
+		(s-decl @4.1-4.34
 			(p-ident @4.1-4.8 (raw "mapList"))
-			(e-lambda @4.11-6.6
+			(e-lambda @4.11-4.34
 				(args
 					(p-ident @4.12-4.16 (raw "list"))
 					(p-ident @4.18-4.20 (raw "fn")))
-				(e-field-access @4.22-6.6
+				(e-field-access @4.22-4.34
 					(e-ident @4.22-4.26 (raw "list"))
 					(e-apply @4.26-4.34
 						(e-ident @4.26-4.30 (raw "map"))
@@ -100,11 +100,11 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 (can-ir
 	(d-let
 		(p-assign @4.1-4.8 (ident "mapList"))
-		(e-lambda @4.11-6.6
+		(e-lambda @4.11-4.34
 			(args
 				(p-assign @4.12-4.16 (ident "list"))
 				(p-assign @4.18-4.20 (ident "fn")))
-			(e-dot-access @4.22-6.6 (field "map")
+			(e-dot-access @4.22-4.34 (field "map")
 				(receiver
 					(e-lookup-local @4.22-4.26
 						(p-assign @4.12-4.16 (ident "list"))))
@@ -115,13 +115,13 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 			(declared-type
 				(ty-fn @3.11-3.39 (effectful false)
 					(ty-apply @3.11-3.18 (symbol "List")
-						(ty-var @3.16-3.17 (name "a")))
+						(ty-var @3.16-3.16 (name "a")))
 					(ty-parens @3.20-3.28
 						(ty-fn @3.21-3.27 (effectful false)
-							(ty-var @3.21-3.22 (name "a"))
-							(ty-var @3.26-3.27 (name "b"))))
+							(ty-var @3.21-3.21 (name "a"))
+							(ty-var @1.1-1.1 (name "b"))))
 					(ty-apply @3.32-3.39 (symbol "List")
-						(ty-var @3.37-3.38 (name "b")))))))
+						(ty-var @3.37-3.37 (name "b")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.33
@@ -145,6 +145,6 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 		(patt @4.1-4.8 (type "Error"))
 		(patt @6.1-6.6 (type "* -> *")))
 	(expressions
-		(expr @4.11-6.6 (type "Error"))
+		(expr @4.11-4.34 (type "Error"))
 		(expr @6.9-6.33 (type "* -> *"))))
 ~~~

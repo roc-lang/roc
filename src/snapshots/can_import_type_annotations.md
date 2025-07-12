@@ -125,13 +125,13 @@ CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
 	(statements
 		(s-import @3.1-3.56 (raw "http.Client") (alias "Http")
 			(exposing
-				(exposed-upper-ident (text "Request"))
-				(exposed-upper-ident (text "Response"))))
+				(exposed-upper-ident @3.38-3.45 (text "Request"))
+				(exposed-upper-ident @3.47-3.55 (text "Response"))))
 		(s-import @4.1-4.17 (raw "json.Json"))
 		(s-import @5.1-5.38 (raw "utils.Result")
 			(exposing
-				(exposed-upper-ident (text "Result"))))
-		(s-type-anno @7.1-8.15 (name "processRequest")
+				(exposed-upper-ident @5.31-5.37 (text "Result"))))
+		(s-type-anno @7.1-7.37 (name "processRequest")
 			(ty-fn @7.18-7.37
 				(ty @7.18-7.25 (name "Request"))
 				(ty @7.29-7.37 (name "Response"))))
@@ -141,7 +141,7 @@ CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
 				(args
 					(p-ident @8.19-8.22 (raw "req")))
 				(e-ident @8.24-8.44 (raw "Http.defaultResponse"))))
-		(s-type-anno @10.1-11.10 (name "parseJson")
+		(s-type-anno @10.1-10.30 (name "parseJson")
 			(ty-fn @10.13-10.30
 				(ty @10.13-10.16 (name "Str"))
 				(ty @10.20-10.30 (name "Json.Value"))))
@@ -153,7 +153,7 @@ CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
 				(e-apply @11.21-11.38
 					(e-ident @11.21-11.31 (raw "Json.parse"))
 					(e-ident @11.32-11.37 (raw "input")))))
-		(s-type-anno @13.1-14.10 (name "handleApi")
+		(s-type-anno @13.1-13.62 (name "handleApi")
 			(ty-fn @13.13-13.62
 				(ty @13.13-13.25 (name "Http.Request"))
 				(ty-apply @13.29-13.62
@@ -171,13 +171,13 @@ CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
 							(p-ident @15.5-15.11 (raw "result"))
 							(e-apply @15.14-15.39
 								(e-ident @15.14-15.25 (raw "Json.decode"))
-								(e-field-access @15.26-15.39
+								(e-field-access @15.26-15.38
 									(e-ident @15.26-15.33 (raw "request"))
 									(e-ident @15.33-15.38 (raw "body")))))
 						(e-match
 							(e-ident @16.11-16.17 (raw "result"))
 							(branches
-								(branch @17.9-18.12
+								(branch @17.9-17.43
 									(p-tag @17.9-17.17 (raw "Ok")
 										(p-ident @17.12-17.16 (raw "data")))
 									(e-apply @17.21-17.43
@@ -185,18 +185,18 @@ CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
 										(e-apply @17.24-17.42
 											(e-ident @17.24-17.36 (raw "Http.success"))
 											(e-ident @17.37-17.41 (raw "data")))))
-								(branch @18.9-19.6
+								(branch @18.9-18.29
 									(p-tag @18.9-18.17 (raw "Err")
 										(p-ident @18.13-18.16 (raw "err")))
 									(e-apply @18.21-18.29
 										(e-tag @18.21-18.24 (raw "Err"))
 										(e-ident @18.25-18.28 (raw "err"))))))))))
-		(s-type-anno @22.1-23.7 (name "config")
+		(s-type-anno @22.1-22.21 (name "config")
 			(ty @22.10-22.21 (name "Json.Config")))
 		(s-decl @23.1-23.28
 			(p-ident @23.1-23.7 (raw "config"))
 			(e-ident @23.10-23.28 (raw "Json.defaultConfig")))
-		(s-type-anno @26.1-27.15 (name "advancedParser")
+		(s-type-anno @26.1-26.82 (name "advancedParser")
 			(ty-fn @26.18-26.82
 				(ty @26.18-26.36 (name "Json.Parser.Config"))
 				(ty @26.38-26.41 (name "Str"))
@@ -214,22 +214,22 @@ CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
 					(e-ident @27.40-27.61 (raw "Json.Parser.parseWith"))
 					(e-ident @27.62-27.74 (raw "parserConfig"))
 					(e-ident @27.76-27.81 (raw "input")))))
-		(s-type-anno @30.1-31.15 (name "combineResults")
+		(s-type-anno @30.1-30.71 (name "combineResults")
 			(ty-fn @30.18-30.71
 				(ty-apply @30.18-30.32
 					(ty @30.18-30.24 (name "Result"))
-					(ty-var @30.25-30.26 (raw "a"))
-					(ty-var @30.28-30.31 (raw "err")))
+					(ty-var @30.25-30.25 (raw "a"))
+					(ty-var @1.1-1.1 (raw "err")))
 				(ty-apply @30.34-30.48
 					(ty @30.34-30.40 (name "Result"))
-					(ty-var @30.41-30.42 (raw "b"))
-					(ty-var @30.44-30.47 (raw "err")))
+					(ty-var @30.41-30.41 (raw "b"))
+					(ty-var @1.1-1.1 (raw "err")))
 				(ty-apply @30.52-30.71
 					(ty @30.52-30.58 (name "Result"))
 					(ty-tuple @30.59-30.65
-						(ty-var @30.60-30.61 (raw "a"))
-						(ty-var @30.63-30.64 (raw "b")))
-					(ty-var @30.67-30.70 (raw "err")))))
+						(ty-var @30.60-30.60 (raw "a"))
+						(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @1.1-1.1 (raw "err")))))
 		(s-decl @31.1-39.6
 			(p-ident @31.1-31.15 (raw "combineResults"))
 			(e-lambda @31.18-39.6
@@ -239,14 +239,14 @@ CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
 				(e-match
 					(e-ident @32.11-32.18 (raw "result1"))
 					(branches
-						(branch @33.9-38.12
+						(branch @33.9-37.14
 							(p-tag @33.9-33.19 (raw "Ok")
 								(p-ident @33.12-33.18 (raw "value1")))
 							(e-match
 								(e-tuple @34.18-34.27
 									(e-ident @34.19-34.26 (raw "result2")))
 								(branches
-									(branch @35.17-36.20
+									(branch @35.17-35.51
 										(p-tag @35.17-35.27 (raw "Ok")
 											(p-ident @35.20-35.26 (raw "value2")))
 										(e-apply @35.31-35.51
@@ -254,13 +254,13 @@ CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
 											(e-tuple @35.34-35.50
 												(e-ident @35.35-35.41 (raw "value1"))
 												(e-ident @35.43-35.49 (raw "value2")))))
-									(branch @36.17-37.14
+									(branch @36.17-36.37
 										(p-tag @36.17-36.25 (raw "Err")
 											(p-ident @36.21-36.24 (raw "err")))
 										(e-apply @36.29-36.37
 											(e-tag @36.29-36.32 (raw "Err"))
 											(e-ident @36.33-36.36 (raw "err")))))))
-						(branch @38.9-39.6
+						(branch @38.9-38.29
 							(p-tag @38.9-38.17 (raw "Err")
 								(p-ident @38.13-38.16 (raw "err")))
 							(e-apply @38.21-38.29
@@ -288,6 +288,7 @@ handleApi = |request| {
 		Ok(data) => Ok(Http.success(data))
 		Err(err) => Err(err)
 	}
+
 }
 
 config : Json.Config
@@ -354,7 +355,7 @@ combineResults = |result1, result2|
 						(e-lookup-external @15.14-15.25
 							(module-idx "1")
 							(target-node-idx "0"))
-						(e-dot-access @15.26-15.39 (field "body")
+						(e-dot-access @15.26-15.38 (field "body")
 							(receiver
 								(e-lookup-local @15.26-15.33
 									(p-assign @14.14-14.21 (ident "request")))))))
@@ -488,16 +489,16 @@ combineResults = |result1, result2|
 			(declared-type
 				(ty-fn @30.18-30.71 (effectful false)
 					(ty-apply @30.18-30.32 (symbol "Result")
-						(ty-var @30.25-30.26 (name "a"))
-						(ty-var @30.28-30.31 (name "err")))
+						(ty-var @30.25-30.25 (name "a"))
+						(ty-var @1.1-1.1 (name "err")))
 					(ty-apply @30.34-30.48 (symbol "Result")
-						(ty-var @30.41-30.42 (name "b"))
-						(ty-var @30.44-30.47 (name "err")))
+						(ty-var @30.41-30.41 (name "b"))
+						(ty-var @1.1-1.1 (name "err")))
 					(ty-apply @30.52-30.71 (symbol "Result")
 						(ty-tuple @30.59-30.65
-							(ty-var @30.60-30.61 (name "a"))
-							(ty-var @30.63-30.64 (name "b")))
-						(ty-var @30.67-30.70 (name "err")))))))
+							(ty-var @30.60-30.60 (name "a"))
+							(ty-var @1.1-1.1 (name "b")))
+						(ty-var @1.1-1.1 (name "err")))))))
 	(s-import @3.1-3.56 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes
 			(exposed (name "Request") (wildcard false))

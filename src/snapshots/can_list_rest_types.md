@@ -49,12 +49,12 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 (e-match
 	(e-ident @1.7-1.14 (raw "numbers"))
 	(branches
-		(branch @2.5-3.6
+		(branch @2.5-2.40
 			(p-list @2.5-2.28
 				(p-ident @2.6-2.11 (raw "first"))
-				(p-list-rest @2.13-2.28 (name "restNums")))
+				(p-list-rest @2.13-2.27 (name "restNums")))
 			(e-ident @2.32-2.40 (raw "restNums")))
-		(branch @3.5-4.2
+		(branch @3.5-3.13
 			(p-list @3.5-3.7)
 			(e-list @3.11-3.13))))
 ~~~
@@ -79,10 +79,10 @@ match numbers {
 							(patterns
 								(p-assign @2.6-2.11 (ident "first")))
 							(rest-at (index 1)
-								(p-assign @2.19-2.27 (ident "restNums"))))))
+								(p-assign @1.1-1.1 (ident "restNums"))))))
 				(value
 					(e-lookup-local @2.32-2.40
-						(p-assign @2.19-2.27 (ident "restNums")))))
+						(p-assign @1.1-1.1 (ident "restNums")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

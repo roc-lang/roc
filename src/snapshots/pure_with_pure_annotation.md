@@ -34,35 +34,35 @@ LowerIdent(11:1-11:6),OpAssign(11:7-11:8),LowerIdent(11:9-11:12),NoSpaceOpenRoun
 ~~~clojure
 (file @1.1-11.18
 	(app @1.1-1.57
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.55 (name "pf")
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @4.1-5.4 (name "add")
+		(s-type-anno @4.1-4.22 (name "add")
 			(ty-fn @4.7-4.22
 				(ty @4.7-4.10 (name "I32"))
 				(ty @4.12-4.15 (name "I32"))
 				(ty @4.19-4.22 (name "I32"))))
-		(s-decl @5.1-8.7
+		(s-decl @5.1-5.30
 			(p-ident @5.1-5.4 (raw "add"))
-			(e-lambda @5.7-8.7
+			(e-lambda @5.7-5.30
 				(args
 					(p-ident @5.8-5.9 (raw "x"))
 					(p-ident @5.11-5.12 (raw "y")))
-				(e-field-access @5.14-8.7
+				(e-field-access @5.14-5.30
 					(e-record @5.14-5.28
 						(field (field "x")
 							(e-ident @5.19-5.20 (raw "x")))
 						(field (field "y")
 							(e-ident @5.25-5.26 (raw "y"))))
 					(e-ident @5.28-5.30 (raw "x")))))
-		(s-type-anno @8.1-9.7 (name "double")
+		(s-type-anno @8.1-8.20 (name "double")
 			(ty-fn @8.10-8.20
 				(ty @8.10-8.13 (name "I32"))
 				(ty @8.17-8.20 (name "I32"))))
@@ -101,11 +101,11 @@ main! = add(1, 2)
 (can-ir
 	(d-let
 		(p-assign @5.1-5.4 (ident "add"))
-		(e-lambda @5.7-8.7
+		(e-lambda @5.7-5.30
 			(args
 				(p-assign @5.8-5.9 (ident "x"))
 				(p-assign @5.11-5.12 (ident "y")))
-			(e-dot-access @5.14-8.7 (field "x")
+			(e-dot-access @5.14-5.30 (field "x")
 				(receiver
 					(e-record @5.14-5.28
 						(fields
@@ -154,7 +154,7 @@ main! = add(1, 2)
 		(patt @9.1-9.7 (type "I32 -> I32"))
 		(patt @11.1-11.6 (type "I32")))
 	(expressions
-		(expr @5.7-8.7 (type "I32, I32 -> I32"))
+		(expr @5.7-5.30 (type "I32, I32 -> I32"))
 		(expr @9.10-9.23 (type "I32 -> I32"))
 		(expr @11.9-11.18 (type "I32"))))
 ~~~

@@ -38,7 +38,6 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 
 	answer: 42,
 	launchTheNukes!: |{}| ...
-
 }
 ~~~
 # CANONICALIZE
@@ -52,7 +51,7 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 				(args
 					(p-record-destructure @3.23-3.25
 						(destructs)))
-				(e-not-implemented @3.27-3.30)))))
+				(e-not-implemented @1.1-1.1)))))
 ~~~
 # TYPES
 ~~~clojure

@@ -80,13 +80,13 @@ CloseCurly(26:1-26:2),EndOfFile(26:2-26:2),
 ~~~clojure
 (file @1.1-26.2
 	(app @1.1-1.56
-		(provides @1.6-1.11
-			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf")
+		(provides @1.5-1.11
+			(exposed-lower-ident @1.6-1.10 (text "main")))
+		(record-field @1.14-1.54 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf")
+			(record-field @1.14-1.54 (name "pf")
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -96,18 +96,18 @@ CloseCurly(26:1-26:2),EndOfFile(26:2-26:2),
 					(ty-var @4.6-4.7 (raw "a"))
 					(ty-var @4.9-4.10 (raw "b"))))
 			(ty-tuple @4.14-4.20
-				(ty-var @4.15-4.16 (raw "a"))
-				(ty-var @4.18-4.19 (raw "b"))))
-		(s-type-anno @7.1-8.10 (name "swap_pair")
+				(ty-var @4.15-4.15 (raw "a"))
+				(ty-var @1.1-1.1 (raw "b"))))
+		(s-type-anno @7.1-7.37 (name "swap_pair")
 			(ty-fn @7.13-7.37
 				(ty-apply @7.13-7.23
 					(ty @7.13-7.17 (name "Pair"))
-					(ty-var @7.18-7.19 (raw "a"))
-					(ty-var @7.21-7.22 (raw "b")))
+					(ty-var @7.18-7.18 (raw "a"))
+					(ty-var @1.1-1.1 (raw "b")))
 				(ty-apply @7.27-7.37
 					(ty @7.27-7.31 (name "Pair"))
-					(ty-var @7.32-7.33 (raw "b"))
-					(ty-var @7.35-7.36 (raw "a")))))
+					(ty-var @7.32-7.32 (raw "b"))
+					(ty-var @1.1-1.1 (raw "a")))))
 		(s-decl @8.1-8.28
 			(p-ident @8.1-8.10 (raw "swap_pair"))
 			(e-lambda @8.13-8.28
@@ -118,22 +118,22 @@ CloseCurly(26:1-26:2),EndOfFile(26:2-26:2),
 				(e-tuple @8.22-8.28
 					(e-ident @8.23-8.24 (raw "y"))
 					(e-ident @8.26-8.27 (raw "x")))))
-		(s-type-anno @11.1-12.9 (name "map_pair")
+		(s-type-anno @11.1-11.56 (name "map_pair")
 			(ty-fn @11.12-11.56
 				(ty-apply @11.12-11.22
 					(ty @11.12-11.16 (name "Pair"))
-					(ty-var @11.17-11.18 (raw "a"))
-					(ty-var @11.20-11.21 (raw "b")))
+					(ty-var @11.17-11.17 (raw "a"))
+					(ty-var @1.1-1.1 (raw "b")))
 				(ty-fn @11.25-11.31
-					(ty-var @11.25-11.26 (raw "a"))
-					(ty-var @11.30-11.31 (raw "c")))
+					(ty-var @11.25-11.25 (raw "a"))
+					(ty-var @1.1-1.1 (raw "c")))
 				(ty-fn @11.35-11.41
-					(ty-var @11.35-11.36 (raw "b"))
-					(ty-var @11.40-11.41 (raw "d")))
+					(ty-var @11.35-11.35 (raw "b"))
+					(ty-var @1.1-1.1 (raw "d")))
 				(ty-apply @11.46-11.56
 					(ty @11.46-11.50 (name "Pair"))
-					(ty-var @11.51-11.52 (raw "c"))
-					(ty-var @11.54-11.55 (raw "d")))))
+					(ty-var @11.51-11.51 (raw "c"))
+					(ty-var @1.1-1.1 (raw "d")))))
 		(s-decl @12.1-12.39
 			(p-ident @12.1-12.9 (raw "map_pair"))
 			(e-lambda @12.12-12.39
@@ -168,17 +168,17 @@ CloseCurly(26:1-26:2),EndOfFile(26:2-26:2),
 							(e-int @23.19-23.20 (raw "3"))
 							(e-int @23.22-23.23 (raw "4"))
 							(e-tuple @23.25-23.36
-								(e-lambda @23.26-23.36
+								(e-lambda @23.26-23.35
 									(args
 										(p-ident @23.27-23.28 (raw "x")))
-									(e-binop @23.30-23.36 (op "+")
+									(e-binop @23.30-23.35 (op "+")
 										(e-ident @23.30-23.31 (raw "x"))
 										(e-int @23.34-23.35 (raw "1")))))
 							(e-tuple @23.38-23.49
-								(e-lambda @23.39-23.49
+								(e-lambda @23.39-23.48
 									(args
 										(p-ident @23.40-23.41 (raw "y")))
-									(e-binop @23.43-23.49 (op "*")
+									(e-binop @23.43-23.48 (op "*")
 										(e-ident @23.43-23.44 (raw "y"))
 										(e-int @23.47-23.48 (raw "2")))))))
 					(e-ident @25.5-25.7 (raw "p2")))))))
@@ -233,11 +233,11 @@ main = {
 			(declared-type
 				(ty-fn @7.13-7.37 (effectful false)
 					(ty-apply @7.13-7.23 (symbol "Pair")
-						(ty-var @7.18-7.19 (name "a"))
-						(ty-var @7.21-7.22 (name "b")))
+						(ty-var @7.18-7.18 (name "a"))
+						(ty-var @1.1-1.1 (name "b")))
 					(ty-apply @7.27-7.37 (symbol "Pair")
-						(ty-var @7.32-7.33 (name "b"))
-						(ty-var @7.35-7.36 (name "a")))))))
+						(ty-var @7.32-7.32 (name "b"))
+						(ty-var @1.1-1.1 (name "a")))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "map_pair"))
 		(e-lambda @12.12-12.39
@@ -264,19 +264,19 @@ main = {
 			(declared-type
 				(ty-fn @11.12-11.56 (effectful false)
 					(ty-apply @11.12-11.22 (symbol "Pair")
-						(ty-var @11.17-11.18 (name "a"))
-						(ty-var @11.20-11.21 (name "b")))
+						(ty-var @11.17-11.17 (name "a"))
+						(ty-var @1.1-1.1 (name "b")))
 					(ty-parens @11.24-11.32
 						(ty-fn @11.25-11.31 (effectful false)
-							(ty-var @11.25-11.26 (name "a"))
-							(ty-var @11.30-11.31 (name "c"))))
+							(ty-var @11.25-11.25 (name "a"))
+							(ty-var @1.1-1.1 (name "c"))))
 					(ty-parens @11.34-11.42
 						(ty-fn @11.35-11.41 (effectful false)
-							(ty-var @11.35-11.36 (name "b"))
-							(ty-var @11.40-11.41 (name "d"))))
+							(ty-var @11.35-11.35 (name "b"))
+							(ty-var @1.1-1.1 (name "d"))))
 					(ty-apply @11.46-11.56 (symbol "Pair")
-						(ty-var @11.51-11.52 (name "c"))
-						(ty-var @11.54-11.55 (name "d")))))))
+						(ty-var @11.51-11.51 (name "c"))
+						(ty-var @1.1-1.1 (name "d")))))))
 	(d-let
 		(p-assign @17.1-17.5 (ident "main"))
 		(e-block @17.8-26.2
@@ -296,17 +296,17 @@ main = {
 						(p-assign @12.1-12.9 (ident "map_pair")))
 					(e-int @23.19-23.20 (value "3"))
 					(e-int @23.22-23.23 (value "4"))
-					(e-lambda @23.26-23.36
+					(e-lambda @23.26-23.35
 						(args
 							(p-assign @23.27-23.28 (ident "x")))
-						(e-binop @23.30-23.36 (op "add")
+						(e-binop @23.30-23.35 (op "add")
 							(e-lookup-local @23.30-23.31
 								(p-assign @23.27-23.28 (ident "x")))
 							(e-int @23.34-23.35 (value "1"))))
-					(e-lambda @23.39-23.49
+					(e-lambda @23.39-23.48
 						(args
 							(p-assign @23.40-23.41 (ident "y")))
-						(e-binop @23.43-23.49 (op "mul")
+						(e-binop @23.43-23.48 (op "mul")
 							(e-lookup-local @23.43-23.44
 								(p-assign @23.40-23.41 (ident "y")))
 							(e-int @23.47-23.48 (value "2"))))))
@@ -318,8 +318,8 @@ main = {
 				(ty-var @4.6-4.7 (name "a"))
 				(ty-var @4.9-4.10 (name "b"))))
 		(ty-tuple @4.14-4.20
-			(ty-var @4.15-4.16 (name "a"))
-			(ty-var @4.18-4.19 (name "b")))))
+			(ty-var @4.15-4.15 (name "a"))
+			(ty-var @1.1-1.1 (name "b")))))
 ~~~
 # TYPES
 ~~~clojure

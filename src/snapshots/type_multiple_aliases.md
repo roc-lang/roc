@@ -47,13 +47,13 @@ CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 ~~~clojure
 (file @1.1-17.2
 	(app @1.1-1.57
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.55 (name "pf")
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -73,13 +73,13 @@ CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 			(header @6.1-6.5 (name "User")
 				(args))
 			(ty-record @6.8-6.55
-				(anno-record-field @6.10-6.22 (name "id")
+				(anno-record-field @6.10-6.21 (name "id")
 					(ty @6.15-6.21 (name "UserId")))
-				(anno-record-field @6.23-6.39 (name "name")
+				(anno-record-field @6.23-6.38 (name "name")
 					(ty @6.30-6.38 (name "UserName")))
-				(anno-record-field @6.40-6.55 (name "age")
+				(anno-record-field @6.40-6.53 (name "age")
 					(ty @6.46-6.53 (name "UserAge")))))
-		(s-type-anno @8.1-9.12 (name "create_user")
+		(s-type-anno @8.1-8.48 (name "create_user")
 			(ty-fn @8.15-8.48
 				(ty @8.15-8.21 (name "UserId"))
 				(ty @8.23-8.31 (name "UserName"))
@@ -96,16 +96,16 @@ CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 					(field (field "id"))
 					(field (field "name"))
 					(field (field "age")))))
-		(s-type-anno @11.1-12.14 (name "get_user_name")
+		(s-type-anno @11.1-11.33 (name "get_user_name")
 			(ty-fn @11.17-11.33
 				(ty @11.17-11.21 (name "User"))
 				(ty @11.25-11.33 (name "UserName"))))
-		(s-decl @12.1-14.6
+		(s-decl @12.1-12.33
 			(p-ident @12.1-12.14 (raw "get_user_name"))
-			(e-lambda @12.17-14.6
+			(e-lambda @12.17-12.33
 				(args
 					(p-ident @12.18-12.22 (raw "user")))
-				(e-field-access @12.24-14.6
+				(e-field-access @12.24-12.33
 					(e-ident @12.24-12.28 (raw "user"))
 					(e-ident @12.28-12.33 (raw "name")))))
 		(s-decl @14.1-17.2
@@ -144,13 +144,13 @@ NO CHANGE
 			(e-record @9.31-9.46
 				(fields
 					(field (name "id")
-						(e-lookup-local @9.32-9.35
+						(e-lookup-local @9.32-9.34
 							(p-assign @9.16-9.18 (ident "id"))))
 					(field (name "name")
-						(e-lookup-local @9.36-9.41
+						(e-lookup-local @9.36-9.40
 							(p-assign @9.20-9.24 (ident "name"))))
 					(field (name "age")
-						(e-lookup-local @9.42-9.46
+						(e-lookup-local @9.42-9.45
 							(p-assign @9.26-9.29 (ident "age")))))))
 		(annotation @9.1-9.12
 			(declared-type
@@ -161,10 +161,10 @@ NO CHANGE
 					(ty @8.44-8.48 (name "User"))))))
 	(d-let
 		(p-assign @12.1-12.14 (ident "get_user_name"))
-		(e-lambda @12.17-14.6
+		(e-lambda @12.17-12.33
 			(args
 				(p-assign @12.18-12.22 (ident "user")))
-			(e-dot-access @12.24-14.6 (field "name")
+			(e-dot-access @12.24-12.33 (field "name")
 				(receiver
 					(e-lookup-local @12.24-12.28
 						(p-assign @12.18-12.22 (ident "user"))))))
@@ -230,6 +230,6 @@ NO CHANGE
 			(ty-header @6.1-6.5 (name "User"))))
 	(expressions
 		(expr @9.15-9.46 (type "UserId, UserName, UserAge -> User"))
-		(expr @12.17-14.6 (type "User -> UserName"))
+		(expr @12.17-12.33 (type "User -> UserName"))
 		(expr @14.9-17.2 (type "* -> UserName"))))
 ~~~

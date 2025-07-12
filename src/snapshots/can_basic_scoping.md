@@ -83,12 +83,12 @@ CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
 							(p-ident @10.5-10.16 (raw "innerResult"))
 							(e-block @10.19-14.6
 								(statements
-									(s-decl @12.9-13.10
+									(s-decl @12.9-12.18
 										(p-ident @12.9-12.10 (raw "z"))
-										(e-binop @12.13-13.10 (op "+")
+										(e-binop @12.13-12.18 (op "+")
 											(e-ident @12.13-12.14 (raw "x"))
 											(e-ident @12.17-12.18 (raw "y"))))
-									(e-binop @13.9-14.6 (op "+")
+									(e-binop @13.9-13.14 (op "+")
 										(e-ident @13.9-13.10 (raw "z"))
 										(e-int @13.13-13.14 (raw "1"))))))
 						(e-ident @15.5-15.16 (raw "innerResult"))))))))
@@ -133,14 +133,14 @@ outerFunc = |_| {
 				(s-let @10.5-14.6
 					(p-assign @10.5-10.16 (ident "innerResult"))
 					(e-block @10.19-14.6
-						(s-let @12.9-13.10
+						(s-let @12.9-12.18
 							(p-assign @12.9-12.10 (ident "z"))
-							(e-binop @12.13-13.10 (op "add")
+							(e-binop @12.13-12.18 (op "add")
 								(e-lookup-local @12.13-12.14
 									(p-assign @9.5-9.6 (ident "x")))
 								(e-lookup-local @12.17-12.18
 									(p-assign @5.1-5.2 (ident "y")))))
-						(e-binop @13.9-14.6 (op "add")
+						(e-binop @13.9-13.14 (op "add")
 							(e-lookup-local @13.9-13.10
 								(p-assign @12.9-12.10 (ident "z")))
 							(e-int @13.13-13.14 (value "1")))))

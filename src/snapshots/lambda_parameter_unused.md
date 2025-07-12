@@ -82,17 +82,17 @@ CloseCurly(25:1-25:2),EndOfFile(25:2-25:2),
 ~~~clojure
 (file @1.1-25.2
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @4.1-5.4 (name "add")
+		(s-type-anno @4.1-4.17 (name "add")
 			(ty-fn @4.7-4.17
 				(ty @4.7-4.10 (name "U64"))
 				(ty @4.14-4.17 (name "U64"))))
@@ -102,19 +102,19 @@ CloseCurly(25:1-25:2),EndOfFile(25:2-25:2),
 				(args
 					(p-ident @5.8-5.14 (raw "unused")))
 				(e-int @5.16-5.18 (raw "42"))))
-		(s-type-anno @8.1-9.9 (name "multiply")
+		(s-type-anno @8.1-8.22 (name "multiply")
 			(ty-fn @8.12-8.22
 				(ty @8.12-8.15 (name "U64"))
 				(ty @8.19-8.22 (name "U64"))))
-		(s-decl @9.1-12.8
+		(s-decl @9.1-9.33
 			(p-ident @9.1-9.9 (raw "multiply"))
-			(e-lambda @9.12-12.8
+			(e-lambda @9.12-9.33
 				(args
 					(p-ident @9.13-9.20 (raw "_factor")))
-				(e-binop @9.22-12.8 (op "*")
+				(e-binop @9.22-9.33 (op "*")
 					(e-ident @9.22-9.29 (raw "_factor"))
 					(e-int @9.32-9.33 (raw "2")))))
-		(s-type-anno @12.1-13.8 (name "process")
+		(s-type-anno @12.1-12.21 (name "process")
 			(ty-fn @12.11-12.21
 				(ty @12.11-12.14 (name "U64"))
 				(ty @12.18-12.21 (name "U64"))))
@@ -124,16 +124,16 @@ CloseCurly(25:1-25:2),EndOfFile(25:2-25:2),
 				(args
 					(p-ident @13.12-13.18 (raw "_input")))
 				(e-int @13.20-13.23 (raw "100"))))
-		(s-type-anno @16.1-17.7 (name "double")
+		(s-type-anno @16.1-16.20 (name "double")
 			(ty-fn @16.10-16.20
 				(ty @16.10-16.13 (name "U64"))
 				(ty @16.17-16.20 (name "U64"))))
-		(s-decl @17.1-19.6
+		(s-decl @17.1-17.27
 			(p-ident @17.1-17.7 (raw "double"))
-			(e-lambda @17.10-19.6
+			(e-lambda @17.10-17.27
 				(args
 					(p-ident @17.11-17.16 (raw "value")))
-				(e-binop @17.18-19.6 (op "*")
+				(e-binop @17.18-17.27 (op "*")
 					(e-ident @17.18-17.23 (raw "value"))
 					(e-int @17.26-17.27 (raw "2")))))
 		(s-decl @19.1-25.2
@@ -163,11 +163,11 @@ CloseCurly(25:1-25:2),EndOfFile(25:2-25:2),
 							(e-apply @23.15-23.24
 								(e-ident @23.15-23.21 (raw "double"))
 								(e-int @23.22-23.23 (raw "4"))))
-						(e-binop @24.5-25.2 (op "+")
+						(e-binop @24.5-24.42 (op "+")
 							(e-ident @24.5-24.12 (raw "result1"))
-							(e-binop @24.15-25.2 (op "+")
+							(e-binop @24.15-24.42 (op "+")
 								(e-ident @24.15-24.22 (raw "result2"))
-								(e-binop @24.25-25.2 (op "+")
+								(e-binop @24.25-24.42 (op "+")
 									(e-ident @24.25-24.32 (raw "result3"))
 									(e-ident @24.35-24.42 (raw "result4")))))))))))
 ~~~
@@ -215,10 +215,10 @@ main! = |_| {
 					(ty @4.14-4.17 (name "U64"))))))
 	(d-let
 		(p-assign @9.1-9.9 (ident "multiply"))
-		(e-lambda @9.12-12.8
+		(e-lambda @9.12-9.33
 			(args
 				(p-assign @9.13-9.20 (ident "_factor")))
-			(e-binop @9.22-12.8 (op "mul")
+			(e-binop @9.22-9.33 (op "mul")
 				(e-lookup-local @9.22-9.29
 					(p-assign @9.13-9.20 (ident "_factor")))
 				(e-int @9.32-9.33 (value "2"))))
@@ -240,10 +240,10 @@ main! = |_| {
 					(ty @12.18-12.21 (name "U64"))))))
 	(d-let
 		(p-assign @17.1-17.7 (ident "double"))
-		(e-lambda @17.10-19.6
+		(e-lambda @17.10-17.27
 			(args
 				(p-assign @17.11-17.16 (ident "value")))
-			(e-binop @17.18-19.6 (op "mul")
+			(e-binop @17.18-17.27 (op "mul")
 				(e-lookup-local @17.18-17.23
 					(p-assign @17.11-17.16 (ident "value")))
 				(e-int @17.26-17.27 (value "2"))))
@@ -282,13 +282,13 @@ main! = |_| {
 						(e-lookup-local @23.15-23.21
 							(p-assign @17.1-17.7 (ident "double")))
 						(e-int @23.22-23.23 (value "4"))))
-				(e-binop @24.5-25.2 (op "add")
+				(e-binop @24.5-24.42 (op "add")
 					(e-lookup-local @24.5-24.12
 						(p-assign @20.5-20.12 (ident "result1")))
-					(e-binop @24.15-25.2 (op "add")
+					(e-binop @24.15-24.42 (op "add")
 						(e-lookup-local @24.15-24.22
 							(p-assign @21.5-21.12 (ident "result2")))
-						(e-binop @24.25-25.2 (op "add")
+						(e-binop @24.25-24.42 (op "add")
 							(e-lookup-local @24.25-24.32
 								(p-assign @22.5-22.12 (ident "result3")))
 							(e-lookup-local @24.35-24.42
@@ -305,8 +305,8 @@ main! = |_| {
 		(patt @19.1-19.6 (type "* -> *")))
 	(expressions
 		(expr @5.7-5.18 (type "U64 -> U64"))
-		(expr @9.12-12.8 (type "U64 -> U64"))
+		(expr @9.12-9.33 (type "U64 -> U64"))
 		(expr @13.11-13.23 (type "U64 -> U64"))
-		(expr @17.10-19.6 (type "U64 -> U64"))
+		(expr @17.10-17.27 (type "U64 -> U64"))
 		(expr @19.9-25.2 (type "* -> *"))))
 ~~~

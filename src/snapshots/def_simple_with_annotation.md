@@ -25,9 +25,9 @@ LowerIdent(4:1-4:4),OpAssign(4:5-4:6),StringStart(4:7-4:8),StringPart(4:8-4:11),
 (file @1.1-4.12
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident (text "foo"))))
+			(exposed-lower-ident @1.9-1.12 (text "foo"))))
 	(statements
-		(s-type-anno @3.1-4.4 (name "foo")
+		(s-type-anno @3.1-3.10 (name "foo")
 			(ty @3.7-3.10 (name "Str")))
 		(s-decl @4.1-4.12
 			(p-ident @4.1-4.4 (raw "foo"))

@@ -26,8 +26,8 @@ LowerIdent(4:1-4:6),OpAssign(4:7-4:8),StringStart(4:9-4:10),StringPart(4:10-4:15
 (file @1.1-4.16
 	(module @1.1-1.23
 		(exposes @1.8-1.23
-			(exposed-lower-ident (text "hello!"))
-			(exposed-lower-ident (text "world"))))
+			(exposed-lower-ident @1.9-1.15 (text "hello!"))
+			(exposed-lower-ident @1.17-1.22 (text "world"))))
 	(statements
 		(s-import @2.1-2.17 (raw "pf.Stdout"))
 		(s-decl @3.1-3.31

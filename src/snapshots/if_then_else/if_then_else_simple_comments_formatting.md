@@ -40,7 +40,9 @@ CloseCurly(3:1-3:2),KwElse(3:3-3:7),UpperIdent(3:8-3:9),EndOfFile(3:9-3:9),
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if bool { # Comment after then open
+	A
+} else B
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -80,12 +80,12 @@ UpperIdent(10:1-10:7),OpColon(10:8-10:9),OpenSquare(10:10-10:11),UpperIdent(10:1
 (file @1.1-10.19
 	(module @1.1-1.50
 		(exposes @1.8-1.50
-			(exposed-lower-ident (text "foo"))
-			(exposed-lower-ident (text "bar"))
-			(exposed-upper-ident (text "MyType"))
-			(exposed-upper-ident (text "OtherType"))
-			(exposed-lower-ident (text "foo"))
-			(exposed-upper-ident (text "MyType"))))
+			(exposed-lower-ident @1.9-1.12 (text "foo"))
+			(exposed-lower-ident @1.14-1.17 (text "bar"))
+			(exposed-upper-ident @1.19-1.25 (text "MyType"))
+			(exposed-upper-ident @1.27-1.36 (text "OtherType"))
+			(exposed-lower-ident @1.38-1.41 (text "foo"))
+			(exposed-upper-ident @1.43-1.49 (text "MyType"))))
 	(statements
 		(s-decl @8.1-8.9
 			(p-ident @8.1-8.4 (raw "foo"))

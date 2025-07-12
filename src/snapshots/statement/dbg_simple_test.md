@@ -29,7 +29,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 (file @1.1-6.2
 	(module @1.1-1.14
 		(exposes @1.8-1.14
-			(exposed-lower-ident (text "test"))))
+			(exposed-lower-ident @1.9-1.13 (text "test"))))
 	(statements
 		(s-decl @3.1-6.2
 			(p-ident @3.1-3.5 (raw "test"))
@@ -38,7 +38,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 					(s-decl @4.5-4.11
 						(p-ident @4.5-4.6 (raw "x"))
 						(e-int @4.9-4.11 (raw "42")))
-					(s-dbg @5.5-6.2
+					(s-dbg @5.5-5.11
 						(e-tuple @5.8-5.11
 							(e-ident @5.9-5.10 (raw "x")))))))))
 ~~~
@@ -60,7 +60,7 @@ test = {
 			(s-let @4.5-4.11
 				(p-assign @4.5-4.6 (ident "x"))
 				(e-int @4.9-4.11 (value "42")))
-			(e-dbg @5.5-6.2
+			(e-dbg @5.5-5.11
 				(e-lookup-local @5.9-5.10
 					(p-assign @4.5-4.6 (ident "x")))))))
 ~~~

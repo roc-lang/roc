@@ -14,7 +14,7 @@ match numbers {
 BAD LIST REST PATTERN SYNTAX - list_patterns.md:3:13:3:19
 UNDEFINED VARIABLE - list_patterns.md:1:7:1:14
 UNDEFINED VARIABLE - list_patterns.md:2:11:2:14
-UNUSED VARIABLE - list_patterns.md:3:15:3:19
+UNUSED VARIABLE - list_patterns.md:3:15:3:15
 UNUSED VARIABLE - list_patterns.md:3:6:3:11
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
@@ -56,11 +56,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**list_patterns.md:3:15:3:19:**
+**list_patterns.md:3:15:3:15:**
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error
 ```
-              ^^^^
+              
 
 
 **UNUSED VARIABLE**
@@ -87,13 +87,13 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 (e-match
 	(e-ident @1.7-1.14 (raw "numbers"))
 	(branches
-		(branch @2.5-3.6
+		(branch @2.5-2.14
 			(p-list @2.5-2.7)
 			(e-ident @2.11-2.14 (raw "acc")))
-		(branch @3.5-4.2
+		(branch @3.5-3.25
 			(p-list @3.5-3.20
 				(p-ident @3.6-3.11 (raw "first"))
-				(p-list-rest @3.13-3.20 (name "rest")))
+				(p-list-rest @3.13-3.19 (name "rest")))
 			(e-int @3.24-3.25 (raw "0")))))
 ~~~
 # FORMATTED
@@ -124,7 +124,7 @@ match numbers {
 							(patterns
 								(p-assign @3.6-3.11 (ident "first")))
 							(rest-at (index 1)
-								(p-assign @3.15-3.19 (ident "rest"))))))
+								(p-assign @3.15-3.15 (ident "rest"))))))
 				(value
 					(e-int @3.24-3.25 (value "0")))))))
 ~~~

@@ -28,7 +28,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:15),NoSpaceDotUpperIdent(
 (file @1.1-6.20
 	(module @1.1-1.15
 		(exposes @1.8-1.15
-			(exposed-lower-ident (text "value"))))
+			(exposed-lower-ident @1.9-1.14 (text "value"))))
 	(statements
 		(s-type-decl @3.1-3.23
 			(header @3.1-3.7 (name "MyType")
@@ -37,7 +37,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:15),NoSpaceDotUpperIdent(
 				(tags
 					(ty @3.12-3.16 (name "TagA"))
 					(ty @3.18-3.22 (name "TagB")))))
-		(s-type-anno @5.1-6.6 (name "value")
+		(s-type-anno @5.1-5.15 (name "value")
 			(ty @5.9-5.15 (name "MyType")))
 		(s-decl @6.1-6.20
 			(p-ident @6.1-6.6 (raw "value"))

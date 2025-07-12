@@ -8,18 +8,18 @@ type=expr
 |{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - function_record_parameter_capture.md:1:15:1:20
+UNUSED VARIABLE - function_record_parameter_capture.md:1:15:1:18
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``a`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
 The unused variable is declared here:
-**function_record_parameter_capture.md:1:15:1:20:**
+**function_record_parameter_capture.md:1:15:1:18:**
 ```roc
 |{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
 ```
-              ^^^^^
+              ^^^
 
 
 # TOKENS
@@ -30,11 +30,11 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 ~~~clojure
 (e-lambda @1.1-1.103
 	(args
-		(p-as @1.2-1.30 (name "person")
+		(p-as @1.2-1.23 (name "person")
 			(p-record @1.2-1.20
-				(field @1.4-1.9 (name "name") (rest false))
-				(field @1.10-1.14 (name "age") (rest false))
-				(field @1.15-1.20 (name "a") (rest true)))))
+				(field @1.4-1.8 (name "name") (rest false))
+				(field @1.10-1.13 (name "age") (rest false))
+				(field @1.15-1.18 (name "a") (rest true)))))
 	(e-record @1.32-1.103
 		(field (field "greeting")
 			(e-string @1.44-1.59
@@ -44,7 +44,7 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 		(field (field "full_record")
 			(e-ident @1.74-1.80 (raw "person")))
 		(field (field "is_adult")
-			(e-binop @1.92-1.103 (op ">=")
+			(e-binop @1.92-1.101 (op ">=")
 				(e-ident @1.92-1.95 (raw "age"))
 				(e-int @1.99-1.101 (raw "18"))))))
 ~~~
@@ -56,14 +56,14 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 ~~~clojure
 (e-lambda @1.1-1.103
 	(args
-		(p-as @1.2-1.30 (as "person")
+		(p-as @1.2-1.23 (as "person")
 			(p-record-destructure @1.2-1.20
 				(destructs
-					(record-destruct @1.4-1.9 (label "name") (ident "name")
+					(record-destruct @1.4-1.8 (label "name") (ident "name")
 						(required))
-					(record-destruct @1.10-1.14 (label "age") (ident "age")
+					(record-destruct @1.10-1.13 (label "age") (ident "age")
 						(required))
-					(record-destruct @1.15-1.20 (label "a") (ident "a")
+					(record-destruct @1.15-1.18 (label "a") (ident "a")
 						(required))))))
 	(e-record @1.32-1.103
 		(fields
@@ -71,23 +71,23 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 				(e-string @1.44-1.59
 					(e-literal @1.45-1.51 (string "Hello "))
 					(e-lookup-local @1.53-1.57
-						(p-assign @1.4-1.9 (ident "name")))
+						(p-assign @1.4-1.8 (ident "name")))
 					(e-literal @1.58-1.58 (string ""))))
 			(field (name "full_record")
 				(e-lookup-local @1.74-1.80
-					(p-as @1.2-1.30 (as "person")
+					(p-as @1.2-1.23 (as "person")
 						(p-record-destructure @1.2-1.20
 							(destructs
-								(record-destruct @1.4-1.9 (label "name") (ident "name")
+								(record-destruct @1.4-1.8 (label "name") (ident "name")
 									(required))
-								(record-destruct @1.10-1.14 (label "age") (ident "age")
+								(record-destruct @1.10-1.13 (label "age") (ident "age")
 									(required))
-								(record-destruct @1.15-1.20 (label "a") (ident "a")
+								(record-destruct @1.15-1.18 (label "a") (ident "a")
 									(required)))))))
 			(field (name "is_adult")
-				(e-binop @1.92-1.103 (op "ge")
+				(e-binop @1.92-1.101 (op "ge")
 					(e-lookup-local @1.92-1.95
-						(p-assign @1.10-1.14 (ident "age")))
+						(p-assign @1.10-1.13 (ident "age")))
 					(e-int @1.99-1.101 (value "18")))))))
 ~~~
 # TYPES

@@ -70,14 +70,14 @@ UpperIdent(10:1-10:12),OpColon(10:13-10:14),UpperIdent(10:15-10:25),NoSpaceDotUp
 (file @1.1-10.37
 	(module @1.1-1.30
 		(exposes @1.8-1.30
-			(exposed-upper-ident (text "MyType"))
-			(exposed-lower-ident (text "processValue"))))
+			(exposed-upper-ident @1.9-1.15 (text "MyType"))
+			(exposed-lower-ident @1.17-1.29 (text "processValue"))))
 	(statements
 		(s-type-decl @3.1-3.21
 			(header @3.1-3.7 (name "MyType")
 				(args))
 			(ty @3.10-3.21 (name "UnknownType")))
-		(s-type-anno @5.1-6.13 (name "processValue")
+		(s-type-anno @5.1-5.39 (name "processValue")
 			(ty-fn @5.16-5.39
 				(ty @5.16-5.32 (name "UndeclaredResult"))
 				(ty @5.36-5.39 (name "Str"))))
@@ -104,6 +104,7 @@ MyType : UnknownType
 processValue : UndeclaredResult -> Str
 processValue = |value| {
 	"processed"
+
 }
 
 AnotherType : SomeModule.MissingType

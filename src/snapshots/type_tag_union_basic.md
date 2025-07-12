@@ -75,17 +75,17 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 ~~~clojure
 (file @1.1-18.15
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.8 (name "process")
+		(s-type-anno @3.1-3.35 (name "process")
 			(ty-fn @3.11-3.35
 				(ty-tag-union @3.11-3.28
 					(tags
@@ -101,16 +101,16 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 					(p-ident @4.12-4.17 (raw "maybe")))
 				(e-string @4.19-4.27
 					(e-string-part @4.20-4.26 (raw "result")))))
-		(s-type-anno @6.1-7.27 (name "is_ok_ret_unqualified_bool")
+		(s-type-anno @6.1-6.56 (name "is_ok_ret_unqualified_bool")
 			(ty-fn @6.30-6.56
 				(ty-tag-union @6.30-6.48
 					(tags
 						(ty-apply @6.31-6.37
 							(ty @6.31-6.33 (name "Ok"))
-							(ty-var @6.34-6.36 (raw "ok")))
+							(ty-var @6.34-6.34 (raw "ok")))
 						(ty-apply @6.39-6.47
 							(ty @6.39-6.42 (name "Err"))
-							(ty-var @6.43-6.46 (raw "err")))))
+							(ty-var @6.43-6.43 (raw "err")))))
 				(ty @6.52-6.56 (name "Bool"))))
 		(s-decl @7.1-10.2
 			(p-ident @7.1-7.27 (raw "is_ok_ret_unqualified_bool"))
@@ -120,24 +120,24 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 				(e-match
 					(e-ident @7.45-7.51 (raw "result"))
 					(branches
-						(branch @8.5-9.8
+						(branch @8.5-8.18
 							(p-tag @8.5-8.10 (raw "Ok")
 								(p-underscore))
 							(e-tag @8.14-8.18 (raw "True")))
-						(branch @9.5-10.2
+						(branch @9.5-9.20
 							(p-tag @9.5-9.11 (raw "Err")
 								(p-underscore))
 							(e-tag @9.15-9.20 (raw "False")))))))
-		(s-type-anno @12.1-13.15 (name "is_ok_ret_bool")
+		(s-type-anno @12.1-12.46 (name "is_ok_ret_bool")
 			(ty-fn @12.18-12.46
 				(ty-tag-union @12.18-12.38
 					(tags
 						(ty-apply @12.19-12.26
 							(ty @12.19-12.21 (name "Ok"))
-							(ty-var @12.22-12.25 (raw "ok2")))
+							(ty-var @12.22-12.22 (raw "ok2")))
 						(ty-apply @12.28-12.37
 							(ty @12.28-12.31 (name "Err"))
-							(ty-var @12.32-12.36 (raw "err2")))))
+							(ty-var @12.32-12.32 (raw "err2")))))
 				(ty @12.42-12.46 (name "Bool"))))
 		(s-decl @13.1-16.2
 			(p-ident @13.1-13.15 (raw "is_ok_ret_bool"))
@@ -147,11 +147,11 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 				(e-match
 					(e-ident @13.33-13.39 (raw "result"))
 					(branches
-						(branch @14.5-15.8
+						(branch @14.5-14.23
 							(p-tag @14.5-14.10 (raw "Ok")
 								(p-underscore))
 							(e-tag @14.14-14.23 (raw "Bool.True")))
-						(branch @15.5-16.2
+						(branch @15.5-15.25
 							(p-tag @15.5-15.11 (raw "Err")
 								(p-underscore))
 							(e-tag @15.15-15.25 (raw "Bool.False")))))))
@@ -229,9 +229,9 @@ main! = |_| {}
 				(ty-fn @6.30-6.56 (effectful false)
 					(ty-tag-union @6.30-6.48
 						(ty-apply @6.31-6.37 (symbol "Ok")
-							(ty-var @6.34-6.36 (name "ok")))
+							(ty-var @6.34-6.34 (name "ok")))
 						(ty-apply @6.39-6.47 (symbol "Err")
-							(ty-var @6.43-6.46 (name "err"))))
+							(ty-var @6.43-6.43 (name "err"))))
 					(ty @6.52-6.56 (name "Bool"))))))
 	(d-let
 		(p-assign @13.1-13.15 (ident "is_ok_ret_bool"))
@@ -263,9 +263,9 @@ main! = |_| {}
 				(ty-fn @12.18-12.46 (effectful false)
 					(ty-tag-union @12.18-12.38
 						(ty-apply @12.19-12.26 (symbol "Ok")
-							(ty-var @12.22-12.25 (name "ok2")))
+							(ty-var @12.22-12.22 (name "ok2")))
 						(ty-apply @12.28-12.37 (symbol "Err")
-							(ty-var @12.32-12.36 (name "err2"))))
+							(ty-var @12.32-12.32 (name "err2"))))
 					(ty @12.42-12.46 (name "Bool"))))))
 	(d-let
 		(p-assign @18.1-18.6 (ident "main!"))

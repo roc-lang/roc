@@ -40,10 +40,10 @@ LowerIdent(8:1-8:5),OpAssign(8:6-8:7),UpperIdent(8:8-8:10),NoSpaceDotUpperIdent(
 (file @1.1-8.29
 	(module @1.1-1.14
 		(exposes @1.8-1.14
-			(exposed-lower-ident (text "blue"))))
+			(exposed-lower-ident @1.9-1.13 (text "blue"))))
 	(statements
 		(s-import @4.1-4.26 (raw "styles.Color") (alias "CC"))
-		(s-type-anno @7.1-8.5 (name "blue")
+		(s-type-anno @7.1-7.14 (name "blue")
 			(ty @7.8-7.14 (name "CC.RGB")))
 		(s-decl @8.1-8.29
 			(p-ident @8.1-8.5 (raw "blue"))

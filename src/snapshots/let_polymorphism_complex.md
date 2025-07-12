@@ -208,13 +208,13 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 ~~~clojure
 (file @1.1-108.2
 	(app @1.1-1.56
-		(provides @1.6-1.11
-			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf")
+		(provides @1.5-1.11
+			(exposed-lower-ident @1.6-1.10 (text "main")))
+		(record-field @1.14-1.54 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf")
+			(record-field @1.14-1.54 (name "pf")
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -402,10 +402,10 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 								(field (field "items")
 									(e-list @72.20-72.43
 										(e-ident @72.21-72.24 (raw "num"))
-										(e-binop @72.26-72.34 (op "*")
+										(e-binop @72.26-72.33 (op "*")
 											(e-ident @72.26-72.29 (raw "num"))
 											(e-int @72.32-72.33 (raw "2")))
-										(e-binop @72.35-72.43 (op "*")
+										(e-binop @72.35-72.42 (op "*")
 											(e-ident @72.35-72.38 (raw "num"))
 											(e-int @72.41-72.42 (raw "3")))))))
 						(field (field "collection")
@@ -436,14 +436,14 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 							(field (field "tag")
 								(e-string @79.33-79.39
 									(e-string-part @79.34-79.38 (raw "more")))))))))
-		(s-decl @84.1-85.9
+		(s-decl @84.1-84.20
 			(p-ident @84.1-84.9 (raw "compute1"))
-			(e-binop @84.12-85.9 (op "+")
+			(e-binop @84.12-84.20 (op "+")
 				(e-ident @84.12-84.15 (raw "num"))
 				(e-int @84.18-84.20 (raw "10"))))
-		(s-decl @85.1-86.9
+		(s-decl @85.1-85.19
 			(p-ident @85.1-85.9 (raw "compute2"))
-			(e-binop @85.12-86.9 (op "*")
+			(e-binop @85.12-85.19 (op "*")
 				(e-ident @85.12-85.15 (raw "num"))
 				(e-int @85.18-85.19 (raw "2"))))
 		(s-decl @86.1-86.22
@@ -459,10 +459,10 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 				(field (field "derived")
 					(e-list @87.34-87.57
 						(e-ident @87.35-87.38 (raw "num"))
-						(e-binop @87.40-87.48 (op "+")
+						(e-binop @87.40-87.47 (op "+")
 							(e-ident @87.40-87.43 (raw "num"))
 							(e-int @87.46-87.47 (raw "1")))
-						(e-binop @87.49-87.57 (op "+")
+						(e-binop @87.49-87.56 (op "+")
 							(e-ident @87.49-87.52 (raw "num"))
 							(e-int @87.55-87.56 (raw "2")))))))
 		(s-decl @90.1-103.2
@@ -500,11 +500,11 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 				(field (field "computations")
 					(e-record @98.19-102.6
 						(field (field "from_num")
-							(e-binop @99.19-99.29 (op "*")
+							(e-binop @99.19-99.28 (op "*")
 								(e-ident @99.19-99.22 (raw "num"))
 								(e-int @99.25-99.28 (raw "100"))))
 						(field (field "from_frac")
-							(e-binop @100.20-100.32 (op "*")
+							(e-binop @100.20-100.31 (op "*")
 								(e-ident @100.20-100.24 (raw "frac"))
 								(e-frac @100.27-100.31 (raw "10.0"))))
 						(field (field "list_from_num")
@@ -519,8 +519,8 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 					(p-underscore))
 				(e-block @105.12-108.2
 					(statements
-						(e-binop @107.5-108.2 (op "+")
-							(e-field-access @107.5-107.23
+						(e-binop @107.5-107.26 (op "+")
+							(e-field-access @107.5-107.21
 								(e-ident @107.5-107.15 (raw "container1"))
 								(e-ident @107.15-107.21 (raw "value")))
 							(e-int @107.24-107.26 (raw "10")))))))))
@@ -562,8 +562,9 @@ base_config = {
 		version: num,
 		ratio: frac,
 		description: str
-
 	}
+
+# Different instantiations of base_config
 
 }
 
@@ -576,9 +577,9 @@ config1 = {
 		version: num,
 		ratio: frac,
 		description: str
-
 	},
 	name: "integers"
+
 
 }
 
@@ -590,9 +591,10 @@ config2 = {
 		version: num,
 		ratio: frac,
 		description: str
-
 	},
 	name: "fruits"
+
+# Polymorphic function-like structures
 
 }
 
@@ -613,19 +615,18 @@ deep = {
 
 				data: empty_list,
 				value: num
-
 			},
 			items: [num, num * 2, num * 3]
-
 		},
 		collection: empty_list
-
 	},
 	results: [
 		{data: [1], tag: "single"},
 		{data: [1, 2], tag: "ints"},
 		{data: [1, 2, 3], tag: "more"},
 	]
+
+# Polymorphic values used in computations
 
 }
 
@@ -645,15 +646,14 @@ mixed = {
 		raw: empty_list,
 		in_list: [empty_list],
 		in_record: {data: empty_list}
-
 	},
 	computations: {
 
 		from_num: num * 100,
 		from_frac: frac * 10.0,
 		list_from_num: [num, num, num]
-
 	}
+
 
 }
 
@@ -903,11 +903,11 @@ main = |_| {
 												(elems
 													(e-lookup-local @72.21-72.24
 														(p-assign @4.1-4.4 (ident "num")))
-													(e-binop @72.26-72.34 (op "mul")
+													(e-binop @72.26-72.33 (op "mul")
 														(e-lookup-local @72.26-72.29
 															(p-assign @4.1-4.4 (ident "num")))
 														(e-int @72.32-72.33 (value "2")))
-													(e-binop @72.35-72.43 (op "mul")
+													(e-binop @72.35-72.42 (op "mul")
 														(e-lookup-local @72.35-72.38
 															(p-assign @4.1-4.4 (ident "num")))
 														(e-int @72.41-72.42 (value "3")))))))))
@@ -949,13 +949,13 @@ main = |_| {
 											(e-literal @79.34-79.38 (string "more"))))))))))))
 	(d-let
 		(p-assign @84.1-84.9 (ident "compute1"))
-		(e-binop @84.12-85.9 (op "add")
+		(e-binop @84.12-84.20 (op "add")
 			(e-lookup-local @84.12-84.15
 				(p-assign @4.1-4.4 (ident "num")))
 			(e-int @84.18-84.20 (value "10"))))
 	(d-let
 		(p-assign @85.1-85.9 (ident "compute2"))
-		(e-binop @85.12-86.9 (op "mul")
+		(e-binop @85.12-85.19 (op "mul")
 			(e-lookup-local @85.12-85.15
 				(p-assign @4.1-4.4 (ident "num")))
 			(e-int @85.18-85.19 (value "2"))))
@@ -979,11 +979,11 @@ main = |_| {
 						(elems
 							(e-lookup-local @87.35-87.38
 								(p-assign @4.1-4.4 (ident "num")))
-							(e-binop @87.40-87.48 (op "add")
+							(e-binop @87.40-87.47 (op "add")
 								(e-lookup-local @87.40-87.43
 									(p-assign @4.1-4.4 (ident "num")))
 								(e-int @87.46-87.47 (value "1")))
-							(e-binop @87.49-87.57 (op "add")
+							(e-binop @87.49-87.56 (op "add")
 								(e-lookup-local @87.49-87.52
 									(p-assign @4.1-4.4 (ident "num")))
 								(e-int @87.55-87.56 (value "2")))))))))
@@ -1041,12 +1041,12 @@ main = |_| {
 					(e-record @98.19-102.6
 						(fields
 							(field (name "from_num")
-								(e-binop @99.19-99.29 (op "mul")
+								(e-binop @99.19-99.28 (op "mul")
 									(e-lookup-local @99.19-99.22
 										(p-assign @4.1-4.4 (ident "num")))
 									(e-int @99.25-99.28 (value "100"))))
 							(field (name "from_frac")
-								(e-binop @100.20-100.32 (op "mul")
+								(e-binop @100.20-100.31 (op "mul")
 									(e-lookup-local @100.20-100.24
 										(p-assign @5.1-5.5 (ident "frac")))
 									(e-dec-small @100.27-100.31 (numerator "100") (denominator-power-of-ten "1") (value "10"))))
@@ -1065,8 +1065,8 @@ main = |_| {
 			(args
 				(p-underscore @105.9-105.10))
 			(e-block @105.12-108.2
-				(e-binop @107.5-108.2 (op "add")
-					(e-dot-access @107.5-107.23 (field "value")
+				(e-binop @107.5-107.26 (op "add")
+					(e-dot-access @107.5-107.21 (field "value")
 						(receiver
 							(e-lookup-local @107.5-107.15
 								(p-assign @60.1-60.11 (ident "container1")))))
@@ -1127,8 +1127,8 @@ main = |_| {
 		(expr @61.14-61.33 (type "{ value: *, wrapper: List(*) }"))
 		(expr @62.14-62.34 (type "{ value: *, wrapper: List(*) }"))
 		(expr @65.8-81.2 (type "{ level1: { level2: { level3: { data: List(Num(*)), value: Num(*) }, items: List(Num(*)) }, collection: List(Num(*)) }, results: List({ data: List(Num(*)), tag: Str }) }"))
-		(expr @84.12-85.9 (type "*"))
-		(expr @85.12-86.9 (type "*"))
+		(expr @84.12-84.20 (type "*"))
+		(expr @85.12-85.19 (type "*"))
 		(expr @86.12-86.22 (type "List(Num(*))"))
 		(expr @87.12-87.59 (type "{ base: Num(*), derived: List(Num(*)) }"))
 		(expr @90.9-103.2 (type "{ numbers: { value: Num(*), list: List(Num(*)), float: Frac(*) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(*)), in_list: List(List(Num(*))), in_record: { data: List(Num(*)) } }, computations: { from_num: *, from_frac: *, list_from_num: List(Num(*)) } }"))

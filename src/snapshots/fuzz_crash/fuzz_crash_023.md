@@ -214,11 +214,11 @@ expect {
 }
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_023.md:178:37:178:40
-PARSE ERROR - fuzz_crash_023.md:178:38:178:41
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:40:178:45
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:45:178:50
-PARSE ERROR - fuzz_crash_023.md:178:52:178:55
+PARSE ERROR - fuzz_crash_023.md:178:37:178:38
+PARSE ERROR - fuzz_crash_023.md:178:38:178:40
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:40:178:41
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:45:178:46
+PARSE ERROR - fuzz_crash_023.md:178:52:178:54
 UNDECLARED TYPE - fuzz_crash_023.md:36:8:36:11
 UNDECLARED TYPE - fuzz_crash_023.md:36:13:36:16
 UNDECLARED TYPE - fuzz_crash_023.md:39:2:39:5
@@ -231,11 +231,11 @@ UNDECLARED TYPE - fuzz_crash_023.md:52:4:52:6
 UNDECLARED TYPE - fuzz_crash_023.md:53:8:53:17
 UNDEFINED VARIABLE - fuzz_crash_023.md:72:4:72:13
 UNUSED VARIABLE - fuzz_crash_023.md:97:3:97:8
-UNUSED VARIABLE - fuzz_crash_023.md:102:19:102:23
-UNUSED VARIABLE - fuzz_crash_023.md:108:23:108:27
-UNUSED VARIABLE - fuzz_crash_023.md:115:6:115:10
-UNUSED VARIABLE - fuzz_crash_023.md:121:21:121:29
-UNUSED VARIABLE - fuzz_crash_023.md:127:4:128:10
+UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_023.md:121:21:121:27
+UNUSED VARIABLE - fuzz_crash_023.md:127:4:128:9
 UNUSED VARIABLE - fuzz_crash_023.md:82:2:82:3
 UNDEFINED VARIABLE - fuzz_crash_023.md:141:2:141:6
 UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
@@ -263,11 +263,11 @@ A parsing error occurred: `expected_expr_record_field_name`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_023.md:178:37:178:40:**
+**fuzz_crash_023.md:178:37:178:38:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-                                    ^^^
+                                    ^
 
 
 **PARSE ERROR**
@@ -275,35 +275,35 @@ A parsing error occurred: `expected_expr_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_023.md:178:38:178:41:**
+**fuzz_crash_023.md:178:38:178:40:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-                                     ^^^
+                                     ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **: tag** is not expected in an expression.
+The token **:** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_023.md:178:40:178:45:**
+**fuzz_crash_023.md:178:40:178:41:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-                                       ^^^^^
+                                       ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **, qux** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_023.md:178:45:178:50:**
+**fuzz_crash_023.md:178:45:178:46:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-                                            ^^^^^
+                                            ^
 
 
 **PARSE ERROR**
@@ -311,11 +311,11 @@ A parsing error occurred: `expected_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_023.md:178:52:178:55:**
+**fuzz_crash_023.md:178:52:178:54:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-                                                   ^^^
+                                                   ^^
 
 
 **UNDECLARED TYPE**
@@ -468,11 +468,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_023.md:102:19:102:23:**
+**fuzz_crash_023.md:1:1:1:1:**
 ```roc
-		[1, 2, 3, .. as rest] # After pattern comment
+
 ```
-                  ^^^^
+
 
 
 **NOT IMPLEMENTED**
@@ -484,11 +484,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_023.md:108:23:108:27:**
+**fuzz_crash_023.md:1:1:1:1:**
 ```roc
-		[1, 2 | 5, 3, .. as rest] => 123
+
 ```
-                      ^^^^
+
 
 
 **NOT IMPLEMENTED**
@@ -500,11 +500,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_023.md:115:6:115:10:**
+**fuzz_crash_023.md:1:1:1:1:**
 ```roc
-					rest, # After last pattern in list
+
 ```
-     ^^^^
+
 
 
 **NOT IMPLEMENTED**
@@ -520,11 +520,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_023.md:121:21:121:29:**
+**fuzz_crash_023.md:121:21:121:27:**
 ```roc
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 ```
-                    ^^^^^^^^
+                    ^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -532,7 +532,7 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_023.md:127:4:128:10:**
+**fuzz_crash_023.md:127:4:128:9:**
 ```roc
 			.. # After spread operator
 				rest, # After last field
@@ -842,7 +842,7 @@ The pattern in the fourth branch of this `match` differs from previous ones:
 		TwoArgs("hello", Some("world")) => 1000
 	}
 ```
-  ^
+  ^^^^^
 
 The fourth pattern has this type:
     _Str_
@@ -1055,29 +1055,29 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 ~~~clojure
 (file @2.1-207.2
 	(app @2.1-2.57
-		(provides @2.6-2.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @2.15-2.57 (name "pf")
+		(provides @2.5-2.12
+			(exposed-lower-ident @2.6-2.11 (text "main!")))
+		(record-field @2.15-2.55 (name "pf")
 			(e-string @2.28-2.55
 				(e-string-part @2.29-2.54 (raw "../basic-cli/platform.roc"))))
 		(packages @2.13-2.57
-			(record-field @2.15-2.57 (name "pf")
+			(record-field @2.15-2.55 (name "pf")
 				(e-string @2.28-2.55
 					(e-string-part @2.29-2.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
 		(s-import @4.1-4.42 (raw "pf.Stdout")
 			(exposing
-				(exposed-lower-ident (text "line!"))
-				(exposed-lower-ident (text "write!"))))
+				(exposed-lower-ident @4.28-4.33 (text "line!"))
+				(exposed-lower-ident @4.35-4.41 (text "write!"))))
 		(s-import @6.1-12.4 (raw "pf.StdoutMultiline")
 			(exposing
-				(exposed-lower-ident (text "line!"))
-				(exposed-lower-ident (text "write!"))))
+				(exposed-lower-ident @10.4-10.9 (text "line!"))
+				(exposed-lower-ident @11.4-11.10 (text "write!"))))
 		(s-import @14.1-14.82 (raw "pkg.Something")
 			(exposing
-				(exposed-lower-ident (text "func") (as "function"))
-				(exposed-upper-ident (text "Type") (as "ValueCategory"))
-				(exposed-upper-ident-star (text "Custom"))))
+				(exposed-lower-ident @14.32-14.48 (text "func") (as "function"))
+				(exposed-upper-ident @14.50-14.71 (text "Type") (as "ValueCategory"))
+				(exposed-upper-ident-star @14.73-14.81 (text "Custom"))))
 		(s-import @16.1-16.27 (raw "BadName") (alias "GoodName"))
 		(s-import @17.1-20.20 (raw "BadNameMultiline") (alias "GoodNameMultiline"))
 		(s-type-decl @22.1-22.41
@@ -1088,13 +1088,13 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 			(ty-fn @22.13-22.41
 				(ty-apply @22.13-22.20
 					(ty @22.13-22.17 (name "List"))
-					(ty-var @22.18-22.19 (raw "a")))
+					(ty-var @22.18-22.18 (raw "a")))
 				(ty-fn @22.23-22.29
-					(ty-var @22.23-22.24 (raw "a"))
-					(ty-var @22.28-22.29 (raw "b")))
+					(ty-var @22.23-22.23 (raw "a"))
+					(ty-var @1.1-1.1 (raw "b")))
 				(ty-apply @22.34-22.41
 					(ty @22.34-22.38 (name "List"))
-					(ty-var @22.39-22.40 (raw "b")))))
+					(ty-var @22.39-22.39 (raw "b")))))
 		(s-type-decl @23.1-34.5
 			(header @23.1-26.2 (name "MapML")
 				(args
@@ -1103,13 +1103,13 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 			(ty-fn @28.3-34.5
 				(ty-apply @28.3-30.4
 					(ty @28.3-28.7 (name "List"))
-					(ty-var @29.4-29.5 (raw "a")))
+					(ty-var @1.1-1.1 (raw "a")))
 				(ty-fn @31.4-31.10
-					(ty-var @31.4-31.5 (raw "a"))
-					(ty-var @31.9-31.10 (raw "b")))
+					(ty-var @31.4-31.4 (raw "a"))
+					(ty-var @1.1-1.1 (raw "b")))
 				(ty-apply @32.4-34.5
 					(ty @32.4-32.8 (name "List"))
-					(ty-var @33.5-33.6 (raw "b")))))
+					(ty-var @1.1-1.1 (raw "b")))))
 		(s-type-decl @36.1-36.17
 			(header @36.1-36.4 (name "Foo")
 				(args))
@@ -1127,33 +1127,33 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 				(args
 					(ty-var @43.6-43.7 (raw "a"))))
 			(ty-record @43.11-43.43
-				(anno-record-field @43.13-43.25 (name "foo")
+				(anno-record-field @43.13-43.24 (name "foo")
 					(ty-apply @43.19-43.24
 						(ty @43.19-43.21 (name "Ok"))
-						(ty-var @43.22-43.23 (raw "a"))))
-				(anno-record-field @43.26-43.43 (name "bar")
+						(ty-var @43.22-43.22 (raw "a"))))
+				(anno-record-field @43.26-43.41 (name "bar")
 					(ty @43.32-43.41 (name "Something")))))
 		(s-type-decl @44.1-47.2
 			(header @44.1-44.10 (name "SomeMl")
 				(args
 					(ty-var @44.8-44.9 (raw "a"))))
 			(ty-record @44.13-47.2
-				(anno-record-field @45.2-45.14 (name "foo")
+				(anno-record-field @45.2-45.13 (name "foo")
 					(ty-apply @45.8-45.13
 						(ty @45.8-45.10 (name "Ok"))
-						(ty-var @45.11-45.12 (raw "a"))))
-				(anno-record-field @46.2-46.18 (name "bar")
+						(ty-var @45.11-45.11 (raw "a"))))
+				(anno-record-field @46.2-46.17 (name "bar")
 					(ty @46.8-46.17 (name "Something")))))
 		(s-type-decl @49.1-54.2
 			(header @49.1-49.17 (name "SomeMultiline")
 				(args
 					(ty-var @49.15-49.16 (raw "a"))))
 			(ty-record @49.20-54.2
-				(anno-record-field @50.2-52.10 (name "foo")
+				(anno-record-field @50.2-52.9 (name "foo")
 					(ty-apply @52.4-52.9
 						(ty @52.4-52.6 (name "Ok"))
-						(ty-var @52.7-52.8 (raw "a"))))
-				(anno-record-field @53.2-53.18 (name "bar")
+						(ty-var @52.7-52.7 (raw "a"))))
+				(anno-record-field @53.2-53.17 (name "bar")
 					(ty @53.8-53.17 (name "Something")))))
 		(s-type-decl @56.1-56.27
 			(header @56.1-56.9 (name "Maybe")
@@ -1163,7 +1163,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 				(tags
 					(ty-apply @56.13-56.20
 						(ty @56.13-56.17 (name "Some"))
-						(ty-var @56.18-56.19 (raw "a")))
+						(ty-var @56.18-56.18 (raw "a")))
 					(ty @56.22-56.26 (name "None")))))
 		(s-type-decl @58.1-61.2
 			(header @58.1-58.18 (name "MaybeMultiline")
@@ -1173,7 +1173,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 				(tags
 					(ty-apply @59.2-59.9
 						(ty @59.2-59.6 (name "Some"))
-						(ty-var @59.7-59.8 (raw "a")))
+						(ty-var @59.7-59.7 (raw "a")))
 					(ty @60.2-60.6 (name "None")))))
 		(s-type-decl @63.1-63.38
 			(header @63.1-63.12 (name "SomeFunc")
@@ -1182,21 +1182,21 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 			(ty-fn @63.15-63.38
 				(ty-apply @63.15-63.23
 					(ty @63.15-63.20 (name "Maybe"))
-					(ty-var @63.21-63.22 (raw "a")))
-				(ty-var @63.25-63.26 (raw "a"))
+					(ty-var @63.21-63.21 (raw "a")))
+				(ty-var @1.1-1.1 (raw "a"))
 				(ty-apply @63.30-63.38
 					(ty @63.30-63.35 (name "Maybe"))
-					(ty-var @63.36-63.37 (raw "a")))))
-		(s-decl @65.1-67.8
+					(ty-var @63.36-63.36 (raw "a")))))
+		(s-decl @65.1-65.40
 			(p-ident @65.1-65.16 (raw "add_one_oneline"))
-			(e-lambda @65.19-67.8
+			(e-lambda @65.19-65.40
 				(args
 					(p-ident @65.20-65.23 (raw "num")))
-				(e-if-then-else @65.25-67.8
+				(e-if-then-else @65.25-65.40
 					(e-ident @65.28-65.31 (raw "num"))
 					(e-int @65.32-65.33 (raw "2"))
 					(e-int @65.39-65.40 (raw "5")))))
-		(s-type-anno @67.1-68.8 (name "add_one")
+		(s-type-anno @67.1-67.21 (name "add_one")
 			(ty-fn @67.11-67.21
 				(ty @67.11-67.14 (name "U64"))
 				(ty @67.18-67.21 (name "U64"))))
@@ -1210,17 +1210,17 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 						(s-decl @69.2-69.11
 							(p-ident @69.2-69.7 (raw "other"))
 							(e-int @69.10-69.11 (raw "1")))
-						(e-if-then-else @70.2-78.2
+						(e-if-then-else @70.2-77.3
 							(e-ident @70.5-70.8 (raw "num"))
 							(e-block @70.9-74.3
 								(statements
-									(s-dbg @71.3-73.4
+									(s-dbg @71.3-72.15
 										(e-apply @72.4-72.15
 											(e-ident @72.4-72.13 (raw "some_func"))))
 									(e-int @73.3-73.4 (raw "0"))))
 							(e-block @74.9-77.3
 								(statements
-									(s-dbg @75.3-76.8
+									(s-dbg @75.3-75.10
 										(e-int @75.7-75.10 (raw "123")))
 									(e-ident @76.3-76.8 (raw "other")))))))))
 		(s-decl @80.1-138.3
@@ -1232,7 +1232,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 				(e-match
 					(e-ident @84.8-84.9 (raw "a"))
 					(branches
-						(branch @85.3-89.7
+						(branch @85.3-88.4
 							(p-alternatives
 								(p-tag @85.3-85.7 (raw "Blue"))
 								(p-tag @85.10-85.15 (raw "Green"))
@@ -1243,7 +1243,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 										(p-ident @86.4-86.5 (raw "x"))
 										(e-int @86.8-86.10 (raw "12")))
 									(e-ident @87.4-87.5 (raw "x")))))
-						(branch @89.3-97.8
+						(branch @89.3-96.5
 							(p-alternatives
 								(p-tag @89.3-89.7 (raw "Blue"))
 								(p-tag @91.4-91.9 (raw "Green"))
@@ -1254,57 +1254,57 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 										(p-ident @94.5-94.6 (raw "x"))
 										(e-int @94.9-94.11 (raw "12")))
 									(e-ident @95.5-95.6 (raw "x")))))
-						(branch @97.3-99.4
+						(branch @97.3-98.8
 							(p-ident @97.3-97.8 (raw "lower"))
 							(e-int @98.7-98.8 (raw "1")))
-						(branch @99.3-101.4
-							(p-string @99.3-99.4 (raw """))
+						(branch @99.3-100.7
+							(p-string @99.3-99.8 (raw """))
 							(e-int @100.4-100.7 (raw "100")))
-						(branch @101.3-102.4
+						(branch @101.3-101.23
 							(p-alternatives
-								(p-string @101.3-101.4 (raw """))
-								(p-string @101.11-101.12 (raw """)))
+								(p-string @101.3-101.8 (raw """))
+								(p-string @101.11-101.16 (raw """)))
 							(e-int @101.20-101.23 (raw "200")))
-						(branch @102.3-108.4
+						(branch @102.3-104.8
 							(p-list @102.3-102.24
 								(p-int @102.4-102.5 (raw "1"))
 								(p-int @102.7-102.8 (raw "2"))
 								(p-int @102.10-102.11 (raw "3"))
-								(p-list-rest @102.13-102.24 (name "rest")))
+								(p-list-rest @102.13-102.23 (name "rest")))
 							(e-int @104.5-104.8 (raw "123")))
-						(branch @108.3-109.4
+						(branch @108.3-108.35
 							(p-list @108.3-108.28
 								(p-int @108.4-108.5 (raw "1"))
 								(p-alternatives
 									(p-int @108.7-108.8 (raw "2"))
 									(p-int @108.11-108.12 (raw "5")))
 								(p-int @108.14-108.15 (raw "3"))
-								(p-list-rest @108.17-108.28 (name "rest")))
+								(p-list-rest @108.17-108.27 (name "rest")))
 							(e-int @108.32-108.35 (raw "123")))
-						(branch @109.3-117.7
+						(branch @109.3-116.11
 							(p-list @109.3-116.4
 								(p-int @110.4-110.5 (raw "1"))
 								(p-alternatives
 									(p-int @111.4-111.5 (raw "2"))
 									(p-int @111.8-111.9 (raw "5")))
 								(p-int @112.4-112.5 (raw "3"))
-								(p-list-rest @113.4-115.11 (name "rest")))
+								(p-list-rest @113.4-115.10 (name "rest")))
 							(e-int @116.8-116.11 (raw "123")))
-						(branch @117.3-118.7
+						(branch @117.3-117.14
 							(p-frac @117.3-117.7 (raw "3.14"))
 							(e-int @117.11-117.14 (raw "314")))
-						(branch @118.3-119.4
+						(branch @118.3-118.21
 							(p-alternatives
 								(p-frac @118.3-118.7 (raw "3.14"))
 								(p-frac @118.10-118.14 (raw "6.28")))
 							(e-int @118.18-118.21 (raw "314")))
-						(branch @119.3-120.4
+						(branch @119.3-119.19
 							(p-tuple @119.3-119.12
 								(p-int @119.4-119.5 (raw "1"))
 								(p-int @119.7-119.8 (raw "2"))
 								(p-int @119.10-119.11 (raw "3")))
 							(e-int @119.16-119.19 (raw "123")))
-						(branch @120.3-121.4
+						(branch @120.3-120.23
 							(p-tuple @120.3-120.16
 								(p-int @120.4-120.5 (raw "1"))
 								(p-alternatives
@@ -1312,64 +1312,64 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 									(p-int @120.11-120.12 (raw "5")))
 								(p-int @120.14-120.15 (raw "3")))
 							(e-int @120.20-120.23 (raw "123")))
-						(branch @121.3-122.4
+						(branch @121.3-121.44
 							(p-record @121.3-121.29
-								(field @121.5-121.12 (name "foo") (rest false)
+								(field @121.5-121.11 (name "foo") (rest false)
 									(p-int @121.10-121.11 (raw "1")))
-								(field @121.13-121.20 (name "bar") (rest false)
+								(field @121.13-121.19 (name "bar") (rest false)
 									(p-int @121.18-121.19 (raw "2")))
-								(field @121.21-121.29 (name "rest") (rest true)))
-							(e-local-dispatch @121.33-122.4
+								(field @121.21-121.27 (name "rest") (rest true)))
+							(e-local-dispatch @121.33-121.44
 								(e-int @121.33-121.35 (raw "12"))
 								(e-apply @121.35-121.44
-									(e-ident @121.37-121.40 (raw "add"))
+									(e-ident @121.37-121.37 (raw "add"))
 									(e-int @121.41-121.43 (raw "34")))))
-						(branch @122.3-130.4
+						(branch @122.3-129.10
 							(p-record @122.3-129.4
-								(field @123.4-125.8 (name "foo") (rest false)
+								(field @123.4-125.7 (name "foo") (rest false)
 									(p-int @125.6-125.7 (raw "1")))
-								(field @126.4-126.11 (name "bar") (rest false)
+								(field @126.4-126.10 (name "bar") (rest false)
 									(p-int @126.9-126.10 (raw "2")))
-								(field @127.4-128.10 (name "rest") (rest true)))
+								(field @127.4-128.9 (name "rest") (rest true)))
 							(e-int @129.8-129.10 (raw "12")))
-						(branch @130.3-131.4
+						(branch @130.3-130.31
 							(p-record @130.3-130.25
-								(field @130.5-130.12 (name "foo") (rest false)
+								(field @130.5-130.11 (name "foo") (rest false)
 									(p-int @130.10-130.11 (raw "1")))
-								(field @130.13-130.25 (name "bar") (rest false)
+								(field @130.13-130.23 (name "bar") (rest false)
 									(p-alternatives
 										(p-int @130.18-130.19 (raw "2"))
 										(p-int @130.22-130.23 (raw "7")))))
 							(e-int @130.29-130.31 (raw "12")))
-						(branch @131.3-135.5
+						(branch @131.3-134.10
 							(p-record @131.3-134.4
-								(field @132.4-132.11 (name "foo") (rest false)
+								(field @132.4-132.10 (name "foo") (rest false)
 									(p-int @132.9-132.10 (raw "1")))
-								(field @133.4-133.15 (name "bar") (rest false)
+								(field @133.4-133.14 (name "bar") (rest false)
 									(p-alternatives
 										(p-int @133.9-133.10 (raw "2"))
 										(p-int @133.13-133.14 (raw "7")))))
 							(e-int @134.8-134.10 (raw "12")))
-						(branch @135.3-136.5
+						(branch @135.3-135.17
 							(p-tag @135.3-135.10 (raw "Ok")
 								(p-int @135.6-135.9 (raw "123")))
 							(e-int @135.14-135.17 (raw "123")))
-						(branch @136.3-137.10
+						(branch @136.3-136.25
 							(p-tag @136.3-136.17 (raw "Ok")
 								(p-tag @136.6-136.16 (raw "Some")
 									(p-ident @136.11-136.15 (raw "dude"))))
 							(e-ident @136.21-136.25 (raw "dude")))
-						(branch @137.3-138.3
+						(branch @137.3-137.42
 							(p-tag @137.3-137.34 (raw "TwoArgs")
-								(p-string @137.11-137.12 (raw """))
+								(p-string @137.11-137.18 (raw """))
 								(p-tag @137.20-137.33 (raw "Some")
-									(p-string @137.25-137.26 (raw """))))
+									(p-string @137.25-137.32 (raw """))))
 							(e-int @137.38-137.42 (raw "1000")))))))
-		(s-expect @140.1-143.6
-			(e-binop @141.2-143.6 (op "==")
+		(s-expect @140.1-141.11
+			(e-binop @141.2-141.11 (op "==")
 				(e-ident @141.2-141.6 (raw "blah"))
 				(e-int @141.10-141.11 (raw "1"))))
-		(s-type-anno @143.1-144.6 (name "main!")
+		(s-type-anno @143.1-143.38 (name "main!")
 			(ty-fn @143.9-143.38
 				(ty-apply @143.9-143.21
 					(ty @143.9-143.13 (name "List"))
@@ -1389,16 +1389,16 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 							(p-ident @145.2-145.7 (raw "world"))
 							(e-string @145.10-145.17
 								(e-string-part @145.11-145.16 (raw "World"))))
-						(s-var @146.2-147.8 (name "number")
+						(s-var @146.2-146.18 (name "number")
 							(e-int @146.15-146.18 (raw "123")))
-						(s-expect @147.2-148.5
-							(e-binop @147.9-148.5 (op "==")
+						(s-expect @147.2-147.18
+							(e-binop @147.9-147.18 (op "==")
 								(e-ident @147.9-147.13 (raw "blah"))
 								(e-int @147.17-147.18 (raw "1"))))
 						(s-decl @148.2-148.12
 							(p-ident @148.2-148.5 (raw "tag"))
 							(e-tag @148.8-148.12 (raw "Blue")))
-						(s-return @149.2-154.5
+						(s-return @149.2-150.6
 							(e-ident @150.3-150.6 (raw "tag")))
 						(e-ellipsis)
 						(e-apply @155.2-157.3
@@ -1408,7 +1408,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 							(e-ident @158.2-158.11 (raw "some_func"))
 							(e-dbg
 								(e-int @160.4-160.6 (raw "42"))))
-						(s-crash @162.2-164.18
+						(s-crash @162.2-163.17
 							(e-string @163.3-163.17
 								(e-string-part @163.4-163.16 (raw "Unreachable!"))))
 						(s-decl @164.2-164.31
@@ -1431,7 +1431,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 										(e-ident @169.5-169.11 (raw "number"))))
 								(e-int @171.3-171.6 (raw "456"))
 								(e-int @172.3-172.6 (raw "789"))))
-						(s-for @174.2-178.8
+						(s-for @174.2-177.3
 							(p-ident @174.6-174.7 (raw "n"))
 							(e-ident @174.11-174.15 (raw "list"))
 							(e-block @174.16-177.3
@@ -1444,19 +1444,19 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 											(e-string-part @175.28-175.32 (raw " to "))
 											(e-ident @175.34-175.40 (raw "number"))
 											(e-string-part @175.41-175.41 (raw ""))))
-									(s-decl @176.3-177.3
+									(s-decl @176.3-176.22
 										(p-ident @176.3-176.9 (raw "number"))
-										(e-binop @176.12-177.3 (op "+")
+										(e-binop @176.12-176.22 (op "+")
 											(e-ident @176.12-176.18 (raw "number"))
 											(e-ident @176.21-176.22 (raw "n")))))))
-						(s-decl @178.2-178.41
+						(s-decl @178.2-178.40
 							(p-ident @178.2-178.8 (raw "record"))
-							(e-malformed @178.38-178.41 (reason "expected_expr_close_curly_or_comma")))
-						(e-malformed @178.40-178.45 (reason "expr_unexpected_token"))
+							(e-malformed @178.38-178.40 (reason "expected_expr_close_curly_or_comma")))
+						(e-malformed @178.40-178.41 (reason "expr_unexpected_token"))
 						(e-ident @178.42-178.45 (raw "tag"))
-						(e-malformed @178.45-178.50 (reason "expr_unexpected_token"))
-						(s-type-anno @178.47-179.7 (name "qux")
-							(ty-malformed @178.52-179.7 (tag "expected_arrow")))
+						(e-malformed @178.45-178.46 (reason "expr_unexpected_token"))
+						(s-type-anno @178.47-178.71 (name "qux")
+							(ty-malformed @178.52-178.71 (tag "expected_arrow")))
 						(s-decl @179.2-179.68
 							(p-ident @179.2-179.7 (raw "tuple"))
 							(e-tuple @179.10-179.68
@@ -1491,53 +1491,53 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 									(e-int @186.4-186.5 (raw "1"))
 									(e-int @186.7-186.8 (raw "2"))
 									(e-int @186.10-186.11 (raw "3")))))
-						(s-decl @188.2-189.23
+						(s-decl @188.2-188.86
 							(p-ident @188.2-188.15 (raw "bin_op_result"))
-							(e-binop @188.18-189.23 (op "or")
-								(e-binop @188.18-188.74 (op "or")
-									(e-binop @188.18-188.43 (op ">")
-										(e-binop @188.18-188.34 (op "??")
+							(e-binop @188.18-188.86 (op "or")
+								(e-binop @188.18-188.71 (op "or")
+									(e-binop @188.18-188.40 (op ">")
+										(e-binop @188.18-188.32 (op "??")
 											(e-apply @188.18-188.26
 												(e-tag @188.18-188.21 (raw "Err"))
 												(e-ident @188.22-188.25 (raw "foo")))
 											(e-int @188.30-188.32 (raw "12")))
-										(e-binop @188.35-188.43 (op "*")
+										(e-binop @188.35-188.40 (op "*")
 											(e-int @188.35-188.36 (raw "5"))
 											(e-int @188.39-188.40 (raw "5"))))
-									(e-binop @188.44-188.74 (op "and")
-										(e-binop @188.44-188.58 (op "<")
-											(e-binop @188.44-188.52 (op "+")
+									(e-binop @188.44-188.71 (op "and")
+										(e-binop @188.44-188.54 (op "<")
+											(e-binop @188.44-188.50 (op "+")
 												(e-int @188.44-188.46 (raw "13"))
 												(e-int @188.49-188.50 (raw "2")))
 											(e-int @188.53-188.54 (raw "5")))
-										(e-binop @188.59-188.74 (op ">=")
-											(e-binop @188.59-188.68 (op "-")
+										(e-binop @188.59-188.71 (op ">=")
+											(e-binop @188.59-188.65 (op "-")
 												(e-int @188.59-188.61 (raw "10"))
 												(e-int @188.64-188.65 (raw "1")))
 											(e-int @188.69-188.71 (raw "16")))))
-								(e-binop @188.75-189.23 (op "<=")
+								(e-binop @188.75-188.86 (op "<=")
 									(e-int @188.75-188.77 (raw "12"))
-									(e-binop @188.81-189.23 (op "/")
+									(e-binop @188.81-188.86 (op "/")
 										(e-int @188.81-188.82 (raw "3"))
 										(e-int @188.85-188.86 (raw "5"))))))
-						(s-decl @189.2-190.8
+						(s-decl @189.2-189.111
 							(p-ident @189.2-189.23 (raw "static_dispatch_style"))
-							(e-field-access @189.26-190.8
-								(e-field-access @189.26-189.110
-									(e-field-access @189.26-189.94
-										(e-question-suffix @189.26-189.40
+							(e-field-access @189.26-189.111
+								(e-field-access @189.26-189.97
+									(e-field-access @189.26-189.66
+										(e-question-suffix @189.26-189.39
 											(e-apply @189.26-189.39
 												(e-ident @189.26-189.33 (raw "some_fn"))
 												(e-ident @189.34-189.38 (raw "arg1"))))
-										(e-question-suffix @189.40-189.66
+										(e-question-suffix @189.40-189.65
 											(e-apply @189.40-189.65
 												(e-ident @189.40-189.63 (raw "static_dispatch_method")))))
-									(e-question-suffix @189.66-189.97
+									(e-question-suffix @189.66-189.96
 										(e-apply @189.66-189.96
 											(e-ident @189.66-189.94 (raw "next_static_dispatch_method")))))
-								(e-question-suffix @189.97-189.111
+								(e-question-suffix @189.97-189.110
 									(e-ident @189.97-189.110 (raw "record_field")))))
-						(e-question-suffix @190.2-190.29
+						(e-question-suffix @190.2-190.28
 							(e-apply @190.2-190.28
 								(e-ident @190.2-190.14 (raw "Stdout.line!"))
 								(e-ident @190.15-190.27 (raw "interpolated"))))
@@ -1549,18 +1549,18 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 									(e-ident @193.4-193.13 (raw "Num.toStr"))
 									(e-ident @193.14-193.20 (raw "number")))
 								(e-string-part @194.4-194.17 (raw " as a string?"))))))))
-		(s-type-anno @198.1-199.6 (name "empty")
+		(s-type-anno @198.1-198.11 (name "empty")
 			(ty-record @198.9-198.11))
 		(s-decl @199.1-199.11
 			(p-ident @199.1-199.6 (raw "empty"))
 			(e-record @199.9-199.11))
-		(s-type-anno @201.1-203.7 (name "tuple")
+		(s-type-anno @201.1-201.25 (name "tuple")
 			(ty-apply @201.9-201.25
 				(ty @201.9-201.14 (name "Value"))
 				(ty-tuple @201.15-201.24
-					(ty-var @201.16-201.17 (raw "a"))
-					(ty-var @201.19-201.20 (raw "b"))
-					(ty-var @201.22-201.23 (raw "c")))))
+					(ty-var @201.16-201.16 (raw "a"))
+					(ty-var @1.1-1.1 (raw "b"))
+					(ty-var @1.1-1.1 (raw "c")))))
 		(s-expect @203.1-207.2
 			(e-block @203.8-207.2
 				(statements
@@ -1570,7 +1570,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 					(s-decl @205.2-205.10
 						(p-ident @205.2-205.6 (raw "blah"))
 						(e-int @205.9-205.10 (raw "1")))
-					(e-binop @206.2-207.2 (op "==")
+					(e-binop @206.2-206.13 (op "==")
 						(e-ident @206.2-206.6 (raw "blah"))
 						(e-ident @206.10-206.13 (raw "foo"))))))))
 ~~~
@@ -1582,11 +1582,13 @@ app [main!] { pf: platform "../basic-cli/platform.roc" }
 import pf.Stdout exposing [line!, write!]
 
 import # Comment after import keyword
-	pf # Comment after qualifier
-		.StdoutMultiline # Comment after ident
+	pf.StdoutMultiline # Comment after ident
 		exposing [ # Comment after exposing open
 			line!, # Comment after exposed item
+# Comment after exposed item
 			write!, # Another after exposed item
+# Another after exposed item
+# Another after exposed item
 		] # Comment after exposing close
 
 import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
@@ -1653,11 +1655,14 @@ add_one = |num| {
 		dbg 123
 		other
 	}
+
 }
 
 match_time = |
 	a, # After arg
+# After arg
 	b,
+
 | # After args
 	match a {
 		Blue | Green | Red => {
@@ -1774,7 +1779,8 @@ main! = |_| { # Yeah I can leave a comment here
 		"How about ${ # Comment after string interpolation open
 			Num.toStr(number) # Comment after string interpolation expr
 		} as a string?",
-	)
+	) # Comment after top-level decl
+
 } # Comment after top-level decl
 
 empty : {}
@@ -1793,10 +1799,10 @@ expect {
 (can-ir
 	(d-let
 		(p-assign @65.1-65.16 (ident "add_one_oneline"))
-		(e-lambda @65.19-67.8
+		(e-lambda @65.19-65.40
 			(args
 				(p-assign @65.20-65.23 (ident "num")))
-			(e-if @65.25-67.8
+			(e-if @65.25-65.40
 				(if-branches
 					(if-branch
 						(e-lookup-local @65.28-65.31
@@ -1813,19 +1819,19 @@ expect {
 				(s-let @69.2-69.11
 					(p-assign @69.2-69.7 (ident "other"))
 					(e-int @69.10-69.11 (value "1")))
-				(e-if @70.2-78.2
+				(e-if @70.2-77.3
 					(if-branches
 						(if-branch
 							(e-lookup-local @70.5-70.8
 								(p-assign @68.12-68.15 (ident "num")))
 							(e-block @70.9-74.3
-								(s-dbg @71.3-73.4
+								(s-dbg @71.3-72.15
 									(e-call @72.4-72.15
 										(e-runtime-error (tag "ident_not_in_scope"))))
 								(e-int @73.3-73.4 (value "0")))))
 					(if-else
 						(e-block @74.9-77.3
-							(s-dbg @75.3-76.8
+							(s-dbg @75.3-75.10
 								(e-int @75.7-75.10 (value "123")))
 							(e-lookup-local @76.3-76.8
 								(p-assign @69.2-69.7 (ident "other"))))))))
@@ -1885,15 +1891,15 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-str @99.3-99.4 (text """))))
+									(p-str @99.3-99.8 (text """))))
 							(value
 								(e-int @100.4-100.7 (value "100"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-str @101.3-101.4 (text """)))
+									(p-str @101.3-101.8 (text """)))
 								(pattern (degenerate false)
-									(p-str @101.11-101.12 (text """))))
+									(p-str @101.11-101.16 (text """))))
 							(value
 								(e-int @101.20-101.23 (value "200"))))
 						(branch
@@ -1905,7 +1911,7 @@ expect {
 											(p-int @102.7-102.8 (value "2"))
 											(p-int @102.10-102.11 (value "3")))
 										(rest-at (index 3)
-											(p-assign @102.19-102.23 (ident "rest"))))))
+											(p-assign @1.1-1.1 (ident "rest"))))))
 							(value
 								(e-int @104.5-104.8 (value "123"))))
 						(branch
@@ -1917,7 +1923,7 @@ expect {
 											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
 											(p-int @108.14-108.15 (value "3")))
 										(rest-at (index 3)
-											(p-assign @108.23-108.27 (ident "rest"))))))
+											(p-assign @1.1-1.1 (ident "rest"))))))
 							(value
 								(e-int @108.32-108.35 (value "123"))))
 						(branch
@@ -1929,7 +1935,7 @@ expect {
 											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
 											(p-int @112.4-112.5 (value "3")))
 										(rest-at (index 3)
-											(p-assign @115.6-115.10 (ident "rest"))))))
+											(p-assign @1.1-1.1 (ident "rest"))))))
 							(value
 								(e-int @116.8-116.11 (value "123"))))
 						(branch
@@ -1971,13 +1977,13 @@ expect {
 								(pattern (degenerate false)
 									(p-record-destructure @121.3-121.29
 										(destructs
-											(record-destruct @121.5-121.12 (label "foo") (ident "foo")
+											(record-destruct @121.5-121.11 (label "foo") (ident "foo")
 												(sub-pattern
 													(p-int @121.10-121.11 (value "1"))))
-											(record-destruct @121.13-121.20 (label "bar") (ident "bar")
+											(record-destruct @121.13-121.19 (label "bar") (ident "bar")
 												(sub-pattern
 													(p-int @121.18-121.19 (value "2"))))
-											(record-destruct @121.21-121.29 (label "rest") (ident "rest")
+											(record-destruct @121.21-121.27 (label "rest") (ident "rest")
 												(required))))))
 							(value
 								(e-runtime-error (tag "not_implemented"))))
@@ -1986,13 +1992,13 @@ expect {
 								(pattern (degenerate false)
 									(p-record-destructure @122.3-129.4
 										(destructs
-											(record-destruct @123.4-125.8 (label "foo") (ident "foo")
+											(record-destruct @123.4-125.7 (label "foo") (ident "foo")
 												(sub-pattern
 													(p-int @125.6-125.7 (value "1"))))
-											(record-destruct @126.4-126.11 (label "bar") (ident "bar")
+											(record-destruct @126.4-126.10 (label "bar") (ident "bar")
 												(sub-pattern
 													(p-int @126.9-126.10 (value "2"))))
-											(record-destruct @127.4-128.10 (label "rest") (ident "rest")
+											(record-destruct @127.4-128.9 (label "rest") (ident "rest")
 												(required))))))
 							(value
 								(e-int @129.8-129.10 (value "12"))))
@@ -2001,10 +2007,10 @@ expect {
 								(pattern (degenerate false)
 									(p-record-destructure @130.3-130.25
 										(destructs
-											(record-destruct @130.5-130.12 (label "foo") (ident "foo")
+											(record-destruct @130.5-130.11 (label "foo") (ident "foo")
 												(sub-pattern
 													(p-int @130.10-130.11 (value "1"))))
-											(record-destruct @130.13-130.25 (label "bar") (ident "bar")
+											(record-destruct @130.13-130.23 (label "bar") (ident "bar")
 												(sub-pattern
 													(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
 							(value
@@ -2014,10 +2020,10 @@ expect {
 								(pattern (degenerate false)
 									(p-record-destructure @131.3-134.4
 										(destructs
-											(record-destruct @132.4-132.11 (label "foo") (ident "foo")
+											(record-destruct @132.4-132.10 (label "foo") (ident "foo")
 												(sub-pattern
 													(p-int @132.9-132.10 (value "1"))))
-											(record-destruct @133.4-133.15 (label "bar") (ident "bar")
+											(record-destruct @133.4-133.14 (label "bar") (ident "bar")
 												(sub-pattern
 													(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
 							(value
@@ -2051,38 +2057,38 @@ expect {
 					(p-assign @145.2-145.7 (ident "world"))
 					(e-string @145.10-145.17
 						(e-literal @145.11-145.16 (string "World"))))
-				(s-var @146.2-147.8
-					(p-assign @146.2-147.8 (ident "number"))
+				(s-var @146.2-146.18
+					(p-assign @146.2-146.18 (ident "number"))
 					(e-int @146.15-146.18 (value "123")))
-				(s-expect @147.2-148.5
-					(e-binop @147.9-148.5 (op "eq")
+				(s-expect @147.2-147.18
+					(e-binop @147.9-147.18 (op "eq")
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-int @147.17-147.18 (value "1"))))
 				(s-let @148.2-148.12
 					(p-assign @148.2-148.5 (ident "tag"))
 					(e-tag @148.8-148.12 (name "Blue")))
-				(s-return @149.2-154.5
+				(s-return @149.2-150.6
 					(e-lookup-local @150.3-150.6
 						(p-assign @148.2-148.5 (ident "tag"))))
-				(s-expr @154.2-155.12
-					(e-not-implemented @154.2-154.5))
-				(s-expr @155.2-158.11
+				(s-expr @154.2-154.5
+					(e-not-implemented @1.1-1.1))
+				(s-expr @155.2-157.3
 					(e-call @155.2-157.3
 						(e-lookup-local @155.2-155.12
 							(p-assign @80.1-80.11 (ident "match_time")))
-						(e-not-implemented @156.3-156.6)))
-				(s-expr @158.2-162.7
+						(e-not-implemented @1.1-1.1)))
+				(s-expr @158.2-161.3
 					(e-call @158.2-161.3
 						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-dbg @159.3-160.7
+						(e-dbg @159.3-160.6
 							(e-int @160.4-160.6 (value "42")))))
-				(s-crash @162.2-164.18 (msg "Unreachable!"))
+				(s-crash @162.2-163.17 (msg "Unreachable!"))
 				(s-let @164.2-164.31
 					(p-assign @164.2-164.18 (ident "tag_with_payload"))
 					(e-tag @164.21-164.23 (name "Ok")
 						(args
 							(e-lookup-local @164.24-164.30
-								(p-assign @146.2-147.8 (ident "number"))))))
+								(p-assign @146.2-146.18 (ident "number"))))))
 				(s-let @165.2-165.34
 					(p-assign @165.2-165.14 (ident "interpolated"))
 					(e-string @165.17-165.34
@@ -2097,16 +2103,16 @@ expect {
 							(e-call @167.3-170.4
 								(e-lookup-local @167.3-167.10
 									(p-assign @68.1-68.8 (ident "add_one")))
-								(e-dbg @168.4-169.12
+								(e-dbg @168.4-169.11
 									(e-lookup-local @169.5-169.11
-										(p-assign @146.2-147.8 (ident "number")))))
+										(p-assign @146.2-146.18 (ident "number")))))
 							(e-int @171.3-171.6 (value "456"))
 							(e-int @172.3-172.6 (value "789")))))
-				(s-expr @178.42-178.46
+				(s-expr @178.42-178.45
 					(e-lookup-local @178.42-178.45
 						(p-assign @148.2-148.5 (ident "tag"))))
-				(s-type-anno @178.47-179.7 (name "qux")
-					(ty-malformed @178.52-179.7))
+				(s-type-anno @178.47-178.71 (name "qux")
+					(ty-malformed @178.52-178.71))
 				(s-let @179.2-179.68
 					(p-assign @179.2-179.7 (ident "tuple"))
 					(e-tuple @179.10-179.68
@@ -2152,45 +2158,45 @@ expect {
 									(e-int @186.4-186.5 (value "1"))
 									(e-int @186.7-186.8 (value "2"))
 									(e-int @186.10-186.11 (value "3")))))))
-				(s-let @188.2-189.23
+				(s-let @188.2-188.86
 					(p-assign @188.2-188.15 (ident "bin_op_result"))
-					(e-binop @188.18-189.23 (op "or")
-						(e-binop @188.18-188.74 (op "or")
-							(e-binop @188.18-188.43 (op "gt")
-								(e-binop @188.18-188.34 (op "null_coalesce")
+					(e-binop @188.18-188.86 (op "or")
+						(e-binop @188.18-188.71 (op "or")
+							(e-binop @188.18-188.40 (op "gt")
+								(e-binop @188.18-188.32 (op "null_coalesce")
 									(e-tag @188.18-188.21 (name "Err")
 										(args
 											(e-runtime-error (tag "ident_not_in_scope"))))
 									(e-int @188.30-188.32 (value "12")))
-								(e-binop @188.35-188.43 (op "mul")
+								(e-binop @188.35-188.40 (op "mul")
 									(e-int @188.35-188.36 (value "5"))
 									(e-int @188.39-188.40 (value "5"))))
-							(e-binop @188.44-188.74 (op "and")
-								(e-binop @188.44-188.58 (op "lt")
-									(e-binop @188.44-188.52 (op "add")
+							(e-binop @188.44-188.71 (op "and")
+								(e-binop @188.44-188.54 (op "lt")
+									(e-binop @188.44-188.50 (op "add")
 										(e-int @188.44-188.46 (value "13"))
 										(e-int @188.49-188.50 (value "2")))
 									(e-int @188.53-188.54 (value "5")))
-								(e-binop @188.59-188.74 (op "ge")
-									(e-binop @188.59-188.68 (op "sub")
+								(e-binop @188.59-188.71 (op "ge")
+									(e-binop @188.59-188.65 (op "sub")
 										(e-int @188.59-188.61 (value "10"))
 										(e-int @188.64-188.65 (value "1")))
 									(e-int @188.69-188.71 (value "16")))))
-						(e-binop @188.75-189.23 (op "le")
+						(e-binop @188.75-188.86 (op "le")
 							(e-int @188.75-188.77 (value "12"))
-							(e-binop @188.81-189.23 (op "div")
+							(e-binop @188.81-188.86 (op "div")
 								(e-int @188.81-188.82 (value "3"))
 								(e-int @188.85-188.86 (value "5"))))))
-				(s-let @189.2-190.8
+				(s-let @189.2-189.111
 					(p-assign @189.2-189.23 (ident "static_dispatch_style"))
-					(e-dot-access @189.26-190.8 (field "unknown")
+					(e-dot-access @189.26-189.111 (field "unknown")
 						(receiver
-							(e-dot-access @189.26-189.110 (field "unknown")
+							(e-dot-access @189.26-189.97 (field "unknown")
 								(receiver
-									(e-dot-access @189.26-189.94 (field "unknown")
+									(e-dot-access @189.26-189.66 (field "unknown")
 										(receiver
 											(e-runtime-error (tag "not_implemented")))))))))
-				(s-expr @190.2-191.8
+				(s-expr @190.2-190.29
 					(e-runtime-error (tag "not_implemented")))
 				(e-call @191.2-195.3
 					(e-lookup-external @191.2-191.14
@@ -2201,7 +2207,7 @@ expect {
 						(e-call @193.4-193.21
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @193.14-193.20
-								(p-assign @146.2-147.8 (ident "number"))))
+								(p-assign @146.2-146.18 (ident "number"))))
 						(e-literal @194.4-194.17 (string " as a string?"))))))
 		(annotation @144.1-144.6
 			(declared-type
@@ -2210,7 +2216,7 @@ expect {
 						(ty @143.14-143.20 (name "String")))
 					(ty-apply @143.25-143.38 (symbol "Result")
 						(ty-record @143.32-143.34)
-						(ty-underscore @143.36-143.37))))))
+						(ty-underscore @1.1-1.1))))))
 	(d-let
 		(p-assign @199.1-199.6 (ident "empty"))
 		(e-empty_record @199.9-199.11)
@@ -2224,13 +2230,13 @@ expect {
 				(ty-var @22.8-22.9 (name "b"))))
 		(ty-fn @22.13-22.41 (effectful false)
 			(ty-apply @22.13-22.20 (symbol "List")
-				(ty-var @22.18-22.19 (name "a")))
+				(ty-var @22.18-22.18 (name "a")))
 			(ty-parens @22.22-22.30
 				(ty-fn @22.23-22.29 (effectful false)
-					(ty-var @22.23-22.24 (name "a"))
-					(ty-var @22.28-22.29 (name "b"))))
+					(ty-var @22.23-22.23 (name "a"))
+					(ty-var @1.1-1.1 (name "b"))))
 			(ty-apply @22.34-22.41 (symbol "List")
-				(ty-var @22.39-22.40 (name "b")))))
+				(ty-var @22.39-22.39 (name "b")))))
 	(s-alias-decl @23.1-34.5
 		(ty-header @23.1-26.2 (name "MapML")
 			(ty-args
@@ -2238,13 +2244,13 @@ expect {
 				(ty-var @25.2-25.3 (name "b"))))
 		(ty-fn @28.3-34.5 (effectful false)
 			(ty-apply @28.3-30.4 (symbol "List")
-				(ty-var @29.4-29.5 (name "a")))
+				(ty-var @1.1-1.1 (name "a")))
 			(ty-parens @31.3-31.11
 				(ty-fn @31.4-31.10 (effectful false)
-					(ty-var @31.4-31.5 (name "a"))
-					(ty-var @31.9-31.10 (name "b"))))
+					(ty-var @31.4-31.4 (name "a"))
+					(ty-var @1.1-1.1 (name "b"))))
 			(ty-apply @32.4-34.5 (symbol "List")
-				(ty-var @33.5-33.6 (name "b")))))
+				(ty-var @1.1-1.1 (name "b")))))
 	(s-alias-decl @36.1-36.17
 		(ty-header @36.1-36.4 (name "Foo"))
 		(ty-tuple @36.7-36.17
@@ -2262,7 +2268,7 @@ expect {
 		(ty-record @43.11-43.43
 			(field (field "foo")
 				(ty-apply @43.19-43.24 (symbol "Ok")
-					(ty-var @43.22-43.23 (name "a"))))
+					(ty-var @43.22-43.22 (name "a"))))
 			(field (field "bar")
 				(ty @43.32-43.41 (name "Something")))))
 	(s-alias-decl @44.1-47.2
@@ -2272,7 +2278,7 @@ expect {
 		(ty-record @44.13-47.2
 			(field (field "foo")
 				(ty-apply @45.8-45.13 (symbol "Ok")
-					(ty-var @45.11-45.12 (name "a"))))
+					(ty-var @45.11-45.11 (name "a"))))
 			(field (field "bar")
 				(ty @46.8-46.17 (name "Something")))))
 	(s-alias-decl @49.1-54.2
@@ -2282,7 +2288,7 @@ expect {
 		(ty-record @49.20-54.2
 			(field (field "foo")
 				(ty-apply @52.4-52.9 (symbol "Ok")
-					(ty-var @52.7-52.8 (name "a"))))
+					(ty-var @52.7-52.7 (name "a"))))
 			(field (field "bar")
 				(ty @53.8-53.17 (name "Something")))))
 	(s-alias-decl @56.1-56.27
@@ -2291,7 +2297,7 @@ expect {
 				(ty-var @56.7-56.8 (name "a"))))
 		(ty-tag-union @56.12-56.27
 			(ty-apply @56.13-56.20 (symbol "Some")
-				(ty-var @56.18-56.19 (name "a")))
+				(ty-var @56.18-56.18 (name "a")))
 			(ty @56.22-56.26 (name "None"))))
 	(s-alias-decl @58.1-61.2
 		(ty-header @58.1-58.18 (name "MaybeMultiline")
@@ -2299,7 +2305,7 @@ expect {
 				(ty-var @58.16-58.17 (name "a"))))
 		(ty-tag-union @58.21-61.2
 			(ty-apply @59.2-59.9 (symbol "Some")
-				(ty-var @59.7-59.8 (name "a")))
+				(ty-var @59.7-59.7 (name "a")))
 			(ty @60.2-60.6 (name "None"))))
 	(s-alias-decl @63.1-63.38
 		(ty-header @63.1-63.12 (name "SomeFunc")
@@ -2307,10 +2313,10 @@ expect {
 				(ty-var @63.10-63.11 (name "a"))))
 		(ty-fn @63.15-63.38 (effectful false)
 			(ty-apply @63.15-63.23 (symbol "Maybe")
-				(ty-var @63.21-63.22 (name "a")))
-			(ty-var @63.25-63.26 (name "a"))
+				(ty-var @63.21-63.21 (name "a")))
+			(ty-var @1.1-1.1 (name "a"))
 			(ty-apply @63.30-63.38 (symbol "Maybe")
-				(ty-var @63.36-63.37 (name "a")))))
+				(ty-var @63.36-63.36 (name "a")))))
 	(s-import @4.1-4.42 (module "pf.Stdout") (qualifier "pf")
 		(exposes
 			(exposed (name "line!") (wildcard false))
@@ -2328,8 +2334,8 @@ expect {
 		(exposes))
 	(s-import @17.1-20.20 (module "BadNameMultiline") (alias "GoodNameMultiline")
 		(exposes))
-	(s-expect @140.1-143.6
-		(e-binop @141.2-143.6 (op "eq")
+	(s-expect @140.1-141.11
+		(e-binop @141.2-141.11 (op "eq")
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-int @141.10-141.11 (value "1"))))
 	(s-expect @203.1-207.2
@@ -2340,7 +2346,7 @@ expect {
 			(s-let @205.2-205.10
 				(p-assign @205.2-205.6 (ident "blah"))
 				(e-int @205.9-205.10 (value "1")))
-			(e-binop @206.2-207.2 (op "eq")
+			(e-binop @206.2-206.13 (op "eq")
 				(e-lookup-local @206.2-206.6
 					(p-assign @205.2-205.6 (ident "blah")))
 				(e-lookup-local @206.10-206.13
@@ -2395,7 +2401,7 @@ expect {
 				(ty-args
 					(ty-var @63.10-63.11 (name "a"))))))
 	(expressions
-		(expr @65.19-67.8 (type "Bool -> Num(*)"))
+		(expr @65.19-65.40 (type "Bool -> Num(*)"))
 		(expr @68.11-78.2 (type "Error -> Error"))
 		(expr @80.14-138.3 (type "Error"))
 		(expr @144.9-196.2 (type "Error -> Error"))

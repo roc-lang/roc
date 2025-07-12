@@ -27,32 +27,36 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:9:17:9:24
-UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:13:23:13:30
-INVALID STATEMENT - crash_and_ellipsis_test.md:9:23:12:16
+UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:9:17:9:22
+UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:13:23:13:28
+INVALID STATEMENT - crash_and_ellipsis_test.md:9:23:9:48
+INVALID STATEMENT - crash_and_ellipsis_test.md:13:29:13:35
+UNUSED VARIABLE - crash_and_ellipsis_test.md:16:5:16:12
+UNUSED VARIABLE - crash_and_ellipsis_test.md:17:5:17:12
+UNUSED VARIABLE - crash_and_ellipsis_test.md:18:5:18:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **crash "** is not expected in an expression.
+The token **crash** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**crash_and_ellipsis_test.md:9:17:9:24:**
+**crash_and_ellipsis_test.md:9:17:9:22:**
 ```roc
 testCrash = |_| crash "This is a crash message"
 ```
-                ^^^^^^^
+                ^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **crash "** is not expected in an expression.
+The token **crash** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**crash_and_ellipsis_test.md:13:23:13:30:**
+**crash_and_ellipsis_test.md:13:23:13:28:**
 ```roc
 testCrashSimple = |_| crash "oops"
 ```
-                      ^^^^^^^
+                      ^^^^^
 
 
 **INVALID LAMBDA**
@@ -62,13 +66,11 @@ The body of this lambda expression is not valid.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**crash_and_ellipsis_test.md:9:23:12:16:**
+**crash_and_ellipsis_test.md:9:23:9:48:**
 ```roc
 testCrash = |_| crash "This is a crash message"
-
-# Test crash with different message
-testCrashSimple : U64 -> U64
 ```
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **INVALID LAMBDA**
@@ -78,12 +80,11 @@ The body of this lambda expression is not valid.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**crash_and_ellipsis_test.md:13:29:15:6:**
+**crash_and_ellipsis_test.md:13:29:13:35:**
 ```roc
 testCrashSimple = |_| crash "oops"
-
-main! = |_| {
 ```
+                            ^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -142,17 +143,17 @@ CloseCurly(20:1-20:2),EndOfFile(20:2-20:2),
 ~~~clojure
 (file @1.1-20.2
 	(app @1.1-1.57
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.55 (name "pf")
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @4.1-5.13 (name "testEllipsis")
+		(s-type-anno @4.1-4.26 (name "testEllipsis")
 			(ty-fn @4.16-4.26
 				(ty @4.16-4.19 (name "U64"))
 				(ty @4.23-4.26 (name "U64"))))
@@ -162,28 +163,28 @@ CloseCurly(20:1-20:2),EndOfFile(20:2-20:2),
 				(args
 					(p-underscore))
 				(e-ellipsis)))
-		(s-type-anno @8.1-9.10 (name "testCrash")
+		(s-type-anno @8.1-8.23 (name "testCrash")
 			(ty-fn @8.13-8.23
 				(ty @8.13-8.16 (name "U64"))
 				(ty @8.20-8.23 (name "U64"))))
-		(s-decl @9.1-9.24
+		(s-decl @9.1-9.22
 			(p-ident @9.1-9.10 (raw "testCrash"))
-			(e-lambda @9.13-9.24
+			(e-lambda @9.13-9.22
 				(args
 					(p-underscore))
-				(e-malformed @9.17-9.24 (reason "expr_unexpected_token"))))
+				(e-malformed @9.17-9.22 (reason "expr_unexpected_token"))))
 		(e-string @9.23-9.48
 			(e-string-part @9.24-9.47 (raw "This is a crash message")))
-		(s-type-anno @12.1-13.16 (name "testCrashSimple")
+		(s-type-anno @12.1-12.29 (name "testCrashSimple")
 			(ty-fn @12.19-12.29
 				(ty @12.19-12.22 (name "U64"))
 				(ty @12.26-12.29 (name "U64"))))
-		(s-decl @13.1-13.30
+		(s-decl @13.1-13.28
 			(p-ident @13.1-13.16 (raw "testCrashSimple"))
-			(e-lambda @13.19-13.30
+			(e-lambda @13.19-13.28
 				(args
 					(p-underscore))
-				(e-malformed @13.23-13.30 (reason "expr_unexpected_token"))))
+				(e-malformed @13.23-13.28 (reason "expr_unexpected_token"))))
 		(e-string @13.29-13.35
 			(e-string-part @13.30-13.34 (raw "oops")))
 		(s-decl @15.1-20.2
@@ -241,7 +242,7 @@ main! = |_| {
 		(e-lambda @5.16-5.23
 			(args
 				(p-underscore @5.17-5.18))
-			(e-not-implemented @5.20-5.23))
+			(e-not-implemented @1.1-1.1))
 		(annotation @5.1-5.13
 			(declared-type
 				(ty-fn @4.16-4.26 (effectful false)
@@ -249,7 +250,7 @@ main! = |_| {
 					(ty @4.23-4.26 (name "U64"))))))
 	(d-let
 		(p-assign @9.1-9.10 (ident "testCrash"))
-		(e-lambda @9.13-9.24
+		(e-lambda @9.13-9.22
 			(args
 				(p-underscore @9.14-9.15))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
@@ -260,7 +261,7 @@ main! = |_| {
 					(ty @8.20-8.23 (name "U64"))))))
 	(d-let
 		(p-assign @13.1-13.16 (ident "testCrashSimple"))
-		(e-lambda @13.19-13.30
+		(e-lambda @13.19-13.28
 			(args
 				(p-underscore @13.20-13.21))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
@@ -305,7 +306,7 @@ main! = |_| {
 		(patt @15.1-15.6 (type "* -> List(*)")))
 	(expressions
 		(expr @5.16-5.23 (type "Error -> Error"))
-		(expr @9.13-9.24 (type "Error -> Error"))
-		(expr @13.19-13.30 (type "Error -> Error"))
+		(expr @9.13-9.22 (type "Error -> Error"))
+		(expr @13.19-13.28 (type "Error -> Error"))
 		(expr @15.9-20.2 (type "* -> List(*)"))))
 ~~~

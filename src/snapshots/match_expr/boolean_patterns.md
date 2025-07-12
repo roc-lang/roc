@@ -36,11 +36,11 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 (e-match
 	(e-ident @1.7-1.14 (raw "isReady"))
 	(branches
-		(branch @2.2-3.7
+		(branch @2.2-2.24
 			(p-tag @2.2-2.6 (raw "True"))
 			(e-string @2.10-2.24
 				(e-string-part @2.11-2.23 (raw "ready to go!"))))
-		(branch @3.2-4.2
+		(branch @3.2-3.26
 			(p-tag @3.2-3.7 (raw "False"))
 			(e-string @3.11-3.26
 				(e-string-part @3.12-3.25 (raw "not ready yet"))))))

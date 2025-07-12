@@ -22,7 +22,7 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Float(2:7-2:12),EndOfFile(2:12-2:12),
 (file @1.1-2.12
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident (text "foo"))))
+			(exposed-lower-ident @1.9-1.12 (text "foo"))))
 	(statements
 		(s-decl @2.1-2.12
 			(p-ident @2.1-2.4 (raw "foo"))

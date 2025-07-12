@@ -33,57 +33,62 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:3:19:4:7
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:4:19:4:27
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:4:25:4:36
-PARSE ERROR - can_import_nested_modules.md:5:1:5:13
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:13:5:27
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:20:5:36
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:28:5:38
-INVALID STATEMENT - can_import_nested_modules.md:3:19:4:7
-INVALID STATEMENT - can_import_nested_modules.md:4:19:4:27
-INVALID STATEMENT - can_import_nested_modules.md:4:25:4:36
-INVALID STATEMENT - can_import_nested_modules.md:5:8:5:20
-INVALID STATEMENT - can_import_nested_modules.md:5:13:5:27
-INVALID STATEMENT - can_import_nested_modules.md:5:20:5:36
-INVALID STATEMENT - can_import_nested_modules.md:5:28:5:38
-INVALID STATEMENT - can_import_nested_modules.md:5:37:8:12
+UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:3:19:3:26
+UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:4:19:4:24
+UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:4:25:4:27
+PARSE ERROR - can_import_nested_modules.md:5:1:5:7
+UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:13:5:20
+UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:20:5:27
+UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:28:5:36
+INVALID STATEMENT - can_import_nested_modules.md:3:19:3:26
+INVALID STATEMENT - can_import_nested_modules.md:4:19:4:24
+INVALID STATEMENT - can_import_nested_modules.md:4:25:4:27
+INVALID STATEMENT - can_import_nested_modules.md:5:8:5:13
+INVALID STATEMENT - can_import_nested_modules.md:5:13:5:20
+INVALID STATEMENT - can_import_nested_modules.md:5:20:5:27
+INVALID STATEMENT - can_import_nested_modules.md:5:28:5:36
+INVALID STATEMENT - can_import_nested_modules.md:5:37:5:46
+UNDEFINED VARIABLE - can_import_nested_modules.md:9:26:9:41
+UNDEFINED VARIABLE - can_import_nested_modules.md:13:29:13:43
+UNDEFINED VARIABLE - can_import_nested_modules.md:18:5:18:37
+UNDEFINED VARIABLE - can_import_nested_modules.md:22:23:22:30
+UNDEFINED VARIABLE - can_import_nested_modules.md:22:37:22:58
+UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Config
-import** is not expected in an expression.
+The token **.Config** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**can_import_nested_modules.md:3:19:4:7:**
+**can_import_nested_modules.md:3:19:3:26:**
 ```roc
 import json.Parser.Config
-import http.Client.Auth as HttpAuth
 ```
+                  ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Auth as** is not expected in an expression.
+The token **.Auth** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**can_import_nested_modules.md:4:19:4:27:**
+**can_import_nested_modules.md:4:19:4:24:**
 ```roc
 import http.Client.Auth as HttpAuth
 ```
-                  ^^^^^^^^
+                  ^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **as HttpAuth** is not expected in an expression.
+The token **as** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**can_import_nested_modules.md:4:25:4:36:**
+**can_import_nested_modules.md:4:25:4:27:**
 ```roc
 import http.Client.Auth as HttpAuth
 ```
-                        ^^^^^^^^^^^
+                        ^^
 
 
 **PARSE ERROR**
@@ -103,137 +108,135 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**can_import_nested_modules.md:5:1:5:13:**
+**can_import_nested_modules.md:5:1:5:7:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
-^^^^^^^^^^^^
+^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **.String.Format** is not expected in an expression.
+The token **.String** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**can_import_nested_modules.md:5:13:5:27:**
+**can_import_nested_modules.md:5:13:5:20:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
-            ^^^^^^^^^^^^^^
+            ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Format exposing** is not expected in an expression.
+The token **.Format** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**can_import_nested_modules.md:5:20:5:36:**
+**can_import_nested_modules.md:5:20:5:27:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
-                   ^^^^^^^^^^^^^^^^
+                   ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **exposing [** is not expected in an expression.
+The token **exposing** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**can_import_nested_modules.md:5:28:5:38:**
+**can_import_nested_modules.md:5:28:5:36:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
-                           ^^^^^^^^^^
+                           ^^^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**can_import_nested_modules.md:3:19:4:7:**
+**can_import_nested_modules.md:3:19:3:26:**
 ```roc
 import json.Parser.Config
-import http.Client.Auth as HttpAuth
 ```
+                  ^^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**can_import_nested_modules.md:4:19:4:27:**
+**can_import_nested_modules.md:4:19:4:24:**
 ```roc
 import http.Client.Auth as HttpAuth
 ```
-                  ^^^^^^^^
+                  ^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**can_import_nested_modules.md:4:25:4:36:**
+**can_import_nested_modules.md:4:25:4:27:**
 ```roc
 import http.Client.Auth as HttpAuth
 ```
-                        ^^^^^^^^^^^
+                        ^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**can_import_nested_modules.md:5:8:5:20:**
+**can_import_nested_modules.md:5:8:5:13:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
-       ^^^^^^^^^^^^
+       ^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**can_import_nested_modules.md:5:13:5:27:**
+**can_import_nested_modules.md:5:13:5:20:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
-            ^^^^^^^^^^^^^^
+            ^^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**can_import_nested_modules.md:5:20:5:36:**
+**can_import_nested_modules.md:5:20:5:27:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
-                   ^^^^^^^^^^^^^^^^
+                   ^^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**can_import_nested_modules.md:5:28:5:38:**
+**can_import_nested_modules.md:5:28:5:36:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
-                           ^^^^^^^^^^
+                           ^^^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**can_import_nested_modules.md:5:37:8:12:**
+**can_import_nested_modules.md:5:37:5:46:**
 ```roc
 import utils.String.Format exposing [padLeft]
-
-# Test multi-level type qualification
-parseConfig : Config.Settings -> Str
 ```
+                                    ^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -327,18 +330,18 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 		(exposes @1.8-1.10))
 	(statements
 		(s-import @3.1-3.19 (raw "json.Parser"))
-		(e-malformed @3.19-4.7 (reason "expr_unexpected_token"))
+		(e-malformed @3.19-3.26 (reason "expr_unexpected_token"))
 		(s-import @4.1-4.19 (raw "http.Client"))
-		(e-malformed @4.19-4.27 (reason "expr_unexpected_token"))
-		(e-malformed @4.25-4.36 (reason "expr_unexpected_token"))
-		(s-malformed @4.28-5.13 (tag "expected_colon_after_type_annotation"))
+		(e-malformed @4.19-4.24 (reason "expr_unexpected_token"))
+		(e-malformed @4.25-4.27 (reason "expr_unexpected_token"))
+		(s-malformed @4.28-5.7 (tag "expected_colon_after_type_annotation"))
 		(e-ident @5.8-5.13 (raw "utils"))
-		(e-malformed @5.13-5.27 (reason "expr_unexpected_token"))
-		(e-malformed @5.20-5.36 (reason "expr_unexpected_token"))
-		(e-malformed @5.28-5.38 (reason "expr_unexpected_token"))
+		(e-malformed @5.13-5.20 (reason "expr_unexpected_token"))
+		(e-malformed @5.20-5.27 (reason "expr_unexpected_token"))
+		(e-malformed @5.28-5.36 (reason "expr_unexpected_token"))
 		(e-list @5.37-5.46
 			(e-ident @5.38-5.45 (raw "padLeft")))
-		(s-type-anno @8.1-9.12 (name "parseConfig")
+		(s-type-anno @8.1-8.37 (name "parseConfig")
 			(ty-fn @8.15-8.37
 				(ty @8.15-8.30 (name "Config.Settings"))
 				(ty @8.34-8.37 (name "Str"))))
@@ -350,7 +353,7 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 				(e-apply @9.26-9.51
 					(e-ident @9.26-9.41 (raw "Config.toString"))
 					(e-ident @9.42-9.50 (raw "settings")))))
-		(s-type-anno @12.1-13.13 (name "authenticate")
+		(s-type-anno @12.1-12.42 (name "authenticate")
 			(ty-fn @12.16-12.42
 				(ty @12.16-12.19 (name "Str"))
 				(ty @12.21-12.24 (name "Str"))
@@ -365,7 +368,7 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 					(e-ident @13.29-13.43 (raw "HttpAuth.login"))
 					(e-ident @13.44-13.48 (raw "user"))
 					(e-ident @13.50-13.54 (raw "pass")))))
-		(s-type-anno @16.1-17.12 (name "processData")
+		(s-type-anno @16.1-16.78 (name "processData")
 			(ty-fn @16.15-16.78
 				(ty @16.15-16.37 (name "Config.Parser.Advanced"))
 				(ty @16.39-16.42 (name "Str"))
@@ -383,7 +386,7 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 					(e-ident @18.5-18.37 (raw "Config.Parser.Advanced.parseWith"))
 					(e-ident @18.38-18.52 (raw "advancedConfig"))
 					(e-ident @18.54-18.59 (raw "input")))))
-		(s-type-anno @21.1-22.13 (name "formatOutput")
+		(s-type-anno @21.1-21.26 (name "formatOutput")
 			(ty-fn @21.16-21.26
 				(ty @21.16-21.19 (name "Str"))
 				(ty @21.23-21.26 (name "Str"))))
@@ -396,7 +399,7 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 					(e-ident @22.23-22.30 (raw "padLeft"))
 					(e-ident @22.31-22.35 (raw "text"))
 					(e-ident @22.37-22.58 (raw "Config.defaultPadding")))))
-		(s-type-anno @25.1-26.13 (name "validateAuth")
+		(s-type-anno @25.1-25.78 (name "validateAuth")
 			(ty-fn @25.16-25.78
 				(ty @25.16-25.36 (name "HttpAuth.Credentials"))
 				(ty-apply @25.40-25.78
