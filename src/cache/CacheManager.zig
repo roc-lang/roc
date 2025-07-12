@@ -55,30 +55,30 @@ pub const CacheManager = struct {
     /// Look up a cache entry by content and compiler version.
     ///
     /// Returns CacheResult indicating hit, miss, or invalid entry.
-    /// IMPORTANT: This function takes ownership of content only.
+    /// IMPORTANT: This function takes ownership of source only.
     /// compiler_version is borrowed (not owned).
-    /// On cache miss/invalid, content is returned in the result for the caller to reuse.
+    /// On cache miss/invalid, source is returned in the result for the caller to reuse.
     pub fn loadFromCache(
         self: *Self,
-        content: []const u8,
+        source: []const u8,
         compiler_version: []const u8,
     ) CacheResult {
         if (!self.config.enabled) {
             return CacheResult{ .miss = .{
-                .source = content,
+                .source = source,
             } };
         }
 
-        const cache_key = self.generateCacheKey(content, compiler_version) catch {
+        const cache_key = self.generateCacheKey(source, compiler_version) catch {
             return CacheResult{ .miss = .{
-                .source = content,
+                .source = source,
             } };
         };
         defer self.allocator.free(cache_key);
 
         const cache_path = self.getCacheFilePath(cache_key) catch {
             return CacheResult{ .miss = .{
-                .source = content,
+                .source = source,
             } };
         };
         defer self.allocator.free(cache_path);
@@ -88,7 +88,7 @@ pub const CacheManager = struct {
         if (!exists) {
             self.stats.recordMiss();
             return CacheResult{ .miss = .{
-                .source = content,
+                .source = source,
             } };
         }
 
@@ -99,7 +99,7 @@ pub const CacheManager = struct {
             }
             self.stats.recordMiss();
             return CacheResult{ .miss = .{
-                .source = content,
+                .source = source,
             } };
         };
         defer mapped_cache.deinit(self.allocator);
@@ -108,14 +108,14 @@ pub const CacheManager = struct {
         // restoreFromCache takes ownership of content
         const result = self.restoreFromCache(
             mapped_cache.data(),
-            content,
+            source,
         ) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
             }
             self.stats.recordInvalidation();
             return CacheResult{ .invalid = .{
-                .source = content,
+                .source = source,
             } };
         };
 
@@ -192,10 +192,10 @@ pub const CacheManager = struct {
         self.stats.recordStore(cache_data.len);
     }
 
-    /// Generate a BLAKE3-based cache key from content and compiler version.
-    fn generateCacheKey(self: *Self, content: []const u8, compiler_version: []const u8) ![]u8 {
-        // Combine content and compiler version
-        const combined = try std.fmt.allocPrint(self.allocator, "{s}|{s}", .{ content, compiler_version });
+    /// Generate a BLAKE3-based cache key from source and compiler version.
+    fn generateCacheKey(self: *Self, source: []const u8, compiler_version: []const u8) ![]u8 {
+        // Combine source and compiler version
+        const combined = try std.fmt.allocPrint(self.allocator, "{s}|{s}", .{ source, compiler_version });
         defer self.allocator.free(combined);
 
         // Hash with BLAKE3
@@ -388,13 +388,12 @@ test "CacheManager loadFromCache miss" {
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
-    const content = try allocator.dupe(u8, "module [test]\n\ntest = 42");
+    const source = try allocator.dupe(u8, "module [test]\n\ntest = 42");
 
-    const result = manager.loadFromCache(content, "roc-zig-0.11.0-debug");
+    const result = manager.loadFromCache(source, "roc-zig-0.11.0-debug");
     switch (result) {
         .miss => |returned| {
             try testing.expect(manager.stats.misses == 1);
-            // Free the returned source
             allocator.free(returned.source);
         },
         else => return error.TestUnexpectedResult,
@@ -408,12 +407,11 @@ test "CacheManager disabled" {
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
-    const content = try allocator.dupe(u8, "module [test]\n\ntest = 42");
+    const source = try allocator.dupe(u8, "module [test]\n\ntest = 42");
 
-    const result = manager.loadFromCache(content, "roc-zig-0.11.0-debug");
+    const result = manager.loadFromCache(source, "roc-zig-0.11.0-debug");
     switch (result) {
         .miss => |returned| {
-            // Free the returned source
             allocator.free(returned.source);
         },
         else => return error.TestUnexpectedResult,
