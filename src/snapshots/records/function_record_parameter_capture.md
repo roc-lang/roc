@@ -14,7 +14,7 @@ UNUSED VARIABLE - function_record_parameter_capture.md:1:15:1:20
 Variable ``a`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
-
+The unused variable is declared here:
 **function_record_parameter_capture.md:1:15:1:20:**
 ```roc
 |{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }

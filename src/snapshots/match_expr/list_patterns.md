@@ -55,7 +55,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **list_patterns.md:3:15:3:19:**
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error
@@ -67,7 +67,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 Variable ``first`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
-
+The unused variable is declared here:
 **list_patterns.md:3:6:3:11:**
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error

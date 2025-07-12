@@ -35,7 +35,7 @@ match list {
 Variable ``tail`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_tail` to suppress this warning.
-
+The unused variable is declared here:
 **list_destructure_variations.md:5:18:5:22:**
 ```roc
     [head, .. as tail] => head
@@ -47,7 +47,7 @@ If you don't need this variable, prefix it with an underscore like `_tail` to su
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **list_destructure_variations.md:6:22:6:26:**
 ```roc
     [One, Two, .. as rest] => 3
@@ -59,7 +59,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 Variable ``more`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_more` to suppress this warning.
-
+The unused variable is declared here:
 **list_destructure_variations.md:7:21:7:25:**
 ```roc
     [x, y, z, .. as more] => x + y + z

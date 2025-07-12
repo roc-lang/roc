@@ -75,7 +75,7 @@ match items {
 Variable ``first`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
-
+The unused variable is declared here:
 **list_rest_invalid.md:2:6:2:11:**
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error
@@ -87,7 +87,7 @@ If you don't need this variable, prefix it with an underscore like `_first` to s
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **list_rest_invalid.md:2:15:2:19:**
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error
@@ -99,7 +99,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **list_rest_invalid.md:3:8:3:12:**
 ```roc
     [..rest, last] => 1 # invalid rest pattern should error
@@ -111,7 +111,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 Variable ``last`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_last` to suppress this warning.
-
+The unused variable is declared here:
 **list_rest_invalid.md:3:14:3:18:**
 ```roc
     [..rest, last] => 1 # invalid rest pattern should error
@@ -123,7 +123,7 @@ If you don't need this variable, prefix it with an underscore like `_last` to su
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **list_rest_invalid.md:4:11:4:15:**
 ```roc
     [x, ..rest, y] => 2 # invalid rest pattern should error
@@ -135,7 +135,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 Variable ``x`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-
+The unused variable is declared here:
 **list_rest_invalid.md:4:6:4:7:**
 ```roc
     [x, ..rest, y] => 2 # invalid rest pattern should error
@@ -147,7 +147,7 @@ If you don't need this variable, prefix it with an underscore like `_x` to suppr
 Variable ``y`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-
+The unused variable is declared here:
 **list_rest_invalid.md:4:17:4:18:**
 ```roc
     [x, ..rest, y] => 2 # invalid rest pattern should error

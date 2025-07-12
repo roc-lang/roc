@@ -31,7 +31,7 @@ match items {
 Variable ``middle`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_middle` to suppress this warning.
-
+The unused variable is declared here:
 **middle_rest.md:3:18:3:24:**
 ```roc
     [a, b, .. as middle, x, y] => a + b + x + y  

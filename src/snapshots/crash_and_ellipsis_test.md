@@ -90,7 +90,7 @@ main! = |_| {
 Variable ``result1`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_result1` to suppress this warning.
-
+The unused variable is declared here:
 **crash_and_ellipsis_test.md:16:5:16:12:**
 ```roc
     result1 = testEllipsis(42)
@@ -102,7 +102,7 @@ If you don't need this variable, prefix it with an underscore like `_result1` to
 Variable ``result2`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_result2` to suppress this warning.
-
+The unused variable is declared here:
 **crash_and_ellipsis_test.md:17:5:17:12:**
 ```roc
     result2 = testCrash(42)
@@ -114,7 +114,7 @@ If you don't need this variable, prefix it with an underscore like `_result2` to
 Variable ``result3`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
-
+The unused variable is declared here:
 **crash_and_ellipsis_test.md:18:5:18:12:**
 ```roc
     result3 = testCrashSimple(42)

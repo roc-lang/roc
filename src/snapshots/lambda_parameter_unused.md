@@ -39,7 +39,7 @@ UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 Variable ``unused`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_unused` to suppress this warning.
-
+The unused variable is declared here:
 **lambda_parameter_unused.md:5:8:5:14:**
 ```roc
 add = |unused| 42

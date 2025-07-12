@@ -455,7 +455,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``lower`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_lower` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:97:3:97:8:**
 ```roc
 		lower # After pattern comment
@@ -467,7 +467,7 @@ If you don't need this variable, prefix it with an underscore like `_lower` to s
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:102:19:102:23:**
 ```roc
 		[1, 2, 3, .. as rest] # After pattern comment
@@ -483,7 +483,7 @@ Let us know if you want to help!
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:108:23:108:27:**
 ```roc
 		[1, 2 | 5, 3, .. as rest] => 123
@@ -499,7 +499,7 @@ Let us know if you want to help!
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:115:6:115:10:**
 ```roc
 					rest, # After last pattern in list
@@ -519,7 +519,7 @@ Let us know if you want to help!
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:121:21:121:29:**
 ```roc
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
@@ -531,7 +531,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:127:4:128:10:**
 ```roc
 			.. # After spread operator
@@ -551,7 +551,7 @@ Let us know if you want to help!
 Variable ``b`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:82:2:82:3:**
 ```roc
 	b,
@@ -677,7 +677,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``multiline_tuple`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:180:2:180:17:**
 ```roc
 	multiline_tuple = (
@@ -689,7 +689,7 @@ If you don't need this variable, prefix it with an underscore like `_multiline_t
 Variable ``record`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:178:2:178:8:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
@@ -701,7 +701,7 @@ If you don't need this variable, prefix it with an underscore like `_record` to 
 Variable ``tag_with_payload`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_tag_with_payload` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:164:2:164:18:**
 ```roc
 	tag_with_payload = Ok(number)
@@ -713,7 +713,7 @@ If you don't need this variable, prefix it with an underscore like `_tag_with_pa
 Variable ``list`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:166:2:166:6:**
 ```roc
 	list = [
@@ -725,7 +725,7 @@ If you don't need this variable, prefix it with an underscore like `_list` to su
 Variable ``bin_op_result`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_bin_op_result` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:188:2:188:15:**
 ```roc
 	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
@@ -737,7 +737,7 @@ If you don't need this variable, prefix it with an underscore like `_bin_op_resu
 Variable ``static_dispatch_style`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_static_dispatch_style` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:189:2:189:23:**
 ```roc
 	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
@@ -749,7 +749,7 @@ If you don't need this variable, prefix it with an underscore like `_static_disp
 Variable ``interpolated`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_023.md:165:2:165:14:**
 ```roc
 	interpolated = "Hello, ${world}"

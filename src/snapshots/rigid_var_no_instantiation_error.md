@@ -112,7 +112,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``result1`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_result1` to suppress this warning.
-
+The unused variable is declared here:
 **rigid_var_no_instantiation_error.md:13:5:13:12:**
 ```roc
     result1 = swap((42, "hello"))
@@ -124,7 +124,7 @@ If you don't need this variable, prefix it with an underscore like `_result1` to
 Variable ``result2`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_result2` to suppress this warning.
-
+The unused variable is declared here:
 **rigid_var_no_instantiation_error.md:17:5:17:12:**
 ```roc
     result2 = swap((Bool.true, [1, 2, 3]))
@@ -136,7 +136,7 @@ If you don't need this variable, prefix it with an underscore like `_result2` to
 Variable ``result3`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
-
+The unused variable is declared here:
 **rigid_var_no_instantiation_error.md:21:5:21:12:**
 ```roc
     result3 = swap(("foo", "bar"))

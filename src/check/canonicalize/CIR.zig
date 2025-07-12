@@ -54,8 +54,8 @@ store: NodeStore,
 /// Lifetime: The caller must ensure the source remains valid for the duration of the
 /// operation (e.g., `toSExprStr` or `diagnosticToReport` calls).
 temp_source_for_sexpr: ?[]const u8 = null,
-/// Cached diagnostics to make getDiagnostics non-destructive
-cached_diagnostics: ?[]CIR.Diagnostic = null,
+/// Diagnostics extracted from the store (needed because getDiagnostics is destructive)
+diagnostics: ?[]CIR.Diagnostic = null,
 /// All the definitions and in the module, populated by calling `canonicalize_file`
 all_defs: Def.Span,
 /// All the top-level statements in the module, populated by calling `canonicalize_file`
@@ -83,7 +83,7 @@ pub fn init(env: *ModuleEnv, module_name: []const u8) CIR {
     return CIR{
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
-        .cached_diagnostics = null,
+        .diagnostics = null,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = ExternalDecl.SafeList.initCapacity(env.gpa, 16),
@@ -98,7 +98,7 @@ pub fn fromCache(env: *ModuleEnv, cached_store: NodeStore, all_defs: Def.Span, a
         .env = env,
         .store = cached_store,
         .temp_source_for_sexpr = null,
-        .cached_diagnostics = null,
+        .diagnostics = null,
         .all_defs = all_defs,
         .all_statements = all_statements,
         .external_decls = ExternalDecl.SafeList.initCapacity(env.gpa, 16),
@@ -112,8 +112,8 @@ pub fn deinit(self: *CIR) void {
     self.store.deinit();
     self.external_decls.deinit(self.env.gpa);
     self.imports.deinit(self.env.gpa);
-    if (self.cached_diagnostics) |diagnostics| {
-        self.env.gpa.free(diagnostics);
+    if (self.diagnostics) |diags| {
+        self.env.gpa.free(diags);
     }
 }
 
@@ -161,9 +161,9 @@ pub fn pushMalformed(self: *CIR, comptime t: type, reason: CIR.Diagnostic) t {
 
 /// Retrieve all diagnostics collected during canonicalization.
 pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
-    // Return cached diagnostics if available
-    if (self.cached_diagnostics) |diagnostics| {
-        return diagnostics;
+    // Return diagnostics if already extracted
+    if (self.diagnostics) |diags| {
+        return diags;
     }
 
     // First time - compute and cache the diagnostics
@@ -175,8 +175,8 @@ pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
         list.append(self.store.getDiagnostic(idx)) catch |err| exitOnOom(err);
     }
 
-    self.cached_diagnostics = list.toOwnedSlice() catch |err| exitOnOom(err);
-    return self.cached_diagnostics.?;
+    self.diagnostics = list.toOwnedSlice() catch |err| exitOnOom(err);
+    return self.diagnostics.?;
 }
 
 /// Convert a canonicalization diagnostic to a Report for rendering.

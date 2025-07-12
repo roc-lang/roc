@@ -444,7 +444,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``lue`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:64:11:64:14:**
 ```roc
 	match a {lue | Red => {
@@ -467,7 +467,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:70:38:70:42:**
 ```roc
 		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
@@ -483,7 +483,7 @@ Let us know if you want to help!
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:74:23:74:27:**
 ```roc
 		[1, 2 | 5, 3, .. as rest] => 123
@@ -495,7 +495,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 Variable ``ist`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_ist` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:76:1:76:4:**
 ```roc
 ist
@@ -515,7 +515,7 @@ Let us know if you want to help!
 Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:82:21:82:29:**
 ```roc
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
@@ -535,7 +535,7 @@ Let us know if you want to help!
 Variable ``b`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:62:2:62:3:**
 ```roc
 	b,
@@ -676,7 +676,7 @@ tuple : Value((a, b, c))
 Variable ``record`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:131:2:131:8:**
 ```roc
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
@@ -688,7 +688,7 @@ If you don't need this variable, prefix it with an underscore like `_record` to 
 Variable ``list`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:121:2:121:6:**
 ```roc
 	list = [
@@ -700,7 +700,7 @@ If you don't need this variable, prefix it with an underscore like `_list` to su
 Variable ``m_tuple`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_m_tuple` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:133:2:133:9:**
 ```roc
 	m_tuple = (
@@ -712,7 +712,7 @@ If you don't need this variable, prefix it with an underscore like `_m_tuple` to
 Variable ``stale`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_stale` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:142:2:142:7:**
 ```roc
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
@@ -724,7 +724,7 @@ If you don't need this variable, prefix it with an underscore like `_stale` to s
 Variable ``empty`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_empty` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:151:1:151:6:**
 ```roc
 empty = {}
@@ -736,7 +736,7 @@ empty = {}
 Variable ``tag_with`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_tag_with` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:119:2:119:10:**
 ```roc
 	tag_with = Ok(number)
@@ -748,7 +748,7 @@ If you don't need this variable, prefix it with an underscore like `_tag_with` t
 Variable ``bsult`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_bsult` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:141:2:141:7:**
 ```roc
 	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
@@ -760,7 +760,7 @@ If you don't need this variable, prefix it with an underscore like `_bsult` to s
 Variable ``ited`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_ited` to suppress this warning.
-
+The unused variable is declared here:
 **fuzz_crash_027.md:120:2:120:6:**
 ```roc
 	ited = "Hello, ${world}"

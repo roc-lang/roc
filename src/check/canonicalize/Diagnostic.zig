@@ -935,6 +935,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addText("` to suppress this warning.");
 
         try report.document.addLineBreak();
+        try report.document.addText("The unused variable is declared here:");
         try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);

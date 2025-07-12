@@ -62,7 +62,7 @@ This pattern contains invalid syntax or uses unsupported features.
 Variable ``value`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
-
+The unused variable is declared here:
 **f64_pattern_literal_error.md:4:5:4:10:**
 ```roc
     value => "other"

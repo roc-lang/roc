@@ -86,7 +86,7 @@ match data {
 Variable ``items`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
-
+The unused variable is declared here:
 **list_rest_scoping_variables.md:2:8:2:13:**
 ```roc
     [..items] => 1
@@ -98,7 +98,7 @@ If you don't need this variable, prefix it with an underscore like `_items` to s
 Variable ``items`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
-
+The unused variable is declared here:
 **list_rest_scoping_variables.md:3:15:3:20:**
 ```roc
     [first, ..items] => first
@@ -110,7 +110,7 @@ If you don't need this variable, prefix it with an underscore like `_items` to s
 Variable ``items`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
-
+The unused variable is declared here:
 **list_rest_scoping_variables.md:4:8:4:13:**
 ```roc
     [..items, last] => last
@@ -122,7 +122,7 @@ If you don't need this variable, prefix it with an underscore like `_items` to s
 Variable ``items`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
-
+The unused variable is declared here:
 **list_rest_scoping_variables.md:5:15:5:20:**
 ```roc
     [first, ..items, last] => first + last

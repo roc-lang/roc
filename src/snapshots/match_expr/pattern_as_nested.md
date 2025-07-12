@@ -29,7 +29,7 @@ match person {
 Variable ``name`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
-
+The unused variable is declared here:
 **pattern_as_nested.md:2:7:2:12:**
 ```roc
     { name, address: { city } as addr } as fullPerson => (fullPerson, addr, city)
