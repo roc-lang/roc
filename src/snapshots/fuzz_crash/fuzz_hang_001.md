@@ -8,7 +8,7 @@ type=file
 0 (
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_hang_001.md:1:1:1:4
+MISSING HEADER - fuzz_hang_001.md:1:1:1:2
 PARSE ERROR - fuzz_hang_001.md:1:4:1:4
 INVALID STATEMENT - fuzz_hang_001.md:1:3:1:4
 # PROBLEMS
@@ -21,11 +21,11 @@ or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 Here is the problematic code:
-**fuzz_hang_001.md:1:1:1:4:**
+**fuzz_hang_001.md:1:1:1:2:**
 ```roc
 0 (
 ```
-^^^
+^
 
 
 **PARSE ERROR**
@@ -58,7 +58,7 @@ Int(1:1-1:2),OpenRound(1:3-1:4),EndOfFile(1:4-1:4),
 # PARSE
 ~~~clojure
 (file @1.1-1.4
-	(malformed-header @1.1-1.4 (tag "missing_header"))
+	(malformed-header @1.1-1.2 (tag "missing_header"))
 	(statements
 		(e-malformed @1.4-1.4 (reason "expected_expr_close_round_or_comma"))))
 ~~~

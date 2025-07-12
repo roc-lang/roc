@@ -12,8 +12,8 @@ foo =
     "on        (string 'onmo %')))
 ~~~
 # EXPECTED
-ASCII CONTROL CHARACTER - fuzz_crash_010.md:1:1:1:3
-INVALID STATEMENT - fuzz_crash_010.md:1:2:3:4
+ASCII CONTROL CHARACTER - fuzz_crash_010.md:1:1:1:2
+INVALID STATEMENT - fuzz_crash_010.md:1:2:2:7
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -33,37 +33,35 @@ or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 Here is the problematic code:
-**fuzz_crash_010.md:1:1:1:3:**
+**fuzz_crash_010.md:1:1:1:2:**
 ```roc
 H{o,
 ```
-^^
+^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_010.md:1:2:3:4:**
+**fuzz_crash_010.md:1:2:2:7:**
 ```roc
 H{o,
     ]
-foo =
 ```
 
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),Newline(1:1-1:1),
-CloseCurly(2:6-2:7),Newline(1:1-1:1),
-LowerIdent(3:1-3:4),OpAssign(3:5-3:6),Newline(1:1-1:1),
-Newline(1:1-1:1),
+UpperIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),
+CloseCurly(2:6-2:7),
+LowerIdent(3:1-3:4),OpAssign(3:5-3:6),
 StringStart(5:5-5:6),StringPart(5:6-5:35),EndOfFile(5:35-5:35),
 ~~~
 # PARSE
 ~~~clojure
 (file @1.1-5.35
-	(malformed-header @1.1-1.3 (tag "missing_header"))
+	(malformed-header @1.1-1.2 (tag "missing_header"))
 	(statements
 		(e-record @1.2-2.7
 			(field (field "o")))

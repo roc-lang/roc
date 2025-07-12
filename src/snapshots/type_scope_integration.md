@@ -54,18 +54,10 @@ Bar : SomeUndeclaredType
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),CloseSquare(1:17-1:18),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:2-3:23),
-UpperIdent(4:1-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(6:2-6:48),
-UpperIdent(7:1-7:4),OpColon(7:5-7:6),UpperIdent(7:7-7:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(9:2-9:52),
-UpperIdent(10:1-10:4),OpColon(10:5-10:6),UpperIdent(10:7-10:25),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(12:2-12:52),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),CloseSquare(1:17-1:18),
+UpperIdent(4:1-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:10),
+UpperIdent(7:1-7:4),OpColon(7:5-7:6),UpperIdent(7:7-7:10),
+UpperIdent(10:1-10:4),OpColon(10:5-10:6),UpperIdent(10:7-10:25),
 UpperIdent(13:1-13:4),OpColon(13:5-13:6),UpperIdent(13:7-13:10),EndOfFile(13:10-13:10),
 ~~~
 # PARSE
@@ -73,8 +65,8 @@ UpperIdent(13:1-13:4),OpColon(13:5-13:6),UpperIdent(13:7-13:10),EndOfFile(13:10-
 (file @1.1-13.10
 	(module @1.1-1.18
 		(exposes @1.8-1.18
-			(exposed-upper-ident (text "Foo"))
-			(exposed-upper-ident (text "Bar"))))
+			(exposed-upper-ident @1.9-1.12 (text "Foo"))
+			(exposed-upper-ident @1.14-1.17 (text "Bar"))))
 	(statements
 		(s-type-decl @4.1-4.10
 			(header @4.1-4.4 (name "Foo")

@@ -20,14 +20,14 @@ LowerIdent(1:1-1:15),OpColon(1:16-1:17),OpenCurly(1:18-1:19),LowerIdent(1:20-1:2
 (s-type-anno @1.1-1.72 (name "process_things")
 	(ty-fn @1.18-1.72
 		(ty-record @1.18-1.53
-			(anno-record-field @1.20-1.31 (name "name")
+			(anno-record-field @1.20-1.30 (name "name")
 				(ty @1.27-1.30 (name "Str")))
-			(anno-record-field @1.32-1.42 (name "age")
+			(anno-record-field @1.32-1.41 (name "age")
 				(ty @1.38-1.41 (name "U32")))
-			(anno-record-field @1.43-1.53 (name "thing")
-				(ty-var @1.50-1.51 (raw "a"))))
+			(anno-record-field @1.43-1.51 (name "thing")
+				(ty-var @1.1-1.1 (raw "a"))))
 		(ty-fn @1.56-1.64
-			(ty-var @1.56-1.57 (raw "a"))
+			(ty-var @1.56-1.56 (raw "a"))
 			(ty @1.61-1.64 (name "Str")))
 		(ty @1.69-1.72 (name "Str"))))
 ~~~
@@ -46,10 +46,10 @@ process_things : { name : Str, age : U32, thing : a }, (a -> Str) -> Str
 				(field (field "age")
 					(ty @1.38-1.41 (name "U32")))
 				(field (field "thing")
-					(ty-var @1.50-1.51 (name "a"))))
+					(ty-var @1.1-1.1 (name "a"))))
 			(ty-parens @1.55-1.65
 				(ty-fn @1.56-1.64 (effectful false)
-					(ty-var @1.56-1.57 (name "a"))
+					(ty-var @1.56-1.56 (name "a"))
 					(ty @1.61-1.64 (name "Str"))))
 			(ty @1.69-1.72 (name "Str")))))
 ~~~

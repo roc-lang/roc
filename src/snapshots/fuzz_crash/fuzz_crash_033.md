@@ -8,8 +8,8 @@ type=expr
 { i, Complete]
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_033.md:1:6:1:15
-UNDEFINED VARIABLE - fuzz_crash_033.md:1:3:1:5
+PARSE ERROR - fuzz_crash_033.md:1:6:1:14
+UNDEFINED VARIABLE - fuzz_crash_033.md:1:3:1:4
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.
@@ -19,22 +19,22 @@ A parsing error occurred: `expected_expr_record_field_name`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_033.md:1:6:1:15:**
+**fuzz_crash_033.md:1:6:1:14:**
 ```roc
 { i, Complete]
 ```
-     ^^^^^^^^^
+     ^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_033.md:1:3:1:5:**
+**fuzz_crash_033.md:1:3:1:4:**
 ```roc
 { i, Complete]
 ```
-  ^^
+  ^
 
 
 # TOKENS

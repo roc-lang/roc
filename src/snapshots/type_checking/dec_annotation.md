@@ -16,9 +16,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:2),OpColon(3:3-3:4),UpperIdent(3:5-3:8),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+LowerIdent(3:1-3:2),OpColon(3:3-3:4),UpperIdent(3:5-3:8),
 LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Float(4:5-4:12),EndOfFile(4:12-4:12),
 ~~~
 # PARSE
@@ -27,7 +26,7 @@ LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Float(4:5-4:12),EndOfFile(4:12-4:12),
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
-		(s-type-anno @1.1-1.1 (name "x")
+		(s-type-anno @3.1-3.8 (name "x")
 			(ty @3.5-3.8 (name "Dec")))
 		(s-decl @4.1-4.12
 			(p-ident @4.1-4.2 (raw "x"))

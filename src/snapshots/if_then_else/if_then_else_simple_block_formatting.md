@@ -46,8 +46,8 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),LowerIdent(1:4-1:8),OpenCurly(1:9-1:10),Newline(1:1-1:1),
-UpperIdent(2:2-2:3),Newline(1:1-1:1),
+KwIf(1:1-1:3),LowerIdent(1:4-1:8),OpenCurly(1:9-1:10),
+UpperIdent(2:2-2:3),
 CloseCurly(3:1-3:2),KwElse(3:3-3:7),Int(3:8-3:9),EndOfFile(3:9-3:9),
 ~~~
 # PARSE

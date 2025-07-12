@@ -8,18 +8,18 @@ type=expr
 -rec1.field
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - unary_negation_access.md:1:1:1:6
+UNEXPECTED TOKEN IN EXPRESSION - unary_negation_access.md:1:1:1:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **-rec1** is not expected in an expression.
+The token **-** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**unary_negation_access.md:1:1:1:6:**
+**unary_negation_access.md:1:1:1:2:**
 ```roc
 -rec1.field
 ```
-^^^^^
+^
 
 
 # TOKENS
@@ -28,7 +28,7 @@ OpUnaryMinus(1:1-1:2),LowerIdent(1:2-1:6),NoSpaceDotLowerIdent(1:6-1:12),EndOfFi
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.6 (reason "expr_unexpected_token"))
+(e-malformed @1.1-1.2 (reason "expr_unexpected_token"))
 ~~~
 # FORMATTED
 ~~~roc

@@ -20,28 +20,28 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),Newline(1:6-1:28),
-OpenSquare(2:2-2:3),Newline(2:5-2:33),
-LowerIdent(3:3-3:8),Comma(3:8-3:9),Newline(3:11-3:38),
-CloseSquare(4:2-4:3),Newline(1:1-1:1),
-OpenCurly(5:2-5:3),Newline(5:5-5:33),
-LowerIdent(6:3-6:5),OpColon(6:5-6:6),KwPlatform(6:7-6:15),StringStart(6:16-6:17),StringPart(6:17-6:28),StringEnd(6:28-6:29),Comma(6:29-6:30),Newline(6:32-6:55),
-LowerIdent(7:3-7:8),OpColon(7:8-7:9),StringStart(7:10-7:11),StringPart(7:11-7:31),StringEnd(7:31-7:32),Comma(7:32-7:33),Newline(7:35-7:62),
+KwApp(1:1-1:4),
+OpenSquare(2:2-2:3),
+LowerIdent(3:3-3:8),Comma(3:8-3:9),
+CloseSquare(4:2-4:3),
+OpenCurly(5:2-5:3),
+LowerIdent(6:3-6:5),OpColon(6:5-6:6),KwPlatform(6:7-6:15),StringStart(6:16-6:17),StringPart(6:17-6:28),StringEnd(6:28-6:29),Comma(6:29-6:30),
+LowerIdent(7:3-7:8),OpColon(7:8-7:9),StringStart(7:10-7:11),StringPart(7:11-7:31),StringEnd(7:31-7:32),Comma(7:32-7:33),
 CloseCurly(8:2-8:3),EndOfFile(8:3-8:3),
 ~~~
 # PARSE
 ~~~clojure
 (app @1.1-8.3
-	(provides @3.3-4.3
-		(exposed-lower-ident (text "main!")))
-	(record-field @6.3-6.30 (name "pf")
+	(provides @2.2-4.3
+		(exposed-lower-ident @3.3-3.8 (text "main!")))
+	(record-field @6.3-6.29 (name "pf")
 		(e-string @6.16-6.29
 			(e-string-part @6.17-6.28 (raw "../main.roc"))))
 	(packages @5.2-8.3
-		(record-field @6.3-6.30 (name "pf")
+		(record-field @6.3-6.29 (name "pf")
 			(e-string @6.16-6.29
 				(e-string-part @6.17-6.28 (raw "../main.roc"))))
-		(record-field @7.3-7.33 (name "other")
+		(record-field @7.3-7.32 (name "other")
 			(e-string @7.10-7.32
 				(e-string-part @7.11-7.31 (raw "../../other/main.roc"))))))
 ~~~

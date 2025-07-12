@@ -8,18 +8,18 @@ type=expr
 -!h
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - minus_not_h.md:1:1:1:3
+UNEXPECTED TOKEN IN EXPRESSION - minus_not_h.md:1:1:1:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **-!** is not expected in an expression.
+The token **-** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**minus_not_h.md:1:1:1:3:**
+**minus_not_h.md:1:1:1:2:**
 ```roc
 -!h
 ```
-^^
+^
 
 
 # TOKENS
@@ -28,7 +28,7 @@ OpUnaryMinus(1:1-1:2),OpBang(1:2-1:3),LowerIdent(1:3-1:4),EndOfFile(1:4-1:4),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.3 (reason "expr_unexpected_token"))
+(e-malformed @1.1-1.2 (reason "expr_unexpected_token"))
 ~~~
 # FORMATTED
 ~~~roc

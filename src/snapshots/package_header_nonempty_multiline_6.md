@@ -40,14 +40,14 @@ You can fix this by either defining ``SomeType`` in this module, or by removing 
 
 # TOKENS
 ~~~zig
-KwPackage(1:1-1:8),Newline(1:10-1:32),
-OpenSquare(2:2-2:3),Newline(2:5-2:32),
-LowerIdent(3:3-3:12),Comma(3:12-3:13),Newline(3:15-3:42),
-UpperIdent(4:3-4:11),Comma(4:11-4:12),Newline(4:14-4:46),
-CloseSquare(5:2-5:3),Newline(1:1-1:1),
-OpenCurly(6:2-6:3),Newline(6:5-6:33),
-LowerIdent(7:3-7:10),OpColon(7:10-7:11),StringStart(7:12-7:13),StringPart(7:13-7:24),StringEnd(7:24-7:25),Comma(7:25-7:26),Newline(7:28-7:50),
-LowerIdent(8:3-8:8),OpColon(8:8-8:9),StringStart(8:10-8:11),StringPart(8:11-8:31),StringEnd(8:31-8:32),Comma(8:32-8:33),Newline(8:35-8:62),
+KwPackage(1:1-1:8),
+OpenSquare(2:2-2:3),
+LowerIdent(3:3-3:12),Comma(3:12-3:13),
+UpperIdent(4:3-4:11),Comma(4:11-4:12),
+CloseSquare(5:2-5:3),
+OpenCurly(6:2-6:3),
+LowerIdent(7:3-7:10),OpColon(7:10-7:11),StringStart(7:12-7:13),StringPart(7:13-7:24),StringEnd(7:24-7:25),Comma(7:25-7:26),
+LowerIdent(8:3-8:8),OpColon(8:8-8:9),StringStart(8:10-8:11),StringPart(8:11-8:31),StringEnd(8:31-8:32),Comma(8:32-8:33),
 CloseCurly(9:2-9:3),EndOfFile(9:3-9:3),
 ~~~
 # PARSE
@@ -55,13 +55,13 @@ CloseCurly(9:2-9:3),EndOfFile(9:3-9:3),
 (file @1.1-9.3
 	(package @1.1-9.3
 		(exposes @2.2-5.3
-			(exposed-lower-ident (text "something"))
-			(exposed-upper-ident (text "SomeType")))
+			(exposed-lower-ident @3.3-3.12 (text "something"))
+			(exposed-upper-ident @4.3-4.11 (text "SomeType")))
 		(packages @6.2-9.3
-			(record-field @7.3-7.26 (name "somePkg")
+			(record-field @7.3-7.25 (name "somePkg")
 				(e-string @7.12-7.25
 					(e-string-part @7.13-7.24 (raw "../main.roc"))))
-			(record-field @8.3-8.33 (name "other")
+			(record-field @8.3-8.32 (name "other")
 				(e-string @8.10-8.32
 					(e-string-part @8.11-8.31 (raw "../../other/main.roc"))))))
 	(statements))

@@ -39,13 +39,27 @@ parse_diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 
 /// Calculate whether this region is - or will be - multiline
 pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
-    var i = region.start;
-    const tags = self.tokens.tokens.items(.tag);
-    while (i <= region.end) {
-        if (tags[i] == .Newline) {
+    if (region.start >= region.end) return false;
+
+    // Check if there's a newline in the source text between start and end tokens
+    const start_region = self.tokens.resolve(region.start);
+    const end_region = self.tokens.resolve(region.end - 1);
+
+    const source_start = start_region.start.offset;
+    const source_end = end_region.end.offset;
+
+    // Look for newlines in the source text
+    for (self.source[source_start..source_end]) |c| {
+        if (c == '\n') {
             return true;
         }
-        if (tags[i] == .Comma and (tags[i + 1] == .CloseSquare or
+    }
+
+    // Also check for trailing comma patterns that indicate multiline
+    var i = region.start;
+    const tags = self.tokens.tokens.items(.tag);
+    while (i < region.end) {
+        if (tags[i] == .Comma and i + 1 < self.tokens.tokens.len and (tags[i + 1] == .CloseSquare or
             tags[i + 1] == .CloseRound or
             tags[i + 1] == .CloseCurly))
         {
@@ -82,7 +96,7 @@ pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const 
 /// Append region information to an S-expression node for diagnostics
 pub fn appendRegionInfoToSexprTree(self: *AST, env: *base.ModuleEnv, tree: *SExprTree, region: TokenizedRegion) void {
     const start = self.tokens.resolve(region.start);
-    const end = self.tokens.resolve(region.end);
+    const end = self.tokens.resolve(region.end - 1);
     const info: base.RegionInfo = base.RegionInfo.position(self.source, env.line_starts.items.items, start.start.offset, end.end.offset) catch .{
         .start_line_idx = 0,
         .start_col_idx = 0,
@@ -160,7 +174,7 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
         safe_end_idx;
 
     const start_region = self.tokens.resolve(safe_start_idx);
-    const end_region = self.tokens.resolve(final_end_idx);
+    const end_region = self.tokens.resolve(final_end_idx - 1);
     return .{
         .start = start_region.start,
         .end = end_region.end,
@@ -1677,6 +1691,7 @@ pub const ExposedItem = union(enum) {
             .lower_ident => |i| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("exposed-lower-ident");
+                ast.appendRegionInfoToSexprTree(env, tree, i.region);
                 // text attribute
                 const token = ast.tokens.tokens.get(i.ident);
                 const text = env.idents.getText(token.extra.interned);
@@ -1699,6 +1714,7 @@ pub const ExposedItem = union(enum) {
             .upper_ident => |i| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("exposed-upper-ident");
+                ast.appendRegionInfoToSexprTree(env, tree, i.region);
 
                 // text attribute
                 const token = ast.tokens.tokens.get(i.ident);
@@ -1719,6 +1735,7 @@ pub const ExposedItem = union(enum) {
             .upper_ident_star => |i| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("exposed-upper-ident-star");
+                ast.appendRegionInfoToSexprTree(env, tree, i.region);
 
                 // text attribute
                 const token = ast.tokens.tokens.get(i.ident);
@@ -1730,6 +1747,7 @@ pub const ExposedItem = union(enum) {
             .malformed => |m| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("exposed-malformed");
+                ast.appendRegionInfoToSexprTree(env, tree, m.region);
 
                 // reason attribute
                 const reason_begin = tree.beginNode();

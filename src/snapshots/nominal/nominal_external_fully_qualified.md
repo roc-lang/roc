@@ -34,16 +34,14 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwImport(3:1-3:7),UpperIdent(3:8-3:22),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(5:1-5:13),OpColon(5:14-5:15),UpperIdent(5:16-5:30),NoSpaceDotUpperIdent(5:30-5:43),NoSpaceOpenRound(5:43-5:44),UpperIdent(5:44-5:47),Comma(5:47-5:48),UpperIdent(5:49-5:52),CloseRound(5:52-5:53),OpArrow(5:54-5:56),UpperIdent(5:57-5:60),Newline(1:1-1:1),
-LowerIdent(6:1-6:13),OpAssign(6:14-6:15),OpBar(6:16-6:17),LowerIdent(6:17-6:23),OpBar(6:23-6:24),OpenCurly(6:25-6:26),Newline(1:1-1:1),
-KwMatch(7:5-7:10),LowerIdent(7:11-7:17),OpenCurly(7:18-7:19),Newline(1:1-1:1),
-UpperIdent(8:9-8:23),NoSpaceDotUpperIdent(8:23-8:36),NoSpaceDotUpperIdent(8:36-8:39),NoSpaceOpenRound(8:39-8:40),LowerIdent(8:40-8:45),CloseRound(8:45-8:46),OpFatArrow(8:47-8:49),LowerIdent(8:50-8:55),Newline(1:1-1:1),
-UpperIdent(9:9-9:23),NoSpaceDotUpperIdent(9:23-9:36),NoSpaceDotUpperIdent(9:36-9:40),NoSpaceOpenRound(9:40-9:41),LowerIdent(9:41-9:45),CloseRound(9:45-9:46),OpFatArrow(9:47-9:49),StringStart(9:50-9:51),StringPart(9:51-9:73),StringEnd(9:73-9:74),Newline(1:1-1:1),
-CloseCurly(10:5-10:6),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),
+KwImport(3:1-3:7),UpperIdent(3:8-3:22),
+LowerIdent(5:1-5:13),OpColon(5:14-5:15),UpperIdent(5:16-5:30),NoSpaceDotUpperIdent(5:30-5:43),NoSpaceOpenRound(5:43-5:44),UpperIdent(5:44-5:47),Comma(5:47-5:48),UpperIdent(5:49-5:52),CloseRound(5:52-5:53),OpArrow(5:54-5:56),UpperIdent(5:57-5:60),
+LowerIdent(6:1-6:13),OpAssign(6:14-6:15),OpBar(6:16-6:17),LowerIdent(6:17-6:23),OpBar(6:23-6:24),OpenCurly(6:25-6:26),
+KwMatch(7:5-7:10),LowerIdent(7:11-7:17),OpenCurly(7:18-7:19),
+UpperIdent(8:9-8:23),NoSpaceDotUpperIdent(8:23-8:36),NoSpaceDotUpperIdent(8:36-8:39),NoSpaceOpenRound(8:39-8:40),LowerIdent(8:40-8:45),CloseRound(8:45-8:46),OpFatArrow(8:47-8:49),LowerIdent(8:50-8:55),
+UpperIdent(9:9-9:23),NoSpaceDotUpperIdent(9:23-9:36),NoSpaceDotUpperIdent(9:36-9:40),NoSpaceOpenRound(9:40-9:41),LowerIdent(9:41-9:45),CloseRound(9:45-9:46),OpFatArrow(9:47-9:49),StringStart(9:50-9:51),StringPart(9:51-9:73),StringEnd(9:73-9:74),
+CloseCurly(10:5-10:6),
 CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
 ~~~
 # PARSE
@@ -51,10 +49,10 @@ CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
 (file @1.1-11.2
 	(module @1.1-1.22
 		(exposes @1.8-1.22
-			(exposed-lower-ident (text "handleResult"))))
+			(exposed-lower-ident @1.9-1.21 (text "handleResult"))))
 	(statements
 		(s-import @3.1-3.22 (raw "MyResultModule"))
-		(s-type-anno @1.1-1.1 (name "handleResult")
+		(s-type-anno @5.1-5.60 (name "handleResult")
 			(ty-fn @5.16-5.60
 				(ty-apply @5.16-5.53
 					(ty @5.16-5.43 (name "MyResultModule.MyResultType"))
@@ -71,11 +69,11 @@ CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
 						(e-match
 							(e-ident @7.11-7.17 (raw "result"))
 							(branches
-								(branch @8.9-9.23
+								(branch @8.9-8.55
 									(p-tag @8.9-8.46 (raw ".Ok")
 										(p-ident @8.40-8.45 (raw "value")))
 									(e-ident @8.50-8.55 (raw "value")))
-								(branch @1.1-1.1
+								(branch @9.9-9.74
 									(p-tag @9.9-9.46 (raw ".Err")
 										(p-ident @9.41-9.45 (raw "code")))
 									(e-string @9.50-9.74

@@ -36,10 +36,10 @@ You can fix this by either defining ``SomeType`` in this module, or by removing 
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),Newline(1:9-1:38),
-OpenSquare(2:2-2:3),Newline(2:5-2:32),
-LowerIdent(3:3-3:12),Comma(3:12-3:13),Newline(3:15-3:42),
-UpperIdent(4:3-4:11),Comma(4:11-4:12),Newline(4:14-4:47),
+KwModule(1:1-1:7),
+OpenSquare(2:2-2:3),
+LowerIdent(3:3-3:12),Comma(3:12-3:13),
+UpperIdent(4:3-4:11),Comma(4:11-4:12),
 CloseSquare(5:2-5:3),EndOfFile(5:3-5:3),
 ~~~
 # PARSE
@@ -47,8 +47,8 @@ CloseSquare(5:2-5:3),EndOfFile(5:3-5:3),
 (file @1.1-5.3
 	(module @1.1-5.3
 		(exposes @2.2-5.3
-			(exposed-lower-ident (text "something"))
-			(exposed-upper-ident (text "SomeType"))))
+			(exposed-lower-ident @3.3-3.12 (text "something"))
+			(exposed-upper-ident @4.3-4.11 (text "SomeType"))))
 	(statements))
 ~~~
 # FORMATTED

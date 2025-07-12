@@ -43,19 +43,19 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_records.md:19:50:19:56
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_records.md:19:50:19:51
 UNUSED VARIABLE - let_polymorphism_records.md:19:27:19:36
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **& data** is not expected in an expression.
+The token **&** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**let_polymorphism_records.md:19:50:19:56:**
+**let_polymorphism_records.md:19:50:19:51:**
 ```roc
 update_data = |container, new_value| { container & data: new_value }
 ```
-                                                 ^^^^^^
+                                                 ^
 
 
 **UNUSED VARIABLE**
@@ -72,54 +72,38 @@ update_data = |container, new_value| { container & data: new_value }
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:53),StringEnd(1:53-1:54),CloseCurly(1:55-1:56),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:2-3:40),
-LowerIdent(4:1-4:4),OpAssign(4:5-4:6),Int(4:7-4:9),Newline(1:1-1:1),
-LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Float(5:8-5:11),Newline(1:1-1:1),
-LowerIdent(6:1-6:4),OpAssign(6:5-6:6),StringStart(6:7-6:8),StringPart(6:8-6:13),StringEnd(6:13-6:14),Newline(1:1-1:1),
-LowerIdent(7:1-7:14),OpAssign(7:15-7:16),OpenSquare(7:17-7:18),CloseSquare(7:18-7:19),Newline(1:1-1:1),
-LowerIdent(8:1-8:17),OpAssign(8:18-8:19),OpenSquare(8:20-8:21),LowerIdent(8:21-8:24),Comma(8:24-8:25),LowerIdent(8:26-8:30),CloseSquare(8:30-8:31),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(10:2-10:32),
-LowerIdent(11:1-11:15),OpAssign(11:16-11:17),OpBar(11:18-11:19),LowerIdent(11:19-11:24),OpBar(11:24-11:25),OpenCurly(11:26-11:27),LowerIdent(11:28-11:32),OpColon(11:32-11:33),LowerIdent(11:34-11:39),Comma(11:39-11:40),LowerIdent(11:41-11:46),OpColon(11:46-11:47),Int(11:48-11:49),CloseCurly(11:50-11:51),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(13:2-13:28),
-LowerIdent(14:1-14:14),OpAssign(14:15-14:16),LowerIdent(14:17-14:31),NoSpaceOpenRound(14:31-14:32),LowerIdent(14:32-14:35),CloseRound(14:35-14:36),Newline(1:1-1:1),
-LowerIdent(15:1-15:14),OpAssign(15:15-15:16),LowerIdent(15:17-15:31),NoSpaceOpenRound(15:31-15:32),LowerIdent(15:32-15:35),CloseRound(15:35-15:36),Newline(1:1-1:1),
-LowerIdent(16:1-16:15),OpAssign(16:16-16:17),LowerIdent(16:18-16:32),NoSpaceOpenRound(16:32-16:33),LowerIdent(16:33-16:46),CloseRound(16:46-16:47),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(18:2-18:28),
-LowerIdent(19:1-19:12),OpAssign(19:13-19:14),OpBar(19:15-19:16),LowerIdent(19:16-19:25),Comma(19:25-19:26),LowerIdent(19:27-19:36),OpBar(19:36-19:37),OpenCurly(19:38-19:39),LowerIdent(19:40-19:49),OpAmpersand(19:50-19:51),LowerIdent(19:52-19:56),OpColon(19:56-19:57),LowerIdent(19:58-19:67),CloseCurly(19:68-19:69),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(21:2-21:35),
-LowerIdent(22:1-22:12),OpAssign(22:13-22:14),LowerIdent(22:15-22:26),NoSpaceOpenRound(22:26-22:27),LowerIdent(22:27-22:40),Comma(22:40-22:41),Int(22:42-22:45),CloseRound(22:45-22:46),Newline(1:1-1:1),
-LowerIdent(23:1-23:12),OpAssign(23:13-23:14),LowerIdent(23:15-23:26),NoSpaceOpenRound(23:26-23:27),LowerIdent(23:27-23:40),Comma(23:40-23:41),StringStart(23:42-23:43),StringPart(23:43-23:48),StringEnd(23:48-23:49),CloseRound(23:49-23:50),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(25:2-25:40),
-LowerIdent(26:1-26:16),OpAssign(26:17-26:18),OpBar(26:19-26:20),LowerIdent(26:20-26:21),OpBar(26:21-26:22),OpenCurly(26:23-26:24),LowerIdent(26:25-26:30),OpColon(26:30-26:31),LowerIdent(26:32-26:33),CloseCurly(26:34-26:35),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(28:2-28:26),
-LowerIdent(29:1-29:11),OpAssign(29:12-29:13),LowerIdent(29:14-29:29),NoSpaceOpenRound(29:29-29:30),Int(29:30-29:32),CloseRound(29:32-29:33),Newline(1:1-1:1),
-LowerIdent(30:1-30:11),OpAssign(30:12-30:13),LowerIdent(30:14-30:29),NoSpaceOpenRound(30:29-30:30),StringStart(30:30-30:31),StringPart(30:31-30:35),StringEnd(30:35-30:36),CloseRound(30:36-30:37),Newline(1:1-1:1),
-LowerIdent(31:1-31:12),OpAssign(31:13-31:14),LowerIdent(31:15-31:30),NoSpaceOpenRound(31:30-31:31),OpenSquare(31:31-31:32),Int(31:32-31:33),Comma(31:33-31:34),Int(31:35-31:36),Comma(31:36-31:37),Int(31:38-31:39),CloseSquare(31:39-31:40),CloseRound(31:40-31:41),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(33:1-33:5),OpAssign(33:6-33:7),OpBar(33:8-33:9),Underscore(33:9-33:10),OpBar(33:10-33:11),OpenCurly(33:12-33:13),Newline(1:1-1:1),
-Newline(34:6-34:32),
-LowerIdent(35:5-35:18),NoSpaceDotLowerIdent(35:18-35:24),OpPlus(35:25-35:26),LowerIdent(35:27-35:40),NoSpaceDotLowerIdent(35:40-35:46),Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:53),StringEnd(1:53-1:54),CloseCurly(1:55-1:56),
+LowerIdent(4:1-4:4),OpAssign(4:5-4:6),Int(4:7-4:9),
+LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Float(5:8-5:11),
+LowerIdent(6:1-6:4),OpAssign(6:5-6:6),StringStart(6:7-6:8),StringPart(6:8-6:13),StringEnd(6:13-6:14),
+LowerIdent(7:1-7:14),OpAssign(7:15-7:16),OpenSquare(7:17-7:18),CloseSquare(7:18-7:19),
+LowerIdent(8:1-8:17),OpAssign(8:18-8:19),OpenSquare(8:20-8:21),LowerIdent(8:21-8:24),Comma(8:24-8:25),LowerIdent(8:26-8:30),CloseSquare(8:30-8:31),
+LowerIdent(11:1-11:15),OpAssign(11:16-11:17),OpBar(11:18-11:19),LowerIdent(11:19-11:24),OpBar(11:24-11:25),OpenCurly(11:26-11:27),LowerIdent(11:28-11:32),OpColon(11:32-11:33),LowerIdent(11:34-11:39),Comma(11:39-11:40),LowerIdent(11:41-11:46),OpColon(11:46-11:47),Int(11:48-11:49),CloseCurly(11:50-11:51),
+LowerIdent(14:1-14:14),OpAssign(14:15-14:16),LowerIdent(14:17-14:31),NoSpaceOpenRound(14:31-14:32),LowerIdent(14:32-14:35),CloseRound(14:35-14:36),
+LowerIdent(15:1-15:14),OpAssign(15:15-15:16),LowerIdent(15:17-15:31),NoSpaceOpenRound(15:31-15:32),LowerIdent(15:32-15:35),CloseRound(15:35-15:36),
+LowerIdent(16:1-16:15),OpAssign(16:16-16:17),LowerIdent(16:18-16:32),NoSpaceOpenRound(16:32-16:33),LowerIdent(16:33-16:46),CloseRound(16:46-16:47),
+LowerIdent(19:1-19:12),OpAssign(19:13-19:14),OpBar(19:15-19:16),LowerIdent(19:16-19:25),Comma(19:25-19:26),LowerIdent(19:27-19:36),OpBar(19:36-19:37),OpenCurly(19:38-19:39),LowerIdent(19:40-19:49),OpAmpersand(19:50-19:51),LowerIdent(19:52-19:56),OpColon(19:56-19:57),LowerIdent(19:58-19:67),CloseCurly(19:68-19:69),
+LowerIdent(22:1-22:12),OpAssign(22:13-22:14),LowerIdent(22:15-22:26),NoSpaceOpenRound(22:26-22:27),LowerIdent(22:27-22:40),Comma(22:40-22:41),Int(22:42-22:45),CloseRound(22:45-22:46),
+LowerIdent(23:1-23:12),OpAssign(23:13-23:14),LowerIdent(23:15-23:26),NoSpaceOpenRound(23:26-23:27),LowerIdent(23:27-23:40),Comma(23:40-23:41),StringStart(23:42-23:43),StringPart(23:43-23:48),StringEnd(23:48-23:49),CloseRound(23:49-23:50),
+LowerIdent(26:1-26:16),OpAssign(26:17-26:18),OpBar(26:19-26:20),LowerIdent(26:20-26:21),OpBar(26:21-26:22),OpenCurly(26:23-26:24),LowerIdent(26:25-26:30),OpColon(26:30-26:31),LowerIdent(26:32-26:33),CloseCurly(26:34-26:35),
+LowerIdent(29:1-29:11),OpAssign(29:12-29:13),LowerIdent(29:14-29:29),NoSpaceOpenRound(29:29-29:30),Int(29:30-29:32),CloseRound(29:32-29:33),
+LowerIdent(30:1-30:11),OpAssign(30:12-30:13),LowerIdent(30:14-30:29),NoSpaceOpenRound(30:29-30:30),StringStart(30:30-30:31),StringPart(30:31-30:35),StringEnd(30:35-30:36),CloseRound(30:36-30:37),
+LowerIdent(31:1-31:12),OpAssign(31:13-31:14),LowerIdent(31:15-31:30),NoSpaceOpenRound(31:30-31:31),OpenSquare(31:31-31:32),Int(31:32-31:33),Comma(31:33-31:34),Int(31:35-31:36),Comma(31:36-31:37),Int(31:38-31:39),CloseSquare(31:39-31:40),CloseRound(31:40-31:41),
+LowerIdent(33:1-33:5),OpAssign(33:6-33:7),OpBar(33:8-33:9),Underscore(33:9-33:10),OpBar(33:10-33:11),OpenCurly(33:12-33:13),
+LowerIdent(35:5-35:18),NoSpaceDotLowerIdent(35:18-35:24),OpPlus(35:25-35:26),LowerIdent(35:27-35:40),NoSpaceDotLowerIdent(35:40-35:46),
 CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 ~~~
 # PARSE
 ~~~clojure
 (file @1.1-36.2
 	(app @1.1-1.56
-		(provides @1.6-1.11
-			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf")
+		(provides @1.5-1.11
+			(exposed-lower-ident @1.6-1.10 (text "main")))
+		(record-field @1.14-1.54 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf")
+			(record-field @1.14-1.54 (name "pf")
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -175,9 +159,9 @@ CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 				(e-block @19.38-19.69
 					(statements
 						(e-ident @19.40-19.49 (raw "container"))
-						(e-malformed @19.50-19.56 (reason "expr_unexpected_token"))
-						(s-type-anno @19.52-19.69 (name "data")
-							(ty-var @19.58-19.67 (raw "new_value")))))))
+						(e-malformed @19.50-19.51 (reason "expr_unexpected_token"))
+						(s-type-anno @19.52-19.67 (name "data")
+							(ty-var @1.1-1.1 (raw "new_value")))))))
 		(s-decl @22.1-22.46
 			(p-ident @22.1-22.12 (raw "updated_int"))
 			(e-apply @22.15-22.46
@@ -225,11 +209,11 @@ CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 					(p-underscore))
 				(e-block @33.12-36.2
 					(statements
-						(e-binop @35.5-36.2 (op "+")
-							(e-field-access @35.5-35.26
+						(e-binop @35.5-35.46 (op "+")
+							(e-field-access @35.5-35.24
 								(e-ident @35.5-35.18 (raw "int_container"))
 								(e-ident @35.18-35.24 (raw "count")))
-							(e-field-access @35.27-36.2
+							(e-field-access @35.27-35.46
 								(e-ident @35.27-35.40 (raw "str_container"))
 								(e-ident @35.40-35.46 (raw "count"))))))))))
 ~~~
@@ -257,6 +241,8 @@ update_data = |container, new_value| {
 	container
 	
 	data : new_value
+
+	# Used with different record types
 }
 
 # Used with different record types
@@ -340,12 +326,12 @@ main = |_| {
 				(p-assign @19.16-19.25 (ident "container"))
 				(p-assign @19.27-19.36 (ident "new_value")))
 			(e-block @19.38-19.69
-				(s-expr @19.40-19.51
+				(s-expr @19.40-19.49
 					(e-lookup-local @19.40-19.49
 						(p-assign @19.16-19.25 (ident "container"))))
-				(s-type-anno @19.52-19.69 (name "data")
-					(ty-var @19.58-19.67 (name "new_value")))
-				(e-tuple @19.52-19.69
+				(s-type-anno @19.52-19.67 (name "data")
+					(ty-var @1.1-1.1 (name "new_value")))
+				(e-tuple @19.52-19.67
 					(elems)))))
 	(d-let
 		(p-assign @22.1-22.12 (ident "updated_int"))
@@ -403,12 +389,12 @@ main = |_| {
 			(args
 				(p-underscore @33.9-33.10))
 			(e-block @33.12-36.2
-				(e-binop @35.5-36.2 (op "add")
-					(e-dot-access @35.5-35.26 (field "count")
+				(e-binop @35.5-35.46 (op "add")
+					(e-dot-access @35.5-35.24 (field "count")
 						(receiver
 							(e-lookup-local @35.5-35.18
 								(p-assign @14.1-14.14 (ident "int_container")))))
-					(e-dot-access @35.27-36.2 (field "count")
+					(e-dot-access @35.27-35.46 (field "count")
 						(receiver
 							(e-lookup-local @35.27-35.40
 								(p-assign @15.1-15.14 (ident "str_container"))))))))))

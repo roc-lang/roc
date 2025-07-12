@@ -8,19 +8,19 @@ type=expr
 { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
 ~~~
 # EXPECTED
-PARSE ERROR - error_malformed_syntax.md:1:18:1:22
-PARSE ERROR - error_malformed_syntax.md:1:20:1:23
+PARSE ERROR - error_malformed_syntax.md:1:18:1:19
+PARSE ERROR - error_malformed_syntax.md:1:20:1:22
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_record_field_name`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**error_malformed_syntax.md:1:18:1:22:**
+**error_malformed_syntax.md:1:18:1:19:**
 ```roc
 { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
 ```
-                 ^^^^
+                 ^
 
 
 **PARSE ERROR**
@@ -28,11 +28,11 @@ A parsing error occurred: `expected_expr_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**error_malformed_syntax.md:1:20:1:23:**
+**error_malformed_syntax.md:1:20:1:22:**
 ```roc
 { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
 ```
-                   ^^^
+                   ^^
 
 
 # TOKENS
@@ -41,7 +41,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.20-1.23 (reason "expected_expr_close_curly_or_comma"))
+(e-malformed @1.20-1.22 (reason "expected_expr_close_curly_or_comma"))
 ~~~
 # FORMATTED
 ~~~roc

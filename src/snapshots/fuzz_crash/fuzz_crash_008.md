@@ -8,7 +8,7 @@ type=file
 ||1
 ~~~
 # EXPECTED
-ASCII CONTROL CHARACTER - fuzz_crash_008.md:1:1:1:4
+ASCII CONTROL CHARACTER - fuzz_crash_008.md:1:1:1:2
 PARSE ERROR - fuzz_crash_008.md:1:5:1:5
 INVALID STATEMENT - fuzz_crash_008.md:1:3:1:5
 # PROBLEMS
@@ -24,11 +24,11 @@ or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 Here is the problematic code:
-**fuzz_crash_008.md:1:1:1:4:**
+**fuzz_crash_008.md:1:1:1:2:**
 ```roc
 ||1
 ```
-^^^
+^
 
 
 **PARSE ERROR**
@@ -61,7 +61,7 @@ OpBar(1:1-1:2),OpBar(1:3-1:4),Int(1:4-1:5),EndOfFile(1:5-1:5),
 # PARSE
 ~~~clojure
 (file @1.1-1.5
-	(malformed-header @1.1-1.4 (tag "missing_header"))
+	(malformed-header @1.1-1.2 (tag "missing_header"))
 	(statements
 		(e-malformed @1.5-1.5 (reason "expected_expr_bar"))))
 ~~~

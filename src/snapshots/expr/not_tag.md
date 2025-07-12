@@ -8,18 +8,18 @@ type=expr
 !(C(2))
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - not_tag.md:1:1:1:3
+UNEXPECTED TOKEN IN EXPRESSION - not_tag.md:1:1:1:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **!(** is not expected in an expression.
+The token **!** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**not_tag.md:1:1:1:3:**
+**not_tag.md:1:1:1:2:**
 ```roc
 !(C(2))
 ```
-^^
+^
 
 
 # TOKENS
@@ -28,7 +28,7 @@ OpBang(1:1-1:2),NoSpaceOpenRound(1:2-1:3),UpperIdent(1:3-1:4),NoSpaceOpenRound(1
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.3 (reason "expr_unexpected_token"))
+(e-malformed @1.1-1.2 (reason "expr_unexpected_token"))
 ~~~
 # FORMATTED
 ~~~roc

@@ -16,9 +16,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:27),CloseSquare(1:27-1:28),Newline(1:1-1:1),
-Newline(1:1-1:1),
-UpperIdent(3:1-3:9),OpColon(3:10-3:11),UpperIdent(3:12-3:15),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:27),CloseSquare(1:27-1:28),
+UpperIdent(3:1-3:9),OpColon(3:10-3:11),UpperIdent(3:12-3:15),
 UpperIdent(4:1-4:9),OpColon(4:10-4:11),UpperIdent(4:12-4:15),EndOfFile(4:15-4:15),
 ~~~
 # PARSE
@@ -26,8 +25,8 @@ UpperIdent(4:1-4:9),OpColon(4:10-4:11),UpperIdent(4:12-4:15),EndOfFile(4:15-4:15
 (file @1.1-4.15
 	(module @1.1-1.28
 		(exposes @1.8-1.28
-			(exposed-upper-ident (text "MyNumber"))
-			(exposed-upper-ident (text "MyString"))))
+			(exposed-upper-ident @1.9-1.17 (text "MyNumber"))
+			(exposed-upper-ident @1.19-1.27 (text "MyString"))))
 	(statements
 		(s-type-decl @3.1-3.15
 			(header @3.1-3.9 (name "MyNumber")

@@ -26,11 +26,11 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:4:12:4:15
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:7:22:7:25
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:10:28:10:31
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:13:29:13:32
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:16:19:16:22
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:4:12:4:13
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:7:22:7:23
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:10:28:10:29
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:13:29:13:30
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:16:19:16:20
 UNDEFINED VARIABLE - tuple_patterns.md:4:6:4:7
 UNDEFINED VARIABLE - tuple_patterns.md:4:9:4:10
 UNDEFINED VARIABLE - tuple_patterns.md:7:7:7:8
@@ -47,63 +47,63 @@ UNDEFINED VARIABLE - tuple_patterns.md:16:6:16:10
 UNDEFINED VARIABLE - tuple_patterns.md:16:12:16:17
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= (** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**tuple_patterns.md:4:12:4:15:**
+**tuple_patterns.md:4:12:4:13:**
 ```roc
     (x, y) = (1, 2)
 ```
-           ^^^
+           ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= (** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**tuple_patterns.md:7:22:7:25:**
+**tuple_patterns.md:7:22:7:23:**
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))
 ```
-                     ^^^
+                     ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= (** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**tuple_patterns.md:10:28:10:31:**
+**tuple_patterns.md:10:28:10:29:**
 ```roc
     (first, second, third) = (100, 42, 200)
 ```
-                           ^^^
+                           ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= (** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**tuple_patterns.md:13:29:13:32:**
+**tuple_patterns.md:13:29:13:30:**
 ```roc
     (name, string, boolean) = ("Alice", "fixed", True)
 ```
-                            ^^^
+                            ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= (** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**tuple_patterns.md:16:19:16:22:**
+**tuple_patterns.md:16:19:16:20:**
 ```roc
     (list, hello) = ([1, 2, 3], "hello")
 ```
-                  ^^^
+                  ^
 
 
 **UNDEFINED VARIABLE**
@@ -262,24 +262,13 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:6-3:33),
-OpenRound(4:5-4:6),LowerIdent(4:6-4:7),Comma(4:7-4:8),LowerIdent(4:9-4:10),CloseRound(4:10-4:11),OpAssign(4:12-4:13),OpenRound(4:14-4:15),Int(4:15-4:16),Comma(4:16-4:17),Int(4:18-4:19),CloseRound(4:19-4:20),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(6:6-6:28),
-OpenRound(7:5-7:6),NoSpaceOpenRound(7:6-7:7),LowerIdent(7:7-7:8),Comma(7:8-7:9),LowerIdent(7:10-7:11),CloseRound(7:11-7:12),Comma(7:12-7:13),OpenRound(7:14-7:15),LowerIdent(7:15-7:16),Comma(7:16-7:17),LowerIdent(7:18-7:19),CloseRound(7:19-7:20),CloseRound(7:20-7:21),OpAssign(7:22-7:23),OpenRound(7:24-7:25),NoSpaceOpenRound(7:25-7:26),Int(7:26-7:28),Comma(7:28-7:29),Int(7:30-7:32),CloseRound(7:32-7:33),Comma(7:33-7:34),OpenRound(7:35-7:36),Int(7:36-7:38),Comma(7:38-7:39),Int(7:40-7:42),CloseRound(7:42-7:43),CloseRound(7:43-7:44),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(9:6-9:35),
-OpenRound(10:5-10:6),LowerIdent(10:6-10:11),Comma(10:11-10:12),LowerIdent(10:13-10:19),Comma(10:19-10:20),LowerIdent(10:21-10:26),CloseRound(10:26-10:27),OpAssign(10:28-10:29),OpenRound(10:30-10:31),Int(10:31-10:34),Comma(10:34-10:35),Int(10:36-10:38),Comma(10:38-10:39),Int(10:40-10:43),CloseRound(10:43-10:44),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(12:6-12:41),
-OpenRound(13:5-13:6),LowerIdent(13:6-13:10),Comma(13:10-13:11),LowerIdent(13:12-13:18),Comma(13:18-13:19),LowerIdent(13:20-13:27),CloseRound(13:27-13:28),OpAssign(13:29-13:30),OpenRound(13:31-13:32),StringStart(13:32-13:33),StringPart(13:33-13:38),StringEnd(13:38-13:39),Comma(13:39-13:40),StringStart(13:41-13:42),StringPart(13:42-13:47),StringEnd(13:47-13:48),Comma(13:48-13:49),UpperIdent(13:50-13:54),CloseRound(13:54-13:55),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(15:6-15:30),
-OpenRound(16:5-16:6),LowerIdent(16:6-16:10),Comma(16:10-16:11),LowerIdent(16:12-16:17),CloseRound(16:17-16:18),OpAssign(16:19-16:20),OpenRound(16:21-16:22),OpenSquare(16:22-16:23),Int(16:23-16:24),Comma(16:24-16:25),Int(16:26-16:27),Comma(16:27-16:28),Int(16:29-16:30),CloseSquare(16:30-16:31),Comma(16:31-16:32),StringStart(16:33-16:34),StringPart(16:34-16:39),StringEnd(16:39-16:40),CloseRound(16:40-16:41),Newline(1:1-1:1),
-Newline(1:1-1:1),
-OpenCurly(18:5-18:6),CloseCurly(18:6-18:7),Newline(1:1-1:1),
+OpenCurly(1:1-1:2),
+OpenRound(4:5-4:6),LowerIdent(4:6-4:7),Comma(4:7-4:8),LowerIdent(4:9-4:10),CloseRound(4:10-4:11),OpAssign(4:12-4:13),OpenRound(4:14-4:15),Int(4:15-4:16),Comma(4:16-4:17),Int(4:18-4:19),CloseRound(4:19-4:20),
+OpenRound(7:5-7:6),NoSpaceOpenRound(7:6-7:7),LowerIdent(7:7-7:8),Comma(7:8-7:9),LowerIdent(7:10-7:11),CloseRound(7:11-7:12),Comma(7:12-7:13),OpenRound(7:14-7:15),LowerIdent(7:15-7:16),Comma(7:16-7:17),LowerIdent(7:18-7:19),CloseRound(7:19-7:20),CloseRound(7:20-7:21),OpAssign(7:22-7:23),OpenRound(7:24-7:25),NoSpaceOpenRound(7:25-7:26),Int(7:26-7:28),Comma(7:28-7:29),Int(7:30-7:32),CloseRound(7:32-7:33),Comma(7:33-7:34),OpenRound(7:35-7:36),Int(7:36-7:38),Comma(7:38-7:39),Int(7:40-7:42),CloseRound(7:42-7:43),CloseRound(7:43-7:44),
+OpenRound(10:5-10:6),LowerIdent(10:6-10:11),Comma(10:11-10:12),LowerIdent(10:13-10:19),Comma(10:19-10:20),LowerIdent(10:21-10:26),CloseRound(10:26-10:27),OpAssign(10:28-10:29),OpenRound(10:30-10:31),Int(10:31-10:34),Comma(10:34-10:35),Int(10:36-10:38),Comma(10:38-10:39),Int(10:40-10:43),CloseRound(10:43-10:44),
+OpenRound(13:5-13:6),LowerIdent(13:6-13:10),Comma(13:10-13:11),LowerIdent(13:12-13:18),Comma(13:18-13:19),LowerIdent(13:20-13:27),CloseRound(13:27-13:28),OpAssign(13:29-13:30),OpenRound(13:31-13:32),StringStart(13:32-13:33),StringPart(13:33-13:38),StringEnd(13:38-13:39),Comma(13:39-13:40),StringStart(13:41-13:42),StringPart(13:42-13:47),StringEnd(13:47-13:48),Comma(13:48-13:49),UpperIdent(13:50-13:54),CloseRound(13:54-13:55),
+OpenRound(16:5-16:6),LowerIdent(16:6-16:10),Comma(16:10-16:11),LowerIdent(16:12-16:17),CloseRound(16:17-16:18),OpAssign(16:19-16:20),OpenRound(16:21-16:22),OpenSquare(16:22-16:23),Int(16:23-16:24),Comma(16:24-16:25),Int(16:26-16:27),Comma(16:27-16:28),Int(16:29-16:30),CloseSquare(16:30-16:31),Comma(16:31-16:32),StringStart(16:33-16:34),StringPart(16:34-16:39),StringEnd(16:39-16:40),CloseRound(16:40-16:41),
+OpenCurly(18:5-18:6),CloseCurly(18:6-18:7),
 CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # PARSE
@@ -289,7 +278,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(e-tuple @4.5-4.11
 			(e-ident @4.6-4.7 (raw "x"))
 			(e-ident @4.9-4.10 (raw "y")))
-		(e-malformed @4.12-4.15 (reason "expr_unexpected_token"))
+		(e-malformed @4.12-4.13 (reason "expr_unexpected_token"))
 		(e-tuple @4.14-4.20
 			(e-int @4.15-4.16 (raw "1"))
 			(e-int @4.18-4.19 (raw "2")))
@@ -300,7 +289,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(e-tuple @7.14-7.20
 				(e-ident @7.15-7.16 (raw "c"))
 				(e-ident @7.18-7.19 (raw "d"))))
-		(e-malformed @7.22-7.25 (reason "expr_unexpected_token"))
+		(e-malformed @7.22-7.23 (reason "expr_unexpected_token"))
 		(e-tuple @7.24-7.44
 			(e-tuple @7.25-7.33
 				(e-int @7.26-7.28 (raw "10"))
@@ -312,7 +301,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(e-ident @10.6-10.11 (raw "first"))
 			(e-ident @10.13-10.19 (raw "second"))
 			(e-ident @10.21-10.26 (raw "third")))
-		(e-malformed @10.28-10.31 (reason "expr_unexpected_token"))
+		(e-malformed @10.28-10.29 (reason "expr_unexpected_token"))
 		(e-tuple @10.30-10.44
 			(e-int @10.31-10.34 (raw "100"))
 			(e-int @10.36-10.38 (raw "42"))
@@ -321,7 +310,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(e-ident @13.6-13.10 (raw "name"))
 			(e-ident @13.12-13.18 (raw "string"))
 			(e-ident @13.20-13.27 (raw "boolean")))
-		(e-malformed @13.29-13.32 (reason "expr_unexpected_token"))
+		(e-malformed @13.29-13.30 (reason "expr_unexpected_token"))
 		(e-tuple @13.31-13.55
 			(e-string @13.32-13.39
 				(e-string-part @13.33-13.38 (raw "Alice")))
@@ -331,7 +320,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(e-tuple @16.5-16.18
 			(e-ident @16.6-16.10 (raw "list"))
 			(e-ident @16.12-16.17 (raw "hello")))
-		(e-malformed @16.19-16.22 (reason "expr_unexpected_token"))
+		(e-malformed @16.19-16.20 (reason "expr_unexpected_token"))
 		(e-tuple @16.21-16.41
 			(e-list @16.22-16.31
 				(e-int @16.23-16.24 (raw "1"))
@@ -376,17 +365,17 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-19.2
-	(s-expr @4.5-4.13
+	(s-expr @4.5-4.11
 		(e-tuple @4.5-4.11
 			(elems
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope")))))
-	(s-expr @4.14-7.6
+	(s-expr @4.14-4.20
 		(e-tuple @4.14-4.20
 			(elems
 				(e-int @4.15-4.16 (value "1"))
 				(e-int @4.18-4.19 (value "2")))))
-	(s-expr @7.5-7.23
+	(s-expr @7.5-7.21
 		(e-tuple @7.5-7.21
 			(elems
 				(e-tuple @7.6-7.12
@@ -397,7 +386,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(elems
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-runtime-error (tag "ident_not_in_scope")))))))
-	(s-expr @7.24-10.6
+	(s-expr @7.24-7.44
 		(e-tuple @7.24-7.44
 			(elems
 				(e-tuple @7.25-7.33
@@ -408,25 +397,25 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(elems
 						(e-int @7.36-7.38 (value "30"))
 						(e-int @7.40-7.42 (value "40")))))))
-	(s-expr @10.5-10.29
+	(s-expr @10.5-10.27
 		(e-tuple @10.5-10.27
 			(elems
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope")))))
-	(s-expr @10.30-13.6
+	(s-expr @10.30-10.44
 		(e-tuple @10.30-10.44
 			(elems
 				(e-int @10.31-10.34 (value "100"))
 				(e-int @10.36-10.38 (value "42"))
 				(e-int @10.40-10.43 (value "200")))))
-	(s-expr @13.5-13.30
+	(s-expr @13.5-13.28
 		(e-tuple @13.5-13.28
 			(elems
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope")))))
-	(s-expr @13.31-16.6
+	(s-expr @13.31-13.55
 		(e-tuple @13.31-13.55
 			(elems
 				(e-string @13.32-13.39
@@ -434,12 +423,12 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 				(e-string @13.41-13.48
 					(e-literal @13.42-13.47 (string "fixed")))
 				(e-tag @13.50-13.54 (name "True")))))
-	(s-expr @16.5-16.20
+	(s-expr @16.5-16.18
 		(e-tuple @16.5-16.18
 			(elems
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope")))))
-	(s-expr @16.21-18.6
+	(s-expr @16.21-16.41
 		(e-tuple @16.21-16.41
 			(elems
 				(e-list @16.22-16.31

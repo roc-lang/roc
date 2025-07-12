@@ -7,6 +7,7 @@ const fmt = @import("fmt.zig");
 const base = @import("base.zig");
 const collections = @import("collections.zig");
 const reporting = @import("reporting.zig");
+const build_options = @import("build_options");
 // const coordinate = @import("coordinate.zig");
 const coordinate_simple = @import("coordinate_simple.zig");
 
@@ -62,7 +63,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         .format => |format_args| rocFormat(gpa, arena, format_args),
         .test_cmd => |test_args| rocTest(gpa, test_args),
         .repl => rocRepl(gpa),
-        .version => rocVersion(gpa),
+        .version => try stdout.print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(gpa, docs_args),
         .help => |help_message| stdout.writeAll(help_message),
         .licenses => stdout.writeAll(legalDetailsFileContent),
@@ -166,11 +167,6 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     try stdout.writer().print(".\n", .{});
 
     std.process.exit(exit_code);
-}
-
-fn rocVersion(gpa: Allocator) !void {
-    _ = gpa;
-    fatal("version not implemented", .{});
 }
 
 /// Helper function to format elapsed time, showing decimal milliseconds

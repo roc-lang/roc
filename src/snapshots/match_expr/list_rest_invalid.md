@@ -17,10 +17,10 @@ BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:3:6:3:12
 BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:4:9:4:15
 UNDEFINED VARIABLE - list_rest_invalid.md:1:7:1:12
 UNUSED VARIABLE - list_rest_invalid.md:2:6:2:11
-UNUSED VARIABLE - list_rest_invalid.md:2:15:2:19
-UNUSED VARIABLE - list_rest_invalid.md:3:8:3:12
+UNUSED VARIABLE - list_rest_invalid.md:2:15:2:15
+UNUSED VARIABLE - list_rest_invalid.md:3:8:3:8
 UNUSED VARIABLE - list_rest_invalid.md:3:14:3:18
-UNUSED VARIABLE - list_rest_invalid.md:4:11:4:15
+UNUSED VARIABLE - list_rest_invalid.md:4:11:4:11
 UNUSED VARIABLE - list_rest_invalid.md:4:6:4:7
 UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
 # PROBLEMS
@@ -88,11 +88,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**list_rest_invalid.md:2:15:2:19:**
+**list_rest_invalid.md:2:15:2:15:**
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error
 ```
-              ^^^^
+              
 
 
 **UNUSED VARIABLE**
@@ -100,11 +100,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**list_rest_invalid.md:3:8:3:12:**
+**list_rest_invalid.md:3:8:3:8:**
 ```roc
     [..rest, last] => 1 # invalid rest pattern should error
 ```
-       ^^^^
+       
 
 
 **UNUSED VARIABLE**
@@ -124,11 +124,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**list_rest_invalid.md:4:11:4:15:**
+**list_rest_invalid.md:4:11:4:11:**
 ```roc
     [x, ..rest, y] => 2 # invalid rest pattern should error
 ```
-          ^^^^
+          
 
 
 **UNUSED VARIABLE**
@@ -157,10 +157,10 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),
-OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),Comma(2:11-2:12),DoubleDot(2:13-2:15),LowerIdent(2:15-2:19),CloseSquare(2:19-2:20),OpFatArrow(2:21-2:23),Int(2:24-2:25),Newline(2:27-2:61),
-OpenSquare(3:5-3:6),DoubleDot(3:6-3:8),LowerIdent(3:8-3:12),Comma(3:12-3:13),LowerIdent(3:14-3:18),CloseSquare(3:18-3:19),OpFatArrow(3:20-3:22),Int(3:23-3:24),Newline(3:26-3:60),
-OpenSquare(4:5-4:6),LowerIdent(4:6-4:7),Comma(4:7-4:8),DoubleDot(4:9-4:11),LowerIdent(4:11-4:15),Comma(4:15-4:16),LowerIdent(4:17-4:18),CloseSquare(4:18-4:19),OpFatArrow(4:20-4:22),Int(4:23-4:24),Newline(4:26-4:60),
+KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),
+OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),Comma(2:11-2:12),DoubleDot(2:13-2:15),LowerIdent(2:15-2:19),CloseSquare(2:19-2:20),OpFatArrow(2:21-2:23),Int(2:24-2:25),
+OpenSquare(3:5-3:6),DoubleDot(3:6-3:8),LowerIdent(3:8-3:12),Comma(3:12-3:13),LowerIdent(3:14-3:18),CloseSquare(3:18-3:19),OpFatArrow(3:20-3:22),Int(3:23-3:24),
+OpenSquare(4:5-4:6),LowerIdent(4:6-4:7),Comma(4:7-4:8),DoubleDot(4:9-4:11),LowerIdent(4:11-4:15),Comma(4:15-4:16),LowerIdent(4:17-4:18),CloseSquare(4:18-4:19),OpFatArrow(4:20-4:22),Int(4:23-4:24),
 CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
@@ -168,20 +168,20 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 (e-match
 	(e-ident @1.7-1.12 (raw "items"))
 	(branches
-		(branch @2.5-3.6
+		(branch @2.5-2.25
 			(p-list @2.5-2.20
 				(p-ident @2.6-2.11 (raw "first"))
-				(p-list-rest @2.13-2.20 (name "rest")))
+				(p-list-rest @2.13-2.19 (name "rest")))
 			(e-int @2.24-2.25 (raw "0")))
-		(branch @3.5-4.6
+		(branch @3.5-3.24
 			(p-list @3.5-3.19
-				(p-list-rest @3.6-3.13 (name "rest"))
+				(p-list-rest @3.6-3.12 (name "rest"))
 				(p-ident @3.14-3.18 (raw "last")))
 			(e-int @3.23-3.24 (raw "1")))
-		(branch @4.5-5.2
+		(branch @4.5-4.24
 			(p-list @4.5-4.19
 				(p-ident @4.6-4.7 (raw "x"))
-				(p-list-rest @4.9-4.16 (name "rest"))
+				(p-list-rest @4.9-4.15 (name "rest"))
 				(p-ident @4.17-4.18 (raw "y")))
 			(e-int @4.23-4.24 (raw "2")))))
 ~~~
@@ -207,7 +207,7 @@ match items {
 							(patterns
 								(p-assign @2.6-2.11 (ident "first")))
 							(rest-at (index 1)
-								(p-assign @2.15-2.19 (ident "rest"))))))
+								(p-assign @2.15-2.15 (ident "rest"))))))
 				(value
 					(e-int @2.24-2.25 (value "0"))))
 			(branch
@@ -217,7 +217,7 @@ match items {
 							(patterns
 								(p-assign @3.14-3.18 (ident "last")))
 							(rest-at (index 0)
-								(p-assign @3.8-3.12 (ident "rest"))))))
+								(p-assign @3.8-3.8 (ident "rest"))))))
 				(value
 					(e-int @3.23-3.24 (value "1"))))
 			(branch
@@ -228,7 +228,7 @@ match items {
 								(p-assign @4.6-4.7 (ident "x"))
 								(p-assign @4.17-4.18 (ident "y")))
 							(rest-at (index 1)
-								(p-assign @4.11-4.15 (ident "rest"))))))
+								(p-assign @4.11-4.11 (ident "rest"))))))
 				(value
 					(e-int @4.23-4.24 (value "2")))))))
 ~~~

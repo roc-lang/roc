@@ -41,8 +41,8 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),Newline(1:1-1:1),
-OpenSquare(2:5-2:6),DoubleDot(2:6-2:8),Comma(2:8-2:9),LowerIdent(2:10-2:16),Comma(2:16-2:17),DoubleDot(2:18-2:20),CloseSquare(2:20-2:21),OpFatArrow(2:22-2:24),TripleDot(2:25-2:28),Newline(2:30-2:72),
+KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),
+OpenSquare(2:5-2:6),DoubleDot(2:6-2:8),Comma(2:8-2:9),LowerIdent(2:10-2:16),Comma(2:16-2:17),DoubleDot(2:18-2:20),CloseSquare(2:20-2:21),OpFatArrow(2:22-2:24),TripleDot(2:25-2:28),
 CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # PARSE
@@ -50,11 +50,11 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 (e-match
 	(e-ident @1.7-1.14 (raw "numbers"))
 	(branches
-		(branch @2.5-3.2
+		(branch @2.5-2.28
 			(p-list @2.5-2.21
-				(p-list-rest @2.6-2.9)
+				(p-list-rest @2.6-2.8)
 				(p-ident @2.10-2.16 (raw "middle"))
-				(p-list-rest @2.18-2.21))
+				(p-list-rest @2.18-2.20))
 			(e-ellipsis))))
 ~~~
 # FORMATTED
@@ -78,7 +78,7 @@ match numbers {
 								(p-assign @2.10-2.16 (ident "middle")))
 							(rest-at (index 0)))))
 				(value
-					(e-not-implemented @2.25-2.28))))))
+					(e-not-implemented @1.1-1.1))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -26,9 +26,9 @@ match isReady {
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),Newline(1:1-1:1),
-UpperIdent(2:2-2:6),OpFatArrow(2:7-2:9),StringStart(2:10-2:11),StringPart(2:11-2:23),StringEnd(2:23-2:24),Newline(1:1-1:1),
-UpperIdent(3:2-3:7),OpFatArrow(3:8-3:10),StringStart(3:11-3:12),StringPart(3:12-3:25),StringEnd(3:25-3:26),Newline(1:1-1:1),
+KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),
+UpperIdent(2:2-2:6),OpFatArrow(2:7-2:9),StringStart(2:10-2:11),StringPart(2:11-2:23),StringEnd(2:23-2:24),
+UpperIdent(3:2-3:7),OpFatArrow(3:8-3:10),StringStart(3:11-3:12),StringPart(3:12-3:25),StringEnd(3:25-3:26),
 CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
@@ -36,11 +36,11 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 (e-match
 	(e-ident @1.7-1.14 (raw "isReady"))
 	(branches
-		(branch @1.1-1.1
+		(branch @2.2-2.24
 			(p-tag @2.2-2.6 (raw "True"))
 			(e-string @2.10-2.24
 				(e-string-part @2.11-2.23 (raw "ready to go!"))))
-		(branch @1.1-1.1
+		(branch @3.2-3.26
 			(p-tag @3.2-3.7 (raw "False"))
 			(e-string @3.11-3.26
 				(e-string-part @3.12-3.25 (raw "not ready yet"))))))

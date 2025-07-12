@@ -8,7 +8,7 @@ type=file
 = "te
 ~~~
 # EXPECTED
-UNCLOSED STRING - fuzz_crash_003.md:1:1:1:4
+UNCLOSED STRING - fuzz_crash_003.md:1:1:1:2
 INVALID STATEMENT - fuzz_crash_003.md:1:3:1:6
 # PROBLEMS
 **UNCLOSED STRING**
@@ -23,11 +23,11 @@ or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 Here is the problematic code:
-**fuzz_crash_003.md:1:1:1:4:**
+**fuzz_crash_003.md:1:1:1:2:**
 ```roc
 = "te
 ```
-^^^
+^
 
 
 **INVALID STATEMENT**
@@ -48,7 +48,7 @@ OpAssign(1:1-1:2),StringStart(1:3-1:4),StringPart(1:4-1:6),EndOfFile(1:6-1:6),
 # PARSE
 ~~~clojure
 (file @1.1-1.6
-	(malformed-header @1.1-1.4 (tag "missing_header"))
+	(malformed-header @1.1-1.2 (tag "missing_header"))
 	(statements
 		(e-string @1.3-1.6
 			(e-string-part @1.4-1.6 (raw "te")))))

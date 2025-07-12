@@ -57,39 +57,30 @@ used_underscore = |_value| _value
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(3:2-3:48),
-LowerIdent(4:1-4:15),OpAssign(4:16-4:17),OpBar(4:18-4:19),LowerIdent(4:19-4:20),OpBar(4:20-4:21),Int(4:22-4:24),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(6:2-6:49),
-LowerIdent(7:1-7:16),OpAssign(7:17-7:18),OpBar(7:19-7:20),NamedUnderscore(7:20-7:26),OpBar(7:26-7:27),NamedUnderscore(7:28-7:34),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(9:2-9:54),
-LowerIdent(10:1-10:18),OpAssign(10:19-10:20),OpBar(10:21-10:22),NamedUnderscore(10:22-10:30),OpBar(10:30-10:31),Int(10:32-10:35),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(12:2-12:49),
-LowerIdent(13:1-13:13),OpAssign(13:14-13:15),OpBar(13:16-13:17),LowerIdent(13:17-13:23),OpBar(13:23-13:24),LowerIdent(13:25-13:31),OpPlus(13:32-13:33),Int(13:34-13:35),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(15:1-15:6),OpAssign(15:7-15:8),OpBar(15:9-15:10),Underscore(15:10-15:11),OpBar(15:11-15:12),OpenCurly(15:13-15:14),Newline(1:1-1:1),
-LowerIdent(16:5-16:6),OpAssign(16:7-16:8),LowerIdent(16:9-16:23),NoSpaceOpenRound(16:23-16:24),Int(16:24-16:25),CloseRound(16:25-16:26),Newline(1:1-1:1),
-LowerIdent(17:5-17:6),OpAssign(17:7-17:8),LowerIdent(17:9-17:24),NoSpaceOpenRound(17:24-17:25),Int(17:25-17:27),CloseRound(17:27-17:28),Newline(1:1-1:1),
-LowerIdent(18:5-18:6),OpAssign(18:7-18:8),LowerIdent(18:9-18:26),NoSpaceOpenRound(18:26-18:27),Int(18:27-18:29),CloseRound(18:29-18:30),Newline(1:1-1:1),
-LowerIdent(19:5-19:6),OpAssign(19:7-19:8),LowerIdent(19:9-19:21),NoSpaceOpenRound(19:21-19:22),Int(19:22-19:24),CloseRound(19:24-19:25),Newline(1:1-1:1),
-LowerIdent(20:5-20:6),OpPlus(20:7-20:8),LowerIdent(20:9-20:10),OpPlus(20:11-20:12),LowerIdent(20:13-20:14),OpPlus(20:15-20:16),LowerIdent(20:17-20:18),Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
+LowerIdent(4:1-4:15),OpAssign(4:16-4:17),OpBar(4:18-4:19),LowerIdent(4:19-4:20),OpBar(4:20-4:21),Int(4:22-4:24),
+LowerIdent(7:1-7:16),OpAssign(7:17-7:18),OpBar(7:19-7:20),NamedUnderscore(7:20-7:26),OpBar(7:26-7:27),NamedUnderscore(7:28-7:34),
+LowerIdent(10:1-10:18),OpAssign(10:19-10:20),OpBar(10:21-10:22),NamedUnderscore(10:22-10:30),OpBar(10:30-10:31),Int(10:32-10:35),
+LowerIdent(13:1-13:13),OpAssign(13:14-13:15),OpBar(13:16-13:17),LowerIdent(13:17-13:23),OpBar(13:23-13:24),LowerIdent(13:25-13:31),OpPlus(13:32-13:33),Int(13:34-13:35),
+LowerIdent(15:1-15:6),OpAssign(15:7-15:8),OpBar(15:9-15:10),Underscore(15:10-15:11),OpBar(15:11-15:12),OpenCurly(15:13-15:14),
+LowerIdent(16:5-16:6),OpAssign(16:7-16:8),LowerIdent(16:9-16:23),NoSpaceOpenRound(16:23-16:24),Int(16:24-16:25),CloseRound(16:25-16:26),
+LowerIdent(17:5-17:6),OpAssign(17:7-17:8),LowerIdent(17:9-17:24),NoSpaceOpenRound(17:24-17:25),Int(17:25-17:27),CloseRound(17:27-17:28),
+LowerIdent(18:5-18:6),OpAssign(18:7-18:8),LowerIdent(18:9-18:26),NoSpaceOpenRound(18:26-18:27),Int(18:27-18:29),CloseRound(18:29-18:30),
+LowerIdent(19:5-19:6),OpAssign(19:7-19:8),LowerIdent(19:9-19:21),NoSpaceOpenRound(19:21-19:22),Int(19:22-19:24),CloseRound(19:24-19:25),
+LowerIdent(20:5-20:6),OpPlus(20:7-20:8),LowerIdent(20:9-20:10),OpPlus(20:11-20:12),LowerIdent(20:13-20:14),OpPlus(20:15-20:16),LowerIdent(20:17-20:18),
 CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 ~~~
 # PARSE
 ~~~clojure
 (file @1.1-21.2
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -111,12 +102,12 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 				(args
 					(p-ident @10.22-10.30 (raw "_ignored")))
 				(e-int @10.32-10.35 (raw "100"))))
-		(s-decl @13.1-15.6
+		(s-decl @13.1-13.35
 			(p-ident @13.1-13.13 (raw "used_regular"))
-			(e-lambda @13.16-15.6
+			(e-lambda @13.16-13.35
 				(args
 					(p-ident @13.17-13.23 (raw "number")))
-				(e-binop @13.25-15.6 (op "+")
+				(e-binop @13.25-13.35 (op "+")
 					(e-ident @13.25-13.31 (raw "number"))
 					(e-int @13.34-13.35 (raw "1")))))
 		(s-decl @15.1-21.2
@@ -146,11 +137,11 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 							(e-apply @19.9-19.25
 								(e-ident @19.9-19.21 (raw "used_regular"))
 								(e-int @19.22-19.24 (raw "20"))))
-						(e-binop @20.5-21.2 (op "+")
+						(e-binop @20.5-20.18 (op "+")
 							(e-ident @20.5-20.6 (raw "a"))
-							(e-binop @20.9-21.2 (op "+")
+							(e-binop @20.9-20.18 (op "+")
 								(e-ident @20.9-20.10 (raw "b"))
-								(e-binop @20.13-21.2 (op "+")
+								(e-binop @20.13-20.18 (op "+")
 									(e-ident @20.13-20.14 (raw "c"))
 									(e-ident @20.17-20.18 (raw "d")))))))))))
 ~~~
@@ -202,10 +193,10 @@ main! = |_| {
 			(e-int @10.32-10.35 (value "100"))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "used_regular"))
-		(e-lambda @13.16-15.6
+		(e-lambda @13.16-13.35
 			(args
 				(p-assign @13.17-13.23 (ident "number")))
-			(e-binop @13.25-15.6 (op "add")
+			(e-binop @13.25-13.35 (op "add")
 				(e-lookup-local @13.25-13.31
 					(p-assign @13.17-13.23 (ident "number")))
 				(e-int @13.34-13.35 (value "1")))))
@@ -239,13 +230,13 @@ main! = |_| {
 						(e-lookup-local @19.9-19.21
 							(p-assign @13.1-13.13 (ident "used_regular")))
 						(e-int @19.22-19.24 (value "20"))))
-				(e-binop @20.5-21.2 (op "add")
+				(e-binop @20.5-20.18 (op "add")
 					(e-lookup-local @20.5-20.6
 						(p-assign @16.5-16.6 (ident "a")))
-					(e-binop @20.9-21.2 (op "add")
+					(e-binop @20.9-20.18 (op "add")
 						(e-lookup-local @20.9-20.10
 							(p-assign @17.5-17.6 (ident "b")))
-						(e-binop @20.13-21.2 (op "add")
+						(e-binop @20.13-20.18 (op "add")
 							(e-lookup-local @20.13-20.14
 								(p-assign @18.5-18.6 (ident "c")))
 							(e-lookup-local @20.17-20.18
@@ -264,6 +255,6 @@ main! = |_| {
 		(expr @4.18-4.24 (type "* -> Num(*)"))
 		(expr @7.19-7.34 (type "* -> *"))
 		(expr @10.21-10.35 (type "* -> Num(*)"))
-		(expr @13.16-15.6 (type "* -> *"))
+		(expr @13.16-13.35 (type "* -> *"))
 		(expr @15.9-21.2 (type "* -> *"))))
 ~~~

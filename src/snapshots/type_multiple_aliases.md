@@ -29,35 +29,31 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
-Newline(1:1-1:1),
-UpperIdent(3:1-3:7),OpColon(3:8-3:9),UpperIdent(3:10-3:13),Newline(1:1-1:1),
-UpperIdent(4:1-4:9),OpColon(4:10-4:11),UpperIdent(4:12-4:15),Newline(1:1-1:1),
-UpperIdent(5:1-5:8),OpColon(5:9-5:10),UpperIdent(5:11-5:13),Newline(1:1-1:1),
-UpperIdent(6:1-6:5),OpColon(6:6-6:7),OpenCurly(6:8-6:9),LowerIdent(6:10-6:12),OpColon(6:13-6:14),UpperIdent(6:15-6:21),Comma(6:21-6:22),LowerIdent(6:23-6:27),OpColon(6:28-6:29),UpperIdent(6:30-6:38),Comma(6:38-6:39),LowerIdent(6:40-6:43),OpColon(6:44-6:45),UpperIdent(6:46-6:53),CloseCurly(6:54-6:55),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(8:1-8:12),OpColon(8:13-8:14),UpperIdent(8:15-8:21),Comma(8:21-8:22),UpperIdent(8:23-8:31),Comma(8:31-8:32),UpperIdent(8:33-8:40),OpArrow(8:41-8:43),UpperIdent(8:44-8:48),Newline(1:1-1:1),
-LowerIdent(9:1-9:12),OpAssign(9:13-9:14),OpBar(9:15-9:16),LowerIdent(9:16-9:18),Comma(9:18-9:19),LowerIdent(9:20-9:24),Comma(9:24-9:25),LowerIdent(9:26-9:29),OpBar(9:29-9:30),OpenCurly(9:31-9:32),LowerIdent(9:32-9:34),Comma(9:34-9:35),LowerIdent(9:36-9:40),Comma(9:40-9:41),LowerIdent(9:42-9:45),CloseCurly(9:45-9:46),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(11:1-11:14),OpColon(11:15-11:16),UpperIdent(11:17-11:21),OpArrow(11:22-11:24),UpperIdent(11:25-11:33),Newline(1:1-1:1),
-LowerIdent(12:1-12:14),OpAssign(12:15-12:16),OpBar(12:17-12:18),LowerIdent(12:18-12:22),OpBar(12:22-12:23),LowerIdent(12:24-12:28),NoSpaceDotLowerIdent(12:28-12:33),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(14:1-14:6),OpAssign(14:7-14:8),OpBar(14:9-14:10),Underscore(14:10-14:11),OpBar(14:11-14:12),OpenCurly(14:13-14:14),Newline(1:1-1:1),
-LowerIdent(15:2-15:6),OpAssign(15:7-15:8),LowerIdent(15:9-15:20),NoSpaceOpenRound(15:20-15:21),Int(15:21-15:24),Comma(15:24-15:25),StringStart(15:26-15:27),StringPart(15:27-15:32),StringEnd(15:32-15:33),Comma(15:33-15:34),Int(15:35-15:37),CloseRound(15:37-15:38),Newline(1:1-1:1),
-LowerIdent(16:2-16:15),NoSpaceOpenRound(16:15-16:16),LowerIdent(16:16-16:20),CloseRound(16:20-16:21),Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
+UpperIdent(3:1-3:7),OpColon(3:8-3:9),UpperIdent(3:10-3:13),
+UpperIdent(4:1-4:9),OpColon(4:10-4:11),UpperIdent(4:12-4:15),
+UpperIdent(5:1-5:8),OpColon(5:9-5:10),UpperIdent(5:11-5:13),
+UpperIdent(6:1-6:5),OpColon(6:6-6:7),OpenCurly(6:8-6:9),LowerIdent(6:10-6:12),OpColon(6:13-6:14),UpperIdent(6:15-6:21),Comma(6:21-6:22),LowerIdent(6:23-6:27),OpColon(6:28-6:29),UpperIdent(6:30-6:38),Comma(6:38-6:39),LowerIdent(6:40-6:43),OpColon(6:44-6:45),UpperIdent(6:46-6:53),CloseCurly(6:54-6:55),
+LowerIdent(8:1-8:12),OpColon(8:13-8:14),UpperIdent(8:15-8:21),Comma(8:21-8:22),UpperIdent(8:23-8:31),Comma(8:31-8:32),UpperIdent(8:33-8:40),OpArrow(8:41-8:43),UpperIdent(8:44-8:48),
+LowerIdent(9:1-9:12),OpAssign(9:13-9:14),OpBar(9:15-9:16),LowerIdent(9:16-9:18),Comma(9:18-9:19),LowerIdent(9:20-9:24),Comma(9:24-9:25),LowerIdent(9:26-9:29),OpBar(9:29-9:30),OpenCurly(9:31-9:32),LowerIdent(9:32-9:34),Comma(9:34-9:35),LowerIdent(9:36-9:40),Comma(9:40-9:41),LowerIdent(9:42-9:45),CloseCurly(9:45-9:46),
+LowerIdent(11:1-11:14),OpColon(11:15-11:16),UpperIdent(11:17-11:21),OpArrow(11:22-11:24),UpperIdent(11:25-11:33),
+LowerIdent(12:1-12:14),OpAssign(12:15-12:16),OpBar(12:17-12:18),LowerIdent(12:18-12:22),OpBar(12:22-12:23),LowerIdent(12:24-12:28),NoSpaceDotLowerIdent(12:28-12:33),
+LowerIdent(14:1-14:6),OpAssign(14:7-14:8),OpBar(14:9-14:10),Underscore(14:10-14:11),OpBar(14:11-14:12),OpenCurly(14:13-14:14),
+LowerIdent(15:2-15:6),OpAssign(15:7-15:8),LowerIdent(15:9-15:20),NoSpaceOpenRound(15:20-15:21),Int(15:21-15:24),Comma(15:24-15:25),StringStart(15:26-15:27),StringPart(15:27-15:32),StringEnd(15:32-15:33),Comma(15:33-15:34),Int(15:35-15:37),CloseRound(15:37-15:38),
+LowerIdent(16:2-16:15),NoSpaceOpenRound(16:15-16:16),LowerIdent(16:16-16:20),CloseRound(16:20-16:21),
 CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 ~~~
 # PARSE
 ~~~clojure
 (file @1.1-17.2
 	(app @1.1-1.57
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.55 (name "pf")
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -77,13 +73,13 @@ CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 			(header @6.1-6.5 (name "User")
 				(args))
 			(ty-record @6.8-6.55
-				(anno-record-field @6.10-6.22 (name "id")
+				(anno-record-field @6.10-6.21 (name "id")
 					(ty @6.15-6.21 (name "UserId")))
-				(anno-record-field @6.23-6.39 (name "name")
+				(anno-record-field @6.23-6.38 (name "name")
 					(ty @6.30-6.38 (name "UserName")))
-				(anno-record-field @6.40-6.55 (name "age")
+				(anno-record-field @6.40-6.53 (name "age")
 					(ty @6.46-6.53 (name "UserAge")))))
-		(s-type-anno @1.1-1.1 (name "create_user")
+		(s-type-anno @8.1-8.48 (name "create_user")
 			(ty-fn @8.15-8.48
 				(ty @8.15-8.21 (name "UserId"))
 				(ty @8.23-8.31 (name "UserName"))
@@ -100,16 +96,16 @@ CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 					(field (field "id"))
 					(field (field "name"))
 					(field (field "age")))))
-		(s-type-anno @1.1-1.1 (name "get_user_name")
+		(s-type-anno @11.1-11.33 (name "get_user_name")
 			(ty-fn @11.17-11.33
 				(ty @11.17-11.21 (name "User"))
 				(ty @11.25-11.33 (name "UserName"))))
-		(s-decl @12.1-14.6
+		(s-decl @12.1-12.33
 			(p-ident @12.1-12.14 (raw "get_user_name"))
-			(e-lambda @12.17-14.6
+			(e-lambda @12.17-12.33
 				(args
 					(p-ident @12.18-12.22 (raw "user")))
-				(e-field-access @12.24-14.6
+				(e-field-access @12.24-12.33
 					(e-ident @12.24-12.28 (raw "user"))
 					(e-ident @12.28-12.33 (raw "name")))))
 		(s-decl @14.1-17.2
@@ -148,13 +144,13 @@ NO CHANGE
 			(e-record @9.31-9.46
 				(fields
 					(field (name "id")
-						(e-lookup-local @9.32-9.35
+						(e-lookup-local @9.32-9.34
 							(p-assign @9.16-9.18 (ident "id"))))
 					(field (name "name")
-						(e-lookup-local @9.36-9.41
+						(e-lookup-local @9.36-9.40
 							(p-assign @9.20-9.24 (ident "name"))))
 					(field (name "age")
-						(e-lookup-local @9.42-9.46
+						(e-lookup-local @9.42-9.45
 							(p-assign @9.26-9.29 (ident "age")))))))
 		(annotation @9.1-9.12
 			(declared-type
@@ -165,10 +161,10 @@ NO CHANGE
 					(ty @8.44-8.48 (name "User"))))))
 	(d-let
 		(p-assign @12.1-12.14 (ident "get_user_name"))
-		(e-lambda @12.17-14.6
+		(e-lambda @12.17-12.33
 			(args
 				(p-assign @12.18-12.22 (ident "user")))
-			(e-dot-access @12.24-14.6 (field "name")
+			(e-dot-access @12.24-12.33 (field "name")
 				(receiver
 					(e-lookup-local @12.24-12.28
 						(p-assign @12.18-12.22 (ident "user"))))))
@@ -234,6 +230,6 @@ NO CHANGE
 			(ty-header @6.1-6.5 (name "User"))))
 	(expressions
 		(expr @9.15-9.46 (type "UserId, UserName, UserAge -> User"))
-		(expr @12.17-14.6 (type "User -> UserName"))
+		(expr @12.17-12.33 (type "User -> UserName"))
 		(expr @14.9-17.2 (type "* -> UserName"))))
 ~~~

@@ -28,7 +28,7 @@ LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:11),OpPlus(1:12-1:13),Int(1:14-1:
 # PARSE
 ~~~clojure
 (e-binop @1.1-1.15 (op "+")
-	(e-field-access @1.1-1.13
+	(e-field-access @1.1-1.11
 		(e-ident @1.1-1.7 (raw "person"))
 		(e-ident @1.7-1.11 (raw "age")))
 	(e-int @1.14-1.15 (raw "5")))
@@ -40,7 +40,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-binop @1.1-1.15 (op "add")
-	(e-dot-access @1.1-1.13 (field "age")
+	(e-dot-access @1.1-1.11 (field "age")
 		(receiver
 			(e-runtime-error (tag "ident_not_in_scope"))))
 	(e-int @1.14-1.15 (value "5")))

@@ -22,13 +22,13 @@ LowerIdent(1:1-1:13),OpColon(1:14-1:15),UpperIdent(1:16-1:19),Comma(1:19-1:20),U
 		(ty @1.16-1.19 (name "Str"))
 		(ty @1.21-1.24 (name "U32"))
 		(ty-record @1.28-1.78
-			(anno-record-field @1.30-1.41 (name "name")
+			(anno-record-field @1.30-1.40 (name "name")
 				(ty @1.37-1.40 (name "Str")))
-			(anno-record-field @1.42-1.52 (name "age")
+			(anno-record-field @1.42-1.51 (name "age")
 				(ty @1.48-1.51 (name "U32")))
-			(anno-record-field @1.53-1.62 (name "id")
+			(anno-record-field @1.53-1.61 (name "id")
 				(ty @1.58-1.61 (name "U64")))
-			(anno-record-field @1.63-1.78 (name "active")
+			(anno-record-field @1.63-1.76 (name "active")
 				(ty @1.72-1.76 (name "Bool"))))))
 ~~~
 # FORMATTED

@@ -50,32 +50,17 @@ processRequest = |req| Http.Server.defaultResponse
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),Newline(1:1-1:1),
-KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:19),KwAs(4:20-4:22),UpperIdent(4:23-4:27),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(6:2-6:34),
-LowerIdent(7:1-7:5),OpAssign(7:6-7:7),UpperIdent(7:8-7:12),NoSpaceDotUpperIdent(7:12-7:24),NoSpaceDotLowerIdent(7:24-7:31),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(9:2-9:47),
-LowerIdent(10:1-10:10),OpColon(10:11-10:12),UpperIdent(10:13-10:17),NoSpaceDotUpperIdent(10:17-10:29),OpArrow(10:30-10:32),UpperIdent(10:33-10:36),Newline(1:1-1:1),
-LowerIdent(11:1-11:10),OpAssign(11:11-11:12),OpBar(11:13-11:14),LowerIdent(11:14-11:18),OpBar(11:18-11:19),UpperIdent(11:20-11:24),NoSpaceDotLowerIdent(11:24-11:34),NoSpaceOpenRound(11:34-11:35),LowerIdent(11:35-11:39),CloseRound(11:39-11:40),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(13:2-13:39),
-LowerIdent(14:1-14:15),OpColon(14:16-14:17),UpperIdent(14:18-14:22),NoSpaceDotUpperIdent(14:22-14:29),NoSpaceDotUpperIdent(14:29-14:37),OpArrow(14:38-14:40),UpperIdent(14:41-14:45),NoSpaceDotUpperIdent(14:45-14:52),NoSpaceDotUpperIdent(14:52-14:61),Newline(1:1-1:1),
-LowerIdent(15:1-15:15),OpAssign(15:16-15:17),OpBar(15:18-15:19),LowerIdent(15:19-15:22),OpBar(15:22-15:23),UpperIdent(15:24-15:28),NoSpaceDotUpperIdent(15:28-15:35),NoSpaceDotLowerIdent(15:35-15:51),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(17:2-17:30),
-LowerIdent(18:1-18:7),OpAssign(18:8-18:9),UpperIdent(18:10-18:14),NoSpaceDotLowerIdent(18:14-18:20),NoSpaceOpenRound(18:20-18:21),StringStart(18:21-18:22),StringPart(18:22-18:26),StringEnd(18:26-18:27),CloseRound(18:27-18:28),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(20:2-20:36),
-LowerIdent(21:1-21:7),OpAssign(21:8-21:9),UpperIdent(21:10-21:17),NoSpaceDotUpperIdent(21:17-21:24),NoSpaceDotLowerIdent(21:24-21:31),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(23:2-23:39),
-LowerIdent(24:1-24:7),OpAssign(24:8-24:9),UpperIdent(24:10-24:14),NoSpaceDotLowerIdent(24:14-24:28),Newline(1:1-1:1),
-Newline(1:1-1:1),
-Newline(26:2-26:43),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),
+KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:19),KwAs(4:20-4:22),UpperIdent(4:23-4:27),
+LowerIdent(7:1-7:5),OpAssign(7:6-7:7),UpperIdent(7:8-7:12),NoSpaceDotUpperIdent(7:12-7:24),NoSpaceDotLowerIdent(7:24-7:31),
+LowerIdent(10:1-10:10),OpColon(10:11-10:12),UpperIdent(10:13-10:17),NoSpaceDotUpperIdent(10:17-10:29),OpArrow(10:30-10:32),UpperIdent(10:33-10:36),
+LowerIdent(11:1-11:10),OpAssign(11:11-11:12),OpBar(11:13-11:14),LowerIdent(11:14-11:18),OpBar(11:18-11:19),UpperIdent(11:20-11:24),NoSpaceDotLowerIdent(11:24-11:34),NoSpaceOpenRound(11:34-11:35),LowerIdent(11:35-11:39),CloseRound(11:39-11:40),
+LowerIdent(14:1-14:15),OpColon(14:16-14:17),UpperIdent(14:18-14:22),NoSpaceDotUpperIdent(14:22-14:29),NoSpaceDotUpperIdent(14:29-14:37),OpArrow(14:38-14:40),UpperIdent(14:41-14:45),NoSpaceDotUpperIdent(14:45-14:52),NoSpaceDotUpperIdent(14:52-14:61),
+LowerIdent(15:1-15:15),OpAssign(15:16-15:17),OpBar(15:18-15:19),LowerIdent(15:19-15:22),OpBar(15:22-15:23),UpperIdent(15:24-15:28),NoSpaceDotUpperIdent(15:28-15:35),NoSpaceDotLowerIdent(15:35-15:51),
+LowerIdent(18:1-18:7),OpAssign(18:8-18:9),UpperIdent(18:10-18:14),NoSpaceDotLowerIdent(18:14-18:20),NoSpaceOpenRound(18:20-18:21),StringStart(18:21-18:22),StringPart(18:22-18:26),StringEnd(18:26-18:27),CloseRound(18:27-18:28),
+LowerIdent(21:1-21:7),OpAssign(21:8-21:9),UpperIdent(21:10-21:17),NoSpaceDotUpperIdent(21:17-21:24),NoSpaceDotLowerIdent(21:24-21:31),
+LowerIdent(24:1-24:7),OpAssign(24:8-24:9),UpperIdent(24:10-24:14),NoSpaceDotLowerIdent(24:14-24:28),
 LowerIdent(27:1-27:7),OpAssign(27:8-27:9),UpperIdent(27:10-27:14),NoSpaceDotUpperIdent(27:14-27:21),NoSpaceDotUpperIdent(27:21-27:30),NoSpaceDotUpperIdent(27:30-27:42),NoSpaceDotLowerIdent(27:42-27:49),EndOfFile(27:49-27:49),
 ~~~
 # PARSE
@@ -89,7 +74,7 @@ LowerIdent(27:1-27:7),OpAssign(27:8-27:9),UpperIdent(27:10-27:14),NoSpaceDotUppe
 		(s-decl @7.1-7.31
 			(p-ident @7.1-7.5 (raw "main"))
 			(e-ident @7.8-7.31 (raw "Json.NonExistent.method")))
-		(s-type-anno @1.1-1.1 (name "parseData")
+		(s-type-anno @10.1-10.36 (name "parseData")
 			(ty-fn @10.13-10.36
 				(ty @10.13-10.29 (name "Json.InvalidType"))
 				(ty @10.33-10.36 (name "Str"))))
@@ -101,7 +86,7 @@ LowerIdent(27:1-27:7),OpAssign(27:8-27:9),UpperIdent(27:10-27:14),NoSpaceDotUppe
 				(e-apply @11.20-11.40
 					(e-ident @11.20-11.34 (raw "Json.stringify"))
 					(e-ident @11.35-11.39 (raw "data")))))
-		(s-type-anno @1.1-1.1 (name "processRequest")
+		(s-type-anno @14.1-14.61 (name "processRequest")
 			(ty-fn @14.18-14.61
 				(ty @14.18-14.37 (name "Http.Server.Request"))
 				(ty @14.41-14.61 (name "Http.Server.Response"))))

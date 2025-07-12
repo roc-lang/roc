@@ -8,9 +8,9 @@ type=file
 ||(|(l888888888|
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_012.md:1:1:1:3
-UNEXPECTED TOKEN IN PATTERN - fuzz_crash_012.md:1:4:1:6
-UNEXPECTED TOKEN IN PATTERN - fuzz_crash_012.md:1:3:1:5
+MISSING HEADER - fuzz_crash_012.md:1:1:1:2
+UNEXPECTED TOKEN IN PATTERN - fuzz_crash_012.md:1:4:1:5
+UNEXPECTED TOKEN IN PATTERN - fuzz_crash_012.md:1:3:1:4
 PARSE ERROR - fuzz_crash_012.md:1:17:1:17
 INVALID STATEMENT - fuzz_crash_012.md:1:2:1:17
 # PROBLEMS
@@ -23,35 +23,35 @@ or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 Here is the problematic code:
-**fuzz_crash_012.md:1:1:1:3:**
+**fuzz_crash_012.md:1:1:1:2:**
 ```roc
 ||(|(l888888888|
 ```
-^^
+^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token **|(** is not expected in a pattern.
+The token **|** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**fuzz_crash_012.md:1:4:1:6:**
+**fuzz_crash_012.md:1:4:1:5:**
 ```roc
 ||(|(l888888888|
 ```
-   ^^
+   ^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token **(|** is not expected in a pattern.
+The token **(** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
-**fuzz_crash_012.md:1:3:1:5:**
+**fuzz_crash_012.md:1:3:1:4:**
 ```roc
 ||(|(l888888888|
 ```
-  ^^
+  ^
 
 
 **PARSE ERROR**
@@ -84,7 +84,7 @@ OpBar(1:1-1:2),OpBar(1:2-1:3),NoSpaceOpenRound(1:3-1:4),OpBar(1:4-1:5),NoSpaceOp
 # PARSE
 ~~~clojure
 (file @1.1-1.17
-	(malformed-header @1.1-1.3 (tag "missing_header"))
+	(malformed-header @1.1-1.2 (tag "missing_header"))
 	(statements
 		(e-malformed @1.17-1.17 (reason "expected_expr_bar"))))
 ~~~

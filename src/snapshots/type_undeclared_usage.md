@@ -57,15 +57,12 @@ processValue = |value| {
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:29),CloseSquare(1:29-1:30),Newline(1:1-1:1),
-Newline(1:1-1:1),
-UpperIdent(3:1-3:7),OpColon(3:8-3:9),UpperIdent(3:10-3:21),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(5:1-5:13),OpColon(5:14-5:15),UpperIdent(5:16-5:32),OpArrow(5:33-5:35),UpperIdent(5:36-5:39),Newline(1:1-1:1),
-LowerIdent(6:1-6:13),OpAssign(6:14-6:15),OpBar(6:16-6:17),LowerIdent(6:17-6:22),OpBar(6:22-6:23),OpenCurly(6:24-6:25),Newline(1:1-1:1),
-StringStart(7:5-7:6),StringPart(7:6-7:15),StringEnd(7:15-7:16),Newline(1:1-1:1),
-CloseCurly(8:1-8:2),Newline(1:1-1:1),
-Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:29),CloseSquare(1:29-1:30),
+UpperIdent(3:1-3:7),OpColon(3:8-3:9),UpperIdent(3:10-3:21),
+LowerIdent(5:1-5:13),OpColon(5:14-5:15),UpperIdent(5:16-5:32),OpArrow(5:33-5:35),UpperIdent(5:36-5:39),
+LowerIdent(6:1-6:13),OpAssign(6:14-6:15),OpBar(6:16-6:17),LowerIdent(6:17-6:22),OpBar(6:22-6:23),OpenCurly(6:24-6:25),
+StringStart(7:5-7:6),StringPart(7:6-7:15),StringEnd(7:15-7:16),
+CloseCurly(8:1-8:2),
 UpperIdent(10:1-10:12),OpColon(10:13-10:14),UpperIdent(10:15-10:25),NoSpaceDotUpperIdent(10:25-10:37),EndOfFile(10:37-10:37),
 ~~~
 # PARSE
@@ -73,14 +70,14 @@ UpperIdent(10:1-10:12),OpColon(10:13-10:14),UpperIdent(10:15-10:25),NoSpaceDotUp
 (file @1.1-10.37
 	(module @1.1-1.30
 		(exposes @1.8-1.30
-			(exposed-upper-ident (text "MyType"))
-			(exposed-lower-ident (text "processValue"))))
+			(exposed-upper-ident @1.9-1.15 (text "MyType"))
+			(exposed-lower-ident @1.17-1.29 (text "processValue"))))
 	(statements
 		(s-type-decl @3.1-3.21
 			(header @3.1-3.7 (name "MyType")
 				(args))
 			(ty @3.10-3.21 (name "UnknownType")))
-		(s-type-anno @1.1-1.1 (name "processValue")
+		(s-type-anno @5.1-5.39 (name "processValue")
 			(ty-fn @5.16-5.39
 				(ty @5.16-5.32 (name "UndeclaredResult"))
 				(ty @5.36-5.39 (name "Str"))))
@@ -107,6 +104,7 @@ MyType : UnknownType
 processValue : UndeclaredResult -> Str
 processValue = |value| {
 	"processed"
+
 }
 
 AnotherType : SomeModule.MissingType
