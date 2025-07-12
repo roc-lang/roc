@@ -625,7 +625,7 @@ make_cat_or_dog_sound = |is_dog|
 The function from the example above checks the boolean parameter;
 If `is_dog` is true, the ”Woof” sound branch is taken, otherwise the ”Miauw” branch. Afterwards the branches **join**
 back up and use string concatenation to add an exclamation mark. A naive way to [normalise](#normalization)
-this function would be to add an assigment and `Str.concat ...` to both branches. Like below:
+this function would be to add an assignment and `Str.concat ...` to both branches. Like below:
 ```roc
 make_cat_or_dog_sound = |is_dog|
     if is_dog then
@@ -655,7 +655,7 @@ make_cat_or_dog_sound = |is_dog|
 `sound_jp` is a joinpoint; a labeled code location inside a function that can be "jumped to" from multiple places in the control flow.
 
 Joinpoints provide the best of both worlds:
-- We avoid the code duplication from the naive appoach.
+- We avoid the code duplication from the naive approach.
 - No need to modify the stack or registers.
 - They simplify control flow by bringing branches back together.
 - They are optimization friendly.
