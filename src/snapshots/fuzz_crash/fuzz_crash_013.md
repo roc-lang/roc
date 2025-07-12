@@ -9,6 +9,7 @@ type=file
 ~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_013.md:1:1:1:2
+PARSE ERROR - fuzz_crash_013.md:1:3:1:3
 INVALID STATEMENT - fuzz_crash_013.md:1:2:1:3
 # PROBLEMS
 **MISSING HEADER**
@@ -25,6 +26,18 @@ Here is the problematic code:
 0{
 ```
 ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `expected_expr_close_curly_or_comma`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_013.md:1:3:1:3:**
+```roc
+0{
+```
+  
 
 
 **INVALID STATEMENT**
@@ -47,12 +60,11 @@ Int(1:1-1:2),OpenCurly(1:2-1:3),EndOfFile(1:3-1:3),
 (file @1.1-1.3
 	(malformed-header @1.1-1.2 (tag "missing_header"))
 	(statements
-		(e-block @1.2-1.3
-			(statements))))
+		(e-malformed @1.3-1.3 (reason "expected_expr_close_curly_or_comma"))))
 ~~~
 # FORMATTED
 ~~~roc
-{}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

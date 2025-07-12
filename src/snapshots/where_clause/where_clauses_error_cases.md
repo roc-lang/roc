@@ -181,7 +181,8 @@ module [broken_fn1, broken_fn2, broken_fn3]
 # Missing colon in constraint
 broken_fn1 : a -> b
  where
-	,b
+	,
+b
 
 # Empty where clause
 broken_fn2 : a -> b

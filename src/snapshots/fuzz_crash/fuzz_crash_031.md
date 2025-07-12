@@ -80,7 +80,8 @@ LowerIdent(4:1-4:6),LowerIdent(4:7-4:8),OpAssign(4:8-4:9),SingleQuote(4:10-4:11)
 []
 
 # el
-vavart = '
+vavar
+t = '
 ~~~
 # CANONICALIZE
 ~~~clojure

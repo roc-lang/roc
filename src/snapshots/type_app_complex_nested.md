@@ -258,7 +258,8 @@ processComplex = |result|
 
 # Test multiple levels of nesting
 deepNested : Maybe(Result(List(Dict(Str, a)), b)) -> a
-deepNested = |_| "not implemented"
+deepNested = |_| 
+"not implemented"
 
 # Test type alias with complex nesting
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))

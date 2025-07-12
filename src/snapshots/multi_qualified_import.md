@@ -590,7 +590,8 @@ LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpper
 ~~~roc
 module [json_encoder]
 
-import json.Core[Encoder]
+import json.Core
+[Encoder]
 
 json_encoder : Encoder
 json_encoder = Json.defaultEncoder
@@ -598,9 +599,12 @@ json_encoder = Json.defaultEncoder
 # Test with qualified type in annotation
 process : json
 
+
 # Test with multiple qualifiers
 data : json
-data = json"hello"
+
+data = json
+"hello"
 ~~~
 # CANONICALIZE
 ~~~clojure

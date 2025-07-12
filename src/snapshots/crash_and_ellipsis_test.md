@@ -221,11 +221,13 @@ testEllipsis = |_| ...
 
 # Test crash statement
 testCrash : U64 -> U64
-testCrash = |_| "This is a crash message"
+testCrash = |_| 
+"This is a crash message"
 
 # Test crash with different message
 testCrashSimple : U64 -> U64
-testCrashSimple = |_| "oops"
+testCrashSimple = |_| 
+"oops"
 
 main! = |_| {
 	result1 = testEllipsis(42)

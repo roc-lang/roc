@@ -103,7 +103,8 @@ KwVar(7:1-7:4),LowerIdent(7:5-7:6),OpAssign(7:6-7:7),Int(7:8-7:9),EndOfFile(7:9-
 ~~~
 # FORMATTED
 ~~~roc
-module []{
+module []
+{
 	pf : 
 	".-/main._]where # A"
 

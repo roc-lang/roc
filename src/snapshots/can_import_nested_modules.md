@@ -420,7 +420,10 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 module []
 
 import json.Parser
-import http.Clientutils[padLeft]
+
+import http.Client
+utils
+[padLeft]
 
 # Test multi-level type qualification
 parseConfig : Config.Settings -> Str

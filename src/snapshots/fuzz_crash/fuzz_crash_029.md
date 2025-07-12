@@ -335,7 +335,8 @@ CloseRound(17:3-17:4),EndOfFile(17:4-17:4),
 # FORMATTED
 ~~~roc
 # Co		{	} #ose
-{} # ure
+{}
+# ure
 # Ce
 # rd
 [] # Cse
