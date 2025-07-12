@@ -300,7 +300,12 @@ test "addTypeVar - flex num var defaults to i128" {
     defer layout_store.deinit();
 
     // Create a flex number type variable (Num(a))
-    const flex_num_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = @enumFromInt(0) } } });
+    const num_var = type_store.fresh();
+    const requirements = types.Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = 0,
+    };
+    const flex_num_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_var, .requirements = requirements } } } });
 
     // Convert to layout - should default to i128
     const layout_idx = try layout_store.addTypeVar(flex_num_var);
@@ -327,7 +332,12 @@ test "addTypeVar - flex int var defaults to i128" {
     defer layout_store.deinit();
 
     // Create a flex int type variable (Int(a))
-    const flex_int_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int_poly = @enumFromInt(0) } } });
+    const int_var = type_store.fresh();
+    const int_requirements = types.Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = 0,
+    };
+    const flex_int_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int_poly = .{ .var_ = int_var, .requirements = int_requirements } } } });
 
     // Convert to layout - should default to i128
     const layout_idx = try layout_store.addTypeVar(flex_int_var);
@@ -354,7 +364,12 @@ test "addTypeVar - flex frac var defaults to dec" {
     defer layout_store.deinit();
 
     // Create a flex frac type variable (Frac(a))
-    const flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac_poly = @enumFromInt(0) } } });
+    const frac_var = type_store.fresh();
+    const frac_requirements = types.Num.FracRequirements{
+        .fits_in_f32 = true,
+        .fits_in_dec = true,
+    };
+    const flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = frac_var, .requirements = frac_requirements } } } });
 
     // Convert to layout - should default to dec
     const layout_idx = try layout_store.addTypeVar(flex_frac_var);
@@ -381,10 +396,16 @@ test "addTypeVar - list of flex num var defaults to list of i128" {
     defer layout_store.deinit();
 
     // Create a flex num type variable (Num(a))
-    const flex_num_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = @enumFromInt(0) } } });
+    // Create a polyorphic int with specific requirements
+    const poly_var = type_store.fresh();
+    const poly_requirements = types.Num.IntRequirements{
+        .sign_needed = true,
+        .bits_needed = 64,
+    };
+    const poly_int_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int_poly = .{ .var_ = poly_var, .requirements = poly_requirements } } } });
 
     // Create a list of flex num type variable
-    const list_flex_num_var = type_store.freshFromContent(.{ .structure = .{ .list = flex_num_var } });
+    const list_flex_num_var = type_store.freshFromContent(.{ .structure = .{ .list = poly_int_var } });
 
     // Convert to layout - should default to list of i128
     const list_layout_idx = try layout_store.addTypeVar(list_flex_num_var);
@@ -413,10 +434,16 @@ test "addTypeVar - box of flex frac var defaults to box of dec" {
     defer layout_store.deinit();
 
     // Create a flex frac type variable (Frac(a))
-    const flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac_poly = @enumFromInt(0) } } });
+    // Create a polymorphic frac with specific requirements
+    const poly_frac_var_inner = type_store.fresh();
+    const poly_frac_requirements = types.Num.FracRequirements{
+        .fits_in_f32 = false,
+        .fits_in_dec = true,
+    };
+    const poly_frac_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = poly_frac_var_inner, .requirements = poly_frac_requirements } } } });
 
     // Create a box of flex frac type variable
-    const box_flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .box = flex_frac_var } });
+    const box_flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .box = poly_frac_var } });
 
     // Convert to layout - should default to box of dec
     const box_layout_idx = try layout_store.addTypeVar(box_flex_frac_var);
@@ -3396,7 +3423,7 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
 
     // Verify the ArrayListMap was initialized with capacity
     // The length should be at least as large as the types store
-    try testing.expect(layout_store.layouts_by_var.entries.len >= type_store.slots.backing.items.len);
+    try testing.expect(layout_store.layouts_by_var.entries.len >= type_store.slots.backing.len());
 }
 
 test "idxFromScalar - arithmetic mapping with no branches" {

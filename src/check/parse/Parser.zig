@@ -14,6 +14,8 @@ const TokenIdx = Token.Idx;
 
 const exitOnOom = collections.utils.exitOnOom;
 
+const MAX_PARSE_DIAGNOSTICS: usize = 1_000;
+
 /// A parser which tokenizes and parses source code into an abstract syntax tree.
 pub const Parser = @This();
 
@@ -23,6 +25,7 @@ tok_buf: TokenizedBuffer,
 store: NodeStore,
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
+cached_malformed_node: ?Node.Idx,
 
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer) Parser {
@@ -36,6 +39,7 @@ pub fn init(tokens: TokenizedBuffer) Parser {
         .store = store,
         .scratch_nodes = .{},
         .diagnostics = .{},
+        .cached_malformed_node = null,
     };
 }
 
@@ -62,20 +66,8 @@ fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) Test
     try run(parser);
 }
 
-/// helper to advance the parser until a non-newline token is encountered
+/// helper to advance the parser by one token
 pub fn advance(self: *Parser) void {
-    while (true and self.peek() != .EndOfFile) {
-        self.pos += 1;
-        if (self.peek() != .Newline) {
-            break;
-        }
-    }
-    // We have an EndOfFile token that we never expect to advance past
-    std.debug.assert(self.pos < self.tok_buf.tokens.len);
-}
-
-/// Helper to advance the parser exactly one token, whether it is significant or not.
-pub fn advanceOne(self: *Parser) void {
     self.pos += 1;
     // We have an EndOfFile token that we never expect to advance past
     std.debug.assert(self.pos < self.tok_buf.tokens.len);
@@ -84,7 +76,7 @@ pub fn advanceOne(self: *Parser) void {
 const ExpectError = error{expected_not_found};
 
 /// look ahead at the next token and return an error if it does not have the expected tag
-pub fn expect(self: *Parser, expected: Token.Tag) !void {
+pub fn expect(self: *Parser, expected: Token.Tag) ExpectError!void {
     if (self.peek() != expected) {
         return ExpectError.expected_not_found;
     }
@@ -99,59 +91,79 @@ pub fn peek(self: *Parser) Token.Tag {
     return self.tok_buf.tokens.items(.tag)[self.pos];
 }
 
-/// Peek at the next significant token
+/// Peek at the next token
 pub fn peekNext(self: *Parser) Token.Tag {
-    var next = self.pos + 1;
-    const tags = self.tok_buf.tokens.items(.tag);
-    while (next < self.tok_buf.tokens.len and tags[next] == .Newline) {
-        next += 1;
-    }
+    const next = self.pos + 1;
     if (next >= self.tok_buf.tokens.len) {
         return .EndOfFile;
     }
-    return tags[next];
+    return self.tok_buf.tokens.items(.tag)[next];
 }
 
-/// Peek at `n` significant tokens forward
+/// Peek at `n` tokens forward
 pub fn peekN(self: *Parser, n: u32) Token.Tag {
     if (n == 0) {
         return self.peek();
     }
-    var left = n;
-    var next = self.pos;
-    const tags = self.tok_buf.tokens.items(.tag);
-    while (left > 0) {
-        next += 1;
-        while (next < self.tok_buf.tokens.len and tags[next] == .Newline) {
-            next += 1;
-        }
-        if (next >= self.tok_buf.tokens.len) {
-            return .EndOfFile;
-        }
-        left -= 1;
+    const next = self.pos + n;
+    if (next >= self.tok_buf.tokens.len) {
+        return .EndOfFile;
     }
-    return tags[next];
+    return self.tok_buf.tokens.items(.tag)[next];
 }
 
 /// add a diagnostic error
 pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.TokenizedRegion) void {
-    self.diagnostics.append(self.gpa, .{
-        .tag = tag,
-        .region = region,
-    }) catch |err| exitOnOom(err);
+    if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
+        self.diagnostics.append(self.gpa, .{
+            .tag = tag,
+            .region = region,
+        }) catch |err| exitOnOom(err);
+    }
 }
 /// add a malformed token
 pub fn pushMalformed(self: *Parser, comptime t: type, tag: AST.Diagnostic.Tag, start: TokenIdx) t {
     const pos = self.pos;
+
     if (self.peek() != .EndOfFile) {
-        self.advanceOne(); // TODO: find a better point to advance to
+        self.advance(); // TODO: find a better point to advance to
     }
-    const region = AST.TokenizedRegion{ .start = start, .end = pos };
-    self.diagnostics.append(self.gpa, .{
-        .tag = tag,
-        .region = region,
-    }) catch |err| exitOnOom(err);
-    return self.store.addMalformed(t, tag, region);
+
+    if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
+        // Create a diagnostic region that points to the problematic token
+        // If the parser has moved too far from the start, use the start token for better error location
+        const diagnostic_start = if (self.pos > start and (self.pos - start) > 2) start else @min(pos, self.pos);
+        const diagnostic_end = if (self.pos > start and (self.pos - start) > 2) start + 1 else @max(pos, self.pos);
+        // If start equals end, make it a single-token region
+        const diagnostic_region = AST.TokenizedRegion{
+            .start = diagnostic_start,
+            .end = if (diagnostic_start == diagnostic_end) diagnostic_start + 1 else diagnostic_end,
+        };
+
+        // AST node should span the entire malformed expression
+        const ast_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+
+        self.diagnostics.append(self.gpa, .{
+            .tag = tag,
+            .region = diagnostic_region,
+        }) catch |err| exitOnOom(err);
+        return self.store.addMalformed(t, tag, ast_region);
+    } else {
+        // Return a cached malformed node to avoid creating excessive nodes when diagnostic limit is exceeded
+        if (self.cached_malformed_node == null) {
+            // Create a generic malformed node with a fallback diagnostic tag
+            const fallback_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+            const nid = self.store.nodes.append(self.gpa, .{
+                .tag = .malformed,
+                .main_token = 0,
+                .data = .{ .lhs = @intFromEnum(AST.Diagnostic.Tag.expr_unexpected_token), .rhs = 0 },
+                .region = fallback_region,
+            });
+            self.cached_malformed_node = nid;
+        }
+        // Cast the cached node to the requested type
+        return @enumFromInt(@intFromEnum(self.cached_malformed_node.?));
+    }
 }
 /// parse a `.roc` module
 ///
@@ -161,15 +173,11 @@ pub fn parseFile(self: *Parser) void {
     defer trace.end();
 
     self.store.emptyScratch();
-    _ = self.store.addFile(.{
+    self.store.addFile(.{
         .header = @as(AST.Header.Idx, @enumFromInt(0)),
         .statements = AST.Statement.Span{ .span = base.DataSpan.empty() },
         .region = AST.TokenizedRegion.empty(),
     });
-
-    while (self.peek() == .Newline) {
-        self.advanceOne();
-    }
 
     const header = self.parseHeader();
     const scratch_top = self.store.scratchStatementTop();
@@ -185,7 +193,7 @@ pub fn parseFile(self: *Parser) void {
         }
     }
 
-    _ = self.store.addFile(.{
+    self.store.addFile(.{
         .header = header,
         .statements = self.store.statementSpanFrom(scratch_top),
         .region = .{ .start = 0, .end = @intCast(self.tok_buf.tokens.len - 1) },
@@ -195,18 +203,19 @@ pub fn parseFile(self: *Parser) void {
 /// Parses the items of type T until we encounter end_token, with each item separated by a Comma token
 ///
 /// Returns the ending position of the collection
-fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, scratch_fn: fn (*NodeStore, T) void, parser: fn (*Parser) T) ExpectError!u32 {
+fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, scratch_fn: fn (*NodeStore, T) void, parser: fn (*Parser) T) ExpectError!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     while (self.peek() != end_token and self.peek() != .EndOfFile) {
         scratch_fn(&self.store, parser(self));
         self.expect(.Comma) catch {
             break;
         };
     }
-    const collection_end = self.pos;
     self.expect(end_token) catch {
         return ExpectError.expected_not_found;
     };
-    return collection_end;
 }
 
 /// Utility to see where a the current position is within the buffer of tokens
@@ -233,6 +242,9 @@ fn debugToken(self: *Parser, window: usize) void {
 /// package_entry :: LowerIdent Comma "platform"? String Comma
 /// app_header :: KwApp Newline* OpenSquare provides_entry* CloseSquare OpenCurly package_entry CloseCurly
 pub fn parseHeader(self: *Parser) AST.Header.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     switch (self.peek()) {
         .KwApp => {
             return self.parseAppHeader();
@@ -267,6 +279,9 @@ pub fn parseHeader(self: *Parser) AST.Header.Idx {
 ///     imports []
 ///     provides [main_for_host]
 pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     std.debug.assert(self.peek() == .KwPlatform);
     self.advance(); // Advance past KwPlatform
@@ -312,13 +327,13 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         );
     };
     const rigids_top = self.store.scratchExposedItemTop();
-    const rigids_end = self.parseCollectionSpan(
+    self.parseCollectionSpan(
         AST.ExposedItem.Idx,
         .CloseCurly,
         NodeStore.addScratchExposedItem,
         Parser.parseExposedItem,
     ) catch {
-        self.store.clearScratchExposedItemsFrom(rigids_start);
+        self.store.clearScratchExposedItemsFrom(rigids_top);
         return self.pushMalformed(
             AST.Header.Idx,
             .expected_requires_rigids_close_curly,
@@ -332,7 +347,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
             .span = rigids_span.span,
             .region = .{
                 .start = rigids_start,
-                .end = rigids_end,
+                .end = self.pos,
             },
         },
     );
@@ -347,7 +362,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         );
     };
     const signatures_top = self.store.scratchAnnoRecordFieldTop();
-    const signatures_end = self.parseCollectionSpan(
+    self.parseCollectionSpan(
         AST.AnnoRecordField.Idx,
         .CloseCurly,
         NodeStore.addScratchAnnoRecordField,
@@ -356,7 +371,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         return self.pushMalformed(
             AST.Header.Idx,
             .expected_requires_signatures_close_curly,
-            rigids_start,
+            signatures_start,
         );
     };
     const signatures_span = self.store.annoRecordFieldSpanFrom(signatures_top);
@@ -364,7 +379,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         .fields = signatures_span,
         .region = .{
             .start = signatures_start,
-            .end = signatures_end,
+            .end = self.pos,
         },
     } });
 
@@ -385,13 +400,13 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         );
     };
     const exposes_top = self.store.scratchExposedItemTop();
-    const exposes_end = self.parseCollectionSpan(
+    self.parseCollectionSpan(
         AST.ExposedItem.Idx,
         .CloseSquare,
         NodeStore.addScratchExposedItem,
         Parser.parseExposedItem,
     ) catch {
-        self.store.clearScratchExposedItemsFrom(exposes_start);
+        self.store.clearScratchExposedItemsFrom(exposes_top);
         return self.pushMalformed(
             AST.Header.Idx,
             .expected_exposes_close_square,
@@ -403,7 +418,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         .collection_exposed,
         .{
             .span = exposes_span.span,
-            .region = .{ .start = exposes_start, .end = exposes_end },
+            .region = .{ .start = exposes_start, .end = self.pos },
         },
     );
 
@@ -424,7 +439,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
             self.pos,
         );
     };
-    const packages_end = self.parseCollectionSpan(
+    self.parseCollectionSpan(
         AST.RecordField.Idx,
         .CloseCurly,
         NodeStore.addScratchRecordField,
@@ -442,7 +457,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         .collection_packages,
         .{
             .span = packages_span.span,
-            .region = .{ .start = packages_start, .end = packages_end },
+            .region = .{ .start = packages_start, .end = self.pos },
         },
     );
 
@@ -463,7 +478,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         );
     };
     const provides_top = self.store.scratchExposedItemTop();
-    const end = self.parseCollectionSpan(
+    self.parseCollectionSpan(
         AST.ExposedItem.Idx,
         .CloseSquare,
         NodeStore.addScratchExposedItem,
@@ -481,7 +496,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         .collection_exposed,
         .{
             .span = provides_span.span,
-            .region = .{ .start = provides_start, .end = end },
+            .region = .{ .start = provides_start, .end = self.pos },
         },
     );
 
@@ -492,7 +507,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         .exposes = exposes,
         .packages = packages,
         .provides = provides,
-        .region = .{ .start = start, .end = end },
+        .region = .{ .start = start, .end = self.pos },
     } });
 }
 
@@ -500,6 +515,9 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
 ///
 /// e.g. `package [ foo ] { something: "package/path/main.roc" }`
 pub fn parsePackageHeader(self: *Parser) AST.Header.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
 
     std.debug.assert(self.peek() == .KwPackage);
@@ -511,7 +529,7 @@ pub fn parsePackageHeader(self: *Parser) AST.Header.Idx {
         return self.pushMalformed(AST.Header.Idx, .expected_provides_open_square, start);
     };
     const scratch_top = self.store.scratchExposedItemTop();
-    const exposes_end = self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
+    self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
         while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
             self.advance();
         }
@@ -526,7 +544,7 @@ pub fn parsePackageHeader(self: *Parser) AST.Header.Idx {
         .span = exposes_span.span,
         .region = .{
             .start = exposes_start,
-            .end = exposes_end,
+            .end = self.pos,
         },
     });
 
@@ -536,7 +554,7 @@ pub fn parsePackageHeader(self: *Parser) AST.Header.Idx {
         return self.pushMalformed(AST.Header.Idx, .expected_package_platform_open_curly, start);
     };
     const fields_scratch_top = self.store.scratchRecordFieldTop();
-    const end = self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, Parser.parseRecordField) catch {
+    self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, Parser.parseRecordField) catch {
         self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
         return self.pushMalformed(AST.Header.Idx, .expected_package_platform_close_curly, start);
     };
@@ -545,16 +563,14 @@ pub fn parsePackageHeader(self: *Parser) AST.Header.Idx {
         .span = packages_span.span,
         .region = .{
             .start = packages_start,
-            .end = end,
+            .end = self.pos,
         },
     });
-
-    self.advance();
 
     const header = AST.Header{ .package = .{
         .exposes = exposes,
         .packages = packages,
-        .region = .{ .start = start, .end = end },
+        .region = .{ .start = start, .end = self.pos },
     } };
     const idx = self.store.addHeader(header);
     return idx;
@@ -564,6 +580,9 @@ pub fn parsePackageHeader(self: *Parser) AST.Header.Idx {
 ///
 /// e.g. `hosted [foo]`
 fn parseHostedHeader(self: *Parser) AST.Header.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     std.debug.assert(self.peek() == .KwHosted);
 
     const start = self.pos;
@@ -576,7 +595,7 @@ fn parseHostedHeader(self: *Parser) AST.Header.Idx {
         return self.pushMalformed(AST.Header.Idx, .header_expected_open_square, self.pos);
     };
     const scratch_top = self.store.scratchExposedItemTop();
-    const end = self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
+    self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
         while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
             self.advance();
         }
@@ -591,12 +610,12 @@ fn parseHostedHeader(self: *Parser) AST.Header.Idx {
         .span = exposes_span.span,
         .region = .{
             .start = exposes_start,
-            .end = end,
+            .end = self.pos,
         },
     });
 
     return self.store.addHeader(.{ .hosted = .{
-        .region = .{ .start = start, .end = end },
+        .region = .{ .start = start, .end = self.pos },
         .exposes = exposes,
     } });
 }
@@ -605,6 +624,9 @@ fn parseHostedHeader(self: *Parser) AST.Header.Idx {
 ///
 /// e.g. `module [foo]`
 fn parseModuleHeader(self: *Parser) AST.Header.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     std.debug.assert(self.peek() == .KwModule);
 
     const start = self.pos;
@@ -617,7 +639,7 @@ fn parseModuleHeader(self: *Parser) AST.Header.Idx {
         return self.pushMalformed(AST.Header.Idx, .header_expected_open_square, self.pos);
     };
     const scratch_top = self.store.scratchExposedItemTop();
-    const end = self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
+    self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
         while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
             self.advance();
         }
@@ -632,12 +654,12 @@ fn parseModuleHeader(self: *Parser) AST.Header.Idx {
         .span = exposes_span.span,
         .region = .{
             .start = exposes_start,
-            .end = end,
+            .end = self.pos,
         },
     });
 
     return self.store.addHeader(.{ .module = .{
-        .region = .{ .start = start, .end = end },
+        .region = .{ .start = start, .end = self.pos },
         .exposes = exposes,
     } });
 }
@@ -646,6 +668,9 @@ fn parseModuleHeader(self: *Parser) AST.Header.Idx {
 ///
 /// e.g. `app [main!] { pf: "../some-platform.roc" }`
 pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var platform: ?AST.RecordField.Idx = null;
     const start = self.pos;
 
@@ -653,12 +678,12 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
     self.advance(); // Advance past KwApp
 
     // Get provides
+    const provides_start = self.pos;
     self.expect(.OpenSquare) catch {
         return self.pushMalformed(AST.Header.Idx, .expected_provides_open_square, start);
     };
-    const provides_start = self.pos;
     const scratch_top = self.store.scratchExposedItemTop();
-    const provides_end = self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
+    self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
         while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
             self.advance();
         }
@@ -669,7 +694,7 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
         return self.pushMalformed(AST.Header.Idx, .import_exposing_no_close, start);
     };
     const provides_span = self.store.exposedItemSpanFrom(scratch_top);
-    const provides_region = AST.TokenizedRegion{ .start = provides_start, .end = provides_end };
+    const provides_region = AST.TokenizedRegion{ .start = provides_start, .end = self.pos };
     const provides = self.store.addCollection(.collection_exposed, AST.Collection{
         .span = provides_span.span,
         .region = provides_region,
@@ -710,7 +735,6 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
             const pidx = self.store.addRecordField(.{
                 .name = name_tok,
                 .value = value,
-                .optional = false,
                 .region = .{ .start = entry_start, .end = self.pos },
             });
             self.store.addScratchRecordField(pidx);
@@ -724,34 +748,27 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
             self.store.addScratchRecordField(self.store.addRecordField(.{
                 .name = name_tok,
                 .value = value,
-                .optional = false,
                 .region = .{ .start = entry_start, .end = self.pos },
             }));
-        }
-        while (self.peek() == .Newline) {
-            self.advanceOne();
         }
         self.expect(.Comma) catch {
             break;
         };
         i = i + 1;
     }
-    const packages_end = self.pos;
     if (self.peek() != .CloseCurly) {
         self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-        std.debug.print("Tokens: {any}\n", .{self.tok_buf.tokens.items(.tag)[start..self.pos]});
         return self.pushMalformed(AST.Header.Idx, .expected_package_platform_close_curly, start);
     }
-    self.advanceOne(); // Advance past CloseCurly
+    self.advance(); // Advance past CloseCurly
     const packages_span = self.store.recordFieldSpanFrom(fields_scratch_top);
     const packages = self.store.addCollection(.collection_packages, .{
         .span = packages_span.span,
         .region = .{
             .start = packages_start,
-            .end = packages_end,
+            .end = self.pos,
         },
     });
-    self.advance();
 
     if (platform) |pidx| {
         const header = AST.Header{
@@ -759,7 +776,7 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
                 .platform_idx = pidx,
                 .provides = provides,
                 .packages = packages,
-                .region = .{ .start = start, .end = packages_end },
+                .region = .{ .start = start, .end = self.pos },
             },
         };
         const idx = self.store.addHeader(header);
@@ -770,6 +787,9 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
 
 /// Parses an ExposedItem, adding it to the NodeStore and returning the Idx
 pub fn parseExposedItem(self: *Parser) AST.ExposedItem.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     var end = start;
     switch (self.peek()) {
@@ -787,7 +807,7 @@ pub fn parseExposedItem(self: *Parser) AST.ExposedItem.Idx {
                 self.advance(); // Advance past LowerIdent
             }
             const ei = self.store.addExposedItem(.{ .lower_ident = .{
-                .region = .{ .start = start, .end = end },
+                .region = .{ .start = start, .end = self.pos },
                 .ident = start,
                 .as = as,
             } });
@@ -815,7 +835,7 @@ pub fn parseExposedItem(self: *Parser) AST.ExposedItem.Idx {
                 self.advance(); // Advance past UpperIdent
             }
             const ei = self.store.addExposedItem(.{ .upper_ident = .{
-                .region = .{ .start = start, .end = end },
+                .region = .{ .start = start, .end = self.pos },
                 .ident = start,
                 .as = as,
             } });
@@ -834,6 +854,9 @@ const StatementType = enum { top_level, in_body };
 ///
 /// e.g. `import Foo`
 pub fn parseTopLevelStatement(self: *Parser) ?AST.Statement.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.parseStmtByType(.top_level);
 }
 
@@ -841,6 +864,9 @@ pub fn parseTopLevelStatement(self: *Parser) ?AST.Statement.Idx {
 ///
 /// e.g. `foo = 2 + x`
 pub fn parseStmt(self: *Parser) ?AST.Statement.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.parseStmtByType(.in_body);
 }
 
@@ -848,6 +874,9 @@ pub fn parseStmt(self: *Parser) ?AST.Statement.Idx {
 ///
 /// e.g. `import Foo`, or `foo = 2 + x`
 fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     switch (self.peek()) {
         .KwImport => {
             if (statementType != .top_level) {
@@ -864,25 +893,28 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
             if (self.peek() == .UpperIdent or (qualifier != null and (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent))) {
                 var exposes = AST.ExposedItem.Span{ .span = base.DataSpan.empty() };
                 const module_name_tok = self.pos;
-                var end = self.pos;
+                // Handle 'as' clause if present
                 if (self.peekNext() == .KwAs) {
                     self.advance(); // Advance past UpperIdent
                     self.advance(); // Advance past KwAs
                     alias_tok = self.pos;
-                    end = self.pos;
                     self.expect(.UpperIdent) catch {
                         const malformed = self.pushMalformed(AST.Statement.Idx, .expected_upper_name_after_import_as, start);
                         self.advance();
                         return malformed;
                     };
-                } else if (self.peekNext() == .KwExposing) {
-                    self.advance(); // Advance past ident
+                } else {
+                    self.advance(); // Advance past identifier
+                }
+
+                // Handle 'exposing' clause if present (can occur with or without 'as')
+                if (self.peek() == .KwExposing) {
                     self.advance(); // Advance past KwExposing
                     self.expect(.OpenSquare) catch {
                         return self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
                     };
                     const scratch_top = self.store.scratchExposedItemTop();
-                    end = self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
+                    self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
                         while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
                             self.advance();
                         }
@@ -891,23 +923,15 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                         return self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
                     };
                     exposes = self.store.exposedItemSpanFrom(scratch_top);
-                } else {
-                    self.advance(); // Advance past identifier
                 }
                 const statement_idx = self.store.addStatement(.{ .import = .{
                     .module_name_tok = module_name_tok,
                     .qualifier_tok = qualifier,
                     .alias_tok = alias_tok,
                     .exposes = exposes,
-                    .region = .{ .start = start, .end = end },
+                    .region = .{ .start = start, .end = self.pos },
                 } });
-                if (self.peek() == .Newline) {
-                    self.advance();
-                }
                 return statement_idx;
-            }
-            if (self.peek() == .Newline) {
-                self.advance();
             }
             return null;
         },
@@ -919,9 +943,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 .body = body,
                 .region = .{ .start = start, .end = self.pos },
             } });
-            if (self.peek() == .Newline) {
-                self.advance();
-            }
             return statement_idx;
         },
         .KwFor => {
@@ -940,10 +961,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 .body = body,
             } });
 
-            if (self.peek() == .Newline) {
-                self.advance();
-            }
-
             return statement_idx;
         },
         .KwCrash => {
@@ -954,9 +971,16 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 .expr = expr,
                 .region = .{ .start = start, .end = self.pos },
             } });
-            if (self.peek() == .Newline) {
-                self.advance();
-            }
+            return statement_idx;
+        },
+        .KwDbg => {
+            const start = self.pos;
+            self.advance();
+            const expr = self.parseExpr();
+            const statement_idx = self.store.addStatement(.{ .dbg = .{
+                .expr = expr,
+                .region = .{ .start = start, .end = self.pos },
+            } });
             return statement_idx;
         },
         .KwReturn => {
@@ -967,9 +991,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 .expr = expr,
                 .region = .{ .start = start, .end = self.pos },
             } });
-            if (self.peek() == .Newline) {
-                self.advance();
-            }
             return statement_idx;
         },
         .KwVar => {
@@ -992,33 +1013,57 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 .body = body,
                 .region = .{ .start = start, .end = self.pos },
             } });
-            if (self.peek() == .Newline) {
-                self.advance();
-            }
             return statement_idx;
         },
         .LowerIdent => {
             const start = self.pos;
             if (self.peekNext() == .OpAssign) {
                 self.advance(); // Advance past LowerIdent
-                self.advance(); // Advance past OpAssign
-                const idx = self.parseExpr();
-                const expr_region = self.store.nodes.items.items(.region)[@intFromEnum(idx)];
                 const patt_idx = self.store.addPattern(.{ .ident = .{
                     .ident_tok = start,
-                    .region = .{ .start = start, .end = start },
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                self.advance(); // Advance past OpAssign
+                const idx = self.parseExpr();
+                const statement_idx = self.store.addStatement(.{ .decl = .{
+                    .pattern = patt_idx,
+                    .body = idx,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                return statement_idx;
+            } else if (self.peekNext() == .OpColon) {
+                self.advance(); // Advance past LowerIdent
+                self.advance(); // Advance past OpColon
+                const anno = self.parseTypeAnno(.not_looking_for_args);
+                const statement_idx = self.store.addStatement(.{ .type_anno = .{
+                    .anno = anno,
+                    .name = start,
+                    .where = self.parseWhereConstraint(),
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                return statement_idx;
+            } else {
+                // continue to parse final expression
+            }
+        },
+        .NamedUnderscore => {
+            const start = self.pos;
+            if (self.peekNext() == .OpAssign) {
+                self.advance(); // Advance past NamedUnderscore
+                self.advance(); // Advance past OpAssign
+                const idx = self.parseExpr();
+                const patt_idx = self.store.addPattern(.{ .ident = .{
+                    .ident_tok = start,
+                    .region = .{ .start = start, .end = self.pos },
                 } });
                 const statement_idx = self.store.addStatement(.{ .decl = .{
                     .pattern = patt_idx,
                     .body = idx,
-                    .region = .{ .start = start, .end = expr_region.end },
+                    .region = .{ .start = start, .end = self.pos },
                 } });
-                if (self.peek() == .Newline) {
-                    self.advance();
-                }
                 return statement_idx;
             } else if (self.peekNext() == .OpColon) {
-                self.advance(); // Advance past LowerIdent
+                self.advance(); // Advance past NamedUnderscore
                 self.advance(); // Advance past OpColon
                 const anno = self.parseTypeAnno(.not_looking_for_args);
                 const statement_idx = self.store.addStatement(.{ .type_anno = .{
@@ -1037,15 +1082,20 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
             const start = self.pos;
             if (statementType == .top_level) {
                 const header = self.parseTypeHeader();
-                if (self.peek() != .OpColon) {
+                if (self.peek() != .OpColon and self.peek() != .OpColonEqual) {
                     return self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, start);
                 }
+                const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual) .nominal else .alias;
                 self.advance();
                 const anno = self.parseTypeAnno(.not_looking_for_args);
+                const where_clause = self.parseWhereConstraint();
+                // Use the type annotation's end position if there's no where clause,
+                // otherwise use the current position (after parsing where clause)
                 const statement_idx = self.store.addStatement(.{ .type_decl = .{
                     .header = header,
                     .anno = anno,
-                    .where = self.parseWhereConstraint(),
+                    .where = where_clause,
+                    .kind = kind,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -1061,23 +1111,44 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
         .expr = expr,
         .region = .{ .start = start, .end = self.pos },
     } });
-    if (self.peek() == .Newline) {
-        self.advance();
-    }
     return statement_idx;
 }
 
 fn parseWhereConstraint(self: *Parser) ?AST.Collection.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const where_start = self.pos; // Position of the where keyword
+
     self.expect(.KwWhere) catch {
         return null;
     };
-    const start = self.pos;
+
+    const where_end = self.pos; // Position right after the where keyword
     const where_clauses_top = self.store.scratchWhereClauseTop();
     while (self.peek() != .Comma and self.peek() != .EndOfFile) {
         const curr = self.peek();
         const next = self.peekNext();
+
+        // Check if we've reached the start of a new statement (e.g., "broken_fn2 : a -> b" or "process = ...")
+        // This indicates we should stop parsing where clauses
+        if (curr == .LowerIdent and (next == .OpColon or next == .OpAssign)) {
+            break;
+        }
+
         const valid_lookahead = curr == .KwModule or (curr == .LowerIdent and (next == .NoSpaceDotLowerIdent or next == .DotLowerIdent or next == .NoSpaceDotUpperIdent or next == .DotUpperIdent));
         if (!valid_lookahead) {
+            // Check if we have a malformed constraint that starts with a type variable
+            if (curr == .LowerIdent) {
+                // Try to parse as a malformed where clause to provide better error messages
+                const clause = self.parseWhereClause();
+                self.store.addScratchWhereClause(clause);
+                if (self.peek() != .Comma) {
+                    break;
+                }
+                self.advance();
+                continue;
+            }
             break;
         }
         const clause = self.parseWhereClause();
@@ -1088,10 +1159,38 @@ fn parseWhereConstraint(self: *Parser) ?AST.Collection.Idx {
         self.advance();
     }
     const where_clauses = self.store.whereClauseSpanFrom(where_clauses_top);
+
+    // Check if the where clause is empty
+    if (where_clauses.span.len == 0) {
+        // Create diagnostic region pointing to the where keyword
+        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = where_end };
+
+        // Create AST region for the malformed node
+        const ast_region = AST.TokenizedRegion{ .start = where_start, .end = where_end };
+
+        // Add the diagnostic
+        self.diagnostics.append(self.gpa, .{
+            .tag = .where_expected_constraints,
+            .region = diagnostic_region,
+        }) catch |err| exitOnOom(err);
+
+        // Create the malformed where clause node
+        const malformed_clause = self.store.addMalformed(AST.WhereClause.Idx, .where_expected_constraints, ast_region);
+
+        self.store.addScratchWhereClause(malformed_clause);
+        const updated_where_clauses = self.store.whereClauseSpanFrom(where_clauses_top);
+        const coll_id = self.store.addCollection(.collection_where_clause, .{
+            .region = .{ .start = where_start, .end = where_end },
+            .span = updated_where_clauses.span,
+        });
+        return coll_id;
+    }
+
     const coll_id = self.store.addCollection(.collection_where_clause, .{
-        .region = .{ .start = start, .end = self.pos },
+        .region = .{ .start = where_start, .end = self.pos },
         .span = where_clauses.span,
     });
+
     return coll_id;
 }
 
@@ -1103,6 +1202,9 @@ const Alternatives = enum {
 
 /// todo -- what does this do?
 pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const outer_start = self.pos;
     const patterns_scratch_top = self.store.scratchPatternTop();
     errdefer self.store.clearScratchPatternsFrom(patterns_scratch_top);
@@ -1111,77 +1213,149 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
         var pattern: ?AST.Pattern.Idx = null;
         switch (self.peek()) {
             .LowerIdent => {
+                self.advance();
                 pattern = self.store.addPattern(.{ .ident = .{
                     .ident_tok = start,
                     .region = .{ .start = start, .end = self.pos },
                 } });
+            },
+            .NamedUnderscore => {
                 self.advance();
+                pattern = self.store.addPattern(.{ .ident = .{
+                    .ident_tok = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
             },
             .UpperIdent => {
-                if (self.peekNext() != .NoSpaceOpenRound) {
-                    pattern = self.store.addPattern(.{ .tag = .{
-                        .region = .{ .start = start, .end = self.pos },
-                        .args = .{ .span = .{
-                            .start = 0,
-                            .len = 0,
-                        } },
-                        .tag_tok = start,
-                    } });
-                    self.advance();
+                const qual_result = self.parseQualificationChain();
+                // Use final token as end position to avoid newline tokens
+                self.pos = qual_result.final_token + 1;
+
+                if (qual_result.is_upper) {
+                    // This is a qualified or unqualified tag
+                    if (self.peek() != .NoSpaceOpenRound) {
+                        // Tag without args
+                        pattern = self.store.addPattern(.{ .tag = .{
+                            .region = .{ .start = start, .end = self.pos },
+                            .args = .{ .span = .{
+                                .start = 0,
+                                .len = 0,
+                            } },
+                            .tag_tok = qual_result.final_token,
+                        } });
+                    } else {
+                        // Tag with args
+                        self.advance(); // Advance past NoSpaceOpenRound
+                        const scratch_top = self.store.scratchPatternTop();
+                        self.parseCollectionSpan(AST.Pattern.Idx, .CloseRound, NodeStore.addScratchPattern, parsePatternWithAlts) catch {
+                            while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+                                self.advance();
+                            }
+                            self.store.clearScratchPatternsFrom(scratch_top);
+                            return self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
+                        };
+                        const args = self.store.patternSpanFrom(scratch_top);
+                        pattern = self.store.addPattern(.{ .tag = .{
+                            .region = .{ .start = start, .end = self.pos },
+                            .args = args,
+                            .tag_tok = qual_result.final_token,
+                        } });
+                    }
                 } else {
-                    self.advance(); // Advance past Upperident
-                    self.advance(); // Advance past NoSpaceOpenRound
-                    // Parse args
-                    const scratch_top = self.store.scratchPatternTop();
-                    const args_end = self.parseCollectionSpan(AST.Pattern.Idx, .CloseRound, NodeStore.addScratchPattern, parsePatternWithAlts) catch {
-                        while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
-                            self.advance();
-                        }
-                        self.store.clearScratchPatternsFrom(scratch_top);
-                        return self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
-                    };
-                    const args = self.store.patternSpanFrom(scratch_top);
-                    pattern = self.store.addPattern(.{ .tag = .{
-                        .region = .{ .start = start, .end = args_end },
-                        .args = args,
-                        .tag_tok = start,
+                    // This is a qualified lowercase ident (shouldn't happen in patterns, but handle it)
+                    pattern = self.store.addPattern(.{ .ident = .{
+                        .ident_tok = qual_result.final_token,
+                        .region = .{ .start = start, .end = self.pos },
                     } });
                 }
             },
             .StringStart => {
                 pattern = self.parseStringPattern();
             },
+            .SingleQuote => {
+                self.advance();
+                pattern = self.store.addPattern(.{ .single_quote = .{
+                    .token = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            },
             .Int => {
-                // Should be number
-                pattern = self.store.addPattern(.{ .number = .{
+                self.advance();
+                pattern = self.store.addPattern(.{ .int = .{
                     .region = .{ .start = start, .end = self.pos },
                     .number_tok = start,
                 } });
-                self.advance();
             },
             .Float => {
-                // Should be number
-                pattern = self.store.addPattern(.{ .number = .{
+                self.advance();
+                pattern = self.store.addPattern(.{ .frac = .{
                     .region = .{ .start = start, .end = self.pos },
                     .number_tok = start,
                 } });
-                self.advance();
             },
             .OpenSquare => {
-                // List
+                // List - custom parsing to handle DoubleDot rest patterns
                 self.advance();
                 const scratch_top = self.store.scratchPatternTop();
-                const end = self.parseCollectionSpan(AST.Pattern.Idx, .CloseSquare, NodeStore.addScratchPattern, parsePatternWithAlts) catch {
-                    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                        self.advance();
+
+                // Parse list elements with support for rest patterns
+                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                    if (self.peek() == .DoubleDot) {
+                        // Handle rest pattern .. as name or .. (unnamed)
+                        const rest_start = self.pos;
+                        self.advance(); // consume DoubleDot
+
+                        var rest_name: ?Token.Idx = null;
+                        if (self.peek() == .KwAs) {
+                            self.advance(); // consume KwAs
+                            if (self.peek() == .LowerIdent) {
+                                rest_name = self.pos;
+                                self.advance();
+                            }
+                        } else if (self.peek() == .LowerIdent) {
+                            // Old syntax ..name - add diagnostic but continue parsing
+                            rest_name = self.pos;
+                            self.advance();
+
+                            // Add diagnostic for old syntax
+                            self.pushDiagnostic(.pattern_list_rest_old_syntax, .{
+                                .start = rest_start,
+                                .end = self.pos,
+                            });
+                        }
+
+                        const rest_pattern = self.store.addPattern(.{ .list_rest = .{
+                            .name = rest_name,
+                            .region = .{ .start = rest_start, .end = self.pos },
+                        } });
+
+                        self.store.addScratchPattern(rest_pattern);
+                    } else {
+                        // Regular pattern
+                        const pat = self.parsePattern(.alternatives_allowed);
+                        self.store.addScratchPattern(pat);
                     }
+
+                    // Handle comma or end of list
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+
+                if (self.peek() == .CloseSquare) {
+                    self.advance();
+                } else {
+                    // List not properly closed, but continue with "inform don't block"
                     self.store.clearScratchPatternsFrom(scratch_top);
                     return self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
-                };
+                }
+
                 const patterns = self.store.patternSpanFrom(scratch_top);
 
                 pattern = self.store.addPattern(.{ .list = .{
-                    .region = .{ .start = start, .end = end },
+                    .region = .{ .start = start, .end = self.pos },
                     .patterns = patterns,
                 } });
             },
@@ -1199,15 +1373,14 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                 if (self.peek() != .CloseCurly) {
                     return self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
                 }
-                const end = self.pos;
                 self.advance();
                 pattern = self.store.addPattern(.{ .record = .{
-                    .region = .{ .start = start, .end = end },
+                    .region = .{ .start = start, .end = self.pos },
                     .fields = fields,
                 } });
             },
             .DoubleDot => {
-                var name: ?TokenIdx = null;
+                var name: ?Token.Idx = null;
                 var end: u32 = self.pos;
                 self.advance();
                 if (self.peek() == .KwAs) {
@@ -1218,22 +1391,25 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                     name = self.pos;
                     end = self.pos;
                     self.advance();
+                } else if (self.peek() == .LowerIdent) {
+                    // Old syntax ..name - create malformed pattern with helpful diagnostic
+                    return self.pushMalformed(AST.Pattern.Idx, .pattern_list_rest_old_syntax, self.pos);
                 }
                 pattern = self.store.addPattern(.{ .list_rest = .{
-                    .region = .{ .start = start, .end = end },
+                    .region = .{ .start = start, .end = self.pos },
                     .name = name,
                 } });
             },
             .Underscore => {
-                pattern = self.store.addPattern(.{ .underscore = .{
-                    .region = .{ .start = start, .end = start },
-                } });
                 self.advance();
+                pattern = self.store.addPattern(.{ .underscore = .{
+                    .region = .{ .start = start, .end = self.pos },
+                } });
             },
             .OpenRound, .NoSpaceOpenRound => {
                 self.advance();
                 const scratch_top = self.store.scratchPatternTop();
-                const end = self.parseCollectionSpan(AST.Pattern.Idx, .CloseRound, NodeStore.addScratchPattern, parsePatternWithAlts) catch {
+                self.parseCollectionSpan(AST.Pattern.Idx, .CloseRound, NodeStore.addScratchPattern, parsePatternWithAlts) catch {
                     while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
                         self.advance();
                     }
@@ -1244,7 +1420,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
 
                 pattern = self.store.addPattern(.{ .tuple = .{
                     .patterns = patterns,
-                    .region = .{ .start = start, .end = end },
+                    .region = .{ .start = start, .end = self.pos },
                 } });
             },
             else => {
@@ -1254,11 +1430,11 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
 
         if (pattern) |p| {
             if (alternatives == .alternatives_forbidden) {
-                return p;
+                return self.parseAsPattern(p);
             }
             if (self.peek() != .OpBar) {
                 if ((self.store.scratchPatternTop() - patterns_scratch_top) == 0) {
-                    return p;
+                    return self.parseAsPattern(p);
                 }
                 self.store.addScratchPattern(p);
                 break;
@@ -1267,27 +1443,63 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
             self.advance();
         }
     }
-    if ((self.store.scratchPatternTop() - patterns_scratch_top) == 0) {
+    const pattern_count = self.store.scratchPatternTop() - patterns_scratch_top;
+    if (pattern_count == 0) {
         return self.store.addMalformed(AST.Pattern.Idx, .pattern_unexpected_eof, .{ .start = outer_start, .end = self.pos });
     }
-    const last_pattern = self.store.scratch_patterns.items.items[self.store.scratchPatternTop() - 1];
-    const last_pattern_region = self.store.nodes.items.items(.region)[@intFromEnum(last_pattern)];
+    if (pattern_count == 1) {
+        // Only one pattern, return it directly instead of wrapping in alternatives
+        const single_pattern = self.store.scratch_patterns.items.items[self.store.scratchPatternTop() - 1];
+        self.store.clearScratchPatternsFrom(patterns_scratch_top);
+        return self.parseAsPattern(single_pattern);
+    }
     const patterns = self.store.patternSpanFrom(patterns_scratch_top);
     return self.store.addPattern(.{ .alternatives = .{
-        .region = .{ .start = outer_start, .end = last_pattern_region.end },
+        .region = .{ .start = outer_start, .end = self.pos },
         .patterns = patterns,
     } });
 }
 
+fn parseAsPattern(self: *Parser, pattern: AST.Pattern.Idx) AST.Pattern.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    if (self.peek() != .KwAs) {
+        return pattern;
+    }
+    self.advance(); // Advance past KwAs
+    if (self.peek() != .LowerIdent) {
+        // The name of a pattern can only be a lower ident
+        return self.pushMalformed(AST.Pattern.Idx, .bad_as_pattern_name, self.pos);
+    }
+    const parent_region = self.store.getPattern(pattern).to_tokenized_region();
+    const p = self.store.addPattern(.{ .as = .{
+        .name = self.pos,
+        .pattern = pattern,
+        .region = .{ .start = parent_region.start, .end = self.pos },
+    } });
+    self.advance(); // Advance past LowerIdent;
+    return p;
+}
+
 fn parsePatternNoAlts(self: *Parser) AST.Pattern.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.parsePattern(.alternatives_forbidden);
 }
 fn parsePatternWithAlts(self: *Parser) AST.Pattern.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.parsePattern(.alternatives_allowed);
 }
 
 /// todo
 pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) AST.PatternRecordField.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const field_start = self.pos;
     if (self.peek() == .DoubleDot) {
         self.advance();
@@ -1304,7 +1516,10 @@ pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) AST.Pa
         });
     }
     if (self.peek() != .LowerIdent) {
-        while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        while (self.peek() != .EndOfFile) {
+            if (self.peek() == .CloseCurly) {
+                break;
+            }
             self.advance();
         }
         return self.pushMalformed(AST.PatternRecordField.Idx, .expected_lower_ident_pat_field_name, field_start);
@@ -1312,14 +1527,17 @@ pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) AST.Pa
     const name = self.pos;
     self.advance();
     var value: ?AST.Pattern.Idx = null;
-    if (self.peek() != .OpColon and (self.peekNext() != .Comma or self.peekNext() != .CloseCurly)) {
-        while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-            self.advance();
+    // With shorthand the next token is a Comma or the ending CloseCurly
+    if (self.peek() != .Comma and self.peek() != .CloseCurly) {
+        // Otherwise we should see an OpColon to introduce the value
+        if (self.peek() != .OpColon) {
+            while (self.peek() != .EndOfFile) {
+                if (self.peek() == .CloseCurly) break;
+                self.advance();
+            }
+            return self.pushMalformed(AST.PatternRecordField.Idx, .expected_colon_after_pat_field_name, field_start);
         }
-        return self.pushMalformed(AST.PatternRecordField.Idx, .expected_colon_after_pat_field_name, field_start);
-    }
-    self.advance();
-    if (self.peekNext() != .Comma or self.peekNext() != .CloseCurly) {
+        self.advance();
         const patt = self.parsePattern(alternatives);
         value = patt;
     }
@@ -1332,47 +1550,115 @@ pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) AST.Pa
     });
 }
 
+const QualificationResult = struct {
+    qualifiers: Token.Span,
+    final_token: Token.Idx,
+    is_upper: bool,
+};
+
+/// Parses a qualification chain (e.g., "json.Core.Utf8" -> ["json", "Core"])
+/// Returns the qualifiers and the final token
+fn parseQualificationChain(self: *Parser) QualificationResult {
+    const scratch_top = self.store.scratchTokenTop();
+    var final_token = self.pos;
+    var is_upper = false;
+
+    // First token should be UpperIdent
+    if (self.peek() == .UpperIdent) {
+        final_token = self.pos; // Capture position of the identifier
+        is_upper = true;
+
+        // Check if there's a qualification chain by looking ahead
+        const saved_pos = self.pos;
+        self.advance();
+
+        if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
+            // There is a qualification chain, continue parsing
+            while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
+                // Add the current token as a qualifier before moving to the next
+                self.store.addScratchToken(final_token);
+
+                // Capture position of the dot-prefixed token
+                final_token = self.pos;
+                is_upper = (self.tok_buf.tokens.items(.tag)[final_token] == .NoSpaceDotUpperIdent);
+
+                // Move past this token
+                self.advance();
+            }
+        } else {
+            // No qualification chain, restore position
+            self.pos = saved_pos;
+        }
+    }
+
+    const qualifiers = self.store.tokenSpanFrom(scratch_top);
+
+    return QualificationResult{
+        .qualifiers = qualifiers,
+        .final_token = final_token,
+        .is_upper = is_upper,
+    };
+}
+
 /// todo
 pub fn parseExpr(self: *Parser) AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.parseExprWithBp(0);
 }
 
 /// todo
 pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
+
     var expr: ?AST.Expr.Idx = null;
     const token = self.peek();
     switch (token) {
         .UpperIdent => {
-            self.advance();
+            const qual_result = self.parseQualificationChain();
+            // Use final token as end position to avoid newline tokens
+            self.pos = qual_result.final_token + 1;
 
-            if (self.peek() == .NoSpaceDotLowerIdent) {
-                // This is a qualified lowercase ident
-                const id = self.pos;
-                self.advance();
-                const ident = self.store.addExpr(.{ .ident = .{
-                    .token = id,
-                    .qualifier = start,
-                    .region = .{ .start = start, .end = id },
-                } });
-
-                expr = ident;
-            } else {
-                // This is a Tag
+            if (qual_result.is_upper) {
+                // This is a qualified or unqualified tag
                 const tag = self.store.addExpr(.{ .tag = .{
-                    .token = start,
-                    .region = .{ .start = start, .end = start },
+                    .token = qual_result.final_token,
+                    .qualifiers = qual_result.qualifiers,
+                    .region = .{ .start = start, .end = self.pos },
                 } });
-
                 expr = tag;
+            } else {
+                // This is a qualified lowercase ident
+                const ident = self.store.addExpr(.{ .ident = .{
+                    .token = qual_result.final_token,
+                    .qualifiers = qual_result.qualifiers,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                expr = ident;
             }
         },
         .LowerIdent => {
             self.advance();
+            const empty_qualifiers = self.store.tokenSpanFrom(self.store.scratchTokenTop());
             const ident = self.store.addExpr(.{ .ident = .{
                 .token = start,
-                .qualifier = null,
-                .region = .{ .start = start, .end = start },
+                .qualifiers = empty_qualifiers,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+
+            expr = ident;
+        },
+        .NamedUnderscore => {
+            self.advance();
+            const empty_qualifiers = self.store.tokenSpanFrom(self.store.scratchTokenTop());
+            const ident = self.store.addExpr(.{ .ident = .{
+                .token = start,
+                .qualifiers = empty_qualifiers,
+                .region = .{ .start = start, .end = self.pos },
             } });
 
             expr = ident;
@@ -1381,14 +1667,21 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
             self.advance();
             expr = self.store.addExpr(.{ .int = .{
                 .token = start,
-                .region = .{ .start = start, .end = start },
+                .region = .{ .start = start, .end = self.pos },
             } });
         },
         .Float => {
             self.advance();
-            expr = self.store.addExpr(.{ .float = .{
+            expr = self.store.addExpr(.{ .frac = .{
                 .token = start,
-                .region = .{ .start = start, .end = start },
+                .region = .{ .start = start, .end = self.pos },
+            } });
+        },
+        .SingleQuote => {
+            self.advance();
+            expr = self.store.addExpr(.{ .single_quote = .{
+                .token = start,
+                .region = .{ .start = start, .end = self.pos },
             } });
         },
         .StringStart => {
@@ -1397,7 +1690,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
         .OpenSquare => {
             self.advance();
             const scratch_top = self.store.scratchExprTop();
-            const list_end = self.parseCollectionSpan(AST.Expr.Idx, .CloseSquare, NodeStore.addScratchExpr, parseExpr) catch {
+            self.parseCollectionSpan(AST.Expr.Idx, .CloseSquare, NodeStore.addScratchExpr, parseExpr) catch {
                 while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
                     self.advance();
                 }
@@ -1407,14 +1700,14 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
             const items = self.store.exprSpanFrom(scratch_top);
             expr = self.store.addExpr(.{ .list = .{
                 .items = items,
-                .region = .{ .start = start, .end = list_end },
+                .region = .{ .start = start, .end = self.pos },
             } });
         },
         .NoSpaceOpenRound, .OpenRound => {
             self.advance();
             // TODO: Parenthesized expressions
             const scratch_top = self.store.scratchExprTop();
-            const end = self.parseCollectionSpan(AST.Expr.Idx, .CloseRound, NodeStore.addScratchExpr, parseExpr) catch {
+            self.parseCollectionSpan(AST.Expr.Idx, .CloseRound, NodeStore.addScratchExpr, parseExpr) catch {
                 while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
                     self.advance();
                 }
@@ -1424,33 +1717,158 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
             const items = self.store.exprSpanFrom(scratch_top);
             expr = self.store.addExpr(.{ .tuple = .{
                 .items = items,
-                .region = .{ .start = start, .end = end },
+                .region = .{ .start = start, .end = self.pos },
             } });
         },
         .OpenCurly => {
             self.advance();
-            // Is this a Record or a Block?
-            if (self.peek() == .CloseCurly or (self.peek() == .LowerIdent and (self.peekNext() == .OpColon or self.peekNext() == .Comma))) {
-                // This is the best guesstimation of this being a Record for now.  I believe we have to have a NoSpaceOpColon
-                // for this to be full-proof without backtracking.
+
+            if (self.peek() == .EndOfFile) {
+                return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+            } else if (self.peek() == .CloseCurly) {
+                // Empty - treat as empty record
                 const scratch_top = self.store.scratchRecordFieldTop();
-                const end = self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
+                self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
                     self.store.clearScratchRecordFieldsFrom(scratch_top);
                     return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
                 };
                 const fields = self.store.recordFieldSpanFrom(scratch_top);
                 expr = self.store.addExpr(.{ .record = .{
                     .fields = fields,
-                    .region = .{ .start = start, .end = end },
+                    .ext = null,
+                    .region = .{ .start = start, .end = self.pos },
                 } });
+            } else if (self.peek() == .DoubleDot) {
+                // Record is being extended
+
+                self.advance(); // consume DoubleDot
+
+                // Parse the extension
+                const ext_expr = self.parseExprWithBp(0);
+
+                // Expect comma after extension
+                if (self.peek() != .Comma) {
+                    return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                }
+                self.advance(); // consume comma
+
+                // Parse the remaining fields
+                const scratch_top = self.store.scratchRecordFieldTop();
+                self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
+                    self.store.clearScratchRecordFieldsFrom(scratch_top);
+                    return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                };
+                const fields = self.store.recordFieldSpanFrom(scratch_top);
+                expr = self.store.addExpr(.{ .record = .{
+                    .fields = fields,
+                    .ext = ext_expr,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            } else if (self.peek() == .LowerIdent and self.peekNext() == .Comma) {
+                // Definitely a record - has comma-separated fields
+                const scratch_top = self.store.scratchRecordFieldTop();
+                self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
+                    self.store.clearScratchRecordFieldsFrom(scratch_top);
+                    return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                };
+                const fields = self.store.recordFieldSpanFrom(scratch_top);
+                expr = self.store.addExpr(.{ .record = .{
+                    .fields = fields,
+                    .ext = null,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            } else if (self.peek() == .LowerIdent and self.peekNext() == .OpColon) {
+                // Ambiguous case: could be record field or type annotation
+                // Use bounded lookahead to determine the context
+                var is_block = false;
+
+                // Save current position
+                const saved_pos = self.pos;
+
+                // Advance past LowerIdent : to see what follows
+                var lookahead_pos = self.pos + 2;
+
+                if (lookahead_pos < self.tok_buf.tokens.len) {
+                    var depth: u32 = 0;
+
+                    // Look ahead with proper bounds checking
+                    while (lookahead_pos < self.tok_buf.tokens.len) {
+                        const tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
+
+                        switch (tok) {
+                            .OpenRound, .NoSpaceOpenRound, .OpenSquare, .OpenCurly => depth += 1,
+                            .CloseRound, .CloseSquare, .CloseCurly => {
+                                if (depth == 0) break;
+                                depth -= 1;
+                            },
+                            .LowerIdent => {
+                                // At depth 0, check if this looks like an assignment (block) or record field
+                                if (depth == 0) {
+                                    const check_pos = lookahead_pos + 1;
+                                    if (check_pos < self.tok_buf.tokens.len) {
+                                        const after_ident = self.tok_buf.tokens.items(.tag)[check_pos];
+                                        // If we see assignment, it's definitely a block
+                                        if (after_ident == .OpAssign) {
+                                            is_block = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            },
+                            .EndOfFile => break,
+                            else => {
+                                // Ignore other tokens
+                            },
+                        }
+                        lookahead_pos += 1;
+
+                        // Limit lookahead to prevent infinite loops
+                        if (lookahead_pos > saved_pos + 100) break;
+                    }
+                }
+
+                // Restore parser position after lookahead
+                self.pos = saved_pos;
+
+                if (is_block) {
+                    // Parse as block
+                    const scratch_top = self.store.scratchStatementTop();
+
+                    while (self.peek() != .EndOfFile) {
+                        const statement = self.parseStmt() orelse break;
+                        self.store.addScratchStatement(statement);
+                        if (self.peek() == .CloseCurly) {
+                            self.advance();
+                            break;
+                        }
+                    }
+
+                    const statements = self.store.statementSpanFrom(scratch_top);
+                    expr = self.store.addExpr(.{ .block = .{
+                        .statements = statements,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                } else {
+                    // Parse as record
+                    const scratch_top = self.store.scratchRecordFieldTop();
+                    self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
+                        self.store.clearScratchRecordFieldsFrom(scratch_top);
+                        return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                    };
+                    const fields = self.store.recordFieldSpanFrom(scratch_top);
+                    expr = self.store.addExpr(.{ .record = .{
+                        .fields = fields,
+                        .ext = null,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                }
             } else {
+                // Not ambiguous - parse as block
                 const scratch_top = self.store.scratchStatementTop();
-                var end = self.pos;
 
                 while (self.peek() != .EndOfFile) {
                     const statement = self.parseStmt() orelse break;
                     self.store.addScratchStatement(statement);
-                    end = self.pos;
                     if (self.peek() == .CloseCurly) {
                         self.advance();
                         break;
@@ -1458,28 +1876,26 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                 }
 
                 const statements = self.store.statementSpanFrom(scratch_top);
-
                 expr = self.store.addExpr(.{ .block = .{
                     .statements = statements,
-                    .region = .{ .start = start, .end = end },
+                    .region = .{ .start = start, .end = self.pos },
                 } });
             }
         },
         .OpBar => {
             self.advance();
             const scratch_top = self.store.scratchPatternTop();
-            _ = self.parseCollectionSpan(AST.Pattern.Idx, .OpBar, NodeStore.addScratchPattern, parsePatternNoAlts) catch {
+            self.parseCollectionSpan(AST.Pattern.Idx, .OpBar, NodeStore.addScratchPattern, parsePatternNoAlts) catch {
                 self.store.clearScratchPatternsFrom(scratch_top);
                 return self.pushMalformed(AST.Expr.Idx, .expected_expr_bar, self.pos);
             };
             const args = self.store.patternSpanFrom(scratch_top);
 
             const body = self.parseExpr();
-            const body_region = self.store.nodes.items.items(.region)[@intFromEnum(body)];
             expr = self.store.addExpr(.{ .lambda = .{
                 .body = body,
                 .args = args,
-                .region = .{ .start = start, .end = body_region.end },
+                .region = .{ .start = start, .end = self.pos },
             } });
         },
         .KwIf => {
@@ -1505,14 +1921,14 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
             self.expect(.OpenCurly) catch {
                 return self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
             };
-            const scratch_top = self.store.scratchWhenBranchTop();
+            const scratch_top = self.store.scratchMatchBranchTop();
             while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-                self.store.addScratchWhenBranch(self.parseBranch());
+                self.store.addScratchMatchBranch(self.parseBranch());
                 if (self.peek() == .Comma) {
                     self.advance();
                 }
             }
-            const branches = self.store.whenBranchSpanFrom(scratch_top);
+            const branches = self.store.matchBranchSpanFrom(scratch_top);
             if (self.peek() != .CloseCurly) {
                 return self.pushMalformed(AST.Expr.Idx, .expected_close_curly_at_end_of_match, self.pos);
             }
@@ -1551,10 +1967,11 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                 const s = self.pos;
                 self.advance();
                 if (self.peek() == .LowerIdent) {
+                    const empty_qualifiers = self.store.tokenSpanFrom(self.store.scratchTokenTop());
                     const ident = self.store.addExpr(.{ .ident = .{
                         .region = .{ .start = self.pos, .end = self.pos },
                         .token = self.pos,
-                        .qualifier = null,
+                        .qualifiers = empty_qualifiers,
                     } });
                     self.advance();
                     const ident_suffixed = self.parseExprSuffix(s, ident);
@@ -1565,9 +1982,11 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                         .right = ident_suffixed,
                     } });
                 } else if (self.peek() == .UpperIdent) { // UpperIdent - should be a tag
+                    const empty_qualifiers = self.store.tokenSpanFrom(self.store.scratchTokenTop());
                     const tag = self.store.addExpr(.{ .tag = .{
                         .region = .{ .start = self.pos, .end = self.pos },
                         .token = self.pos,
+                        .qualifiers = empty_qualifiers,
                     } });
                     self.advance();
                     const ident_suffixed = self.parseExprSuffix(s, tag);
@@ -1582,12 +2001,13 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                 }
             } else { // NoSpaceDotLowerIdent
                 const s = self.pos;
-                const ident = self.store.addExpr(.{ .ident = .{
-                    .region = .{ .start = self.pos, .end = self.pos },
-                    .token = self.pos,
-                    .qualifier = null,
-                } });
                 self.advance();
+                const empty_qualifiers = self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                const ident = self.store.addExpr(.{ .ident = .{
+                    .region = .{ .start = s, .end = self.pos },
+                    .token = s,
+                    .qualifiers = empty_qualifiers,
+                } });
                 const ident_suffixed = self.parseExprSuffix(s, ident);
                 expression = self.store.addExpr(.{ .field_access = .{
                     .region = .{ .start = start, .end = self.pos },
@@ -1621,12 +2041,15 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
 
 /// todo
 fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var expression = e;
     // Check for an apply...
     if (self.peek() == .NoSpaceOpenRound) {
         self.advance();
         const scratch_top = self.store.scratchExprTop();
-        const end = self.parseCollectionSpan(AST.Expr.Idx, .CloseRound, NodeStore.addScratchExpr, parseExpr) catch {
+        self.parseCollectionSpan(AST.Expr.Idx, .CloseRound, NodeStore.addScratchExpr, parseExpr) catch {
             self.store.clearScratchExprsFrom(scratch_top);
             return self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, start);
         };
@@ -1635,7 +2058,7 @@ fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) AST.Expr.Idx {
         expression = self.store.addExpr(.{ .apply = .{
             .args = args,
             .@"fn" = e,
-            .region = .{ .start = start, .end = end },
+            .region = .{ .start = start, .end = self.pos },
         } });
     }
     if (self.peek() == .NoSpaceOpQuestion) {
@@ -1651,7 +2074,11 @@ fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) AST.Expr.Idx {
 
 /// todo
 pub fn parseRecordField(self: *Parser) AST.RecordField.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
+
     self.expect(.LowerIdent) catch {
         return self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
     };
@@ -1665,20 +2092,30 @@ pub fn parseRecordField(self: *Parser) AST.RecordField.Idx {
     return self.store.addRecordField(.{
         .name = name,
         .value = value,
-        .optional = false,
         .region = .{ .start = start, .end = self.pos },
     });
 }
 
 /// todo
-pub fn parseBranch(self: *Parser) AST.WhenBranch.Idx {
+pub fn parseBranch(self: *Parser) AST.MatchBranch.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     const p = self.parsePattern(.alternatives_allowed);
     if (self.peek() == .OpFatArrow) {
         self.advance();
+    } else if (self.peek() == .OpArrow) {
+        // Add diagnostic for wrong arrow
+        self.pushDiagnostic(.match_branch_wrong_arrow, .{
+            .start = self.pos,
+            .end = self.pos,
+        });
+
+        self.advance();
     }
     const b = self.parseExpr();
-    return self.store.addWhenBranch(.{
+    return self.store.addMatchBranch(.{
         .region = .{ .start = start, .end = self.pos },
         .pattern = p,
         .body = b,
@@ -1687,40 +2124,41 @@ pub fn parseBranch(self: *Parser) AST.WhenBranch.Idx {
 
 /// todo
 pub fn parseStringExpr(self: *Parser) AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     std.debug.assert(self.peek() == .StringStart);
     const start = self.pos;
     // Start parsing string with possible interpolations
     // e.g.:
     // StringStart, StringPart, OpenStringInterpolation, <expr>, CloseStringInterpolation, StringPart, StringEnd
-    self.advanceOne();
+    self.advance();
     const scratch_top = self.store.scratchExprTop();
     while (self.peek() != .EndOfFile) {
         var string_end = self.pos;
         switch (self.peek()) {
             .StringEnd => {
                 string_end = self.pos;
-                self.advanceOne(); // Advance past ONLY the StringEnd
+                self.advance(); // Advance past the StringEnd
                 break;
             },
             .StringPart => {
+                const part_start = self.pos;
+                self.advance(); // Advance past the StringPart
                 const index = self.store.addExpr(.{ .string_part = .{
-                    .token = self.pos,
-                    .region = .{ .start = self.pos, .end = self.pos },
+                    .token = part_start,
+                    .region = .{ .start = part_start, .end = self.pos },
                 } });
-                self.advanceOne(); // Advance past ONLY the StringPart
                 self.store.addScratchExpr(index);
             },
             .OpenStringInterpolation => {
                 self.advance(); // Advance past OpenStringInterpolation
                 const ex = self.parseExpr();
                 self.store.addScratchExpr(ex);
-                while (self.peek() == .Newline) {
-                    self.advanceOne(); // Advance ONLY past the Newline
-                }
                 if (self.peek() != .CloseStringInterpolation) {
                     return self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, start);
                 }
-                self.advanceOne(); // Advance ONLY past the CloseString Interpolation
+                self.advance(); // Advance past the CloseString Interpolation
             },
             else => {
                 // Something is broken in the tokenizer if we get here!
@@ -1735,7 +2173,7 @@ pub fn parseStringExpr(self: *Parser) AST.Expr.Idx {
             .parts = parts,
             .region = .{
                 .start = start,
-                .end = self.pos - 1, // we want the previous token's end position here
+                .end = self.pos,
             },
         },
     });
@@ -1744,11 +2182,14 @@ pub fn parseStringExpr(self: *Parser) AST.Expr.Idx {
 
 /// todo
 pub fn parseStringPattern(self: *Parser) AST.Pattern.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     const inner = parseStringExpr(self);
     const patt_idx = self.store.addPattern(.{ .string = .{
         .string_tok = start,
-        .region = .{ .start = start, .end = start },
+        .region = .{ .start = start, .end = self.pos },
         .expr = inner,
     } });
     return patt_idx;
@@ -1756,6 +2197,9 @@ pub fn parseStringPattern(self: *Parser) AST.Pattern.Idx {
 
 /// todo
 pub fn parseTypeHeader(self: *Parser) AST.TypeHeader.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     std.debug.assert(self.peek() == .UpperIdent);
     self.advance(); // Advance past UpperIdent
@@ -1766,12 +2210,12 @@ pub fn parseTypeHeader(self: *Parser) AST.TypeHeader.Idx {
                 .start = 0,
                 .len = 0,
             } },
-            .region = .{ .start = start, .end = start },
+            .region = .{ .start = start, .end = self.pos },
         });
     }
     self.advance();
     const scratch_top = self.store.scratchTypeAnnoTop();
-    const end = self.parseCollectionSpan(AST.TypeAnno.Idx, .CloseRound, NodeStore.addScratchTypeAnno, Parser.parseTypeIdent) catch {
+    self.parseCollectionSpan(AST.TypeAnno.Idx, .CloseRound, NodeStore.addScratchTypeAnno, Parser.parseTypeIdent) catch {
         self.store.clearScratchTypeAnnosFrom(scratch_top);
         return self.pushMalformed(AST.TypeHeader.Idx, .expected_ty_anno_end, start);
     };
@@ -1779,16 +2223,19 @@ pub fn parseTypeHeader(self: *Parser) AST.TypeHeader.Idx {
     return self.store.addTypeHeader(.{
         .name = start,
         .args = args,
-        .region = .{ .start = start, .end = end },
+        .region = .{ .start = start, .end = self.pos },
     });
 }
 
 fn parseTypeIdent(self: *Parser) AST.TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     if (self.peek() == .LowerIdent) {
         const tok = self.pos;
         self.advance();
         return self.store.addTypeAnno(.{ .ty_var = .{
-            .region = .{ .start = tok, .end = tok },
+            .region = .{ .start = tok, .end = self.pos },
             .tok = tok,
         } });
     }
@@ -1802,26 +2249,23 @@ const TyFnArgs = enum {
 
 /// Parse a type annotation, e.g. `Foo(a) : (a,Str,I64)`
 pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) AST.TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     var anno: ?AST.TypeAnno.Idx = null;
 
     switch (self.peek()) {
         .UpperIdent => {
-            self.advance(); // Advance past UpperIdent
-            if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
-                const second_ident = self.pos;
-                self.advance(); // Advance past NoSpaceDotUpperIdent
-                anno = self.store.addTypeAnno(.{ .mod_ty = .{
-                    .region = .{ .start = start, .end = second_ident },
-                    .ty_ident = self.tok_buf.resolveIdentifier(start).?,
-                    .mod_ident = self.tok_buf.resolveIdentifier(second_ident).?,
-                } });
-            } else {
-                anno = self.store.addTypeAnno(.{ .ty = .{
-                    .region = .{ .start = start, .end = start },
-                    .ident = self.tok_buf.resolveIdentifier(start).?,
-                } });
-            }
+            const qual_result = self.parseQualificationChain();
+            // Use final token as end position to avoid newline tokens
+            self.pos = qual_result.final_token + 1;
+
+            anno = self.store.addTypeAnno(.{ .ty = .{
+                .region = .{ .start = start, .end = self.pos },
+                .token = qual_result.final_token,
+                .qualifiers = qual_result.qualifiers,
+            } });
 
             if (self.peek() == .NoSpaceOpenRound) {
                 self.advance(); // Advance past NoSpaceOpenRound
@@ -1829,13 +2273,13 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) AST.TypeAnno.Idx
                 self.store.addScratchTypeAnno(anno orelse {
                     return self.store.addMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, .{ .start = start, .end = self.pos });
                 });
-                const end = self.parseCollectionSpan(AST.TypeAnno.Idx, .CloseRound, NodeStore.addScratchTypeAnno, parseTypeAnnoInCollection) catch {
+                self.parseCollectionSpan(AST.TypeAnno.Idx, .CloseRound, NodeStore.addScratchTypeAnno, parseTypeAnnoInCollection) catch {
                     self.store.clearScratchTypeAnnosFrom(scratch_top);
                     return self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, start);
                 };
 
                 anno = self.store.addTypeAnno(.{ .apply = .{
-                    .region = .{ .start = start, .end = end },
+                    .region = .{ .start = start, .end = self.pos },
                     .args = self.store.typeAnnoSpanFrom(scratch_top),
                 } });
             }
@@ -1867,7 +2311,6 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) AST.TypeAnno.Idx
                 const effectful = self.peek() == .OpFatArrow;
                 self.advance(); // Advance past arrow
                 const ret = self.parseTypeAnno(.looking_for_args);
-                const ret_region = self.store.nodes.items.items(.region)[@intFromEnum(ret)];
                 if (self.peek() != .CloseRound) {
                     self.store.clearScratchTypeAnnosFrom(scratch_top);
                     return self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_end_of_function, start);
@@ -1876,50 +2319,48 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) AST.TypeAnno.Idx
                     .args = args,
                     .ret = ret,
                     .effectful = effectful,
-                    .region = .{ .start = after_round, .end = ret_region.end },
+                    .region = .{ .start = after_round, .end = self.pos },
                 } });
-                const end = self.pos;
                 self.advance();
                 return self.store.addTypeAnno(.{ .parens = .{
                     .anno = function,
-                    .region = .{ .start = start, .end = end },
+                    .region = .{ .start = start, .end = self.pos },
                 } });
             }
             if (self.peek() != .CloseRound) {
                 self.store.clearScratchTypeAnnosFrom(scratch_top);
                 return self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_end, start);
             }
-            const end = self.pos;
             self.advance(); // Advance past CloseRound
             const annos = self.store.typeAnnoSpanFrom(scratch_top);
             anno = self.store.addTypeAnno(.{ .tuple = .{
-                .region = .{ .start = start, .end = end },
+                .region = .{ .start = start, .end = self.pos },
                 .annos = annos,
             } });
         },
         .OpenCurly => {
             self.advance(); // Advance past OpenCurly
             const scratch_top = self.store.scratchAnnoRecordFieldTop();
-            const end = self.parseCollectionSpan(AST.AnnoRecordField.Idx, .CloseCurly, NodeStore.addScratchAnnoRecordField, parseAnnoRecordField) catch {
+            self.parseCollectionSpan(AST.AnnoRecordField.Idx, .CloseCurly, NodeStore.addScratchAnnoRecordField, parseAnnoRecordField) catch {
                 self.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
                 return self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
             };
             const fields = self.store.annoRecordFieldSpanFrom(scratch_top);
             anno = self.store.addTypeAnno(.{ .record = .{
-                .region = .{ .start = start, .end = end },
+                .region = .{ .start = start, .end = self.pos },
                 .fields = fields,
             } });
         },
         .OpenSquare => {
             self.advance(); // Advance past OpenSquare
             const scratch_top = self.store.scratchTypeAnnoTop();
-            const end = self.parseCollectionSpan(AST.TypeAnno.Idx, .CloseSquare, NodeStore.addScratchTypeAnno, parseTypeAnnoInCollection) catch {
+            self.parseCollectionSpan(AST.TypeAnno.Idx, .CloseSquare, NodeStore.addScratchTypeAnno, parseTypeAnnoInCollection) catch {
                 self.store.clearScratchTypeAnnosFrom(scratch_top);
                 return self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_square_or_comma, self.pos);
             };
             const tags = self.store.typeAnnoSpanFrom(scratch_top);
             anno = self.store.addTypeAnno(.{ .tag_union = .{
-                .region = .{ .start = start, .end = end },
+                .region = .{ .start = start, .end = self.pos },
                 .open_anno = null,
                 .tags = tags,
             } });
@@ -1960,9 +2401,8 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) AST.TypeAnno.Idx
             self.advance(); // Advance past arrow
             // TODO: Handle thin vs fat arrow
             const ret = self.parseTypeAnno(.looking_for_args);
-            const region = self.store.nodes.items.items(.region)[@intFromEnum(ret)];
             return self.store.addTypeAnno(.{ .@"fn" = .{
-                .region = .{ .start = start, .end = region.end },
+                .region = .{ .start = start, .end = self.pos },
                 .args = args,
                 .ret = ret,
                 .effectful = effectful,
@@ -1976,11 +2416,17 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) AST.TypeAnno.Idx
 
 /// todo
 pub fn parseTypeAnnoInCollection(self: *Parser) AST.TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.parseTypeAnno(.looking_for_args);
 }
 
 /// todo
 pub fn parseAnnoRecordField(self: *Parser) AST.AnnoRecordField.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const field_start = self.pos;
     if (self.peek() != .LowerIdent) {
         while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
@@ -2012,159 +2458,158 @@ pub fn parseAnnoRecordField(self: *Parser) AST.AnnoRecordField.Idx {
 /// e.g. `hasher.Hasher`
 /// e.g. `module(a).decode(List(U8)) -> a`
 pub fn parseWhereClause(self: *Parser) AST.WhereClause.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     if (self.peek() == .KwModule) {
         // Parsing a mod_method clause
         self.advance();
         self.expect(.NoSpaceOpenRound) catch {
-            return self.store.addMalformed(
+            return self.pushMalformed(
                 AST.WhereClause.Idx,
                 .where_expected_mod_open,
-                .{ .start = start, .end = self.pos },
+                start,
             );
         };
         const var_tok = self.pos;
         self.expect(.LowerIdent) catch {
-            return self.store.addMalformed(
+            return self.pushMalformed(
                 AST.WhereClause.Idx,
                 .where_expected_var,
-                .{ .start = start, .end = self.pos },
+                start,
             );
         };
         self.expect(.CloseRound) catch {
-            return self.store.addMalformed(
+            return self.pushMalformed(
                 AST.WhereClause.Idx,
                 .where_expected_mod_close,
-                .{ .start = start, .end = self.pos },
+                start,
             );
         };
         const name_tok = self.pos;
-        if (self.peek() != .NoSpaceDotLowerIdent and self.peek() != .DotLowerIdent) {
-            return self.store.addMalformed(
+        if (self.peek() != .NoSpaceDotLowerIdent and self.peek() != .DotLowerIdent and self.peek() != .NoSpaceDotUpperIdent and self.peek() != .DotUpperIdent) {
+            return self.pushMalformed(
                 AST.WhereClause.Idx,
                 .where_expected_method_or_alias_name,
-                .{ .start = start, .end = self.pos },
+                start,
             );
         }
         self.advance();
-        const arg_start = self.pos;
-        self.expect(.NoSpaceOpenRound) catch {
-            return self.store.addMalformed(
+
+        // Check if this is a type alias (uppercase identifier)
+        const current_token_tag = self.tok_buf.tokens.items(.tag)[name_tok];
+        if (current_token_tag == .NoSpaceDotUpperIdent or current_token_tag == .DotUpperIdent) {
+            // Type alias case: module(a).TypeAlias
+            return self.store.addWhereClause(.{ .mod_alias = .{
+                .region = .{ .start = start, .end = self.pos },
+                .name_tok = name_tok,
+                .var_tok = var_tok,
+            } });
+        }
+
+        if (self.peek() == .OpColon) {
+            // Handle type annotation syntax: module(a).method : type
+            self.advance(); // advance past colon
+            const method_type_anno = self.parseTypeAnno(.not_looking_for_args);
+            const method_type = self.store.getTypeAnno(method_type_anno);
+
+            // Check if the type annotation is a function type
+            if (method_type == .@"fn") {
+                // Function type: extract args and return type
+                const fn_type = method_type.@"fn";
+                const args = self.store.addCollection(
+                    .collection_ty_anno,
+                    .{
+                        .region = .{ .start = self.pos, .end = self.pos },
+                        .span = fn_type.args.span,
+                    },
+                );
+                return self.store.addWhereClause(.{ .mod_method = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .name_tok = name_tok,
+                    .var_tok = var_tok,
+                    .args = args,
+                    .ret_anno = fn_type.ret,
+                } });
+            } else {
+                // Non-function type: treat as zero-argument method
+                const empty_args = self.store.addCollection(
+                    .collection_ty_anno,
+                    .{
+                        .region = .{ .start = self.pos, .end = self.pos },
+                        .span = base.DataSpan.empty(),
+                    },
+                );
+                return self.store.addWhereClause(.{ .mod_method = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .name_tok = name_tok,
+                    .var_tok = var_tok,
+                    .args = empty_args,
+                    .ret_anno = method_type_anno,
+                } });
+            }
+        } else if (self.peek() == .OpArrow) {
+            // Handle case where user forgot the colon: module(a).method -> Type
+            return self.pushMalformed(
                 AST.WhereClause.Idx,
-                .where_expected_arg_open,
-                .{ .start = start, .end = self.pos },
+                .where_expected_colon,
+                start,
             );
-        };
-        const ty_anno_top = self.store.scratchTypeAnnoTop();
-        const arg_end = self.parseCollectionSpan(
-            AST.TypeAnno.Idx,
-            .CloseRound,
-            NodeStore.addScratchTypeAnno,
-            Parser.parseTypeAnnoInCollection,
-        ) catch {
-            self.store.clearScratchTypeAnnosFrom(ty_anno_top);
-            return self.store.addMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_arg_close,
-                .{ .start = start, .end = self.pos },
-            );
-        };
-        const arg_span = self.store.typeAnnoSpanFrom(ty_anno_top);
-        const args = self.store.addCollection(
-            .collection_ty_anno,
-            .{
-                .region = .{ .start = arg_start, .end = arg_end },
-                .span = arg_span.span,
-            },
-        );
-        self.expect(.OpArrow) catch {
-            return self.store.addMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_method_arrow,
-                .{ .start = start, .end = self.pos },
-            );
-        };
-        const ret_ty_anno = self.parseTypeAnnoInCollection();
-        return self.store.addWhereClause(.{ .mod_method = .{
-            .region = .{ .start = start, .end = self.pos },
-            .name_tok = name_tok,
-            .var_tok = var_tok,
-            .args = args,
-            .ret_anno = ret_ty_anno,
-        } });
-    } else if (self.peek() == .LowerIdent) {
-        // Parsing either an alias or method clause
-        const var_tok = self.pos;
-        self.advance();
-        const name_tok = self.pos;
-        if (self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent) {
-            self.advance();
+        } else {
+            // Handle method call syntax: module(a).method(args) -> ret
             const arg_start = self.pos;
             self.expect(.NoSpaceOpenRound) catch {
-                return self.store.addMalformed(
+                return self.pushMalformed(
                     AST.WhereClause.Idx,
                     .where_expected_arg_open,
-                    .{ .start = start, .end = self.pos },
+                    start,
                 );
             };
             const ty_anno_top = self.store.scratchTypeAnnoTop();
-            const arg_end = self.parseCollectionSpan(
+            self.parseCollectionSpan(
                 AST.TypeAnno.Idx,
                 .CloseRound,
                 NodeStore.addScratchTypeAnno,
                 Parser.parseTypeAnnoInCollection,
             ) catch {
                 self.store.clearScratchTypeAnnosFrom(ty_anno_top);
-                return self.store.addMalformed(
+                return self.pushMalformed(
                     AST.WhereClause.Idx,
                     .where_expected_arg_close,
-                    .{ .start = start, .end = self.pos },
+                    start,
                 );
             };
             const arg_span = self.store.typeAnnoSpanFrom(ty_anno_top);
             const args = self.store.addCollection(
                 .collection_ty_anno,
                 .{
-                    .region = .{ .start = arg_start, .end = arg_end },
+                    .region = .{ .start = arg_start, .end = self.pos },
                     .span = arg_span.span,
                 },
             );
             self.expect(.OpArrow) catch {
-                return self.store.addMalformed(
+                return self.pushMalformed(
                     AST.WhereClause.Idx,
                     .where_expected_method_arrow,
-                    .{ .start = start, .end = self.pos },
+                    start,
                 );
             };
             const ret_ty_anno = self.parseTypeAnnoInCollection();
-            return self.store.addWhereClause(.{ .method = .{
+            return self.store.addWhereClause(.{ .mod_method = .{
                 .region = .{ .start = start, .end = self.pos },
                 .name_tok = name_tok,
                 .var_tok = var_tok,
                 .args = args,
                 .ret_anno = ret_ty_anno,
             } });
-        } else if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
-            const alias_tok = self.pos;
-            self.advance();
-            return self.store.addWhereClause(.{ .alias = .{
-                .region = .{ .start = start, .end = alias_tok },
-                .var_tok = var_tok,
-                .alias_tok = alias_tok,
-            } });
-        } else {
-            return self.store.addMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_method_or_alias_name,
-                .{ .start = start, .end = self.pos },
-            );
         }
     } else {
-        // malformed
-        return self.store.addMalformed(
+        // Only module(a).method syntax is supported
+        return self.pushMalformed(
             AST.WhereClause.Idx,
-            .where_expected_var_or_module,
-            .{ .start = start, .end = self.pos },
+            .where_expected_module,
+            start,
         );
     }
 }

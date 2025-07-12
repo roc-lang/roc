@@ -1,0 +1,181 @@
+/* Base layout */
+body {
+    font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
+    margin: 0;
+    background: #fafafa;
+}
+
+/* Two-column layout */
+.two-column-layout {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    background: white;
+}
+.left-pane,
+.right-pane {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    background: white;
+}
+.left-pane {
+    border-right: 1px solid #e0e0e0;
+}
+.pane-header {
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    z-index: 1001;
+    background: #f5f5f5;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 10px 15px;
+    font-weight: bold;
+    color: #333;
+}
+.pane-content {
+    flex: 1;
+    overflow: auto;
+    padding: 15px;
+    min-width: 0;
+}
+.section-dropdown {
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    font-weight: bold;
+    color: #333;
+    font-size: 1em;
+    outline: none;
+    cursor: pointer;
+}
+
+/* Content styling */
+.source-code {
+    background: #f8f8f8;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+.source-line {
+    display: block;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+.token-list .token-item {
+    padding: 2px 4px;
+    margin: 1px;
+    border-radius: 2px;
+    cursor: pointer;
+    display: inline-block;
+    font-size: 0.9em;
+}
+.problems {
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 4px;
+    padding: 10px;
+}
+.meta-info {
+    background: #e8f4fd;
+    border: 1px solid #bee5eb;
+    border-radius: 4px;
+    padding: 10px;
+}
+.meta-info strong {
+    color: #0c5460;
+}
+
+/* Token highlighting - consistent colors */
+[data-token-id] {
+    cursor: pointer;
+}
+[data-token-id]:hover {
+    background-color: #f0f0f0;
+}
+.highlighted {
+    background-color: #ffffcc;
+    outline: 2px solid #ffd700;
+}
+
+/* Source range highlighting for PARSE tree */
+.source-range {
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+.source-range:hover {
+    background-color: #f0f0f0;
+    text-decoration: underline;
+}
+
+/* Byte range highlighting */
+.highlight {
+    background-color: #ffffcc;
+    border-bottom: 2px solid #ffd700;
+}
+
+/* Flash animation for click highlighting */
+@keyframes flash-underline {
+    0%,
+    100% {
+        background-color: #ffffcc;
+        border-bottom-color: #ffd700;
+    }
+    50% {
+        background-color: #ffeb3b;
+        border-bottom-color: #ff9800;
+    }
+}
+.flash-highlight {
+    animation: flash-underline 0.3s ease-in-out 2;
+}
+
+/* Syntax highlighting */
+.token-keyword {
+    color: #0000ff;
+    font-weight: bold;
+}
+.token-identifier {
+    color: #000000;
+}
+.token-string {
+    color: #008000;
+}
+.token-number {
+    color: #ff8c00;
+}
+.token-operator {
+    color: #800080;
+}
+.token-bracket {
+    color: #808080;
+    font-weight: bold;
+}
+.token-punctuation {
+    color: #808080;
+}
+.token-comment {
+    color: #008000;
+    font-style: italic;
+}
+.token-default {
+    color: #000000;
+}
+.source-range {
+    color: #008000;
+    font-style: italic;
+}
+
+/* Hidden data storage */
+.hidden {
+    display: none;
+}
+.section {
+    display: none;
+}

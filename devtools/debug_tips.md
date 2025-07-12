@@ -16,6 +16,10 @@ If you want to debug the rust compiler instead of a roc program, you need to com
 
 - In general we recommend using linux to investigate, it has better tools for this. 
 - If your segfault also happens when using `--linker=legacy`, use it to improve valgrind output. For example: `roc build myApp.roc --linker=legacy` followed by `valgrind ./myApp`.
+- A very quick way to get a backtrace at the point of segfault is:
+```
+$ gdb --batch --ex run --ex bt --args roc check myApp.roc
+```
 
 ### Assembly debuggers
 
@@ -39,7 +43,7 @@ Note that the addresses shown in objdump may use a different offset compared to 
 5. You probably want to go to the function you saw in valgrind like `List_walkTryHelp_...` [here](https://github.com/roc-lang/examples/pull/192#issuecomment-2269571439). You can use Ctrl+F in the Function s window in IDA free.
 6. Right click and choose `Add Breakpoint` at the first instruction of the function you clicked on the previous step.
 7. Run the debugger by pressing F9
-8. Use step into (F7) and step over (F8) to see what's going on. Keep an eye on the `General Registers` and `Stack view` windows while you're stepping.
+8. Use step into (F7), step over (F8) and run until next breakpoint (F9) to see what's going on. Keep an eye on the `General Registers` and `Stack view` windows while you're stepping.
 
 
 #### gdb
@@ -74,7 +78,52 @@ $ cargo llvm-cov report --html
 ```
 Viewing lcov.info will depend on your editor. For vscode, you can use the [coverage gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension. After installing, click `Watch` in the bottom bar and go to a file for which you want to see the coverage, for example `crates/compiler/build/src/link.rs`. `Watch` in the bottom bar will now be replaced with `x% Coverage`.
 
-## Trace all Function Calls
+## Tracing
+
+If there's too much to step through with a debugger, tracing may be the tool for the job.
+
+### Trace executed lines in file
+
+If you want to trace all executed lines in a single file, use the lldb_line_tracer.py script:
+```
+./devtools/lldb_line_tracer.py <file_to_trace.rs> <binary> -- <binary args> 
+```
+For example:
+```
+❯ ./devtools/lldb_line_tracer.py crates/compiler/build/src/program.rs target/debug/roc -- check hello.roc
+INFO: Will launch binary with arguments: ['check', 'hello.roc']
+[...]
+(lldb) process launch -- check hello.roc
+=> function: check_file
+*  1339     let compilation_start = Instant::now();
+*  1343     let target = Target::LinuxX64;
+*  1349         function_kind: FunctionKind::from_env(),
+*  1351         render: RenderTarget::ColorTerminal,
+*  1354         exec_mode: ExecutionMode::Check,
+*  1347     let load_config = LoadConfig {
+*  1358         roc_file_path,
+*  1359         opt_main_path,
+*  1356     let mut loaded = roc_load::load_and_typecheck(
+*  1364     let buf = &mut String::with_capacity(1024);
+*  1366     let mut it = loaded.timings.iter().peekable();
+*  1367     while let Some((module_id, module_timing)) = it.next() {
+*  1368         let module_name = loaded.interns.module_name(*module_id);
+*  1370         buf.push_str("    ");
+*  1372         if module_name.is_empty() {
+*  1376             buf.push_str(module_name);
+*  1379         buf.push('\n');
+*  1381         report_timing(buf, "Read .roc file from disk", module_timing.read_roc_file);
+=> function: report_timing
+*   606         duration.as_secs_f64() * 1000.0,
+*   603     writeln!(
+*   610 }
+[...]
+```
+The script puts an lldb breakpoint at every line in the provided file, note that some lines contain nothing executable, so they will not be printed.
+
+If needed you can probably easily adapt the script to trace e.g. all *.rs files in a given folder.
+
+### Trace Function Calls
 
 [uftrace](https://github.com/namhyung/uftrace) allows you to trace all functions that were called in the compiler in order. For example, you can use it with `./target/debug/roc build yourFile.roc`. The output looks like this:
 ```
@@ -91,7 +140,7 @@ roc::main() {
 ```
 It can be valuable if you want to compare two compiler versions/commits and see how their function calls differ. It also gives you a nice overview compared to stepping with the debugger.
 
-### Getting started with uftrace
+#### Getting started with uftrace
 
 1. [Install uftrace](https://github.com/namhyung/uftrace?tab=readme-ov-file#how-to-build-and-install-uftrace)
 1. In the roc repo in rust-toolchain.toml, switch to the commented out nightly channel

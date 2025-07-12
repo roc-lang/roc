@@ -2,9 +2,8 @@
 
 const std = @import("std");
 const parse = @import("check/parse.zig");
-const module_work = @import("base/module_work.zig");
 
-pub const sexpr = @import("base/sexpr.zig");
+pub const SExprTree = @import("base/SExprTree.zig");
 pub const Ident = @import("base/Ident.zig");
 pub const Region = @import("base/Region.zig");
 pub const Package = @import("base/Package.zig");
@@ -13,9 +12,7 @@ pub const ModuleImport = @import("base/ModuleImport.zig");
 pub const StringLiteral = @import("base/StringLiteral.zig");
 pub const RegionInfo = @import("base/RegionInfo.zig");
 pub const Scratch = @import("base/Scratch.zig").Scratch;
-
-pub const ModuleWork = module_work.ModuleWork;
-pub const ModuleWorkIdx = module_work.ModuleWorkIdx;
+pub const parallel = @import("base/parallel.zig");
 
 /// Whether a function calls itself.
 pub const Recursive = enum {
@@ -54,7 +51,7 @@ pub const CalledVia = enum {
 /// Represents a value written as-is in a Roc source file.
 pub const Literal = union(enum) {
     Int: IntLiteral,
-    Float: FloatLiteral,
+    Float: FracLiteral,
     Bool: bool,
     Str: StringLiteral.Idx,
     /// A crash with a textual message describing why a crash occurred.
@@ -76,7 +73,7 @@ pub const IntLiteral = union(enum) {
 };
 
 /// A fractional number literal.
-pub const FloatLiteral = union(enum) {
+pub const FracLiteral = union(enum) {
     F32: f32,
     F64: f64,
     // We represent Dec as a large integer divided by 10^18, which is the maximum
@@ -87,7 +84,7 @@ pub const FloatLiteral = union(enum) {
 /// An integer or fractional number literal.
 pub const NumLiteral = union(enum) {
     Int: IntLiteral,
-    Float: FloatLiteral,
+    Frac: FracLiteral,
 };
 
 /// Just a small struct to take a span of data in an array

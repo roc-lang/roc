@@ -1,0 +1,6 @@
+package
+	[
+		Bool,
+		Result,
+	]
+	{}

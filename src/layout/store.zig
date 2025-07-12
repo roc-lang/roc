@@ -101,7 +101,7 @@ pub const Store = struct {
         type_store: *const types_store.Store,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
-        const capacity = type_store.slots.backing.items.len;
+        const capacity = type_store.slots.backing.len();
         const layouts_by_var = try collections.ArrayListMap(Var, Idx).init(env.gpa, capacity);
 
         var layouts = collections.SafeMultiList(Layout){};
@@ -258,10 +258,39 @@ pub const Store = struct {
                             break;
                         }
                     },
+                    .record_unbound => |fields| {
+                        if (fields.len() > 0) {
+                            num_fields += fields.len();
+                            const unbound_field_slice = self.types_store.getRecordFieldsSlice(fields);
+                            for (unbound_field_slice.items(.name), unbound_field_slice.items(.var_)) |name, var_| {
+                                // TODO is it possible that here we're adding fields with names
+                                // already in the list? Would type-checking have already collapsed these?
+                                // We would certainly rather not spend time doing hashmap things
+                                // if we can avoid it here.
+                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+                            }
+                        }
+                        // record_unbound has no extension, so stop here
+                        break;
+                    },
+                    .record_poly => |poly| {
+                        if (poly.record.fields.len() > 0) {
+                            num_fields += poly.record.fields.len();
+                            const poly_field_slice = self.types_store.getRecordFieldsSlice(poly.record.fields);
+                            for (poly_field_slice.items(.name), poly_field_slice.items(.var_)) |name, var_| {
+                                // TODO is it possible that here we're adding fields with names
+                                // already in the list? Would type-checking have already collapsed these?
+                                // We would certainly rather not spend time doing hashmap things
+                                // if we can avoid it here.
+                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+                            }
+                        }
+                        current_ext = poly.record.ext;
+                    },
                     else => return LayoutError.InvalidRecordExtension,
                 },
                 .alias => |alias| {
-                    current_ext = alias.backing_var;
+                    current_ext = self.types_store.getAliasBackingVar(alias);
                 },
                 else => return LayoutError.InvalidRecordExtension,
             }
@@ -545,14 +574,22 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(elem_var);
                         continue;
                     },
-                    .custom_type => |custom_type| {
+                    .list_unbound => {
+                        // For unbound lists (empty lists), use list of zero-sized type
+                        const layout = Layout.listOfZst();
+                        const idx = try self.insertLayout(layout);
+                        try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
+                        return idx;
+                    },
+                    .nominal_type => |nominal_type| {
                         // TODO special-case the builtin Num type here.
                         // If we have one of those, then convert it to a Num layout,
                         // or to a runtime error if it's an invalid elem type.
 
-                        // From a layout perspective, custom types are identical to type aliases:
+                        // From a layout perspective, nominal types are identical to type aliases:
                         // all we care about is what's inside, so just unroll it.
-                        current = self.types_store.resolveVar(custom_type.backing_var);
+                        const backing_var = self.types_store.getNominalBackingVar(nominal_type);
+                        current = self.types_store.resolveVar(backing_var);
                         continue;
                     },
                     .num => |num| switch (num) {
@@ -563,6 +600,9 @@ pub const Store = struct {
                         .int_precision => |precision| Layout.int(precision),
                         .frac_precision => |precision| Layout.frac(precision),
                         // For polymorphic types, use default precision
+                        .num_unbound => Layout.int(types.Num.Int.Precision.default),
+                        .int_unbound => Layout.int(types.Num.Int.Precision.default),
+                        .frac_unbound => Layout.frac(types.Num.Frac.Precision.default),
                         .num_poly => Layout.int(types.Num.Int.Precision.default),
                         .int_poly => Layout.int(types.Num.Int.Precision.default),
                         .frac_poly => Layout.frac(types.Num.Frac.Precision.default),
@@ -591,10 +631,20 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(last_pending_field.var_);
                         continue :outer;
                     },
-                    .func => |func| {
+                    .fn_pure => |func| {
                         // TODO
                         _ = func;
-                        @panic("TODO: func layout");
+                        std.debug.panic("TODO addTypeVar: fn_pure", .{});
+                    },
+                    .fn_effectful => |func| {
+                        // TODO
+                        _ = func;
+                        std.debug.panic("TODO addTypeVar: fn_effectful", .{});
+                    },
+                    .fn_unbound => |func| {
+                        // TODO
+                        _ = func;
+                        std.debug.panic("TODO addTypeVar: fn_unbound", .{});
                     },
                     .record => |record_type| {
                         const num_fields = try self.gatherRecordFields(record_type);
@@ -624,6 +674,63 @@ pub const Store = struct {
                         // TODO
                         _ = tag_union;
                         @panic("TODO: tag_union layout");
+                    },
+                    .record_unbound => |fields| {
+                        // For record_unbound, we need to gather fields directly since it has no Record struct
+                        var num_fields: usize = 0;
+
+                        if (fields.len() > 0) {
+                            num_fields = fields.len();
+                            const unbound_field_slice = self.types_store.getRecordFieldsSlice(fields);
+                            for (unbound_field_slice.items(.name), unbound_field_slice.items(.var_)) |name, var_| {
+                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+                            }
+                        }
+
+                        if (num_fields == 0) {
+                            continue :flat_type .empty_record;
+                        }
+
+                        try self.work.pending_containers.append(self.env.gpa, .{
+                            .var_ = current.var_,
+                            .container = .{
+                                .record = .{
+                                    .num_fields = @intCast(num_fields),
+                                    .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
+                                    .pending_fields = @intCast(num_fields),
+                                },
+                            },
+                        });
+
+                        // Start working on the last pending field (we want to pop them).
+                        const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+
+                        current = self.types_store.resolveVar(field.var_);
+                        continue;
+                    },
+                    .record_poly => |poly| {
+                        const num_fields = try self.gatherRecordFields(poly.record);
+
+                        if (num_fields == 0) {
+                            continue :flat_type .empty_record;
+                        }
+
+                        try self.work.pending_containers.append(self.env.gpa, .{
+                            .var_ = current.var_,
+                            .container = .{
+                                .record = .{
+                                    .num_fields = @intCast(num_fields),
+                                    .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
+                                    .pending_fields = @intCast(num_fields),
+                                },
+                            },
+                        });
+
+                        // Start working on the last pending field (we want to pop them).
+                        const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+
+                        current = self.types_store.resolveVar(field.var_);
+                        continue;
                     },
                     .empty_record, .empty_tag_union => blk: {
                         // Empty records and tag unions are zero-sized, so we need to do something different
@@ -739,11 +846,10 @@ pub const Store = struct {
                 },
                 .alias => |alias| {
                     // Follow the alias by updating the work item
-                    current = self.types_store.resolveVar(alias.backing_var);
+                    const backing_var = self.types_store.getAliasBackingVar(alias);
+                    current = self.types_store.resolveVar(backing_var);
                     continue;
                 },
-                .effectful => @panic("TODO: effectful doesn't make sense as a layout; should be moved out of Content"),
-                .pure => @panic("pure doesn't make sense as a layout; should be moved out of Content"),
                 .err => return LayoutError.TypeContainedMismatch,
             };
 

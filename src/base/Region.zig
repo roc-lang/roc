@@ -26,6 +26,15 @@ pub fn zero() Self {
     };
 }
 
+/// Create a `Region` from raw offsets.
+pub fn from_raw_offsets(start: u32, end: u32) Self {
+    std.debug.assert(start <= end);
+    return Self{
+        .start = Position{ .offset = start },
+        .end = Position{ .offset = end },
+    };
+}
+
 /// Returns true if two regions are equal.
 pub fn eq(self: Self, other: Self) bool {
     return self.start.offset == other.start.offset and self.end.offset == other.end.offset;

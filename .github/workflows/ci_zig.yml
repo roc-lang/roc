@@ -12,9 +12,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
-      - uses: mlugg/setup-zig@aa9ad5c14eb3452e235a441c4f9a8e89f20d97bd # ratchet:mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@475c97be87a204e6c57fe851f970bd02005a70f0 # ratchet:mlugg/setup-zig@v2
         with:
-          version: 0.14.0
+          version: 0.14.1
           # Do not cache the zig cache.
           # Just cache the zig executable.
           # Zig cache corrupts sometimes and uses tons of space.
@@ -47,17 +47,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04-arm, windows-2022, windows-2025, windows-11-arm] # macos-13 uses x64, macos-14 uses arm64
+        os: [macos-13, macos-15, ubuntu-22.04, ubuntu-24.04-arm, windows-2022, windows-2025, windows-11-arm] # macos-13 uses x64, macos-15 uses arm64
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
-      - uses: mlugg/setup-zig@aa9ad5c14eb3452e235a441c4f9a8e89f20d97bd # ratchet:mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@475c97be87a204e6c57fe851f970bd02005a70f0 # ratchet:mlugg/setup-zig@v2
         with:
-          version: 0.14.0
+          version: 0.14.1
           # Do not cache the zig cache.
           # Just cache the zig executable.
           # Zig cache corrupts sometimes and uses tons of space.
           use-cache: false
+      - if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
+        uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-25.05
 
       - name: build roc
         run: |
@@ -73,12 +77,12 @@ jobs:
         run: |
           zig-out\bin\roc.exe -h | findstr "Usage:"
 
+      - name: zig snapshot tests
+        run: zig build snapshot -- --debug
+
       - name: zig tests
         run: |
           zig build test -Dllvm -Dfuzz -Dsystem-afl=false
-
-      - name: zig snapshot tests
-        run: zig build snapshot
 
       - name: Check for snapshot changes
         run: |
@@ -92,6 +96,17 @@ jobs:
             git diff src/snapshots;
             exit 1;
           }
+
+      - name: check snapshots with valgrind (ubuntu)
+        # Sadly, with zig 0.14.1, this had to be disabled on arm.
+        # Valgrind as of 3.25.1 does not support some arm instructions zig generates.
+        # So valgrind only works happily on x86_64 linux.
+        # We can re-evaluate as new version of zig/valgrind come out.
+        if: ${{ matrix.os == 'ubuntu-22.04' }}
+        run: |
+          sudo apt install -y valgrind
+          valgrind --version
+          valgrind --leak-check=full --error-exitcode=1 --errors-for-leak-kinds=definite,possible ./zig-out/bin/snapshot --debug
 
       - name: check if statically linked (ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
@@ -120,6 +135,13 @@ jobs:
               exit 1
           }
 
+      - name: Test inside nix too
+        if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
+        run: |
+          git clean -fdx
+          git reset --hard HEAD
+          nix develop ./src/flake.nix -c zig build snapshot && zig build test
+
   zig-cross-compile:
     needs: check-zig
     runs-on: ubuntu-24.04
@@ -139,9 +161,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
-      - uses: mlugg/setup-zig@aa9ad5c14eb3452e235a441c4f9a8e89f20d97bd # ratchet:mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@475c97be87a204e6c57fe851f970bd02005a70f0 # ratchet:mlugg/setup-zig@v2
         with:
-          version: 0.14.0
+          version: 0.14.1
           # Do not cache the zig cache.
           # Just cache the zig executable.
           # Zig cache corrupts sometimes and uses tons of space.

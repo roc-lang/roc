@@ -17,6 +17,7 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
+    const update_expected_step = b.step("update-expected", "Update EXPECTED sections based on PROBLEMS in snapshots");
 
     // general configuration
     const target = b.standardTargetOptions(.{ .default_target = .{
@@ -51,6 +52,7 @@ pub fn build(b: *std.Build) void {
     // Create compile time build options
     const build_options = b.addOptions();
     build_options.addOption(bool, "enable_tracy", tracy != null);
+    build_options.addOption([]const u8, "compiler_version", getCompilerVersion(b, optimize));
     if (target.result.os.tag == .macos and tracy_callstack) {
         std.log.warn("Tracy callstack does not work on MacOS, disabling.", .{});
         build_options.addOption(bool, "enable_tracy_callstack", false);
@@ -75,6 +77,17 @@ pub fn build(b: *std.Build) void {
     add_tracy(b, build_options, snapshot_exe, target, false, tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 
+    // Add update-expected tool
+    const update_expected_exe = b.addExecutable(.{
+        .name = "update-expected",
+        .root_source_file = b.path("src/update_expected.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    add_tracy(b, build_options, update_expected_exe, target, false, tracy);
+    install_and_run(b, no_bin, update_expected_exe, update_expected_step, update_expected_step);
+
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
@@ -92,13 +105,24 @@ pub fn build(b: *std.Build) void {
     });
     builtins_tests.root_module.stack_check = false;
 
-    if (!no_bin) {
+    b.default_step.dependOn(&all_tests.step);
+    b.default_step.dependOn(&builtins_tests.step);
+    if (no_bin) {
+        test_step.dependOn(&all_tests.step);
+        test_step.dependOn(&builtins_tests.step);
+    } else {
         const run_tests = b.addRunArtifact(all_tests);
         test_step.dependOn(&run_tests.step);
 
         const run_builtins_tests = b.addRunArtifact(builtins_tests);
         builtins_test_step.dependOn(&run_builtins_tests.step);
         test_step.dependOn(&run_builtins_tests.step);
+
+        // Add success message after all tests complete
+        const tests_passed_step = b.addSystemCommand(&.{ "echo", "All tests passed!" });
+        tests_passed_step.step.dependOn(&run_tests.step);
+        tests_passed_step.step.dependOn(&run_builtins_tests.step);
+        test_step.dependOn(&tests_passed_step.step);
     }
 
     // Fmt zig code.
@@ -135,6 +159,7 @@ pub fn build(b: *std.Build) void {
     const names: []const []const u8 = &.{
         "tokenize",
         "parse",
+        "canonicalize",
     };
     for (names) |name| {
         add_fuzz_target(
@@ -631,3 +656,38 @@ const llvm_libs = [_][]const u8{
     "LLVMSupport",
     "LLVMDemangle",
 };
+
+/// Get the compiler version string for cache versioning.
+/// Returns a string like "debug-abc12345" where abc12345 is the git commit SHA.
+/// If git is not available, falls back to "debug-no-git" format.
+fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
+    const build_mode = switch (optimize) {
+        .Debug => "debug",
+        .ReleaseSafe => "release-safe",
+        .ReleaseFast => "release-fast",
+        .ReleaseSmall => "release-small",
+    };
+
+    // Try to get git commit SHA using std.process.Child.run
+    const result = std.process.Child.run(.{
+        .allocator = b.allocator,
+        .argv = &[_][]const u8{ "git", "rev-parse", "--short=8", "HEAD" },
+    }) catch {
+        // Git command failed, use fallback
+        return std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+    };
+    defer b.allocator.free(result.stdout);
+    defer b.allocator.free(result.stderr);
+
+    if (result.term == .Exited and result.term.Exited == 0) {
+        // Git succeeded, use the commit SHA
+        const commit_sha = std.mem.trim(u8, result.stdout, " \n\r\t");
+        if (commit_sha.len > 0) {
+            return std.fmt.allocPrint(b.allocator, "{s}-{s}", .{ build_mode, commit_sha }) catch
+                std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+        }
+    }
+
+    // Git not available or failed, use fallback
+    return std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+}

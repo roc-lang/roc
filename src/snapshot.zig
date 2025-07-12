@@ -2,15 +2,79 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
+const parallel = base.parallel;
 const canonicalize = @import("check/canonicalize.zig");
+const types_mod = @import("types.zig");
+const types_problem_mod = @import("check/check_types/problem.zig");
+const cache = @import("cache/mod.zig");
+
+const Solver = @import("check/check_types.zig");
 const CIR = canonicalize.CIR;
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
 const types = @import("types.zig");
 const reporting = @import("reporting.zig");
+const tokenize = @import("check/parse/tokenize.zig");
+const SExprTree = @import("base/SExprTree.zig");
 
 const AST = parse.AST;
 const Report = reporting.Report;
+
+/// Categories of tokens for syntax highlighting
+const TokenCategory = enum {
+    keyword,
+    identifier,
+    string,
+    number,
+    operator,
+    bracket,
+    comment,
+    punctuation,
+    default,
+
+    pub fn toCssClass(self: TokenCategory) []const u8 {
+        return switch (self) {
+            .keyword => "token-keyword",
+            .identifier => "token-identifier",
+            .string => "token-string",
+            .number => "token-number",
+            .operator => "token-operator",
+            .bracket => "token-bracket",
+            .comment => "token-comment",
+            .punctuation => "token-punctuation",
+            .default => "token-default",
+        };
+    }
+};
+
+/// Convert a token type to its category for syntax highlighting
+fn tokenToCategory(token: tokenize.Token.Tag) TokenCategory {
+    return switch (token) {
+        // Keywords
+        .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwVar, .KwWhere, .KwWith => .keyword,
+
+        // Identifiers
+        .UpperIdent, .LowerIdent, .DotLowerIdent, .DotUpperIdent, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .NamedUnderscore, .OpaqueName => .identifier,
+
+        // Strings
+        .StringStart, .StringEnd, .StringPart, .MultilineStringStart, .MultilineStringEnd, .SingleQuote => .string,
+
+        // Numbers
+        .Float, .Int, .DotInt, .NoSpaceDotInt, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits => .number,
+
+        // Operators
+        .OpPlus, .OpStar, .OpBinaryMinus, .OpUnaryMinus, .OpEquals, .OpNotEquals, .OpAnd, .OpOr, .OpGreaterThan, .OpLessThan, .OpGreaterThanOrEq, .OpLessThanOrEq, .OpAssign, .OpColonEqual, .OpArrow, .OpBackslash, .OpBar, .OpBang, .OpQuestion, .OpColon, .OpPercent, .OpDoubleSlash, .OpCaret, .OpAmpersand, .OpPizza, .OpSlash, .OpDoubleQuestion, .OpBackArrow, .OpFatArrow, .NoSpaceOpQuestion => .operator,
+
+        // Brackets
+        .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly => .bracket,
+
+        // Punctuation
+        .Comma, .Dot, .DoubleDot, .TripleDot, .Underscore => .punctuation,
+
+        // Everything else
+        else => .default,
+    };
+}
 
 var verbose_log: bool = false;
 var prng = std.Random.DefaultPrng.init(1234567890);
@@ -31,10 +95,9 @@ fn warn(comptime fmt_str: []const u8, args: anytype) void {
 
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
+    // Use GeneralPurposeAllocator for command-line parsing and general work
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        _ = gpa_impl.deinit();
-    }
+    defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
     const args = try std.process.argsAlloc(gpa);
@@ -45,10 +108,24 @@ pub fn main() !void {
 
     var maybe_fuzz_corpus_path: ?[]const u8 = null;
     var expect_fuzz_corpus_path: bool = false;
+    var generate_html: bool = false;
+    var debug_mode: bool = false;
+    var max_threads: usize = 0;
+    var expect_threads: bool = false;
 
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_log = true;
+        } else if (std.mem.eql(u8, arg, "--html")) {
+            generate_html = true;
+        } else if (std.mem.eql(u8, arg, "--debug")) {
+            debug_mode = true;
+        } else if (std.mem.eql(u8, arg, "--threads")) {
+            if (max_threads != 0) {
+                std.log.err("`--threads` should only be specified once.", .{});
+                std.process.exit(1);
+            }
+            expect_threads = true;
         } else if (std.mem.eql(u8, arg, "--fuzz-corpus")) {
             if (maybe_fuzz_corpus_path != null) {
                 std.log.err("`--fuzz-corpus` should only be specified once.", .{});
@@ -58,12 +135,21 @@ pub fn main() !void {
         } else if (expect_fuzz_corpus_path) {
             maybe_fuzz_corpus_path = arg;
             expect_fuzz_corpus_path = false;
+        } else if (expect_threads) {
+            max_threads = std.fmt.parseInt(usize, arg, 10) catch |err| {
+                std.log.err("Invalid thread count '{s}': {s}", .{ arg, @errorName(err) });
+                std.process.exit(1);
+            };
+            expect_threads = false;
         } else if (std.mem.eql(u8, arg, "--help")) {
             const usage =
                 \\Usage: roc snapshot [options] [snapshot_paths...]
                 \\
                 \\Options:
                 \\  --verbose       Enable verbose logging
+                \\  --html          Generate HTML output files
+                \\  --debug         Use GeneralPurposeAllocator for debugging (default: c_allocator)
+                \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.
                 \\  --fuzz-corpus <path>  Specify the path to the fuzz corpus
                 \\
                 \\Arguments:
@@ -81,113 +167,581 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    if (maybe_fuzz_corpus_path != null) {
-        log("copying SOURCE from snapshots to: {s}", .{maybe_fuzz_corpus_path.?});
-        try std.fs.cwd().makePath(maybe_fuzz_corpus_path.?);
+    if (expect_threads) {
+        std.log.err("Expected thread count, but none was provided", .{});
+        std.process.exit(1);
     }
 
+    // Force single-threaded mode in debug mode
+    if (debug_mode and max_threads == 0) {
+        max_threads = 1;
+    }
+
+    const config = Config{
+        .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
+        .generate_html = generate_html,
+    };
+
+    if (config.maybe_fuzz_corpus_path != null) {
+        log("copying SOURCE from snapshots to: {s}", .{config.maybe_fuzz_corpus_path.?});
+        try std.fs.cwd().makePath(config.maybe_fuzz_corpus_path.?);
+    }
     const snapshots_dir = "src/snapshots";
-    var file_count: usize = 0;
     var timer = std.time.Timer.start() catch unreachable;
+
+    // Stage 1: Collect work items
+    var work_list = WorkList.init(gpa);
+    defer {
+        // Clean up any remaining work items
+        for (work_list.items) |work_item| {
+            gpa.free(work_item.path);
+        }
+        work_list.deinit();
+    }
 
     if (snapshot_paths.items.len > 0) {
         for (snapshot_paths.items) |path| {
-            file_count += try processPath(gpa, path, maybe_fuzz_corpus_path);
+            try collectWorkItems(gpa, path, &work_list);
         }
     } else {
         // process all files in snapshots_dir
-        file_count = try processPath(gpa, snapshots_dir, maybe_fuzz_corpus_path);
+        try collectWorkItems(gpa, snapshots_dir, &work_list);
     }
+
+    const collect_duration_ms = timer.read() / std.time.ns_per_ms;
+    log("collected {d} work items in {d} ms", .{ work_list.items.len, collect_duration_ms });
+
+    // Stage 2: Process work items (in parallel or single-threaded)
+    const result = try processWorkItems(gpa, work_list, max_threads, debug_mode, config);
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
 
-    std.log.info("processed {d} snapshots in {d} ms.", .{ file_count, duration_ms });
+    std.log.info(
+        "collected {d} items in {d} ms, processed {d} snapshots in {d} ms.",
+        .{ work_list.items.len, collect_duration_ms, result.success, duration_ms },
+    );
 }
 
-fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !usize {
-    var processed_count: usize = 0;
+/// Check if a file has a valid snapshot extension
+fn isSnapshotFile(path: []const u8) bool {
+    return std.mem.endsWith(u8, path, ".md");
+}
 
-    const canonical_path = std.fs.cwd().realpathAlloc(gpa, path) catch |err| {
-        log("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
-        return 0;
+fn isMultiFileSnapshot(path: []const u8) bool {
+    return std.mem.endsWith(u8, path, "_package") or
+        std.mem.endsWith(u8, path, "_platform") or
+        std.mem.endsWith(u8, path, "_app");
+}
+
+fn getMultiFileSnapshotType(path: []const u8) NodeType {
+    if (std.mem.endsWith(u8, path, "_package")) return .package;
+    if (std.mem.endsWith(u8, path, "_platform")) return .platform;
+    if (std.mem.endsWith(u8, path, "_app")) return .app;
+    return .file; // fallback, shouldn't happen if isMultiFileSnapshot was checked first
+}
+
+fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, generate_html: bool) !void {
+    log("Processing multi-file snapshot directory: {s}", .{dir_path});
+
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+        warn("Failed to open directory {s}: {}", .{ dir_path, err });
+        return;
     };
-    defer gpa.free(canonical_path);
+    defer dir.close();
 
-    const stat = std.fs.cwd().statFile(canonical_path) catch |err| {
-        log("failed to stat path '{s}': {s}", .{ canonical_path, @errorName(err) });
-        return 0;
-    };
-
-    if (stat.kind == .directory) {
-        var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
-        defer dir.close();
-
-        var dir_iterator = dir.iterate();
-        while (try dir_iterator.next()) |entry| {
-
-            // Skip hidden files and special directories
-            if (entry.name[0] == '.') continue;
-
-            const full_path = try std.fs.path.join(gpa, &[_][]const u8{ canonical_path, entry.name });
-            defer gpa.free(full_path);
-
-            if (entry.kind == .directory) {
-                processed_count += try processPath(gpa, full_path, maybe_fuzz_corpus_path);
-            } else if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".txt")) {
-                if (try processSnapshotFile(gpa, full_path, maybe_fuzz_corpus_path)) {
-                    processed_count += 1;
-                }
-            }
+    // First, collect EXPECTED sections from existing .md files
+    var expected_sections = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        var iter = expected_sections.iterator();
+        while (iter.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
         }
-    } else if (stat.kind == .file) {
-        if (std.mem.endsWith(u8, canonical_path, ".txt")) {
-            if (try processSnapshotFile(gpa, canonical_path, maybe_fuzz_corpus_path)) {
-                processed_count += 1;
-            }
+        expected_sections.deinit();
+    }
+
+    var iterator = dir.iterate();
+    while (try iterator.next()) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
+            const full_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
+            defer allocator.free(full_path);
+
+            if (std.fs.cwd().readFileAlloc(allocator, full_path, 1024 * 1024)) |content| {
+                defer allocator.free(content);
+
+                // Extract EXPECTED section
+                const expected_header = "# EXPECTED\n";
+                if (std.mem.indexOf(u8, content, expected_header)) |start_idx| {
+                    const content_start = start_idx + expected_header.len;
+
+                    // Find the next section header
+                    var end_idx = content.len;
+                    var search_idx = content_start;
+                    while (search_idx < content.len - 2) {
+                        if (content[search_idx] == '\n' and
+                            content[search_idx + 1] == '#' and
+                            content[search_idx + 2] == ' ')
+                        {
+                            end_idx = search_idx + 1;
+                            break;
+                        }
+                        search_idx += 1;
+                    }
+
+                    const expected_section = std.mem.trim(u8, content[content_start..end_idx], " \t\r\n");
+                    try expected_sections.put(try allocator.dupe(u8, entry.name), try allocator.dupe(u8, expected_section));
+                }
+            } else |_| {}
         }
     }
 
-    return processed_count;
+    // Delete existing .md files
+    iterator = dir.iterate();
+    var files_to_delete = std.ArrayList([]u8).init(allocator);
+    defer {
+        for (files_to_delete.items) |file_path| {
+            allocator.free(file_path);
+        }
+        files_to_delete.deinit();
+    }
+
+    while (try iterator.next()) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
+            const file_path = try allocator.dupe(u8, entry.name);
+            try files_to_delete.append(file_path);
+        }
+    }
+
+    for (files_to_delete.items) |file_name| {
+        dir.deleteFile(file_name) catch |err| {
+            warn("Failed to delete {s}: {}", .{ file_name, err });
+        };
+    }
+
+    // Find all .roc files and generate snapshots for each
+    iterator = dir.iterate();
+    const snapshot_type = getMultiFileSnapshotType(dir_path);
+
+    while (try iterator.next()) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
+            const roc_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
+            defer allocator.free(roc_file_path);
+
+            // Generate snapshot file name (replace .roc with .md)
+            const base_name = entry.name[0 .. entry.name.len - 4]; // remove .roc
+            const snapshot_file_name = try std.fmt.allocPrint(allocator, "{s}.md", .{base_name});
+            defer allocator.free(snapshot_file_name);
+            const snapshot_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, snapshot_file_name });
+            defer allocator.free(snapshot_file_path);
+
+            // Read the .roc file content
+            const roc_content = std.fs.cwd().readFileAlloc(allocator, roc_file_path, 1024 * 1024) catch |err| {
+                warn("Failed to read {s}: {}", .{ roc_file_path, err });
+                continue;
+            };
+            defer allocator.free(roc_content);
+
+            // Create meta section
+            const type_name = switch (snapshot_type) {
+                .package => "package",
+                .platform => "platform",
+                .app => "app",
+                else => "file",
+            };
+            const meta = Meta{
+                .description = try std.fmt.allocPrint(allocator, "{s} module from {s}", .{ base_name, type_name }),
+                .node_type = snapshot_type,
+            };
+            defer allocator.free(meta.description);
+
+            // Get preserved EXPECTED section if it exists
+            const expected_content = expected_sections.get(snapshot_file_name);
+
+            // Process the .roc file as a snapshot
+            try processRocFileAsSnapshotWithExpected(allocator, snapshot_file_path, roc_content, meta, expected_content, generate_html);
+        }
+    }
+}
+
+fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_content: []const u8, meta: Meta, generate_html: bool) !void {
+    // Try to read existing EXPECTED section if the file exists
+    var expected_content: ?[]const u8 = null;
+    defer if (expected_content) |content| allocator.free(content);
+
+    if (std.fs.cwd().readFileAlloc(allocator, output_path, 1024 * 1024)) |existing_content| {
+        defer allocator.free(existing_content);
+
+        // Extract EXPECTED section manually since extractSections is defined later
+        const expected_header = "# EXPECTED\n";
+        if (std.mem.indexOf(u8, existing_content, expected_header)) |start_idx| {
+            const content_start = start_idx + expected_header.len;
+
+            // Find the next section header
+            var end_idx = existing_content.len;
+            var search_idx = content_start;
+            while (search_idx < existing_content.len - 2) {
+                if (existing_content[search_idx] == '\n' and
+                    existing_content[search_idx + 1] == '#' and
+                    existing_content[search_idx + 2] == ' ')
+                {
+                    end_idx = search_idx + 1;
+                    break;
+                }
+                search_idx += 1;
+            }
+
+            const expected_section = std.mem.trim(u8, existing_content[content_start..end_idx], " \t\r\n");
+            expected_content = try allocator.dupe(u8, expected_section);
+        }
+    } else |_| {
+        // File doesn't exist yet, that's fine
+    }
+
+    try processRocFileAsSnapshotWithExpected(allocator, output_path, roc_content, meta, expected_content, generate_html);
+}
+
+fn processSnapshotContent(allocator: Allocator, content: Content, output_path: []const u8, generate_html: bool) !void {
+    log("Generating snapshot for: {s}", .{output_path});
+
+    // Process the content through the compilation pipeline
+    var module_env = base.ModuleEnv.init(allocator);
+    defer module_env.deinit();
+
+    // Parse the source code based on node type
+    var parse_ast = switch (content.meta.node_type) {
+        .file => parse.parse(&module_env, content.source),
+        .header => parse.parseHeader(&module_env, content.source),
+        .expr => parse.parseExpr(&module_env, content.source),
+        .statement => parse.parseStatement(&module_env, content.source),
+        .package => parse.parse(&module_env, content.source),
+        .platform => parse.parse(&module_env, content.source),
+        .app => parse.parse(&module_env, content.source),
+    };
+    defer parse_ast.deinit(allocator);
+
+    parse_ast.store.emptyScratch();
+
+    // Extract module name from output path
+    const basename = std.fs.path.basename(output_path);
+    const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
+        basename[0..dot_idx]
+    else
+        basename;
+    var can_ir = CIR.init(&module_env, module_name);
+    defer can_ir.deinit();
+
+    var can = try canonicalize.init(&can_ir, &parse_ast, null);
+    defer can.deinit();
+
+    var maybe_expr_idx: ?CIR.Expr.Idx = null;
+
+    switch (content.meta.node_type) {
+        .file => try can.canonicalizeFile(),
+        .header => {
+            // TODO: implement canonicalize_header when available
+        },
+        .expr => {
+            const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+            maybe_expr_idx = try can.canonicalizeExpr(expr_idx);
+        },
+        .statement => {
+            // Manually track scratch statements because we aren't using the file entrypoint
+            const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+            const scratch_statements_start = can_ir.store.scratch_statements.top();
+            _ = try can.canonicalizeStatement(stmt_idx);
+            can_ir.all_statements = can_ir.store.statementSpanFrom(scratch_statements_start);
+        },
+        .package => try can.canonicalizeFile(),
+        .platform => try can.canonicalizeFile(),
+        .app => try can.canonicalizeFile(),
+    }
+
+    // Types
+    const empty_modules: []const *CIR = &.{};
+    var solver = try Solver.init(allocator, &can_ir.env.types, &can_ir, empty_modules);
+    defer solver.deinit();
+
+    if (maybe_expr_idx) |expr_idx| {
+        _ = try solver.checkExpr(expr_idx);
+    } else {
+        try solver.checkDefs();
+    }
+
+    // Cache round-trip validation - ensure ModuleCache serialization/deserialization works
+    {
+        // Generate original S-expression for comparison
+        var original_tree = SExprTree.init(allocator);
+        defer original_tree.deinit();
+        CIR.pushToSExprTree(&can_ir, null, &original_tree, content.source);
+
+        var original_sexpr = std.ArrayList(u8).init(allocator);
+        defer original_sexpr.deinit();
+        original_tree.toStringPretty(original_sexpr.writer().any());
+
+        // Create and serialize MmapCache
+        const cache_data = try cache.CacheModule.create(allocator, &module_env, &can_ir, 0, 0);
+        defer allocator.free(cache_data);
+
+        // Deserialize back
+        var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
+
+        // Restore ModuleEnv and CIR
+        const restored = try loaded_cache.restore(allocator, module_name);
+        var restored_module_env = restored.module_env;
+        defer restored_module_env.deinit();
+        var restored_cir = restored.cir;
+        defer restored_cir.deinit();
+
+        // Fix env pointer after struct move
+        restored_cir.env = &restored_module_env;
+
+        // Generate S-expression from restored CIR
+        var restored_tree = SExprTree.init(allocator);
+        defer restored_tree.deinit();
+        CIR.pushToSExprTree(&restored_cir, null, &restored_tree, content.source);
+
+        var restored_sexpr = std.ArrayList(u8).init(allocator);
+        defer restored_sexpr.deinit();
+        restored_tree.toStringPretty(restored_sexpr.writer().any());
+
+        // Compare S-expressions - crash if they don't match
+        if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
+            std.log.err("Cache round-trip validation failed for snapshot: {s}", .{output_path});
+            std.log.err("Original and restored CIR S-expressions don't match!", .{});
+            std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
+            std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
+            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
+            return error.CacheRoundTripValidationFailed;
+        }
+    }
+
+    // Buffer all output in memory before writing files
+    var md_buffer = std.ArrayList(u8).init(allocator);
+    defer md_buffer.deinit();
+
+    var html_buffer = if (generate_html) std.ArrayList(u8).init(allocator) else null;
+    defer if (html_buffer) |*buf| buf.deinit();
+
+    var output = DualOutput.init(allocator, &md_buffer, if (html_buffer) |*buf| buf else null);
+
+    // Generate HTML wrapper
+    try generateHtmlWrapper(&output, &content);
+
+    // Generate all sections
+    try generateMetaSection(&output, &content);
+    try generateSourceSection(&output, &content);
+    try generateExpectedSection(&output, &content);
+    try generateProblemsSection(&output, &parse_ast, &can_ir, &solver, &content, output_path, &module_env);
+    try generateTokensSection(&output, &parse_ast, &content, &module_env);
+    try generateParseSection(&output, &content, &parse_ast, &module_env);
+    try generateFormattedSection(&output, &content, &parse_ast);
+    try generateCanonicalizeSection(&output, &content, &can_ir, maybe_expr_idx);
+    try generateTypesSection(&output, &content, &can_ir, maybe_expr_idx);
+
+    try generateHtmlClosing(&output);
+
+    // Write the markdown file
+    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        warn("Failed to create {s}: {}", .{ output_path, err });
+        return;
+    };
+    defer md_file.close();
+
+    try md_file.writeAll(md_buffer.items);
+
+    if (html_buffer) |*buf| {
+        writeHtmlFile(allocator, output_path, buf) catch |err| {
+            warn("Failed to write HTML file for {s}: {}", .{ output_path, err });
+        };
+    }
+}
+
+fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []const u8, roc_content: []const u8, meta: Meta, expected_content: ?[]const u8, generate_html: bool) !void {
+    // Create content structure
+    const content = Content{
+        .meta = meta,
+        .source = roc_content,
+        .expected = expected_content,
+        .formatted = null,
+        .has_canonicalize = true,
+    };
+
+    try processSnapshotContent(allocator, content, output_path, generate_html);
+}
+
+const Config = struct {
+    maybe_fuzz_corpus_path: ?[]const u8,
+    generate_html: bool,
+};
+
+const ProcessResult = struct {
+    success: usize,
+    failed: usize,
+};
+
+const WorkItem = struct {
+    path: []const u8,
+    kind: enum {
+        snapshot_file,
+        multi_file_snapshot,
+    },
+};
+
+const WorkList = std.ArrayList(WorkItem);
+
+const ProcessContext = struct {
+    work_list: *WorkList,
+    config: Config,
+    success_count: parallel.AtomicUsize,
+    failed_count: parallel.AtomicUsize,
+};
+
+/// Worker function that processes a single work item
+fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usize) void {
+    const work_item = context.work_list.items[item_id];
+    const success = switch (work_item.kind) {
+        .snapshot_file => processSnapshotFile(allocator, work_item.path, context.config.maybe_fuzz_corpus_path, context.config.generate_html) catch false,
+        .multi_file_snapshot => blk: {
+            processMultiFileSnapshot(allocator, work_item.path, context.config.generate_html) catch {
+                break :blk false;
+            };
+            break :blk true;
+        },
+    };
+
+    if (success) {
+        _ = context.success_count.fetchAdd(1, .monotonic);
+    } else {
+        _ = context.failed_count.fetchAdd(1, .monotonic);
+    }
+}
+
+/// Stage 2: Process work items in parallel using the parallel utility
+fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, debug: bool, config: Config) !ProcessResult {
+    if (work_list.items.len == 0) {
+        return ProcessResult{ .success = 0, .failed = 0 };
+    }
+
+    var context = ProcessContext{
+        .work_list = @constCast(&work_list),
+        .config = config,
+        .success_count = parallel.AtomicUsize.init(0),
+        .failed_count = parallel.AtomicUsize.init(0),
+    };
+
+    // Use per-thread arena allocators for snapshot processing
+    const options = parallel.ProcessOptions{
+        .max_threads = max_threads,
+        .use_per_thread_arenas = !debug,
+    };
+
+    try parallel.process(
+        ProcessContext,
+        &context,
+        processWorkItem,
+        gpa,
+        work_list.items.len,
+        options,
+    );
+
+    return ProcessResult{
+        .success = context.success_count.load(.monotonic),
+        .failed = context.failed_count.load(.monotonic),
+    };
+}
+
+/// Stage 1: Walk directory tree and collect work items
+fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !void {
+    const canonical_path = std.fs.cwd().realpathAlloc(gpa, path) catch |err| {
+        std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
+        return;
+    };
+    defer gpa.free(canonical_path);
+
+    // Try to open as directory first
+    if (std.fs.cwd().openDir(canonical_path, .{ .iterate = true })) |dir_handle| {
+        var dir = dir_handle;
+        defer dir.close();
+
+        // It's a directory
+        if (isMultiFileSnapshot(canonical_path)) {
+            const path_copy = try gpa.dupe(u8, canonical_path);
+            try work_list.append(WorkItem{
+                .path = path_copy,
+                .kind = .multi_file_snapshot,
+            });
+        } else {
+            var dir_iterator = dir.iterate();
+            while (try dir_iterator.next()) |entry| {
+                // Skip hidden files and special directories
+                if (entry.name[0] == '.') continue;
+
+                const full_path = try std.fs.path.join(gpa, &[_][]const u8{ canonical_path, entry.name });
+                defer gpa.free(full_path);
+
+                if (entry.kind == .directory) {
+                    try collectWorkItems(gpa, full_path, work_list);
+                } else if (entry.kind == .file and isSnapshotFile(entry.name)) {
+                    const path_copy = try gpa.dupe(u8, full_path);
+                    try work_list.append(WorkItem{
+                        .path = path_copy,
+                        .kind = .snapshot_file,
+                    });
+                }
+            }
+        }
+    } else |dir_err| {
+        // Not a directory, try as file
+        if (dir_err == error.NotDir) {
+            if (isSnapshotFile(canonical_path)) {
+                const path_copy = try gpa.dupe(u8, canonical_path);
+                try work_list.append(WorkItem{
+                    .path = path_copy,
+                    .kind = .snapshot_file,
+                });
+            } else {
+                std.log.err("file '{s}' is not a snapshot file (must end with .md)", .{canonical_path});
+            }
+        } else {
+            std.log.err("failed to access path '{s}': {s}", .{ canonical_path, @errorName(dir_err) });
+        }
+    }
 }
 
 /// Represents the different sections of a snapshot file.
 const Section = union(enum) {
     meta,
     source,
+    expected,
     formatted,
     parse,
     canonicalize,
     tokens,
     problems,
+    types,
 
-    pub const META = "~~~META";
-    pub const SOURCE = "~~~SOURCE";
-    pub const FORMATTED = "~~~FORMATTED";
-    pub const PARSE = "~~~PARSE";
-    pub const CANONICALIZE = "~~~CANONICALIZE";
-    pub const TOKENS = "~~~TOKENS";
-    pub const PROBLEMS = "~~~PROBLEMS";
+    pub const META = "# META\n~~~ini\n";
+    pub const SOURCE = "# SOURCE\n~~~roc\n";
+    pub const EXPECTED = "# EXPECTED\n";
+    pub const FORMATTED = "# FORMATTED\n~~~roc\n";
+    pub const PARSE = "# PARSE\n~~~clojure\n";
+    pub const CANONICALIZE = "# CANONICALIZE\n~~~clojure\n";
+    pub const TOKENS = "# TOKENS\n~~~zig\n";
+    pub const PROBLEMS = "# PROBLEMS\n";
+    pub const TYPES = "# TYPES\n~~~clojure\n";
 
-    fn next(self: Section) ?Section {
-        return switch (self) {
-            .meta => .source,
-            .source => .problems,
-            .problems => .formatted,
-            .formatted => .tokens,
-            .tokens => .parse,
-            .parse => .canonicalize,
-            .canonicalize => .null,
-        };
-    }
+    pub const SECTION_END = "~~~\n";
 
     fn fromString(str: []const u8) ?Section {
-        if (std.mem.eql(u8, str, META)) return .meta;
-        if (std.mem.eql(u8, str, SOURCE)) return .source;
-        if (std.mem.eql(u8, str, FORMATTED)) return .formatted;
-        if (std.mem.eql(u8, str, PARSE)) return .parse;
-        if (std.mem.eql(u8, str, CANONICALIZE)) return .canonicalize;
-        if (std.mem.eql(u8, str, TOKENS)) return .tokens;
-        if (std.mem.eql(u8, str, PROBLEMS)) return .problems;
+        if (std.mem.startsWith(u8, str, META)) return .meta;
+        if (std.mem.startsWith(u8, str, SOURCE)) return .source;
+        if (std.mem.startsWith(u8, str, EXPECTED)) return .expected;
+        if (std.mem.startsWith(u8, str, FORMATTED)) return .formatted;
+        if (std.mem.startsWith(u8, str, PARSE)) return .parse;
+        if (std.mem.startsWith(u8, str, CANONICALIZE)) return .canonicalize;
+        if (std.mem.startsWith(u8, str, TYPES)) return .types;
+        if (std.mem.startsWith(u8, str, TOKENS)) return .tokens;
+        if (std.mem.startsWith(u8, str, PROBLEMS)) return .problems;
         return null;
     }
 
@@ -195,12 +749,13 @@ const Section = union(enum) {
         return switch (self) {
             .meta => META,
             .source => SOURCE,
+            .expected => EXPECTED,
             .formatted => FORMATTED,
             .parse => PARSE,
             .canonicalize => CANONICALIZE,
             .tokens => TOKENS,
             .problems => PROBLEMS,
-            .None => "",
+            .types => TYPES,
         };
     }
 
@@ -229,17 +784,26 @@ pub const NodeType = enum {
     header,
     expr,
     statement,
+    package,
+    platform,
+    app,
 
-    const HEADER = "header";
-    const EXPR = "expr";
-    const STMT = "statement";
-    const FILE = "file";
+    pub const HEADER = "header";
+    pub const EXPR = "expr";
+    pub const STMT = "statement";
+    pub const FILE = "file";
+    pub const PACKAGE = "package";
+    pub const PLATFORM = "platform";
+    pub const APP = "app";
 
-    fn fromString(ty: []const u8) Error!NodeType {
-        if (std.mem.eql(u8, ty, HEADER)) return .header;
-        if (std.mem.eql(u8, ty, EXPR)) return .expr;
-        if (std.mem.eql(u8, ty, STMT)) return .statement;
-        if (std.mem.eql(u8, ty, FILE)) return .file;
+    fn fromString(str: []const u8) !NodeType {
+        if (std.mem.eql(u8, str, HEADER)) return .header;
+        if (std.mem.eql(u8, str, EXPR)) return .expr;
+        if (std.mem.eql(u8, str, STMT)) return .statement;
+        if (std.mem.eql(u8, str, FILE)) return .file;
+        if (std.mem.eql(u8, str, PACKAGE)) return .package;
+        if (std.mem.eql(u8, str, PLATFORM)) return .platform;
+        if (std.mem.eql(u8, str, APP)) return .app;
         return Error.InvalidNodeType;
     }
 
@@ -249,6 +813,9 @@ pub const NodeType = enum {
             .header => "header",
             .expr => "expr",
             .statement => "statement",
+            .package => "package",
+            .platform => "platform",
+            .app => "app",
         };
     }
 };
@@ -339,13 +906,15 @@ const Meta = struct {
 const Content = struct {
     meta: Meta,
     source: []const u8,
+    expected: ?[]const u8,
     formatted: ?[]const u8,
     has_canonicalize: bool,
 
-    fn init(meta: Meta, source: []const u8, formatted: ?[]const u8, has_canonicalize: bool) Content {
+    fn init(meta: Meta, source: []const u8, expected: ?[]const u8, formatted: ?[]const u8, has_canonicalize: bool) Content {
         return .{
             .meta = meta,
             .source = source,
+            .expected = expected,
             .formatted = formatted,
             .has_canonicalize = has_canonicalize,
         };
@@ -353,6 +922,7 @@ const Content = struct {
 
     fn from_ranges(ranges: std.AutoHashMap(Section, Section.Range), content: []const u8) Error!Content {
         var source: []const u8 = undefined;
+        var expected: ?[]const u8 = undefined;
         var formatted: ?[]const u8 = undefined;
         var has_canonicalize: bool = false;
 
@@ -360,6 +930,12 @@ const Content = struct {
             source = value.extract(content);
         } else {
             return Error.MissingSnapshotSource;
+        }
+
+        if (ranges.get(.expected)) |value| {
+            expected = value.extract(content);
+        } else {
+            expected = null;
         }
 
         if (ranges.get(.formatted)) |value| {
@@ -378,6 +954,7 @@ const Content = struct {
             return Content.init(
                 meta,
                 source,
+                expected,
                 formatted,
                 has_canonicalize,
             );
@@ -385,311 +962,786 @@ const Content = struct {
             return Error.MissingSnapshotHeader;
         }
     }
+};
 
-    pub fn format(self: Content, comptime fmt_str: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
-        _ = fmt_str;
-        try writer.writeAll("SNAPSHOT CONTENTS\n");
-        try writer.writeAll("META:\n");
-        try self.meta.format(writer);
-        try writer.writeAll("\n---\n");
-        try writer.print("SOURCE:\n{s}\n---\n", .{self.source});
-        if (self.formatted) |formatted| {
-            try writer.print("FORMATTED:\n{s}\n---\n", .{formatted});
-        } else {
-            try writer.print("FORMATTED: null\n", .{});
+const Error = error{ MissingSnapshotHeader, MissingSnapshotSource, InvalidNodeType, BadSectionHeader };
+
+/// Dual output writers for markdown and HTML generation
+const DualOutput = struct {
+    md_writer: std.ArrayList(u8).Writer,
+    html_writer: ?std.ArrayList(u8).Writer,
+    gpa: Allocator,
+
+    fn init(gpa: Allocator, md_buffer: *std.ArrayList(u8), html_buffer: ?*std.ArrayList(u8)) DualOutput {
+        return .{
+            .md_writer = md_buffer.writer(),
+            .html_writer = if (html_buffer) |buf| buf.writer() else null,
+            .gpa = gpa,
+        };
+    }
+
+    fn begin_section(self: *DualOutput, name: []const u8) !void {
+        try self.md_writer.print("# {s}\n", .{name});
+        if (self.html_writer) |writer| {
+            try writer.print(
+                \\        <div class="section" data-section="{s}">
+                \\            <div class="section-content">
+            , .{name});
         }
+    }
+
+    fn end_section(self: *DualOutput) !void {
+        if (self.html_writer) |writer| {
+            try writer.writeAll(
+                \\            </div>
+                \\        </div>
+            );
+        }
+    }
+
+    fn begin_code_block(self: *DualOutput, language: []const u8) !void {
+        try self.md_writer.print("~~~{s}\n", .{language});
+    }
+
+    fn end_code_block(self: *DualOutput) !void {
+        try self.md_writer.writeAll("~~~\n");
     }
 };
 
-const Error = error{
-    MissingSnapshotHeader,
-    MissingSnapshotSource,
-    InvalidNodeType,
-};
+/// Helper function to escape HTML characters
+fn escapeHtmlChar(writer: anytype, char: u8) !void {
+    switch (char) {
+        '<' => try writer.writeAll("&lt;"),
+        '>' => try writer.writeAll("&gt;"),
+        '&' => try writer.writeAll("&amp;"),
+        '"' => try writer.writeAll("&quot;"),
+        '\'' => try writer.writeAll("&#x27;"),
+        else => try writer.writeByte(char),
+    }
+}
 
-fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !bool {
+/// Generate META section for both markdown and HTML
+fn generateMetaSection(output: *DualOutput, content: *const Content) !void {
+    try output.begin_section("META");
+    try output.begin_code_block("ini");
+    try content.meta.format(output.md_writer);
+    try output.md_writer.writeAll("\n");
 
+    // HTML META section
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <div class="meta-info">
+            \\                    <p><strong>Description:</strong>
+        );
+        try writer.writeAll(content.meta.description);
+        try writer.writeAll("</p>\n                    <p><strong>Type:</strong> ");
+        try writer.writeAll(content.meta.node_type.toString());
+        try writer.writeAll(
+            \\</p>
+            \\                </div>
+            \\
+        );
+    }
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate SOURCE section for both markdown and HTML
+fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
+    try output.begin_section("SOURCE");
+    try output.begin_code_block("roc");
+    try output.md_writer.writeAll(content.source);
+    if (content.source.len == 0 or content.source[content.source.len - 1] != '\n') {
+        try output.md_writer.writeAll("\n");
+    }
+
+    // HTML SOURCE section - encode source as JavaScript string
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <div class="source-code" id="source-display">
+            \\                </div>
+            \\                <script>
+            \\                window.rocSourceCode =
+        );
+
+        // Escape the source code for JavaScript string literal
+        try writer.writeAll("`");
+        for (content.source) |char| {
+            switch (char) {
+                '`' => try writer.writeAll("\\`"),
+                '\\' => try writer.writeAll("\\\\"),
+                '$' => try writer.writeAll("\\$"),
+                '\n' => try writer.writeAll("\\n"),
+                '\r' => try writer.writeAll("\\r"),
+                '\t' => try writer.writeAll("\\t"),
+                else => try writer.writeByte(char),
+            }
+        }
+        try writer.writeAll(
+            \\`;
+            \\      </script>
+            \\
+        );
+    }
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate EXPECTED section for both markdown and HTML
+fn generateExpectedSection(output: *DualOutput, content: *const Content) !void {
+    try output.begin_section("EXPECTED");
+
+    if (content.expected) |expected| {
+        try output.md_writer.writeAll(expected);
+        try output.md_writer.writeByte('\n');
+
+        // HTML EXPECTED section
+        if (output.html_writer) |writer| {
+            try writer.writeAll(
+                \\                <div class="expected">
+            );
+
+            // For HTML, escape the expected content
+            for (expected) |char| {
+                switch (char) {
+                    '<' => try writer.writeAll("&lt;"),
+                    '>' => try writer.writeAll("&gt;"),
+                    '&' => try writer.writeAll("&amp;"),
+                    '"' => try writer.writeAll("&quot;"),
+                    '\'' => try writer.writeAll("&#39;"),
+                    else => try writer.writeByte(char),
+                }
+            }
+
+            try writer.writeAll(
+                \\
+                \\                </div>
+                \\
+            );
+        }
+    } else {
+        try output.md_writer.writeAll("NIL\n");
+
+        if (output.html_writer) |writer| {
+            try writer.writeAll(
+                \\                <div class="expected">
+                \\                    <p>NIL</p>
+                \\                </div>
+                \\
+            );
+        }
+    }
+
+    try output.end_section();
+}
+
+/// Generate PROBLEMS section for both markdown and HTML
+fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, solver: *Solver, content: *const Content, snapshot_path: []const u8, module_env: *base.ModuleEnv) !void {
+    try output.begin_section("PROBLEMS");
+
+    // HTML PROBLEMS section
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <div class="problems">
+        );
+    }
+
+    var tokenize_problems: usize = 0;
+    var parser_problems: usize = 0;
+    var canonicalize_problems: usize = 0;
+    var check_types_problem: usize = 0;
+
+    // Tokenize Diagnostics
+    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
+        tokenize_problems += 1;
+        var report: reporting.Report = parse_ast.tokenizeDiagnosticToReport(diagnostic, output.gpa) catch |err| {
+            try output.md_writer.print("Error creating tokenize report: {}\n", .{err});
+            if (output.html_writer) |writer| {
+                try writer.print("                    <p>Error creating tokenize report: {}</p>\n", .{err});
+            }
+            continue;
+        };
+        defer report.deinit();
+
+        report.render(output.md_writer.any(), .markdown) catch |err| {
+            try output.md_writer.print("Error rendering report: {}\n", .{err});
+        };
+
+        if (output.html_writer) |writer| {
+            try writer.writeAll("                    <div class=\"problem\">");
+            report.render(writer.any(), .markdown) catch |err| {
+                try writer.print("Error rendering report: {}", .{err});
+            };
+            try writer.writeAll("</div>\n");
+        }
+    }
+
+    // Parser Diagnostics
+    for (parse_ast.parse_diagnostics.items) |diagnostic| {
+        parser_problems += 1;
+        var report: reporting.Report = parse_ast.parseDiagnosticToReport(module_env, diagnostic, output.gpa, snapshot_path) catch |err| {
+            try output.md_writer.print("Error creating parse report: {}\n", .{err});
+            if (output.html_writer) |writer| {
+                try writer.print("                    <p>Error creating parse report: {}</p>\n", .{err});
+            }
+            continue;
+        };
+        defer report.deinit();
+
+        report.render(output.md_writer.any(), .markdown) catch |err| {
+            try output.md_writer.print("Error rendering report: {}\n", .{err});
+        };
+
+        if (output.html_writer) |writer| {
+            try writer.writeAll("                    <div class=\"problem\">");
+            report.render(writer.any(), .markdown) catch |err| {
+                try writer.print("Error rendering report: {}", .{err});
+            };
+            try writer.writeAll("</div>\n");
+        }
+    }
+
+    // Canonicalization Diagnostics
+    const diagnostics = can_ir.getDiagnostics();
+    defer output.gpa.free(diagnostics);
+    for (diagnostics) |diagnostic| {
+        canonicalize_problems += 1;
+        var report: reporting.Report = can_ir.diagnosticToReport(diagnostic, output.gpa, content.source, snapshot_path) catch |err| {
+            try output.md_writer.print("Error creating canonicalization report: {}\n", .{err});
+            if (output.html_writer) |writer| {
+                try writer.print("                    <p>Error creating canonicalization report: {}</p>\n", .{err});
+            }
+            continue;
+        };
+        defer report.deinit();
+
+        report.render(output.md_writer.any(), .markdown) catch |err| {
+            try output.md_writer.print("Error rendering report: {}\n", .{err});
+        };
+
+        if (output.html_writer) |writer| {
+            try writer.writeAll("                    <div class=\"problem\">");
+            report.render(writer.any(), .markdown) catch |err| {
+                try writer.print("Error rendering report: {}", .{err});
+            };
+            try writer.writeAll("</div>\n");
+        }
+    }
+
+    // Check Types Problems
+    var problem_buf = std.ArrayList(u8).init(output.gpa);
+    defer problem_buf.deinit();
+
+    var problems_itr = solver.problems.problems.iterIndices();
+    while (problems_itr.next()) |problem_idx| {
+        check_types_problem += 1;
+        const problem = solver.problems.problems.get(problem_idx);
+        const empty_modules: []const *CIR = &.{};
+        var report_builder = types_problem_mod.ReportBuilder.init(
+            output.gpa,
+            module_env,
+            can_ir,
+            &solver.snapshots,
+            content.source,
+            snapshot_path,
+            empty_modules,
+        );
+        defer report_builder.deinit();
+
+        var report: reporting.Report = report_builder.build(problem) catch |err| {
+            try output.md_writer.print("Error creating type checking report: {}\n", .{err});
+            if (output.html_writer) |writer| {
+                try writer.print("                    <p>Error creating type checking report: {}</p>\n", .{err});
+            }
+            continue;
+        };
+        defer report.deinit();
+
+        report.render(output.md_writer.any(), .markdown) catch |err| {
+            try output.md_writer.print("Error rendering report: {}\n", .{err});
+        };
+
+        if (output.html_writer) |writer| {
+            try writer.writeAll("                    <div class=\"problem\">");
+            report.render(writer.any(), .markdown) catch |err| {
+                try writer.print("Error rendering report: {}", .{err});
+            };
+            try writer.writeAll("</div>\n");
+        }
+    }
+
+    const nil_problems = tokenize_problems == 0 and parser_problems == 0 and canonicalize_problems == 0 and check_types_problem == 0;
+
+    if (nil_problems) {
+        try output.md_writer.writeAll("NIL\n");
+        if (output.html_writer) |writer| {
+            try writer.writeAll("                    <p>NIL</p>\n");
+        }
+        log("reported NIL problems", .{});
+    } else {
+        log("reported {} token problems", .{tokenize_problems});
+        log("reported {} parser problems", .{parser_problems});
+        log("reported {} canonicalization problems", .{canonicalize_problems});
+        log("reported {} type problems", .{check_types_problem});
+    }
+
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                </div>
+            \\
+        );
+    }
+
+    try output.end_section();
+}
+
+/// Generate TOKENS section for both markdown and HTML
+fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const Content, module_env: *base.ModuleEnv) !void {
+    try output.begin_section("TOKENS");
+    try output.begin_code_block("zig");
+
+    // HTML TOKENS section - encode tokens as JavaScript array
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <div class="token-list" id="tokens-display">
+            \\                </div>
+            \\                <script>
+            \\                window.rocTokens = [
+        );
+    }
+
+    var tokenizedBuffer = parse_ast.tokens;
+    const tokens = tokenizedBuffer.tokens.items(.tag);
+    for (tokens, 0..) |tok, i| {
+        const region = tokenizedBuffer.resolve(@intCast(i));
+        const info = try module_env.calcRegionInfo(content.source, region.start.offset, region.end.offset);
+
+        // Markdown token output
+        try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
+            @tagName(tok),
+            // add one to display numbers instead of index
+            info.start_line_idx + 1,
+            info.start_col_idx + 1,
+            info.end_line_idx + 1,
+            info.end_col_idx + 1,
+        });
+
+        if (i + 1 < tokenizedBuffer.tokens.len) {
+            const next_region = tokenizedBuffer.resolve(@intCast(i + 1));
+            if (source_contains_newline_in_range(parse_ast.source, region.end.offset, next_region.start.offset)) {
+                try output.md_writer.writeAll("\n");
+            }
+        }
+
+        // HTML token output as JavaScript array element: [token_kind_str, start_byte, end_byte]
+        if (output.html_writer) |writer| {
+            try writer.print("                    [\"{s}\", {d}, {d}]", .{
+                @tagName(tok),
+                region.start.offset,
+                region.end.offset,
+            });
+
+            // Add comma except for last token
+            if (i < tokens.len - 1) {
+                try writer.writeAll(",");
+            }
+        }
+
+        if (output.html_writer) |writer| {
+            try writer.writeAll(" ");
+        }
+    }
+
+    try output.md_writer.writeAll("\n");
+
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                ];
+            \\                </script>
+            \\
+        );
+    }
+    try output.end_code_block();
+    try output.end_section();
+}
+
+fn source_contains_newline_in_range(source: []const u8, start: usize, end: usize) bool {
+    for (source[start..end]) |c| {
+        if (c == '\n') return true;
+    }
+    return false;
+}
+
+/// Generate PARSE2 section using SExprTree for both markdown and HTML
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *base.ModuleEnv) !void {
+    var tree = SExprTree.init(output.gpa);
+    defer tree.deinit();
+
+    // Generate SExprTree node based on content type
+    switch (content.meta.node_type) {
+        .file => {
+            const file = parse_ast.store.getFile();
+            file.pushToSExprTree(env, parse_ast, &tree);
+        },
+        .header => {
+            const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
+            header.pushToSExprTree(env, parse_ast, &tree);
+        },
+        .expr => {
+            const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
+            expr.pushToSExprTree(env, parse_ast, &tree);
+        },
+        .statement => {
+            const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
+            stmt.pushToSExprTree(env, parse_ast, &tree);
+        },
+        .package => {
+            const file = parse_ast.store.getFile();
+            file.pushToSExprTree(env, parse_ast, &tree);
+        },
+        .platform => {
+            const file = parse_ast.store.getFile();
+            file.pushToSExprTree(env, parse_ast, &tree);
+        },
+        .app => {
+            const file = parse_ast.store.getFile();
+            file.pushToSExprTree(env, parse_ast, &tree);
+        },
+    }
+
+    // Only generate section if we have content on the stack
+    if (tree.stack.items.len > 0) {
+        try output.begin_section("PARSE");
+        try output.begin_code_block("clojure");
+
+        tree.toStringPretty(output.md_writer.any());
+        try output.md_writer.writeAll("\n");
+
+        // Generate HTML output with syntax highlighting
+        if (output.html_writer) |writer| {
+            try writer.writeAll(
+                \\                <pre class="ast-parse">
+            );
+
+            tree.toHtml(writer.any());
+
+            try writer.writeAll(
+                \\</pre>
+                \\
+            );
+        }
+
+        try output.end_code_block();
+        try output.end_section();
+    }
+}
+
+/// Generate FORMATTED section for both markdown and HTML
+fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_ast: *AST) !void {
+    var formatted = std.ArrayList(u8).init(output.gpa);
+    defer formatted.deinit();
+
+    switch (content.meta.node_type) {
+        .file => {
+            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+        },
+        .header => {
+            try fmt.formatHeader(parse_ast.*, formatted.writer().any());
+        },
+        .expr => {
+            try fmt.formatExpr(parse_ast.*, formatted.writer().any());
+        },
+        .statement => {
+            try fmt.formatStatement(parse_ast.*, formatted.writer().any());
+        },
+        .package => {
+            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+        },
+        .platform => {
+            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+        },
+        .app => {
+            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+        },
+    }
+
+    const is_changed = !std.mem.eql(u8, formatted.items, content.source);
+    const display_content = if (is_changed) formatted.items else "NO CHANGE";
+
+    try output.begin_section("FORMATTED");
+    try output.begin_code_block("roc");
+
+    try output.md_writer.writeAll(display_content);
+    try output.md_writer.writeAll("\n");
+
+    // HTML FORMATTED section
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <pre>
+        );
+
+        // Escape HTML in formatted content
+        for (display_content) |char| {
+            try escapeHtmlChar(writer, char);
+        }
+
+        try writer.writeAll(
+            \\</pre>
+            \\
+        );
+    }
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate CANONICALIZE section for both markdown and HTML
+fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+    var tree = SExprTree.init(output.gpa);
+    defer tree.deinit();
+    can_ir.pushToSExprTree(maybe_expr_idx, &tree, content.source);
+
+    try output.begin_section("CANONICALIZE");
+    try output.begin_code_block("clojure");
+
+    tree.toStringPretty(output.md_writer.any());
+    try output.md_writer.writeAll("\n");
+
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <pre>
+        );
+        tree.toHtml(writer.any());
+        try writer.writeAll(
+            \\</pre>
+            \\
+        );
+    }
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate TYPES section for both markdown and HTML
+fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+    var tree = SExprTree.init(output.gpa);
+    defer tree.deinit();
+    try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree, content.source);
+
+    try output.begin_section("TYPES");
+    try output.begin_code_block("clojure");
+    tree.toStringPretty(output.md_writer.any());
+    try output.md_writer.writeAll("\n");
+
+    // HTML TYPES section
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <pre>
+        );
+        tree.toHtml(writer.any());
+        try writer.writeAll(
+            \\</pre>
+            \\
+        );
+    }
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate TYPES section displaying types store for both markdown and HTML
+/// This is used for debugging.
+fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *CIR) !void {
+    var solved = std.ArrayList(u8).init(output.gpa);
+    defer solved.deinit();
+
+    try types_mod.writers.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, can_ir.env);
+
+    // Markdown TYPES section
+    try output.md_writer.writeAll(Section.TYPES);
+    try output.md_writer.writeAll(solved.items);
+    try output.md_writer.writeAll("\n");
+    try output.md_writer.writeAll(Section.SECTION_END[0 .. Section.SECTION_END.len - 1]);
+
+    // HTML TYPES section
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\        <div class="section">
+            \\            <div class="section-header">TYPES</div>
+            \\            <div class="section-content">
+            \\                <pre>
+        );
+
+        // Escape HTML in types content
+        for (solved.items) |char| {
+            try escapeHtmlChar(writer, char);
+        }
+
+        try writer.writeAll(
+            \\</pre>
+            \\            </div>
+            \\        </div>
+            \\
+        );
+    }
+}
+
+/// Generate HTML document structure and JavaScript
+fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
+    const writer = output.html_writer orelse return;
+
+    // Write HTML document structure
+    try writer.writeAll(
+        \\<!DOCTYPE html>
+        \\<html lang="en">
+        \\<head>
+        \\    <meta charset="UTF-8">
+        \\    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        \\    <title>Roc Snapshot:
+    );
+    try writer.writeAll(content.meta.description);
+    try writer.writeAll(
+        \\</title>
+        \\    <style>
+        \\
+    );
+    try writer.writeAll(@embedFile("snapshot.css"));
+    try writer.writeAll(
+        \\    </style>
+        \\</head>
+        \\<body>
+        \\    <!-- Two-column layout (main and only view) -->
+        \\    <div class="two-column-layout">
+        \\        <div class="left-pane">
+        \\            <div class="pane-header">
+        \\                <select class="section-dropdown" id="left-selector" onchange="switchLeftPane()">
+        \\                    <option value="META">META</option>
+        \\                    <option value="SOURCE" selected>SOURCE</option>
+        \\                </select>
+        \\            </div>
+        \\            <div class="pane-content" id="left-pane-content">
+        \\                <!-- Left pane content will be shown here -->
+        \\            </div>
+        \\        </div>
+        \\        <div class="right-pane">
+        \\            <div class="pane-header">
+        \\                <select class="section-dropdown" id="right-selector" onchange="switchRightPane()">
+        \\                    <option value="TOKENS" selected>TOKENS</option>
+        \\                    <option value="PARSE">PARSE</option>
+        \\                    <option value="FORMATTED">FORMATTED</option>
+        \\                    <option value="CANONICALIZE">CANONICALIZE</option>
+        \\                    <option value="TYPES">TYPES</option>
+        \\                </select>
+        \\            </div>
+        \\            <div class="pane-content" id="right-pane-content">
+        \\                <!-- Right pane content will be shown here -->
+        \\            </div>
+        \\        </div>
+        \\    </div>
+        \\
+        \\    <!-- Hidden sections for data storage -->
+        \\    <div id="data-sections" style="display: none;">
+    );
+}
+
+/// Generate HTML closing tags and JavaScript
+fn generateHtmlClosing(output: *DualOutput) !void {
+    const writer = output.html_writer orelse return;
+
+    // Close data sections container and add JavaScript
+    try writer.writeAll(
+        \\    </div>
+        \\
+        \\    <script>
+    );
+    // Embed remaining snapshot.js directly into the HTML
+    try writer.writeAll(@embedFile("snapshot.js"));
+    try writer.writeAll(
+        \\    </script>
+        \\</body>
+        \\</html>
+        \\
+    );
+}
+
+/// Write HTML buffer to file
+fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ArrayList(u8)) !void {
+    // Convert .md path to .html path
+    const html_path = blk: {
+        if (std.mem.endsWith(u8, snapshot_path, ".md")) {
+            const base_path = snapshot_path[0 .. snapshot_path.len - 3];
+            break :blk try std.fmt.allocPrint(gpa, "{s}.html", .{base_path});
+        } else {
+            break :blk try std.fmt.allocPrint(gpa, "{s}.html", .{snapshot_path});
+        }
+    };
+    defer gpa.free(html_path);
+
+    // Write HTML file
+    var html_file = std.fs.cwd().createFile(html_path, .{}) catch |err| {
+        log("failed to create HTML file '{s}': {s}", .{ html_path, @errorName(err) });
+        return;
+    };
+    defer html_file.close();
+    try html_file.writer().writeAll(html_buffer.items);
+
+    log("generated HTML version: {s}", .{html_path});
+}
+
+/// New unified processSnapshotFile function that generates both markdown and HTML simultaneously
+fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8, generate_html: bool) !bool {
     // Log the file path that was written to
     log("processing snapshot file: {s}", .{snapshot_path});
 
-    const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, 1024 * 1024) catch |err| {
-        log("failed to read file '{s}': {s}", .{ snapshot_path, @errorName(err) });
+    const @"1Mb" = 1024 * 1024;
+    const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, @"1Mb") catch |err| {
+        std.log.err("failed to read file '{s}': {s}", .{ snapshot_path, @errorName(err) });
         return false;
     };
     defer gpa.free(file_content);
 
     // Check our file starts with the metadata section
-    // so we can skip parsing and later steps if this isn't a snapshot file
     if (!std.mem.startsWith(u8, file_content, Section.META)) {
-        log("ignoring non-snapshot file {s}", .{snapshot_path});
+        std.log.err("file '{s}' is not a valid snapshot file", .{snapshot_path});
+        std.log.err("snapshot files must start with '~~~META'", .{});
+        if (file_content.len > 0) {
+            const first_line_end = std.mem.indexOfScalar(u8, file_content, '\n') orelse @min(file_content.len, 50);
+            const first_line = file_content[0..first_line_end];
+            std.log.err("file starts with: '{s}'", .{first_line});
+        }
         return false;
     }
 
     // Parse the file to find section boundaries
     const content = extractSections(gpa, file_content) catch |err| {
         switch (err) {
-            Error.MissingSnapshotHeader, Error.MissingSnapshotSource => {
-                warn("ignoring file {s}: {s}", .{ snapshot_path, @errorName(err) });
+            Error.MissingSnapshotHeader => {
+                std.log.err("file '{s}' is missing the META section header", .{snapshot_path});
+                std.log.err("add a META section like: ~~~META\\ndescription=My test\\ntype=expr\\n", .{});
+                return false;
+            },
+            Error.MissingSnapshotSource => {
+                std.log.err("file '{s}' is missing the SOURCE section", .{snapshot_path});
+                std.log.err("add a SOURCE section like: ~~~SOURCE\\nyour_roc_code_here\\n", .{});
+                return false;
+            },
+            Error.BadSectionHeader => {
+                std.log.err("file '{s}' has an invalid section header", .{snapshot_path});
+                std.log.err("section headers must be like: ~~~META, ~~~SOURCE, etc.", .{});
                 return false;
             },
             else => return err,
         }
     };
 
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    // Parse the source code
-    var parse_ast = switch (content.meta.node_type) {
-        .file => parse.parse(&module_env, content.source),
-        .header => parse.parseHeader(&module_env, content.source),
-        .expr => parse.parseExpr(&module_env, content.source),
-        .statement => parse.parseStatement(&module_env, content.source),
-    };
-    defer parse_ast.deinit(gpa);
-
-    // shouldn't be required in future
-    parse_ast.store.emptyScratch();
-
-    // Canonicalize the source code
-
-    var can_ir = CIR.init(&module_env);
-    defer can_ir.deinit();
-
-    var can = canonicalize.init(&can_ir, &parse_ast);
-    defer can.deinit();
-
-    var maybe_expr_idx: ?CIR.Expr.Idx = null;
-
-    switch (content.meta.node_type) {
-        .file => can.canonicalize_file(),
-        .header => {
-            // TODO: implement canonicalize_header when available
-        },
-        .expr => {
-            // For expr snapshots, just canonicalize the root expression directly
-            const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-            maybe_expr_idx = can.canonicalize_expr(expr_idx);
-        },
-        .statement => {
-            // TODO: implement canonicalize_statement when available
-        },
-    }
-
-    // Buffer all output in memory before writing to the snapshot file
-    var buffer = std.ArrayList(u8).init(gpa);
-    defer buffer.deinit();
-
-    var writer = buffer.writer();
-
-    // Copy original META
-    {
-        try writer.writeAll(Section.META);
-        try writer.writeAll("\n");
-        try content.meta.format(writer);
-        try writer.writeAll("\n");
-    }
-
-    // Copy original SOURCE
-    {
-        try writer.writeAll(Section.SOURCE);
-        try writer.writeAll("\n");
-        try writer.writeAll(content.source);
-        try writer.writeAll("\n");
-    }
-
-    // Write out any PROBLEMS
-    {
-        try writer.writeAll(Section.PROBLEMS);
-        try writer.writeAll("\n");
-
-        var tokenize_problems: usize = 0;
-        var parser_problems: usize = 0;
-        var canonicalize_problems: usize = 0;
-
-        // Use plain text rendering target
-
-        // Tokenize Diagnostics
-        for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-            tokenize_problems += 1;
-
-            // TODO implement `toReport` for tokenize
-            // var report: Report = try diagnostic.toReport(gpa, content.source);
-            // defer report.deinit();
-            // report.render(writer.any(), .plain_text) catch |err| {
-            //     try writer.print("Error rendering report: {}\n", .{err});
-            //     continue;
-            // };
-
-            try diagnostic.toStr(gpa, content.source, writer);
-        }
-
-        // Parser Diagnostics
-        for (parse_ast.parse_diagnostics.items) |diagnostic| {
-            parser_problems += 1;
-
-            // TODO implement `diagnosticToReport` for parser
-            // var report: Report = try parse_ast.diagnosticToReport(diagnostic, gpa);
-            // defer report.deinit();
-            // report.render(writer.any(), .plain_text) catch |err| {
-            //     try writer.print("Error rendering report: {}\n", .{err});
-            //     continue;
-            // };
-
-            const err_msg = try std.fmt.allocPrint(gpa, "PARSER: {s}\n", .{@tagName(diagnostic.tag)});
-            defer gpa.free(err_msg);
-
-            try writer.writeAll(err_msg);
-        }
-
-        // Canonicalization Diagnostics
-        const diagnostics = can_ir.getDiagnostics();
-        defer gpa.free(diagnostics);
-        for (diagnostics) |diagnostic| {
-            canonicalize_problems += 1;
-
-            var report: Report = try can_ir.diagnosticToReport(diagnostic, gpa, content.source, snapshot_path);
-            defer report.deinit();
-            report.render(writer.any(), .plain_text) catch |err| {
-                try writer.print("Error rendering report: {}\n", .{err});
-                continue;
-            };
-        }
-
-        const nil_problems = tokenize_problems == 0 and parser_problems == 0 and canonicalize_problems == 0;
-
-        if (nil_problems) {
-            try writer.writeAll("NIL\n");
-            log("reported NIL problems", .{});
-        } else {
-            log("reported {} token problems", .{tokenize_problems});
-            log("reported {} parser problems", .{parser_problems});
-            log("reported {} canonicalization problems", .{canonicalize_problems});
-        }
-    }
-
-    // Write out any TOKENS
-    {
-        try writer.writeAll(Section.TOKENS);
-        try writer.writeAll("\n");
-        var tokenizedBuffer = parse_ast.tokens;
-        const tokens = tokenizedBuffer.tokens.items(.tag);
-        for (tokens, 0..) |tok, i| {
-            const region = tokenizedBuffer.resolve(@intCast(i));
-            const info = try module_env.calcRegionInfo(content.source, region.start.offset, region.end.offset);
-            const region_str = try std.fmt.allocPrint(gpa, "{s}({d}:{d}-{d}:{d}),", .{
-                @tagName(tok),
-                // add one to display numbers instead of index
-                info.start_line_idx + 1,
-                info.start_col_idx + 1,
-                info.end_line_idx + 1,
-                info.end_col_idx + 1,
-            });
-            defer gpa.free(region_str);
-
-            try writer.writeAll(region_str);
-
-            if (tok == .Newline) {
-                try writer.writeAll("\n");
-            }
-        }
-        try writer.writeAll("\n");
-    }
-
-    // Write PARSE SECTION
-    {
-        var parse_buffer = std.ArrayList(u8).init(gpa);
-        defer parse_buffer.deinit();
-        switch (content.meta.node_type) {
-            .file => {
-                try parse_ast.toSExprStr(&module_env, parse_buffer.writer().any());
-            },
-            .header => {
-                const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
-                var node = header.toSExpr(&module_env, &parse_ast);
-                defer node.deinit(gpa);
-
-                node.toStringPretty(parse_buffer.writer().any());
-            },
-            .expr => {
-                const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
-                var node = expr.toSExpr(&module_env, &parse_ast);
-                defer node.deinit(gpa);
-
-                node.toStringPretty(parse_buffer.writer().any());
-            },
-            .statement => {
-                const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
-                var node = stmt.toSExpr(&module_env, &parse_ast);
-                defer node.deinit(gpa);
-
-                node.toStringPretty(parse_buffer.writer().any());
-            },
-        }
-        try writer.writeAll(Section.PARSE);
-        try writer.writeAll("\n");
-        try writer.writeAll(parse_buffer.items);
-        try writer.writeAll("\n");
-    }
-
-    // Write FORMAT SECTION
-    {
-        var formatted = std.ArrayList(u8).init(gpa);
-        defer formatted.deinit();
-        switch (content.meta.node_type) {
-            .file => {
-                try fmt.formatAst(parse_ast, formatted.writer().any());
-            },
-            .header => {
-                try fmt.formatHeader(parse_ast, formatted.writer().any());
-            },
-            .expr => {
-                try fmt.formatExpr(parse_ast, formatted.writer().any());
-            },
-            .statement => {
-                try fmt.formatStatement(parse_ast, formatted.writer().any());
-            },
-        }
-
-        try writer.writeAll(Section.FORMATTED);
-        try writer.writeAll("\n");
-
-        if (!std.mem.eql(u8, formatted.items, content.source)) {
-            try writer.writeAll(formatted.items);
-            try writer.writeAll("\n");
-        } else {
-            try writer.writeAll("NO CHANGE");
-            try writer.writeAll("\n");
-        }
-    }
-
-    // Write CANONICALIZE SECTION
-    {
-        var canonicalized = std.ArrayList(u8).init(gpa);
-        defer canonicalized.deinit();
-
-        try can_ir.toSExprStr(&module_env, canonicalized.writer().any(), maybe_expr_idx, content.source);
-
-        try writer.writeAll(Section.CANONICALIZE);
-        try writer.writeAll("\n");
-        try writer.writeAll(canonicalized.items);
-        try writer.writeAll("\n");
-    }
-
-    try writer.writeAll("~~~END");
-
-    // Now write the buffer to the snapshot file in one go
-    var file = std.fs.cwd().createFile(snapshot_path, .{}) catch |err| {
-        log("failed to create file '{s}': {s}", .{ snapshot_path, @errorName(err) });
+    // Process the content through the shared compilation pipeline
+    processSnapshotContent(gpa, content, snapshot_path, generate_html) catch |err| {
+        log("failed to process snapshot content: {s}", .{@errorName(err)});
         return false;
     };
-    defer file.close();
-    try file.writer().writeAll(buffer.items);
 
-    // If flag --fuzz-corpus is passed, so write the SOURCE to our corpus
+    // If flag --fuzz-corpus is passed, write the SOURCE to our corpus
     if (maybe_fuzz_corpus_path != null) {
-
-        // create a pseudo-random name for our file
         const rand_file_name = [_][]const u8{
             maybe_fuzz_corpus_path.?, &[_]u8{
                 rand.intRangeAtMost(u8, 'a', 'z'),
@@ -722,125 +1774,72 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     return true;
 }
 
+fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8, generate_html: bool) !bool {
+    return processSnapshotFileUnified(gpa, snapshot_path, maybe_fuzz_corpus_path, generate_html);
+}
+
 /// Extracts the sections from a snapshot file
 fn extractSections(gpa: Allocator, content: []const u8) !Content {
     var ranges = std.AutoHashMap(Section, Section.Range).init(gpa);
     defer ranges.deinit();
 
-    var current_section: ?Section = null;
-    var line_start: usize = 0;
+    // Find all section headers and their positions
+    var idx: usize = 0;
+    while (idx < content.len) {
+        // Look for section headers
+        if (idx == 0 or (idx > 0 and content[idx - 1] == '\n')) {
+            if (Section.fromString(content[idx..])) |section| {
+                // Only process META, SOURCE, and EXPECTED sections
+                if (section == .meta or section == .source or section == .expected) {
+                    const header_len = section.asString().len;
+                    const start = idx + header_len;
 
-    var lines = std.mem.splitScalar(u8, content, '\n');
+                    // Find the end of this section
+                    var end = content.len;
 
-    while (true) {
-        const line_opt = lines.next();
-        if (line_opt == null) break;
+                    // For sections with ~~~ delimiters (META and SOURCE)
+                    if (section == .meta or section == .source) {
+                        // Find the closing ~~~
+                        var search_idx = start;
+                        while (search_idx < content.len - 3) {
+                            if (content[search_idx] == '~' and
+                                content[search_idx + 1] == '~' and
+                                content[search_idx + 2] == '~')
+                            {
+                                // Set end to the position of ~~~, not after it
+                                end = search_idx;
+                                break;
+                            }
+                            search_idx += 1;
+                        }
+                    } else {
+                        // For sections without ~~~ delimiters (EXPECTED)
+                        // Find the next section header
+                        var search_idx = start;
+                        while (search_idx < content.len) {
+                            if (search_idx == 0 or (search_idx > 0 and content[search_idx - 1] == '\n')) {
+                                if (content[search_idx] == '#' and
+                                    search_idx + 1 < content.len and
+                                    content[search_idx + 1] == ' ')
+                                {
+                                    end = search_idx;
+                                    break;
+                                }
+                            }
+                            search_idx += 1;
+                        }
+                    }
 
-        const line = line_opt.?;
-        const line_end = line_start + line.len;
-        const next_line_start = line_end + 1; // +1 for the newline
+                    try ranges.put(section, .{ .start = start, .end = end });
 
-        if (Section.fromString(line)) |new_section| {
-            // If we were in a section, finalize its range
-            if (current_section) |section| {
-                var range = ranges.get(section) orelse Section.Range.empty();
-                range.end = line_start;
-                try ranges.put(section, range);
+                    // Skip to the end of this section
+                    idx = end;
+                    continue;
+                }
             }
-
-            // Start the new section
-            current_section = new_section;
-
-            // Initialize new section range (starting after this line)
-            var range = Section.Range.empty();
-            range.start = next_line_start;
-            try ranges.put(new_section, range);
         }
-
-        line_start = next_line_start;
-    }
-
-    // Handle the last section if there is one
-    if (current_section) |section| {
-        var range = ranges.get(section) orelse Section.Range.empty();
-        range.end = @min(line_start, content.len);
-        try ranges.put(section, range);
+        idx += 1;
     }
 
     return try Content.from_ranges(ranges, content);
-}
-
-test "extractSections" {
-    const input =
-        \\~~~META
-        \\description=
-        \\type=file
-        \\~~~SOURCE
-        \\source code line
-        \\~~~FORMATTED
-        \\formatted output line
-        \\~~~PARSE
-        \\parse section line
-    ;
-
-    const content = try extractSections(testing.allocator, input);
-
-    var meta_buf: std.ArrayListUnmanaged(u8) = .{};
-    defer meta_buf.deinit(std.testing.allocator);
-    try content.meta.format(meta_buf.writer(std.testing.allocator));
-    try testing.expectEqualStrings(
-        \\description=
-        \\type=file
-    , meta_buf.items[0..]);
-    try testing.expectEqualStrings("source code line", content.source);
-    try testing.expectEqualStrings("formatted output line", content.formatted.?);
-}
-
-test "extractSections complex" {
-    const input =
-        \\~~~META
-        \\description=Basic example to develop the snapshot methodology
-        \\~~~SOURCE
-        \\module [foo, bar]
-        \\
-        \\foo = "one"
-        \\
-        \\bar = "two"
-        \\~~~PARSE
-        \\(file
-        \\    (header
-        \\        'foo'
-        \\        'bar')
-        \\    (decl
-        \\        (ident
-        \\            'foo')
-        \\        (string_part))
-        \\    (decl
-        \\        (ident
-        \\            'bar')
-        \\        (string_part)))
-    ;
-
-    const expected_meta =
-        \\description=Basic example to develop the snapshot methodology
-        \\type=file
-    ;
-
-    const expected_source =
-        \\module [foo, bar]
-        \\
-        \\foo = "one"
-        \\
-        \\bar = "two"
-    ;
-
-    const expected_formatted = null;
-    const content = try extractSections(testing.allocator, input);
-
-    var meta_buf: std.ArrayListUnmanaged(u8) = .{};
-    defer meta_buf.deinit(std.testing.allocator);
-    try content.meta.format(meta_buf.writer(std.testing.allocator));
-    try testing.expectEqualStrings(expected_meta, meta_buf.items[0..]);
-    try testing.expectEqualStrings(expected_source, content.source);
-    try testing.expectEqual(expected_formatted, content.formatted);
 }

@@ -2,12 +2,12 @@
 
 This table provides a summary of progress for the zig compiler re-write and should be updated with the PR that includes new features.
 
-|                          | Str & Num * | Functions  | Modules | Collections | Records &  Tuples | Recursive  Types | Static  Dispatch |
+|                          | Str & Num | Functions  | Modules | Collections | Records &  Tuples | Recursive  Types | Static  Dispatch |
 |--------------------------|:-----------:|:----------:|:-------:|:-----------:|:-----------------:|:----------------:|:----------------:|
-| **Parse**                | 🪫          | 🪫         | 🚧      | 🪫          |  🪫               |  🪫              |  🪫              |
-| **Canonicalize**         | 🚧          | 🚧         |         |             |                   |                  |                  |
-| **Resolve Imports**      |             |            |         |             |                   |                  |                  |
-| **Check Types**          |             |            |         |             |                   |                  |                  |
+| **Parse**                | 🔋          | 🔋         | 🪫      | 🪫          |  🔋               |  🪫              |  🚧              |
+| **Canonicalize**         | 🪫          | 🪫         | 🪫      | 🪫          |  🪫               |  🪫              |  🚧              |
+| **Resolve Imports**      | 🚧          | 🚧         | 🪫      | 🚧          |  🚧               |  🚧              |  🚧              |
+| **Check Types**          | 🪫          | 🚧         | 🚧      | 🚧          |  🚧               |  🚧              |                  |
 | **Interpreter**          |             |            |         |             |                   |                  |                  |
 | **Specialize Types**     |             |            |         |             |                   |                  |                  |
 | **Lift Functions**       |             |            |         |             |                   |                  |                  |
@@ -32,7 +32,7 @@ Try it with `zig build -Dno-bin -fincremental --watch`
 ### Expanding to ZLS
 
 This fast config can also be used with `zls`. Simply follow these steps:
-1. run `zls --version` and make sure it is `0.14.0`.
+1. run `zls --version` and make sure it is `0.14.0` (this is still used for zig `0.14.1`).
 2. run `zls env` and grab the `config_file` path.
 3. Edit the config file to include
 ```json
@@ -57,4 +57,4 @@ Try it with `zig build test -fincremental --watch`
 
 ## Overview
 
-![Zig Dependency Graph](https://anton-4.github.io/roc-compiler-vis/zig_dependency_graph.png)
+![Zig Dependency Graph](https://anton-4.github.io/roc-compiler-vis/zig_dependency_graph.webp)

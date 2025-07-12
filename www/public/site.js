@@ -40,10 +40,10 @@ const repl = {
     },
     {
       match: (input) => input.replace(/ /g, "").match(/^name="/i),
-      show: '<p>This created a new <a href="https://www.roc-lang.org/tutorial#defs">definition</a>&mdash;<code>name</code> is now defined to be equal to the <a href="/tutorial#strings-and-numbers">string</a> you entered.</p><p>Try using this definition by entering <code>"Hi, \$(name)!"</code></p>',
+      show: '<p>This created a new <a href="https://www.roc-lang.org/tutorial#defs">definition</a>&mdash;<code>name</code> is now defined to be equal to the <a href="/tutorial#strings-and-numbers">string</a> you entered.</p><p>Try using this definition by entering <code>"Hi, \${name}!"</code></p>',
     },
     {
-      match: (input) => input.match(/^"[^\$]+\$\(name\)/i),
+      match: (input) => input.match(/^"[^\$]+\$\{name\}/i),
       show: `<p>Nicely done! This is an example of <a href=\"/tutorial#string-interpolation\">string interpolation</a>, which replaces part of a string with whatever you put inside the parentheses after a <code>$</code>.</p><p>Now that you’ve written a few <a href=\"/tutorial#naming-things\">expressions</a>, you can either continue exploring in this REPL, or move on to the <a href=\"/tutorial\">tutorial</a> to learn how to make full programs.<p><p><span class='welcome-to-roc'>Welcome to Roc!</span> <a href='/tutorial' class='btn-small'>${tutorialButtonSvg} Start Tutorial</a></p>`,
     },
   ],

@@ -3,53 +3,6 @@
 const std = @import("std");
 const testing = std.testing;
 
-/// Extract specific lines from source text.
-/// Lines are 1-indexed (first line is line 1).
-pub fn extractLines(source: []const u8, start_line: u32, end_line: u32) []const u8 {
-    if (source.len == 0 or start_line == 0 or start_line > end_line) {
-        return "";
-    }
-
-    var current_line: u32 = 1;
-    var start_idx: ?usize = null;
-    var end_idx: ?usize = null;
-
-    // If we're looking for line 1, start at index 0
-    if (start_line == 1) {
-        start_idx = 0;
-    }
-
-    var i: usize = 0;
-    while (i < source.len) : (i += 1) {
-        if (source[i] == '\n') {
-            current_line += 1;
-
-            // Found the start of our desired line range
-            if (current_line == start_line and start_idx == null) {
-                start_idx = i + 1;
-            }
-
-            // Found the end of our desired line range
-            if (current_line > end_line) {
-                end_idx = i;
-                break;
-            }
-        }
-    }
-
-    // If we haven't found the start, the line number is too high
-    if (start_idx == null) {
-        return "";
-    }
-
-    // If we haven't found the end, use the end of the source
-    if (end_idx == null) {
-        end_idx = source.len;
-    }
-
-    return source[start_idx.?..end_idx.?];
-}
-
 /// Calculate the width needed to display a line number
 pub fn calculateLineNumberWidth(max_line: u32) u32 {
     if (max_line == 0) return 1;
@@ -80,46 +33,6 @@ pub fn printSpaces(writer: anytype, count: u32) !void {
 }
 
 // ===== TESTS =====
-
-test "extractLines - single line" {
-    const source = "line 1\nline 2\nline 3";
-    try testing.expectEqualStrings("line 2", extractLines(source, 2, 2));
-}
-
-test "extractLines - multiple lines" {
-    const source = "line 1\nline 2\nline 3\nline 4";
-    try testing.expectEqualStrings("line 2\nline 3", extractLines(source, 2, 3));
-}
-
-test "extractLines - first line" {
-    const source = "line 1\nline 2\nline 3";
-    try testing.expectEqualStrings("line 1", extractLines(source, 1, 1));
-}
-
-test "extractLines - last line without newline" {
-    const source = "line 1\nline 2\nline 3";
-    try testing.expectEqualStrings("line 3", extractLines(source, 3, 3));
-}
-
-test "extractLines - last line with newline" {
-    const source = "line 1\nline 2\nline 3\n";
-    try testing.expectEqualStrings("line 3", extractLines(source, 3, 3));
-}
-
-test "extractLines - line number too high" {
-    const source = "line 1\nline 2";
-    try testing.expectEqualStrings("", extractLines(source, 5, 5));
-}
-
-test "extractLines - empty source" {
-    try testing.expectEqualStrings("", extractLines("", 1, 1));
-}
-
-test "extractLines - invalid range" {
-    const source = "line 1\nline 2";
-    try testing.expectEqualStrings("", extractLines(source, 2, 1));
-    try testing.expectEqualStrings("", extractLines(source, 0, 1));
-}
 
 test "calculateLineNumberWidth" {
     try testing.expectEqual(@as(u32, 1), calculateLineNumberWidth(0));
@@ -182,16 +95,6 @@ test "printSpaces" {
 }
 
 test "integration - format source region" {
-    const source = "module []\n\nx = 1\n\nfoo = |_| {\n    x = 2\n    {}\n}";
-
-    // Extract line 3 (x = 1)
-    const line3 = extractLines(source, 3, 3);
-    try testing.expectEqualStrings("x = 1", line3);
-
-    // Extract line 6 (    x = 2)
-    const line6 = extractLines(source, 6, 6);
-    try testing.expectEqualStrings("    x = 2", line6);
-
     // For "x" identifier at column 1, length should be 1
     try testing.expectEqual(@as(u32, 1), calculateUnderlineLength(1, 2));
 

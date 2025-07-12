@@ -75,6 +75,11 @@ pub const Tag = enum {
     /// * lhs - node index to message(Should be a str_lit)
     /// * rhs - ignored
     crash,
+    /// A debug statement
+    /// Example: `dbg someValue`
+    /// * lhs - node index to expression being debugged
+    /// * rhs - ignored
+    dbg,
     /// Any plain expression - see Exprs below
     /// * lhs - node index for block or expr
     /// * rhs - ignored
@@ -96,7 +101,7 @@ pub const Tag = enum {
     /// * extra_data format(if aliased == 1): [alias upper_ident node index, [exposed node index]{num_exposes}]
     /// * extra_data format(if aliased == 0): [[exposed node index]{num_exposes}]
     import,
-    /// A Type declaration
+    /// A Type declaration for aliases
     /// Example: `Color := { red : U8, green: U8, blue: U8 }`
     /// Example: `Color := [Red, Green, Blue]`
     /// * main_token - upper_ident for type ident
@@ -105,6 +110,15 @@ pub const Tag = enum {
     /// * extra_data format (if has_where == 1): [where node index, [type_arg node index]{num_type_args}, type_term node_index]
     /// * extra_data format (if has_where == 0): [[type_arg node index]{num_type_args}, type_term node_index]
     type_decl,
+    /// A Type declaration for nominal types
+    /// Example: `Color := { red : U8, green: U8, blue: U8 }`
+    /// Example: `Color := [Red, Green, Blue]`
+    /// * main_token - upper_ident for type ident
+    /// * lhs - describes extra_data: struct(packed){ num_type_args: u31, has_where: u1 }
+    /// * rhs - extra_data index
+    /// * extra_data format (if has_where == 1): [where node index, [type_arg node index]{num_type_args}, type_term node_index]
+    /// * extra_data format (if has_where == 0): [[type_arg node index]{num_type_args}, type_term node_index]
+    type_decl_nominal,
     /// A Type annotation
     /// Example: `main! : List Str => Result {} _`
     /// Example: `colors : List Color`
@@ -183,14 +197,11 @@ pub const Tag = enum {
 
     /// DESCRIPTION
     /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
-    where_alias,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
-    where_method,
+    where_mod_alias,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -221,12 +232,22 @@ pub const Tag = enum {
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
-    number_patt,
+    int_patt,
+    /// DESCRIPTION
+    /// Example: EXAMPLE
+    /// * lhs - LHS DESCRIPTION
+    /// * rhs - RHS DESCRIPTION
+    frac_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     string_patt,
+    /// DESCRIPTION
+    /// Example: EXAMPLE
+    /// * lhs - LHS DESCRIPTION
+    /// * rhs - RHS DESCRIPTION
+    single_quote_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -280,7 +301,14 @@ pub const Tag = enum {
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
-    float,
+    frac,
+    /// A character literal enclosed in single quotes
+    /// Example: 'a'
+    /// * main_token - Token index containing the character
+    /// * region - Source region containing the single quote literal
+    /// * lhs - Unused
+    /// * rhs - Unused
+    single_quote,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -373,11 +401,6 @@ pub const Tag = enum {
     /// * rhs - end index of extra_data
     /// * extra_data format - expr node index,[pattern node index, block/expr node index]*
     ident,
-    /// DESCRIPTION
-    /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
-    dbg,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
