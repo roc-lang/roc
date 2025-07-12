@@ -102,13 +102,8 @@ pub fn processFile(
         const compiler_version = try gpa.dupe(u8, getCompilerVersion());
         errdefer gpa.free(compiler_version);
 
-        // Check cache - lookup takes ownership of source, filepath_copy, and compiler_version
-        const cache_result = cache.lookup(source, filepath_copy, compiler_version) catch |err| {
-            // On error, free our copies and fall through
-            gpa.free(filepath_copy);
-            gpa.free(compiler_version);
-            return err;
-        };
+        // Check cache - loadFromCache takes ownership of source, filepath_copy, and compiler_version
+        const cache_result = cache.loadFromCache(source, filepath_copy, compiler_version);
 
         switch (cache_result) {
             .hit => |process_result| {

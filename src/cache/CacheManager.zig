@@ -18,7 +18,7 @@ const ModuleEnv = base.ModuleEnv;
 const CIR = canonicalize.CIR;
 
 /// Cache hit result containing the process result and diagnostic counts
-/// Result of a cache lookup operation
+/// Result of a cache load operation
 pub const CacheResult = union(enum) {
     hit: coordinate_simple.ProcessResult,
     miss: struct {
@@ -55,18 +55,18 @@ pub const CacheManager = struct {
         };
     }
 
-    /// Look up a cache entry by content and compiler version.
+    /// Load a cached module based on its content and compiler version.
     ///
     /// Returns CacheResult indicating hit, miss, or invalid entry.
     ///
     /// IMPORTANT: This function takes ownership of content, module_path, and compiler_version.
-    /// On cache miss/invalid, these are returned in the result for the caller to reuse.
-    pub fn lookup(
+    /// On cache miss or invalid, these are returned in the result for the caller to reuse.
+    pub fn loadFromCache(
         self: *Self,
         content: []const u8,
         module_path: []const u8,
         compiler_version: []const u8,
-    ) !CacheResult {
+    ) CacheResult {
         if (!self.config.enabled) {
             return CacheResult{ .miss = .{
                 .source = content,
@@ -412,7 +412,7 @@ test "CacheManager getCacheFilePath with subdirectory splitting" {
     try testing.expect(std.mem.containsAtLeast(u8, cache_path, 1, "cdef123456789"));
 }
 
-test "CacheManager lookup miss" {
+test "CacheManager loadFromCache miss" {
     const allocator = testing.allocator;
     const config = CacheConfig{};
     var filesystem = Filesystem.testing();
@@ -432,7 +432,7 @@ test "CacheManager lookup miss" {
     const module_path = try allocator.dupe(u8, "test.roc");
     const compiler_version = try allocator.dupe(u8, "roc-zig-0.11.0-debug");
 
-    const result = try manager.lookup(content, module_path, compiler_version);
+    const result = manager.loadFromCache(content, module_path, compiler_version);
     switch (result) {
         .miss => |returned| {
             try testing.expect(manager.stats.misses == 1);
@@ -456,7 +456,7 @@ test "CacheManager disabled" {
     const module_path = try allocator.dupe(u8, "test.roc");
     const compiler_version = try allocator.dupe(u8, "roc-zig-0.11.0-debug");
 
-    const result = try manager.lookup(content, module_path, compiler_version);
+    const result = manager.loadFromCache(content, module_path, compiler_version);
     switch (result) {
         .miss => |returned| {
             // Free the returned values
