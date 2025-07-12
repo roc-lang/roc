@@ -62,9 +62,7 @@ pub fn deinit(self: *Self) void {
     self.exposed_by_str.deinit(self.gpa);
     self.exposed_nodes.deinit(self.gpa);
 
-    if (self.source.len > 0) {
-        self.gpa.free(self.source);
-    }
+    self.gpa.free(self.source);
 }
 
 /// Calculate and store line starts from the source text
