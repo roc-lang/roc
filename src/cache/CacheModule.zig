@@ -264,7 +264,9 @@ pub const CacheModule = struct {
     };
 
     /// Restore ModuleEnv and CIR from the cached data
-    pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8) !RestoredData {
+    /// IMPORTANT: This function takes ownership of `source` and `module_path`.
+    /// The caller must not free these after calling this function.
+    pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8, module_path: []const u8) !RestoredData {
         // Deserialize each component
         const node_store = try NodeStore.deserializeFrom(
             @as([]align(@alignOf(Node)) const u8, @alignCast(self.getComponentData(.node_store))),
@@ -295,8 +297,8 @@ pub const CacheModule = struct {
             .exposed_by_str = exposed_by_str,
             .exposed_nodes = exposed_nodes,
             .line_starts = line_starts,
-            .source = "",
-            .module_path = "",
+            .source = source,
+            .module_path = module_path,
         };
         errdefer module_env.deinit();
 
@@ -623,7 +625,8 @@ test "create and restore cache" {
     try cache.validate();
 
     // Restore ModuleEnv and CIR
-    const restored = try cache.restore(gpa, "TestModule");
+    // Duplicate source and module_path since restore takes ownership
+    const restored = try cache.restore(gpa, "TestModule", try gpa.dupe(u8, source), try gpa.dupe(u8, "test.roc"));
 
     var restored_module_env = restored.module_env;
     defer restored_module_env.deinit();
@@ -764,7 +767,8 @@ test "cache filesystem roundtrip with in-memory storage" {
     try roundtrip_cache.validate();
 
     // Restore from the roundtrip cache
-    const restored = try roundtrip_cache.restore(gpa, "TestModule");
+    // Duplicate source and module_path since restore takes ownership
+    const restored = try roundtrip_cache.restore(gpa, "TestModule", try gpa.dupe(u8, source), try gpa.dupe(u8, "test.roc"));
 
     var restored_module_env = restored.module_env;
     defer restored_module_env.deinit();

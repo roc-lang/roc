@@ -95,11 +95,16 @@ pub const CacheManager = struct {
         defer mapped_cache.deinit(self.allocator);
 
         // Validate and restore from cache
+        // Duplicate module_path since restoreFromCache takes ownership
+        const module_path_copy = try self.allocator.dupe(u8, module_path);
+        errdefer self.allocator.free(module_path_copy);
+
         const result = self.restoreFromCache(
             mapped_cache.data(),
             content,
-            module_path,
+            module_path_copy,
         ) catch |err| {
+            self.allocator.free(module_path_copy);
             if (self.config.verbose) {
                 std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
             }
@@ -254,8 +259,7 @@ pub const CacheManager = struct {
 
     /// Serialize a ProcessResult to cache data.
     fn serializeResult(self: *Self, result: *const coordinate_simple.ProcessResult) ![]u8 {
-        // Use the error and warning counts from the ProcessResult
-        // These were already computed when the result was created
+        // Store error and warning reports in cache
         const error_count = result.error_count;
         const warning_count = result.warning_count;
 
@@ -266,6 +270,8 @@ pub const CacheManager = struct {
     }
 
     /// Restore a ProcessResult from cache data with diagnostic counts.
+    /// IMPORTANT: This function takes ownership of both `source` and `module_path`.
+    /// The caller must not free these after calling this function.
     fn restoreFromCache(
         self: *Self,
         cache_data: []align(SERIALIZATION_ALIGNMENT) const u8,
@@ -286,7 +292,8 @@ pub const CacheManager = struct {
         // Use a default module name when restoring from cache
         // since we don't have access to the original source path
         const module_name = "cached_module";
-        const restored = cache.restore(self.allocator, module_name) catch return error.RestoreError;
+        // Transfer ownership of source and module_path to the restored ModuleEnv
+        const restored = cache.restore(self.allocator, module_name, source, module_path) catch return error.RestoreError;
 
         // Reports are not cached - they need to be recomputed if needed
         // Users can use --no-cache to see diagnostic reports
@@ -296,9 +303,7 @@ pub const CacheManager = struct {
         const module_env = try self.allocator.create(ModuleEnv);
         module_env.* = restored.module_env;
 
-        // Always duplicate source and module_path since ModuleEnv owns them
-        module_env.source = try self.allocator.dupe(u8, source);
-        module_env.module_path = try self.allocator.dupe(u8, module_path);
+        // Note: source and module_path ownership was already transferred to module_env by cache.restore()
 
         // Allocate CIR to heap for ownership
         const cir = try self.allocator.create(CIR);

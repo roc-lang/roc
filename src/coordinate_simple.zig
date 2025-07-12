@@ -100,8 +100,8 @@ pub fn processFile(
         // Check cache
         switch (cache.lookup(source, filepath, compiler_version) catch .miss) {
             .hit => |cache_hit| {
-                // Cache hit! Free the source we just read since cached result has its own
-                gpa.free(source);
+                // Cache hit! The source ownership is transferred to the cached result
+                // so we don't free it here
 
                 // Create a ProcessResult with the cached diagnostic counts
                 var result = cache_hit.result;

@@ -486,7 +486,8 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
 
         // Restore ModuleEnv and CIR
-        const restored = try loaded_cache.restore(allocator, module_name);
+        // Duplicate source and output_path since restore takes ownership
+        const restored = try loaded_cache.restore(allocator, module_name, try allocator.dupe(u8, content.source), try allocator.dupe(u8, output_path));
         var restored_module_env = restored.module_env;
         defer restored_module_env.deinit();
         var restored_cir = restored.cir;
