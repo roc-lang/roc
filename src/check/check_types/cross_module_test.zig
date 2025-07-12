@@ -20,7 +20,7 @@ test "cross-module type checking - monomorphic function" {
     const allocator = testing.allocator;
 
     // Create module A that exports a simple function
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -52,7 +52,7 @@ test "cross-module type checking - monomorphic function" {
     try modules.append(&module_a_cir);
 
     // Create module B that imports and uses the function from module A
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");
@@ -109,7 +109,7 @@ test "cross-module type checking - polymorphic function" {
     const allocator = testing.allocator;
 
     // Create module A that exports a polymorphic identity function
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -137,7 +137,7 @@ test "cross-module type checking - polymorphic function" {
     try modules.append(&module_a_cir);
 
     // Create module B that imports and uses the polymorphic function
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");
@@ -187,7 +187,7 @@ test "cross-module type checking - record type" {
     const allocator = testing.allocator;
 
     // Create module A that exports a record type
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -236,7 +236,7 @@ test "cross-module type checking - record type" {
     try modules.append(&module_a_cir);
 
     // Create module B that imports and uses the record from module A
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");
@@ -294,7 +294,7 @@ test "cross-module type checking - type mismatch error" {
     const allocator = testing.allocator;
 
     // Create module A that exports an I32
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -312,7 +312,7 @@ test "cross-module type checking - type mismatch error" {
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), i32_content);
 
     // Create module B that imports the I32 but tries to use it as a String
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");
@@ -371,7 +371,7 @@ test "cross-module type checking - polymorphic instantiation" {
     const allocator = testing.allocator;
 
     // Create module A that exports a polymorphic list function
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -394,7 +394,7 @@ test "cross-module type checking - polymorphic instantiation" {
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Create module B that imports and uses the function with a specific type
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");
@@ -463,7 +463,7 @@ test "cross-module type checking - preserves module A types" {
     const allocator = testing.allocator;
 
     // Create module A
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -486,7 +486,7 @@ test "cross-module type checking - preserves module A types" {
     try testing.expect(original_content == .flex_var);
 
     // Create module B
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");
@@ -546,7 +546,7 @@ test "cross-module type checking - three module chain monomorphic" {
     const allocator = testing.allocator;
 
     // Module A exports a simple function: add : I32, I32 -> I32
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -570,7 +570,7 @@ test "cross-module type checking - three module chain monomorphic" {
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Module B imports from A and re-exports it
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");
@@ -588,7 +588,7 @@ test "cross-module type checking - three module chain monomorphic" {
     }, base.Region.zero());
 
     // Module C imports from B
-    var module_c_env = base.ModuleEnv.init(allocator);
+    var module_c_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_c_env.deinit();
 
     var module_c_cir = CIR.init(&module_c_env, "ModuleC");
@@ -655,7 +655,7 @@ test "cross-module type checking - three module chain polymorphic" {
     const allocator = testing.allocator;
 
     // Module A exports a polymorphic function: identity : a -> a
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -674,7 +674,7 @@ test "cross-module type checking - three module chain polymorphic" {
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Module B imports from A and re-exports it
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");
@@ -691,7 +691,7 @@ test "cross-module type checking - three module chain polymorphic" {
     }, base.Region.zero());
 
     // Module C imports from B
-    var module_c_env = base.ModuleEnv.init(allocator);
+    var module_c_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_c_env.deinit();
 
     var module_c_cir = CIR.init(&module_c_env, "ModuleC");
@@ -751,7 +751,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     const allocator = testing.allocator;
 
     // Module A exports: map : (a -> b), List a -> List b
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -786,7 +786,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(map_expr_idx)), map_func_content);
 
     // Module B imports map and partially applies it with I32
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");
@@ -834,7 +834,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     try module_b_env.types.setVarContent(@enumFromInt(@intFromEnum(map_i32_expr_idx)), map_i32_content);
 
     // Module C imports the partially specialized version from B
-    var module_c_env = base.ModuleEnv.init(allocator);
+    var module_c_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_c_env.deinit();
 
     var module_c_cir = CIR.init(&module_c_env, "ModuleC");
@@ -931,7 +931,7 @@ test "cross-module type checking - record type chain" {
     const allocator = testing.allocator;
 
     // Module A exports a record type: { x: I32, y: Str }
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -968,7 +968,7 @@ test "cross-module type checking - record type chain" {
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(record_expr_idx)), record_content);
 
     // Module B imports and re-exports the record
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");
@@ -985,7 +985,7 @@ test "cross-module type checking - record type chain" {
     }, base.Region.zero());
 
     // Module C imports from B
-    var module_c_env = base.ModuleEnv.init(allocator);
+    var module_c_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_c_env.deinit();
 
     var module_c_cir = CIR.init(&module_c_env, "ModuleC");
@@ -1056,7 +1056,7 @@ test "cross-module type checking - polymorphic record chain" {
     const allocator = testing.allocator;
 
     // Module A exports a polymorphic record: { value: a, next: List a }
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -1092,7 +1092,7 @@ test "cross-module type checking - polymorphic record chain" {
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(record_expr_idx)), record_content);
 
     // Module B imports and partially specializes to Str
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");
@@ -1144,7 +1144,7 @@ test "cross-module type checking - polymorphic record chain" {
     try module_b_env.types.setVarContent(@enumFromInt(@intFromEnum(str_record_expr_idx)), str_record_content);
 
     // Module C imports the specialized version from B
-    var module_c_env = base.ModuleEnv.init(allocator);
+    var module_c_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_c_env.deinit();
 
     var module_c_cir = CIR.init(&module_c_env, "ModuleC");
@@ -1219,7 +1219,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     const allocator = testing.allocator;
 
     // Module A exports: compose : (b -> c), (a -> b) -> (a -> c)
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -1255,7 +1255,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(compose_expr_idx)), compose_content);
 
     // Module B imports compose and partially applies with b = Str
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");
@@ -1307,7 +1307,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     try module_b_env.types.setVarContent(@enumFromInt(@intFromEnum(compose_str_expr_idx)), compose_str_content);
 
     // Module C imports the partially specialized version and further specializes c = I32
-    var module_c_env = base.ModuleEnv.init(allocator);
+    var module_c_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_c_env.deinit();
 
     var module_c_cir = CIR.init(&module_c_env, "ModuleC");
@@ -1442,7 +1442,7 @@ test "cross-module type checking - type mismatch with proper error message" {
     const allocator = testing.allocator;
 
     // Module A: Exports a string value
-    var module_a_env = base.ModuleEnv.init(allocator);
+    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_a_env.deinit();
 
     var module_a_cir = CIR.init(&module_a_env, "ModuleA");
@@ -1458,7 +1458,7 @@ test "cross-module type checking - type mismatch with proper error message" {
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(str_expr_idx)), .{ .structure = .str });
 
     // Module B: Tries to use the string as a number
-    var module_b_env = base.ModuleEnv.init(allocator);
+    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
     defer module_b_env.deinit();
 
     var module_b_cir = CIR.init(&module_b_env, "ModuleB");

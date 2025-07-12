@@ -32,8 +32,14 @@ exposed_nodes: collections.SafeStringHashMap(u16),
 /// this is a more compact representation at the expense of extra computation only when generating error diagnostics.
 line_starts: collections.SafeList(u32),
 
+/// The source code of this module.
+source: []const u8,
+
+/// The module path (filename)
+module_path: []const u8,
+
 /// Initialize the module environment.
-pub fn init(gpa: std.mem.Allocator) Self {
+pub fn init(gpa: std.mem.Allocator, source: []const u8, module_path: []const u8) Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
 
     return Self{
@@ -42,9 +48,11 @@ pub fn init(gpa: std.mem.Allocator) Self {
         .ident_ids_for_slicing = collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
         .strings = StringLiteral.Store.initCapacityBytes(gpa, 4096),
         .types = types_mod.Store.initCapacity(gpa, 2048, 512),
-        .exposed_by_str = collections.SafeStringHashMap(void).init(),
-        .exposed_nodes = collections.SafeStringHashMap(u16).init(),
+        .exposed_by_str = collections.SafeStringHashMap(void).initCapacity(gpa, 64),
+        .exposed_nodes = collections.SafeStringHashMap(u16).initCapacity(gpa, 64),
         .line_starts = collections.SafeList(u32).initCapacity(gpa, 256),
+        .source = source,
+        .module_path = module_path,
     };
 }
 
@@ -57,6 +65,13 @@ pub fn deinit(self: *Self) void {
     self.line_starts.deinit(self.gpa);
     self.exposed_by_str.deinit(self.gpa);
     self.exposed_nodes.deinit(self.gpa);
+
+    if (self.source.len > 0) {
+        self.gpa.free(self.source);
+    }
+    if (self.module_path.len > 0) {
+        self.gpa.free(self.module_path);
+    }
 }
 
 /// Calculate and store line starts from the source text

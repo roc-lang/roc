@@ -57,7 +57,12 @@ pub const CacheManager = struct {
     ///
     /// Returns CacheResult indicating hit, miss, or invalid entry.
     /// On cache hit, the returned ProcessResult owns all its data.
-    pub fn lookup(self: *Self, content: []const u8, compiler_version: []const u8) !CacheResult {
+    pub fn lookup(
+        self: *Self,
+        content: []const u8,
+        module_path: []const u8,
+        compiler_version: []const u8,
+    ) !CacheResult {
         if (!self.config.enabled) {
             return CacheResult.miss;
         }
@@ -90,7 +95,11 @@ pub const CacheManager = struct {
         defer mapped_cache.deinit(self.allocator);
 
         // Validate and restore from cache
-        const result = self.restoreFromCache(mapped_cache.data()) catch |err| {
+        const result = self.restoreFromCache(
+            mapped_cache.data(),
+            content,
+            module_path,
+        ) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
             }
@@ -245,17 +254,10 @@ pub const CacheManager = struct {
 
     /// Serialize a ProcessResult to cache data.
     fn serializeResult(self: *Self, result: *const coordinate_simple.ProcessResult) ![]u8 {
-        // Count errors and warnings from reports to store in cache
-        var error_count: u32 = 0;
-        var warning_count: u32 = 0;
-
-        for (result.reports) |report| {
-            switch (report.severity) {
-                .info => {}, // Informational messages don't affect error/warning counts
-                .runtime_error, .fatal => error_count += 1,
-                .warning => warning_count += 1,
-            }
-        }
+        // Use the error and warning counts from the ProcessResult
+        // These were already computed when the result was created
+        const error_count = result.error_count;
+        const warning_count = result.warning_count;
 
         // Create cache data using the ModuleEnv from the CIR with diagnostic counts
         const cache_data = try Cache.create(self.allocator, result.cir.env, result.cir, error_count, warning_count);
@@ -264,7 +266,12 @@ pub const CacheManager = struct {
     }
 
     /// Restore a ProcessResult from cache data with diagnostic counts.
-    fn restoreFromCache(self: *Self, cache_data: []align(SERIALIZATION_ALIGNMENT) const u8) !struct {
+    fn restoreFromCache(
+        self: *Self,
+        cache_data: []align(SERIALIZATION_ALIGNMENT) const u8,
+        source: []const u8,
+        module_path: []const u8,
+    ) !struct {
         result: coordinate_simple.ProcessResult,
         error_count: u32,
         warning_count: u32,
@@ -289,6 +296,10 @@ pub const CacheManager = struct {
         const module_env = try self.allocator.create(ModuleEnv);
         module_env.* = restored.module_env;
 
+        // Always duplicate source and module_path since ModuleEnv owns them
+        module_env.source = try self.allocator.dupe(u8, source);
+        module_env.module_path = try self.allocator.dupe(u8, module_path);
+
         // Allocate CIR to heap for ownership
         const cir = try self.allocator.create(CIR);
 
@@ -297,14 +308,12 @@ pub const CacheManager = struct {
         // Immediately fix env pointer to point to our heap-allocated module_env
         cir.env = module_env;
 
-        // Source content is not cached - provide a placeholder
-        const source = try self.allocator.dupe(u8, "# Source loaded from cache");
-
         // Create ProcessResult with proper ownership
+        // Use the same source as ModuleEnv to avoid inconsistency
         const process_result = coordinate_simple.ProcessResult{
             .cir = cir,
             .reports = reports,
-            .source = source,
+            .source = module_env.source,
             .was_cached = true,
         };
 
@@ -393,7 +402,7 @@ test "CacheManager lookup miss" {
     const content = "module [test]\n\ntest = 42";
     const compiler_version = "roc-zig-0.11.0-debug";
 
-    const result = try manager.lookup(content, compiler_version);
+    const result = try manager.lookup(content, "test.roc", compiler_version);
     try testing.expect(result == .miss);
     try testing.expect(manager.stats.misses == 1);
 }
@@ -408,7 +417,7 @@ test "CacheManager disabled" {
     const content = "module [test]\n\ntest = 42";
     const compiler_version = "roc-zig-0.11.0-debug";
 
-    const result = try manager.lookup(content, compiler_version);
+    const result = try manager.lookup(content, "test.roc", compiler_version);
     try testing.expect(result == .miss);
     try testing.expect(manager.stats.getTotalOps() == 0); // No stats recorded when disabled
 }

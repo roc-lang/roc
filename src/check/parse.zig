@@ -44,7 +44,7 @@ fn runParse(env: *base.ModuleEnv, source: []const u8, parserCall: *const fn (*Pa
     const parse_diagnostics = parser.diagnostics;
 
     return .{
-        .source = source,
+        .env = env,
         .tokens = result.tokens,
         .store = parser.store,
         .root_node_idx = idx,

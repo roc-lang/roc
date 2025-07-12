@@ -293,7 +293,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``lue`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
-The unused variable is declared here:
+
 **fuzz_crash_019.md:52:11:52:14:**
 ```roc
 	match a {lue  {
@@ -316,7 +316,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``er`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_er` to suppress this warning.
-The unused variable is declared here:
+
 **fuzz_crash_019.md:57:2:57:4:**
 ```roc
 	er #ent
@@ -339,7 +339,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``est`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_est` to suppress this warning.
-The unused variable is declared here:
+
 **fuzz_crash_019.md:60:12:60:15:**
 ```roc
 		[1, 2, 3,est]123
@@ -596,7 +596,7 @@ Is there an `import` or `exposing` missing up-top?
 Variable ``i`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_i` to suppress this warning.
-The unused variable is declared here:
+
 **fuzz_crash_019.md:87:2:87:3:**
 ```roc
 	i= "H, ${d}"
@@ -608,7 +608,7 @@ The unused variable is declared here:
 Variable ``w`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_w` to suppress this warning.
-The unused variable is declared here:
+
 **fuzz_crash_019.md:76:2:76:3:**
 ```roc
 	w = "d"
@@ -620,7 +620,7 @@ The unused variable is declared here:
 Variable ``t`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_t` to suppress this warning.
-The unused variable is declared here:
+
 **fuzz_crash_019.md:88:1:88:2:**
 ```roc
 t = [
@@ -632,7 +632,7 @@ t = [
 Variable ``rd`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rd` to suppress this warning.
-The unused variable is declared here:
+
 **fuzz_crash_019.md:96:2:96:4:**
 ```roc
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }

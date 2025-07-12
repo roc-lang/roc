@@ -77,7 +77,7 @@ Use a guard:
 Variable ``value`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
-The unused variable is declared here:
+
 **pattern_f64_overflow.md:6:5:6:10:**
 ```roc
     value => "other"

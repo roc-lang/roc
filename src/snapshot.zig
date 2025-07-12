@@ -404,7 +404,7 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
     log("Generating snapshot for: {s}", .{output_path});
 
     // Process the content through the compilation pipeline
-    var module_env = base.ModuleEnv.init(allocator);
+    var module_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, content.source), try allocator.dupe(u8, output_path));
     defer module_env.deinit();
 
     // Parse the source code based on node type
@@ -1330,7 +1330,7 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
 
         if (i + 1 < tokenizedBuffer.tokens.len) {
             const next_region = tokenizedBuffer.resolve(@intCast(i + 1));
-            if (source_contains_newline_in_range(parse_ast.source, region.end.offset, next_region.start.offset)) {
+            if (source_contains_newline_in_range(parse_ast.env.source, region.end.offset, next_region.start.offset)) {
                 try output.md_writer.writeAll("\n");
             }
         }

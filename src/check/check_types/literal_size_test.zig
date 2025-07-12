@@ -12,7 +12,7 @@ const Num = types.Num;
 test "integer literal 255 fits in U8" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
 
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
@@ -56,7 +56,7 @@ test "integer literal 255 fits in U8" {
 test "integer literal 256 does not fit in U8" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
 
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
@@ -100,7 +100,7 @@ test "integer literal 256 does not fit in U8" {
 test "integer literal -128 fits in I8" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
 
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
@@ -144,7 +144,7 @@ test "integer literal -128 fits in I8" {
 test "integer literal -129 does not fit in I8" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
 
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
@@ -188,7 +188,7 @@ test "integer literal -129 does not fit in I8" {
 test "negative literal cannot unify with unsigned type" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
 
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
@@ -232,7 +232,7 @@ test "negative literal cannot unify with unsigned type" {
 test "float literal that fits in F32" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
 
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
@@ -276,7 +276,7 @@ test "float literal that fits in F32" {
 test "float literal that doesn't fit in F32" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
 
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
@@ -320,7 +320,7 @@ test "float literal that doesn't fit in F32" {
 test "float literal NaN doesn't fit in Dec" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
 
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
@@ -364,7 +364,7 @@ test "float literal NaN doesn't fit in Dec" {
 test "two integer literals with different requirements unify to most restrictive" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
 
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
@@ -434,7 +434,7 @@ test "two integer literals with different requirements unify to most restrictive
 test "positive and negative literals unify with sign requirement" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
 
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);

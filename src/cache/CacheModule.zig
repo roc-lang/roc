@@ -295,6 +295,8 @@ pub const CacheModule = struct {
             .exposed_by_str = exposed_by_str,
             .exposed_nodes = exposed_nodes,
             .line_starts = line_starts,
+            .source = "",
+            .module_path = "",
         };
         errdefer module_env.deinit();
 
@@ -587,7 +589,7 @@ test "create and restore cache" {
     ;
 
     // Parse the source
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
 
     var cir = CIR.init(&module_env, "TestModule");
@@ -662,7 +664,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     ;
 
     // Parse the source
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source), try gpa.dupe(u8, "test.roc"));
     defer module_env.deinit();
 
     var cir = CIR.init(&module_env, "TestModule");
