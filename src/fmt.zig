@@ -23,19 +23,33 @@ const FormatFlags = enum {
     no_debug,
 };
 
-/// Count of successfully formatted files along with files that failed to format.
-pub const SuccessFailCount = struct { success: usize, failure: usize };
+/// Report of the result of formatting Roc files including the count of successes, failures, and any files that need to be reformatted
+pub const FormattingResult = struct {
+    success: usize,
+    failure: usize,
+    /// Only relevant when using `roc format --check`
+    unformatted_files: ?std.ArrayList([]const u8),
+
+    pub fn deinit(self: *@This()) void {
+        if (self.unformatted_files) |files| {
+            files.deinit();
+        }
+    }
+};
 
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
-pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !SuccessFailCount {
+pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8, check: bool) !FormattingResult {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
     const stderr = std.io.getStdErr().writer();
 
     var success_count: usize = 0;
     var failed_count: usize = 0;
+    // Only used for `roc format --check`. If we aren't doing check, don't bother allocating
+    var unformatted_files = if (check) std.ArrayList([]const u8).init(gpa) else null;
+
     // First try as a directory.
     if (base_dir.openDir(path, .{ .iterate = true })) |const_dir| {
         var dir = const_dir;
@@ -45,7 +59,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
         defer walker.deinit();
         while (try walker.next()) |entry| {
             if (entry.kind == .file) {
-                if (formatFilePath(gpa, entry.dir, entry.basename)) |_| {
+                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null)) |_| {
                     success_count += 1;
                 } else |err| {
                     if (err != error.NotRocFile) {
@@ -56,7 +70,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
             }
         }
     } else |_| {
-        if (formatFilePath(gpa, base_dir, path)) |_| {
+        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null)) |_| {
             success_count += 1;
         } else |err| {
             if (err != error.NotRocFile) {
@@ -66,7 +80,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
         }
     }
 
-    return .{ .success = success_count, .failure = failed_count };
+    return .{ .success = success_count, .failure = failed_count, .unformatted_files = unformatted_files };
 }
 
 fn binarySearch(
@@ -106,7 +120,7 @@ fn binarySearch(
 
 /// Formats a single roc file at the specified path.
 /// Returns errors on failure and files that don't end in `.roc`
-pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !void {
+pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8, unformatted_files: ?*std.ArrayList([]const u8)) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -159,10 +173,41 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
         return error.ParsingFailed;
     }
 
-    const output_file = try base_dir.createFile(path, .{});
-    defer output_file.close();
+    // Check if the file is formatted without actually formatting it
+    if (unformatted_files != null) {
+        var formatted = std.ArrayList(u8).init(gpa);
+        defer formatted.deinit();
+        try formatAst(parse_ast, formatted.writer().any());
+        if (!std.mem.eql(u8, formatted.items, contents)) {
+            try unformatted_files.?.append(path);
+        }
+    } else { // Otherwise actually format it
+        const output_file = try base_dir.createFile(path, .{});
+        defer output_file.close();
 
-    try formatAst(parse_ast, output_file.writer().any());
+        try formatAst(parse_ast, output_file.writer().any());
+    }
+}
+
+/// Format the contents of stdin and output the result to stdout
+pub fn formatStdin(gpa: std.mem.Allocator) !void {
+    const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
+    defer gpa.free(contents);
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var parse_ast = parse.parse(&module_env, contents);
+    defer parse_ast.deinit(gpa);
+
+    // If there are any parsing problems, print them to stderr
+    if (parse_ast.parse_diagnostics.items.len > 0) {
+        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        try printParseErrors(gpa, contents, parse_ast);
+        return error.ParsingFailed;
+    }
+
+    try formatAst(parse_ast, std.io.getStdOut().writer().any());
 }
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
