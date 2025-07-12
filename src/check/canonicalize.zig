@@ -6322,8 +6322,6 @@ test "hexadecimal integer literals" {
         var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, tc.literal));
         defer env.deinit();
 
-        // Set the source in module_env so canonicalization can access it
-
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
 
@@ -6413,8 +6411,6 @@ test "binary integer literals" {
     for (test_cases) |tc| {
         var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, tc.literal));
         defer env.deinit();
-
-        // Set the source in module_env so canonicalization can access it
 
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
@@ -6506,8 +6502,6 @@ test "octal integer literals" {
         var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, tc.literal));
         defer env.deinit();
 
-        // Set the source in module_env so canonicalization can access it
-
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
 
@@ -6597,8 +6591,6 @@ test "integer literals with uppercase base prefixes" {
     for (test_cases) |tc| {
         var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, tc.literal));
         defer env.deinit();
-
-        // Set the source in module_env so canonicalization can access it
 
         var ast = parse.parseExpr(&env, tc.literal);
         defer ast.deinit(gpa);
@@ -6989,7 +6981,6 @@ test "record literal uses record_unbound" {
 
     // Test a simple record literal
     {
-        // Set the source in module_env so canonicalization can access it
         const source1 = "{ x: 42, y: \"hello\" }";
 
         var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source1));
@@ -7028,7 +7019,6 @@ test "record literal uses record_unbound" {
 
     // Test an empty record literal
     {
-        // Set the source in module_env so canonicalization can access it
         const source2 = "{}";
 
         var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source2));
@@ -7067,7 +7057,6 @@ test "record literal uses record_unbound" {
     // Test a record with a single field
     // Test a nested record literal
     {
-        // Set the source in module_env so canonicalization can access it
         const source3 = "{ value: 123 }";
 
         var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source3));
@@ -7112,8 +7101,6 @@ test "record literal uses record_unbound" {
 
 test "record_unbound basic functionality" {
     const gpa = std.testing.allocator;
-
-    // Set the source in module_env so canonicalization can access it
     const source = "{ x: 42, y: 99 }";
 
     // Test that record literals create record_unbound types
@@ -7158,8 +7145,6 @@ test "record_unbound basic functionality" {
 
 test "record_unbound with multiple fields" {
     const gpa = std.testing.allocator;
-
-    // Set the source in module_env so canonicalization can access it
     const source = "{ a: 123, b: 456, c: 789 }";
 
     var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));

@@ -618,7 +618,6 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
 
     var env2 = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer env2.deinit();
-    // Set the source in module_env so canonicalization can access it
     env2.source = try allocator.dupe(u8, source2);
     env2.owns_source = true;
     try env2.calcLineStarts(source2);
@@ -661,7 +660,6 @@ test "export count safety - ensures safe u16 casting" {
     // Test the diagnostic for exactly maxInt(u16) exports
     var env1 = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer env1.deinit();
-    // Set the source in module_env so canonicalization can access it
     env1.source = try allocator.dupe(u8, source);
     env1.owns_source = true;
     var cir1 = CIR.init(&env1);
