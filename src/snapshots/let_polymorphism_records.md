@@ -43,19 +43,19 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_records.md:19:50:19:56
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_records.md:19:50:19:51
 UNUSED VARIABLE - let_polymorphism_records.md:19:27:19:36
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **& data** is not expected in an expression.
+The token **&** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**let_polymorphism_records.md:19:50:19:56:**
+**let_polymorphism_records.md:19:50:19:51:**
 ```roc
 update_data = |container, new_value| { container & data: new_value }
 ```
-                                                 ^^^^^^
+                                                 ^
 
 
 **UNUSED VARIABLE**
@@ -97,13 +97,13 @@ CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 ~~~clojure
 (file @1.1-36.2
 	(app @1.1-1.56
-		(provides @1.6-1.11
-			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf")
+		(provides @1.5-1.11
+			(exposed-lower-ident @1.6-1.10 (text "main")))
+		(record-field @1.14-1.54 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf")
+			(record-field @1.14-1.54 (name "pf")
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -159,9 +159,9 @@ CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 				(e-block @19.38-19.69
 					(statements
 						(e-ident @19.40-19.49 (raw "container"))
-						(e-malformed @19.50-19.56 (reason "expr_unexpected_token"))
-						(s-type-anno @19.52-19.69 (name "data")
-							(ty-var @19.58-19.67 (raw "new_value")))))))
+						(e-malformed @19.50-19.51 (reason "expr_unexpected_token"))
+						(s-type-anno @19.52-19.67 (name "data")
+							(ty-var @1.1-1.1 (raw "new_value")))))))
 		(s-decl @22.1-22.46
 			(p-ident @22.1-22.12 (raw "updated_int"))
 			(e-apply @22.15-22.46
@@ -209,11 +209,11 @@ CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 					(p-underscore))
 				(e-block @33.12-36.2
 					(statements
-						(e-binop @35.5-36.2 (op "+")
-							(e-field-access @35.5-35.26
+						(e-binop @35.5-35.46 (op "+")
+							(e-field-access @35.5-35.24
 								(e-ident @35.5-35.18 (raw "int_container"))
 								(e-ident @35.18-35.24 (raw "count")))
-							(e-field-access @35.27-36.2
+							(e-field-access @35.27-35.46
 								(e-ident @35.27-35.40 (raw "str_container"))
 								(e-ident @35.40-35.46 (raw "count"))))))))))
 ~~~
@@ -241,6 +241,8 @@ update_data = |container, new_value| {
 	container
 	
 	data : new_value
+
+	# Used with different record types
 }
 
 # Used with different record types
@@ -324,12 +326,12 @@ main = |_| {
 				(p-assign @19.16-19.25 (ident "container"))
 				(p-assign @19.27-19.36 (ident "new_value")))
 			(e-block @19.38-19.69
-				(s-expr @19.40-19.51
+				(s-expr @19.40-19.49
 					(e-lookup-local @19.40-19.49
 						(p-assign @19.16-19.25 (ident "container"))))
-				(s-type-anno @19.52-19.69 (name "data")
-					(ty-var @19.58-19.67 (name "new_value")))
-				(e-tuple @19.52-19.69
+				(s-type-anno @19.52-19.67 (name "data")
+					(ty-var @1.1-1.1 (name "new_value")))
+				(e-tuple @19.52-19.67
 					(elems)))))
 	(d-let
 		(p-assign @22.1-22.12 (ident "updated_int"))
@@ -387,12 +389,12 @@ main = |_| {
 			(args
 				(p-underscore @33.9-33.10))
 			(e-block @33.12-36.2
-				(e-binop @35.5-36.2 (op "add")
-					(e-dot-access @35.5-35.26 (field "count")
+				(e-binop @35.5-35.46 (op "add")
+					(e-dot-access @35.5-35.24 (field "count")
 						(receiver
 							(e-lookup-local @35.5-35.18
 								(p-assign @14.1-14.14 (ident "int_container")))))
-					(e-dot-access @35.27-36.2 (field "count")
+					(e-dot-access @35.27-35.46 (field "count")
 						(receiver
 							(e-lookup-local @35.27-35.40
 								(p-assign @15.1-15.14 (ident "str_container"))))))))))

@@ -16,6 +16,10 @@ If you want to debug the rust compiler instead of a roc program, you need to com
 
 - In general we recommend using linux to investigate, it has better tools for this. 
 - If your segfault also happens when using `--linker=legacy`, use it to improve valgrind output. For example: `roc build myApp.roc --linker=legacy` followed by `valgrind ./myApp`.
+- A very quick way to get a backtrace at the point of segfault is:
+```
+$ gdb --batch --ex run --ex bt --args roc check myApp.roc
+```
 
 ### Assembly debuggers
 

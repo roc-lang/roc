@@ -80,18 +80,18 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 					(p-ident @4.17-4.22 (raw "items")))
 				(e-block @4.24-21.2
 					(statements
-						(s-var @5.2-6.5 (name "count_")
+						(s-var @5.2-5.16 (name "count_")
 							(e-int @5.15-5.16 (raw "0")))
-						(s-var @6.2-9.8 (name "total_")
+						(s-var @6.2-6.16 (name "total_")
 							(e-int @6.15-6.16 (raw "0")))
-						(s-decl @9.2-10.8
+						(s-decl @9.2-9.21
 							(p-ident @9.2-9.8 (raw "count_"))
-							(e-binop @9.11-10.8 (op "+")
+							(e-binop @9.11-9.21 (op "+")
 								(e-ident @9.11-9.17 (raw "count_"))
 								(e-int @9.20-9.21 (raw "1"))))
-						(s-decl @10.2-13.12
+						(s-decl @10.2-10.22
 							(p-ident @10.2-10.8 (raw "total_"))
-							(e-binop @10.11-13.12 (op "+")
+							(e-binop @10.11-10.22 (op "+")
 								(e-ident @10.11-10.17 (raw "total_"))
 								(e-int @10.20-10.22 (raw "10"))))
 						(s-decl @13.2-17.3
@@ -101,14 +101,14 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 									(p-underscore))
 								(e-block @13.19-17.3
 									(statements
-										(s-decl @14.3-15.9
+										(s-decl @14.3-14.22
 											(p-ident @14.3-14.9 (raw "count_"))
-											(e-binop @14.12-15.9 (op "+")
+											(e-binop @14.12-14.22 (op "+")
 												(e-ident @14.12-14.18 (raw "count_"))
 												(e-int @14.21-14.22 (raw "5"))))
-										(s-decl @15.3-16.9
+										(s-decl @15.3-15.22
 											(p-ident @15.3-15.9 (raw "total_"))
-											(e-binop @15.12-16.9 (op "*")
+											(e-binop @15.12-15.22 (op "*")
 												(e-ident @15.12-15.18 (raw "total_"))
 												(e-int @15.21-15.22 (raw "2"))))
 										(e-ident @16.3-16.9 (raw "count_"))))))
@@ -117,13 +117,34 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 							(e-apply @19.11-19.25
 								(e-ident @19.11-19.21 (raw "nestedFunc"))
 								(e-record @19.22-19.24)))
-						(e-binop @20.2-21.2 (op "+")
+						(e-binop @20.2-20.17 (op "+")
 							(e-ident @20.2-20.8 (raw "total_"))
 							(e-ident @20.11-20.17 (raw "result")))))))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+# Regular function with var usage
+processItems = |items| {
+	var count_ = 0
+	var total_ = 0
+
+	# Reassign vars within same function - should work
+	count_ = count_ + 1
+	total_ = total_ + 10
+
+	# Nested function - var reassignment should fail across function boundary
+	nestedFunc = |_| {
+		count_ = count_ + 5 # Should cause error - different function
+		total_ = total_ * 2 # Should cause error - different function
+		count_
+
+	}
+
+	result = nestedFunc({})
+	total_ + result
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -134,23 +155,23 @@ NO CHANGE
 			(args
 				(p-assign @4.17-4.22 (ident "items")))
 			(e-block @4.24-21.2
-				(s-var @5.2-6.5
-					(p-assign @5.2-6.5 (ident "count_"))
+				(s-var @5.2-5.16
+					(p-assign @5.2-5.16 (ident "count_"))
 					(e-int @5.15-5.16 (value "0")))
-				(s-var @6.2-9.8
-					(p-assign @6.2-9.8 (ident "total_"))
+				(s-var @6.2-6.16
+					(p-assign @6.2-6.16 (ident "total_"))
 					(e-int @6.15-6.16 (value "0")))
 				(s-reassign @9.2-9.8
-					(p-assign @5.2-6.5 (ident "count_"))
-					(e-binop @9.11-10.8 (op "add")
+					(p-assign @5.2-5.16 (ident "count_"))
+					(e-binop @9.11-9.21 (op "add")
 						(e-lookup-local @9.11-9.17
-							(p-assign @5.2-6.5 (ident "count_")))
+							(p-assign @5.2-5.16 (ident "count_")))
 						(e-int @9.20-9.21 (value "1"))))
 				(s-reassign @10.2-10.8
-					(p-assign @6.2-9.8 (ident "total_"))
-					(e-binop @10.11-13.12 (op "add")
+					(p-assign @6.2-6.16 (ident "total_"))
+					(e-binop @10.11-10.22 (op "add")
 						(e-lookup-local @10.11-10.17
-							(p-assign @6.2-9.8 (ident "total_")))
+							(p-assign @6.2-6.16 (ident "total_")))
 						(e-int @10.20-10.22 (value "10"))))
 				(s-let @13.2-17.3
 					(p-assign @13.2-13.12 (ident "nestedFunc"))
@@ -159,22 +180,22 @@ NO CHANGE
 							(p-underscore @13.16-13.17))
 						(e-block @13.19-17.3
 							(s-reassign @14.3-14.9
-								(p-assign @5.2-6.5 (ident "count_"))
+								(p-assign @5.2-5.16 (ident "count_"))
 								(e-runtime-error (tag "var_across_function_boundary")))
 							(s-reassign @15.3-15.9
-								(p-assign @6.2-9.8 (ident "total_"))
+								(p-assign @6.2-6.16 (ident "total_"))
 								(e-runtime-error (tag "var_across_function_boundary")))
 							(e-lookup-local @16.3-16.9
-								(p-assign @5.2-6.5 (ident "count_"))))))
+								(p-assign @5.2-5.16 (ident "count_"))))))
 				(s-let @19.2-19.25
 					(p-assign @19.2-19.8 (ident "result"))
 					(e-call @19.11-19.25
 						(e-lookup-local @19.11-19.21
 							(p-assign @13.2-13.12 (ident "nestedFunc")))
 						(e-empty_record @19.22-19.24)))
-				(e-binop @20.2-21.2 (op "add")
+				(e-binop @20.2-20.17 (op "add")
 					(e-lookup-local @20.2-20.8
-						(p-assign @6.2-9.8 (ident "total_")))
+						(p-assign @6.2-6.16 (ident "total_")))
 					(e-lookup-local @20.11-20.17
 						(p-assign @19.2-19.8 (ident "result"))))))))
 ~~~

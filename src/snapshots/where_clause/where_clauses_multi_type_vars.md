@@ -25,22 +25,22 @@ LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),Underscore(4:12-4:13),Co
 (file @1.1-4.21
 	(module @1.1-1.17
 		(exposes @1.8-1.17
-			(exposed-lower-ident (text "process"))))
+			(exposed-lower-ident @1.9-1.16 (text "process"))))
 	(statements
-		(s-type-anno @3.1-4.8 (name "process")
+		(s-type-anno @3.1-3.83 (name "process")
 			(ty-fn @3.11-3.20
-				(ty-var @3.11-3.12 (raw "a"))
-				(ty-var @3.14-3.15 (raw "b"))
-				(ty-var @3.19-3.20 (raw "c")))
+				(ty-var @1.1-1.1 (raw "a"))
+				(ty-var @1.1-1.1 (raw "b"))
+				(ty-var @1.1-1.1 (raw "c")))
 			(where
-				(method @3.27-3.54 (module-of "a") (name "convert")
+				(method @3.27-3.53 (module-of "a") (name "convert")
 					(args
-						(ty-var @3.47-3.48 (raw "a")))
-					(ty-var @3.52-3.53 (raw "c")))
-				(method @3.55-4.8 (module-of "b") (name "transform")
+						(ty-var @1.1-1.1 (raw "a")))
+					(ty-var @1.1-1.1 (raw "c")))
+				(method @3.55-3.83 (module-of "b") (name "transform")
 					(args
-						(ty-var @3.77-3.78 (raw "b")))
-					(ty-var @3.82-3.83 (raw "c")))))
+						(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @1.1-1.1 (raw "c")))))
 		(s-decl @4.1-4.21
 			(p-ident @4.1-4.8 (raw "process"))
 			(e-lambda @4.11-4.21
@@ -62,29 +62,29 @@ NO CHANGE
 			(args
 				(p-underscore @4.12-4.13)
 				(p-underscore @4.15-4.16))
-			(e-not-implemented @4.18-4.21))
+			(e-not-implemented @1.1-1.1))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.20 (effectful false)
-					(ty-var @3.11-3.12 (name "a"))
-					(ty-var @3.14-3.15 (name "b"))
-					(ty-var @3.19-3.20 (name "c"))))))
-	(s-type-anno @3.1-4.8 (name "process")
+					(ty-var @1.1-1.1 (name "a"))
+					(ty-var @1.1-1.1 (name "b"))
+					(ty-var @1.1-1.1 (name "c"))))))
+	(s-type-anno @3.1-3.83 (name "process")
 		(ty-fn @3.11-3.20 (effectful false)
-			(ty-var @3.11-3.12 (name "a"))
-			(ty-var @3.14-3.15 (name "b"))
-			(ty-var @3.19-3.20 (name "c")))
+			(ty-var @1.1-1.1 (name "a"))
+			(ty-var @1.1-1.1 (name "b"))
+			(ty-var @1.1-1.1 (name "c")))
 		(where
-			(method @3.27-3.54 (module-of "a") (ident "convert")
+			(method @3.27-3.53 (module-of "a") (ident "convert")
 				(args
-					(ty-var @3.47-3.48 (name "a")))
-				(ty-var @3.52-3.53 (name "c")))
-			(method @3.55-4.8 (module-of "b") (ident "transform")
+					(ty-var @1.1-1.1 (name "a")))
+				(ty-var @1.1-1.1 (name "c")))
+			(method @3.55-3.83 (module-of "b") (ident "transform")
 				(args
-					(ty-var @3.77-3.78 (name "b")))
-				(ty-var @3.82-3.83 (name "c")))))
-	(ext-decl @3.27-3.54 (ident "module(a).convert") (kind "value"))
-	(ext-decl @3.55-4.8 (ident "module(b).transform") (kind "value")))
+					(ty-var @1.1-1.1 (name "b")))
+				(ty-var @1.1-1.1 (name "c")))))
+	(ext-decl @3.27-3.53 (ident "module(a).convert") (kind "value"))
+	(ext-decl @3.55-3.83 (ident "module(b).transform") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

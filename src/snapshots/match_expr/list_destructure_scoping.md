@@ -36,15 +36,15 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 (e-match
 	(e-ident @1.7-1.11 (raw "list"))
 	(branches
-		(branch @2.5-3.6
+		(branch @2.5-2.21
 			(p-list @2.5-2.12
 				(p-ident @2.6-2.11 (raw "first")))
 			(e-ident @2.16-2.21 (raw "first")))
-		(branch @3.5-4.2
+		(branch @3.5-3.38
 			(p-list @3.5-3.20
 				(p-ident @3.6-3.11 (raw "first"))
 				(p-ident @3.13-3.19 (raw "second")))
-			(e-binop @3.24-4.2 (op "+")
+			(e-binop @3.24-3.38 (op "+")
 				(e-ident @3.24-3.29 (raw "first"))
 				(e-ident @3.32-3.38 (raw "second"))))))
 ~~~
@@ -79,7 +79,7 @@ match list {
 								(p-assign @3.6-3.11 (ident "first"))
 								(p-assign @3.13-3.19 (ident "second"))))))
 				(value
-					(e-binop @3.24-4.2 (op "add")
+					(e-binop @3.24-3.38 (op "add")
 						(e-lookup-local @3.24-3.29
 							(p-assign @3.6-3.11 (ident "first")))
 						(e-lookup-local @3.32-3.38

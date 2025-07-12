@@ -100,23 +100,23 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 (e-match
 	(e-ident @1.7-1.8 (raw "x"))
 	(branches
-		(branch @2.5-3.10
+		(branch @2.5-2.33
 			(p-frac @2.5-2.10 (raw "1e100"))
 			(e-string @2.14-2.33
 				(e-string-part @2.15-2.32 (raw "very large number"))))
-		(branch @3.5-4.27
+		(branch @3.5-3.33
 			(p-frac @3.5-3.10 (raw "1e-40"))
 			(e-string @3.14-3.33
 				(e-string-part @3.15-3.32 (raw "very small number"))))
-		(branch @4.5-5.8
+		(branch @4.5-4.45
 			(p-frac @4.5-4.27 (raw "1.7976931348623157e308"))
 			(e-string @4.31-4.45
 				(e-string-part @4.32-4.44 (raw "near f64 max"))))
-		(branch @5.5-6.10
+		(branch @5.5-5.18
 			(p-frac @5.5-5.8 (raw "0.0"))
 			(e-string @5.12-5.18
 				(e-string-part @5.13-5.17 (raw "zero"))))
-		(branch @6.5-7.2
+		(branch @6.5-6.21
 			(p-ident @6.5-6.10 (raw "value"))
 			(e-string @6.14-6.21
 				(e-string-part @6.15-6.20 (raw "other"))))))

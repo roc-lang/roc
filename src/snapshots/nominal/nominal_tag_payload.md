@@ -39,11 +39,11 @@ LowerIdent(13:1-13:6),OpAssign(13:7-13:8),UpperIdent(13:9-13:14),NoSpaceDotUpper
 (file @1.1-13.19
 	(module @1.1-1.43
 		(exposes @1.8-1.43
-			(exposed-upper-ident (text "Maybe"))
-			(exposed-lower-ident (text "some1"))
-			(exposed-lower-ident (text "none1"))
-			(exposed-lower-ident (text "some2"))
-			(exposed-lower-ident (text "none2"))))
+			(exposed-upper-ident @1.9-1.14 (text "Maybe"))
+			(exposed-lower-ident @1.16-1.21 (text "some1"))
+			(exposed-lower-ident @1.23-1.28 (text "none1"))
+			(exposed-lower-ident @1.30-1.35 (text "some2"))
+			(exposed-lower-ident @1.37-1.42 (text "none2"))))
 	(statements
 		(s-type-decl @3.1-3.28
 			(header @3.1-3.9 (name "Maybe")
@@ -53,14 +53,14 @@ LowerIdent(13:1-13:6),OpAssign(13:7-13:8),UpperIdent(13:9-13:14),NoSpaceDotUpper
 				(tags
 					(ty-apply @3.14-3.21
 						(ty @3.14-3.18 (name "Some"))
-						(ty-var @3.19-3.20 (raw "a")))
+						(ty-var @3.19-3.19 (raw "a")))
 					(ty @3.23-3.27 (name "None")))))
-		(s-type-anno @5.1-6.6 (name "some1")
+		(s-type-anno @5.1-5.22 (name "some1")
 			(ty-fn @5.9-5.22
-				(ty-var @5.9-5.10 (raw "a"))
+				(ty-var @1.1-1.1 (raw "a"))
 				(ty-apply @5.14-5.22
 					(ty @5.14-5.19 (name "Maybe"))
-					(ty-var @5.20-5.21 (raw "a")))))
+					(ty-var @5.20-5.20 (raw "a")))))
 		(s-decl @6.1-6.26
 			(p-ident @6.1-6.6 (raw "some1"))
 			(e-lambda @6.9-6.26
@@ -69,10 +69,10 @@ LowerIdent(13:1-13:6),OpAssign(13:7-13:8),UpperIdent(13:9-13:14),NoSpaceDotUpper
 				(e-apply @6.13-6.26
 					(e-tag @6.13-6.23 (raw "Maybe.Some"))
 					(e-ident @6.24-6.25 (raw "a")))))
-		(s-type-anno @8.1-9.6 (name "none1")
+		(s-type-anno @8.1-8.17 (name "none1")
 			(ty-apply @8.9-8.17
 				(ty @8.9-8.14 (name "Maybe"))
-				(ty-var @8.15-8.16 (raw "a"))))
+				(ty-var @8.15-8.15 (raw "a"))))
 		(s-decl @9.1-9.19
 			(p-ident @9.1-9.6 (raw "none1"))
 			(e-tag @9.9-9.19 (raw "Maybe.None")))
@@ -120,9 +120,9 @@ none2 = None
 		(annotation @6.1-6.6
 			(declared-type
 				(ty-fn @5.9-5.22 (effectful false)
-					(ty-var @5.9-5.10 (name "a"))
+					(ty-var @1.1-1.1 (name "a"))
 					(ty-apply @5.14-5.22 (symbol "Maybe")
-						(ty-var @5.20-5.21 (name "a")))))))
+						(ty-var @5.20-5.20 (name "a")))))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "none1"))
 		(e-nominal @9.9-9.14 (nominal "Maybe")
@@ -130,7 +130,7 @@ none2 = None
 		(annotation @9.1-9.6
 			(declared-type
 				(ty-apply @8.9-8.17 (symbol "Maybe")
-					(ty-var @8.15-8.16 (name "a"))))))
+					(ty-var @8.15-8.15 (name "a"))))))
 	(d-let
 		(p-assign @11.1-11.6 (ident "some2"))
 		(e-lambda @11.9-11.26
@@ -151,7 +151,7 @@ none2 = None
 				(ty-var @3.7-3.8 (name "a"))))
 		(ty-tag-union @3.13-3.28
 			(ty-apply @3.14-3.21 (symbol "Some")
-				(ty-var @3.19-3.20 (name "a")))
+				(ty-var @3.19-3.19 (name "a")))
 			(ty @3.23-3.27 (name "None")))))
 ~~~
 # TYPES

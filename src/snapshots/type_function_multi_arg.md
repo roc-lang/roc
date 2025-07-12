@@ -13,42 +13,42 @@ curry = |fn| |x| |y| fn(x, y)
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_function_multi_arg.md:3:21:3:25
-INVALID STATEMENT - type_function_multi_arg.md:3:21:3:25
-INVALID STATEMENT - type_function_multi_arg.md:3:24:4:6
+UNEXPECTED TOKEN IN EXPRESSION - type_function_multi_arg.md:3:21:3:23
+INVALID STATEMENT - type_function_multi_arg.md:3:21:3:23
+INVALID STATEMENT - type_function_multi_arg.md:3:24:3:37
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **-> (** is not expected in an expression.
+The token **->** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_function_multi_arg.md:3:21:3:25:**
+**type_function_multi_arg.md:3:21:3:23:**
 ```roc
 curry : (a, b -> c) -> (a -> b -> c)
 ```
-                    ^^^^
+                    ^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_function_multi_arg.md:3:21:3:25:**
+**type_function_multi_arg.md:3:21:3:23:**
 ```roc
 curry : (a, b -> c) -> (a -> b -> c)
 ```
-                    ^^^^
+                    ^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_function_multi_arg.md:3:24:4:6:**
+**type_function_multi_arg.md:3:24:3:37:**
 ```roc
 curry : (a, b -> c) -> (a -> b -> c)
-curry = |fn| |x| |y| fn(x, y)
 ```
+                       ^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -62,28 +62,28 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~clojure
 (file @1.1-6.15
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.23 (name "curry")
+		(s-type-anno @3.1-3.20 (name "curry")
 			(ty-fn @3.10-3.19
-				(ty-var @3.10-3.11 (raw "a"))
-				(ty-var @3.13-3.14 (raw "b"))
-				(ty-var @3.18-3.19 (raw "c"))))
-		(e-malformed @3.21-3.25 (reason "expr_unexpected_token"))
+				(ty-var @3.10-3.10 (raw "a"))
+				(ty-var @1.1-1.1 (raw "b"))
+				(ty-var @1.1-1.1 (raw "c"))))
+		(e-malformed @3.21-3.23 (reason "expr_unexpected_token"))
 		(e-tuple @3.24-3.37
-			(e-local-dispatch @3.25-3.37
-				(e-local-dispatch @3.25-3.34
+			(e-local-dispatch @3.25-3.36
+				(e-local-dispatch @3.25-3.31
 					(e-ident @3.25-3.26 (raw "a"))
-					(e-ident @3.30-3.31 (raw "b")))
-				(e-ident @3.35-3.36 (raw "c"))))
+					(e-ident @1.1-1.1 (raw "b")))
+				(e-ident @1.1-1.1 (raw "c"))))
 		(s-decl @4.1-4.30
 			(p-ident @4.1-4.6 (raw "curry"))
 			(e-lambda @4.9-4.30
@@ -110,7 +110,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-curry : (a, b -> c)(a->b->c)
+curry : (a, b -> c)
+(a->b->c)
 curry = |fn| |x| |y| fn(x, y)
 
 main! = |_| {}

@@ -11,74 +11,71 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:15:2:6
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:2:8:2:10
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:3:6
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:10
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:4:2
+UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:15:1:17
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:2:8:2:9
+UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:10
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:9
+UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
 UNDEFINED VARIABLE - record_builder.md:1:3:1:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **<-
-    x** is not expected in an expression.
+The token **<-** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_builder.md:1:15:2:6:**
+**record_builder.md:1:15:1:17:**
 ```roc
 { Foo.Bar.baz <-
-    x: 5,
 ```
+              ^^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **5,** is not expected in a type annotation.
+The token **5** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
 Here is the problematic code:
-**record_builder.md:2:8:2:10:**
+**record_builder.md:2:8:2:9:**
 ```roc
     x: 5,
 ```
-       ^^
+       ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **,
-    y** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_builder.md:2:9:3:6:**
+**record_builder.md:2:9:2:10:**
 ```roc
     x: 5,
-    y: 0,
 ```
+        ^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **0,** is not expected in a type annotation.
+The token **0** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
 Here is the problematic code:
-**record_builder.md:3:8:3:10:**
+**record_builder.md:3:8:3:9:**
 ```roc
     y: 0,
 ```
-       ^^
+       ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **,
-}** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_builder.md:3:9:4:2:**
+**record_builder.md:3:9:3:10:**
 ```roc
     y: 0,
-}
 ```
+        ^
 
 
 **UNDEFINED VARIABLE**
@@ -110,13 +107,13 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 (e-block @1.1-4.2
 	(statements
 		(e-ident @1.3-1.14 (raw "Foo.Bar.baz"))
-		(e-malformed @1.15-2.6 (reason "expr_unexpected_token"))
-		(s-type-anno @2.5-2.10 (name "x")
-			(ty-malformed @2.8-2.10 (tag "ty_anno_unexpected_token")))
-		(e-malformed @2.9-3.6 (reason "expr_unexpected_token"))
-		(s-type-anno @3.5-3.10 (name "y")
-			(ty-malformed @3.8-3.10 (tag "ty_anno_unexpected_token")))
-		(e-malformed @3.9-4.2 (reason "expr_unexpected_token"))))
+		(e-malformed @1.15-1.17 (reason "expr_unexpected_token"))
+		(s-type-anno @2.5-2.9 (name "x")
+			(ty-malformed @2.8-2.9 (tag "ty_anno_unexpected_token")))
+		(e-malformed @2.9-2.10 (reason "expr_unexpected_token"))
+		(s-type-anno @3.5-3.9 (name "y")
+			(ty-malformed @3.8-3.9 (tag "ty_anno_unexpected_token")))
+		(e-malformed @3.9-3.10 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -132,12 +129,12 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-4.2
-	(s-expr @1.3-1.17
+	(s-expr @1.3-1.14
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-type-anno @2.5-2.10 (name "x")
-		(ty-malformed @2.8-2.10))
-	(s-type-anno @3.5-3.10 (name "y")
-		(ty-malformed @3.8-3.10))
+	(s-type-anno @2.5-2.9 (name "x")
+		(ty-malformed @2.8-2.9))
+	(s-type-anno @3.5-3.9 (name "y")
+		(ty-malformed @3.8-3.9))
 	(e-empty_record @1.1-4.2))
 ~~~
 # TYPES

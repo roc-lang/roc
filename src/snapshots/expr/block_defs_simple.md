@@ -30,12 +30,12 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 		(s-decl @2.5-2.11
 			(p-ident @2.5-2.6 (raw "x"))
 			(e-int @2.9-2.11 (raw "42")))
-		(s-decl @3.5-4.6
+		(s-decl @3.5-3.14
 			(p-ident @3.5-3.6 (raw "y"))
-			(e-binop @3.9-4.6 (op "+")
+			(e-binop @3.9-3.14 (op "+")
 				(e-ident @3.9-3.10 (raw "x"))
 				(e-int @3.13-3.14 (raw "1"))))
-		(e-binop @4.5-5.2 (op "*")
+		(e-binop @4.5-4.10 (op "*")
 			(e-ident @4.5-4.6 (raw "y"))
 			(e-int @4.9-4.10 (raw "2")))))
 ~~~
@@ -53,13 +53,13 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 	(s-let @2.5-2.11
 		(p-assign @2.5-2.6 (ident "x"))
 		(e-int @2.9-2.11 (value "42")))
-	(s-let @3.5-4.6
+	(s-let @3.5-3.14
 		(p-assign @3.5-3.6 (ident "y"))
-		(e-binop @3.9-4.6 (op "add")
+		(e-binop @3.9-3.14 (op "add")
 			(e-lookup-local @3.9-3.10
 				(p-assign @2.5-2.6 (ident "x")))
 			(e-int @3.13-3.14 (value "1"))))
-	(e-binop @4.5-5.2 (op "mul")
+	(e-binop @4.5-4.10 (op "mul")
 		(e-lookup-local @4.5-4.6
 			(p-assign @3.5-3.6 (ident "y")))
 		(e-int @4.9-4.10 (value "2"))))

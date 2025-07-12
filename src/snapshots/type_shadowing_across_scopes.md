@@ -19,13 +19,13 @@ InnerModule : {
 }
 ~~~
 # EXPECTED
-PARSE ERROR - type_shadowing_across_scopes.md:11:5:11:13
-PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:32
-UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:12:2
+PARSE ERROR - type_shadowing_across_scopes.md:11:5:11:11
+PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:31
+UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:11:32
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:12:1:12:2
 TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
-INVALID STATEMENT - type_shadowing_across_scopes.md:11:31:12:2
+INVALID STATEMENT - type_shadowing_across_scopes.md:11:31:11:32
 INVALID STATEMENT - type_shadowing_across_scopes.md:12:1:12:2
 # PROBLEMS
 **PARSE ERROR**
@@ -33,11 +33,11 @@ A parsing error occurred: `expected_type_field_name`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**type_shadowing_across_scopes.md:11:5:11:13:**
+**type_shadowing_across_scopes.md:11:5:11:11:**
 ```roc
     Result : [Success, Failure]
 ```
-    ^^^^^^^^
+    ^^^^^^
 
 
 **PARSE ERROR**
@@ -45,24 +45,23 @@ A parsing error occurred: `expected_ty_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**type_shadowing_across_scopes.md:11:24:11:32:**
+**type_shadowing_across_scopes.md:11:24:11:31:**
 ```roc
     Result : [Success, Failure]
 ```
-                       ^^^^^^^^
+                       ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **]
-}** is not expected in an expression.
+The token **]** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_shadowing_across_scopes.md:11:31:12:2:**
+**type_shadowing_across_scopes.md:11:31:11:32:**
 ```roc
     Result : [Success, Failure]
-}
 ```
+                              ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -114,11 +113,11 @@ processData = |data|
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_shadowing_across_scopes.md:11:31:12:2:**
+**type_shadowing_across_scopes.md:11:31:11:32:**
 ```roc
     Result : [Success, Failure]
-}
 ```
+                              ^
 
 
 **INVALID STATEMENT**
@@ -148,8 +147,8 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 (file @1.1-12.2
 	(module @1.1-1.29
 		(exposes @1.8-1.29
-			(exposed-upper-ident (text "Result"))
-			(exposed-lower-ident (text "processData"))))
+			(exposed-upper-ident @1.9-1.15 (text "Result"))
+			(exposed-lower-ident @1.17-1.28 (text "processData"))))
 	(statements
 		(s-type-decl @3.1-3.31
 			(header @3.1-3.13 (name "Result")
@@ -160,11 +159,11 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 				(tags
 					(ty-apply @3.17-3.22
 						(ty @3.17-3.19 (name "Ok"))
-						(ty-var @3.20-3.21 (raw "a")))
+						(ty-var @3.20-3.20 (raw "a")))
 					(ty-apply @3.24-3.30
 						(ty @3.24-3.27 (name "Err"))
-						(ty-var @3.28-3.29 (raw "b"))))))
-		(s-type-anno @5.1-6.12 (name "processData")
+						(ty-var @3.28-3.28 (raw "b"))))))
+		(s-type-anno @5.1-5.25 (name "processData")
 			(ty-fn @5.15-5.25
 				(ty @5.15-5.18 (name "Str"))
 				(ty @5.22-5.25 (name "Str"))))
@@ -175,11 +174,11 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 					(p-ident @6.16-6.20 (raw "data")))
 				(e-string @7.5-7.16
 					(e-string-part @7.6-7.15 (raw "processed")))))
-		(s-type-decl @10.1-11.32
+		(s-type-decl @10.1-11.31
 			(header @10.1-10.12 (name "InnerModule")
 				(args))
-			(ty-malformed @11.24-11.32 (tag "expected_ty_close_curly_or_comma")))
-		(e-malformed @11.31-12.2 (reason "expr_unexpected_token"))
+			(ty-malformed @11.24-11.31 (tag "expected_ty_close_curly_or_comma")))
+		(e-malformed @11.31-11.32 (reason "expr_unexpected_token"))
 		(e-malformed @12.1-12.2 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
@@ -194,6 +193,7 @@ processData = |data|
 
 # In a nested module scope, redeclare Result
 InnerModule : 
+
 
 ~~~
 # CANONICALIZE
@@ -218,12 +218,12 @@ InnerModule :
 				(ty-var @3.11-3.12 (name "b"))))
 		(ty-tag-union @3.16-3.31
 			(ty-apply @3.17-3.22 (symbol "Ok")
-				(ty-var @3.20-3.21 (name "a")))
+				(ty-var @3.20-3.20 (name "a")))
 			(ty-apply @3.24-3.30 (symbol "Err")
-				(ty-var @3.28-3.29 (name "b")))))
-	(s-alias-decl @10.1-11.32
+				(ty-var @3.28-3.28 (name "b")))))
+	(s-alias-decl @10.1-11.31
 		(ty-header @10.1-10.12 (name "InnerModule"))
-		(ty-malformed @11.24-11.32)))
+		(ty-malformed @11.24-11.31)))
 ~~~
 # TYPES
 ~~~clojure
@@ -236,7 +236,7 @@ InnerModule :
 				(ty-args
 					(ty-var @3.8-3.9 (name "a"))
 					(ty-var @3.11-3.12 (name "b")))))
-		(alias @10.1-11.32 (type "InnerModule")
+		(alias @10.1-11.31 (type "InnerModule")
 			(ty-header @10.1-10.12 (name "InnerModule"))))
 	(expressions
 		(expr @6.15-7.16 (type "Str -> Str"))))

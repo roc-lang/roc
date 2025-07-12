@@ -60,13 +60,13 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 (e-match
 	(e-ident @1.7-1.12 (raw "color"))
 	(branches
-		(branch @2.2-3.6
+		(branch @2.2-2.10
 			(p-tag @2.2-2.5 (raw "Red"))
 			(e-int @2.9-2.10 (raw "1")))
-		(branch @3.2-4.7
+		(branch @3.2-3.11
 			(p-tag @3.2-3.6 (raw "Blue"))
 			(e-int @3.10-3.11 (raw "2")))
-		(branch @4.2-5.2
+		(branch @4.2-4.14
 			(p-tag @4.2-4.7 (raw "Green"))
 			(e-string @4.11-4.14
 				(e-string-part @4.12-4.13 (raw "3"))))))

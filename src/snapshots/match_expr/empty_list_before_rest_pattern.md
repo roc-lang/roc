@@ -36,14 +36,14 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 (e-match
 	(e-ident @1.7-1.8 (raw "l"))
 	(branches
-		(branch @2.5-3.6
+		(branch @2.5-2.25
 			(p-list @2.5-2.7)
 			(e-apply @2.11-2.25
 				(e-tag @2.11-2.14 (raw "Err"))
 				(e-tag @2.15-2.24 (raw "EmptyList"))))
-		(branch @3.5-4.2
+		(branch @3.5-3.21
 			(p-list @3.5-3.12
-				(p-list-rest @3.6-3.9)
+				(p-list-rest @3.6-3.8)
 				(p-ident @3.10-3.11 (raw "e")))
 			(e-apply @3.16-3.21
 				(e-tag @3.16-3.18 (raw "Ok"))

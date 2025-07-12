@@ -20,13 +20,13 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 (e-lambda @1.1-1.67
 	(args
 		(p-record @1.2-1.15
-			(field @1.4-1.9 (name "name") (rest false))
-			(field @1.10-1.15 (name "age") (rest false))))
+			(field @1.4-1.8 (name "name") (rest false))
+			(field @1.10-1.13 (name "age") (rest false))))
 	(e-string @1.17-1.67
 		(e-string-part @1.18-1.24 (raw "Hello "))
 		(e-ident @1.26-1.30 (raw "name"))
 		(e-string-part @1.31-1.41 (raw ", you are "))
-		(e-field-access @1.43-1.56
+		(e-field-access @1.43-1.55
 			(e-ident @1.43-1.46 (raw "age"))
 			(e-apply @1.46-1.55
 				(e-ident @1.46-1.53 (raw "to_str"))))
@@ -42,19 +42,19 @@ NO CHANGE
 	(args
 		(p-record-destructure @1.2-1.15
 			(destructs
-				(record-destruct @1.4-1.9 (label "name") (ident "name")
+				(record-destruct @1.4-1.8 (label "name") (ident "name")
 					(required))
-				(record-destruct @1.10-1.15 (label "age") (ident "age")
+				(record-destruct @1.10-1.13 (label "age") (ident "age")
 					(required)))))
 	(e-string @1.17-1.67
 		(e-literal @1.18-1.24 (string "Hello "))
 		(e-lookup-local @1.26-1.30
-			(p-assign @1.4-1.9 (ident "name")))
+			(p-assign @1.4-1.8 (ident "name")))
 		(e-literal @1.31-1.41 (string ", you are "))
-		(e-dot-access @1.43-1.56 (field "to_str")
+		(e-dot-access @1.43-1.55 (field "to_str")
 			(receiver
 				(e-lookup-local @1.43-1.46
-					(p-assign @1.10-1.15 (ident "age"))))
+					(p-assign @1.10-1.13 (ident "age"))))
 			(args))
 		(e-literal @1.56-1.66 (string " years old"))))
 ~~~

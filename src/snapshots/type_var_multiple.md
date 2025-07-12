@@ -17,22 +17,22 @@ swap = |pair| {
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_var_multiple.md:6:21:6:27
+UNEXPECTED TOKEN IN EXPRESSION - type_var_multiple.md:6:21:6:22
 UNDEFINED VARIABLE - type_var_multiple.md:6:6:6:11
 UNDEFINED VARIABLE - type_var_multiple.md:6:13:6:19
 UNDEFINED VARIABLE - type_var_multiple.md:7:6:7:12
 UNDEFINED VARIABLE - type_var_multiple.md:7:14:7:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= pair** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_var_multiple.md:6:21:6:27:**
+**type_var_multiple.md:6:21:6:22:**
 ```roc
     (first, second) = pair
 ```
-                    ^^^^^^
+                    ^
 
 
 **UNDEFINED VARIABLE**
@@ -93,24 +93,24 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 ~~~clojure
 (file @1.1-10.15
 	(app @1.1-1.57
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.55 (name "pf")
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @4.1-5.5 (name "swap")
+		(s-type-anno @4.1-4.24 (name "swap")
 			(ty-fn @4.8-4.24
 				(ty-tuple @4.8-4.14
-					(ty-var @4.9-4.10 (raw "a"))
-					(ty-var @4.12-4.13 (raw "b")))
+					(ty-var @4.9-4.9 (raw "a"))
+					(ty-var @1.1-1.1 (raw "b")))
 				(ty-tuple @4.18-4.24
-					(ty-var @4.19-4.20 (raw "b"))
-					(ty-var @4.22-4.23 (raw "a")))))
+					(ty-var @4.19-4.19 (raw "b"))
+					(ty-var @1.1-1.1 (raw "a")))))
 		(s-decl @5.1-8.2
 			(p-ident @5.1-5.5 (raw "swap"))
 			(e-lambda @5.8-8.2
@@ -121,7 +121,7 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 						(e-tuple @6.5-6.20
 							(e-ident @6.6-6.11 (raw "first"))
 							(e-ident @6.13-6.19 (raw "second")))
-						(e-malformed @6.21-6.27 (reason "expr_unexpected_token"))
+						(e-malformed @6.21-6.22 (reason "expr_unexpected_token"))
 						(e-ident @6.23-6.27 (raw "pair"))
 						(e-tuple @7.5-7.20
 							(e-ident @7.6-7.12 (raw "second"))
@@ -144,6 +144,7 @@ swap = |pair| {
 	
 	pair
 	(second, first)
+
 }
 
 main! = |_| {}
@@ -157,12 +158,12 @@ main! = |_| {}
 			(args
 				(p-assign @5.9-5.13 (ident "pair")))
 			(e-block @5.15-8.2
-				(s-expr @6.5-6.22
+				(s-expr @6.5-6.20
 					(e-tuple @6.5-6.20
 						(elems
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-runtime-error (tag "ident_not_in_scope")))))
-				(s-expr @6.23-7.6
+				(s-expr @6.23-6.27
 					(e-lookup-local @6.23-6.27
 						(p-assign @5.9-5.13 (ident "pair"))))
 				(e-tuple @7.5-7.20
@@ -173,11 +174,11 @@ main! = |_| {}
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)
 					(ty-tuple @4.8-4.14
-						(ty-var @4.9-4.10 (name "a"))
-						(ty-var @4.12-4.13 (name "b")))
+						(ty-var @4.9-4.9 (name "a"))
+						(ty-var @1.1-1.1 (name "b")))
 					(ty-tuple @4.18-4.24
-						(ty-var @4.19-4.20 (name "b"))
-						(ty-var @4.22-4.23 (name "a")))))))
+						(ty-var @4.19-4.19 (name "b"))
+						(ty-var @1.1-1.1 (name "a")))))))
 	(d-let
 		(p-assign @10.1-10.6 (ident "main!"))
 		(e-lambda @10.9-10.15

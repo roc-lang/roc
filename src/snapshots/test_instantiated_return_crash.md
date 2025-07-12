@@ -33,17 +33,17 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 ~~~clojure
 (e-block @1.1-9.2
 	(statements
-		(s-type-anno @2.5-3.13 (name "identity")
+		(s-type-anno @2.5-2.22 (name "identity")
 			(ty-fn @2.16-2.22
-				(ty-var @2.16-2.17 (raw "a"))
-				(ty-var @2.21-2.22 (raw "a"))))
+				(ty-var @1.1-1.1 (raw "a"))
+				(ty-var @1.1-1.1 (raw "a"))))
 		(s-decl @3.5-3.21
 			(p-ident @3.5-3.13 (raw "identity"))
 			(e-lambda @3.16-3.21
 				(args
 					(p-ident @3.17-3.18 (raw "x")))
 				(e-ident @3.20-3.21 (raw "x"))))
-		(s-type-anno @5.5-6.17 (name "needs_string")
+		(s-type-anno @5.5-5.41 (name "needs_string")
 			(ty-fn @5.21-5.40
 				(ty-fn @5.22-5.32
 					(ty @5.22-5.25 (name "Str"))
@@ -78,10 +78,10 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-9.2
-	(s-type-anno @2.5-3.13 (name "identity")
+	(s-type-anno @2.5-2.22 (name "identity")
 		(ty-fn @2.16-2.22 (effectful false)
-			(ty-var @2.16-2.17 (name "a"))
-			(ty-var @2.21-2.22 (name "a"))))
+			(ty-var @1.1-1.1 (name "a"))
+			(ty-var @1.1-1.1 (name "a"))))
 	(s-let @3.5-3.21
 		(p-assign @3.5-3.13 (ident "identity"))
 		(e-lambda @3.16-3.21
@@ -89,7 +89,7 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 				(p-assign @3.17-3.18 (ident "x")))
 			(e-lookup-local @3.20-3.21
 				(p-assign @3.17-3.18 (ident "x")))))
-	(s-type-anno @5.5-6.17 (name "needs_string")
+	(s-type-anno @5.5-5.41 (name "needs_string")
 		(ty-parens @5.20-5.41
 			(ty-fn @5.21-5.40 (effectful false)
 				(ty-parens @5.21-5.33

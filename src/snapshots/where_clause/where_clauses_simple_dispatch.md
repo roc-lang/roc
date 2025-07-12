@@ -25,16 +25,16 @@ LowerIdent(4:1-4:10),OpAssign(4:11-4:12),OpBar(4:13-4:14),LowerIdent(4:14-4:19),
 (file @1.1-4.35
 	(module @1.1-1.19
 		(exposes @1.8-1.19
-			(exposed-lower-ident (text "stringify"))))
+			(exposed-lower-ident @1.9-1.18 (text "stringify"))))
 	(statements
-		(s-type-anno @3.1-4.10 (name "stringify")
+		(s-type-anno @3.1-3.55 (name "stringify")
 			(ty-fn @3.13-3.21
-				(ty-var @3.13-3.14 (raw "a"))
+				(ty-var @1.1-1.1 (raw "a"))
 				(ty @3.18-3.21 (name "Str")))
 			(where
-				(method @3.28-4.10 (module-of "a") (name "to_str")
+				(method @3.28-3.55 (module-of "a") (name "to_str")
 					(args
-						(ty-var @3.47-3.48 (raw "a")))
+						(ty-var @1.1-1.1 (raw "a")))
 					(ty @3.52-3.55 (name "Str")))))
 		(s-decl @4.1-4.35
 			(p-ident @4.1-4.10 (raw "stringify"))
@@ -66,18 +66,18 @@ NO CHANGE
 		(annotation @4.1-4.10
 			(declared-type
 				(ty-fn @3.13-3.21 (effectful false)
-					(ty-var @3.13-3.14 (name "a"))
+					(ty-var @1.1-1.1 (name "a"))
 					(ty @3.18-3.21 (name "Str"))))))
-	(s-type-anno @3.1-4.10 (name "stringify")
+	(s-type-anno @3.1-3.55 (name "stringify")
 		(ty-fn @3.13-3.21 (effectful false)
-			(ty-var @3.13-3.14 (name "a"))
+			(ty-var @1.1-1.1 (name "a"))
 			(ty @3.18-3.21 (name "Str")))
 		(where
-			(method @3.28-4.10 (module-of "a") (ident "to_str")
+			(method @3.28-3.55 (module-of "a") (ident "to_str")
 				(args
-					(ty-var @3.47-3.48 (name "a")))
+					(ty-var @1.1-1.1 (name "a")))
 				(ty @3.52-3.55 (name "Str")))))
-	(ext-decl @3.28-4.10 (ident "module(a).to_str") (kind "value")))
+	(ext-decl @3.28-3.55 (ident "module(a).to_str") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

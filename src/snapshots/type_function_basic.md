@@ -13,42 +13,42 @@ apply = |fn, x| fn(x)
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_function_basic.md:3:17:3:20
-INVALID STATEMENT - type_function_basic.md:3:17:3:20
-INVALID STATEMENT - type_function_basic.md:3:19:4:6
+UNEXPECTED TOKEN IN EXPRESSION - type_function_basic.md:3:17:3:18
+INVALID STATEMENT - type_function_basic.md:3:17:3:18
+INVALID STATEMENT - type_function_basic.md:3:19:3:25
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **, a** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_function_basic.md:3:17:3:20:**
+**type_function_basic.md:3:17:3:18:**
 ```roc
 apply : (a -> b), a -> b
 ```
-                ^^^
+                ^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_function_basic.md:3:17:3:20:**
+**type_function_basic.md:3:17:3:18:**
 ```roc
 apply : (a -> b), a -> b
 ```
-                ^^^
+                ^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_function_basic.md:3:19:4:6:**
+**type_function_basic.md:3:19:3:25:**
 ```roc
 apply : (a -> b), a -> b
-apply = |fn, x| fn(x)
 ```
+                  ^^^^^^
 
 
 # TOKENS
@@ -62,24 +62,24 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~clojure
 (file @1.1-6.15
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.18 (name "apply")
+		(s-type-anno @3.1-3.17 (name "apply")
 			(ty-fn @3.10-3.16
-				(ty-var @3.10-3.11 (raw "a"))
-				(ty-var @3.15-3.16 (raw "b"))))
-		(e-malformed @3.17-3.20 (reason "expr_unexpected_token"))
-		(e-local-dispatch @3.19-4.6
+				(ty-var @3.10-3.10 (raw "a"))
+				(ty-var @1.1-1.1 (raw "b"))))
+		(e-malformed @3.17-3.18 (reason "expr_unexpected_token"))
+		(e-local-dispatch @3.19-3.25
 			(e-ident @3.19-3.20 (raw "a"))
-			(e-ident @3.24-3.25 (raw "b")))
+			(e-ident @1.1-1.1 (raw "b")))
 		(s-decl @4.1-4.22
 			(p-ident @4.1-4.6 (raw "apply"))
 			(e-lambda @4.9-4.22
@@ -100,7 +100,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-apply : (a -> b)a->b
+apply : (a -> b)
+a->b
 apply = |fn, x| fn(x)
 
 main! = |_| {}

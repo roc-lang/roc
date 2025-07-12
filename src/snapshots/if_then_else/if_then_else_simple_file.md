@@ -65,7 +65,7 @@ CloseCurly(7:5-7:6),EndOfFile(7:6-7:6),
 (file @1.1-7.6
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident (text "foo"))))
+			(exposed-lower-ident @1.9-1.12 (text "foo"))))
 	(statements
 		(s-decl @3.1-7.6
 			(p-ident @3.1-3.4 (raw "foo"))

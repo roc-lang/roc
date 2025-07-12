@@ -50,19 +50,19 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 		(e-ident @1.8-1.13 (raw "value"))
 		(e-ident @1.15-1.20 (raw "other")))
 	(branches
-		(branch @2.5-3.6
+		(branch @2.5-2.26
 			(p-tuple @2.5-2.17
 				(p-tag @2.6-2.13 (raw "Some")
 					(p-ident @2.11-2.12 (raw "x")))
 				(p-ident @2.15-2.16 (raw "y")))
-			(e-binop @2.21-3.6 (op "+")
+			(e-binop @2.21-2.26 (op "+")
 				(e-ident @2.21-2.22 (raw "x"))
 				(e-ident @2.25-2.26 (raw "y"))))
-		(branch @3.5-4.2
+		(branch @3.5-3.23
 			(p-tuple @3.5-3.14
 				(p-tag @3.6-3.10 (raw "None"))
 				(p-ident @3.12-3.13 (raw "x")))
-			(e-binop @3.18-4.2 (op "*")
+			(e-binop @3.18-3.23 (op "*")
 				(e-ident @3.18-3.19 (raw "x"))
 				(e-int @3.22-3.23 (raw "2"))))))
 ~~~
@@ -91,7 +91,7 @@ match (value, other) {
 								(p-applied-tag @2.6-2.13)
 								(p-assign @2.15-2.16 (ident "y"))))))
 				(value
-					(e-binop @2.21-3.6 (op "add")
+					(e-binop @2.21-2.26 (op "add")
 						(e-lookup-local @2.21-2.22
 							(p-assign @2.11-2.12 (ident "x")))
 						(e-lookup-local @2.25-2.26
@@ -104,7 +104,7 @@ match (value, other) {
 								(p-applied-tag @3.6-3.10)
 								(p-assign @3.12-3.13 (ident "x"))))))
 				(value
-					(e-binop @3.18-4.2 (op "mul")
+					(e-binop @3.18-3.23 (op "mul")
 						(e-lookup-local @3.18-3.19
 							(p-assign @3.12-3.13 (ident "x")))
 						(e-int @3.22-3.23 (value "2"))))))))

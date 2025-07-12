@@ -19,23 +19,23 @@ Green => LocalStatus-Complete
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_032.md:3:24:3:27
-UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:17
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_032.md:3:24:3:25
+UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:14
 UNDECLARED TYPE - fuzz_crash_032.md:3:21:3:24
-INVALID STATEMENT - fuzz_crash_032.md:3:24:3:27
-INVALID STATEMENT - fuzz_crash_032.md:3:26:5:5
+INVALID STATEMENT - fuzz_crash_032.md:3:24:3:25
+INVALID STATEMENT - fuzz_crash_032.md:3:26:3:45
 UNDEFINED VARIABLE - fuzz_crash_032.md:6:25:6:30
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= [** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_032.md:3:24:3:27:**
+**fuzz_crash_032.md:3:24:3:25:**
 ```roc
 LocalStatus :lue => Loc= [Pending, Complete]
 ```
-                       ^^^
+                       ^
 
 
 **IMPORT MUST BE TOP LEVEL**
@@ -43,11 +43,11 @@ Import statements must appear at the top level of a module.
 Move this import to the top of the file, after the module header but before any definitions.
 
 Here is the problematic code:
-**fuzz_crash_032.md:6:18:6:30:**
+**fuzz_crash_032.md:6:18:6:24:**
 ```roc
 olor = |color| { import Color.RGB
 ```
-                 ^^^^^^^^^^^^
+                 ^^^^^^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -56,11 +56,11 @@ The type variable ``lue`` is not declared in this scope.
 Type variables must be introduced in a type annotation before they can be used.
 
 This type variable is referenced here:
-**fuzz_crash_032.md:3:14:3:17:**
+**fuzz_crash_032.md:3:14:3:14:**
 ```roc
 LocalStatus :lue => Loc= [Pending, Complete]
 ```
-             ^^^
+             
 
 
 **UNDECLARED TYPE**
@@ -78,23 +78,22 @@ LocalStatus :lue => Loc= [Pending, Complete]
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_032.md:3:24:3:27:**
+**fuzz_crash_032.md:3:24:3:25:**
 ```roc
 LocalStatus :lue => Loc= [Pending, Complete]
 ```
-                       ^^^
+                       ^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_032.md:3:26:5:5:**
+**fuzz_crash_032.md:3:26:3:45:**
 ```roc
 LocalStatus :lue => Loc= [Pending, Complete]
-
-olor : _ -> tus
 ```
+                         ^^^^^^^^^^^^^^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -149,23 +148,23 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 (file @1.1-12.2
 	(module @1.1-1.15
 		(exposes @1.8-1.15
-			(exposed-lower-ident (text "tus"))
-			(exposed-lower-ident (text "r"))))
+			(exposed-lower-ident @1.9-1.12 (text "tus"))
+			(exposed-lower-ident @1.13-1.14 (text "r"))))
 	(statements
 		(s-type-decl @3.1-3.24
 			(header @3.1-3.12 (name "LocalStatus")
 				(args))
 			(ty-fn @3.14-3.24
-				(ty-var @3.14-3.17 (raw "lue"))
+				(ty-var @3.14-3.14 (raw "lue"))
 				(ty @3.21-3.24 (name "Loc"))))
-		(e-malformed @3.24-3.27 (reason "expr_unexpected_token"))
+		(e-malformed @3.24-3.25 (reason "expr_unexpected_token"))
 		(e-list @3.26-3.45
 			(e-tag @3.27-3.34 (raw "Pending"))
 			(e-tag @3.36-3.44 (raw "Complete")))
-		(s-type-anno @5.1-6.5 (name "olor")
+		(s-type-anno @5.1-5.16 (name "olor")
 			(ty-fn @5.8-5.16
 				(_)
-				(ty-var @5.13-5.16 (raw "tus"))))
+				(ty-var @1.1-1.1 (raw "tus"))))
 		(s-decl @6.1-12.2
 			(p-ident @6.1-6.5 (raw "olor"))
 			(e-lambda @6.8-12.2
@@ -173,20 +172,20 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 					(p-ident @6.9-6.14 (raw "color")))
 				(e-block @6.16-12.2
 					(statements
-						(s-malformed @6.18-6.30 (tag "import_must_be_top_level"))
+						(s-malformed @6.18-6.24 (tag "import_must_be_top_level"))
 						(e-tag @6.25-6.34 (raw "Color.RGB"))
 						(e-match
 							(e-ident @8.11-8.16 (raw "color"))
 							(branches
-								(branch @8.19-9.6
+								(branch @8.19-8.45
 									(p-tag @8.19-8.22 (raw "RGB"))
 									(e-tag @8.26-8.45 (raw "LocalStatus.Pending")))
-								(branch @9.1-10.4
+								(branch @9.1-9.30
 									(p-tag @9.1-9.6 (raw "Green"))
-									(e-binop @9.10-10.4 (op "-")
+									(e-binop @9.10-9.30 (op "-")
 										(e-tag @9.10-9.21 (raw "LocalStatus"))
 										(e-tag @9.22-9.30 (raw "Complete"))))
-								(branch @10.3-11.6
+								(branch @10.3-10.32
 									(p-tag @10.3-10.9 (raw ".Blue"))
 									(e-tag @10.13-10.32 (raw "LocalStatus.Pending")))))))))))
 ~~~
@@ -194,7 +193,8 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~roc
 module [tus, r]
 
-LocalStatus : lue => Loc[Pending, Complete]
+LocalStatus : lue => Loc
+[Pending, Complete]
 
 olor : _ -> tus
 olor = |color| {
@@ -216,7 +216,7 @@ olor = |color| {
 			(args
 				(p-assign @6.9-6.14 (ident "color")))
 			(e-block @6.16-12.2
-				(s-expr @6.25-8.10
+				(s-expr @6.25-6.34
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(e-match @8.5-11.6
 					(match @8.5-11.6
@@ -236,7 +236,7 @@ olor = |color| {
 									(pattern (degenerate false)
 										(p-applied-tag @9.1-9.6)))
 								(value
-									(e-binop @9.10-10.4 (op "sub")
+									(e-binop @9.10-9.30 (op "sub")
 										(e-tag @9.10-9.21 (name "LocalStatus"))
 										(e-tag @9.22-9.30 (name "Complete")))))
 							(branch
@@ -249,12 +249,12 @@ olor = |color| {
 		(annotation @6.1-6.5
 			(declared-type
 				(ty-fn @5.8-5.16 (effectful false)
-					(ty-underscore @5.8-5.9)
-					(ty-var @5.13-5.16 (name "tus"))))))
+					(ty-underscore @1.1-1.1)
+					(ty-var @1.1-1.1 (name "tus"))))))
 	(s-alias-decl @3.1-3.24
 		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-fn @3.14-3.24 (effectful true)
-			(ty-var @3.14-3.17 (name "lue"))
+			(ty-var @3.14-3.14 (name "lue"))
 			(ty @3.21-3.24 (name "Loc")))))
 ~~~
 # TYPES

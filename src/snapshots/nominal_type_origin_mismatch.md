@@ -17,25 +17,25 @@ main =
     expectsPerson("not a person")
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:17:6:19
-PARSE ERROR - nominal_type_origin_mismatch.md:6:23:6:36
-UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:24:6:37
-UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:36:8:5
+UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:17:6:18
+PARSE ERROR - nominal_type_origin_mismatch.md:6:23:6:24
+UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:24:6:36
+UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:36:6:37
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
-INVALID STATEMENT - nominal_type_origin_mismatch.md:6:18:6:36
-INVALID STATEMENT - nominal_type_origin_mismatch.md:6:24:6:37
-INVALID STATEMENT - nominal_type_origin_mismatch.md:6:36:8:5
+INVALID STATEMENT - nominal_type_origin_mismatch.md:6:18:6:24
+INVALID STATEMENT - nominal_type_origin_mismatch.md:6:24:6:36
+INVALID STATEMENT - nominal_type_origin_mismatch.md:6:36:6:37
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **\p** is not expected in an expression.
+The token **\** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**nominal_type_origin_mismatch.md:6:17:6:19:**
+**nominal_type_origin_mismatch.md:6:17:6:18:**
 ```roc
 expectsPerson = \p -> "Got a person"
 ```
-                ^^
+                ^
 
 
 **PARSE ERROR**
@@ -43,38 +43,35 @@ A parsing error occurred: `expr_arrow_expects_ident`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**nominal_type_origin_mismatch.md:6:23:6:36:**
+**nominal_type_origin_mismatch.md:6:23:6:24:**
 ```roc
 expectsPerson = \p -> "Got a person"
 ```
-                      ^^^^^^^^^^^^^
+                      ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **Got a person"** is not expected in an expression.
+The token **Got a person** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**nominal_type_origin_mismatch.md:6:24:6:37:**
+**nominal_type_origin_mismatch.md:6:24:6:36:**
 ```roc
 expectsPerson = \p -> "Got a person"
 ```
-                       ^^^^^^^^^^^^^
+                       ^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **"
-
-main** is not expected in an expression.
+The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**nominal_type_origin_mismatch.md:6:36:8:5:**
+**nominal_type_origin_mismatch.md:6:36:6:37:**
 ```roc
 expectsPerson = \p -> "Got a person"
-
-main =
 ```
+                                   ^
 
 
 **UNDECLARED TYPE**
@@ -96,34 +93,33 @@ Check the spelling and make sure you're using a valid Roc operator.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**nominal_type_origin_mismatch.md:6:18:6:36:**
+**nominal_type_origin_mismatch.md:6:18:6:24:**
 ```roc
 expectsPerson = \p -> "Got a person"
 ```
-                 ^^^^^^^^^^^^^^^^^^
+                 ^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**nominal_type_origin_mismatch.md:6:24:6:37:**
+**nominal_type_origin_mismatch.md:6:24:6:36:**
 ```roc
 expectsPerson = \p -> "Got a person"
 ```
-                       ^^^^^^^^^^^^^
+                       ^^^^^^^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**nominal_type_origin_mismatch.md:6:36:8:5:**
+**nominal_type_origin_mismatch.md:6:36:6:37:**
 ```roc
 expectsPerson = \p -> "Got a person"
-
-main =
 ```
+                                   ^
 
 
 # TOKENS
@@ -143,17 +139,17 @@ LowerIdent(10:5-10:18),NoSpaceOpenRound(10:18-10:19),StringStart(10:19-10:20),St
 	(statements
 		(s-import @3.1-3.30 (raw "Data")
 			(exposing
-				(exposed-upper-ident (text "Person"))))
-		(s-type-anno @5.1-6.14 (name "expectsPerson")
+				(exposed-upper-ident @3.23-3.29 (text "Person"))))
+		(s-type-anno @5.1-5.30 (name "expectsPerson")
 			(ty-fn @5.17-5.30
 				(ty @5.17-5.23 (name "Person"))
 				(ty @5.27-5.30 (name "Str"))))
-		(s-decl @6.1-6.19
+		(s-decl @6.1-6.18
 			(p-ident @6.1-6.14 (raw "expectsPerson"))
-			(e-malformed @6.17-6.19 (reason "expr_unexpected_token")))
-		(e-malformed @6.23-6.36 (reason "expr_arrow_expects_ident"))
-		(e-malformed @6.24-6.37 (reason "expr_unexpected_token"))
-		(e-malformed @6.36-8.5 (reason "expr_unexpected_token"))
+			(e-malformed @6.17-6.18 (reason "expr_unexpected_token")))
+		(e-malformed @6.23-6.24 (reason "expr_arrow_expects_ident"))
+		(e-malformed @6.24-6.36 (reason "expr_unexpected_token"))
+		(e-malformed @6.36-6.37 (reason "expr_unexpected_token"))
 		(s-decl @8.1-10.34
 			(p-ident @8.1-8.5 (raw "main"))
 			(e-apply @10.5-10.34
@@ -169,6 +165,7 @@ import Data exposing [Person]
 
 expectsPerson : Person -> Str
 expectsPerson = 
+
 
 main = 
 # This will cause a type mismatch
@@ -203,6 +200,6 @@ main =
 		(patt @6.1-6.14 (type "Error"))
 		(patt @8.1-8.5 (type "*")))
 	(expressions
-		(expr @6.17-6.19 (type "Error"))
+		(expr @6.17-6.18 (type "Error"))
 		(expr @10.5-10.34 (type "*"))))
 ~~~

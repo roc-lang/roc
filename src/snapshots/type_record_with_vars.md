@@ -27,30 +27,30 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~clojure
 (file @1.1-6.15
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.9 (name "getField")
+		(s-type-anno @3.1-3.39 (name "getField")
 			(ty-fn @3.12-3.39
 				(ty-record @3.12-3.34
-					(anno-record-field @3.14-3.23 (name "field")
-						(ty-var @3.21-3.22 (raw "a")))
-					(anno-record-field @3.24-3.34 (name "other")
-						(ty-var @3.31-3.32 (raw "b"))))
-				(ty-var @3.38-3.39 (raw "a"))))
-		(s-decl @4.1-6.6
+					(anno-record-field @3.14-3.22 (name "field")
+						(ty-var @1.1-1.1 (raw "a")))
+					(anno-record-field @3.24-3.32 (name "other")
+						(ty-var @1.1-1.1 (raw "b"))))
+				(ty-var @1.1-1.1 (raw "a"))))
+		(s-decl @4.1-4.33
 			(p-ident @4.1-4.9 (raw "getField"))
-			(e-lambda @4.12-6.6
+			(e-lambda @4.12-4.33
 				(args
 					(p-ident @4.13-4.19 (raw "record")))
-				(e-field-access @4.21-6.6
+				(e-field-access @4.21-4.33
 					(e-ident @4.21-4.27 (raw "record"))
 					(e-ident @4.27-4.33 (raw "field")))))
 		(s-decl @6.1-6.15
@@ -74,10 +74,10 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign @4.1-4.9 (ident "getField"))
-		(e-lambda @4.12-6.6
+		(e-lambda @4.12-4.33
 			(args
 				(p-assign @4.13-4.19 (ident "record")))
-			(e-dot-access @4.21-6.6 (field "field")
+			(e-dot-access @4.21-4.33 (field "field")
 				(receiver
 					(e-lookup-local @4.21-4.27
 						(p-assign @4.13-4.19 (ident "record"))))))
@@ -86,10 +86,10 @@ main! = |_| {}
 				(ty-fn @3.12-3.39 (effectful false)
 					(ty-record @3.12-3.34
 						(field (field "field")
-							(ty-var @3.21-3.22 (name "a")))
+							(ty-var @1.1-1.1 (name "a")))
 						(field (field "other")
-							(ty-var @3.31-3.32 (name "b"))))
-					(ty-var @3.38-3.39 (name "a"))))))
+							(ty-var @1.1-1.1 (name "b"))))
+					(ty-var @1.1-1.1 (name "a"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
@@ -104,6 +104,6 @@ main! = |_| {}
 		(patt @4.1-4.9 (type "{ field: a, other: b } -> a"))
 		(patt @6.1-6.6 (type "* -> {}")))
 	(expressions
-		(expr @4.12-6.6 (type "{ field: a, other: b } -> a"))
+		(expr @4.12-4.33 (type "{ field: a, other: b } -> a"))
 		(expr @6.9-6.15 (type "* -> {}"))))
 ~~~

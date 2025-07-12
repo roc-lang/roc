@@ -50,8 +50,8 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 		(e-int @1.8-1.9 (raw "1"))
 		(e-int @1.11-1.12 (raw "2")))
 	(branches
-		(branch @2.5-3.2
-			(p-as @2.5-2.20 (name "point")
+		(branch @2.5-2.29
+			(p-as @2.5-2.14 (name "point")
 				(p-tuple @2.5-2.11
 					(p-ident @2.6-2.7 (raw "x"))
 					(p-ident @2.9-2.10 (raw "y"))))
@@ -76,14 +76,14 @@ match (1, 2) {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-as @2.5-2.20 (as "point")
+						(p-as @2.5-2.14 (as "point")
 							(p-tuple @2.5-2.11
 								(patterns
 									(p-assign @2.6-2.7 (ident "x"))
 									(p-assign @2.9-2.10 (ident "y")))))))
 				(value
 					(e-lookup-local @2.24-2.29
-						(p-as @2.5-2.20 (as "point")
+						(p-as @2.5-2.14 (as "point")
 							(p-tuple @2.5-2.11
 								(patterns
 									(p-assign @2.6-2.7 (ident "x"))

@@ -39,23 +39,23 @@ LowerIdent(14:1-14:7),OpAssign(14:8-14:9),LowerIdent(14:10-14:18),NoSpaceOpenRou
 ~~~clojure
 (file @1.1-14.24
 	(app @1.1-1.56
-		(provides @1.6-1.11
-			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf")
+		(provides @1.5-1.11
+			(exposed-lower-ident @1.6-1.10 (text "main")))
+		(record-field @1.14-1.54 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf")
+			(record-field @1.14-1.54 (name "pf")
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @5.1-6.12 (name "make_record")
+		(s-type-anno @5.1-5.42 (name "make_record")
 			(ty-fn @5.15-5.42
-				(ty-var @5.15-5.16 (raw "a"))
+				(ty-var @1.1-1.1 (raw "a"))
 				(ty-record @5.20-5.42
-					(anno-record-field @5.22-5.31 (name "value")
-						(ty-var @5.29-5.30 (raw "a")))
-					(anno-record-field @5.32-5.42 (name "tag")
+					(anno-record-field @5.22-5.30 (name "value")
+						(ty-var @1.1-1.1 (raw "a")))
+					(anno-record-field @5.32-5.40 (name "tag")
 						(ty @5.37-5.40 (name "Str"))))))
 		(s-decl @6.1-6.44
 			(p-ident @6.1-6.12 (raw "make_record"))
@@ -68,27 +68,27 @@ LowerIdent(14:1-14:7),OpAssign(14:8-14:9),LowerIdent(14:10-14:18),NoSpaceOpenRou
 					(field (field "tag")
 						(e-string @6.36-6.42
 							(e-string-part @6.37-6.41 (raw "data")))))))
-		(s-type-anno @8.1-9.10 (name "get_value")
+		(s-type-anno @8.1-8.40 (name "get_value")
 			(ty-fn @8.13-8.40
 				(ty-record @8.13-8.35
-					(anno-record-field @8.15-8.24 (name "value")
-						(ty-var @8.22-8.23 (raw "a")))
-					(anno-record-field @8.25-8.35 (name "tag")
+					(anno-record-field @8.15-8.23 (name "value")
+						(ty-var @1.1-1.1 (raw "a")))
+					(anno-record-field @8.25-8.33 (name "tag")
 						(ty @8.30-8.33 (name "Str"))))
-				(ty-var @8.39-8.40 (raw "a"))))
-		(s-decl @9.1-11.9
+				(ty-var @1.1-1.1 (raw "a"))))
+		(s-decl @9.1-9.24
 			(p-ident @9.1-9.10 (raw "get_value"))
-			(e-lambda @9.13-11.9
+			(e-lambda @9.13-9.24
 				(args
 					(p-ident @9.14-9.15 (raw "r")))
-				(e-field-access @9.17-11.9
+				(e-field-access @9.17-9.24
 					(e-ident @9.17-9.18 (raw "r"))
 					(e-ident @9.18-9.24 (raw "value")))))
-		(s-type-anno @11.1-12.9 (name "composed")
+		(s-type-anno @11.1-11.26 (name "composed")
 			(ty-fn @11.12-11.26
 				(ty-apply @11.12-11.19
 					(ty @11.12-11.16 (name "List"))
-					(ty-var @11.17-11.18 (raw "a")))
+					(ty-var @11.17-11.17 (raw "a")))
 				(ty @11.23-11.26 (name "Str"))))
 		(s-decl @12.1-12.41
 			(p-ident @12.1-12.9 (raw "composed"))
@@ -143,18 +143,18 @@ answer = composed([42])
 		(annotation @6.1-6.12
 			(declared-type
 				(ty-fn @5.15-5.42 (effectful false)
-					(ty-var @5.15-5.16 (name "a"))
+					(ty-var @1.1-1.1 (name "a"))
 					(ty-record @5.20-5.42
 						(field (field "value")
-							(ty-var @5.29-5.30 (name "a")))
+							(ty-var @1.1-1.1 (name "a")))
 						(field (field "tag")
 							(ty @5.37-5.40 (name "Str"))))))))
 	(d-let
 		(p-assign @9.1-9.10 (ident "get_value"))
-		(e-lambda @9.13-11.9
+		(e-lambda @9.13-9.24
 			(args
 				(p-assign @9.14-9.15 (ident "r")))
-			(e-dot-access @9.17-11.9 (field "value")
+			(e-dot-access @9.17-9.24 (field "value")
 				(receiver
 					(e-lookup-local @9.17-9.18
 						(p-assign @9.14-9.15 (ident "r"))))))
@@ -163,10 +163,10 @@ answer = composed([42])
 				(ty-fn @8.13-8.40 (effectful false)
 					(ty-record @8.13-8.35
 						(field (field "value")
-							(ty-var @8.22-8.23 (name "a")))
+							(ty-var @1.1-1.1 (name "a")))
 						(field (field "tag")
 							(ty @8.30-8.33 (name "Str"))))
-					(ty-var @8.39-8.40 (name "a"))))))
+					(ty-var @1.1-1.1 (name "a"))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "composed"))
 		(e-lambda @12.12-12.41
@@ -184,7 +184,7 @@ answer = composed([42])
 			(declared-type
 				(ty-fn @11.12-11.26 (effectful false)
 					(ty-apply @11.12-11.19 (symbol "List")
-						(ty-var @11.17-11.18 (name "a")))
+						(ty-var @11.17-11.17 (name "a")))
 					(ty @11.23-11.26 (name "Str"))))))
 	(d-let
 		(p-assign @14.1-14.7 (ident "answer"))
@@ -205,7 +205,7 @@ answer = composed([42])
 		(patt @14.1-14.7 (type "Str")))
 	(expressions
 		(expr @6.15-6.44 (type "a -> { value: a, tag: Str }"))
-		(expr @9.13-11.9 (type "{ value: a, tag: Str } -> a"))
+		(expr @9.13-9.24 (type "{ value: a, tag: Str } -> a"))
 		(expr @12.12-12.41 (type "Error -> Str"))
 		(expr @14.10-14.24 (type "Str"))))
 ~~~

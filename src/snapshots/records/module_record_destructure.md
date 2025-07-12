@@ -14,20 +14,20 @@ extract_age = |person| {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - module_record_destructure.md:5:13:5:21
+UNEXPECTED TOKEN IN EXPRESSION - module_record_destructure.md:5:13:5:14
 UNDEFINED VARIABLE - module_record_destructure.md:5:7:5:10
 UNDEFINED VARIABLE - module_record_destructure.md:6:5:6:8
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= person** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**module_record_destructure.md:5:13:5:21:**
+**module_record_destructure.md:5:13:5:14:**
 ```roc
     { age } = person
 ```
-            ^^^^^^^^
+            ^
 
 
 **UNDEFINED VARIABLE**
@@ -66,12 +66,12 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 (file @1.1-7.2
 	(module @1.1-1.21
 		(exposes @1.8-1.21
-			(exposed-lower-ident (text "extract_age"))))
+			(exposed-lower-ident @1.9-1.20 (text "extract_age"))))
 	(statements
-		(s-type-anno @3.1-4.12 (name "extract_age")
+		(s-type-anno @3.1-3.35 (name "extract_age")
 			(ty-fn @3.15-3.35
 				(ty-record @3.15-3.28
-					(anno-record-field @3.17-3.28 (name "age")
+					(anno-record-field @3.17-3.26 (name "age")
 						(ty @3.23-3.26 (name "U64"))))
 				(ty @3.32-3.35 (name "U64"))))
 		(s-decl @4.1-7.2
@@ -84,7 +84,7 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 						(e-block @5.5-5.12
 							(statements
 								(e-ident @5.7-5.10 (raw "age"))))
-						(e-malformed @5.13-5.21 (reason "expr_unexpected_token"))
+						(e-malformed @5.13-5.14 (reason "expr_unexpected_token"))
 						(e-ident @5.15-5.21 (raw "person"))
 						(e-ident @6.5-6.8 (raw "age"))))))))
 ~~~
@@ -109,10 +109,10 @@ extract_age = |person| {
 			(args
 				(p-assign @4.16-4.22 (ident "person")))
 			(e-block @4.24-7.2
-				(s-expr @5.5-5.14
+				(s-expr @5.5-5.12
 					(e-block @5.5-5.12
 						(e-runtime-error (tag "ident_not_in_scope"))))
-				(s-expr @5.15-6.8
+				(s-expr @5.15-5.21
 					(e-lookup-local @5.15-5.21
 						(p-assign @4.16-4.22 (ident "person"))))
 				(e-runtime-error (tag "ident_not_in_scope"))))

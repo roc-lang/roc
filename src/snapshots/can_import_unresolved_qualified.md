@@ -74,7 +74,7 @@ LowerIdent(27:1-27:7),OpAssign(27:8-27:9),UpperIdent(27:10-27:14),NoSpaceDotUppe
 		(s-decl @7.1-7.31
 			(p-ident @7.1-7.5 (raw "main"))
 			(e-ident @7.8-7.31 (raw "Json.NonExistent.method")))
-		(s-type-anno @10.1-11.10 (name "parseData")
+		(s-type-anno @10.1-10.36 (name "parseData")
 			(ty-fn @10.13-10.36
 				(ty @10.13-10.29 (name "Json.InvalidType"))
 				(ty @10.33-10.36 (name "Str"))))
@@ -86,7 +86,7 @@ LowerIdent(27:1-27:7),OpAssign(27:8-27:9),UpperIdent(27:10-27:14),NoSpaceDotUppe
 				(e-apply @11.20-11.40
 					(e-ident @11.20-11.34 (raw "Json.stringify"))
 					(e-ident @11.35-11.39 (raw "data")))))
-		(s-type-anno @14.1-15.15 (name "processRequest")
+		(s-type-anno @14.1-14.61 (name "processRequest")
 			(ty-fn @14.18-14.61
 				(ty @14.18-14.37 (name "Http.Server.Request"))
 				(ty @14.41-14.61 (name "Http.Server.Response"))))

@@ -15,35 +15,35 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:2:7:2:10
-PARSE ERROR - record_different_fields_reserved_error.md:2:22:3:9
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_reserved_error.md:3:11:3:25
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:12:3:26
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:25:3:27
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:26:4:11
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:4:11:4:14
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:4:29:5:11
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:11:5:14
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:26:6:8
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:5:6:9
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:8:6:14
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:7:7
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:8
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:13
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:8:2
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:2:7:2:8
+PARSE ERROR - record_different_fields_reserved_error.md:2:22:2:23
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_reserved_error.md:3:11:3:12
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:12:3:25
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:25:3:26
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:26:3:27
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:4:11:4:12
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:4:29:4:30
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:11:5:12
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:26:5:27
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:5:6:8
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:8:6:9
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:6:20
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:7
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:8
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:20
 UNDEFINED VARIABLE - record_different_fields_reserved_error.md:6:10:6:19
 UNDEFINED VARIABLE - record_different_fields_reserved_error.md:7:9:7:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **: "** is not expected in an expression.
+The token **:** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:2:7:2:10:**
+**record_different_fields_reserved_error.md:2:7:2:8:**
 ```roc
     if: "conditional",
 ```
-      ^^^
+      ^
 
 
 **PARSE ERROR**
@@ -51,85 +51,83 @@ A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:2:22:3:9:**
+**record_different_fields_reserved_error.md:2:22:2:23:**
 ```roc
     if: "conditional",
-    when: "pattern match",
 ```
+                     ^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **"pattern match** is not expected in a type annotation.
+The token **"** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:3:11:3:25:**
+**record_different_fields_reserved_error.md:3:11:3:12:**
 ```roc
     when: "pattern match",
 ```
-          ^^^^^^^^^^^^^^
+          ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **pattern match"** is not expected in an expression.
+The token **pattern match** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:3:12:3:26:**
+**record_different_fields_reserved_error.md:3:12:3:25:**
 ```roc
     when: "pattern match",
 ```
-           ^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **",** is not expected in an expression.
+The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:3:25:3:27:**
+**record_different_fields_reserved_error.md:3:25:3:26:**
 ```roc
     when: "pattern match",
 ```
-                        ^^
+                        ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **,
-    expect** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:3:26:4:11:**
+**record_different_fields_reserved_error.md:3:26:3:27:**
 ```roc
     when: "pattern match",
+```
+                         ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **:** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**record_different_fields_reserved_error.md:4:11:4:12:**
+```roc
     expect: "test assertion",
 ```
+          ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **: "** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:4:11:4:14:**
+**record_different_fields_reserved_error.md:4:29:4:30:**
 ```roc
     expect: "test assertion",
 ```
-          ^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,
-    import** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**record_different_fields_reserved_error.md:4:29:5:11:**
-```roc
-    expect: "test assertion",
-    import: "module load",
-```
+                            ^
 
 
 **IMPORT MUST BE TOP LEVEL**
@@ -137,110 +135,107 @@ Import statements must appear at the top level of a module.
 Move this import to the top of the file, after the module header but before any definitions.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:5:5:5:12:**
+**record_different_fields_reserved_error.md:5:5:5:11:**
 ```roc
     import: "module load",
 ```
-    ^^^^^^^
+    ^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **: "** is not expected in an expression.
+The token **:** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:5:11:5:14:**
+**record_different_fields_reserved_error.md:5:11:5:12:**
 ```roc
     import: "module load",
 ```
-          ^^^
+          ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **,
-    and** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:5:26:6:8:**
+**record_different_fields_reserved_error.md:5:26:5:27:**
 ```roc
     import: "module load",
-    and: Bool.true,
 ```
+                         ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **and:** is not expected in an expression.
+The token **and** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:6:5:6:9:**
+**record_different_fields_reserved_error.md:6:5:6:8:**
 ```roc
     and: Bool.true,
-```
-    ^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **: Bool** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**record_different_fields_reserved_error.md:6:8:6:14:**
-```roc
-    and: Bool.true,
-```
-       ^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,
-    or** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**record_different_fields_reserved_error.md:6:19:7:7:**
-```roc
-    and: Bool.true,
-    or: Bool.false,
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **or:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**record_different_fields_reserved_error.md:7:5:7:8:**
-```roc
-    or: Bool.false,
 ```
     ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **: Bool** is not expected in an expression.
+The token **:** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:7:7:7:13:**
+**record_different_fields_reserved_error.md:6:8:6:9:**
 ```roc
-    or: Bool.false,
+    and: Bool.true,
 ```
-      ^^^^^^
+       ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **,
-}** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:7:19:8:2:**
+**record_different_fields_reserved_error.md:6:19:6:20:**
+```roc
+    and: Bool.true,
+```
+                  ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **or** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**record_different_fields_reserved_error.md:7:5:7:7:**
 ```roc
     or: Bool.false,
-}
 ```
+    ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **:** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**record_different_fields_reserved_error.md:7:7:7:8:**
+```roc
+    or: Bool.false,
+```
+      ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**record_different_fields_reserved_error.md:7:19:7:20:**
+```roc
+    or: Bool.false,
+```
+                  ^
 
 
 **MALFORMED TYPE**
@@ -287,30 +282,30 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~clojure
 (e-block @1.1-8.2
 	(statements
-		(e-malformed @2.22-3.9 (reason "no_else"))
-		(s-type-anno @3.5-3.25 (name "when")
-			(ty-malformed @3.11-3.25 (tag "ty_anno_unexpected_token")))
-		(e-malformed @3.12-3.26 (reason "expr_unexpected_token"))
-		(e-malformed @3.25-3.27 (reason "expr_unexpected_token"))
-		(e-malformed @3.26-4.11 (reason "expr_unexpected_token"))
-		(s-expect @4.5-4.14
-			(e-malformed @4.11-4.14 (reason "expr_unexpected_token")))
+		(e-malformed @2.22-2.23 (reason "no_else"))
+		(s-type-anno @3.5-3.12 (name "when")
+			(ty-malformed @3.11-3.12 (tag "ty_anno_unexpected_token")))
+		(e-malformed @3.12-3.25 (reason "expr_unexpected_token"))
+		(e-malformed @3.25-3.26 (reason "expr_unexpected_token"))
+		(e-malformed @3.26-3.27 (reason "expr_unexpected_token"))
+		(s-expect @4.5-4.12
+			(e-malformed @4.11-4.12 (reason "expr_unexpected_token")))
 		(e-string @4.13-4.29
 			(e-string-part @4.14-4.28 (raw "test assertion")))
-		(e-malformed @4.29-5.11 (reason "expr_unexpected_token"))
-		(s-malformed @5.5-5.12 (tag "import_must_be_top_level"))
-		(e-malformed @5.11-5.14 (reason "expr_unexpected_token"))
+		(e-malformed @4.29-4.30 (reason "expr_unexpected_token"))
+		(s-malformed @5.5-5.11 (tag "import_must_be_top_level"))
+		(e-malformed @5.11-5.12 (reason "expr_unexpected_token"))
 		(e-string @5.13-5.26
 			(e-string-part @5.14-5.25 (raw "module load")))
-		(e-malformed @5.26-6.8 (reason "expr_unexpected_token"))
-		(e-malformed @6.5-6.9 (reason "expr_unexpected_token"))
-		(e-malformed @6.8-6.14 (reason "expr_unexpected_token"))
+		(e-malformed @5.26-5.27 (reason "expr_unexpected_token"))
+		(e-malformed @6.5-6.8 (reason "expr_unexpected_token"))
+		(e-malformed @6.8-6.9 (reason "expr_unexpected_token"))
 		(e-ident @6.10-6.19 (raw "Bool.true"))
-		(e-malformed @6.19-7.7 (reason "expr_unexpected_token"))
-		(e-malformed @7.5-7.8 (reason "expr_unexpected_token"))
-		(e-malformed @7.7-7.13 (reason "expr_unexpected_token"))
+		(e-malformed @6.19-6.20 (reason "expr_unexpected_token"))
+		(e-malformed @7.5-7.7 (reason "expr_unexpected_token"))
+		(e-malformed @7.7-7.8 (reason "expr_unexpected_token"))
 		(e-ident @7.9-7.19 (raw "Bool.false"))
-		(e-malformed @7.19-8.2 (reason "expr_unexpected_token"))))
+		(e-malformed @7.19-7.20 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -340,17 +335,17 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-8.2
-	(s-type-anno @3.5-3.25 (name "when")
-		(ty-malformed @3.11-3.25))
-	(s-expr @4.13-4.30
+	(s-type-anno @3.5-3.12 (name "when")
+		(ty-malformed @3.11-3.12))
+	(s-expr @4.13-4.29
 		(e-string @4.13-4.29
 			(e-literal @4.14-4.28 (string "test assertion"))))
-	(s-expr @5.13-5.27
+	(s-expr @5.13-5.26
 		(e-string @5.13-5.26
 			(e-literal @5.14-5.25 (string "module load"))))
-	(s-expr @6.10-6.20
+	(s-expr @6.10-6.19
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @7.9-7.20
+	(s-expr @7.9-7.19
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(e-empty_record @1.1-8.2))
 ~~~

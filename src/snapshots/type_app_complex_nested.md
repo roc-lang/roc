@@ -25,25 +25,25 @@ ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_app_complex_nested.md:13:18:13:25
+UNEXPECTED TOKEN IN EXPRESSION - type_app_complex_nested.md:13:18:13:23
 UNDECLARED TYPE - type_app_complex_nested.md:16:33:16:38
 UNDECLARED TYPE - type_app_complex_nested.md:16:54:16:59
 UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
-INVALID STATEMENT - type_app_complex_nested.md:13:24:16:12
+INVALID STATEMENT - type_app_complex_nested.md:13:24:13:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **crash "** is not expected in an expression.
+The token **crash** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_app_complex_nested.md:13:18:13:25:**
+**type_app_complex_nested.md:13:18:13:23:**
 ```roc
 deepNested = |_| crash "not implemented"
 ```
-                 ^^^^^^^
+                 ^^^^^
 
 
 **UNDECLARED TYPE**
@@ -120,13 +120,11 @@ The body of this lambda expression is not valid.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_app_complex_nested.md:13:24:16:12:**
+**type_app_complex_nested.md:13:24:13:41:**
 ```roc
 deepNested = |_| crash "not implemented"
-
-# Test type alias with complex nesting
-ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 ```
+                       ^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -147,17 +145,17 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 ~~~clojure
 (file @1.1-18.49
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @4.1-5.15 (name "processComplex")
+		(s-type-anno @4.1-4.72 (name "processComplex")
 			(ty-fn @4.18-4.72
 				(ty-apply @4.18-4.61
 					(ty @4.18-4.24 (name "Result"))
@@ -165,16 +163,16 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 						(ty @4.25-4.29 (name "List"))
 						(ty-apply @4.30-4.38
 							(ty @4.30-4.35 (name "Maybe"))
-							(ty-var @4.36-4.37 (raw "a"))))
+							(ty-var @4.36-4.36 (raw "a"))))
 					(ty-apply @4.41-4.60
 						(ty @4.41-4.45 (name "Dict"))
 						(ty @4.46-4.49 (name "Str"))
 						(ty-apply @4.51-4.59
 							(ty @4.51-4.56 (name "Error"))
-							(ty-var @4.57-4.58 (raw "b")))))
+							(ty-var @4.57-4.57 (raw "b")))))
 				(ty-apply @4.65-4.72
 					(ty @4.65-4.69 (name "List"))
-					(ty-var @4.70-4.71 (raw "a")))))
+					(ty-var @4.70-4.70 (raw "a")))))
 		(s-decl @5.1-9.6
 			(p-ident @5.1-5.15 (raw "processComplex"))
 			(e-lambda @5.18-9.6
@@ -183,15 +181,15 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 				(e-match
 					(e-ident @6.11-6.17 (raw "result"))
 					(branches
-						(branch @7.9-8.12
+						(branch @7.9-7.28
 							(p-tag @7.9-7.22 (raw "Ok")
 								(p-ident @7.12-7.21 (raw "maybeList")))
 							(e-list @7.26-7.28))
-						(branch @8.9-9.6
+						(branch @8.9-8.21
 							(p-tag @8.9-8.15 (raw "Err")
 								(p-underscore))
 							(e-list @8.19-8.21))))))
-		(s-type-anno @12.1-13.11 (name "deepNested")
+		(s-type-anno @12.1-12.55 (name "deepNested")
 			(ty-fn @12.14-12.55
 				(ty-apply @12.14-12.50
 					(ty @12.14-12.19 (name "Maybe"))
@@ -202,15 +200,15 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 							(ty-apply @12.32-12.44
 								(ty @12.32-12.36 (name "Dict"))
 								(ty @12.37-12.40 (name "Str"))
-								(ty-var @12.42-12.43 (raw "a"))))
-						(ty-var @12.47-12.48 (raw "b"))))
-				(ty-var @12.54-12.55 (raw "a"))))
-		(s-decl @13.1-13.25
+								(ty-var @1.1-1.1 (raw "a"))))
+						(ty-var @1.1-1.1 (raw "b"))))
+				(ty-var @1.1-1.1 (raw "a"))))
+		(s-decl @13.1-13.23
 			(p-ident @13.1-13.11 (raw "deepNested"))
-			(e-lambda @13.14-13.25
+			(e-lambda @13.14-13.23
 				(args
 					(p-underscore))
-				(e-malformed @13.18-13.25 (reason "expr_unexpected_token"))))
+				(e-malformed @13.18-13.23 (reason "expr_unexpected_token"))))
 		(e-string @13.24-13.41
 			(e-string-part @13.25-13.40 (raw "not implemented")))
 		(s-type-decl @16.1-16.64
@@ -224,13 +222,13 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 					(ty @16.28-16.32 (name "List"))
 					(ty-apply @16.33-16.41
 						(ty @16.33-16.38 (name "Maybe"))
-						(ty-var @16.39-16.40 (raw "a"))))
+						(ty-var @16.39-16.39 (raw "a"))))
 				(ty-apply @16.44-16.63
 					(ty @16.44-16.48 (name "Dict"))
 					(ty @16.49-16.52 (name "Str"))
 					(ty-apply @16.54-16.62
 						(ty @16.54-16.59 (name "Error"))
-						(ty-var @16.60-16.61 (raw "b"))))))
+						(ty-var @16.60-16.60 (raw "b"))))))
 		(s-decl @18.1-18.49
 			(p-ident @18.1-18.6 (raw "main!"))
 			(e-lambda @18.9-18.49
@@ -260,7 +258,8 @@ processComplex = |result|
 
 # Test multiple levels of nesting
 deepNested : Maybe(Result(List(Dict(Str, a)), b)) -> a
-deepNested = |_| "not implemented"
+deepNested = |_| 
+"not implemented"
 
 # Test type alias with complex nesting
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
@@ -299,16 +298,16 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-apply @4.18-4.61 (symbol "Result")
 						(ty-apply @4.25-4.39 (symbol "List")
 							(ty-apply @4.30-4.38 (symbol "Maybe")
-								(ty-var @4.36-4.37 (name "a"))))
+								(ty-var @4.36-4.36 (name "a"))))
 						(ty-apply @4.41-4.60 (symbol "Dict")
 							(ty @4.46-4.49 (name "Str"))
 							(ty-apply @4.51-4.59 (symbol "Error")
-								(ty-var @4.57-4.58 (name "b")))))
+								(ty-var @4.57-4.57 (name "b")))))
 					(ty-apply @4.65-4.72 (symbol "List")
-						(ty-var @4.70-4.71 (name "a")))))))
+						(ty-var @4.70-4.70 (name "a")))))))
 	(d-let
 		(p-assign @13.1-13.11 (ident "deepNested"))
-		(e-lambda @13.14-13.25
+		(e-lambda @13.14-13.23
 			(args
 				(p-underscore @13.15-13.16))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
@@ -320,9 +319,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 							(ty-apply @12.27-12.45 (symbol "List")
 								(ty-apply @12.32-12.44 (symbol "Dict")
 									(ty @12.37-12.40 (name "Str"))
-									(ty-var @12.42-12.43 (name "a"))))
-							(ty-var @12.47-12.48 (name "b"))))
-					(ty-var @12.54-12.55 (name "a"))))))
+									(ty-var @1.1-1.1 (name "a"))))
+							(ty-var @1.1-1.1 (name "b"))))
+					(ty-var @1.1-1.1 (name "a"))))))
 	(d-let
 		(p-assign @18.1-18.6 (ident "main!"))
 		(e-lambda @18.9-18.49
@@ -347,11 +346,11 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(ty-apply @16.21-16.64 (symbol "Result")
 			(ty-apply @16.28-16.42 (symbol "List")
 				(ty-apply @16.33-16.41 (symbol "Maybe")
-					(ty-var @16.39-16.40 (name "a"))))
+					(ty-var @16.39-16.39 (name "a"))))
 			(ty-apply @16.44-16.63 (symbol "Dict")
 				(ty @16.49-16.52 (name "Str"))
 				(ty-apply @16.54-16.62 (symbol "Error")
-					(ty-var @16.60-16.61 (name "b")))))))
+					(ty-var @16.60-16.60 (name "b")))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -368,6 +367,6 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-var @16.16-16.17 (name "b"))))))
 	(expressions
 		(expr @5.18-9.6 (type "Error -> Error"))
-		(expr @13.14-13.25 (type "Error -> Error"))
+		(expr @13.14-13.23 (type "Error -> Error"))
 		(expr @18.9-18.49 (type "* -> Error"))))
 ~~~

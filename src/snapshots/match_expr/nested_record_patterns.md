@@ -32,13 +32,13 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 (e-match
 	(e-ellipsis)
 	(branches
-		(branch @2.5-3.6
+		(branch @2.5-2.83
 			(p-record @2.5-2.41
-				(field @2.7-2.12 (name "name") (rest false))
-				(field @2.13-2.41 (name "address") (rest false)
+				(field @2.7-2.11 (name "name") (rest false))
+				(field @2.13-2.39 (name "address") (rest false)
 					(p-record @2.22-2.39
-						(field @2.24-2.29 (name "city") (rest false))
-						(field @2.30-2.39 (name "country") (rest false)))))
+						(field @2.24-2.28 (name "city") (rest false))
+						(field @2.30-2.37 (name "country") (rest false)))))
 			(e-string @2.45-2.83
 				(e-string-part @2.46-2.46 (raw ""))
 				(e-ident @2.48-2.52 (raw "name"))
@@ -47,45 +47,45 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 				(e-string-part @2.70-2.72 (raw ", "))
 				(e-ident @2.74-2.81 (raw "country"))
 				(e-string-part @2.82-2.82 (raw ""))))
-		(branch @3.5-4.6
+		(branch @3.5-3.94
 			(p-record @3.5-3.50
-				(field @3.7-3.29 (name "person") (rest false)
+				(field @3.7-3.28 (name "person") (rest false)
 					(p-record @3.15-3.28
-						(field @3.17-3.22 (name "name") (rest false))
-						(field @3.23-3.28 (name "age") (rest false))))
-				(field @3.30-3.50 (name "location") (rest false)
+						(field @3.17-3.21 (name "name") (rest false))
+						(field @3.23-3.26 (name "age") (rest false))))
+				(field @3.30-3.48 (name "location") (rest false)
 					(p-record @3.40-3.48
-						(field @3.42-3.48 (name "city") (rest false)))))
+						(field @3.42-3.46 (name "city") (rest false)))))
 			(e-string @3.54-3.94
 				(e-string-part @3.55-3.55 (raw ""))
 				(e-ident @3.57-3.61 (raw "name"))
 				(e-string-part @3.62-3.64 (raw " ("))
-				(e-field-access @3.66-3.79
+				(e-field-access @3.66-3.78
 					(e-ident @3.66-3.69 (raw "age"))
 					(e-apply @3.69-3.78
 						(e-ident @3.69-3.76 (raw "to_str"))))
 				(e-string-part @3.79-3.86 (raw ") from "))
 				(e-ident @3.88-3.92 (raw "city"))
 				(e-string-part @3.93-3.93 (raw ""))))
-		(branch @4.5-5.6
+		(branch @4.5-4.61
 			(p-record @4.5-4.34
-				(field @4.7-4.34 (name "data") (rest false)
+				(field @4.7-4.32 (name "data") (rest false)
 					(p-record @4.13-4.32
-						(field @4.15-4.32 (name "info") (rest false)
+						(field @4.15-4.30 (name "info") (rest false)
 							(p-record @4.21-4.30
-								(field @4.23-4.30 (name "value") (rest false)))))))
+								(field @4.23-4.28 (name "value") (rest false)))))))
 			(e-string @4.38-4.61
 				(e-string-part @4.39-4.52 (raw "Deep nested: "))
 				(e-ident @4.54-4.59 (raw "value"))
 				(e-string-part @4.60-4.60 (raw ""))))
-		(branch @5.5-6.6
+		(branch @5.5-5.38
 			(p-record @5.5-5.15
-				(field @5.7-5.15 (name "simple") (rest false)))
+				(field @5.7-5.13 (name "simple") (rest false)))
 			(e-string @5.19-5.38
 				(e-string-part @5.20-5.28 (raw "Simple: "))
 				(e-ident @5.30-5.36 (raw "simple"))
 				(e-string-part @5.37-5.37 (raw ""))))
-		(branch @6.5-7.2
+		(branch @6.5-6.18
 			(p-record @6.5-6.7)
 			(e-string @6.11-6.18
 				(e-string-part @6.12-6.17 (raw "empty"))))))
@@ -105,102 +105,102 @@ match ... {
 (e-match @1.1-7.2
 	(match @1.1-7.2
 		(cond
-			(e-not-implemented @1.7-1.10))
+			(e-not-implemented @1.1-1.1))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @2.5-2.41
 							(destructs
-								(record-destruct @2.7-2.12 (label "name") (ident "name")
+								(record-destruct @2.7-2.11 (label "name") (ident "name")
 									(required))
-								(record-destruct @2.13-2.41 (label "address") (ident "address")
+								(record-destruct @2.13-2.39 (label "address") (ident "address")
 									(sub-pattern
 										(p-record-destructure @2.22-2.39
 											(destructs
-												(record-destruct @2.24-2.29 (label "city") (ident "city")
+												(record-destruct @2.24-2.28 (label "city") (ident "city")
 													(required))
-												(record-destruct @2.30-2.39 (label "country") (ident "country")
+												(record-destruct @2.30-2.37 (label "country") (ident "country")
 													(required))))))))))
 				(value
 					(e-string @2.45-2.83
 						(e-literal @2.46-2.46 (string ""))
 						(e-lookup-local @2.48-2.52
-							(p-assign @2.7-2.12 (ident "name")))
+							(p-assign @2.7-2.11 (ident "name")))
 						(e-literal @2.53-2.63 (string " lives in "))
 						(e-lookup-local @2.65-2.69
-							(p-assign @2.24-2.29 (ident "city")))
+							(p-assign @2.24-2.28 (ident "city")))
 						(e-literal @2.70-2.72 (string ", "))
 						(e-lookup-local @2.74-2.81
-							(p-assign @2.30-2.39 (ident "country")))
+							(p-assign @2.30-2.37 (ident "country")))
 						(e-literal @2.82-2.82 (string "")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @3.5-3.50
 							(destructs
-								(record-destruct @3.7-3.29 (label "person") (ident "person")
+								(record-destruct @3.7-3.28 (label "person") (ident "person")
 									(sub-pattern
 										(p-record-destructure @3.15-3.28
 											(destructs
-												(record-destruct @3.17-3.22 (label "name") (ident "name")
+												(record-destruct @3.17-3.21 (label "name") (ident "name")
 													(required))
-												(record-destruct @3.23-3.28 (label "age") (ident "age")
+												(record-destruct @3.23-3.26 (label "age") (ident "age")
 													(required))))))
-								(record-destruct @3.30-3.50 (label "location") (ident "location")
+								(record-destruct @3.30-3.48 (label "location") (ident "location")
 									(sub-pattern
 										(p-record-destructure @3.40-3.48
 											(destructs
-												(record-destruct @3.42-3.48 (label "city") (ident "city")
+												(record-destruct @3.42-3.46 (label "city") (ident "city")
 													(required))))))))))
 				(value
 					(e-string @3.54-3.94
 						(e-literal @3.55-3.55 (string ""))
 						(e-lookup-local @3.57-3.61
-							(p-assign @3.17-3.22 (ident "name")))
+							(p-assign @3.17-3.21 (ident "name")))
 						(e-literal @3.62-3.64 (string " ("))
-						(e-dot-access @3.66-3.79 (field "to_str")
+						(e-dot-access @3.66-3.78 (field "to_str")
 							(receiver
 								(e-lookup-local @3.66-3.69
-									(p-assign @3.23-3.28 (ident "age"))))
+									(p-assign @3.23-3.26 (ident "age"))))
 							(args))
 						(e-literal @3.79-3.86 (string ") from "))
 						(e-lookup-local @3.88-3.92
-							(p-assign @3.42-3.48 (ident "city")))
+							(p-assign @3.42-3.46 (ident "city")))
 						(e-literal @3.93-3.93 (string "")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @4.5-4.34
 							(destructs
-								(record-destruct @4.7-4.34 (label "data") (ident "data")
+								(record-destruct @4.7-4.32 (label "data") (ident "data")
 									(sub-pattern
 										(p-record-destructure @4.13-4.32
 											(destructs
-												(record-destruct @4.15-4.32 (label "info") (ident "info")
+												(record-destruct @4.15-4.30 (label "info") (ident "info")
 													(sub-pattern
 														(p-record-destructure @4.21-4.30
 															(destructs
-																(record-destruct @4.23-4.30 (label "value") (ident "value")
+																(record-destruct @4.23-4.28 (label "value") (ident "value")
 																	(required))))))))))))))
 				(value
 					(e-string @4.38-4.61
 						(e-literal @4.39-4.52 (string "Deep nested: "))
 						(e-lookup-local @4.54-4.59
-							(p-assign @4.23-4.30 (ident "value")))
+							(p-assign @4.23-4.28 (ident "value")))
 						(e-literal @4.60-4.60 (string "")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-record-destructure @5.5-5.15
 							(destructs
-								(record-destruct @5.7-5.15 (label "simple") (ident "simple")
+								(record-destruct @5.7-5.13 (label "simple") (ident "simple")
 									(required))))))
 				(value
 					(e-string @5.19-5.38
 						(e-literal @5.20-5.28 (string "Simple: "))
 						(e-lookup-local @5.30-5.36
-							(p-assign @5.7-5.15 (ident "simple")))
+							(p-assign @5.7-5.13 (ident "simple")))
 						(e-literal @5.37-5.37 (string "")))))
 			(branch
 				(patterns

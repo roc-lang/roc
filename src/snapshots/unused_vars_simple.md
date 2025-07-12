@@ -74,13 +74,13 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 ~~~clojure
 (file @1.1-21.2
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -102,12 +102,12 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 				(args
 					(p-ident @10.22-10.30 (raw "_ignored")))
 				(e-int @10.32-10.35 (raw "100"))))
-		(s-decl @13.1-15.6
+		(s-decl @13.1-13.35
 			(p-ident @13.1-13.13 (raw "used_regular"))
-			(e-lambda @13.16-15.6
+			(e-lambda @13.16-13.35
 				(args
 					(p-ident @13.17-13.23 (raw "number")))
-				(e-binop @13.25-15.6 (op "+")
+				(e-binop @13.25-13.35 (op "+")
 					(e-ident @13.25-13.31 (raw "number"))
 					(e-int @13.34-13.35 (raw "1")))))
 		(s-decl @15.1-21.2
@@ -137,11 +137,11 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 							(e-apply @19.9-19.25
 								(e-ident @19.9-19.21 (raw "used_regular"))
 								(e-int @19.22-19.24 (raw "20"))))
-						(e-binop @20.5-21.2 (op "+")
+						(e-binop @20.5-20.18 (op "+")
 							(e-ident @20.5-20.6 (raw "a"))
-							(e-binop @20.9-21.2 (op "+")
+							(e-binop @20.9-20.18 (op "+")
 								(e-ident @20.9-20.10 (raw "b"))
-								(e-binop @20.13-21.2 (op "+")
+								(e-binop @20.13-20.18 (op "+")
 									(e-ident @20.13-20.14 (raw "c"))
 									(e-ident @20.17-20.18 (raw "d")))))))))))
 ~~~
@@ -193,10 +193,10 @@ main! = |_| {
 			(e-int @10.32-10.35 (value "100"))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "used_regular"))
-		(e-lambda @13.16-15.6
+		(e-lambda @13.16-13.35
 			(args
 				(p-assign @13.17-13.23 (ident "number")))
-			(e-binop @13.25-15.6 (op "add")
+			(e-binop @13.25-13.35 (op "add")
 				(e-lookup-local @13.25-13.31
 					(p-assign @13.17-13.23 (ident "number")))
 				(e-int @13.34-13.35 (value "1")))))
@@ -230,13 +230,13 @@ main! = |_| {
 						(e-lookup-local @19.9-19.21
 							(p-assign @13.1-13.13 (ident "used_regular")))
 						(e-int @19.22-19.24 (value "20"))))
-				(e-binop @20.5-21.2 (op "add")
+				(e-binop @20.5-20.18 (op "add")
 					(e-lookup-local @20.5-20.6
 						(p-assign @16.5-16.6 (ident "a")))
-					(e-binop @20.9-21.2 (op "add")
+					(e-binop @20.9-20.18 (op "add")
 						(e-lookup-local @20.9-20.10
 							(p-assign @17.5-17.6 (ident "b")))
-						(e-binop @20.13-21.2 (op "add")
+						(e-binop @20.13-20.18 (op "add")
 							(e-lookup-local @20.13-20.14
 								(p-assign @18.5-18.6 (ident "c")))
 							(e-lookup-local @20.17-20.18
@@ -255,6 +255,6 @@ main! = |_| {
 		(expr @4.18-4.24 (type "* -> Num(*)"))
 		(expr @7.19-7.34 (type "* -> *"))
 		(expr @10.21-10.35 (type "* -> Num(*)"))
-		(expr @13.16-15.6 (type "* -> *"))
+		(expr @13.16-13.35 (type "* -> *"))
 		(expr @15.9-21.2 (type "* -> *"))))
 ~~~

@@ -108,21 +108,65 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    const stdout = std.io.getStdOut();
+    if (args.stdin) {
+        fmt.formatStdin(gpa) catch std.process.exit(1);
+        return;
+    }
+
     var timer = try std.time.Timer.start();
-    var count = fmt.SuccessFailCount{ .success = 0, .failure = 0 };
-    for (args.paths) |path| {
-        const inner_count = try fmt.formatPath(gpa, arena, std.fs.cwd(), path);
-        count.success += inner_count.success;
-        count.failure += inner_count.failure;
+    var elapsed: u64 = undefined;
+    var failure_count: usize = 0;
+    var exit_code: u8 = 0;
+
+    if (args.check) {
+        var unformatted_files = std.ArrayList([]const u8).init(gpa);
+        defer unformatted_files.deinit();
+
+        for (args.paths) |path| {
+            var result = try fmt.formatPath(gpa, arena, std.fs.cwd(), path, true);
+            defer result.deinit();
+            if (result.unformatted_files) |files| {
+                try unformatted_files.appendSlice(files.items);
+            }
+            failure_count += result.failure;
+        }
+
+        elapsed = timer.read();
+        if (unformatted_files.items.len > 0) {
+            try stdout.writer().print("The following file(s) failed `roc format --check`:\n", .{});
+            for (unformatted_files.items) |file_name| {
+                try stdout.writer().print("    {s}\n", .{file_name});
+            }
+            try stdout.writer().print("You can fix this with `roc format FILENAME.roc`.\n", .{});
+            exit_code = 1;
+        } else {
+            try stdout.writer().print("All formatting valid\n", .{});
+        }
+        if (failure_count > 0) {
+            try stdout.writer().print("Failed to check {} files.\n", .{failure_count});
+            exit_code = 1;
+        }
+    } else {
+        var success_count: usize = 0;
+        for (args.paths) |path| {
+            const result = try fmt.formatPath(gpa, arena, std.fs.cwd(), path, false);
+            success_count += result.success;
+            failure_count += result.failure;
+        }
+        elapsed = timer.read();
+        try stdout.writer().print("Successfully formatted {} files\n", .{success_count});
+        if (failure_count > 0) {
+            try stdout.writer().print("Failed to format {} files.\n", .{failure_count});
+            exit_code = 1;
+        }
     }
-    const elapsed = timer.read();
-    try std.io.getStdOut().writer().print("Successfully formatted {} files\n", .{count.success});
-    if (count.failure > 0) {
-        try std.io.getStdOut().writer().print("Failed to format {} files.\n", .{count.failure});
-    }
-    try std.io.getStdOut().writer().print("Took ", .{});
-    try formatElapsedTime(std.io.getStdOut().writer(), elapsed);
-    try std.io.getStdOut().writer().print(".\n", .{});
+
+    try stdout.writer().print("Took ", .{});
+    try formatElapsedTime(stdout.writer(), elapsed);
+    try stdout.writer().print(".\n", .{});
+
+    std.process.exit(exit_code);
 }
 
 /// Helper function to format elapsed time, showing decimal milliseconds

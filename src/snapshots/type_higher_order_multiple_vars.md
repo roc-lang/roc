@@ -13,24 +13,24 @@ compose = |f, g| |x| f(g(x))
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:19:3:22
-PARSE ERROR - type_higher_order_multiple_vars.md:3:33:3:35
-UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:40:4:8
-INVALID STATEMENT - type_higher_order_multiple_vars.md:3:19:3:22
-INVALID STATEMENT - type_higher_order_multiple_vars.md:3:21:3:35
-INVALID STATEMENT - type_higher_order_multiple_vars.md:3:34:3:41
-INVALID STATEMENT - type_higher_order_multiple_vars.md:3:40:4:8
+UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:19:3:20
+PARSE ERROR - type_higher_order_multiple_vars.md:3:33:3:34
+UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:40:3:41
+INVALID STATEMENT - type_higher_order_multiple_vars.md:3:19:3:20
+INVALID STATEMENT - type_higher_order_multiple_vars.md:3:21:3:34
+INVALID STATEMENT - type_higher_order_multiple_vars.md:3:34:3:40
+INVALID STATEMENT - type_higher_order_multiple_vars.md:3:40:3:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **, (** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_higher_order_multiple_vars.md:3:19:3:22:**
+**type_higher_order_multiple_vars.md:3:19:3:20:**
 ```roc
 compose : (b -> c), (a -> b) -> (a -> c)
 ```
-                  ^^^
+                  ^
 
 
 **PARSE ERROR**
@@ -38,68 +38,67 @@ A parsing error occurred: `expr_arrow_expects_ident`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**type_higher_order_multiple_vars.md:3:33:3:35:**
+**type_higher_order_multiple_vars.md:3:33:3:34:**
 ```roc
 compose : (b -> c), (a -> b) -> (a -> c)
 ```
-                                ^^
+                                ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **)
-compose** is not expected in an expression.
+The token **)** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_higher_order_multiple_vars.md:3:40:4:8:**
+**type_higher_order_multiple_vars.md:3:40:3:41:**
 ```roc
 compose : (b -> c), (a -> b) -> (a -> c)
-compose = |f, g| |x| f(g(x))
 ```
+                                       ^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_higher_order_multiple_vars.md:3:19:3:22:**
+**type_higher_order_multiple_vars.md:3:19:3:20:**
 ```roc
 compose : (b -> c), (a -> b) -> (a -> c)
 ```
-                  ^^^
+                  ^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_higher_order_multiple_vars.md:3:21:3:35:**
+**type_higher_order_multiple_vars.md:3:21:3:34:**
 ```roc
 compose : (b -> c), (a -> b) -> (a -> c)
 ```
-                    ^^^^^^^^^^^^^^
+                    ^^^^^^^^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_higher_order_multiple_vars.md:3:34:3:41:**
+**type_higher_order_multiple_vars.md:3:34:3:40:**
 ```roc
 compose : (b -> c), (a -> b) -> (a -> c)
 ```
-                                 ^^^^^^^
+                                 ^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_higher_order_multiple_vars.md:3:40:4:8:**
+**type_higher_order_multiple_vars.md:3:40:3:41:**
 ```roc
 compose : (b -> c), (a -> b) -> (a -> c)
-compose = |f, g| |x| f(g(x))
 ```
+                                       ^
 
 
 # TOKENS
@@ -113,26 +112,26 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~clojure
 (file @1.1-6.15
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.20 (name "compose")
+		(s-type-anno @3.1-3.19 (name "compose")
 			(ty-fn @3.12-3.18
-				(ty-var @3.12-3.13 (raw "b"))
-				(ty-var @3.17-3.18 (raw "c"))))
-		(e-malformed @3.19-3.22 (reason "expr_unexpected_token"))
-		(e-malformed @3.33-3.35 (reason "expr_arrow_expects_ident"))
-		(e-local-dispatch @3.34-3.41
+				(ty-var @3.12-3.12 (raw "b"))
+				(ty-var @1.1-1.1 (raw "c"))))
+		(e-malformed @3.19-3.20 (reason "expr_unexpected_token"))
+		(e-malformed @3.33-3.34 (reason "expr_arrow_expects_ident"))
+		(e-local-dispatch @3.34-3.40
 			(e-ident @3.34-3.35 (raw "a"))
-			(e-ident @3.39-3.40 (raw "c")))
-		(e-malformed @3.40-4.8 (reason "expr_unexpected_token"))
+			(e-ident @1.1-1.1 (raw "c")))
+		(e-malformed @3.40-3.41 (reason "expr_unexpected_token"))
 		(s-decl @4.1-4.29
 			(p-ident @4.1-4.8 (raw "compose"))
 			(e-lambda @4.11-4.29
@@ -158,7 +157,9 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-compose : (b -> c)a->c
+compose : (b -> c)
+a->c
+
 compose = |f, g| |x| f(g(x))
 
 main! = |_| {}

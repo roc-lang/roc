@@ -36,47 +36,50 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:12:26:12:41
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:41
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:45
-INVALID STATEMENT - let_polymorphism_lists.md:12:28:13:13
-INVALID STATEMENT - let_polymorphism_lists.md:13:28:14:15
-INVALID STATEMENT - let_polymorphism_lists.md:14:32:17:10
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:12:26:12:27
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:27
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:31
+INVALID STATEMENT - let_polymorphism_lists.md:12:28:12:41
+INVALID STATEMENT - let_polymorphism_lists.md:13:28:13:41
+INVALID STATEMENT - let_polymorphism_lists.md:14:32:14:45
+UNDEFINED VARIABLE - let_polymorphism_lists.md:25:12:25:20
+UNDEFINED VARIABLE - let_polymorphism_lists.md:26:12:26:20
+UNDEFINED VARIABLE - let_polymorphism_lists.md:27:12:27:20
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **+ my_empty_list** is not expected in an expression.
+The token **+** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**let_polymorphism_lists.md:12:26:12:41:**
+**let_polymorphism_lists.md:12:26:12:27:**
 ```roc
 all_int_list = int_list ++ my_empty_list
 ```
-                         ^^^^^^^^^^^^^^^
+                         ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **+ my_empty_list** is not expected in an expression.
+The token **+** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**let_polymorphism_lists.md:13:26:13:41:**
+**let_polymorphism_lists.md:13:26:13:27:**
 ```roc
 all_str_list = str_list ++ my_empty_list
 ```
-                         ^^^^^^^^^^^^^^^
+                         ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **+ my_empty_list** is not expected in an expression.
+The token **+** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**let_polymorphism_lists.md:14:30:14:45:**
+**let_polymorphism_lists.md:14:30:14:31:**
 ```roc
 all_float_list = float_list ++ my_empty_list
 ```
-                             ^^^^^^^^^^^^^^^
+                             ^
 
 
 **UNKNOWN OPERATOR**
@@ -87,11 +90,11 @@ Check the spelling and make sure you're using a valid Roc operator.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**let_polymorphism_lists.md:12:28:13:13:**
+**let_polymorphism_lists.md:12:28:12:41:**
 ```roc
 all_int_list = int_list ++ my_empty_list
-all_str_list = str_list ++ my_empty_list
 ```
+                           ^^^^^^^^^^^^^
 
 
 **UNKNOWN OPERATOR**
@@ -102,11 +105,11 @@ Check the spelling and make sure you're using a valid Roc operator.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**let_polymorphism_lists.md:13:28:14:15:**
+**let_polymorphism_lists.md:13:28:13:41:**
 ```roc
 all_str_list = str_list ++ my_empty_list
-all_float_list = float_list ++ my_empty_list
 ```
+                           ^^^^^^^^^^^^^
 
 
 **UNKNOWN OPERATOR**
@@ -117,13 +120,11 @@ Check the spelling and make sure you're using a valid Roc operator.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**let_polymorphism_lists.md:14:32:17:10:**
+**let_polymorphism_lists.md:14:32:14:45:**
 ```roc
 all_float_list = float_list ++ my_empty_list
-
-# Function returning empty list
-get_empty = |_| []
 ```
+                               ^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -183,13 +184,13 @@ CloseCurly(29:1-29:2),EndOfFile(29:2-29:2),
 ~~~clojure
 (file @1.1-29.2
 	(app @1.1-1.56
-		(provides @1.6-1.11
-			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf")
+		(provides @1.5-1.11
+			(exposed-lower-ident @1.6-1.10 (text "main")))
+		(record-field @1.14-1.54 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf")
+			(record-field @1.14-1.54 (name "pf")
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -215,23 +216,23 @@ CloseCurly(29:1-29:2),EndOfFile(29:2-29:2),
 				(e-frac @9.15-9.18 (raw "1.1"))
 				(e-frac @9.20-9.23 (raw "2.2"))
 				(e-frac @9.25-9.28 (raw "3.3"))))
-		(s-decl @12.1-12.41
+		(s-decl @12.1-12.27
 			(p-ident @12.1-12.13 (raw "all_int_list"))
-			(e-binop @12.16-12.41 (op "+")
+			(e-binop @12.16-12.27 (op "+")
 				(e-ident @12.16-12.24 (raw "int_list"))
-				(e-malformed @12.26-12.41 (reason "expr_unexpected_token"))))
+				(e-malformed @12.26-12.27 (reason "expr_unexpected_token"))))
 		(e-ident @12.28-12.41 (raw "my_empty_list"))
-		(s-decl @13.1-13.41
+		(s-decl @13.1-13.27
 			(p-ident @13.1-13.13 (raw "all_str_list"))
-			(e-binop @13.16-13.41 (op "+")
+			(e-binop @13.16-13.27 (op "+")
 				(e-ident @13.16-13.24 (raw "str_list"))
-				(e-malformed @13.26-13.41 (reason "expr_unexpected_token"))))
+				(e-malformed @13.26-13.27 (reason "expr_unexpected_token"))))
 		(e-ident @13.28-13.41 (raw "my_empty_list"))
-		(s-decl @14.1-14.45
+		(s-decl @14.1-14.31
 			(p-ident @14.1-14.15 (raw "all_float_list"))
-			(e-binop @14.18-14.45 (op "+")
+			(e-binop @14.18-14.31 (op "+")
 				(e-ident @14.18-14.28 (raw "float_list"))
-				(e-malformed @14.30-14.45 (reason "expr_unexpected_token"))))
+				(e-malformed @14.30-14.31 (reason "expr_unexpected_token"))))
 		(e-ident @14.32-14.45 (raw "my_empty_list"))
 		(s-decl @17.1-17.19
 			(p-ident @17.1-17.10 (raw "get_empty"))
@@ -272,9 +273,9 @@ CloseCurly(29:1-29:2),EndOfFile(29:2-29:2),
 							(e-apply @27.12-27.36
 								(e-ident @27.12-27.20 (raw "List.len"))
 								(e-ident @27.21-27.35 (raw "all_float_list"))))
-						(e-binop @28.5-29.2 (op "+")
+						(e-binop @28.5-28.23 (op "+")
 							(e-ident @28.5-28.9 (raw "len1"))
-							(e-binop @28.12-29.2 (op "+")
+							(e-binop @28.12-28.23 (op "+")
 								(e-ident @28.12-28.16 (raw "len2"))
 								(e-ident @28.19-28.23 (raw "len3"))))))))))
 ~~~
@@ -291,9 +292,12 @@ str_list = ["hello", "world"]
 float_list = [1.1, 2.2, 3.3]
 
 # Append empty list (polymorphic use)
-all_int_list = int_list + my_empty_list
-all_str_list = str_list + my_empty_list
-all_float_list = float_list + my_empty_list
+all_int_list = int_list + 
+my_empty_list
+all_str_list = str_list + 
+my_empty_list
+all_float_list = float_list + 
+my_empty_list
 
 # Function returning empty list
 get_empty = |_| []
@@ -340,19 +344,19 @@ main = |_| {
 				(e-dec-small @9.25-9.28 (numerator "33") (denominator-power-of-ten "1") (value "3.3")))))
 	(d-let
 		(p-assign @12.1-12.13 (ident "all_int_list"))
-		(e-binop @12.16-12.41 (op "add")
+		(e-binop @12.16-12.27 (op "add")
 			(e-lookup-local @12.16-12.24
 				(p-assign @7.1-7.9 (ident "int_list")))
 			(e-runtime-error (tag "expr_not_canonicalized"))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "all_str_list"))
-		(e-binop @13.16-13.41 (op "add")
+		(e-binop @13.16-13.27 (op "add")
 			(e-lookup-local @13.16-13.24
 				(p-assign @8.1-8.9 (ident "str_list")))
 			(e-runtime-error (tag "expr_not_canonicalized"))))
 	(d-let
 		(p-assign @14.1-14.15 (ident "all_float_list"))
-		(e-binop @14.18-14.45 (op "add")
+		(e-binop @14.18-14.31 (op "add")
 			(e-lookup-local @14.18-14.28
 				(p-assign @9.1-9.11 (ident "float_list")))
 			(e-runtime-error (tag "expr_not_canonicalized"))))
@@ -399,10 +403,10 @@ main = |_| {
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @27.21-27.35
 							(p-assign @14.1-14.15 (ident "all_float_list")))))
-				(e-binop @28.5-29.2 (op "add")
+				(e-binop @28.5-28.23 (op "add")
 					(e-lookup-local @28.5-28.9
 						(p-assign @25.5-25.9 (ident "len1")))
-					(e-binop @28.12-29.2 (op "add")
+					(e-binop @28.12-28.23 (op "add")
 						(e-lookup-local @28.12-28.16
 							(p-assign @26.5-26.9 (ident "len2")))
 						(e-lookup-local @28.19-28.23
@@ -428,9 +432,9 @@ main = |_| {
 		(expr @7.12-7.21 (type "List(Num(*))"))
 		(expr @8.12-8.30 (type "List(Str)"))
 		(expr @9.14-9.29 (type "List(Frac(*))"))
-		(expr @12.16-12.41 (type "*"))
-		(expr @13.16-13.41 (type "*"))
-		(expr @14.18-14.45 (type "*"))
+		(expr @12.16-12.27 (type "*"))
+		(expr @13.16-13.27 (type "*"))
+		(expr @14.18-14.31 (type "*"))
 		(expr @17.13-17.19 (type "* -> List(*)"))
 		(expr @20.18-20.31 (type "List(*)"))
 		(expr @21.18-21.35 (type "List(*)"))

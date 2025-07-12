@@ -46,8 +46,8 @@ LowerIdent(9:1-9:7),OpAssign(9:8-9:9),UpperIdent(9:10-9:15),NoSpaceDotUpperIdent
 (file @1.1-9.22
 	(module @1.1-1.21
 		(exposes @1.8-1.21
-			(exposed-upper-ident (text "Color"))
-			(exposed-lower-ident (text "blue"))))
+			(exposed-upper-ident @1.9-1.14 (text "Color"))
+			(exposed-lower-ident @1.16-1.20 (text "blue"))))
 	(statements
 		(s-type-decl @3.1-3.28
 			(header @3.1-3.6 (name "Color")
@@ -57,12 +57,12 @@ LowerIdent(9:1-9:7),OpAssign(9:8-9:9),UpperIdent(9:10-9:15),NoSpaceDotUpperIdent
 					(ty @3.11-3.14 (name "Red"))
 					(ty @3.16-3.21 (name "Green"))
 					(ty @3.23-3.27 (name "Blue")))))
-		(s-type-anno @5.1-6.5 (name "blue")
+		(s-type-anno @5.1-5.13 (name "blue")
 			(ty @5.8-5.13 (name "Color")))
 		(s-decl @6.1-6.18
 			(p-ident @6.1-6.5 (raw "blue"))
 			(e-tag @6.8-6.18 (raw "Color.Blue")))
-		(s-type-anno @8.1-9.7 (name "yellow")
+		(s-type-anno @8.1-8.15 (name "yellow")
 			(ty @8.10-8.15 (name "Color")))
 		(s-decl @9.1-9.22
 			(p-ident @9.1-9.7 (raw "yellow"))

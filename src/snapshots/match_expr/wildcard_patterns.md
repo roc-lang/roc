@@ -51,15 +51,15 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 (e-match
 	(e-ident @1.7-1.12 (raw "value"))
 	(branches
-		(branch @2.5-3.9
+		(branch @2.5-2.27
 			(p-tag @2.5-2.11 (raw "Answer"))
 			(e-string @2.15-2.27
 				(e-string-part @2.16-2.26 (raw "the answer"))))
-		(branch @3.5-4.10
+		(branch @3.5-3.19
 			(p-tag @3.5-3.9 (raw "Zero"))
 			(e-string @3.13-3.19
 				(e-string-part @3.14-3.18 (raw "zero"))))
-		(branch @4.5-5.2
+		(branch @4.5-4.30
 			(p-ident @4.5-4.10 (raw "other"))
 			(e-string @4.14-4.30
 				(e-string-part @4.15-4.29 (raw "something else"))))))

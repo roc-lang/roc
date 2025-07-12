@@ -13,79 +13,79 @@ runEffect! = |fn!, x| fn!(x)
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:22:3:25
-UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:26:3:30
-INVALID STATEMENT - type_function_effectful.md:3:22:3:25
-INVALID STATEMENT - type_function_effectful.md:3:24:3:28
-INVALID STATEMENT - type_function_effectful.md:3:26:3:30
-INVALID STATEMENT - type_function_effectful.md:3:29:4:11
+UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:22:3:23
+UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:26:3:28
+INVALID STATEMENT - type_function_effectful.md:3:22:3:23
+INVALID STATEMENT - type_function_effectful.md:3:24:3:25
+INVALID STATEMENT - type_function_effectful.md:3:26:3:28
+INVALID STATEMENT - type_function_effectful.md:3:29:3:30
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **, a** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_function_effectful.md:3:22:3:25:**
+**type_function_effectful.md:3:22:3:23:**
 ```roc
 runEffect! : (a => b), a => b
 ```
-                     ^^^
+                     ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **=> b** is not expected in an expression.
+The token **=>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**type_function_effectful.md:3:26:3:30:**
+**type_function_effectful.md:3:26:3:28:**
 ```roc
 runEffect! : (a => b), a => b
 ```
-                         ^^^^
+                         ^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_function_effectful.md:3:22:3:25:**
+**type_function_effectful.md:3:22:3:23:**
 ```roc
 runEffect! : (a => b), a => b
 ```
-                     ^^^
+                     ^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_function_effectful.md:3:24:3:28:**
+**type_function_effectful.md:3:24:3:25:**
 ```roc
 runEffect! : (a => b), a => b
 ```
-                       ^^^^
+                       ^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_function_effectful.md:3:26:3:30:**
+**type_function_effectful.md:3:26:3:28:**
 ```roc
 runEffect! : (a => b), a => b
 ```
-                         ^^^^
+                         ^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**type_function_effectful.md:3:29:4:11:**
+**type_function_effectful.md:3:29:3:30:**
 ```roc
 runEffect! : (a => b), a => b
-runEffect! = |fn!, x| fn!(x)
 ```
+                            ^
 
 
 # TOKENS
@@ -99,23 +99,23 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~clojure
 (file @1.1-6.15
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.23 (name "runEffect!")
+		(s-type-anno @3.1-3.22 (name "runEffect!")
 			(ty-fn @3.15-3.21
-				(ty-var @3.15-3.16 (raw "a"))
-				(ty-var @3.20-3.21 (raw "b"))))
-		(e-malformed @3.22-3.25 (reason "expr_unexpected_token"))
+				(ty-var @3.15-3.15 (raw "a"))
+				(ty-var @1.1-1.1 (raw "b"))))
+		(e-malformed @3.22-3.23 (reason "expr_unexpected_token"))
 		(e-ident @3.24-3.25 (raw "a"))
-		(e-malformed @3.26-3.30 (reason "expr_unexpected_token"))
+		(e-malformed @3.26-3.28 (reason "expr_unexpected_token"))
 		(e-ident @3.29-3.30 (raw "b"))
 		(s-decl @4.1-4.29
 			(p-ident @4.1-4.11 (raw "runEffect!"))
@@ -137,7 +137,9 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-runEffect! : (a => b)ab
+runEffect! : (a => b)
+a
+b
 runEffect! = |fn!, x| fn!(x)
 
 main! = |_| {}

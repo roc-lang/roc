@@ -17,19 +17,19 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - tag_vs_function_calls.md:6:13:6:15
-PARSE ERROR - tag_vs_function_calls.md:6:14:6:18
+UNEXPECTED TOKEN IN EXPRESSION - tag_vs_function_calls.md:6:13:6:14
+PARSE ERROR - tag_vs_function_calls.md:6:14:6:15
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **\x** is not expected in an expression.
+The token **\** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**tag_vs_function_calls.md:6:13:6:15:**
+**tag_vs_function_calls.md:6:13:6:14:**
 ```roc
     addOne: \x -> x + 1,
 ```
-            ^^
+            ^
 
 
 **PARSE ERROR**
@@ -37,11 +37,11 @@ A parsing error occurred: `expected_expr_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**tag_vs_function_calls.md:6:14:6:18:**
+**tag_vs_function_calls.md:6:14:6:15:**
 ```roc
     addOne: \x -> x + 1,
 ```
-             ^^^^
+             ^
 
 
 # TOKENS
@@ -59,7 +59,7 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @6.14-6.18 (reason "expected_expr_close_curly_or_comma"))
+(e-malformed @6.14-6.15 (reason "expected_expr_close_curly_or_comma"))
 ~~~
 # FORMATTED
 ~~~roc

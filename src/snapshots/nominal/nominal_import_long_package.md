@@ -13,35 +13,35 @@ red : CE
 red = ... # not implemented
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:21:3:36
-UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:28:3:38
-INVALID STATEMENT - nominal_import_long_package.md:3:21:3:36
-INVALID STATEMENT - nominal_import_long_package.md:3:28:3:38
-INVALID STATEMENT - nominal_import_long_package.md:3:37:5:4
+UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:21:3:27
+UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:28:3:36
+INVALID STATEMENT - nominal_import_long_package.md:3:21:3:27
+INVALID STATEMENT - nominal_import_long_package.md:3:28:3:36
+INVALID STATEMENT - nominal_import_long_package.md:3:37:3:52
 UNDECLARED TYPE - nominal_import_long_package.md:5:7:5:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Color exposing** is not expected in an expression.
+The token **.Color** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**nominal_import_long_package.md:3:21:3:36:**
+**nominal_import_long_package.md:3:21:3:27:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
-                    ^^^^^^^^^^^^^^^
+                    ^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **exposing [** is not expected in an expression.
+The token **exposing** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**nominal_import_long_package.md:3:28:3:38:**
+**nominal_import_long_package.md:3:28:3:36:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
-                           ^^^^^^^^^^
+                           ^^^^^^^^
 
 
 **LIST NOT CLOSED**
@@ -50,46 +50,44 @@ Lists must be closed with **]** and list items must be separated by commas.
 For example:     [1, 2, 3]
 
 Here is the problematic code:
-**nominal_import_long_package.md:3:51:5:4:**
+**nominal_import_long_package.md:3:51:3:52:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
-
-red : CE
 ```
+                                                  ^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**nominal_import_long_package.md:3:21:3:36:**
+**nominal_import_long_package.md:3:21:3:27:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
-                    ^^^^^^^^^^^^^^^
+                    ^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**nominal_import_long_package.md:3:28:3:38:**
+**nominal_import_long_package.md:3:28:3:36:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
-                           ^^^^^^^^^^
+                           ^^^^^^^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**nominal_import_long_package.md:3:37:5:4:**
+**nominal_import_long_package.md:3:37:3:52:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
-
-red : CE
 ```
+                                    ^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -112,16 +110,16 @@ LowerIdent(6:1-6:4),OpAssign(6:5-6:6),TripleDot(6:7-6:10),EndOfFile(6:28-6:28),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.28
+(file @1.1-6.10
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident (text "red"))))
+			(exposed-lower-ident @1.9-1.12 (text "red"))))
 	(statements
 		(s-import @3.1-3.21 (raw "design.Styles"))
-		(e-malformed @3.21-3.36 (reason "expr_unexpected_token"))
-		(e-malformed @3.28-3.38 (reason "expr_unexpected_token"))
-		(e-malformed @3.51-5.4 (reason "expected_expr_close_square_or_comma"))
-		(s-type-anno @5.1-6.4 (name "red")
+		(e-malformed @3.21-3.27 (reason "expr_unexpected_token"))
+		(e-malformed @3.28-3.36 (reason "expr_unexpected_token"))
+		(e-malformed @3.51-3.52 (reason "expected_expr_close_square_or_comma"))
+		(s-type-anno @5.1-5.9 (name "red")
 			(ty @5.7-5.9 (name "CE")))
 		(s-decl @6.1-6.10
 			(p-ident @6.1-6.4 (raw "red"))
@@ -133,6 +131,7 @@ module [red]
 
 import design.Styles
 
+
 red : CE
 red = ...
 ~~~
@@ -141,7 +140,7 @@ red = ...
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "red"))
-		(e-not-implemented @6.7-6.10)
+		(e-not-implemented @1.1-1.1)
 		(annotation @6.1-6.4
 			(declared-type
 				(ty @5.7-5.9 (name "CE")))))
@@ -154,5 +153,5 @@ red = ...
 	(defs
 		(patt @6.1-6.4 (type "Error")))
 	(expressions
-		(expr @6.7-6.10 (type "Error"))))
+		(expr @1.1-1.1 (type "Error"))))
 ~~~

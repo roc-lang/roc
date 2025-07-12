@@ -47,9 +47,9 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 			(p-ident @3.5-3.8 (raw "str"))
 			(e-string @3.11-3.18
 				(e-string-part @3.12-3.17 (raw "hello"))))
-		(s-decl @4.5-5.11
+		(s-decl @4.5-4.19
 			(p-ident @4.5-4.11 (raw "result"))
-			(e-binop @4.14-5.11 (op "+")
+			(e-binop @4.14-4.19 (op "+")
 				(e-ident @4.14-4.15 (raw "x"))
 				(e-int @4.18-4.19 (raw "5"))))
 		(e-ident @5.5-5.11 (raw "result"))))
@@ -73,9 +73,9 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 		(p-assign @3.5-3.8 (ident "str"))
 		(e-string @3.11-3.18
 			(e-literal @3.12-3.17 (string "hello"))))
-	(s-let @4.5-5.11
+	(s-let @4.5-4.19
 		(p-assign @4.5-4.11 (ident "result"))
-		(e-binop @4.14-5.11 (op "add")
+		(e-binop @4.14-4.19 (op "add")
 			(e-lookup-local @4.14-4.15
 				(p-assign @2.5-2.6 (ident "x")))
 			(e-int @4.18-4.19 (value "5"))))

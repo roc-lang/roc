@@ -27,22 +27,22 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~clojure
 (file @1.1-6.15
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.5 (name "pair")
+		(s-type-anno @3.1-3.19 (name "pair")
 			(ty-fn @3.8-3.19
-				(ty-var @3.8-3.9 (raw "a"))
+				(ty-var @1.1-1.1 (raw "a"))
 				(ty-tuple @3.13-3.19
-					(ty-var @3.14-3.15 (raw "a"))
-					(ty-var @3.17-3.18 (raw "a")))))
+					(ty-var @3.14-3.14 (raw "a"))
+					(ty-var @1.1-1.1 (raw "a")))))
 		(s-decl @4.1-4.18
 			(p-ident @4.1-4.5 (raw "pair"))
 			(e-lambda @4.8-4.18
@@ -79,10 +79,10 @@ NO CHANGE
 		(annotation @4.1-4.5
 			(declared-type
 				(ty-fn @3.8-3.19 (effectful false)
-					(ty-var @3.8-3.9 (name "a"))
+					(ty-var @1.1-1.1 (name "a"))
 					(ty-tuple @3.13-3.19
-						(ty-var @3.14-3.15 (name "a"))
-						(ty-var @3.17-3.18 (name "a")))))))
+						(ty-var @3.14-3.14 (name "a"))
+						(ty-var @1.1-1.1 (name "a")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15

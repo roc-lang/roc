@@ -31,18 +31,18 @@ LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:19),NoSpaceOpenRound(9:19
 ~~~clojure
 (file @1.1-9.36
 	(app @1.1-1.57
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.55 (name "pf")
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
 		(s-import @3.1-3.17 (raw "pf.Stdout"))
-		(s-type-anno @6.1-7.11 (name "print_msg!")
+		(s-type-anno @6.1-6.23 (name "print_msg!")
 			(ty-fn @6.14-6.23
 				(ty @6.14-6.17 (name "Str"))
 				(ty-record @6.21-6.23)))

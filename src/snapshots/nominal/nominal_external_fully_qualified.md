@@ -49,10 +49,10 @@ CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
 (file @1.1-11.2
 	(module @1.1-1.22
 		(exposes @1.8-1.22
-			(exposed-lower-ident (text "handleResult"))))
+			(exposed-lower-ident @1.9-1.21 (text "handleResult"))))
 	(statements
 		(s-import @3.1-3.22 (raw "MyResultModule"))
-		(s-type-anno @5.1-6.13 (name "handleResult")
+		(s-type-anno @5.1-5.60 (name "handleResult")
 			(ty-fn @5.16-5.60
 				(ty-apply @5.16-5.53
 					(ty @5.16-5.43 (name "MyResultModule.MyResultType"))
@@ -69,11 +69,11 @@ CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
 						(e-match
 							(e-ident @7.11-7.17 (raw "result"))
 							(branches
-								(branch @8.9-9.23
+								(branch @8.9-8.55
 									(p-tag @8.9-8.46 (raw ".Ok")
 										(p-ident @8.40-8.45 (raw "value")))
 									(e-ident @8.50-8.55 (raw "value")))
-								(branch @9.9-10.6
+								(branch @9.9-9.74
 									(p-tag @9.9-9.46 (raw ".Err")
 										(p-ident @9.41-9.45 (raw "code")))
 									(e-string @9.50-9.74

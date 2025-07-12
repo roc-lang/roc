@@ -37,24 +37,24 @@ LowerIdent(14:1-14:6),OpAssign(14:7-14:8),LowerIdent(14:9-14:17),NoSpaceOpenRoun
 ~~~clojure
 (file @1.1-14.21
 	(app @1.1-1.57
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
+			(record-field @1.15-1.55 (name "pf")
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
 		(s-import @3.1-3.17 (raw "pf.Stdout"))
-		(s-decl @6.1-9.14
+		(s-decl @6.1-6.24
 			(p-ident @6.1-6.9 (raw "multiply"))
-			(e-lambda @6.12-9.14
+			(e-lambda @6.12-6.24
 				(args
 					(p-ident @6.13-6.14 (raw "x"))
 					(p-ident @6.16-6.17 (raw "y")))
-				(e-binop @6.19-9.14 (op "*")
+				(e-binop @6.19-6.24 (op "*")
 					(e-ident @6.19-6.20 (raw "x"))
 					(e-ident @6.23-6.24 (raw "y")))))
 		(s-decl @9.1-9.36
@@ -91,11 +91,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.9 (ident "multiply"))
-		(e-lambda @6.12-9.14
+		(e-lambda @6.12-6.24
 			(args
 				(p-assign @6.13-6.14 (ident "x"))
 				(p-assign @6.16-6.17 (ident "y")))
-			(e-binop @6.19-9.14 (op "mul")
+			(e-binop @6.19-6.24 (op "mul")
 				(e-lookup-local @6.19-6.20
 					(p-assign @6.13-6.14 (ident "x")))
 				(e-lookup-local @6.23-6.24
@@ -143,7 +143,7 @@ NO CHANGE
 		(patt @12.1-12.9 (type "* -> *"))
 		(patt @14.1-14.6 (type "*")))
 	(expressions
-		(expr @6.12-9.14 (type "*, * -> *"))
+		(expr @6.12-6.24 (type "*, * -> *"))
 		(expr @9.17-9.36 (type "* -> *"))
 		(expr @12.12-12.45 (type "* -> *"))
 		(expr @14.9-14.21 (type "*"))))

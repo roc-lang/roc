@@ -43,13 +43,13 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 ~~~clojure
 (file @1.1-8.27
 	(app @1.1-1.53
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf")
+		(provides @1.5-1.12
+			(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf")
+			(record-field @1.15-1.51 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -59,18 +59,18 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 					(ty-var @3.6-3.7 (raw "a"))
 					(ty-var @3.9-3.10 (raw "b"))))
 			(ty-tuple @3.14-3.20
-				(ty-var @3.15-3.16 (raw "a"))
-				(ty-var @3.18-3.19 (raw "b"))))
-		(s-type-anno @5.1-6.9 (name "swapPair")
+				(ty-var @3.15-3.15 (raw "a"))
+				(ty-var @1.1-1.1 (raw "b"))))
+		(s-type-anno @5.1-5.36 (name "swapPair")
 			(ty-fn @5.12-5.36
 				(ty-apply @5.12-5.22
 					(ty @5.12-5.16 (name "Pair"))
-					(ty-var @5.17-5.18 (raw "a"))
-					(ty-var @5.20-5.21 (raw "b")))
+					(ty-var @5.17-5.17 (raw "a"))
+					(ty-var @1.1-1.1 (raw "b")))
 				(ty-apply @5.26-5.36
 					(ty @5.26-5.30 (name "Pair"))
-					(ty-var @5.31-5.32 (raw "b"))
-					(ty-var @5.34-5.35 (raw "a")))))
+					(ty-var @5.31-5.31 (raw "b"))
+					(ty-var @1.1-1.1 (raw "a")))))
 		(s-decl @6.1-6.27
 			(p-ident @6.1-6.9 (raw "swapPair"))
 			(e-lambda @6.12-6.27
@@ -116,11 +116,11 @@ NO CHANGE
 			(declared-type
 				(ty-fn @5.12-5.36 (effectful false)
 					(ty-apply @5.12-5.22 (symbol "Pair")
-						(ty-var @5.17-5.18 (name "a"))
-						(ty-var @5.20-5.21 (name "b")))
+						(ty-var @5.17-5.17 (name "a"))
+						(ty-var @1.1-1.1 (name "b")))
 					(ty-apply @5.26-5.36 (symbol "Pair")
-						(ty-var @5.31-5.32 (name "b"))
-						(ty-var @5.34-5.35 (name "a")))))))
+						(ty-var @5.31-5.31 (name "b"))
+						(ty-var @1.1-1.1 (name "a")))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "main!"))
 		(e-lambda @8.9-8.27
@@ -137,8 +137,8 @@ NO CHANGE
 				(ty-var @3.6-3.7 (name "a"))
 				(ty-var @3.9-3.10 (name "b"))))
 		(ty-tuple @3.14-3.20
-			(ty-var @3.15-3.16 (name "a"))
-			(ty-var @3.18-3.19 (name "b")))))
+			(ty-var @3.15-3.15 (name "a"))
+			(ty-var @1.1-1.1 (name "b")))))
 ~~~
 # TYPES
 ~~~clojure

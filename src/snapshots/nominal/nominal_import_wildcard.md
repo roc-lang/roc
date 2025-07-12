@@ -19,37 +19,33 @@ green : Color
 green = Green
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - nominal_import_wildcard.md:3:13:5:4
-INVALID STATEMENT - nominal_import_wildcard.md:3:13:5:4
+UNEXPECTED TOKEN IN EXPRESSION - nominal_import_wildcard.md:3:13:3:15
+INVALID STATEMENT - nominal_import_wildcard.md:3:13:3:15
 UNDECLARED TYPE - nominal_import_wildcard.md:5:7:5:12
 UNDECLARED TYPE - nominal_import_wildcard.md:8:8:8:13
 UNDECLARED TYPE - nominal_import_wildcard.md:11:9:11:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **.*
-
-red** is not expected in an expression.
+The token **.*** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**nominal_import_wildcard.md:3:13:5:4:**
+**nominal_import_wildcard.md:3:13:3:15:**
 ```roc
 import Color.*
-
-red : Color
 ```
+            ^^
 
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**nominal_import_wildcard.md:3:13:5:4:**
+**nominal_import_wildcard.md:3:13:3:15:**
 ```roc
 import Color.*
-
-red : Color
 ```
+            ^^
 
 
 **UNDECLARED TYPE**
@@ -101,23 +97,23 @@ LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:14),EndOfFile(12:14
 (file @1.1-12.14
 	(module @1.1-1.26
 		(exposes @1.8-1.26
-			(exposed-lower-ident (text "red"))
-			(exposed-lower-ident (text "green"))
-			(exposed-lower-ident (text "blue"))))
+			(exposed-lower-ident @1.9-1.12 (text "red"))
+			(exposed-lower-ident @1.14-1.19 (text "green"))
+			(exposed-lower-ident @1.21-1.25 (text "blue"))))
 	(statements
 		(s-import @3.1-3.13 (raw "Color"))
-		(e-malformed @3.13-5.4 (reason "expr_unexpected_token"))
-		(s-type-anno @5.1-6.4 (name "red")
+		(e-malformed @3.13-3.15 (reason "expr_unexpected_token"))
+		(s-type-anno @5.1-5.12 (name "red")
 			(ty @5.7-5.12 (name "Color")))
 		(s-decl @6.1-6.10
 			(p-ident @6.1-6.4 (raw "red"))
 			(e-tag @6.7-6.10 (raw "Red")))
-		(s-type-anno @8.1-9.5 (name "blue")
+		(s-type-anno @8.1-8.13 (name "blue")
 			(ty @8.8-8.13 (name "Color")))
 		(s-decl @9.1-9.12
 			(p-ident @9.1-9.5 (raw "blue"))
 			(e-tag @9.8-9.12 (raw "Blue")))
-		(s-type-anno @11.1-12.6 (name "green")
+		(s-type-anno @11.1-11.14 (name "green")
 			(ty @11.9-11.14 (name "Color")))
 		(s-decl @12.1-12.14
 			(p-ident @12.1-12.6 (raw "green"))
@@ -128,6 +124,7 @@ LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:14),EndOfFile(12:14
 module [red, green, blue]
 
 import Color
+
 
 red : Color
 red = Red

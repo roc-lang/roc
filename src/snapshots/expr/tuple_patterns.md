@@ -26,11 +26,11 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:4:12:4:15
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:7:22:7:25
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:10:28:10:31
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:13:29:13:32
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:16:19:16:22
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:4:12:4:13
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:7:22:7:23
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:10:28:10:29
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:13:29:13:30
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:16:19:16:20
 UNDEFINED VARIABLE - tuple_patterns.md:4:6:4:7
 UNDEFINED VARIABLE - tuple_patterns.md:4:9:4:10
 UNDEFINED VARIABLE - tuple_patterns.md:7:7:7:8
@@ -47,63 +47,63 @@ UNDEFINED VARIABLE - tuple_patterns.md:16:6:16:10
 UNDEFINED VARIABLE - tuple_patterns.md:16:12:16:17
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= (** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**tuple_patterns.md:4:12:4:15:**
+**tuple_patterns.md:4:12:4:13:**
 ```roc
     (x, y) = (1, 2)
 ```
-           ^^^
+           ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= (** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**tuple_patterns.md:7:22:7:25:**
+**tuple_patterns.md:7:22:7:23:**
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))
 ```
-                     ^^^
+                     ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= (** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**tuple_patterns.md:10:28:10:31:**
+**tuple_patterns.md:10:28:10:29:**
 ```roc
     (first, second, third) = (100, 42, 200)
 ```
-                           ^^^
+                           ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= (** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**tuple_patterns.md:13:29:13:32:**
+**tuple_patterns.md:13:29:13:30:**
 ```roc
     (name, string, boolean) = ("Alice", "fixed", True)
 ```
-                            ^^^
+                            ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **= (** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**tuple_patterns.md:16:19:16:22:**
+**tuple_patterns.md:16:19:16:20:**
 ```roc
     (list, hello) = ([1, 2, 3], "hello")
 ```
-                  ^^^
+                  ^
 
 
 **UNDEFINED VARIABLE**
@@ -278,7 +278,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(e-tuple @4.5-4.11
 			(e-ident @4.6-4.7 (raw "x"))
 			(e-ident @4.9-4.10 (raw "y")))
-		(e-malformed @4.12-4.15 (reason "expr_unexpected_token"))
+		(e-malformed @4.12-4.13 (reason "expr_unexpected_token"))
 		(e-tuple @4.14-4.20
 			(e-int @4.15-4.16 (raw "1"))
 			(e-int @4.18-4.19 (raw "2")))
@@ -289,7 +289,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(e-tuple @7.14-7.20
 				(e-ident @7.15-7.16 (raw "c"))
 				(e-ident @7.18-7.19 (raw "d"))))
-		(e-malformed @7.22-7.25 (reason "expr_unexpected_token"))
+		(e-malformed @7.22-7.23 (reason "expr_unexpected_token"))
 		(e-tuple @7.24-7.44
 			(e-tuple @7.25-7.33
 				(e-int @7.26-7.28 (raw "10"))
@@ -301,7 +301,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(e-ident @10.6-10.11 (raw "first"))
 			(e-ident @10.13-10.19 (raw "second"))
 			(e-ident @10.21-10.26 (raw "third")))
-		(e-malformed @10.28-10.31 (reason "expr_unexpected_token"))
+		(e-malformed @10.28-10.29 (reason "expr_unexpected_token"))
 		(e-tuple @10.30-10.44
 			(e-int @10.31-10.34 (raw "100"))
 			(e-int @10.36-10.38 (raw "42"))
@@ -310,7 +310,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(e-ident @13.6-13.10 (raw "name"))
 			(e-ident @13.12-13.18 (raw "string"))
 			(e-ident @13.20-13.27 (raw "boolean")))
-		(e-malformed @13.29-13.32 (reason "expr_unexpected_token"))
+		(e-malformed @13.29-13.30 (reason "expr_unexpected_token"))
 		(e-tuple @13.31-13.55
 			(e-string @13.32-13.39
 				(e-string-part @13.33-13.38 (raw "Alice")))
@@ -320,7 +320,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(e-tuple @16.5-16.18
 			(e-ident @16.6-16.10 (raw "list"))
 			(e-ident @16.12-16.17 (raw "hello")))
-		(e-malformed @16.19-16.22 (reason "expr_unexpected_token"))
+		(e-malformed @16.19-16.20 (reason "expr_unexpected_token"))
 		(e-tuple @16.21-16.41
 			(e-list @16.22-16.31
 				(e-int @16.23-16.24 (raw "1"))
@@ -365,17 +365,17 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-19.2
-	(s-expr @4.5-4.13
+	(s-expr @4.5-4.11
 		(e-tuple @4.5-4.11
 			(elems
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope")))))
-	(s-expr @4.14-7.6
+	(s-expr @4.14-4.20
 		(e-tuple @4.14-4.20
 			(elems
 				(e-int @4.15-4.16 (value "1"))
 				(e-int @4.18-4.19 (value "2")))))
-	(s-expr @7.5-7.23
+	(s-expr @7.5-7.21
 		(e-tuple @7.5-7.21
 			(elems
 				(e-tuple @7.6-7.12
@@ -386,7 +386,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(elems
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-runtime-error (tag "ident_not_in_scope")))))))
-	(s-expr @7.24-10.6
+	(s-expr @7.24-7.44
 		(e-tuple @7.24-7.44
 			(elems
 				(e-tuple @7.25-7.33
@@ -397,25 +397,25 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(elems
 						(e-int @7.36-7.38 (value "30"))
 						(e-int @7.40-7.42 (value "40")))))))
-	(s-expr @10.5-10.29
+	(s-expr @10.5-10.27
 		(e-tuple @10.5-10.27
 			(elems
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope")))))
-	(s-expr @10.30-13.6
+	(s-expr @10.30-10.44
 		(e-tuple @10.30-10.44
 			(elems
 				(e-int @10.31-10.34 (value "100"))
 				(e-int @10.36-10.38 (value "42"))
 				(e-int @10.40-10.43 (value "200")))))
-	(s-expr @13.5-13.30
+	(s-expr @13.5-13.28
 		(e-tuple @13.5-13.28
 			(elems
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope")))))
-	(s-expr @13.31-16.6
+	(s-expr @13.31-13.55
 		(e-tuple @13.31-13.55
 			(elems
 				(e-string @13.32-13.39
@@ -423,12 +423,12 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 				(e-string @13.41-13.48
 					(e-literal @13.42-13.47 (string "fixed")))
 				(e-tag @13.50-13.54 (name "True")))))
-	(s-expr @16.5-16.20
+	(s-expr @16.5-16.18
 		(e-tuple @16.5-16.18
 			(elems
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope")))))
-	(s-expr @16.21-18.6
+	(s-expr @16.21-16.41
 		(e-tuple @16.21-16.41
 			(elems
 				(e-list @16.22-16.31

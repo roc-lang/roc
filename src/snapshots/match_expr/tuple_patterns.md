@@ -53,23 +53,23 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 (e-match
 	(e-ident @1.7-1.12 (raw "coord"))
 	(branches
-		(branch @2.5-3.6
+		(branch @2.5-2.29
 			(p-tuple @2.5-2.17
 				(p-tag @2.6-2.10 (raw "Zero"))
 				(p-tag @2.12-2.16 (raw "Zero")))
 			(e-string @2.21-2.29
 				(e-string-part @2.22-2.28 (raw "origin"))))
-		(branch @3.5-4.6
+		(branch @3.5-3.19
 			(p-tuple @3.5-3.14
 				(p-ident @3.6-3.7 (raw "x"))
 				(p-tag @3.9-3.13 (raw "Zero")))
 			(e-ident @3.18-3.19 (raw "x")))
-		(branch @4.5-5.6
+		(branch @4.5-4.19
 			(p-tuple @4.5-4.14
 				(p-tag @4.6-4.10 (raw "Zero"))
 				(p-ident @4.12-4.13 (raw "y")))
 			(e-ident @4.18-4.19 (raw "y")))
-		(branch @5.5-6.2
+		(branch @5.5-5.16
 			(p-tuple @5.5-5.11
 				(p-ident @5.6-5.7 (raw "x"))
 				(p-ident @5.9-5.10 (raw "y")))

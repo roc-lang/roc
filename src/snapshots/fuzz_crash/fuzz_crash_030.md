@@ -23,19 +23,19 @@ ar,
 		]
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_030.md:8:5:9:4
-PARSE ERROR - fuzz_crash_030.md:12:8:12:12
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:9:12:13
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:12:12:14
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:13:12:17
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:17:13:10
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:13:2:14:4
-INVALID STATEMENT - fuzz_crash_030.md:12:9:12:13
-INVALID STATEMENT - fuzz_crash_030.md:12:12:12:14
-INVALID STATEMENT - fuzz_crash_030.md:12:13:12:17
-INVALID STATEMENT - fuzz_crash_030.md:12:15:12:18
-INVALID STATEMENT - fuzz_crash_030.md:12:17:13:10
-INVALID STATEMENT - fuzz_crash_030.md:13:2:14:4
+PARSE ERROR - fuzz_crash_030.md:8:5:8:6
+PARSE ERROR - fuzz_crash_030.md:12:8:12:9
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:9:12:12
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:12:12:13
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:13:12:14
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:17:12:18
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:13:2:13:10
+INVALID STATEMENT - fuzz_crash_030.md:12:9:12:12
+INVALID STATEMENT - fuzz_crash_030.md:12:12:12:13
+INVALID STATEMENT - fuzz_crash_030.md:12:13:12:14
+INVALID STATEMENT - fuzz_crash_030.md:12:15:12:17
+INVALID STATEMENT - fuzz_crash_030.md:12:17:12:18
+INVALID STATEMENT - fuzz_crash_030.md:13:2:13:10
 INVALID STATEMENT - fuzz_crash_030.md:14:3:16:4
 # PROBLEMS
 **PARSE ERROR**
@@ -43,11 +43,11 @@ A parsing error occurred: `exposed_item_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_030.md:8:5:9:4:**
+**fuzz_crash_030.md:8:5:8:6:**
 ```roc
 		[ .
-		] # Cse
 ```
+    ^
 
 
 **PARSE ERROR**
@@ -55,139 +55,137 @@ A parsing error occurred: `expected_packages_close_curly`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_030.md:12:8:12:12:**
+**fuzz_crash_030.md:12:8:12:9:**
 ```roc
 pkg: 77"..c", mm} #
 ```
-       ^^^^
+       ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **..c"** is not expected in an expression.
+The token **..c** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_030.md:12:9:12:13:**
+**fuzz_crash_030.md:12:9:12:12:**
 ```roc
 pkg: 77"..c", mm} #
 ```
-        ^^^^
+        ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **",** is not expected in an expression.
+The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_030.md:12:12:12:14:**
+**fuzz_crash_030.md:12:12:12:13:**
 ```roc
 pkg: 77"..c", mm} #
 ```
-           ^^
+           ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **, mm** is not expected in an expression.
+The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_030.md:12:13:12:17:**
+**fuzz_crash_030.md:12:13:12:14:**
 ```roc
 pkg: 77"..c", mm} #
 ```
-            ^^^^
+            ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **} #
-	provides** is not expected in an expression.
+The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_030.md:12:17:13:10:**
+**fuzz_crash_030.md:12:17:12:18:**
 ```roc
 pkg: 77"..c", mm} #
+```
+                ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **provides** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_030.md:13:2:13:10:**
+```roc
 	provides # Cd
 ```
+ ^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **provides # Cd
-		[** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-Here is the problematic code:
-**fuzz_crash_030.md:13:2:14:4:**
+**fuzz_crash_030.md:12:9:12:12:**
+```roc
+pkg: 77"..c", mm} #
+```
+        ^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_030.md:12:12:12:13:**
+```roc
+pkg: 77"..c", mm} #
+```
+           ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_030.md:12:13:12:14:**
+```roc
+pkg: 77"..c", mm} #
+```
+            ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_030.md:12:15:12:17:**
+```roc
+pkg: 77"..c", mm} #
+```
+              ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_030.md:12:17:12:18:**
+```roc
+pkg: 77"..c", mm} #
+```
+                ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_030.md:13:2:13:10:**
 ```roc
 	provides # Cd
-		[ # pen
 ```
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_030.md:12:9:12:13:**
-```roc
-pkg: 77"..c", mm} #
-```
-        ^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_030.md:12:12:12:14:**
-```roc
-pkg: 77"..c", mm} #
-```
-           ^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_030.md:12:13:12:17:**
-```roc
-pkg: 77"..c", mm} #
-```
-            ^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_030.md:12:15:12:18:**
-```roc
-pkg: 77"..c", mm} #
-```
-              ^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_030.md:12:17:13:10:**
-```roc
-pkg: 77"..c", mm} #
-	provides # Cd
-```
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_030.md:13:2:14:4:**
-```roc
-	provides # Cd
-		[ # pen
-```
+ ^^^^^^^^
 
 
 **INVALID STATEMENT**
@@ -224,20 +222,21 @@ CloseSquare(16:3-16:4),EndOfFile(16:4-16:4),
 # PARSE
 ~~~clojure
 (file @1.1-16.4
-	(malformed-header @12.8-12.12 (tag "expected_packages_close_curly"))
+	(malformed-header @12.8-12.9 (tag "expected_packages_close_curly"))
 	(statements
-		(e-malformed @12.9-12.13 (reason "expr_unexpected_token"))
-		(e-malformed @12.12-12.14 (reason "expr_unexpected_token"))
-		(e-malformed @12.13-12.17 (reason "expr_unexpected_token"))
+		(e-malformed @12.9-12.12 (reason "expr_unexpected_token"))
+		(e-malformed @12.12-12.13 (reason "expr_unexpected_token"))
+		(e-malformed @12.13-12.14 (reason "expr_unexpected_token"))
 		(e-ident @12.15-12.17 (raw "mm"))
-		(e-malformed @12.17-13.10 (reason "expr_unexpected_token"))
-		(e-malformed @13.2-14.4 (reason "expr_unexpected_token"))
+		(e-malformed @12.17-12.18 (reason "expr_unexpected_token"))
+		(e-malformed @13.2-13.10 (reason "expr_unexpected_token"))
 		(e-list @14.3-16.4
 			(e-ident @15.1-15.3 (raw "ar")))))
 ~~~
 # FORMATTED
 ~~~roc
 mm
+
 # Cd
 [ # pen
 	ar,

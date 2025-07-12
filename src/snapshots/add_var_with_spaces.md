@@ -33,7 +33,7 @@ LowerIdent(3:1-3:5),OpAssign(3:6-3:7),LowerIdent(3:8-3:9),OpPlus(3:10-3:11),Int(
 (file @1.1-3.18
 	(module @1.1-1.14
 		(exposes @1.8-1.14
-			(exposed-lower-ident (text "add2"))))
+			(exposed-lower-ident @1.9-1.13 (text "add2"))))
 	(statements
 		(s-decl @3.1-3.18
 			(p-ident @3.1-3.5 (raw "add2"))
