@@ -23,7 +23,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
+    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source));
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
@@ -90,7 +90,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
+    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source));
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
@@ -162,7 +162,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
+    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source));
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);

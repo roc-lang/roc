@@ -38,7 +38,7 @@ const test_allocator = testing.allocator;
 //         \\    myColor.describe()
 //     ;
 //
-//     var module_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""), try test_allocator.dupe(u8, "test.roc"));
+//     var module_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
 //     defer module_env.deinit();
 //
 //     // Parse the source
@@ -107,10 +107,10 @@ const test_allocator = testing.allocator;
 
 // test "static dispatch - method call on imported nominal type" {
 //     // Create module environments
-//     var data_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""), try test_allocator.dupe(u8, "test.roc"));
+//     var data_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
 //     defer data_env.deinit();
 //
-//     var main_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""), try test_allocator.dupe(u8, "test.roc"));
+//     var main_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
 //     defer main_env.deinit();
 //
 //     // Create module envs map
@@ -236,7 +236,7 @@ const test_allocator = testing.allocator;
 //         \\    origin.distance(point)
 //     ;
 //
-//     var module_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""), try test_allocator.dupe(u8, "test.roc"));
+//     var module_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
 //     defer module_env.deinit();
 //
 //     // Parse the source
@@ -319,7 +319,7 @@ const test_allocator = testing.allocator;
 //         \\    alice.nonExistentMethod()
 //     ;
 //
-//     var module_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""), try test_allocator.dupe(u8, "test.roc"));
+//     var module_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
 //     defer module_env.deinit();
 //
 //     // Parse the source

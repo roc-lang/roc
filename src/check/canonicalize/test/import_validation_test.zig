@@ -16,7 +16,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     defer module_envs.deinit();
 
     // Create module environment for "Json" module
-    var json_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "Json.roc"));
+    var json_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer json_env.deinit();
 
     // Add exposed items to Json module
@@ -28,7 +28,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     try module_envs.put("Json", &json_env);
 
     // Create module environment for "Utils" module
-    var utils_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "Utils.roc"));
+    var utils_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer utils_env.deinit();
 
     // Add exposed items to Utils module
@@ -60,14 +60,14 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     // Parse the source
     var tokens = try parse.tokenize(allocator, source, .file);
     defer tokens.deinit(allocator);
-    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
+    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer parse_env.deinit();
     try parse_env.calcLineStarts(source);
     var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
     defer ast.deinit();
 
     // Canonicalize with module validation
-    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
     var cir = CIR.init(&env, "Test");
@@ -145,14 +145,14 @@ test "import validation - no module_envs provided" {
     // Parse the source
     var tokens = try parse.tokenize(allocator, source, .file);
     defer tokens.deinit(allocator);
-    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
+    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer parse_env.deinit();
     try parse_env.calcLineStarts(source);
     var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
     defer ast.deinit();
 
     // Canonicalize without module validation (pass null)
-    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer env.deinit();
     try env.calcLineStarts(source);
     var cir = CIR.init(&env, "Test");
@@ -199,14 +199,14 @@ test "import interner - Import.Idx functionality" {
     // Parse the source
     var tokens = try parse.tokenize(allocator, source, .file);
     defer tokens.deinit(allocator);
-    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer parse_env.deinit();
     try parse_env.calcLineStarts(source);
     var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
     defer ast.deinit();
 
     // Canonicalize without module validation to focus on Import.Idx
-    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
     var cir = CIR.init(&env, "Test");
@@ -287,14 +287,14 @@ test "import interner - comprehensive usage example" {
     // Parse the source
     var tokens = try parse.tokenize(allocator, source, .file);
     defer tokens.deinit(allocator);
-    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer parse_env.deinit();
     try parse_env.calcLineStarts(source);
     var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
     defer ast.deinit();
 
     // Canonicalize
-    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
     var cir = CIR.init(&env, "Test");
@@ -384,14 +384,14 @@ test "module scopes - imports are only available in their scope" {
     // Parse the source
     var tokens = try parse.tokenize(allocator, source, .file);
     defer tokens.deinit(allocator);
-    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer parse_env.deinit();
     try parse_env.calcLineStarts(source);
     var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
     defer ast.deinit();
 
     // Canonicalize without external module validation to focus on scope testing
-    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
     var cir = CIR.init(&env, "Test");
@@ -447,14 +447,14 @@ test "module-qualified lookups with e_lookup_external" {
     // Parse the source
     var tokens = try parse.tokenize(allocator, source, .file);
     defer tokens.deinit(allocator);
-    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer parse_env.deinit();
     try parse_env.calcLineStarts(source);
     var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
     defer ast.deinit();
 
     // Canonicalize
-    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source), try allocator.dupe(u8, "test.roc"));
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
     var cir = CIR.init(&env, "Test");
@@ -511,7 +511,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     defer module_envs.deinit();
 
     // Create a "MathUtils" module with some exposed definitions
-    var math_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var math_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer math_env.deinit();
 
     // Add exposed items
@@ -543,14 +543,14 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     // Parse the source
     var tokens = try parse.tokenize(allocator, source, .file);
     defer tokens.deinit(allocator);
-    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var parse_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer parse_env.deinit();
     try parse_env.calcLineStarts(source);
     var ast = try parse.parse(&parse_env, &tokens, allocator, .file);
     defer ast.deinit();
 
     // Canonicalize with module environments
-    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer env.deinit();
     try env.calcLineStarts(source);
     var cir = CIR.init(&env, "Test");
@@ -594,7 +594,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     try expectEqual(true, found_pi_with_idx_300);
 
     // Test case where exposed_nodes is not populated (should get 0)
-    var empty_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var empty_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer empty_env.deinit();
     try empty_env.exposed_by_str.put(allocator, "undefined", {});
     // Don't add to exposed_nodes - should default to 0
@@ -610,13 +610,13 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
 
     var tokens2 = try parse.tokenize(allocator, source2, .file);
     defer tokens2.deinit(allocator);
-    var parse_env2 = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var parse_env2 = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer parse_env2.deinit();
     try parse_env2.calcLineStarts(source2);
     var ast2 = try parse.parse(&parse_env2, &tokens2, allocator, .file);
     defer ast2.deinit();
 
-    var env2 = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var env2 = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer env2.deinit();
     // Set the source in module_env so canonicalization can access it
     env2.source = try allocator.dupe(u8, source2);
@@ -659,7 +659,7 @@ test "export count safety - ensures safe u16 casting" {
     try expectEqual(@as(u32, 65535), std.math.maxInt(u16));
 
     // Test the diagnostic for exactly maxInt(u16) exports
-    var env1 = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var env1 = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer env1.deinit();
     // Set the source in module_env so canonicalization can access it
     env1.source = try allocator.dupe(u8, source);
@@ -685,7 +685,7 @@ test "export count safety - ensures safe u16 casting" {
     }
 
     // Test the diagnostic for exceeding the limit
-    var env2 = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""), try allocator.dupe(u8, "test.roc"));
+    var env2 = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer env2.deinit();
     var cir2 = CIR.init(&env2);
     defer cir2.deinit();

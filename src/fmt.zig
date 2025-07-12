@@ -146,7 +146,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     };
     defer gpa.free(contents);
 
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents), try gpa.dupe(u8, path));
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
     defer module_env.deinit();
 
     var parse_ast = parse.parse(&module_env, contents);
@@ -2001,7 +2001,7 @@ const Formatter = struct {
 fn moduleFmtsSame(source: []const u8) !void {
     const gpa = std.testing.allocator;
 
-    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source), try gpa.dupe(u8, "test.roc"));
+    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
     var parse_ast = parse(&env, source);
@@ -2032,7 +2032,7 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
 
     const gpa = std.testing.allocator;
 
-    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source), try gpa.dupe(u8, "test.roc"));
+    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
     var messages: [1]tokenize.Diagnostic = undefined;
@@ -2102,7 +2102,7 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, input), try gpa.dupe(u8, "test.roc"));
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, input));
     defer module_env.deinit();
 
     var parse_ast = parse.parse(&module_env, input);

@@ -23,13 +23,9 @@ pub const CacheResult = union(enum) {
     hit: coordinate_simple.ProcessResult,
     miss: struct {
         source: []const u8,
-        module_path: []const u8,
-        compiler_version: []const u8,
     },
     invalid: struct {
         source: []const u8,
-        module_path: []const u8,
-        compiler_version: []const u8,
     },
 };
 
@@ -56,30 +52,26 @@ pub const CacheManager = struct {
     }
 
     /// Load a cached module based on its content and compiler version.
+    /// Look up a cache entry by content and compiler version.
     ///
     /// Returns CacheResult indicating hit, miss, or invalid entry.
-    ///
-    /// IMPORTANT: This function takes ownership of content, module_path, and compiler_version.
-    /// On cache miss or invalid, these are returned in the result for the caller to reuse.
+    /// IMPORTANT: This function takes ownership of content only.
+    /// compiler_version is borrowed (not owned).
+    /// On cache miss/invalid, content is returned in the result for the caller to reuse.
     pub fn loadFromCache(
         self: *Self,
         content: []const u8,
-        module_path: []const u8,
         compiler_version: []const u8,
     ) CacheResult {
         if (!self.config.enabled) {
             return CacheResult{ .miss = .{
                 .source = content,
-                .module_path = module_path,
-                .compiler_version = compiler_version,
             } };
         }
 
         const cache_key = self.generateCacheKey(content, compiler_version) catch {
             return CacheResult{ .miss = .{
                 .source = content,
-                .module_path = module_path,
-                .compiler_version = compiler_version,
             } };
         };
         defer self.allocator.free(cache_key);
@@ -87,8 +79,6 @@ pub const CacheManager = struct {
         const cache_path = self.getCacheFilePath(cache_key) catch {
             return CacheResult{ .miss = .{
                 .source = content,
-                .module_path = module_path,
-                .compiler_version = compiler_version,
             } };
         };
         defer self.allocator.free(cache_path);
@@ -99,8 +89,6 @@ pub const CacheManager = struct {
             self.stats.recordMiss();
             return CacheResult{ .miss = .{
                 .source = content,
-                .module_path = module_path,
-                .compiler_version = compiler_version,
             } };
         }
 
@@ -112,18 +100,15 @@ pub const CacheManager = struct {
             self.stats.recordMiss();
             return CacheResult{ .miss = .{
                 .source = content,
-                .module_path = module_path,
-                .compiler_version = compiler_version,
             } };
         };
         defer mapped_cache.deinit(self.allocator);
 
         // Validate and restore from cache
-        // restoreFromCache takes ownership of content and module_path
+        // restoreFromCache takes ownership of content
         const result = self.restoreFromCache(
             mapped_cache.data(),
             content,
-            module_path,
         ) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
@@ -131,15 +116,10 @@ pub const CacheManager = struct {
             self.stats.recordInvalidation();
             return CacheResult{ .invalid = .{
                 .source = content,
-                .module_path = module_path,
-                .compiler_version = compiler_version,
             } };
         };
 
         self.stats.recordHit(mapped_cache.data().len);
-
-        // Free compiler_version since we don't need it anymore
-        self.allocator.free(compiler_version);
 
         return CacheResult{ .hit = result.result };
     }
@@ -293,14 +273,12 @@ pub const CacheManager = struct {
     }
 
     /// Restore a ProcessResult from cache data with diagnostic counts.
-    ///
-    /// IMPORTANT: This function takes ownership of both `source` and `module_path`.
-    /// The caller must not free these after calling this function.
+    /// IMPORTANT: This function takes ownership of `source`.
+    /// The caller must not free it after calling this function.
     fn restoreFromCache(
         self: *Self,
         cache_data: []align(SERIALIZATION_ALIGNMENT) const u8,
         source: []const u8,
-        module_path: []const u8,
     ) !struct {
         result: coordinate_simple.ProcessResult,
         error_count: u32,
@@ -316,8 +294,8 @@ pub const CacheManager = struct {
         // Use a default module name when restoring from cache
         // since we don't have access to the original source path
         const module_name = "cached_module";
-        // Transfer ownership of source and module_path to the restored ModuleEnv
-        const restored = cache.restore(self.allocator, module_name, source, module_path) catch return error.RestoreError;
+        // Transfer ownership of source to the restored ModuleEnv
+        const restored = cache.restore(self.allocator, module_name, source) catch return error.RestoreError;
 
         // Reports are not cached - they need to be recomputed if needed
         // Users can use --no-cache to see diagnostic reports
@@ -424,17 +402,13 @@ test "CacheManager loadFromCache miss" {
     var manager = CacheManager.init(allocator, config, filesystem);
 
     const content = try allocator.dupe(u8, "module [test]\n\ntest = 42");
-    const module_path = try allocator.dupe(u8, "test.roc");
-    const compiler_version = try allocator.dupe(u8, "roc-zig-0.11.0-debug");
 
-    const result = manager.loadFromCache(content, module_path, compiler_version);
+    const result = manager.loadFromCache(content, "roc-zig-0.11.0-debug");
     switch (result) {
         .miss => |returned| {
             try testing.expect(manager.stats.misses == 1);
-            // Free the returned values
+            // Free the returned source
             allocator.free(returned.source);
-            allocator.free(returned.module_path);
-            allocator.free(returned.compiler_version);
         },
         else => return error.TestUnexpectedResult,
     }
@@ -448,16 +422,12 @@ test "CacheManager disabled" {
     var manager = CacheManager.init(allocator, config, filesystem);
 
     const content = try allocator.dupe(u8, "module [test]\n\ntest = 42");
-    const module_path = try allocator.dupe(u8, "test.roc");
-    const compiler_version = try allocator.dupe(u8, "roc-zig-0.11.0-debug");
 
-    const result = manager.loadFromCache(content, module_path, compiler_version);
+    const result = manager.loadFromCache(content, "roc-zig-0.11.0-debug");
     switch (result) {
         .miss => |returned| {
-            // Free the returned values
+            // Free the returned source
             allocator.free(returned.source);
-            allocator.free(returned.module_path);
-            allocator.free(returned.compiler_version);
         },
         else => return error.TestUnexpectedResult,
     }

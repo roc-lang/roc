@@ -35,11 +35,8 @@ line_starts: collections.SafeList(u32),
 /// The source code of this module.
 source: []const u8,
 
-/// The module path (filename)
-module_path: []const u8,
-
 /// Initialize the module environment.
-pub fn init(gpa: std.mem.Allocator, source: []const u8, module_path: []const u8) Self {
+pub fn init(gpa: std.mem.Allocator, source: []const u8) Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
 
     return Self{
@@ -52,7 +49,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8, module_path: []const u8)
         .exposed_nodes = collections.SafeStringHashMap(u16).initCapacity(gpa, 64),
         .line_starts = collections.SafeList(u32).initCapacity(gpa, 256),
         .source = source,
-        .module_path = module_path,
     };
 }
 
@@ -68,9 +64,6 @@ pub fn deinit(self: *Self) void {
 
     if (self.source.len > 0) {
         self.gpa.free(self.source);
-    }
-    if (self.module_path.len > 0) {
-        self.gpa.free(self.module_path);
     }
 }
 

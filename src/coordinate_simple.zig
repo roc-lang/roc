@@ -69,6 +69,9 @@ pub const ProcessResult = struct {
 /// This function reads the file and transfers ownership of the allocated memory
 /// directly to ProcessResult, avoiding an unnecessary copy. This is an optimization
 /// since source files can be large and the compiler processes many files.
+///
+/// IMPORTANT: The filepath parameter is just borrowed - this function does not take ownership.
+/// The filepath string must remain valid for the duration of this call.
 pub fn processFile(
     gpa: std.mem.Allocator,
     fs: Filesystem,
@@ -92,49 +95,37 @@ pub fn processFile(
 
     // If caching is enabled, try cache first
     if (cache_manager) |cache| {
-        // Duplicate filepath and compiler_version since cache.lookup takes ownership
-        const filepath_copy = try gpa.dupe(u8, filepath);
-        errdefer gpa.free(filepath_copy);
+        const compiler_version = getCompilerVersion();
 
-        const compiler_version = try gpa.dupe(u8, getCompilerVersion());
-        errdefer gpa.free(compiler_version);
-
-        // Check cache - loadFromCache takes ownership of source, filepath_copy, and compiler_version
-        const cache_result = cache.loadFromCache(source, filepath_copy, compiler_version);
+        // Check cache - loadFromCache takes ownership of source only
+        const cache_result = cache.loadFromCache(source, compiler_version);
 
         switch (cache_result) {
             .hit => |process_result| {
-                // Cache hit! Ownership of source, filepath_copy, and compiler_version
-                // has been transferred to the cached result
+                // Cache hit! Ownership of source has been transferred to the cached result
                 return process_result;
             },
             .miss => |returned| {
-                // Cache miss - we get back ownership of source, filepath_copy and compiler_version
-                gpa.free(returned.module_path); // Free the filepath_copy
-                defer gpa.free(returned.compiler_version);
-
-                // Process normally with returned source and original filepath
+                // Cache miss - we get back ownership of source
+                // Process normally with returned source
                 var process_result = try processSourceInternal(gpa, returned.source, filepath, config);
                 process_result.was_cached = false;
 
                 // Store in cache (don't fail compilation if cache store fails)
-                cache.store(returned.source, returned.compiler_version, &process_result) catch |err| {
+                cache.store(returned.source, compiler_version, &process_result) catch |err| {
                     std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
                 };
 
                 return process_result;
             },
             .invalid => |returned| {
-                // Cache invalid - we get back ownership of source, filepath_copy and compiler_version
-                gpa.free(returned.module_path); // Free the filepath_copy
-                defer gpa.free(returned.compiler_version);
-
-                // Process normally with returned source and original filepath
+                // Cache invalid - we get back ownership of source
+                // Process normally with returned source
                 var process_result = try processSourceInternal(gpa, returned.source, filepath, config);
                 process_result.was_cached = false;
 
                 // Store in cache (don't fail compilation if cache store fails)
-                cache.store(returned.source, returned.compiler_version, &process_result) catch |err| {
+                cache.store(returned.source, compiler_version, &process_result) catch |err| {
                     std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
                 };
 
@@ -221,11 +212,10 @@ fn processSourceInternal(
     // Initialize the ModuleEnv (heap-allocated for ownership transfer)
     var module_env = try gpa.create(ModuleEnv);
 
-    // Always duplicate source and filename since ModuleEnv owns them
+    // Always duplicate source since ModuleEnv owns it
     const owned_source_for_env = try gpa.dupe(u8, source);
-    const owned_filename = try gpa.dupe(u8, filename);
 
-    module_env.* = ModuleEnv.init(gpa, owned_source_for_env, owned_filename);
+    module_env.* = ModuleEnv.init(gpa, owned_source_for_env);
 
     // Calculate line starts for region info
     try module_env.*.calcLineStarts(source);

@@ -404,7 +404,7 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
     log("Generating snapshot for: {s}", .{output_path});
 
     // Process the content through the compilation pipeline
-    var module_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, content.source), try allocator.dupe(u8, output_path));
+    var module_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, content.source));
     defer module_env.deinit();
 
     // Parse the source code based on node type
@@ -486,8 +486,8 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
 
         // Restore ModuleEnv and CIR
-        // Duplicate source and output_path since restore takes ownership
-        const restored = try loaded_cache.restore(allocator, module_name, try allocator.dupe(u8, content.source), try allocator.dupe(u8, output_path));
+        // Duplicate source since restore takes ownership
+        const restored = try loaded_cache.restore(allocator, module_name, try allocator.dupe(u8, content.source));
         var restored_module_env = restored.module_env;
         defer restored_module_env.deinit();
         var restored_cir = restored.cir;
