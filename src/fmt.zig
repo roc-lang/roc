@@ -270,6 +270,7 @@ const Formatter = struct {
         for (statement_slice) |s| {
             const region = fmt.nodeRegion(@intFromEnum(s));
             _ = try fmt.flushCommentsBefore(region.start);
+            try fmt.ensureNewline();
             try fmt.formatStatement(s);
         }
     }

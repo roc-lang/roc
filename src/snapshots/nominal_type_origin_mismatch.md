@@ -166,6 +166,7 @@ import Data exposing [Person]
 expectsPerson : Person -> Str
 expectsPerson = 
 
+
 main = 
 # This will cause a type mismatch
 	expectsPerson("not a person")

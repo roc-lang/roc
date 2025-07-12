@@ -952,6 +952,7 @@ named = |str|
 
 str
 
+
 is_named_color = |str| {
 	colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
 

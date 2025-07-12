@@ -43,7 +43,8 @@ KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),OpenSquar
 ~~~roc
 module []
 
-import json.Json[foo, BAR]
+import json.Json
+[foo, BAR]
 ~~~
 # CANONICALIZE
 ~~~clojure

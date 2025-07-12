@@ -100,7 +100,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-apply : (a -> b)a->b
+apply : (a -> b)
+a->b
 apply = |fn, x| fn(x)
 
 main! = |_| {}

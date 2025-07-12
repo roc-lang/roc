@@ -125,6 +125,7 @@ module [red, green, blue]
 
 import Color
 
+
 red : Color
 red = Red
 

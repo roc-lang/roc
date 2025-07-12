@@ -193,7 +193,8 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~roc
 module [tus, r]
 
-LocalStatus : lue => Loc[Pending, Complete]
+LocalStatus : lue => Loc
+[Pending, Complete]
 
 olor : _ -> tus
 olor = |color| {

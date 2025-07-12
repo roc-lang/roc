@@ -794,12 +794,14 @@ UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),LowerIdent(43:20-43:23)
 
 
 import Color
-import ModuleA[TypeC]
+import ModuleA
+[TypeC]
 import ExternalModule as ExtMod
 
 # Simple qualified type
 simpleQualified : Color.RGB
-simpleQualified = RGB{r: 255, g: 0, b: 0}
+simpleQualified = RGB
+{r: 255, g: 0, b: 0}
 
 # Aliased qualified type
 aliasedQualified : ExtMod.DataType
@@ -811,21 +813,31 @@ multiLevelQualified = TypeC.new
 
 # Using qualified type with generics
 resultType : Result.Result
-resultType = Ok42
+
+resultType = Ok
+42
 
 # Function returning qualified type
 getColor : {} -> Color.RGB
-getColor = {}->Color{r: 0, g: 255, b: 0}
+getColor = 
+{}->Color
+{r: 0, g: 255, b: 0}
 
 # Function accepting qualified type
 processColor : Color.RGB -> Str
 processColor = 
 
+
 # Multiple qualified types in a function signature
 transform : Result.Result
-transform = result->
-whenresultis
-rgb->TypeC.fromColorrgb
+
+transform = 
+result->
+when
+result
+is
+rgb->TypeC.fromColor
+rgb
 err->TypeC.default
 ~~~
 # CANONICALIZE

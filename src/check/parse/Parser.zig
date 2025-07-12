@@ -1723,7 +1723,9 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
         .OpenCurly => {
             self.advance();
 
-            if (self.peek() == .CloseCurly) {
+            if (self.peek() == .EndOfFile) {
+                return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+            } else if (self.peek() == .CloseCurly) {
                 // Empty - treat as empty record
                 const scratch_top = self.store.scratchRecordFieldTop();
                 self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
