@@ -47,7 +47,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-15, ubuntu-22.04, ubuntu-24.04-arm, windows-2022, windows-2025, windows-11-arm] # macos-13 uses x64, macos-15 uses arm64
+        os: [
+            macos-13,
+            macos-15,
+            ubuntu-22.04,
+            ubuntu-24.04-arm,
+            windows-2022,
+            windows-2025,
+            windows-11-arm,
+          ] # macos-13 uses x64, macos-15 uses arm64
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
@@ -157,6 +165,7 @@ jobs:
           - x86_64-linux-musl
           - x86_64-macos-none
           - x86_64-windows-gnu
+          - wasm32-wasi
 
     steps:
       - name: Checkout
