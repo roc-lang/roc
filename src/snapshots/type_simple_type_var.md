@@ -85,8 +85,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @4.1-4.9 (type "a -> a"))
-		(patt @6.1-6.6 (type "* -> {}")))
+		(patt @6.1-6.6 (type "arg -> {}")))
 	(expressions
 		(expr @4.12-4.17 (type "a -> a"))
-		(expr @6.9-6.15 (type "* -> {}"))))
+		(expr @6.9-6.15 (type "arg -> {}"))))
 ~~~

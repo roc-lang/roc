@@ -848,7 +848,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red]_
+    _[Red][Blue, Green]others_
 
 All patterns in an `match` must have compatible types.
 
@@ -863,10 +863,10 @@ This expression is used in an unexpected way:
  ^^^^^^^^^^
 
 It is of type:
-    _[Red], * -> Error_
+    _[Red][Blue, Green]others, arg2 -> Error_
 
 But you are trying to use it as:
-    _* -> *_
+    _arg -> ret_
 
 # TOKENS
 ~~~zig
@@ -2356,13 +2356,13 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @65.1-65.16 (type "Bool -> Num(*)"))
+		(patt @65.1-65.16 (type "Bool -> Num(size)"))
 		(patt @68.1-68.8 (type "Error -> Error"))
 		(patt @80.1-80.11 (type "Error"))
 		(patt @144.1-144.6 (type "Error -> Error"))
 		(patt @199.1-199.6 (type "{}")))
 	(type_decls
-		(alias @22.1-22.41 (type "Map(*, *)")
+		(alias @22.1-22.41 (type "Map(d, e)")
 			(ty-header @22.1-22.10 (name "Map")
 				(ty-args
 					(ty-var @22.5-22.6 (name "a"))
@@ -2401,7 +2401,7 @@ expect {
 				(ty-args
 					(ty-var @63.10-63.11 (name "a"))))))
 	(expressions
-		(expr @65.19-65.40 (type "Bool -> Num(*)"))
+		(expr @65.19-65.40 (type "Bool -> Num(size)"))
 		(expr @68.11-78.2 (type "Error -> Error"))
 		(expr @80.14-138.3 (type "Error"))
 		(expr @144.9-196.2 (type "Error -> Error"))

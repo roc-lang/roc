@@ -117,8 +117,8 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt @4.1-4.9 (type "a -> a"))
-		(patt @10.1-10.6 (type "* -> {}")))
+		(patt @10.1-10.6 (type "arg -> {}")))
 	(expressions
 		(expr @4.12-8.2 (type "a -> a"))
-		(expr @10.9-10.15 (type "* -> {}"))))
+		(expr @10.9-10.15 (type "arg -> {}"))))
 ~~~

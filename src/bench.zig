@@ -61,7 +61,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
     std.debug.print("Total: {} bytes, {} lines\n", .{ metrics.total_bytes, metrics.total_lines });
 
     // Create a module environment for tokenization (reused for tokenizer, created per-iteration for parser)
-    var env: ?base.ModuleEnv = if (!is_parse) base.ModuleEnv.init(gpa) else null;
+    var env: ?base.ModuleEnv = if (!is_parse) base.ModuleEnv.init(gpa, "") else null;
     defer if (env) |*e| e.deinit();
 
     // Benchmark parameters
@@ -81,7 +81,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
         for (roc_files.items) |roc_file| {
             if (is_parse) {
                 // Parse mode
-                var parse_env = base.ModuleEnv.init(gpa);
+                var parse_env = base.ModuleEnv.init(gpa, roc_file.content);
                 var ir = parse.parse(&parse_env, roc_file.content);
                 iteration_tokens += ir.tokens.tokens.len;
                 ir.deinit(gpa);
