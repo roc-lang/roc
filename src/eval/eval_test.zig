@@ -143,7 +143,7 @@ test "eval tag - already primitive" {
     try testing.expect(result.layout.tag == .scalar or result.layout.tag == .tuple);
 }
 
-test "eval binop - not yet implemented" {
+test "eval binop - basic implementation" {
     const source = "5 + 3";
 
     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
@@ -157,9 +157,10 @@ test "eval binop - not yet implemented" {
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
-    // For now, binop evaluation is not implemented
+    // Basic binop evaluation is now implemented
     const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
-    try testing.expectError(eval.EvalError.LayoutError, result);
+    // Should succeed for basic operations like add, eq, ne
+    _ = try result;
 }
 
 test "eval call - not yet implemented" {

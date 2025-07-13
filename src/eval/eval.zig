@@ -441,30 +441,48 @@ fn evalBinop(allocator: std.mem.Allocator, cir: *const CIR, binop: CIR.Expr.Bino
         .add => {
             // Addition result
             const result_val = lhs_val + rhs_val;
-            const ptr = try allocator.create(u8);
-            ptr.* = result_val;
+            const result_layout = layout.Layout.int(.u8);
+            const size = result_layout.data.scalar.data.int.size();
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
             return EvalResult{
-                .layout = layout.Layout.int(.u8),
+                .layout = result_layout,
                 .ptr = ptr,
             };
         },
         .eq => {
             // Equality comparison - return boolean
             const result_val: bool = lhs_val == rhs_val;
-            const ptr = try allocator.create(bool);
-            ptr.* = result_val;
+            const result_layout = layout.Layout.boolType();
+            const size = 1; // bool is always 1 byte
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
             return EvalResult{
-                .layout = layout.Layout.boolType(),
+                .layout = result_layout,
                 .ptr = ptr,
             };
         },
         .ne => {
             // Not-equal comparison - return boolean
             const result_val: bool = lhs_val != rhs_val;
-            const ptr = try allocator.create(bool);
-            ptr.* = result_val;
+            const result_layout = layout.Layout.boolType();
+            const size = 1; // bool is always 1 byte
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
             return EvalResult{
-                .layout = layout.Layout.boolType(),
+                .layout = result_layout,
                 .ptr = ptr,
             };
         },
@@ -515,10 +533,16 @@ fn evalCall(allocator: std.mem.Allocator, cir: *const CIR, call_expr_idx: CIR.Ex
     const arg2_val = arg2_ptr.*;
     const result_val = arg1_val + arg2_val;
 
-    const ptr = try allocator.create(u8);
-    ptr.* = result_val;
+    const result_layout = layout.Layout.int(.u8);
+    const size = result_layout.data.scalar.data.int.size();
+    const alignment = result_layout.alignment(target.TargetUsize.native);
+    const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+        error.StackOverflow => return error.StackOverflow,
+    };
+    const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+    typed_ptr.* = result_val;
     return EvalResult{
-        .layout = layout.Layout.int(.u8),
+        .layout = result_layout,
         .ptr = ptr,
     };
 }
