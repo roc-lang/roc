@@ -1804,34 +1804,13 @@ const Formatter = struct {
                 const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
 
                 if (qualifier_tokens.len > 0) {
-                    // Handle qualifiers manually
                     for (qualifier_tokens) |tok_idx| {
                         const tok = @as(Token.Idx, @intCast(tok_idx));
                         try fmt.pushAll(fmt.ast.resolve(tok));
-                        try fmt.pushAll(".");
                     }
-                    // Add just the final token text with dot stripping
-                    const strip_tokens = [_]tokenize.Token.Tag{ .NoSpaceDotUpperIdent, .NoSpaceDotLowerIdent };
-                    const final_text = fmt.ast.resolve(t.token);
-                    const token_tag = fmt.ast.tokens.tokens.items(.tag)[@intCast(t.token)];
-
-                    var stripped = false;
-                    for (strip_tokens) |dot_token_tag| {
-                        if (token_tag == dot_token_tag and final_text.len > 0 and final_text[0] == '.') {
-                            try fmt.pushAll(final_text[1..]);
-                            stripped = true;
-                            break;
-                        }
-                    }
-                    if (!stripped) {
-                        try fmt.pushAll(final_text);
-                    }
-                } else {
-                    // Use resolveQualifiedName for the no-qualifiers case
-                    const strip_tokens = [_]tokenize.Token.Tag{ .NoSpaceDotUpperIdent, .NoSpaceDotLowerIdent };
-                    const final_text = fmt.ast.resolveQualifiedName(t.qualifiers, t.token, &strip_tokens);
-                    try fmt.pushAll(final_text);
                 }
+
+                try fmt.pushAll(fmt.ast.resolve(t.token));
             },
             .mod_ty => |t| {
                 try fmt.pushTokenText(t.region.start);
@@ -1864,7 +1843,7 @@ const Formatter = struct {
                         try fmt.pushIndent();
                     }
                     _ = try fmt.formatTypeAnno(idx);
-                    if (i < (f.args.span.len - 1)) {
+                    if (i < args.len - 1) {
                         if (multiline) {
                             try fmt.push(',');
                         } else {
