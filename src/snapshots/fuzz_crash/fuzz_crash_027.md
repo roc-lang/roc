@@ -171,6 +171,7 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:4:125:5
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:9:125:10
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:126:2:126:3
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:148:1:148:2
+PARSE ERROR - fuzz_crash_027.md:159:2:159:2
 UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
 UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
 UNDECLARED TYPE - fuzz_crash_027.md:32:19:32:21
@@ -289,6 +290,18 @@ Here is the problematic code:
 } # Commenl decl
 ```
 ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `expected_expr_close_curly_or_comma`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_027.md:159:2:159:2:**
+```roc
+}
+```
+ 
 
 
 **UNDECLARED TYPE**

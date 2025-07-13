@@ -907,7 +907,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                     alias_tok = self.pos;
                     self.expect(.UpperIdent) catch {
                         const malformed = self.pushMalformed(AST.Statement.Idx, .expected_upper_name_after_import_as, start);
-                        self.advance();
                         return malformed;
                     };
                 } else {
@@ -1730,9 +1729,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
         .OpenCurly => {
             self.advance();
 
-            if (self.peek() == .EndOfFile) {
-                return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
-            } else if (self.peek() == .CloseCurly) {
+            if (self.peek() == .CloseCurly) {
                 // Empty - treat as empty record
                 const scratch_top = self.store.scratchRecordFieldTop();
                 self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
@@ -1877,10 +1874,16 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                     const statement = self.parseStmt() orelse break;
                     self.store.addScratchStatement(statement);
                     if (self.peek() == .CloseCurly) {
-                        self.advance();
                         break;
                     }
                 }
+
+                self.expect(.CloseCurly) catch {
+                    self.pushDiagnostic(.expected_expr_close_curly_or_comma, .{
+                        .start = self.pos,
+                        .end = self.pos,
+                    });
+                };
 
                 const statements = self.store.statementSpanFrom(scratch_top);
                 expr = self.store.addExpr(.{ .block = .{
@@ -2142,11 +2145,8 @@ pub fn parseStringExpr(self: *Parser) AST.Expr.Idx {
     self.advance();
     const scratch_top = self.store.scratchExprTop();
     while (self.peek() != .EndOfFile) {
-        var string_end = self.pos;
         switch (self.peek()) {
             .StringEnd => {
-                string_end = self.pos;
-                self.advance(); // Advance past the StringEnd
                 break;
             },
             .StringPart => {
@@ -2173,6 +2173,14 @@ pub fn parseStringExpr(self: *Parser) AST.Expr.Idx {
             },
         }
     }
+
+    self.expect(.StringEnd) catch {
+        self.pushDiagnostic(.string_unclosed, .{
+            .start = self.pos,
+            .end = self.pos,
+        });
+    };
+
     const parts = self.store.exprSpanFrom(scratch_top);
     const expr = self.store.addExpr(.{
         .string = .{

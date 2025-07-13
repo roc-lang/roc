@@ -41,6 +41,7 @@ pub const Token = struct {
         MultilineStringEnd, // the """ that ends a multiline string
         StringPart,
         SingleQuote,
+        MalformedSingleQuoteUnclosed, // malformed, but should be treated similar to a SingleQuote in the parser
         Int,
         MalformedNumberBadSuffix, // malformed, but should be treated similar to an int in the parser
         MalformedNumberUnicodeSuffix, // malformed, but should be treated similar to an int in the parser
@@ -303,6 +304,7 @@ pub const Token = struct {
                 .MalformedOpaqueNameWithoutName,
                 .MalformedUnicodeIdent,
                 .MalformedUnknownToken,
+                .MalformedSingleQuoteUnclosed,
                 => true,
             };
         }
@@ -897,7 +899,7 @@ pub const Cursor = struct {
         }
     }
 
-    pub fn chompSingleQuoteLiteral(self: *Cursor) void {
+    pub fn chompSingleQuoteLiteral(self: *Cursor) !void {
         std.debug.assert(self.peek() == '\'');
         const start = self.pos;
         // Skip the initial quote.
@@ -913,8 +915,7 @@ pub const Cursor = struct {
                     escape = true;
                     self.pos += 1;
                 } else if (c == '\n') {
-                    self.pushMessage(.UnclosedSingleQuote, @intCast(start), @intCast(self.pos));
-                    return;
+                    break;
                 } else if (c == '\'') {
                     self.pos += 1;
                     return;
@@ -924,6 +925,7 @@ pub const Cursor = struct {
             }
         }
         self.pushMessage(.UnclosedSingleQuote, start, self.pos);
+        return error.UnclosedSingleQuote;
     }
 };
 
@@ -1379,8 +1381,15 @@ pub const Tokenizer = struct {
                 },
 
                 '\'' => {
-                    self.cursor.chompSingleQuoteLiteral();
-                    self.pushTokenNormalHere(.SingleQuote, start);
+                    if (self.cursor.chompSingleQuoteLiteral()) {
+                        self.pushTokenNormalHere(.SingleQuote, start);
+                    } else |err| {
+                        switch (err) {
+                            error.UnclosedSingleQuote => {
+                                self.pushTokenNormalHere(.MalformedSingleQuoteUnclosed, start);
+                            },
+                        }
+                    }
                 },
 
                 '"' => {
@@ -2098,6 +2107,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .MalformedNamedUnderscoreUnicode,
             .MalformedOpaqueNameUnicode,
             .MalformedOpaqueNameWithoutName,
+            .MalformedSingleQuoteUnclosed,
             => {
                 return error.Unsupported;
             },

@@ -9,6 +9,7 @@ type=file
 ~~~
 # EXPECTED
 UNCLOSED STRING - fuzz_crash_003.md:1:1:1:2
+PARSE ERROR - fuzz_crash_003.md:1:6:1:6
 INVALID STATEMENT - fuzz_crash_003.md:1:3:1:6
 # PROBLEMS
 **UNCLOSED STRING**
@@ -28,6 +29,18 @@ Here is the problematic code:
 = "te
 ```
 ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `string_unclosed`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_003.md:1:6:1:6:**
+```roc
+= "te
+```
+     
 
 
 **INVALID STATEMENT**

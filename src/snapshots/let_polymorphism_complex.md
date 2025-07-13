@@ -555,10 +555,8 @@ use_poly_record2 = {items: ["x", "y", "z"], count: 0}
 
 # Complex nested structure with multiple polymorphic uses
 base_config = {
-
 	data: empty_list,
 	metadata: {
-
 		version: num,
 		ratio: frac,
 		description: str
@@ -570,10 +568,8 @@ base_config = {
 
 # Different instantiations of base_config
 config1 = {
-
 	data: [1, 2, 3, 4, 5],
 	metadata: {
-
 		version: num,
 		ratio: frac,
 		description: str
@@ -584,10 +580,8 @@ config1 = {
 }
 
 config2 = {
-
 	data: ["apple", "banana", "cherry"],
 	metadata: {
-
 		version: num,
 		ratio: frac,
 		description: str
@@ -606,13 +600,9 @@ container3 = make_container(frac)
 
 # Deeply nested polymorphism
 deep = {
-
 	level1: {
-
 		level2: {
-
 			level3: {
-
 				data: empty_list,
 				value: num
 			},
@@ -638,17 +628,14 @@ compute4 = {base: num, derived: [num, num + 1, num + 2]}
 
 # Mixed polymorphic structures
 mixed = {
-
 	numbers: {value: num, list: [num, num], float: frac},
 	strings: {value: str, list: [str, str]},
 	empty_lists: {
-
 		raw: empty_list,
 		in_list: [empty_list],
 		in_record: {data: empty_list}
 	},
 	computations: {
-
 		from_num: num * 100,
 		from_frac: frac * 10.0,
 		list_from_num: [num, num, num]
