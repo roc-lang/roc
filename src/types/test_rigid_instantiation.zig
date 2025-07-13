@@ -1,4 +1,8 @@
-//! TODO Module Doc
+//! Tests for rigid variable instantiation in the type system.
+//!
+//! This module contains tests that verify the correct behavior of rigid type
+//! variables during instantiation, particularly for polymorphic functions
+//! where type variables need to be properly instantiated with concrete types.
 
 const std = @import("std");
 const types = @import("types.zig");

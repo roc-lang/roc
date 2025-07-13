@@ -601,9 +601,74 @@ Left & Right Hand Side: for example in `1 + 2`, `1` is on the left hand side and
 
 TODO
 
-## Joinpoint
+## Normalization
 
 TODO
+
+## Joinpoint
+
+(join)
+
+Let's start from this example:
+```roc
+make_cat_or_dog_sound : Bool -> Str
+make_cat_or_dog_sound = |is_dog|
+    sound =
+        if is_dog then
+            "Woof"
+        else
+            "Miauw"
+            
+    Str.concat sound "!"
+```
+
+The function from the example above checks the boolean parameter;
+If `is_dog` is true, the ”Woof” sound branch is taken, otherwise the ”Miauw” branch. Afterwards the branches **join**
+back up and use string concatenation to add an exclamation mark. A naive way to [normalise](#normalization)
+this function would be to add an assignment and `Str.concat ...` to both branches. Like below:
+```roc
+make_cat_or_dog_sound = |is_dog|
+    if is_dog then
+        sound = "Woof"
+        Str.concat sound "!"
+    else
+        sound = "Miauw"
+        Str.concat sound "!"
+```
+However, if we were to use this approach with multiple nested expressions it could result in a very large code size.
+We could put the if-then-else in a function, and call this function with the `is_dog` parameter to
+obtain its sound. But this again comes with downsides:
+- Function calls require additional [stack](#stack) and register manipulation, making them more
+expensive than simple branching.
+- Moving code into functions can make optimization more difficult.
+
+Joinpoints to the rescue:
+```roc
+make_cat_or_dog_sound = |is_dog|
+    joinpoint sound_jp = |sound|
+        Str.concat sound "!"
+    if is_dog then
+        jump sound_jp "Woof"
+    else
+        jump sound_jp "Miauw"
+```
+`sound_jp` is a joinpoint; a labeled code location inside a function that can be "jumped to" from multiple places in the control flow.
+
+Joinpoints provide the best of both worlds:
+- We avoid the code duplication from the naive approach.
+- No need to modify the stack or registers.
+- They simplify control flow by bringing branches back together.
+- They are optimization friendly.
+
+This explanation was adapted from the thesis of J. Teeuwissen: reference counting with reuse in Roc.
+
+Joinpoints in the compiler:
+- Old compiler:
+  - Search for `Join` in `enum Stmt` in [crates/compiler/mono/src/ir.rs](crates/compiler/mono/src/ir.rs)
+  - `cd crates && rg JoinPoint`
+  - `cd crates && rg "joinpoint" --glob '!**/generated' --glob '*.rs'`
+  - `cd crates && rg "join_point" --glob '*.rs'`
+- New compiler: not yet!
 
 ## Mutate in Place
 

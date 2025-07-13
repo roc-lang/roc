@@ -553,7 +553,7 @@ test "snapshot validation" {
     defer walker.deinit();
 
     while (try walker.next()) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.path, ".md")) {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.path, ".md") and !std.mem.endsWith(u8, entry.path, "README.md")) {
             const full_path = try std.fs.path.join(allocator, &.{ "src/snapshots", entry.path });
             try snapshot_files.append(full_path);
         }

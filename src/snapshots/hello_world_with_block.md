@@ -103,7 +103,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.6 (type "* -> *")))
+		(patt @8.1-8.6 (type "arg -> ret")))
 	(expressions
-		(expr @8.9-12.2 (type "* -> *"))))
+		(expr @8.9-12.2 (type "arg -> ret"))))
 ~~~

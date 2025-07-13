@@ -1,4 +1,9 @@
-//! TODO
+//! Builtin sorting operations and algorithms for the Roc runtime.
+//!
+//! This module provides efficient sorting implementations for Roc's List type,
+//! including comparison-based sorting with custom compare functions. It handles
+//! both direct sorting for small lists and indirect pointer-based sorting for
+//! larger lists to optimize memory usage and cache performance.
 const std = @import("std");
 const testing = std.testing;
 

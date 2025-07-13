@@ -24,10 +24,10 @@ main! = |_| mapList([1,2,3,4,5])
             ^^^^^^^
 
 It is of type:
-    _Error, a -> b -> Error_
+    _Error, arg -> ret2 -> Error_
 
 But you are trying to use it as:
-    _List(Num(*)) -> *_
+    _List(Num(size)) -> ret_
 
 # TOKENS
 ~~~zig
@@ -143,8 +143,8 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 (inferred-types
 	(defs
 		(patt @4.1-4.8 (type "Error"))
-		(patt @6.1-6.6 (type "* -> *")))
+		(patt @6.1-6.6 (type "arg -> ret")))
 	(expressions
 		(expr @4.11-4.34 (type "Error"))
-		(expr @6.9-6.33 (type "* -> *"))))
+		(expr @6.9-6.33 (type "arg -> ret"))))
 ~~~

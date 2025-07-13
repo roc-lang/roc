@@ -24,10 +24,10 @@ This expression is used in an unexpected way:
     ^^^^^^^^
 
 It is of type:
-    _* -> *_
+    _arg -> ret2_
 
 But you are trying to use it as:
-    _Num(*), Num(*) -> *_
+    _Num(size), Num(size2) -> ret_
 
 # TOKENS
 ~~~zig
@@ -95,5 +95,5 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "*"))
+(expr @1.1-6.2 (type "c"))
 ~~~

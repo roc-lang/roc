@@ -231,7 +231,7 @@ InnerModule :
 	(defs
 		(patt @6.1-6.12 (type "Str -> Str")))
 	(type_decls
-		(alias @3.1-3.31 (type "Result(a, b)")
+		(alias @3.1-3.31 (type "Result(c, d)")
 			(ty-header @3.1-3.13 (name "Result")
 				(ty-args
 					(ty-var @3.8-3.9 (name "a"))

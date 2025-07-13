@@ -29,5 +29,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.3 (type "List(*)"))
+(expr @1.1-1.3 (type "List(elem)"))
 ~~~

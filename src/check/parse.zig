@@ -1,3 +1,8 @@
+//! Converts Roc source code into an Abstract Syntax Tree (AST) through tokenization and parsing.
+//!
+//! This module provides the entry point for the parsing phase of compilation, transforming
+//! raw source text into a structured AST representation that subsequent compiler phases can process.
+
 const std = @import("std");
 const testing = std.testing;
 
@@ -44,7 +49,7 @@ fn runParse(env: *base.ModuleEnv, source: []const u8, parserCall: *const fn (*Pa
     const parse_diagnostics = parser.diagnostics;
 
     return .{
-        .source = source,
+        .env = env,
         .tokens = result.tokens,
         .store = parser.store,
         .root_node_idx = idx,

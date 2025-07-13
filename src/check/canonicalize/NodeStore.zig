@@ -2484,21 +2484,16 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
 ///
 /// The malformed node will generate a runtime_error in the CIR that properly
 /// references the diagnostic index.
-pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic) t {
-    // First create the diagnostic node
-    const diagnostic_idx = store.addDiagnostic(reason);
-
-    // Then create a malformed node that references the diagnostic
+pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) CIR.Node.Idx {
     const malformed_node = Node{
         .data_1 = @intFromEnum(diagnostic_idx),
         .data_2 = 0,
         .data_3 = 0,
         .tag = .malformed,
     };
-
-    const malformed_nid = @intFromEnum(store.nodes.append(store.gpa, malformed_node));
-    _ = store.regions.append(store.gpa, reason.toRegion());
-    return @enumFromInt(malformed_nid);
+    const malformed_nid = store.nodes.append(store.gpa, malformed_node);
+    _ = store.regions.append(store.gpa, region);
+    return malformed_nid;
 }
 
 /// Retrieves diagnostic information from a diagnostic node.

@@ -1,4 +1,6 @@
-//! TODO Doc Comment
+//! Parallel processing utilities and thread management for the Roc compiler.
+//!
+//! (Currently only used in the snapshot tool)
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

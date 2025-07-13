@@ -1,4 +1,9 @@
-//! TODO
+//! Builtin string operations and data structures for the Roc runtime.
+//!
+//! This module provides the core implementation of Roc's Str type, including
+//! operations for string manipulation, Unicode handling, formatting, and
+//! memory management. It defines the RocStr structure and associated functions
+//! that are called from compiled Roc code to handle string operations efficiently.
 const utils = @import("utils.zig");
 const RocList = @import("list.zig").RocList;
 const UpdateMode = utils.UpdateMode;

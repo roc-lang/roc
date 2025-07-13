@@ -1,4 +1,9 @@
-//! TODO
+//! Builtin decimal operations and data structures for the Roc runtime.
+//!
+//! This module provides the core implementation of Roc's Dec type, a fixed-point
+//! decimal number with 18 decimal places. It includes arithmetic operations,
+//! parsing, formatting, and conversions for precise decimal calculations
+//! without floating-point precision issues.
 const std = @import("std");
 const str = @import("str.zig");
 const num_ = @import("num.zig");
