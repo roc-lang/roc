@@ -43,6 +43,7 @@ test "cross-module type checking - monomorphic function" {
     const func_content = module_a_env.types.mkFuncPure(&[_]Var{ arg1_var, arg2_var }, ret_var);
 
     // Set the type of expression 0 (which maps to var 0)
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Create array of module CIRs
@@ -128,6 +129,7 @@ test "cross-module type checking - polymorphic function" {
     const func_content = module_a_env.types.mkFuncPure(&[_]Var{type_var_a}, type_var_a);
 
     // Set the type of this expression to our polymorphic function type
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Create array of module CIRs
@@ -227,6 +229,7 @@ test "cross-module type checking - record type" {
     };
 
     // Set the type of this expression to our record type
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(record_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(record_expr_idx)), record_content);
 
     // Create array of module CIRs
@@ -309,6 +312,7 @@ test "cross-module type checking - type mismatch error" {
     } }, base.Region.zero());
 
     // Set the expression's type to I32
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), i32_content);
 
     // Create module B that imports the I32 but tries to use it as a String
@@ -391,6 +395,7 @@ test "cross-module type checking - polymorphic instantiation" {
     const func_content = module_a_env.types.mkFuncPure(&[_]Var{list_var}, i64_var);
 
     // Set the type of expression 0 to our function type (using var 0)
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Create module B that imports and uses the function with a specific type
@@ -479,6 +484,7 @@ test "cross-module type checking - preserves module A types" {
 
     // Set the type of this expression to our flex var
     // Set the expression's type variable to the flex var
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(flex_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(flex_expr_idx)), .{ .flex_var = null });
 
     // Remember the original state
@@ -567,6 +573,7 @@ test "cross-module type checking - three module chain monomorphic" {
 
     const func_content = module_a_env.types.mkFuncPure(&[_]Var{ arg1_var, arg2_var }, ret_var);
 
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Module B imports from A and re-exports it
@@ -671,6 +678,7 @@ test "cross-module type checking - three module chain polymorphic" {
     const type_var_a = module_a_env.types.fresh();
     const func_content = module_a_env.types.mkFuncPure(&[_]Var{type_var_a}, type_var_a);
 
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Module B imports from A and re-exports it
@@ -783,6 +791,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     // Create map : (a -> b), List a -> List b
     const map_func_content = module_a_env.types.mkFuncPure(&[_]Var{ mapper_var, list_a_var }, list_b_var);
 
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(map_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(map_expr_idx)), map_func_content);
 
     // Module B imports map and partially applies it with I32
@@ -965,6 +974,7 @@ test "cross-module type checking - record type chain" {
 
     const record_content = Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } };
 
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(record_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(record_expr_idx)), record_content);
 
     // Module B imports and re-exports the record
@@ -1089,6 +1099,7 @@ test "cross-module type checking - polymorphic record chain" {
 
     const record_content = Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } };
 
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(record_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(record_expr_idx)), record_content);
 
     // Module B imports and partially specializes to Str
@@ -1252,6 +1263,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     // Create compose : (b -> c), (a -> b) -> (a -> c)
     const compose_content = module_a_env.types.mkFuncPure(&[_]Var{ b_to_c_var, a_to_b_var }, a_to_c_var);
 
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(compose_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(compose_expr_idx)), compose_content);
 
     // Module B imports compose and partially applies with b = Str
@@ -1455,6 +1467,7 @@ test "cross-module type checking - type mismatch with proper error message" {
 
     // Allocate var 0 to match expr 0
     _ = module_a_env.types.fresh();
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(str_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(str_expr_idx)), .{ .structure = .str });
 
     // Module B: Tries to use the string as a number
