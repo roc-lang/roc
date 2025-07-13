@@ -87,7 +87,7 @@ empty = Nil
 	(defs
 		(patt @6.1-6.6 (type "ConsList(a)")))
 	(type_decls
-		(nominal @3.1-3.40 (type "ConsList(a)")
+		(nominal @3.1-3.40 (type "ConsList(*)")
 			(ty-header @3.1-3.12 (name "ConsList")
 				(ty-args
 					(ty-var @3.10-3.11 (name "a"))))))

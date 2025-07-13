@@ -273,7 +273,7 @@ pub const ReportBuilder = struct {
         try snapshot_writer.write(types.actual_snapshot);
         const owned_actual = try report.addOwnedString(self.buf.items[0..]);
 
-        const region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(self.source, region.start.offset, region.end.offset) catch |err| switch (err) {
@@ -377,8 +377,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const actual_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.actual_var)));
-        const expected_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.last_elem_expr)));
+        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const expected_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.last_elem_expr)));
         const overall_start_offset = @min(actual_region.start.offset, expected_region.start.offset);
         const overall_end_offset = @max(actual_region.end.offset, expected_region.end.offset);
 
@@ -491,7 +491,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Get the region info for the invalid condition
-        const actual_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.actual_var)));
+        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const actual_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.line_starts.items.items,
@@ -594,12 +594,12 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const last_if_branch_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.last_if_branch)));
+        const last_if_branch_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.last_if_branch)));
 
         // TODO: getExprSpecific will panic if actual_var is not an Expr
         // It _should_ always be, but we should handle this better so it don't blow up
         const zoomed_in_var = self.can_ir.store.getExprSpecific(@enumFromInt(@intFromEnum(types.actual_var)));
-        const actual_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(zoomed_in_var)));
+        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(zoomed_in_var)));
 
         const overall_start_offset = @min(last_if_branch_region.start.offset, actual_region.start.offset);
         const overall_end_offset = @max(last_if_branch_region.end.offset, actual_region.end.offset);
@@ -738,7 +738,7 @@ pub const ReportBuilder = struct {
         }
 
         // Determine the overall region that encompasses both elements
-        const match_expr_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.match_expr)));
+        const match_expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
         const overall_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.line_starts.items.items,
@@ -747,7 +747,7 @@ pub const ReportBuilder = struct {
         ) catch return report;
 
         // Get region info for invalid branch
-        const invalid_var_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.actual_var)));
+        const invalid_var_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const invalid_var_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.line_starts.items.items,
@@ -855,8 +855,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const expr_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.match_expr)));
-        const this_branch_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.actual_var)));
+        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const this_branch_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         const overall_start_offset = expr_region.start.offset;
         const overall_end_offset = this_branch_region.end.offset;
@@ -957,8 +957,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const expr_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.binop_expr)));
-        const problem_side_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.actual_var)));
+        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.binop_expr)));
+        const problem_side_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         const overall_start_offset = expr_region.start.offset;
         const overall_end_offset = problem_side_region.end.offset;
@@ -1055,8 +1055,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const expr_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.expected_var)));
-        const problem_side_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.actual_var)));
+        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.expected_var)));
+        const problem_side_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         const overall_start_offset = expr_region.start.offset;
         const overall_end_offset = problem_side_region.end.offset;
@@ -1130,7 +1130,7 @@ pub const ReportBuilder = struct {
         try snapshot_writer.write(data.expected_type);
         const owned_expected = try report.addOwnedString(self.buf.items[0..]);
 
-        const region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.literal_var)));
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(self.source, region.start.offset, region.end.offset) catch |err| switch (err) {
@@ -1176,7 +1176,7 @@ pub const ReportBuilder = struct {
         try snapshot_writer.write(data.expected_type);
         const owned_expected = try report.addOwnedString(self.buf.items[0..]);
 
-        const region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.literal_var)));
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(self.source, region.start.offset, region.end.offset) catch |err| switch (err) {

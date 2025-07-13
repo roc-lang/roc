@@ -206,12 +206,12 @@ NO CHANGE
 		(patt @18.1-18.10 (type "Option(I32) -> I32"))
 		(patt @20.1-20.6 (type "* -> {}")))
 	(type_decls
-		(alias @4.1-4.41 (type "MyResult(ok, err)")
+		(alias @4.1-4.41 (type "MyResult(*, *)")
 			(ty-header @4.1-4.18 (name "MyResult")
 				(ty-args
 					(ty-var @4.10-4.12 (name "ok"))
 					(ty-var @4.14-4.17 (name "err")))))
-		(alias @11.1-11.28 (type "Option(a)")
+		(alias @11.1-11.28 (type "Option(*)")
 			(ty-header @11.1-11.10 (name "Option")
 				(ty-args
 					(ty-var @11.8-11.9 (name "a"))))))

@@ -190,15 +190,15 @@ is_ok = |result| match result {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.3 (type "ok -> MyResult(ok, err)"))
+		(patt @6.1-6.3 (type "ok -> MyResult(ok, *)"))
 		(patt @9.1-9.6 (type "Error -> Bool")))
 	(type_decls
-		(nominal @3.1-3.40 (type "MyResult(ok, err)")
+		(nominal @3.1-3.40 (type "MyResult(*, *)")
 			(ty-header @3.1-3.18 (name "MyResult")
 				(ty-args
 					(ty-var @3.10-3.12 (name "ok"))
 					(ty-var @3.14-3.17 (name "err"))))))
 	(expressions
-		(expr @6.6-6.24 (type "ok -> MyResult(ok, err)"))
+		(expr @6.6-6.24 (type "ok -> MyResult(ok, *)"))
 		(expr @9.9-12.2 (type "Error -> Bool"))))
 ~~~

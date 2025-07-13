@@ -144,6 +144,11 @@ pub const Store = struct {
         self.tag_args.deinit(self.gpa);
     }
 
+    /// Return the number of type variables in the store.
+    pub fn len(self: *Self) usize {
+        return self.slots.backing.len();
+    }
+
     // fresh variables //
 
     /// Create a new unbound, flexible type variable without a name

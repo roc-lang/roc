@@ -117,7 +117,7 @@ sort = ...
 	(defs
 		(patt @7.1-7.5 (type "Error -> Error")))
 	(type_decls
-		(alias @3.1-4.48 (type "Sort(a)")
+		(alias @3.1-4.48 (type "Sort(*)")
 			(ty-header @3.1-3.8 (name "Sort")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))))))
