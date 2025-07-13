@@ -78,6 +78,8 @@ pub const BuildArgs = struct {
     path: []const u8, // the path to the roc file to be built
     opt: OptLevel, // the optimization level
     output: ?[]const u8 = null, // the path where the output binary should be created
+    z_bench_tokenize: ?[]const u8 = null, // benchmark tokenizer on a file or directory
+    z_bench_parse: ?[]const u8 = null, // benchmark parser on a file or directory
 };
 
 /// Arguments for `roc test`
@@ -197,6 +199,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
     var output: ?[]const u8 = null;
+    var z_bench_tokenize: ?[]const u8 = null;
+    var z_bench_parse: ?[]const u8 = null;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
@@ -208,9 +212,11 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\  [ROC_FILE] The .roc file to build [default: main.roc]
             \\
             \\Options:
-            \\      --output=<output>       The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
-            \\      --opt=<size|speed|dev>  Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
-            \\      -h, --help              Print help
+            \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
+            \\      --opt=<size|speed|dev>         Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
+            \\      --z-bench-tokenize=<path>      Benchmark tokenizer on a file or directory
+            \\      --z-bench-parse=<path>         Benchmark parser on a file or directory
+            \\      -h, --help                     Print help
             \\
         };
         } else if (mem.startsWith(u8, arg, "--output")) {
@@ -229,6 +235,18 @@ fn parseBuild(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
+        } else if (mem.startsWith(u8, arg, "--z-bench-tokenize")) {
+            if (getFlagValue(arg)) |value| {
+                z_bench_tokenize = value;
+            } else {
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--z-bench-tokenize" } } };
+            }
+        } else if (mem.startsWith(u8, arg, "--z-bench-parse")) {
+            if (getFlagValue(arg)) |value| {
+                z_bench_parse = value;
+            } else {
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--z-bench-parse" } } };
+            }
         } else {
             if (path != null) {
                 return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "build", .arg = arg } } };
@@ -236,7 +254,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .output = output } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .output = output, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse } };
 }
 
 fn parseFormat(gpa: mem.Allocator, args: []const []const u8) CliArgs {
