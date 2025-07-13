@@ -6,12 +6,14 @@ const std = @import("std");
 const testing = std.testing;
 const snapshot_mod = @import("snapshot.zig");
 const base = @import("base.zig");
+const RegionInfo = base.RegionInfo;
 const parse = @import("check/parse.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const CIR = @import("check/canonicalize/CIR.zig");
 const eval = @import("eval/eval.zig");
 const stack = @import("eval/stack.zig");
 const layout_store = @import("layout/store.zig");
+const reporting = @import("reporting.zig");
 
 /// Represents a problem entry from either EXPECTED or PROBLEMS section
 const ProblemEntry = struct {
@@ -632,7 +634,7 @@ test "snapshot evaluate top-level `expect` statements" {
             if (err == error.ExpectEvaluationFailed) {
                 total_failures += 1;
                 try failed_files.append(snapshot_path);
-                return err;
+                continue;
             } else {
                 return err;
             }
@@ -739,7 +741,22 @@ fn evaluateSnapshotExpects(allocator: std.mem.Allocator, snapshot_path: []const 
             if (result.layout.isBoolean()) {
                 const bool_value = @as(*bool, @ptrCast(@alignCast(result.ptr))).*;
                 if (!bool_value) {
-                    std.debug.print("FAILED expect in {s}: expected True, got False\n", .{snapshot_path});
+                    // Build and print the error report immediately
+                    var report = buildExpectFailureReport(allocator, snapshot_path, snapshot_content.source, expect_expr_idx, &cir) catch |err| {
+                        // Fallback to simple message if report building fails
+                        std.debug.print("FAILED expect in {s}: expected True, got False (report error: {})\n", .{ snapshot_path, err });
+                        failed_expects += 1;
+                        continue;
+                    };
+                    defer report.deinit();
+
+                    // Print the formatted report with newline
+                    const stderr = std.io.getStdErr().writer();
+                    stderr.print("\n", .{}) catch {};
+                    report.render(stderr, .color_terminal) catch |err| {
+                        // Fallback if rendering fails
+                        std.debug.print("FAILED expect in {s}: expected True, got False (render error: {})\n", .{ snapshot_path, err });
+                    };
                     failed_expects += 1;
                 }
             } else {
@@ -754,6 +771,48 @@ fn evaluateSnapshotExpects(allocator: std.mem.Allocator, snapshot_path: []const 
     }
 
     return EvaluationResult{ .expect_count = expect_count, .skipped_count = skipped_count };
+}
+
+fn buildExpectFailureReport(
+    allocator: std.mem.Allocator,
+    snapshot_path: []const u8,
+    source_code: []const u8,
+    expect_expr_idx: CIR.Expr.Idx,
+    cir: *CIR,
+) !reporting.Report {
+    var report = reporting.Report.init(allocator, "EXPECT FAILED", .runtime_error);
+
+    try report.document.addReflowingText("This ");
+    try report.document.addAnnotated("expect", .inline_code);
+    try report.document.addReflowingText(" statement evaluated to ");
+    try report.document.addAnnotated("False", .error_highlight);
+    try report.document.addReflowingText(" but was expected to be ");
+    try report.document.addAnnotated("True", .suggestion);
+    try report.document.addReflowingText(".");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+
+    try report.document.addReflowingText("The failing expect statement is in: ");
+    try report.document.addAnnotated(snapshot_path, .inline_code);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+
+    // Get the region of the expect expression for highlighting
+    const expect_region = cir.store.getExprRegion(expect_expr_idx);
+
+    // Set temporary source for region calculation
+    cir.temp_source_for_sexpr = source_code;
+    defer cir.temp_source_for_sexpr = null;
+
+    const region_info = cir.calcRegionInfo(expect_region);
+
+    try report.document.addSourceRegion(
+        region_info,
+        .error_highlight,
+        snapshot_path,
+    );
+
+    return report;
 }
 
 // Unit tests
