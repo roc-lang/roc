@@ -247,14 +247,14 @@ main! = |_| {
 (inferred-types
 	(defs
 		(patt @4.1-4.15 (type "a -> Num(b)"))
-		(patt @7.1-7.16 (type "a -> b"))
+		(patt @7.1-7.16 (type "a -> a"))
 		(patt @10.1-10.18 (type "a -> Num(b)"))
 		(patt @13.1-13.13 (type "a -> b"))
 		(patt @15.1-15.6 (type "a -> b")))
 	(expressions
-		(expr @4.18-4.24 (type "a -> Num(b)"))
-		(expr @7.19-7.34 (type "a -> b"))
-		(expr @10.21-10.35 (type "a -> Num(b)"))
+		(expr @4.18-4.24 (type "a -> Num(a)"))
+		(expr @7.19-7.34 (type "a -> a"))
+		(expr @10.21-10.35 (type "a -> Num(a)"))
 		(expr @13.16-13.35 (type "a -> b"))
 		(expr @15.9-21.2 (type "a -> b"))))
 ~~~

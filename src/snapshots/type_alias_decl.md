@@ -392,5 +392,5 @@ main! = |_| {
 				(ty-args
 					(ty-var @22.11-22.15 (name "item"))))))
 	(expressions
-		(expr @27.9-39.2 (type "a -> Num(b)"))))
+		(expr @27.9-39.2 (type "a -> Num(a)"))))
 ~~~

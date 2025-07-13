@@ -23,7 +23,7 @@ const Tag = types.Tag;
 /// Helper that to writes variables as s-exprs
 pub const SExprWriter = struct {
     /// Write all variables in the type store into the writer as an s-exprs
-    pub fn allVarsToSExprStr(writer: std.io.AnyWriter, gpa: std.mem.Allocator, env: *const ModuleEnv) Allocator.Error!void {
+    pub fn allVarsToSExprStr(writer: std.io.AnyWriter, gpa: std.mem.Allocator, env: *ModuleEnv) Allocator.Error!void {
         var root_node = SExpr.init(gpa, "types_store");
         defer root_node.deinit(gpa);
 
@@ -70,12 +70,20 @@ pub const SExprWriter = struct {
 pub const TypeWriter = struct {
     const Self = @This();
 
-    env: *const ModuleEnv,
+    env: *ModuleEnv,
     buf: std.ArrayList(u8),
     seen: std.ArrayList(Var),
     next_name_index: u32,
 
-    pub fn init(gpa: std.mem.Allocator, env: *const ModuleEnv) Allocator.Error!Self {
+    /// Initialize a TypeWriter with a mutable ModuleEnv reference.
+    ///
+    /// The ModuleEnv must be mutable because when we encounter unnamed type variables
+    /// (flex vars with no name), we generate a name for them and update the type
+    /// variable to have that name. This ensures that the same type variable will
+    /// display with the same generated name throughout the type annotation.
+    /// For example, the identity function `|x| x` will show as type `a -> a`
+    /// instead of `a -> b`.
+    pub fn init(gpa: std.mem.Allocator, env: *ModuleEnv) Allocator.Error!Self {
         return .{
             .env = env,
             .buf = try std.ArrayList(u8).initCapacity(gpa, 32),
@@ -147,7 +155,14 @@ pub const TypeWriter = struct {
                         if (mb_ident_idx) |ident_idx| {
                             _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
                         } else {
+                            // Generate a name and update the type variable to have this name
+                            const start_pos = self.buf.items.len;
                             try self.generateNextName();
+                            const generated_name = self.buf.items[start_pos..];
+
+                            // Update the type variable to have this generated name
+                            const new_ident_idx = self.env.idents.insert(self.buf.allocator, Ident.for_text(generated_name), base.Region.zero());
+                            try self.env.types.setVarContent(var_, Content{ .flex_var = new_ident_idx });
                         }
                     },
                     .rigid_var => |ident_idx| {
@@ -460,7 +475,14 @@ pub const TypeWriter = struct {
                 if (mb_ident_idx) |ident_idx| {
                     _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
                 } else {
+                    // Generate a name and update the type variable to have this name
+                    const start_pos = self.buf.items.len;
                     try self.generateNextName();
+                    const generated_name = self.buf.items[start_pos..];
+
+                    // Update the type variable to have this generated name
+                    const new_ident_idx = self.env.idents.insert(self.buf.allocator, Ident.for_text(generated_name), base.Region.zero());
+                    try self.env.types.setVarContent(tag_union.ext, Content{ .flex_var = new_ident_idx });
                 }
             },
             .structure => |flat_type| switch (flat_type) {

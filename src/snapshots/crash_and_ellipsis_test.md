@@ -310,5 +310,5 @@ main! = |_| {
 		(expr @5.16-5.23 (type "Error -> Error"))
 		(expr @9.13-9.22 (type "Error -> Error"))
 		(expr @13.19-13.28 (type "Error -> Error"))
-		(expr @15.9-20.2 (type "a -> List(b)"))))
+		(expr @15.9-20.2 (type "a -> List(a)"))))
 ~~~

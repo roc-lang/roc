@@ -435,7 +435,7 @@ main = |_| {
 		(expr @12.16-12.27 (type "a"))
 		(expr @13.16-13.27 (type "a"))
 		(expr @14.18-14.31 (type "a"))
-		(expr @17.13-17.19 (type "a -> List(b)"))
+		(expr @17.13-17.19 (type "a -> List(a)"))
 		(expr @20.18-20.31 (type "List(a)"))
 		(expr @21.18-21.35 (type "List(a)"))
 		(expr @23.8-29.2 (type "a -> b"))))

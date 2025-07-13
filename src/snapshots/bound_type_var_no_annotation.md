@@ -32,7 +32,7 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - type_annotation_basic.md:21:5:21:9
+UNUSED VARIABLE - bound_type_var_no_annotation.md:19:5:19:9
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``pair`` is not used anywhere in your code.
@@ -254,12 +254,12 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.9 (type "a -> b"))
+		(patt @3.1-3.9 (type "a -> a"))
 		(patt @7.1-7.8 (type "a, b -> (a, b)"))
 		(patt @11.1-11.7 (type "U64 -> U64"))
 		(patt @13.1-13.6 (type "a -> U64")))
 	(expressions
-		(expr @3.12-3.17 (type "a -> b"))
+		(expr @3.12-3.17 (type "a -> a"))
 		(expr @7.11-7.42 (type "a, b -> (a, b)"))
 		(expr @11.10-11.19 (type "U64 -> U64"))
 		(expr @13.9-25.2 (type "a -> U64"))))
