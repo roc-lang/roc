@@ -837,7 +837,7 @@ It is of type:
     _[Red, Blue]others, arg2 -> Error_
 
 But you are trying to use it as:
-    _arg -> d_
+    _arg -> ret_
 
 # TOKENS
 ~~~zig

@@ -731,7 +731,7 @@ It is of type:
     _[Blue]others, [Tb]others2 -> Error_
 
 But you are trying to use it as:
-    _arg -> f_
+    _arg -> ret_
 
 # TOKENS
 ~~~zig

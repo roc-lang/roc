@@ -85,7 +85,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.4 (type "arg -> a")))
+		(patt @3.1-3.4 (type "arg -> ret")))
 	(expressions
-		(expr @3.7-9.2 (type "arg -> a"))))
+		(expr @3.7-9.2 (type "arg -> ret"))))
 ~~~

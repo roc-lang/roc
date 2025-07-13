@@ -606,7 +606,7 @@ main! = |_| {
 		(patt @49.1-49.3 (type "Num(size)"))
 		(patt @50.1-50.3 (type "Num(size)"))
 		(patt @53.1-53.14 (type "arg7 -> arg7"))
-		(patt @55.1-55.6 (type "arg8 -> ac")))
+		(patt @55.1-55.6 (type "arg8 -> ret")))
 	(expressions
 		(expr @4.5-4.7 (type "Num(size)"))
 		(expr @7.12-7.17 (type "arg2 -> arg2"))
@@ -641,5 +641,5 @@ main! = |_| {
 		(expr @49.6-49.9 (type "Num(size)"))
 		(expr @50.6-50.9 (type "Num(size)"))
 		(expr @53.17-53.30 (type "arg7 -> arg7"))
-		(expr @55.9-65.2 (type "arg8 -> ac"))))
+		(expr @55.9-65.2 (type "arg8 -> ret"))))
 ~~~

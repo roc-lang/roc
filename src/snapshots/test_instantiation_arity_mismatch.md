@@ -24,10 +24,10 @@ This expression is used in an unexpected way:
     ^^^^^^^^
 
 It is of type:
-    _arg -> d_
+    _arg -> ret2_
 
 But you are trying to use it as:
-    _Num(size), Num(size2) -> c_
+    _Num(size), Num(size2) -> ret_
 
 # TOKENS
 ~~~zig

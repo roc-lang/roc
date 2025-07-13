@@ -1371,7 +1371,7 @@ is_named_color = |str| {
 		(patt @27.1-27.4 (type "Error -> Error"))
 		(patt @49.1-49.7 (type "Error -> Error"))
 		(patt @61.1-61.6 (type "Error"))
-		(patt @67.1-67.15 (type "arg -> h")))
+		(patt @67.1-67.15 (type "arg -> ret")))
 	(type_decls
 		(nominal @10.1-15.2 (type "Error")
 			(ty-header @10.1-10.6 (name "Color"))))
@@ -1381,5 +1381,5 @@ is_named_color = |str| {
 		(expr @27.7-46.2 (type "Error -> Error"))
 		(expr @49.10-54.2 (type "Error -> Error"))
 		(expr @61.9-63.29 (type "Error"))
-		(expr @67.18-71.2 (type "arg -> h"))))
+		(expr @67.18-71.2 (type "arg -> ret"))))
 ~~~

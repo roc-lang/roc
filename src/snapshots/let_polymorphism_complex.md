@@ -1103,7 +1103,7 @@ main = |_| {
 		(patt @86.1-86.9 (type "List(Num(size))"))
 		(patt @87.1-87.9 (type "{ base: Num(size), derived: List(Num(size2)) }"))
 		(patt @90.1-90.6 (type "{ numbers: { value: Num(size), list: List(Num(size2)), float: Frac(size3) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(size4)), in_list: List(List(Num(size5))), in_record: { data: List(Num(size6)) } }, computations: { from_num: field4, from_frac: field5, list_from_num: List(Num(size7)) } }"))
-		(patt @105.1-105.5 (type "arg2 -> c")))
+		(patt @105.1-105.5 (type "arg2 -> ret")))
 	(expressions
 		(expr @4.7-4.9 (type "Num(size)"))
 		(expr @5.8-5.11 (type "Frac(size)"))
@@ -1132,5 +1132,5 @@ main = |_| {
 		(expr @86.12-86.22 (type "List(Num(size))"))
 		(expr @87.12-87.59 (type "{ base: Num(size), derived: List(Num(size2)) }"))
 		(expr @90.9-103.2 (type "{ numbers: { value: Num(size), list: List(Num(size2)), float: Frac(size3) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(size4)), in_list: List(List(Num(size5))), in_record: { data: List(Num(size6)) } }, computations: { from_num: field4, from_frac: field5, list_from_num: List(Num(size7)) } }"))
-		(expr @105.8-108.2 (type "arg2 -> c"))))
+		(expr @105.8-108.2 (type "arg2 -> ret"))))
 ~~~

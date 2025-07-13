@@ -524,6 +524,7 @@ const TypeContext = enum {
     RecordFieldContent,
     TupleFieldContent,
     FunctionArgument,
+    FunctionReturn,
 };
 
 /// Helper that accepts a `Var` and write it as a nice string.
@@ -638,6 +639,7 @@ pub const SnapshotWriter = struct {
             .RecordFieldContent => "field",
             .TupleFieldContent => "field",
             .FunctionArgument => "arg",
+            .FunctionReturn => "ret",
             .General => {
                 // Fall back to generic name generation
                 try self.generateNextName();
@@ -874,7 +876,7 @@ pub const SnapshotWriter = struct {
 
         _ = try self.writer.write(arrow);
 
-        try self.write(func.ret);
+        try self.writeWithContext(func.ret, .FunctionReturn);
     }
 
     /// Write a record type

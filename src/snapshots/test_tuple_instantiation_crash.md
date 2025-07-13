@@ -30,7 +30,7 @@ It is of type:
     _(a, b) -> (b, a)_
 
 But you are trying to use it as:
-    _Num(size), Num(size2) -> c_
+    _Num(size), Num(size2) -> ret_
 
 # TOKENS
 ~~~zig

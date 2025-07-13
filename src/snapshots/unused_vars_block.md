@@ -163,7 +163,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.6 (type "arg -> a")))
+		(patt @3.1-3.6 (type "arg -> ret")))
 	(expressions
-		(expr @3.9-19.2 (type "arg -> a"))))
+		(expr @3.9-19.2 (type "arg -> ret"))))
 ~~~

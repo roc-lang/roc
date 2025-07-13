@@ -55,5 +55,5 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "{ answer: Num(size), launchTheNukes!: arg -> a }"))
+(expr @1.1-4.2 (type "{ answer: Num(size), launchTheNukes!: arg -> ret }"))
 ~~~
