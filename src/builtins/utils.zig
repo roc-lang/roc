@@ -1,4 +1,10 @@
-//! TODO
+//! Core utility functions and types for the Roc runtime builtins.
+//!
+//! This module provides essential infrastructure for builtin operations,
+//! including memory allocation interfaces, overflow detection utilities,
+//! debug functions, and common types used throughout the builtin modules.
+//! It serves as the foundation layer that other builtin modules depend on
+//! for low-level operations and host interface functions.
 const std = @import("std");
 const builtin = @import("builtin");
 

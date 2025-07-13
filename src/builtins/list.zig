@@ -1,4 +1,9 @@
-//! TODO
+//! Builtin list operations and data structures for the Roc runtime.
+//!
+//! This module provides the core implementation of Roc's List type, including
+//! operations for creation, manipulation, sorting, and memory management.
+//! It defines the RocList structure and associated functions that are called
+//! from compiled Roc code to handle list operations efficiently.
 const std = @import("std");
 const utils = @import("utils.zig");
 const str = @import("str.zig");

@@ -1,3 +1,7 @@
+//! Performs Hindley-Milner type inference with constraint solving and unification on the Canonical Intermediate Representation (CIR).
+//!
+//! This module implements constraint-based type inference.
+
 const std = @import("std");
 const base = @import("../base.zig");
 const tracy = @import("../tracy.zig");

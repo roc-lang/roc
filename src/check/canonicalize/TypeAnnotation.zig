@@ -1,4 +1,6 @@
-//! TODO Module Documentation
+//! Representation of type annotations in the CIR.
+//!
+//! Includes formatting of type annotations to s-expression debug format.
 
 const std = @import("std");
 const base = @import("../../base.zig");

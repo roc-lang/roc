@@ -1,4 +1,9 @@
-//! TODO
+//! Type serialization utilities for writing type information as S-expressions.
+//!
+//! This module provides functionality to serialize type store contents and
+//! individual types into S-expression format for debugging, inspection, and
+//! external tool integration. The serialized output helps visualize the
+//! compiler's internal type representations.
 
 const std = @import("std");
 const base = @import("../base.zig");

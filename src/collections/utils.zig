@@ -1,3 +1,10 @@
+//! Utility functions for collection management and error handling.
+//!
+//! This module provides essential utilities for the Roc compiler, including
+//! out-of-memory error handling and fatal error reporting. These utilities
+//! follow the "Inform Don't Block" philosophy by providing clean exit paths
+//! for unrecoverable errors.
+
 const std = @import("std");
 const tracy = @import("../tracy.zig");
 

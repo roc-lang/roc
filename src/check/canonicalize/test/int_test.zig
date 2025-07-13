@@ -1,4 +1,8 @@
-//! TODO module doc comment here
+//! Tests for integer literal canonicalization during the canonicalization phase.
+//!
+//! This module contains unit tests that verify the correct canonicalization
+//! of integer literals and integer expressions from parsed AST into the
+//! compiler's canonical internal representation (CIR).
 
 const std = @import("std");
 const testing = std.testing;

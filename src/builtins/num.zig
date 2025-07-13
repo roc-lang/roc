@@ -1,4 +1,10 @@
-//! TODO
+//! Builtin numeric operations and data structures for the Roc runtime.
+//!
+//! This module provides the core implementation of Roc's numeric types and
+//! operations, including integer and floating-point arithmetic, parsing,
+//! overflow detection, and conversions. It defines numeric parsing utilities
+//! and functions that are called from compiled Roc code to handle numeric
+//! operations efficiently and safely.
 const std = @import("std");
 const math = std.math;
 const RocList = @import("list.zig").RocList;

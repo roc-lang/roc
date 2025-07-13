@@ -1,3 +1,10 @@
+//! Parser for converting tokenized Roc source code into an Abstract Syntax Tree.
+//!
+//! This module provides the Parser struct which takes a buffer of tokens and
+//! transforms them into an AST representation. The parser handles syntax errors
+//! gracefully by inserting malformed placeholders and continuing compilation,
+//! following the "Inform Don't Block" philosophy.
+
 const std = @import("std");
 const tracy = @import("../../tracy.zig");
 const tokenize = @import("tokenize.zig");

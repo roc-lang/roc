@@ -1,3 +1,9 @@
+//! Collection utilities and memory alignment constants for the Roc compiler.
+//!
+//! This module provides utilities for managing collections and defines
+//! memory alignment constants used throughout the compiler, particularly
+//! for stack allocations in the interpreter.
+
 /// Utilities for managing collections.
 pub const utils = @import("collections/utils.zig");
 

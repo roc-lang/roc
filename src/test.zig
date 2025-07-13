@@ -1,3 +1,9 @@
+//! Test runner for the Roc compiler.
+//!
+//! This module provides a centralized test runner that recursively references
+//! all declarations from the main compiler modules to ensure all tests are
+//! discovered and executed during the test phase.
+
 const std = @import("std");
 const testing = std.testing;
 
