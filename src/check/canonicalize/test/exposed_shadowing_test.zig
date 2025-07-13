@@ -1,4 +1,8 @@
-//! TODO
+//! Tests for exposed item shadowing validation during the canonicalization phase.
+//!
+//! This module contains unit tests that verify the correct handling of
+//! exposed items that are declared but not implemented, and validation
+//! of shadowing behavior during the canonicalization process.
 
 const std = @import("std");
 const testing = std.testing;

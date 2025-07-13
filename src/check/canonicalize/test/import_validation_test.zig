@@ -1,4 +1,9 @@
-//! TODO
+//! Tests for import validation during the canonicalization phase.
+//!
+//! This module contains unit tests that verify the correct validation
+//! of import statements, including handling of missing modules, unexposed
+//! types and values, and proper resolution of valid imports during
+//! the canonicalization process.
 
 const std = @import("std");
 const testing = std.testing;

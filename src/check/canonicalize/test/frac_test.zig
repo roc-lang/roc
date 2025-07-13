@@ -1,4 +1,8 @@
-//! TODO module doc comment here
+//! Tests for fractional literal canonicalization during the canonicalization phase.
+//!
+//! This module contains unit tests that verify the correct canonicalization
+//! of fractional literals and decimal expressions from parsed AST into the
+//! compiler's canonical internal representation (CIR).
 
 const std = @import("std");
 const testing = std.testing;
