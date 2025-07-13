@@ -907,7 +907,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                     alias_tok = self.pos;
                     self.expect(.UpperIdent) catch {
                         const malformed = self.pushMalformed(AST.Statement.Idx, .expected_upper_name_after_import_as, start);
-                        self.advance();
                         return malformed;
                     };
                 } else {
