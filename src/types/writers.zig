@@ -124,14 +124,18 @@ pub const TypeWriter = struct {
     fn generateNextName(self: *Self) !void {
         // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
         // Skip any names that already exist in the identifier store
-        while (true) {
+        // We need at most one more name than the number of existing identifiers
+        const max_attempts = self.env.idents.interner.outer_indices.items.len + 1;
+        var attempts: usize = 0;
+        while (attempts < max_attempts) : (attempts += 1) {
             var n = self.next_name_index;
             self.next_name_index += 1;
 
             var name_buf: [8]u8 = undefined;
             var name_len: usize = 0;
 
-            while (true) {
+            // Generate name in base-26: a, b, ..., z, aa, ab, ..., az, ba, ...
+            while (name_len < name_buf.len) {
                 name_buf[name_len] = @intCast('a' + (n % 26));
                 name_len += 1;
                 n = n / 26;
@@ -166,6 +170,12 @@ pub const TypeWriter = struct {
             }
             // Name already exists, try the next one
         }
+
+        // This should never happen in practice, but let's handle it gracefully
+        if (attempts >= max_attempts) {
+            _ = try self.buf.writer().write("var");
+            try self.buf.writer().print("{}", .{self.next_name_index});
+        }
     }
 
     fn generateContextualName(self: *Self) Allocator.Error!void {
@@ -190,7 +200,10 @@ pub const TypeWriter = struct {
         var counter = self.name_counters.get(context) orelse 0;
         var found = false;
 
-        while (!found) {
+        // We need at most as many attempts as there are existing identifiers
+        const max_attempts = self.env.idents.interner.outer_indices.items.len;
+        var attempts: usize = 0;
+        while (!found and attempts < max_attempts) : (attempts += 1) {
             var buf: [32]u8 = undefined;
             const candidate_name = if (counter == 0)
                 base_name
@@ -225,6 +238,12 @@ pub const TypeWriter = struct {
                 // Try next counter
                 counter += 1;
             }
+        }
+
+        // If we couldn't find a unique contextual name, fall back to generic names
+        if (!found) {
+            try self.generateNextName();
+            return;
         }
 
         self.name_counters.put(context, counter + 1);
