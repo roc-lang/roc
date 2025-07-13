@@ -562,24 +562,48 @@ pub const SnapshotWriter = struct {
 
     fn generateNextName(self: *Self) !void {
         // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
-        var n = self.next_name_index;
-        self.next_name_index += 1;
-
-        var name_buf: [8]u8 = undefined;
-        var name_len: usize = 0;
-
+        // Skip any names that already exist in the identifier store
         while (true) {
-            name_buf[name_len] = @intCast('a' + (n % 26));
-            name_len += 1;
-            n = n / 26;
-            if (n == 0) break;
-            n -= 1;
-        }
+            var n = self.next_name_index;
+            self.next_name_index += 1;
 
-        // Names are generated in reverse order, so write them reversed
-        var i: usize = 0;
-        while (i < name_len) : (i += 1) {
-            try self.writer.writeByte(name_buf[name_len - 1 - i]);
+            var name_buf: [8]u8 = undefined;
+            var name_len: usize = 0;
+
+            while (true) {
+                name_buf[name_len] = @intCast('a' + (n % 26));
+                name_len += 1;
+                n = n / 26;
+                if (n == 0) break;
+                n -= 1;
+            }
+
+            // Names are generated in reverse order, so reverse the buffer
+            std.mem.reverse(u8, name_buf[0..name_len]);
+
+            // Check if this name already exists in the identifier store
+            const candidate_name = name_buf[0..name_len];
+            var exists = false;
+
+            // Check all identifiers in the store
+            var i: u32 = 0;
+            while (i < self.idents.interner.outer_indices.items.len) : (i += 1) {
+                const ident_idx = Ident.Idx{ .idx = @truncate(i), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+                const existing_name = self.idents.getText(ident_idx);
+                if (std.mem.eql(u8, existing_name, candidate_name)) {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists) {
+                // This name is available, write it to the writer
+                for (candidate_name) |c| {
+                    try self.writer.writeByte(c);
+                }
+                break;
+            }
+            // Name already exists, try the next one
         }
     }
 
