@@ -71,6 +71,7 @@ const TypeContext = enum {
     ListContent,
     RecordExtension,
     RecordFieldContent,
+    TupleFieldContent,
     FunctionArgument,
 };
 
@@ -182,6 +183,7 @@ pub const TypeWriter = struct {
             .ListContent => "elem",
             .RecordExtension => "others",
             .RecordFieldContent => "field",
+            .TupleFieldContent => "field",
             .FunctionArgument => "arg",
             .General => {
                 // Fall back to generic name generation
@@ -414,7 +416,7 @@ pub const TypeWriter = struct {
         _ = try self.buf.writer().write("(");
         for (elems, 0..) |elem, i| {
             if (i > 0) _ = try self.buf.writer().write(", ");
-            try self.writeVar(elem);
+            try self.writeVarWithContext(elem, .TupleFieldContent);
         }
         _ = try self.buf.writer().write(")");
     }
