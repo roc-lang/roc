@@ -521,6 +521,7 @@ const TypeContext = enum {
     NumContent,
     ListContent,
     RecordExtension,
+    TagUnionExtension,
     RecordFieldContent,
     TupleFieldContent,
     FunctionArgument,
@@ -636,6 +637,7 @@ pub const SnapshotWriter = struct {
             .NumContent => "size",
             .ListContent => "elem",
             .RecordExtension => "others",
+            .TagUnionExtension => "others",
             .RecordFieldContent => "field",
             .TupleFieldContent => "field",
             .FunctionArgument => "arg",
@@ -966,20 +968,20 @@ pub const SnapshotWriter = struct {
                 if (mb_ident) |ident_idx| {
                     _ = try self.writer.write(self.idents.getText(ident_idx));
                 } else {
-                    try self.generateContextualName(.RecordExtension);
+                    try self.generateContextualName(.TagUnionExtension);
                 }
             },
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
                 else => {
-                    try self.writeWithContext(tag_union.ext, .RecordExtension);
+                    try self.writeWithContext(tag_union.ext, .TagUnionExtension);
                 },
             },
             .rigid_var => |ident_idx| {
                 _ = try self.writer.write(self.idents.getText(ident_idx));
             },
             else => {
-                try self.writeWithContext(tag_union.ext, .RecordExtension);
+                try self.writeWithContext(tag_union.ext, .TagUnionExtension);
             },
         }
     }

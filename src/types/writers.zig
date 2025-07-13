@@ -70,6 +70,7 @@ const TypeContext = enum {
     NumContent,
     ListContent,
     RecordExtension,
+    TagUnionExtension,
     RecordFieldContent,
     TupleFieldContent,
     FunctionArgument,
@@ -183,6 +184,7 @@ pub const TypeWriter = struct {
             .NumContent => "size",
             .ListContent => "elem",
             .RecordExtension => "others",
+            .TagUnionExtension => "others",
             .RecordFieldContent => "field",
             .TupleFieldContent => "field",
             .FunctionArgument => "arg",
@@ -618,7 +620,7 @@ pub const TypeWriter = struct {
                 } else {
                     // Generate a name and update the type variable to have this name
                     const start_pos = self.buf.items.len;
-                    try self.generateContextualName(.RecordExtension);
+                    try self.generateContextualName(.TagUnionExtension);
                     const generated_name = self.buf.items[start_pos..];
 
                     // Update the type variable to have this generated name
@@ -629,14 +631,14 @@ pub const TypeWriter = struct {
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
                 else => {
-                    try self.writeVarWithContext(tag_union.ext, .RecordExtension);
+                    try self.writeVarWithContext(tag_union.ext, .TagUnionExtension);
                 },
             },
             .rigid_var => |ident_idx| {
                 _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
             },
             else => {
-                try self.writeVarWithContext(tag_union.ext, .RecordExtension);
+                try self.writeVarWithContext(tag_union.ext, .TagUnionExtension);
             },
         }
     }
