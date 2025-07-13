@@ -54,6 +54,8 @@ store: NodeStore,
 /// Lifetime: The caller must ensure the source remains valid for the duration of the
 /// operation (e.g., `toSExprStr` or `diagnosticToReport` calls).
 temp_source_for_sexpr: ?[]const u8 = null,
+/// Diagnostics extracted from the store (needed because getDiagnostics is destructive)
+diagnostics: ?[]CIR.Diagnostic = null,
 /// All the definitions and in the module, populated by calling `canonicalize_file`
 all_defs: Def.Span,
 /// All the top-level statements in the module, populated by calling `canonicalize_file`
@@ -81,6 +83,7 @@ pub fn init(env: *ModuleEnv, module_name: []const u8) CIR {
     return CIR{
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
+        .diagnostics = null,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = ExternalDecl.SafeList.initCapacity(env.gpa, 16),
@@ -95,6 +98,7 @@ pub fn fromCache(env: *ModuleEnv, cached_store: NodeStore, all_defs: Def.Span, a
         .env = env,
         .store = cached_store,
         .temp_source_for_sexpr = null,
+        .diagnostics = null,
         .all_defs = all_defs,
         .all_statements = all_statements,
         .external_decls = ExternalDecl.SafeList.initCapacity(env.gpa, 16),
@@ -108,6 +112,9 @@ pub fn deinit(self: *CIR) void {
     self.store.deinit();
     self.external_decls.deinit(self.env.gpa);
     self.imports.deinit(self.env.gpa);
+    if (self.diagnostics) |diags| {
+        self.env.gpa.free(diags);
+    }
 }
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
@@ -155,6 +162,12 @@ pub fn pushMalformed(self: *CIR, comptime RetIdx: type, reason: CIR.Diagnostic) 
 
 /// Retrieve all diagnostics collected during canonicalization.
 pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
+    // Return diagnostics if already extracted
+    if (self.diagnostics) |diags| {
+        return diags;
+    }
+
+    // First time - compute and cache the diagnostics
     const all = self.store.diagnosticSpanFrom(0);
 
     var list = std.ArrayList(CIR.Diagnostic).init(self.store.gpa);
@@ -163,7 +176,8 @@ pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
         list.append(self.store.getDiagnostic(idx)) catch |err| exitOnOom(err);
     }
 
-    return list.toOwnedSlice() catch |err| exitOnOom(err);
+    self.diagnostics = list.toOwnedSlice() catch |err| exitOnOom(err);
+    return self.diagnostics.?;
 }
 
 /// Convert a canonicalization diagnostic to a Report for rendering.
@@ -171,12 +185,12 @@ pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
 /// The source parameter is not owned by this function - the caller must ensure it
 /// remains valid for the duration of this call. The returned Report will contain
 /// references to the source text but does not own it.
-pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator, source: []const u8, filename: []const u8) !reporting.Report {
+pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator, source: ?[]const u8, filename: []const u8) !reporting.Report {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Set temporary source for calcRegionInfo
-    self.temp_source_for_sexpr = source;
+    self.temp_source_for_sexpr = source orelse self.env.source;
     defer self.temp_source_for_sexpr = null;
 
     return switch (diagnostic) {
@@ -210,7 +224,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             break :blk Diagnostic.buildInvalidNumLiteralReport(
                 allocator,
                 data.region,
-                source,
+                source orelse self.env.source,
             );
         },
         .ident_already_in_scope => |data| blk: {
@@ -244,7 +258,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             break :blk Diagnostic.buildF64PatternLiteralReport(
                 allocator,
                 data.region,
-                source,
+                source orelse self.env.source,
             );
         },
         .invalid_single_quote => Diagnostic.buildInvalidSingleQuoteReport(allocator),
@@ -1551,9 +1565,9 @@ pub const IntValue = struct {
 
 /// Helper function to generate the S-expression node for the entire Canonical IR.
 /// If a single expression is provided, only that expression is returned.
-pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: []const u8) void {
+pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: ?[]const u8) void {
     // Set temporary source for region info calculation during SExpr generation
-    ir.temp_source_for_sexpr = source;
+    ir.temp_source_for_sexpr = source orelse ir.env.source;
     defer ir.temp_source_for_sexpr = null;
 
     if (maybe_expr_idx) |expr_idx| {

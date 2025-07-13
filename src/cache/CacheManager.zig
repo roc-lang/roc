@@ -18,17 +18,15 @@ const ModuleEnv = base.ModuleEnv;
 const CIR = canonicalize.CIR;
 
 /// Cache hit result containing the process result and diagnostic counts
-pub const CacheHit = struct {
-    result: coordinate_simple.ProcessResult,
-    error_count: u32,
-    warning_count: u32,
-};
-
-/// Result of a cache lookup operation.
+/// Result of a cache load operation
 pub const CacheResult = union(enum) {
-    hit: CacheHit,
-    miss: void,
-    invalid: void,
+    hit: coordinate_simple.ProcessResult,
+    miss: struct {
+        source: []const u8,
+    },
+    invalid: struct {
+        source: []const u8,
+    },
 };
 
 /// Cache manager using BLAKE3-based keys.
@@ -53,22 +51,35 @@ pub const CacheManager = struct {
         };
     }
 
+    /// Load a cached module based on its content and compiler version.
     /// Look up a cache entry by content and compiler version.
     ///
     /// Returns CacheResult indicating hit, miss, or invalid entry.
-    /// On cache hit, the returned ProcessResult owns all its data.
-    pub fn lookup(self: *Self, content: []const u8, compiler_version: []const u8) !CacheResult {
+    /// IMPORTANT: This function takes ownership of source only.
+    /// compiler_version is borrowed (not owned).
+    /// On cache miss/invalid, source is returned in the result for the caller to reuse.
+    pub fn loadFromCache(
+        self: *Self,
+        source: []const u8,
+        compiler_version: []const u8,
+    ) CacheResult {
         if (!self.config.enabled) {
-            return CacheResult.miss;
+            return CacheResult{ .miss = .{
+                .source = source,
+            } };
         }
 
-        const cache_key = self.generateCacheKey(content, compiler_version) catch {
-            return CacheResult.miss;
+        const cache_key = self.generateCacheKey(source, compiler_version) catch {
+            return CacheResult{ .miss = .{
+                .source = source,
+            } };
         };
         defer self.allocator.free(cache_key);
 
         const cache_path = self.getCacheFilePath(cache_key) catch {
-            return CacheResult.miss;
+            return CacheResult{ .miss = .{
+                .source = source,
+            } };
         };
         defer self.allocator.free(cache_path);
 
@@ -76,7 +87,9 @@ pub const CacheManager = struct {
         const exists = self.filesystem.fileExists(cache_path) catch false;
         if (!exists) {
             self.stats.recordMiss();
-            return CacheResult.miss;
+            return CacheResult{ .miss = .{
+                .source = source,
+            } };
         }
 
         // Read cache data using memory mapping for better performance
@@ -85,26 +98,30 @@ pub const CacheManager = struct {
                 std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
             }
             self.stats.recordMiss();
-            return CacheResult.miss;
+            return CacheResult{ .miss = .{
+                .source = source,
+            } };
         };
         defer mapped_cache.deinit(self.allocator);
 
         // Validate and restore from cache
-        const result = self.restoreFromCache(mapped_cache.data()) catch |err| {
+        // restoreFromCache takes ownership of content
+        const result = self.restoreFromCache(
+            mapped_cache.data(),
+            source,
+        ) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
             }
             self.stats.recordInvalidation();
-            return CacheResult.invalid;
+            return CacheResult{ .invalid = .{
+                .source = source,
+            } };
         };
 
         self.stats.recordHit(mapped_cache.data().len);
 
-        return CacheResult{ .hit = CacheHit{
-            .result = result.result,
-            .error_count = result.error_count,
-            .warning_count = result.warning_count,
-        } };
+        return CacheResult{ .hit = result.result };
     }
 
     /// Store a cache entry.
@@ -131,8 +148,7 @@ pub const CacheManager = struct {
             return;
         };
 
-        // Serialize the result
-        const cache_data = self.serializeResult(process_result) catch |err| {
+        const cache_data = Cache.create(self.allocator, process_result.cir.env, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }
@@ -176,10 +192,10 @@ pub const CacheManager = struct {
         self.stats.recordStore(cache_data.len);
     }
 
-    /// Generate a BLAKE3-based cache key from content and compiler version.
-    fn generateCacheKey(self: *Self, content: []const u8, compiler_version: []const u8) ![]u8 {
-        // Combine content and compiler version
-        const combined = try std.fmt.allocPrint(self.allocator, "{s}|{s}", .{ content, compiler_version });
+    /// Generate a BLAKE3-based cache key from source and compiler version.
+    fn generateCacheKey(self: *Self, source: []const u8, compiler_version: []const u8) ![]u8 {
+        // Combine source and compiler version
+        const combined = try std.fmt.allocPrint(self.allocator, "{s}|{s}", .{ source, compiler_version });
         defer self.allocator.free(combined);
 
         // Hash with BLAKE3
@@ -243,28 +259,14 @@ pub const CacheManager = struct {
         };
     }
 
-    /// Serialize a ProcessResult to cache data.
-    fn serializeResult(self: *Self, result: *const coordinate_simple.ProcessResult) ![]u8 {
-        // Count errors and warnings from reports to store in cache
-        var error_count: u32 = 0;
-        var warning_count: u32 = 0;
-
-        for (result.reports) |report| {
-            switch (report.severity) {
-                .info => {}, // Informational messages don't affect error/warning counts
-                .runtime_error, .fatal => error_count += 1,
-                .warning => warning_count += 1,
-            }
-        }
-
-        // Create cache data using the ModuleEnv from the CIR with diagnostic counts
-        const cache_data = try Cache.create(self.allocator, result.cir.env, result.cir, error_count, warning_count);
-
-        return cache_data;
-    }
-
     /// Restore a ProcessResult from cache data with diagnostic counts.
-    fn restoreFromCache(self: *Self, cache_data: []align(SERIALIZATION_ALIGNMENT) const u8) !struct {
+    /// IMPORTANT: This function takes ownership of `source`.
+    /// The caller must not free it after calling this function.
+    fn restoreFromCache(
+        self: *Self,
+        cache_data: []align(SERIALIZATION_ALIGNMENT) const u8,
+        source: []const u8,
+    ) !struct {
         result: coordinate_simple.ProcessResult,
         error_count: u32,
         warning_count: u32,
@@ -279,7 +281,8 @@ pub const CacheManager = struct {
         // Use a default module name when restoring from cache
         // since we don't have access to the original source path
         const module_name = "cached_module";
-        const restored = cache.restore(self.allocator, module_name) catch return error.RestoreError;
+        // Transfer ownership of source to the restored ModuleEnv
+        const restored = cache.restore(self.allocator, module_name, source) catch return error.RestoreError;
 
         // Reports are not cached - they need to be recomputed if needed
         // Users can use --no-cache to see diagnostic reports
@@ -289,7 +292,6 @@ pub const CacheManager = struct {
         const module_env = try self.allocator.create(ModuleEnv);
         module_env.* = restored.module_env;
 
-        // Allocate CIR to heap for ownership
         const cir = try self.allocator.create(CIR);
 
         // Copy CIR but don't copy the invalid env pointer
@@ -297,14 +299,10 @@ pub const CacheManager = struct {
         // Immediately fix env pointer to point to our heap-allocated module_env
         cir.env = module_env;
 
-        // Source content is not cached - provide a placeholder
-        const source = try self.allocator.dupe(u8, "# Source loaded from cache");
-
         // Create ProcessResult with proper ownership
         const process_result = coordinate_simple.ProcessResult{
             .cir = cir,
             .reports = reports,
-            .source = source,
             .was_cached = true,
         };
 
@@ -374,7 +372,7 @@ test "CacheManager getCacheFilePath with subdirectory splitting" {
     try testing.expect(std.mem.containsAtLeast(u8, cache_path, 1, "cdef123456789"));
 }
 
-test "CacheManager lookup miss" {
+test "CacheManager loadFromCache miss" {
     const allocator = testing.allocator;
     const config = CacheConfig{};
     var filesystem = Filesystem.testing();
@@ -390,12 +388,16 @@ test "CacheManager lookup miss" {
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
-    const content = "module [test]\n\ntest = 42";
-    const compiler_version = "roc-zig-0.11.0-debug";
+    const source = try allocator.dupe(u8, "module [test]\n\ntest = 42");
 
-    const result = try manager.lookup(content, compiler_version);
-    try testing.expect(result == .miss);
-    try testing.expect(manager.stats.misses == 1);
+    const result = manager.loadFromCache(source, "roc-zig-0.11.0-debug");
+    switch (result) {
+        .miss => |returned| {
+            try testing.expect(manager.stats.misses == 1);
+            allocator.free(returned.source);
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "CacheManager disabled" {
@@ -405,11 +407,15 @@ test "CacheManager disabled" {
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
-    const content = "module [test]\n\ntest = 42";
-    const compiler_version = "roc-zig-0.11.0-debug";
+    const source = try allocator.dupe(u8, "module [test]\n\ntest = 42");
 
-    const result = try manager.lookup(content, compiler_version);
-    try testing.expect(result == .miss);
+    const result = manager.loadFromCache(source, "roc-zig-0.11.0-debug");
+    switch (result) {
+        .miss => |returned| {
+            allocator.free(returned.source);
+        },
+        else => return error.TestUnexpectedResult,
+    }
     try testing.expect(manager.stats.getTotalOps() == 0); // No stats recorded when disabled
 }
 

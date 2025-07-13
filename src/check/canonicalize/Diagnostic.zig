@@ -284,10 +284,11 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("` is exposed, but it is not defined anywhere in this module.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
         );
 
         try report.document.addReflowingText("You can fix this by either defining `");
@@ -313,10 +314,11 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("` is exposed multiple times in the module header.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
         );
 
         try report.document.addReflowingText("It was already exposed here:");
@@ -324,7 +326,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
         );
 
         try report.document.addReflowingText("You can remove the duplicate entry to fix this warning.");
@@ -352,10 +354,11 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText(" missing up-top?");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
         );
         return report;
     }
@@ -935,10 +938,11 @@ pub const Diagnostic = union(enum) {
         try report.document.addText("The unused variable is declared here:");
         try report.document.addLineBreak();
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
         );
 
         return report;
@@ -969,13 +973,13 @@ pub const Diagnostic = union(enum) {
         try report.document.addText("`.");
 
         try report.document.addLineBreak();
-        try report.document.addText("The underscore variable is declared here:");
         try report.document.addLineBreak();
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
         );
 
         return report;
@@ -1102,12 +1106,13 @@ pub const Diagnostic = union(enum) {
         try report.document.addUnqualifiedSymbol(owned_value);
         try report.document.addText(".");
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Make sure the module exports this value, or use a value that is exposed.");
+        try report.document.addReflowingText("Split this out into multiple modules, or remove some of the exports.");
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
         );
 
         return report;
@@ -1133,10 +1138,11 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("Make sure the module exports this type, or use a type that is exposed.");
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
         );
 
         return report;
@@ -1161,10 +1167,11 @@ pub const Diagnostic = union(enum) {
         try report.document.addText(" ");
         try report.document.addAnnotated(owned_module, .module_name);
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
         );
 
         return report;
@@ -1191,12 +1198,13 @@ pub const Diagnostic = union(enum) {
         try report.document.addAnnotated(max_str, .emphasized);
         try report.document.addText(".");
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Consider splitting this module into smaller modules with fewer exports.");
+        try report.document.addReflowingText("Import it to use its types and values.");
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
         );
 
         return report;

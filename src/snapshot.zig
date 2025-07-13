@@ -404,7 +404,8 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
     log("Generating snapshot for: {s}", .{output_path});
 
     // Process the content through the compilation pipeline
-    var module_env = base.ModuleEnv.init(allocator);
+    const source_copy = try allocator.dupe(u8, content.source);
+    var module_env = base.ModuleEnv.init(allocator, source_copy);
     defer module_env.deinit();
 
     // Parse the source code based on node type
@@ -498,19 +499,18 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
 
         // Restore ModuleEnv and CIR
-        const restored = try loaded_cache.restore(allocator, module_name);
-        var restored_module_env = restored.module_env;
-        defer restored_module_env.deinit();
-        var restored_cir = restored.cir;
-        defer restored_cir.deinit();
+        // Duplicate source since restore takes ownership
+        const restored_source = try allocator.dupe(u8, content.source);
+        var restored = try loaded_cache.restore(allocator, module_name, restored_source);
+        defer restored.module_env.deinit();
+        defer restored.cir.deinit();
 
-        // Fix env pointer after struct move
-        restored_cir.env = &restored_module_env;
+        restored.cir.env = &restored.module_env;
 
         // Generate S-expression from restored CIR
         var restored_tree = SExprTree.init(allocator);
         defer restored_tree.deinit();
-        CIR.pushToSExprTree(&restored_cir, null, &restored_tree, content.source);
+        CIR.pushToSExprTree(&restored.cir, null, &restored_tree, content.source);
 
         var restored_sexpr = std.ArrayList(u8).init(allocator);
         defer restored_sexpr.deinit();
@@ -1217,7 +1217,7 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
 
     // Canonicalization Diagnostics
     const diagnostics = can_ir.getDiagnostics();
-    defer output.gpa.free(diagnostics);
+    // Don't free diagnostics here - CIR owns them and will free them in deinit()
     for (diagnostics) |diagnostic| {
         canonicalize_problems += 1;
         var report: reporting.Report = can_ir.diagnosticToReport(diagnostic, output.gpa, content.source, snapshot_path) catch |err| {
@@ -1342,7 +1342,7 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
 
         if (i + 1 < tokenizedBuffer.tokens.len) {
             const next_region = tokenizedBuffer.resolve(@intCast(i + 1));
-            if (source_contains_newline_in_range(parse_ast.source, region.end.offset, next_region.start.offset)) {
+            if (source_contains_newline_in_range(parse_ast.env.source, region.end.offset, next_region.start.offset)) {
                 try output.md_writer.writeAll("\n");
             }
         }

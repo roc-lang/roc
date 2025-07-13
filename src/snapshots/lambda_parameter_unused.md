@@ -51,7 +51,7 @@ add = |unused| 42
 Variable ``_factor`` is prefixed with an underscore but is actually used.
 
 Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: `factor`.
-The underscore variable is declared here:
+
 **lambda_parameter_unused.md:9:22:9:29:**
 ```roc
 multiply = |_factor| _factor * 2

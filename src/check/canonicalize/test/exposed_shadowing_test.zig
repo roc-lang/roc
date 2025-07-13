@@ -12,14 +12,14 @@ const tokenize = @import("../../parse/tokenize.zig");
 test "exposed but not implemented - values" {
     const allocator = testing.allocator;
 
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
-
     const source =
         \\module [foo, bar]
         \\
         \\foo = 42
     ;
+
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    defer env.deinit();
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -53,14 +53,14 @@ test "exposed but not implemented - values" {
 test "exposed but not implemented - types" {
     const allocator = testing.allocator;
 
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
-
     const source =
         \\module [MyType, OtherType]
         \\
         \\MyType : [A, B]
     ;
+
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    defer env.deinit();
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -94,16 +94,16 @@ test "exposed but not implemented - types" {
 test "redundant exposed entries" {
     const allocator = testing.allocator;
 
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
-
     const source =
         \\module [foo, bar, foo, MyType, bar]
         \\
         \\foo = 42
         \\bar = "hello"
-        \\MyType : [A]
+        \\MyType : [A, B]
     ;
+
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    defer env.deinit();
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -141,9 +141,6 @@ test "redundant exposed entries" {
 test "shadowing with exposed items" {
     const allocator = testing.allocator;
 
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
-
     const source =
         \\module [x, y]
         \\
@@ -153,6 +150,9 @@ test "shadowing with exposed items" {
         \\y = "first"
         \\y = "second"
     ;
+
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    defer env.deinit();
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -182,15 +182,16 @@ test "shadowing with exposed items" {
 test "shadowing non-exposed items" {
     const allocator = testing.allocator;
 
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
-
     const source =
         \\module []
         \\
         \\notExposed = 1
         \\notExposed = 2
+        \\# Shadowing is allowed for non-exposed items
     ;
+
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    defer env.deinit();
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -224,9 +225,6 @@ test "shadowing non-exposed items" {
 test "exposed items correctly tracked across shadowing" {
     const allocator = testing.allocator;
 
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
-
     const source =
         \\module [x, y, z]
         \\
@@ -237,6 +235,9 @@ test "exposed items correctly tracked across shadowing" {
         \\
         \\# z is exposed but never defined
     ;
+
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    defer env.deinit();
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -289,9 +290,6 @@ test "exposed items correctly tracked across shadowing" {
 test "complex case with redundant, shadowing, and not implemented" {
     const allocator = testing.allocator;
 
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
-
     const source =
         \\module [a, b, a, c, NotImplemented]
         \\
@@ -302,6 +300,9 @@ test "complex case with redundant, shadowing, and not implemented" {
         \\
         \\c = 100
     ;
+
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    defer env.deinit();
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -352,9 +353,6 @@ test "complex case with redundant, shadowing, and not implemented" {
 test "exposed_by_str is populated correctly" {
     const allocator = testing.allocator;
 
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
-
     const source =
         \\module [foo, bar, MyType, foo]
         \\
@@ -362,6 +360,9 @@ test "exposed_by_str is populated correctly" {
         \\bar = "hello"
         \\MyType : [A, B]
     ;
+
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    defer env.deinit();
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -386,9 +387,6 @@ test "exposed_by_str is populated correctly" {
 test "exposed_by_str persists after canonicalization" {
     const allocator = testing.allocator;
 
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
-
     const source =
         \\module [x, y, z]
         \\
@@ -396,6 +394,9 @@ test "exposed_by_str persists after canonicalization" {
         \\y = 2
         \\# z is not defined
     ;
+
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    defer env.deinit();
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);
@@ -420,16 +421,16 @@ test "exposed_by_str persists after canonicalization" {
 test "exposed_by_str never has entries removed" {
     const allocator = testing.allocator;
 
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
-
     const source =
         \\module [foo, bar, foo, baz]
         \\
         \\foo = 42
         \\bar = "hello"
-        \\# baz is not implemented
+        \\baz = 3.14
     ;
+
+    var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    defer env.deinit();
 
     var ast = parse.parse(&env, source);
     defer ast.deinit(allocator);

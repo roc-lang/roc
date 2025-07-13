@@ -47,7 +47,7 @@ unused_regular = |x| 42
 Variable ``_value`` is prefixed with an underscore but is actually used.
 
 Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: `value`.
-The underscore variable is declared here:
+
 **unused_vars_simple.md:7:28:7:34:**
 ```roc
 used_underscore = |_value| _value

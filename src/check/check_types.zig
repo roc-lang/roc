@@ -1300,7 +1300,7 @@ test "minimum signed values fit in their respective types" {
 
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
     var problems = problem.Store.initCapacity(gpa, 16);
@@ -1459,7 +1459,7 @@ test "lambda with record field access infers correct type" {
     const gpa = std.testing.allocator;
 
     // Create a minimal environment for testing
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
     var cir = CIR.init(&module_env, "Test");
@@ -1564,7 +1564,7 @@ test "dot access properly unifies field types with parameters" {
     const gpa = std.testing.allocator;
 
     // Create a minimal environment for testing
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
     var cir = CIR.init(&module_env, "Test");
@@ -1672,7 +1672,7 @@ test "call site unification order matters for concrete vs flexible types" {
     const gpa = std.testing.allocator;
 
     // Create a minimal environment for testing
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
     var cir = CIR.init(&module_env, "Test");
