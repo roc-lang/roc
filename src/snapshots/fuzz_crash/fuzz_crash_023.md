@@ -2362,7 +2362,7 @@ expect {
 		(patt @144.1-144.6 (type "Error -> Error"))
 		(patt @199.1-199.6 (type "{}")))
 	(type_decls
-		(alias @22.1-22.41 (type "Map(d, e)")
+		(alias @22.1-22.41 (type "Map(a, b)")
 			(ty-header @22.1-22.10 (name "Map")
 				(ty-args
 					(ty-var @22.5-22.6 (name "a"))

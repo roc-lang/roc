@@ -360,7 +360,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(patt @13.1-13.11 (type "Error -> Error"))
 		(patt @18.1-18.6 (type "arg -> Error")))
 	(type_decls
-		(alias @16.1-16.64 (type "ComplexType(c, d)")
+		(alias @16.1-16.64 (type "ComplexType(a, b)")
 			(ty-header @16.1-16.18 (name "ComplexType")
 				(ty-args
 					(ty-var @16.13-16.14 (name "a"))

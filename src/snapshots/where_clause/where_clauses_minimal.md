@@ -74,7 +74,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.11 (type "arg -> ret")))
+		(patt @6.1-6.11 (type "a -> b")))
 	(expressions
-		(expr @1.1-1.1 (type "arg -> ret"))))
+		(expr @1.1-1.1 (type "a -> b"))))
 ~~~
