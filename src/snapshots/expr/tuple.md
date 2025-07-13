@@ -38,5 +38,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.19 (type "(Num(size), Str, [True]a)"))
+(expr @1.1-1.19 (type "(Num(size), Str, [True]others)"))
 ~~~

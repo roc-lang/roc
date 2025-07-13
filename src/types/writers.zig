@@ -616,7 +616,7 @@ pub const TypeWriter = struct {
                 } else {
                     // Generate a name and update the type variable to have this name
                     const start_pos = self.buf.items.len;
-                    try self.generateNextName();
+                    try self.generateContextualName(.RecordExtension);
                     const generated_name = self.buf.items[start_pos..];
 
                     // Update the type variable to have this generated name
@@ -626,9 +626,16 @@ pub const TypeWriter = struct {
             },
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
-                else => {}, // TODO: Error?
+                else => {
+                    try self.writeVarWithContext(tag_union.ext, .RecordExtension);
+                },
             },
-            else => {}, // TODO: Error?
+            .rigid_var => |ident_idx| {
+                _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+            },
+            else => {
+                try self.writeVarWithContext(tag_union.ext, .RecordExtension);
+            },
         }
     }
 

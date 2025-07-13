@@ -261,10 +261,10 @@ olor = |color| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "[Green, RGB, Blue]a -> Error")))
+		(patt @6.1-6.5 (type "[Green, RGB, Blue]others -> Error")))
 	(type_decls
 		(alias @3.1-3.24 (type "LocalStatus")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
-		(expr @6.8-12.2 (type "[Green, RGB, Blue]a -> Error"))))
+		(expr @6.8-12.2 (type "[Green, RGB, Blue]others -> Error"))))
 ~~~

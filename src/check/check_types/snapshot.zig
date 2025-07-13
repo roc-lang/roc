@@ -969,9 +969,16 @@ pub const SnapshotWriter = struct {
             },
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
-                else => {}, // TODO: Error?
+                else => {
+                    try self.writeWithContext(tag_union.ext, .RecordExtension);
+                },
             },
-            else => {}, // TODO: Error?
+            .rigid_var => |ident_idx| {
+                _ = try self.writer.write(self.idents.getText(ident_idx));
+            },
+            else => {
+                try self.writeWithContext(tag_union.ext, .RecordExtension);
+            },
         }
     }
 

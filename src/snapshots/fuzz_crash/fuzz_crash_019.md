@@ -1687,10 +1687,10 @@ expect {
 		(patt @35.1-35.4 (type "Bool -> Num(size)"))
 		(patt @38.1-38.4 (type "Bool -> Error"))
 		(patt @49.1-49.3 (type "Error"))
-		(patt @75.1-75.3 (type "arg -> [Stdo!(Str)]f"))
+		(patt @75.1-75.3 (type "arg -> [Stdo!(Str)]others"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
-		(alias @13.1-13.33 (type "Map(j, k)")
+		(alias @13.1-13.33 (type "Map(f, j)")
 			(ty-header @13.1-13.10 (name "Map")
 				(ty-args
 					(ty-var @13.5-13.6 (name "a"))
@@ -1719,6 +1719,6 @@ expect {
 		(expr @35.7-35.28 (type "Bool -> Num(size)"))
 		(expr @38.7-47.2 (type "Bool -> Error"))
 		(expr @49.6-69.3 (type "Error"))
-		(expr @75.5-111.2 (type "arg -> [Stdo!(Str)]f"))
+		(expr @75.5-111.2 (type "arg -> [Stdo!(Str)]others"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~
