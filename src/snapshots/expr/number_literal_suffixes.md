@@ -247,7 +247,6 @@ CloseCurly(34:1-34:2),EndOfFile(34:2-34:2),
 # FORMATTED
 ~~~roc
 {
-
 	u8: 123u8,
 	u16: 123u16,
 	u32: 123u32,

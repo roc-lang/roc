@@ -35,7 +35,6 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 # FORMATTED
 ~~~roc
 {
-
 	answer: 42,
 	launchTheNukes!: |{}| ...
 }

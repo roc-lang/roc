@@ -924,7 +924,7 @@ const Formatter = struct {
                         if (is_multiline) {
                             _ = try fmt.flushCommentsAfter(r.region.start);
                             fmt.curr_indent += 1;
-                            try fmt.newline();
+                            try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
                     }
