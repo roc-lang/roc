@@ -56,7 +56,7 @@ if bool {
  ^
 
 The second branch has this type:
-    _[A]a_
+    _[A]others_
 
 But the previous branch has this type:
     _Num(size)_

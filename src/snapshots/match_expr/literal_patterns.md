@@ -54,7 +54,7 @@ The fourth pattern has this type:
     _Num(size)_
 
 But all the previous patterns have this type: 
-    _[Answer, Zero, Greeting]a_
+    _[Answer, Zero, Greeting]others_
 
 All patterns in an `match` must have compatible types.
 

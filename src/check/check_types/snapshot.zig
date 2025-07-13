@@ -536,7 +536,6 @@ pub const SnapshotWriter = struct {
     can_ir: ?*const @import("../canonicalize/CIR.zig"),
     other_modules: ?[]const *const @import("../canonicalize/CIR.zig"),
     next_name_index: u32,
-    context_stack: std.ArrayList(TypeContext),
     name_counters: std.EnumMap(TypeContext, u32),
 
     pub fn init(writer: std.ArrayList(u8).Writer, snapshots: *const Store, idents: *const Ident.Store) Self {
@@ -548,7 +547,6 @@ pub const SnapshotWriter = struct {
             .can_ir = null,
             .other_modules = null,
             .next_name_index = 0,
-            .context_stack = std.ArrayList(TypeContext).init(writer.context.allocator),
             .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
         };
     }
@@ -569,7 +567,6 @@ pub const SnapshotWriter = struct {
             .can_ir = can_ir,
             .other_modules = other_modules,
             .next_name_index = 0,
-            .context_stack = std.ArrayList(TypeContext).init(writer.context.allocator),
             .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
         };
     }
@@ -631,12 +628,7 @@ pub const SnapshotWriter = struct {
         }
     }
 
-    fn generateContextualName(self: *Self) !void {
-        const context = if (self.context_stack.items.len > 0)
-            self.context_stack.items[self.context_stack.items.len - 1]
-        else
-            TypeContext.General;
-
+    fn generateContextualName(self: *Self, context: TypeContext) !void {
         const base_name = switch (context) {
             .NumContent => "size",
             .ListContent => "elem",
@@ -702,20 +694,20 @@ pub const SnapshotWriter = struct {
         self.name_counters.put(context, counter + 1);
     }
 
-    /// Convert a content to a type string
-    pub fn write(self: *Self, idx: SnapshotContentIdx) Allocator.Error!void {
+    /// Convert a content to a type string with context
+    pub fn writeWithContext(self: *Self, idx: SnapshotContentIdx, context: TypeContext) Allocator.Error!void {
         const content = self.snapshots.contents.get(idx);
-        return self.writeContent(content.*);
+        return self.writeContent(content.*, context);
     }
 
     /// Convert a content to a type string
-    pub fn writeContent(self: *Self, content: SnapshotContent) Allocator.Error!void {
+    pub fn writeContent(self: *Self, content: SnapshotContent, context: TypeContext) Allocator.Error!void {
         switch (content) {
             .flex_var => |mb_ident_idx| {
                 if (mb_ident_idx) |ident_idx| {
                     _ = try self.writer.write(self.idents.getText(ident_idx));
                 } else {
-                    try self.generateContextualName();
+                    try self.generateContextualName(context);
                 }
             },
             .rigid_var => |ident_idx| {
@@ -765,16 +757,12 @@ pub const SnapshotWriter = struct {
             },
             .list => |sub_var| {
                 _ = try self.writer.write("List(");
-                try self.context_stack.append(.ListContent);
-                try self.write(sub_var);
-                _ = self.context_stack.pop();
+                try self.writeWithContext(sub_var, .ListContent);
                 _ = try self.writer.write(")");
             },
             .list_unbound => {
                 _ = try self.writer.write("List(");
-                try self.context_stack.append(.ListContent);
-                try self.generateContextualName();
-                _ = self.context_stack.pop();
+                try self.generateContextualName(.ListContent);
                 _ = try self.writer.write(")");
             },
             .tuple => |tuple| {
@@ -859,6 +847,11 @@ pub const SnapshotWriter = struct {
         }
     }
 
+    /// Convert a content to a type string
+    pub fn write(self: *Self, idx: SnapshotContentIdx) Allocator.Error!void {
+        try self.writeWithContext(idx, .General);
+    }
+
     /// Write a function type with a specific arrow
     pub fn writeFuncWithArrow(self: *Self, func: SnapshotFunc, arrow: []const u8) Allocator.Error!void {
         const args = self.snapshots.getFuncArgsSlice(func.args);
@@ -867,15 +860,11 @@ pub const SnapshotWriter = struct {
         if (args.len == 0) {
             _ = try self.writer.write("({})");
         } else if (args.len == 1) {
-            try self.context_stack.append(.FunctionArgument);
-            try self.write(args[0]);
-            _ = self.context_stack.pop();
+            try self.writeWithContext(args[0], .FunctionArgument);
         } else {
             for (args, 0..) |arg, i| {
                 if (i > 0) _ = try self.writer.write(", ");
-                try self.context_stack.append(.FunctionArgument);
-                try self.write(arg);
-                _ = self.context_stack.pop();
+                try self.writeWithContext(arg, .FunctionArgument);
             }
         }
 
@@ -911,16 +900,12 @@ pub const SnapshotWriter = struct {
                 .empty_record => {}, // Don't show empty extension
                 else => {
                     if (fields_slice.len > 0) _ = try self.writer.write(", ");
-                    try self.context_stack.append(.RecordExtension);
-                    try self.write(record.ext);
-                    _ = self.context_stack.pop();
+                    try self.writeWithContext(record.ext, .RecordExtension);
                 },
             },
             else => {
                 if (fields_slice.len > 0) _ = try self.writer.write(", ");
-                try self.context_stack.append(.RecordExtension);
-                try self.write(record.ext);
-                _ = self.context_stack.pop();
+                try self.writeWithContext(record.ext, .RecordExtension);
             },
         }
 
@@ -975,7 +960,7 @@ pub const SnapshotWriter = struct {
                 if (mb_ident) |ident_idx| {
                     _ = try self.writer.write(self.idents.getText(ident_idx));
                 } else {
-                    try self.generateContextualName();
+                    try self.generateContextualName(.RecordExtension);
                 }
             },
             .structure => |flat_type| switch (flat_type) {
@@ -1005,44 +990,32 @@ pub const SnapshotWriter = struct {
         switch (num) {
             .num_poly => |sub_var| {
                 _ = try self.writer.write("Num(");
-                try self.context_stack.append(.NumContent);
-                try self.write(sub_var);
-                _ = self.context_stack.pop();
+                try self.writeWithContext(sub_var, .NumContent);
                 _ = try self.writer.write(")");
             },
             .int_poly => |sub_var| {
                 _ = try self.writer.write("Int(");
-                try self.context_stack.append(.NumContent);
-                try self.write(sub_var);
-                _ = self.context_stack.pop();
+                try self.writeWithContext(sub_var, .NumContent);
                 _ = try self.writer.write(")");
             },
             .frac_poly => |sub_var| {
                 _ = try self.writer.write("Frac(");
-                try self.context_stack.append(.NumContent);
-                try self.write(sub_var);
-                _ = self.context_stack.pop();
+                try self.writeWithContext(sub_var, .NumContent);
                 _ = try self.writer.write(")");
             },
             .num_unbound => |_| {
                 _ = try self.writer.write("Num(");
-                try self.context_stack.append(.NumContent);
-                try self.generateContextualName();
-                _ = self.context_stack.pop();
+                try self.generateContextualName(.NumContent);
                 _ = try self.writer.write(")");
             },
             .int_unbound => |_| {
                 _ = try self.writer.write("Int(");
-                try self.context_stack.append(.NumContent);
-                try self.generateContextualName();
-                _ = self.context_stack.pop();
+                try self.generateContextualName(.NumContent);
                 _ = try self.writer.write(")");
             },
             .frac_unbound => |_| {
                 _ = try self.writer.write("Frac(");
-                try self.context_stack.append(.NumContent);
-                try self.generateContextualName();
-                _ = self.context_stack.pop();
+                try self.generateContextualName(.NumContent);
                 _ = try self.writer.write(")");
             },
             .int_precision => |prec| {

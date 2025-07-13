@@ -60,7 +60,7 @@ It is of type:
     _Pair(a, b), Num(size3) -> Num(size4), Num(size5) -> Num(size6) -> Pair(c, d)_
 
 But you are trying to use it as:
-    _Num(size), Num(size2), arg -> arg2, arg3 -> arg4 -> e_
+    _Num(size), Num(size2), arg -> e, arg2 -> h -> i_
 
 # TOKENS
 ~~~zig

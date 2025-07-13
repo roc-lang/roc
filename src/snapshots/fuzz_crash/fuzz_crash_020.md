@@ -724,7 +724,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue]f_
+    _[Blue]others_
 
 All patterns in an `match` must have compatible types.
 

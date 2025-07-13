@@ -819,7 +819,7 @@ The third pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red, Blue]d_
+    _[Red, Blue]others_
 
 All patterns in an `match` must have compatible types.
 
@@ -834,7 +834,7 @@ This expression is used in an unexpected way:
  ^^^^^^^^^^
 
 It is of type:
-    _[Red, Blue]arg2, arg3 -> Error_
+    _[Red, Blue]others, arg2 -> Error_
 
 But you are trying to use it as:
     _arg -> d_

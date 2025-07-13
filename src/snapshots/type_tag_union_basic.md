@@ -52,7 +52,7 @@ It is of type:
     _Bool_
 
 But you are trying to use it as:
-    _[True, False]a_
+    _[True, False]others_
 
 # TOKENS
 ~~~zig
@@ -279,12 +279,12 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt @4.1-4.8 (type "[None, Some(Str)] -> Str"))
-		(patt @7.1-7.27 (type "[Err(arg), Ok(arg2)] -> Error"))
-		(patt @13.1-13.15 (type "[Err(arg3), Ok(arg4)] -> Error"))
-		(patt @18.1-18.6 (type "arg5 -> {}")))
+		(patt @7.1-7.27 (type "[Err(a), Ok(b)] -> Error"))
+		(patt @13.1-13.15 (type "[Err(c), Ok(d)] -> Error"))
+		(patt @18.1-18.6 (type "arg -> {}")))
 	(expressions
 		(expr @4.11-4.27 (type "[None, Some(Str)] -> Str"))
-		(expr @7.30-10.2 (type "[Err(arg), Ok(arg2)] -> Error"))
-		(expr @13.18-16.2 (type "[Err(arg3), Ok(arg4)] -> Error"))
-		(expr @18.9-18.15 (type "arg5 -> {}"))))
+		(expr @7.30-10.2 (type "[Err(a), Ok(b)] -> Error"))
+		(expr @13.18-16.2 (type "[Err(c), Ok(d)] -> Error"))
+		(expr @18.9-18.15 (type "arg -> {}"))))
 ~~~
