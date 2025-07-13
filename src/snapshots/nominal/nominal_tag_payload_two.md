@@ -33,7 +33,7 @@ It is of type:
     _MyResult(ok, err)_
 
 But you are trying to use it as:
-    _[Ok(c), Err(d)]e_
+    _[Ok(c), Err(d)]others_
 
 # TOKENS
 ~~~zig

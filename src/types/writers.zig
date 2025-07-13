@@ -82,7 +82,6 @@ pub const TypeWriter = struct {
     buf: std.ArrayList(u8),
     seen: std.ArrayList(Var),
     next_name_index: u32,
-    context_stack: std.ArrayList(TypeContext),
     name_counters: std.EnumMap(TypeContext, u32),
 
     /// Initialize a TypeWriter with a mutable ModuleEnv reference.
@@ -99,7 +98,6 @@ pub const TypeWriter = struct {
             .buf = try std.ArrayList(u8).initCapacity(gpa, 32),
             .seen = try std.ArrayList(Var).initCapacity(gpa, 16),
             .next_name_index = 0,
-            .context_stack = try std.ArrayList(TypeContext).initCapacity(gpa, 8),
             .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
         };
     }
@@ -107,7 +105,6 @@ pub const TypeWriter = struct {
     pub fn deinit(self: *Self) void {
         self.buf.deinit();
         self.seen.deinit();
-        self.context_stack.deinit();
     }
 
     pub fn get(self: *const Self) []u8 {
@@ -178,12 +175,7 @@ pub const TypeWriter = struct {
         }
     }
 
-    fn generateContextualName(self: *Self) Allocator.Error!void {
-        const context = if (self.context_stack.items.len > 0)
-            self.context_stack.items[self.context_stack.items.len - 1]
-        else
-            TypeContext.General;
-
+    fn generateContextualName(self: *Self, context: TypeContext) Allocator.Error!void {
         const base_name = switch (context) {
             .NumContent => "size",
             .ListContent => "elem",
@@ -284,7 +276,7 @@ pub const TypeWriter = struct {
     }
 
     /// Convert a var to a type string
-    fn writeVar(self: *Self, var_: types.Var) Allocator.Error!void {
+    fn writeVarWithContext(self: *Self, var_: types.Var, context: TypeContext) Allocator.Error!void {
         if (@intFromEnum(var_) >= self.env.types.slots.backing.len()) {
             // Debug assert that the variable is in bounds - if not, we have a bug in type checking
             _ = try self.buf.writer().write("invalid_type");
@@ -303,7 +295,7 @@ pub const TypeWriter = struct {
                         } else {
                             // Generate a name and update the type variable to have this name
                             const start_pos = self.buf.items.len;
-                            try self.generateContextualName();
+                            try self.generateContextualName(context);
                             const generated_name = self.buf.items[start_pos..];
 
                             // Update the type variable to have this generated name
@@ -326,6 +318,10 @@ pub const TypeWriter = struct {
                 }
             }
         }
+    }
+
+    fn writeVar(self: *Self, var_: types.Var) Allocator.Error!void {
+        try self.writeVarWithContext(var_, .General);
     }
 
     /// Write an alias type
@@ -362,16 +358,12 @@ pub const TypeWriter = struct {
             },
             .list => |sub_var| {
                 _ = try self.buf.writer().write("List(");
-                try self.context_stack.append(.ListContent);
-                try self.writeVar(sub_var);
-                _ = self.context_stack.pop();
+                try self.writeVarWithContext(sub_var, .ListContent);
                 _ = try self.buf.writer().write(")");
             },
             .list_unbound => {
                 _ = try self.buf.writer().write("List(");
-                try self.context_stack.append(.ListContent);
-                try self.generateContextualName();
-                _ = self.context_stack.pop();
+                try self.generateContextualName(.ListContent);
                 _ = try self.buf.writer().write(")");
             },
             .tuple => |tuple| {
@@ -481,15 +473,11 @@ pub const TypeWriter = struct {
         if (args.len == 0) {
             _ = try self.buf.writer().write("({})");
         } else if (args.len == 1) {
-            try self.context_stack.append(.FunctionArgument);
-            try self.writeVar(args[0]);
-            _ = self.context_stack.pop();
+            try self.writeVarWithContext(args[0], .FunctionArgument);
         } else {
             for (args, 0..) |arg, i| {
                 if (i > 0) _ = try self.buf.writer().write(", ");
-                try self.context_stack.append(.FunctionArgument);
-                try self.writeVar(arg);
-                _ = self.context_stack.pop();
+                try self.writeVarWithContext(arg, .FunctionArgument);
             }
         }
 
@@ -529,18 +517,14 @@ pub const TypeWriter = struct {
                 },
                 else => {
                     if (fields.len > 0) _ = try self.buf.writer().write(", ");
-                    try self.context_stack.append(.RecordExtension);
-                    try self.writeVar(record.ext);
-                    _ = self.context_stack.pop();
+                    try self.writeVarWithContext(record.ext, .RecordExtension);
                 },
             },
             .flex_var => |mb_ident| {
                 // Only show flex vars if they have a name
                 if (mb_ident) |_| {
                     if (fields.len > 0) _ = try self.buf.writer().write(", ");
-                    try self.context_stack.append(.RecordExtension);
-                    try self.writeVar(record.ext);
-                    _ = self.context_stack.pop();
+                    try self.writeVarWithContext(record.ext, .RecordExtension);
                 }
                 // Otherwise hide unnamed flex vars, so they render as no extension.
             },
@@ -552,9 +536,7 @@ pub const TypeWriter = struct {
             },
             else => {
                 if (fields.len > 0) _ = try self.buf.writer().write(", ");
-                try self.context_stack.append(.RecordExtension);
-                try self.writeVar(record.ext);
-                _ = self.context_stack.pop();
+                try self.writeVarWithContext(record.ext, .RecordExtension);
             },
         }
 
@@ -581,18 +563,14 @@ pub const TypeWriter = struct {
                 },
                 else => {
                     if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                    try self.context_stack.append(.RecordExtension);
-                    try self.writeVar(ext_var);
-                    _ = self.context_stack.pop();
+                    try self.writeVarWithContext(ext_var, .RecordExtension);
                 },
             },
             .flex_var => |mb_ident| {
                 // Only show flex vars if they have a name
                 if (mb_ident) |_| {
                     if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                    try self.context_stack.append(.RecordExtension);
-                    try self.writeVar(ext_var);
-                    _ = self.context_stack.pop();
+                    try self.writeVarWithContext(ext_var, .RecordExtension);
                 }
                 // Otherwise hide unnamed flex vars, so they render as no extension.
             },
@@ -605,9 +583,7 @@ pub const TypeWriter = struct {
             else => {
                 // Show other types (aliases, errors, etc)
                 if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                try self.context_stack.append(.RecordExtension);
-                try self.writeVar(ext_var);
-                _ = self.context_stack.pop();
+                try self.writeVarWithContext(ext_var, .RecordExtension);
             },
         }
     }
@@ -671,44 +647,32 @@ pub const TypeWriter = struct {
         switch (num) {
             .num_poly => |poly| {
                 _ = try self.buf.writer().write("Num(");
-                try self.context_stack.append(.NumContent);
-                try self.writeVar(poly.var_);
-                _ = self.context_stack.pop();
+                try self.writeVarWithContext(poly.var_, .NumContent);
                 _ = try self.buf.writer().write(")");
             },
             .int_poly => |poly| {
                 _ = try self.buf.writer().write("Int(");
-                try self.context_stack.append(.NumContent);
-                try self.writeVar(poly.var_);
-                _ = self.context_stack.pop();
+                try self.writeVarWithContext(poly.var_, .NumContent);
                 _ = try self.buf.writer().write(")");
             },
             .frac_poly => |poly| {
                 _ = try self.buf.writer().write("Frac(");
-                try self.context_stack.append(.NumContent);
-                try self.writeVar(poly.var_);
-                _ = self.context_stack.pop();
+                try self.writeVarWithContext(poly.var_, .NumContent);
                 _ = try self.buf.writer().write(")");
             },
             .num_unbound => |_| {
                 _ = try self.buf.writer().write("Num(");
-                try self.context_stack.append(.NumContent);
-                try self.generateContextualName();
-                _ = self.context_stack.pop();
+                try self.generateContextualName(.NumContent);
                 _ = try self.buf.writer().write(")");
             },
             .int_unbound => |_| {
                 _ = try self.buf.writer().write("Int(");
-                try self.context_stack.append(.NumContent);
-                try self.generateContextualName();
-                _ = self.context_stack.pop();
+                try self.generateContextualName(.NumContent);
                 _ = try self.buf.writer().write(")");
             },
             .frac_unbound => |_| {
                 _ = try self.buf.writer().write("Frac(");
-                try self.context_stack.append(.NumContent);
-                try self.generateContextualName();
-                _ = self.context_stack.pop();
+                try self.generateContextualName(.NumContent);
                 _ = try self.buf.writer().write(")");
             },
             .int_precision => |prec| {

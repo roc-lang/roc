@@ -37,7 +37,7 @@ The `else` branch has the type:
     _Num(size)_
 
 But the `then` branch has the type:
-    _[A]a_
+    _[A]others_
 
 All branches in an `if` must have compatible types.
 

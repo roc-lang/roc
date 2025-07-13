@@ -101,9 +101,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.9 (type "{ field: a, other: arg } -> a"))
-		(patt @6.1-6.6 (type "arg2 -> {}")))
+		(patt @4.1-4.9 (type "{ field: a, other: c } -> a"))
+		(patt @6.1-6.6 (type "arg -> {}")))
 	(expressions
-		(expr @4.12-4.33 (type "{ field: a, other: arg } -> a"))
-		(expr @6.9-6.15 (type "arg2 -> {}"))))
+		(expr @4.12-4.33 (type "{ field: a, other: c } -> a"))
+		(expr @6.9-6.15 (type "arg -> {}"))))
 ~~~

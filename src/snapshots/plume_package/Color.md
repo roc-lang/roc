@@ -451,7 +451,7 @@ It is of type:
     _Color_
 
 But you are trying to use it as:
-    _[Named(Str), RGB(h, i, j), RGBA(k, l, m, n), Hex(Str)]o_
+    _[Named(Str), RGB(h, i, j), RGBA(k, l, m, n), Hex(Str)]others_
 
 # TOKENS
 ~~~zig

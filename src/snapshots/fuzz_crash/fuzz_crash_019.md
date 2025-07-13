@@ -713,7 +713,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue]f_
+    _[Blue]others_
 
 All patterns in an `match` must have compatible types.
 
@@ -728,7 +728,7 @@ This expression is used in an unexpected way:
  ^^
 
 It is of type:
-    _[Blue]arg2, [Tb]arg3 -> Error_
+    _[Blue]others, [Tb]others2 -> Error_
 
 But you are trying to use it as:
     _arg -> f_
