@@ -440,7 +440,8 @@ test "extractBranchData - valid branch node" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa, "");
+    const owned_source = try gpa.dupe(u8, "");
+    var module_env = base.ModuleEnv.init(gpa, owned_source);
     defer module_env.deinit();
 
     var cir = CIR.init(&module_env, "test");
@@ -472,7 +473,8 @@ test "extractBranchData - wrong node type" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa, "");
+    const owned_source = try gpa.dupe(u8, "");
+    var module_env = base.ModuleEnv.init(gpa, owned_source);
     defer module_env.deinit();
 
     var cir = CIR.init(&module_env, "test");
@@ -499,7 +501,8 @@ test "extractBranchData - out of bounds extra_data" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa, "");
+    const owned_source = try gpa.dupe(u8, "");
+    var module_env = base.ModuleEnv.init(gpa, owned_source);
     defer module_env.deinit();
 
     var cir = CIR.init(&module_env, "test");

@@ -21,7 +21,8 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !s
 } {
     // Initialize the ModuleEnv
     const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = base.ModuleEnv.init(allocator, "");
+    const owned_source = try allocator.dupe(u8, source);
+    module_env.* = base.ModuleEnv.init(allocator, owned_source);
 
     // Parse the source code as an expression
     const parse_ast = try allocator.create(parse.AST);
@@ -646,7 +647,8 @@ test "eval empty record" {
 
 test "eval integer literal directly from CIR node" {
     // Create a minimal CIR environment
-    var module_env = base.ModuleEnv.init(test_allocator, "");
+    const owned_source = try test_allocator.dupe(u8, "");
+    var module_env = base.ModuleEnv.init(test_allocator, owned_source);
     defer module_env.deinit();
 
     var cir = CIR.init(&module_env, "test");
