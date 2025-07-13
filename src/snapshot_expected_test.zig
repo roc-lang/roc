@@ -5,6 +5,13 @@
 const std = @import("std");
 const testing = std.testing;
 const snapshot_mod = @import("snapshot.zig");
+const base = @import("base.zig");
+const parse = @import("check/parse.zig");
+const canonicalize = @import("check/canonicalize.zig");
+const CIR = @import("check/canonicalize/CIR.zig");
+const eval = @import("eval/eval.zig");
+const stack = @import("eval/stack.zig");
+const layout_store = @import("layout/store.zig");
 
 /// Represents a problem entry from either EXPECTED or PROBLEMS section
 const ProblemEntry = struct {
@@ -536,12 +543,9 @@ fn validateSnapshotProblems(allocator: std.mem.Allocator, path: []const u8) !voi
     }
 }
 
-test "snapshot validation" {
-    const allocator = testing.allocator;
-
-    // Collect all snapshot files
+fn collectSnapshotFiles(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
     var snapshot_files = std.ArrayList([]const u8).init(allocator);
-    defer {
+    errdefer {
         for (snapshot_files.items) |f| allocator.free(f);
         snapshot_files.deinit();
     }
@@ -565,6 +569,18 @@ test "snapshot validation" {
             return std.mem.lessThan(u8, a, b);
         }
     }.lessThan);
+
+    return snapshot_files;
+}
+
+test "snapshot validation" {
+    const allocator = testing.allocator;
+
+    var snapshot_files = try collectSnapshotFiles(allocator);
+    defer {
+        for (snapshot_files.items) |f| allocator.free(f);
+        snapshot_files.deinit();
+    }
 
     var total_failures: usize = 0;
     var failed_files = std.ArrayList([]const u8).init(allocator);
@@ -591,6 +607,139 @@ test "snapshot validation" {
         std.debug.print("========================================\n\n", .{});
         return error.SnapshotValidationFailed;
     }
+}
+
+test "snapshot evaluate top-level `expect` statements" {
+    const allocator = testing.allocator;
+
+    var snapshot_files = try collectSnapshotFiles(allocator);
+    defer {
+        for (snapshot_files.items) |f| allocator.free(f);
+        snapshot_files.deinit();
+    }
+
+    var total_failures: usize = 0;
+    var total_expects: usize = 0;
+    var failed_files = std.ArrayList([]const u8).init(allocator);
+    defer failed_files.deinit();
+
+    const start_time = std.time.milliTimestamp();
+
+    // Evaluate expects in each snapshot
+    for (snapshot_files.items) |snapshot_path| {
+        const expect_count = evaluateSnapshotExpects(allocator, snapshot_path) catch |err| {
+            if (err == error.ExpectEvaluationFailed) {
+                total_failures += 1;
+                try failed_files.append(snapshot_path);
+                return err;
+            } else {
+                return err;
+            }
+        };
+        total_expects += expect_count;
+    }
+
+    const end_time = std.time.milliTimestamp();
+    const duration_ms = end_time - start_time;
+
+    std.debug.print("info: evaluated {} top-level `expect` statements from {} snapshot files in {} ms.\n", .{ total_expects, snapshot_files.items.len, duration_ms });
+
+    if (total_failures > 0) {
+        std.debug.print("\n\n========================================\n", .{});
+        std.debug.print("Expect evaluation summary: {} files with failed expects out of {} total\n", .{
+            total_failures,
+            snapshot_files.items.len,
+        });
+        std.debug.print("========================================\n\n", .{});
+        return error.ExpectEvaluationFailed;
+    }
+}
+
+fn evaluateSnapshotExpects(allocator: std.mem.Allocator, snapshot_path: []const u8) !usize {
+    const content = std.fs.cwd().readFileAlloc(allocator, snapshot_path, 10 * 1024 * 1024) catch |err| {
+        std.debug.print("Failed to read snapshot file {s}: {}\n", .{ snapshot_path, err });
+        return err;
+    };
+    defer allocator.free(content);
+
+    // Parse snapshot sections using existing infrastructure
+    const snapshot_content = snapshot_mod.extractSections(allocator, content) catch |err| {
+        std.debug.print("Failed to parse snapshot sections in {s}: {}\n", .{ snapshot_path, err });
+        return err;
+    };
+
+    // Skip files without SOURCE section (they might be validation-only)
+    if (snapshot_content.source.len == 0) {
+        return 0;
+    }
+
+    // Parse and canonicalize the source
+    const owned_source = try allocator.dupe(u8, snapshot_content.source);
+    var module_env = base.ModuleEnv.init(allocator, owned_source);
+    defer module_env.deinit();
+
+    var parse_ast = parse.parse(&module_env, snapshot_content.source);
+    defer parse_ast.deinit(allocator);
+
+    var cir = CIR.init(&module_env, "test");
+    defer cir.deinit();
+
+    var can = try canonicalize.init(&cir, &parse_ast, null);
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    // Extract and evaluate top-level expect statements
+    const statements = cir.store.sliceStatements(cir.all_statements);
+    var failed_expects: usize = 0;
+    var expect_count: usize = 0;
+
+    for (statements) |stmt_idx| {
+        const statement = cir.store.getStatement(stmt_idx);
+        if (statement == .s_expect) {
+            expect_count += 1;
+            const expect_expr_idx = statement.s_expect.body;
+
+            // Evaluate the expect expression
+            var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
+            defer eval_stack.deinit();
+
+            var layout_cache = try layout_store.Store.init(&module_env, &module_env.types);
+            defer layout_cache.deinit();
+
+            const result = eval.eval(allocator, &cir, expect_expr_idx, &eval_stack, &layout_cache) catch |err| {
+                switch (err) {
+                    error.LayoutError => {
+                        // Skip unimplemented features for now
+                        continue;
+                    },
+                    error.Crash => {
+                        // Skip runtime errors for now (e.g., crash expressions)
+                        continue;
+                    },
+                    else => return err,
+                }
+            };
+
+            // Check if the result is True (expect should evaluate to True)
+            if (result.layout.isBoolean()) {
+                const bool_value = @as(*bool, @ptrCast(@alignCast(result.ptr))).*;
+                if (!bool_value) {
+                    std.debug.print("FAILED expect in {s}: expected True, got False\n", .{snapshot_path});
+                    failed_expects += 1;
+                }
+            } else {
+                std.debug.print("FAILED expect in {s}: expected boolean result\n", .{snapshot_path});
+                failed_expects += 1;
+            }
+        }
+    }
+
+    if (failed_expects > 0) {
+        return error.ExpectEvaluationFailed;
+    }
+
+    return expect_count;
 }
 
 // Unit tests

@@ -305,6 +305,11 @@ pub const Layout = packed struct {
         return boolType();
     }
 
+    /// Check if this layout represents a boolean
+    pub fn isBoolean(self: Layout) bool {
+        return self.tag == .scalar and self.data.scalar.tag == .bool;
+    }
+
     /// str layout
     pub fn str() Layout {
         return Layout{ .data = .{ .scalar = .{ .data = .{ .str = {} }, .tag = .str } }, .tag = .scalar };
