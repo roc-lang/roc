@@ -620,6 +620,7 @@ test "snapshot evaluate top-level `expect` statements" {
 
     var total_failures: usize = 0;
     var total_expects: usize = 0;
+    var total_skipped: usize = 0;
     var failed_files = std.ArrayList([]const u8).init(allocator);
     defer failed_files.deinit();
 
@@ -627,7 +628,7 @@ test "snapshot evaluate top-level `expect` statements" {
 
     // Evaluate expects in each snapshot
     for (snapshot_files.items) |snapshot_path| {
-        const expect_count = evaluateSnapshotExpects(allocator, snapshot_path) catch |err| {
+        const result = evaluateSnapshotExpects(allocator, snapshot_path) catch |err| {
             if (err == error.ExpectEvaluationFailed) {
                 total_failures += 1;
                 try failed_files.append(snapshot_path);
@@ -636,13 +637,18 @@ test "snapshot evaluate top-level `expect` statements" {
                 return err;
             }
         };
-        total_expects += expect_count;
+        total_expects += result.expect_count;
+        total_skipped += result.skipped_count;
     }
 
     const end_time = std.time.milliTimestamp();
     const duration_ms = end_time - start_time;
 
-    std.debug.print("info: evaluated {} top-level `expect` statements from {} snapshot files in {} ms.\n", .{ total_expects, snapshot_files.items.len, duration_ms });
+    if (total_skipped > 0) {
+        std.debug.print("info: evaluated {} top-level `expect` statements (skipped {} not-implemented) from {} snapshot files in {} ms.\n", .{ total_expects, total_skipped, snapshot_files.items.len, duration_ms });
+    } else {
+        std.debug.print("info: evaluated {} top-level `expect` statements from {} snapshot files in {} ms.\n", .{ total_expects, snapshot_files.items.len, duration_ms });
+    }
 
     if (total_failures > 0) {
         std.debug.print("\n\n========================================\n", .{});
@@ -655,7 +661,12 @@ test "snapshot evaluate top-level `expect` statements" {
     }
 }
 
-fn evaluateSnapshotExpects(allocator: std.mem.Allocator, snapshot_path: []const u8) !usize {
+const EvaluationResult = struct {
+    expect_count: usize,
+    skipped_count: usize,
+};
+
+fn evaluateSnapshotExpects(allocator: std.mem.Allocator, snapshot_path: []const u8) !EvaluationResult {
     const content = std.fs.cwd().readFileAlloc(allocator, snapshot_path, 10 * 1024 * 1024) catch |err| {
         std.debug.print("Failed to read snapshot file {s}: {}\n", .{ snapshot_path, err });
         return err;
@@ -670,7 +681,7 @@ fn evaluateSnapshotExpects(allocator: std.mem.Allocator, snapshot_path: []const 
 
     // Skip files without SOURCE section (they might be validation-only)
     if (snapshot_content.source.len == 0) {
-        return 0;
+        return EvaluationResult{ .expect_count = 0, .skipped_count = 0 };
     }
 
     // Parse and canonicalize the source
@@ -693,6 +704,7 @@ fn evaluateSnapshotExpects(allocator: std.mem.Allocator, snapshot_path: []const 
     const statements = cir.store.sliceStatements(cir.all_statements);
     var failed_expects: usize = 0;
     var expect_count: usize = 0;
+    var skipped_count: usize = 0;
 
     for (statements) |stmt_idx| {
         const statement = cir.store.getStatement(stmt_idx);
@@ -711,10 +723,12 @@ fn evaluateSnapshotExpects(allocator: std.mem.Allocator, snapshot_path: []const 
                 switch (err) {
                     error.LayoutError => {
                         // Skip unimplemented features for now
+                        skipped_count += 1;
                         continue;
                     },
                     error.Crash => {
                         // Skip runtime errors for now (e.g., crash expressions)
+                        skipped_count += 1;
                         continue;
                     },
                     else => return err,
@@ -739,7 +753,7 @@ fn evaluateSnapshotExpects(allocator: std.mem.Allocator, snapshot_path: []const 
         return error.ExpectEvaluationFailed;
     }
 
-    return expect_count;
+    return EvaluationResult{ .expect_count = expect_count, .skipped_count = skipped_count };
 }
 
 // Unit tests
