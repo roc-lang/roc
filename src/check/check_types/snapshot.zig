@@ -521,6 +521,7 @@ const TypeContext = enum {
     NumContent,
     ListContent,
     RecordExtension,
+    RecordFieldContent,
     FunctionArgument,
 };
 
@@ -633,6 +634,7 @@ pub const SnapshotWriter = struct {
             .NumContent => "size",
             .ListContent => "elem",
             .RecordExtension => "others",
+            .RecordFieldContent => "field",
             .FunctionArgument => "arg",
             .General => {
                 // Fall back to generic name generation
@@ -883,14 +885,14 @@ pub const SnapshotWriter = struct {
             // Write first field
             _ = try self.writer.write(self.idents.getText(fields_slice.items(.name)[0]));
             _ = try self.writer.write(": ");
-            try self.write(fields_slice.items(.content)[0]);
+            try self.writeWithContext(fields_slice.items(.content)[0], .RecordFieldContent);
 
             // Write remaining fields
             for (fields_slice.items(.name)[1..], fields_slice.items(.content)[1..]) |name, content| {
                 _ = try self.writer.write(", ");
                 _ = try self.writer.write(self.idents.getText(name));
                 _ = try self.writer.write(": ");
-                try self.write(content);
+                try self.writeWithContext(content, .RecordFieldContent);
             }
         }
 
@@ -926,14 +928,14 @@ pub const SnapshotWriter = struct {
         // Write first field - we already verified that there is at least one field.
         _ = try self.writer.write(self.idents.getText(fields_slice.items(.name)[0]));
         _ = try self.writer.write(": ");
-        try self.write(fields_slice.items(.content)[0]);
+        try self.writeWithContext(fields_slice.items(.content)[0], .RecordFieldContent);
 
         // Write remaining fields
         for (fields_slice.items(.name)[1..], fields_slice.items(.content)[1..]) |name, content| {
             _ = try self.writer.write(", ");
             _ = try self.writer.write(self.idents.getText(name));
             _ = try self.writer.write(": ");
-            try self.write(content);
+            try self.writeWithContext(content, .RecordFieldContent);
         }
 
         _ = try self.writer.write(" }");

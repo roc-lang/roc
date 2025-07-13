@@ -523,14 +523,14 @@ combineResults = |result1, result2|
 	(defs
 		(patt @8.1-8.15 (type "Error -> Error"))
 		(patt @11.1-11.10 (type "Str -> Json.Value"))
-		(patt @14.1-14.10 (type "{ body: c } -> Error"))
+		(patt @14.1-14.10 (type "{ body: field } -> Error"))
 		(patt @23.1-23.7 (type "Error"))
 		(patt @27.1-27.15 (type "Json.Parser.Config, Str -> Error"))
 		(patt @31.1-31.15 (type "Error, Error -> Error")))
 	(expressions
 		(expr @8.18-8.44 (type "Error -> Error"))
 		(expr @11.13-11.38 (type "Str -> Json.Value"))
-		(expr @14.13-20.2 (type "{ body: c } -> Error"))
+		(expr @14.13-20.2 (type "{ body: field } -> Error"))
 		(expr @23.10-23.28 (type "Error"))
 		(expr @27.18-27.82 (type "Json.Parser.Config, Str -> Error"))
 		(expr @31.18-39.6 (type "Error, Error -> Error"))))

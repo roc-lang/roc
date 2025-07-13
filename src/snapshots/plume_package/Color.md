@@ -423,7 +423,7 @@ It is of type:
     _U8_
 
 But you are trying to use it as:
-    _{ to_frac: h }_
+    _{ to_frac: field }_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
