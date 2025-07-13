@@ -724,7 +724,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue]*_
+    _[Blue]others_
 
 All patterns in an `match` must have compatible types.
 
@@ -1677,13 +1677,13 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @35.1-35.4 (type "Bool -> Num(*)"))
-		(patt @38.1-38.4 (type "[Rum]* -> Error"))
-		(patt @49.1-49.3 (type "[Blue]* -> Error"))
-		(patt @75.1-75.3 (type "* -> [Stdo!(Str)]*"))
+		(patt @35.1-35.4 (type "Bool -> Num(size)"))
+		(patt @38.1-38.4 (type "[Rum]others -> Error"))
+		(patt @49.1-49.3 (type "[Blue]others2 -> Error"))
+		(patt @75.1-75.3 (type "arg -> [Stdo!(Str)]others3"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
-		(alias @13.1-13.33 (type "Map(*, *)")
+		(alias @13.1-13.33 (type "Map(f, j)")
 			(ty-header @13.1-13.10 (name "Map")
 				(ty-args
 					(ty-var @13.5-13.6 (name "a"))
@@ -1709,9 +1709,9 @@ expect {
 				(ty-args
 					(ty-var @32.8-32.9 (name "a"))))))
 	(expressions
-		(expr @35.7-35.28 (type "Bool -> Num(*)"))
-		(expr @38.7-47.2 (type "[Rum]* -> Error"))
-		(expr @49.6-69.3 (type "[Blue]* -> Error"))
-		(expr @75.5-111.2 (type "* -> [Stdo!(Str)]*"))
+		(expr @35.7-35.28 (type "Bool -> Num(size)"))
+		(expr @38.7-47.2 (type "[Rum]others -> Error"))
+		(expr @49.6-69.3 (type "[Blue]others2 -> Error"))
+		(expr @75.5-111.2 (type "arg -> [Stdo!(Str)]others3"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~
