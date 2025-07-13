@@ -232,7 +232,7 @@ pub fn main() !void {
 
 /// Check if a file has a valid snapshot extension
 fn isSnapshotFile(path: []const u8) bool {
-    return std.mem.endsWith(u8, path, ".md");
+    return std.mem.endsWith(u8, path, ".md") and !std.mem.endsWith(u8, path, "README.md");
 }
 
 fn isMultiFileSnapshot(path: []const u8) bool {
