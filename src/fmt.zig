@@ -160,7 +160,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     };
     defer gpa.free(contents);
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
     defer module_env.deinit();
 
     var parse_ast = parse.parse(&module_env, contents);
@@ -194,7 +194,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
     const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
     defer gpa.free(contents);
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
     defer module_env.deinit();
 
     var parse_ast = parse.parse(&module_env, contents);
@@ -617,7 +617,7 @@ const Formatter = struct {
         const between_start = prev_region.end.offset;
         const between_end = current_region.start.offset;
 
-        for (fmt.ast.source[between_start..between_end]) |c| {
+        for (fmt.ast.env.source[between_start..between_end]) |c| {
             if (c == '\n') {
                 return true;
             }
@@ -636,7 +636,7 @@ const Formatter = struct {
         const between_start = current_region.end.offset;
         const between_end = next_region.start.offset;
 
-        for (fmt.ast.source[between_start..between_end]) |c| {
+        for (fmt.ast.env.source[between_start..between_end]) |c| {
             if (c == '\n') {
                 return true;
             }
@@ -1938,13 +1938,13 @@ const Formatter = struct {
     fn flushCommentsBefore(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
         const start = if (tokenIdx == 0) 0 else fmt.ast.tokens.resolve(tokenIdx - 1).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx).start.offset;
-        return fmt.flushComments(fmt.ast.source[start..end]);
+        return fmt.flushComments(fmt.ast.env.source[start..end]);
     }
 
     fn flushCommentsAfter(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
         const start = fmt.ast.tokens.resolve(tokenIdx).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx + 1).start.offset;
-        return fmt.flushComments(fmt.ast.source[start..end]);
+        return fmt.flushComments(fmt.ast.env.source[start..end]);
     }
 
     fn flushComments(fmt: *Formatter, between_text: []const u8) !bool {
@@ -2026,7 +2026,7 @@ const Formatter = struct {
             else => {},
         }
 
-        const text = fmt.ast.source[start..region.end.offset];
+        const text = fmt.ast.env.source[start..region.end.offset];
         try fmt.pushAll(text);
     }
 
@@ -2050,7 +2050,7 @@ const Formatter = struct {
 fn moduleFmtsSame(source: []const u8) !void {
     const gpa = std.testing.allocator;
 
-    var env = base.ModuleEnv.init(gpa);
+    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
     var parse_ast = parse(&env, source);
@@ -2081,7 +2081,7 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
 
     const gpa = std.testing.allocator;
 
-    var env = base.ModuleEnv.init(gpa);
+    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
     var messages: [1]tokenize.Diagnostic = undefined;
@@ -2151,7 +2151,7 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, input));
     defer module_env.deinit();
 
     var parse_ast = parse.parse(&module_env, input);

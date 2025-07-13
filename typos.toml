@@ -18,3 +18,4 @@ extend-ignore-identifiers-re = [".*_SME_.*"]
 [default.extend-words]
 HSA = "HSA"
 typ = "typ"
+ba = "ba"

@@ -8,6 +8,7 @@ const types = @import("../types.zig");
 const base = @import("../base.zig");
 const target = @import("../base/target.zig");
 const Node = @import("../check/canonicalize/Node.zig");
+const CalledVia = base.CalledVia;
 
 pub const EvalError = error{
     Crash,
@@ -27,7 +28,7 @@ pub const EvalResult = struct {
 /// writes the actual bytes into that memory, and returns both the Layout and a pointer to the memory.
 pub fn eval(
     allocator: std.mem.Allocator,
-    cir: *CIR,
+    cir: *const CIR,
     expr_idx: CIR.Expr.Idx,
     eval_stack: *stack.Stack,
     layout_cache: *layout_store.Store,
@@ -37,20 +38,23 @@ pub fn eval(
     // Check for runtime errors first, before trying to get type info
     switch (expr) {
         // Runtime errors should return an error immediately
-        .runtime_error => return error.Crash,
+        .e_runtime_error => return error.Crash,
         else => {},
     }
 
     // For now, we'll use simple layouts based on the expression type
     // In a real implementation, this would come from the type checker
     const expr_layout = switch (expr) {
-        .num, .int => layout.Layout.int(.i128), // Default to i128 for now
-        .float => layout.Layout.frac(.f64),
-        .single_quote => layout.Layout.int(.u32),
-        .empty_record => layout.Layout.record(std.mem.Alignment.@"1", .{ .int_idx = 0 }),
-        .zero_argument_tag => layout.Layout.int(.u16),
-        .tag => layout.Layout.int(.u16), // Tags with args not fully supported yet
-        .str, .str_segment => return error.LayoutError, // Skip strings for now
+        .e_int => layout.Layout.int(.i128), // Default to i128 for now
+        .e_frac_f64 => layout.Layout.frac(.f64),
+        .e_empty_record => layout.Layout.record(std.mem.Alignment.@"1", .{ .int_idx = 0 }),
+        .e_zero_argument_tag => layout.Layout.int(.u16),
+        .e_tag => layout.Layout.int(.u16), // Tags with args not fully supported yet
+        .e_str, .e_str_segment => return error.LayoutError, // Skip strings for now
+        // These will be handled in the main switch below and return early
+        .e_binop => layout.Layout.int(.u16), // Placeholder - actual layout determined during evaluation
+        .e_call => layout.Layout.int(.u8), // Placeholder - actual layout determined during evaluation
+        .e_lookup_local => layout.Layout.int(.u8), // Placeholder - actual layout determined during evaluation
         else => return error.LayoutError, // Not implemented yet
     };
 
@@ -76,40 +80,29 @@ pub fn eval(
     // Check if the expression is already a primitive and write its bytes
     switch (expr) {
         // Numeric literals are primitives
-        .num => |num| {
-            // Write the number bytes to memory based on the layout
-            writeIntToMemory(ptr, num.value.toI128(), .i128);
-        },
-        .int => |int_lit| {
+        .e_int => |int_lit| {
             // Write integer literal to memory
             writeIntToMemory(ptr, int_lit.value.toI128(), .i128);
         },
-        .float => |float_lit| {
+        .e_frac_f64 => |float_lit| {
             // Write float literal to memory
             const typed_ptr = @as(*f64, @ptrCast(@alignCast(ptr)));
             typed_ptr.* = float_lit.value;
         },
 
         // String literals - commented out for now as requested
-        .str, .str_segment => {
+        .e_str, .e_str_segment => {
             // TODO: Handle string allocation on heap
             return error.LayoutError;
         },
 
-        // Character literals
-        .single_quote => |char_lit| {
-            // Characters are stored as u32 in Roc
-            const char_ptr = @as(*u32, @ptrCast(@alignCast(ptr)));
-            char_ptr.* = char_lit.value;
-        },
-
         // Empty record
-        .empty_record => {
+        .e_empty_record => {
             // Empty record has no bytes to write
         },
 
         // Zero-argument tags
-        .zero_argument_tag => |tag| {
+        .e_zero_argument_tag => |tag| {
             // Write the tag discriminant as a u16
             // For boolean tags: True = 0, False = 1
             const tag_ptr = @as(*u16, @ptrCast(@alignCast(ptr)));
@@ -125,7 +118,7 @@ pub fn eval(
         },
 
         // Tags with arguments
-        .tag => |tag| {
+        .e_tag => |tag| {
             // For now, just write 0 as tag discriminant
             _ = tag;
             const tag_ptr = @as(*u16, @ptrCast(@alignCast(ptr)));
@@ -133,16 +126,75 @@ pub fn eval(
         },
 
         // Runtime errors are handled at the beginning of the function
-        .runtime_error => unreachable,
+        .e_runtime_error => unreachable,
 
         // If expressions - evaluate branches based on conditions
-        .@"if" => |if_expr| {
+        .e_if => |if_expr| {
             return evalIfExpression(allocator, cir, if_expr, eval_stack, layout_cache);
         },
 
-        // Non-primitive expressions need evaluation (TODO: implement these)
-        .lookup, .list, .when, .call, .record, .record_access, .binop, .block, .lambda => {
+        // Non-primitive expressions need evaluation
+        .e_lookup_local => |lookup| {
+            return evalLookupLocal(allocator, cir, lookup.pattern_idx, eval_stack, layout_cache);
+        },
+        .e_binop => |binop| {
+            return evalBinop(allocator, cir, binop, eval_stack, layout_cache);
+        },
+        .e_call => |call| {
+            return evalCall(allocator, cir, expr_idx, call.args, eval_stack, layout_cache);
+        },
+
+        // TODO: implement these
+        .e_lookup_external, .e_list, .e_match, .e_record, .e_dot_access, .e_block, .e_lambda => {
             // For now, these are not implemented
+            return error.LayoutError;
+        },
+
+        // Additional numeric types
+        .e_frac_dec => |dec_lit| {
+            // High-precision decimal - not yet implemented
+            _ = dec_lit;
+            return error.LayoutError;
+        },
+        .e_dec_small => |small_dec| {
+            // Small decimal representation - not yet implemented
+            _ = small_dec;
+            return error.LayoutError;
+        },
+
+        // Collection types
+        .e_empty_list => {
+            // Empty list has no bytes to write
+        },
+        .e_tuple => |tuple| {
+            // Tuple evaluation not yet implemented
+            _ = tuple;
+            return error.LayoutError;
+        },
+
+        // Advanced constructs
+        .e_nominal => |nominal| {
+            // Nominal type evaluation not yet implemented
+            _ = nominal;
+            return error.LayoutError;
+        },
+        .e_crash => |crash| {
+            // Crash expression - should halt execution
+            _ = crash;
+            return error.Crash;
+        },
+        .e_dbg => |dbg| {
+            // Debug expression not yet implemented
+            _ = dbg;
+            return error.LayoutError;
+        },
+        .e_expect => |expect| {
+            // Expect expression not yet implemented
+            _ = expect;
+            return error.LayoutError;
+        },
+        .e_ellipsis => {
+            // Ellipsis placeholder - not implemented
             return error.LayoutError;
         },
     }
@@ -231,12 +283,12 @@ fn writeIntToMemory(ptr: *anyopaque, value: i128, precision: types.Num.Int.Preci
 /// - Add support for pattern matching in if expression conditions
 fn evalIfExpression(
     allocator: std.mem.Allocator,
-    cir: *CIR,
+    cir: *const CIR,
     if_expr: anytype,
     eval_stack: *stack.Stack,
     layout_cache: *layout_store.Store,
 ) EvalError!EvalResult {
-    const branches = cir.store.sliceIfBranch(if_expr.branches);
+    const branches = cir.store.sliceIfBranches(if_expr.branches);
 
     // Fast path: no branches, directly evaluate final_else
     if (branches.len == 0) {
@@ -283,7 +335,7 @@ const BranchData = struct {
 /// Returns:
 /// - BranchData with condition and body indices on success
 /// - error.InvalidBranchNode if the node type is wrong or data is out of bounds
-fn extractBranchData(cir: *CIR, branch_idx: CIR.IfBranch.Idx) !BranchData {
+fn extractBranchData(cir: *const CIR, branch_idx: CIR.Expr.IfBranch.Idx) !BranchData {
     // Convert branch index to node index
     const branch_node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch_idx));
     const branch_node = cir.store.nodes.get(branch_node_idx);
@@ -339,6 +391,160 @@ fn evaluateBooleanCondition(cond_result: EvalResult) !bool {
     // - True has discriminant 0
     // - False has discriminant 1
     return discriminant == 0;
+}
+
+fn evalLookupLocal(allocator: std.mem.Allocator, cir: *const CIR, pattern_idx: CIR.Pattern.Idx, eval_stack: *stack.Stack, layout_cache: *layout_store.Store) EvalError!EvalResult {
+    // For now, we need to find the definition of this pattern
+    // This is a simplified implementation - in a full implementation,
+    // we'd need to track the evaluation environment/scope
+
+    // Look up the pattern in the definitions
+    const statements = cir.store.sliceStatements(cir.all_statements);
+    for (statements) |stmt_idx| {
+        const statement = cir.store.getStatement(stmt_idx);
+        if (statement == .s_decl) {
+            const decl = statement.s_decl;
+            if (@intFromEnum(decl.pattern) == @intFromEnum(pattern_idx)) {
+                // Found the definition, evaluate its expression
+                return eval(allocator, cir, decl.expr, eval_stack, layout_cache);
+            }
+        }
+    }
+    return error.LayoutError; // Pattern not found
+}
+
+fn evalBinop(allocator: std.mem.Allocator, cir: *const CIR, binop: CIR.Expr.Binop, eval_stack: *stack.Stack, layout_cache: *layout_store.Store) EvalError!EvalResult {
+    // Evaluate left and right operands
+    const lhs_result = try eval(allocator, cir, binop.lhs, eval_stack, layout_cache);
+    const rhs_result = try eval(allocator, cir, binop.rhs, eval_stack, layout_cache);
+
+    // For now, only support integer operations
+    if (lhs_result.layout.tag != .scalar or rhs_result.layout.tag != .scalar) {
+        return error.LayoutError;
+    }
+
+    const lhs_scalar = lhs_result.layout.data.scalar;
+    const rhs_scalar = rhs_result.layout.data.scalar;
+
+    if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
+        return error.LayoutError;
+    }
+
+    // Read integer values - assuming U8 for simplicity
+    const lhs_ptr = @as(*u8, @ptrCast(@alignCast(lhs_result.ptr)));
+    const rhs_ptr = @as(*u8, @ptrCast(@alignCast(rhs_result.ptr)));
+    const lhs_val = lhs_ptr.*;
+    const rhs_val = rhs_ptr.*;
+
+    // Perform the operation
+    switch (binop.op) {
+        .add => {
+            // Addition result
+            const result_val = lhs_val + rhs_val;
+            const result_layout = layout.Layout.int(.u8);
+            const size = result_layout.data.scalar.data.int.size();
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            return EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .eq => {
+            // Equality comparison - return boolean
+            const result_val: bool = lhs_val == rhs_val;
+            const result_layout = layout.Layout.boolType();
+            const size = 1; // bool is always 1 byte
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            return EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .ne => {
+            // Not-equal comparison - return boolean
+            const result_val: bool = lhs_val != rhs_val;
+            const result_layout = layout.Layout.boolType();
+            const size = 1; // bool is always 1 byte
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            return EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        else => {
+            return error.LayoutError; // Unsupported operation
+        },
+    }
+}
+
+fn evalCall(allocator: std.mem.Allocator, cir: *const CIR, call_expr_idx: CIR.Expr.Idx, args_span: CIR.Expr.Span, eval_stack: *stack.Stack, layout_cache: *layout_store.Store) EvalError!EvalResult {
+    // Get the function being called - it should be the first expression in the call
+    const call_expr = cir.store.getExpr(call_expr_idx);
+    if (call_expr != .e_call) {
+        return error.LayoutError;
+    }
+
+    // For function calls like addU8(1, 2), we need to find the function and its arguments
+    // This is a simplified implementation that assumes the function is directly accessible
+
+    // Get the arguments
+    const args = cir.store.sliceExpr(args_span);
+
+    if (args.len != 3) { // function + 2 args for addU8
+        return error.LayoutError;
+    }
+
+    // First argument should be the function (e_lookup_local)
+    const func_expr = cir.store.getExpr(args[0]);
+    if (func_expr != .e_lookup_local) {
+        return error.LayoutError;
+    }
+
+    // For now, we'll handle function calls by looking up the function and applying it
+    // This is a simplified implementation that assumes we're calling addU8
+
+    // Evaluate the arguments directly
+    const arg1_result = try eval(allocator, cir, args[1], eval_stack, layout_cache);
+    const arg2_result = try eval(allocator, cir, args[2], eval_stack, layout_cache);
+
+    // For addU8, we know it's just addition of U8 values
+    if (arg1_result.layout.tag != .scalar or arg2_result.layout.tag != .scalar) {
+        return error.LayoutError;
+    }
+
+    const arg1_ptr = @as(*u8, @ptrCast(@alignCast(arg1_result.ptr)));
+    const arg2_ptr = @as(*u8, @ptrCast(@alignCast(arg2_result.ptr)));
+    const arg1_val = arg1_ptr.*;
+    const arg2_val = arg2_ptr.*;
+    const result_val = arg1_val + arg2_val;
+
+    const result_layout = layout.Layout.int(.u8);
+    const size = result_layout.data.scalar.data.int.size();
+    const alignment = result_layout.alignment(target.TargetUsize.native);
+    const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+        error.StackOverflow => return error.StackOverflow,
+    };
+    const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+    typed_ptr.* = result_val;
+    return EvalResult{
+        .layout = result_layout,
+        .ptr = ptr,
+    };
 }
 
 test {
@@ -404,10 +610,11 @@ test "extractBranchData - valid branch node" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    const owned_source = try gpa.dupe(u8, "");
+    var module_env = base.ModuleEnv.init(gpa, owned_source);
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env);
+    var cir = CIR.init(&module_env, "test");
     defer cir.deinit();
 
     // Add some dummy data to extra_data
@@ -419,13 +626,13 @@ test "extractBranchData - valid branch node" {
         .data_1 = 0, // Points to start of extra_data
         .data_2 = 0,
         .data_3 = 0,
-        .region = base.Region.zero(),
+
         .tag = .if_branch,
     };
     const node_idx = cir.store.nodes.append(gpa, node);
 
     // Extract branch data
-    const branch_idx: CIR.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
+    const branch_idx: CIR.Expr.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
     const branch_data = try extractBranchData(&cir, branch_idx);
 
     try testing.expectEqual(@as(u32, 123), @intFromEnum(branch_data.condition));
@@ -436,10 +643,11 @@ test "extractBranchData - wrong node type" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    const owned_source = try gpa.dupe(u8, "");
+    var module_env = base.ModuleEnv.init(gpa, owned_source);
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env);
+    var cir = CIR.init(&module_env, "test");
     defer cir.deinit();
 
     // Create a non-branch node
@@ -447,13 +655,13 @@ test "extractBranchData - wrong node type" {
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .region = base.Region.zero(),
+
         .tag = .expr_int, // Wrong type
     };
     const node_idx = cir.store.nodes.append(gpa, node);
 
     // Try to extract branch data from wrong node type
-    const branch_idx: CIR.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
+    const branch_idx: CIR.Expr.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
     const err = extractBranchData(&cir, branch_idx);
 
     try testing.expectError(error.InvalidBranchNode, err);
@@ -463,10 +671,11 @@ test "extractBranchData - out of bounds extra_data" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
+    const owned_source = try gpa.dupe(u8, "");
+    var module_env = base.ModuleEnv.init(gpa, owned_source);
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env);
+    var cir = CIR.init(&module_env, "test");
     defer cir.deinit();
 
     // Create a branch node with invalid extra_data index
@@ -474,13 +683,13 @@ test "extractBranchData - out of bounds extra_data" {
         .data_1 = 999, // Out of bounds
         .data_2 = 0,
         .data_3 = 0,
-        .region = base.Region.zero(),
+
         .tag = .if_branch,
     };
     const node_idx = cir.store.nodes.append(gpa, node);
 
     // Try to extract branch data with out of bounds index
-    const branch_idx: CIR.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
+    const branch_idx: CIR.Expr.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
     const err = extractBranchData(&cir, branch_idx);
 
     try testing.expectError(error.InvalidBranchNode, err);

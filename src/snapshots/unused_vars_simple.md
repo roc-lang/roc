@@ -47,7 +47,7 @@ unused_regular = |x| 42
 Variable ``_value`` is prefixed with an underscore but is actually used.
 
 Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: `value`.
-The underscore variable is declared here:
+
 **unused_vars_simple.md:7:28:7:34:**
 ```roc
 used_underscore = |_value| _value
@@ -246,15 +246,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.15 (type "* -> Num(*)"))
-		(patt @7.1-7.16 (type "* -> *"))
-		(patt @10.1-10.18 (type "* -> Num(*)"))
-		(patt @13.1-13.13 (type "* -> *"))
-		(patt @15.1-15.6 (type "* -> *")))
+		(patt @4.1-4.15 (type "arg -> Num(size)"))
+		(patt @7.1-7.16 (type "arg2 -> arg2"))
+		(patt @10.1-10.18 (type "arg3 -> Num(size)"))
+		(patt @13.1-13.13 (type "arg4 -> ret"))
+		(patt @15.1-15.6 (type "arg5 -> ret2")))
 	(expressions
-		(expr @4.18-4.24 (type "* -> Num(*)"))
-		(expr @7.19-7.34 (type "* -> *"))
-		(expr @10.21-10.35 (type "* -> Num(*)"))
-		(expr @13.16-13.35 (type "* -> *"))
-		(expr @15.9-21.2 (type "* -> *"))))
+		(expr @4.18-4.24 (type "arg -> Num(size)"))
+		(expr @7.19-7.34 (type "arg2 -> arg2"))
+		(expr @10.21-10.35 (type "arg3 -> Num(size)"))
+		(expr @13.16-13.35 (type "arg4 -> ret"))
+		(expr @15.9-21.2 (type "arg5 -> ret2"))))
 ~~~

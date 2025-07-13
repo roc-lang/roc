@@ -1,3 +1,10 @@
+//! Type system definitions and utilities for the Roc compiler.
+//!
+//! This module re-exports core type definitions from the types/ directory.
+//! It serves as the main interface for type-related functionality throughout
+//! the compiler, including type aliases, content types, function types,
+//! and nominal types.
+
 const types = @import("./types/types.zig");
 
 // TODO: refactor this to just be types.zig

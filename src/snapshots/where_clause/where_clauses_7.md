@@ -124,7 +124,7 @@ Decode(a) : a where
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-10.27 (type "Hash(a, hasher)")
+		(alias @3.1-10.27 (type "Hash(b, c)")
 			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))

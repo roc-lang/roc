@@ -246,7 +246,7 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.41 (type "Map(a, b)")
+		(alias @3.1-3.41 (type "Map(c, d)")
 			(ty-header @3.1-3.10 (name "Map")
 				(ty-args
 					(ty-var @3.5-3.6 (name "a"))

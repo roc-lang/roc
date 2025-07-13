@@ -1,4 +1,8 @@
-//! TODO
+//! Panic handling utilities for the Roc runtime.
+//!
+//! This module provides functions to handle runtime panics in Roc programs,
+//! including signaling panic conditions to the host environment. It bridges
+//! between Roc's internal panic representation and the external host interface.
 const std = @import("std");
 const RocStr = @import("str.zig").RocStr;
 

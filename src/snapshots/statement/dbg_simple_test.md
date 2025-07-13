@@ -68,7 +68,7 @@ test = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.5 (type "*")))
+		(patt @3.1-3.5 (type "a")))
 	(expressions
-		(expr @3.8-6.2 (type "*"))))
+		(expr @3.8-6.2 (type "a"))))
 ~~~

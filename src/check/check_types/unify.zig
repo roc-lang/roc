@@ -2764,7 +2764,7 @@ const TestEnv = struct {
     /// slight more verbose setup for each test
     fn init(gpa: std.mem.Allocator) Self {
         const module_env = gpa.create(base.ModuleEnv) catch |e| exitOnOutOfMemory(e);
-        module_env.* = base.ModuleEnv.init(gpa);
+        module_env.* = base.ModuleEnv.init(gpa, gpa.dupe(u8, "") catch |e| exitOnOutOfMemory(e));
         return .{
             .module_env = module_env,
             .snapshots = snapshot_mod.Store.initCapacity(gpa, 16),

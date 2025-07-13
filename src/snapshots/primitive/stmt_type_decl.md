@@ -61,7 +61,7 @@ Foo(a, b) : (a, b, Str, U64)
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.25 (type "Foo(a, b)")
+		(alias @3.1-3.25 (type "Foo(c, d)")
 			(ty-header @3.1-3.9 (name "Foo")
 				(ty-args
 					(ty-var @3.5-3.6 (name "a"))

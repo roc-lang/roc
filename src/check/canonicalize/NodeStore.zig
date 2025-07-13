@@ -441,20 +441,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
-        .expr_zero_argument_tag => {
-            // Get the extra_data index from data_1
-            const extra_idx = node.data_1;
 
-            return .{
-                .zero_argument_tag = .{
-                    .closure_name = @bitCast(store.extra_data.items[extra_idx]),
-                    .variant_var = @enumFromInt(node.data_2),
-                    .ext_var = @enumFromInt(node.data_3),
-                    .name = @bitCast(store.extra_data.items[extra_idx + 1]),
-                    .region = node.region,
-                },
-            };
-        },
         .expr_bin_op => {
             return CIR.Expr{
                 .e_binop = CIR.Expr.Binop.init(
@@ -2484,21 +2471,16 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
 ///
 /// The malformed node will generate a runtime_error in the CIR that properly
 /// references the diagnostic index.
-pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic) t {
-    // First create the diagnostic node
-    const diagnostic_idx = store.addDiagnostic(reason);
-
-    // Then create a malformed node that references the diagnostic
+pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) CIR.Node.Idx {
     const malformed_node = Node{
         .data_1 = @intFromEnum(diagnostic_idx),
         .data_2 = 0,
         .data_3 = 0,
         .tag = .malformed,
     };
-
-    const malformed_nid = @intFromEnum(store.nodes.append(store.gpa, malformed_node));
-    _ = store.regions.append(store.gpa, reason.toRegion());
-    return @enumFromInt(malformed_nid);
+    const malformed_nid = store.nodes.append(store.gpa, malformed_node);
+    _ = store.regions.append(store.gpa, region);
+    return malformed_nid;
 }
 
 /// Retrieves diagnostic information from a diagnostic node.

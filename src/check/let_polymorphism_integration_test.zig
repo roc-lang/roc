@@ -23,7 +23,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(allocator);
+    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source));
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
@@ -59,7 +59,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
     const checker = try allocator.create(check_types);
     const empty_modules: []const *CIR = &.{};
 
-    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules);
+    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules, &cir.store.regions);
 
     // For expressions, check the expression directly
     if (canon_expr_idx) |expr_idx| {
@@ -90,7 +90,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(allocator);
+    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source));
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
@@ -134,7 +134,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
     const checker = try allocator.create(check_types);
     const empty_modules: []const *CIR = &.{};
 
-    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules);
+    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules, &cir.store.regions);
 
     try checker.checkDefs();
 
@@ -162,7 +162,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(allocator);
+    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source));
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
@@ -198,7 +198,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
     const checker = try allocator.create(check_types);
     const empty_modules: []const *CIR = &.{};
 
-    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules);
+    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules, &cir.store.regions);
 
     // Check if we have any defs to check
     if (cir.all_defs.span.len > 0) {

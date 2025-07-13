@@ -1,12 +1,30 @@
-## Roc Snapshot System
+# Roc Compiler
 
-Roc uses snapshot tests to verify compiler behavior and prevent regressions. Snapshots capture the output of each compilation stage for a given piece of Roc code, making it easy to track changes and catch bugs.
+This repository contains the source code for the Roc compiler -- both the original prototype written in Rust, and the new production version written in Zig.
 
-### Managing Snapshots
+All discussion, unless otherwise explicitly requested, is regarding the new Zig production version. Therefore, ONLY files under the `src/` directory should be considered moving forward.
 
-- **Generate/Update All:** `zig build snapshot`
-- **Generate/Update Specific:** `zig build snapshot -- <file_path>`
-- **Update EXPECTED from PROBLEMS:** `zig build update-expected -- <file_path>`
+## Documentation
+
+Our approach is to review and update with each change. Quality documentation helps us understand quickly; however, this only works if we continuously improve and maintain it.
+
+The documentation is aimed at our compiler engineers who only need high-level detail - they are comfortable using precise technical terminology. Therefore, our documentation should be concise, focusing on the WHY and avoiding the WHAT or HOW -- we shouldn't include implementation details as we expect these to change frequently.
+
+Every `.zig` file should start with module documentation `//!` that describes the module's purpose.
+Every `src/` directory should have a `README.md` file that describes the directory's purpose.
+
+## Tests
+
+Roc uses two different test strategies to Verify Correctness, and Validate Behaviour.
+1. **Verify Correctness:** Where necessary, we add unit tests to ensure low-level or specific implementation details remain correct. These are written in `.zig` files using the `test` keyword alongside the code they are testing. These tests are typically limited in scope to a single function.
+2. **Validate Behaviour:** More commonly, we add snapshot tests to provide assurance that the compiler continues to behave as expected. Snapshot files `.md` concurrently exercise many parts of the compiler by presenting the output of each stage for a given snippet of Roc code. Unlike unit tests, this has relevant debug-level information depth and multiple-compiler stage breadth.
+
+### Usage
+
+- **Run Unit Tests** `zig build test` (note `zig test` doesn't work as we have a complicated build system, therefore we use `zig build test` also for individual tests).
+- **Generate or Update All Snapshots Files** `zig build snapshot`
+- **Generate or Update Specific Snapshot File** `zig build snapshot -- <file_path>`
+- **Update EXPECTED from PROBLEMS in Snapshot File** `zig build update-expected -- <file_path>`
 
 ### Snapshot File Structure
 
@@ -19,8 +37,8 @@ Each snapshot is a markdown file with the following key sections:
 
 ### Best Practices for Creating Snapshots
 
-1.  **Focused Intent**: Each snapshot should test a single, specific compiler behavior. This is useful for new features, error cases, edge cases, and regression prevention.
-2.  **Minimal Complexity**: Use the simplest possible code to demonstrate the behavior you are testing. Consider using `...` ellipsis which is valid syntax for "not implemented", and commonly used in examples.
+1.  **Focused Intent**: Each snapshot should test a single, specific compiler behaviour. This is useful for new features, error cases, edge cases, and regression prevention.
+2.  **Minimal Complexity**: Use the simplest possible code to demonstrate the behaviour you are testing. Consider using `...` ellipsis, which is valid syntax for "not implemented" and commonly used in examples.
 3.  **Clear Naming**: The file name should clearly describe the test's purpose (e.g., `can_list_type_mismatch.md` is better than `test1.md`).
 
 ### Debugging with Snapshots
@@ -28,4 +46,4 @@ Each snapshot is a markdown file with the following key sections:
 Snapshots are powerful for debugging as they show the compiler's output at every stage:
 `SOURCE` -> `TOKENS` -> `PARSE` -> `CANONICALIZE` -> `TYPES`.
 
-The `PROBLEMS` section provides human-readable diagnostics. When you modify the compiler, run `zig build snapshot` and review the diffs to ensure the changes are intentional before committing them.
+The `PROBLEMS` section provides human-readable diagnostics. When you modify the compiler, run `zig build snapshot` and review the diffs to ensure any changes are intentional before they are committed to the repository.

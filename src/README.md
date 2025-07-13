@@ -1,3 +1,23 @@
+# Roc Compiler (Zig Implementation)
+
+## Navigation
+
+Core compiler directories:
+
+- [base/](./base/) - Core data structures and utilities shared across the compiler
+- [check/](./check/) - Main compilation pipeline (parsing, canonicalization, type checking)
+- [types/](./types/) - Type system definitions and utilities
+- [builtins/](./builtins/) - Built-in types, functions, and operations
+- [reporting/](./reporting/) - Error reporting and diagnostic formatting
+- [collections/](./collections/) - Efficient data structures used throughout the compiler
+- [cache/](./cache/) - Compilation caching system for faster incremental builds
+- [coordinate/](./coordinate/) - Cross-module compilation coordination and dependency management
+- [eval/](./eval/) - Runtime evaluation and interpretation system
+- [fs/](./fs/) - Filesystem operations and file I/O utilities
+- [layout/](./layout/) - Memory layout computation and management for code generation
+- [serialization/](./serialization/) - Serialization utilities for compiler data structures
+- [snapshots/](./snapshots/) - Snapshot tests validating compiler behavior across all stages
+
 ## Status
 
 This table provides a summary of progress for the zig compiler re-write and should be updated with the PR that includes new features.

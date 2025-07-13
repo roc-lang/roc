@@ -42,7 +42,6 @@ pub const TimingInfo = struct {
 pub const ProcessResult = struct {
     cir: *CIR,
     reports: []reporting.Report,
-    source: []const u8,
     timing: ?TimingInfo = null,
     error_count: u32 = 0,
     warning_count: u32 = 0,
@@ -53,7 +52,6 @@ pub const ProcessResult = struct {
             report.deinit();
         }
         gpa.free(self.reports);
-        gpa.free(self.source);
 
         // Clean up the heap-allocated ModuleEnv (only when loaded from cache)
         if (self.was_cached) {
@@ -71,6 +69,9 @@ pub const ProcessResult = struct {
 /// This function reads the file and transfers ownership of the allocated memory
 /// directly to ProcessResult, avoiding an unnecessary copy. This is an optimization
 /// since source files can be large and the compiler processes many files.
+///
+/// IMPORTANT: The filepath parameter is just borrowed - this function does not take ownership.
+/// The filepath string must remain valid for the duration of this call.
 pub fn processFile(
     gpa: std.mem.Allocator,
     fs: Filesystem,
@@ -89,7 +90,6 @@ pub fn processFile(
     };
 
     const config = ProcessConfig{
-        .take_ownership = true,
         .collect_timing = collect_timing,
     };
 
@@ -97,36 +97,41 @@ pub fn processFile(
     if (cache_manager) |cache| {
         const compiler_version = getCompilerVersion();
 
-        // Check cache
-        switch (cache.lookup(source, compiler_version) catch .miss) {
-            .hit => |cache_hit| {
-                // Cache hit! Free the source we just read since cached result has its own
-                gpa.free(source);
+        // Check cache - loadFromCache takes ownership of source only
+        const cache_result = cache.loadFromCache(source, compiler_version);
 
-                // Create a ProcessResult with the cached diagnostic counts
-                var result = cache_hit.result;
-                result.error_count = cache_hit.error_count;
-                result.warning_count = cache_hit.warning_count;
-                return result;
+        switch (cache_result) {
+            .hit => |process_result| {
+                // Cache hit! Ownership of source has been transferred to the cached result
+                return process_result;
             },
-            .miss => {
-                // Fall through to normal processing
+            .miss => |returned| {
+                // Cache miss - we get back ownership of source
+                // Process normally with returned source
+                var process_result = try processSourceInternal(gpa, returned.source, filepath, config);
+                process_result.was_cached = false;
+
+                // Store in cache (don't fail compilation if cache store fails)
+                cache.store(returned.source, compiler_version, &process_result) catch |err| {
+                    std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
+                };
+
+                return process_result;
             },
-            .invalid => {
-                // Fall through to normal processing
+            .invalid => |returned| {
+                // Cache invalid - we get back ownership of source
+                // Process normally with returned source
+                var process_result = try processSourceInternal(gpa, returned.source, filepath, config);
+                process_result.was_cached = false;
+
+                // Store in cache (don't fail compilation if cache store fails)
+                cache.store(returned.source, compiler_version, &process_result) catch |err| {
+                    std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
+                };
+
+                return process_result;
             },
         }
-
-        // Cache miss - process normally and store result
-        var process_result = try processSourceInternal(gpa, source, filepath, config);
-        process_result.was_cached = false;
-
-        // Store in cache (don't fail compilation if cache store fails)
-        cache.store(source, compiler_version, &process_result) catch |err| {
-            std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
-        };
-
-        return process_result;
     }
 
     // No caching - process normally
@@ -139,7 +144,7 @@ pub fn processFile(
 /// retains ownership of the input. Use this when you already have source text
 /// in memory (e.g., from tests, REPL, or other tools).
 ///
-/// The returned ProcessResult owns its own copy of the source.
+/// The source is duplicated and owned by the ModuleEnv in the returned ProcessResult.
 ///
 /// `processSource` is used by the fuzzer.
 pub fn processSource(
@@ -147,12 +152,11 @@ pub fn processSource(
     source: []const u8,
     filename: []const u8,
 ) !ProcessResult {
-    return try processSourceInternal(gpa, source, filename, .{ .take_ownership = false, .collect_timing = false });
+    return try processSourceInternal(gpa, source, filename, .{ .collect_timing = false });
 }
 
 /// Configuration for processSourceInternal
 pub const ProcessConfig = struct {
-    take_ownership: bool = false,
     collect_timing: bool = false,
 };
 
@@ -177,16 +181,11 @@ fn collectTiming(config: ProcessConfig, timer: *?std.time.Timer, timing_info: *?
 
 /// Internal helper that processes source code and produces a ProcessResult.
 ///
-/// The config.take_ownership parameter controls memory management:
-/// - true: Transfer ownership of 'source' to ProcessResult (no allocation)
-/// - false: Clone 'source' so ProcessResult has its own copy
-///
 /// The config.collect_timing parameter controls whether to collect timing information:
 /// - true: Collect timing information for each compilation phase
 /// - false: Skip timing collection for faster processing
 ///
-/// This design allows processFile to avoid an unnecessary copy while
-/// processSource can safely work with borrowed memory.
+/// The source is always duplicated for the ModuleEnv, which owns the copy.
 fn processSourceInternal(
     gpa: std.mem.Allocator,
     source: []const u8,
@@ -212,7 +211,11 @@ fn processSourceInternal(
 
     // Initialize the ModuleEnv (heap-allocated for ownership transfer)
     var module_env = try gpa.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(gpa);
+
+    // Always duplicate source since ModuleEnv owns it
+    const owned_source_for_env = try gpa.dupe(u8, source);
+
+    module_env.* = ModuleEnv.init(gpa, owned_source_for_env);
 
     // Calculate line starts for region info
     try module_env.*.calcLineStarts(source);
@@ -257,6 +260,9 @@ fn processSourceInternal(
 
     collectTiming(config, &timer, &timing_info, "canonicalize_ns");
 
+    // Assert that everything is in-sync
+    cir.debugAssertArraysInSync();
+
     // Get diagnostic Reports from CIR
     const diagnostics = cir.getDiagnostics();
     defer gpa.free(diagnostics);
@@ -269,7 +275,7 @@ fn processSourceInternal(
 
     // Type checking
     const empty_modules: []const *CIR = &.{};
-    var solver = try Solver.init(gpa, &module_env.types, cir, empty_modules);
+    var solver = try Solver.init(gpa, &module_env.types, cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 
     // Check for type errors
@@ -277,15 +283,8 @@ fn processSourceInternal(
 
     collectTiming(config, &timer, &timing_info, "type_checking_ns");
 
-    // Ensure ProcessResult owns the source
-    // We have two cases:
-    // 1. processFile already allocated the source memory - we take ownership to avoid a copy
-    // 2. processSource borrows the caller's source - we must clone it
-    // This optimization matters because source files can be large and we process many of them.
-    const owned_source = if (config.take_ownership)
-        source // Transfer existing ownership (no allocation)
-    else
-        try gpa.dupe(u8, source); // Clone to get our own copy
+    // Assert that we have regions for every type variable
+    solver.debugAssertArraysInSync();
 
     // Get type checking diagnostic Reports
     var report_builder = types_problem_mod.ReportBuilder.init(
@@ -293,7 +292,7 @@ fn processSourceInternal(
         module_env,
         cir,
         &solver.snapshots,
-        owned_source,
+        module_env.source,
         filename,
         empty_modules,
     );
@@ -324,7 +323,6 @@ fn processSourceInternal(
     return ProcessResult{
         .cir = cir,
         .reports = final_reports,
-        .source = owned_source,
         .timing = timing_info,
         .error_count = error_count,
         .warning_count = warning_count,

@@ -204,14 +204,14 @@ NO CHANGE
 		(patt @8.1-8.8 (type "MyResult(Str, I32) -> Str"))
 		(patt @15.1-15.10 (type "Option(Str) -> Str"))
 		(patt @18.1-18.10 (type "Option(I32) -> I32"))
-		(patt @20.1-20.6 (type "* -> {}")))
+		(patt @20.1-20.6 (type "arg -> {}")))
 	(type_decls
-		(alias @4.1-4.41 (type "MyResult(ok, err)")
+		(alias @4.1-4.41 (type "MyResult(b, c)")
 			(ty-header @4.1-4.18 (name "MyResult")
 				(ty-args
 					(ty-var @4.10-4.12 (name "ok"))
 					(ty-var @4.14-4.17 (name "err")))))
-		(alias @11.1-11.28 (type "Option(a)")
+		(alias @11.1-11.28 (type "Option(d)")
 			(ty-header @11.1-11.10 (name "Option")
 				(ty-args
 					(ty-var @11.8-11.9 (name "a"))))))
@@ -219,5 +219,5 @@ NO CHANGE
 		(expr @8.11-8.32 (type "MyResult(Str, I32) -> Str"))
 		(expr @15.13-15.29 (type "Option(Str) -> Str"))
 		(expr @18.13-18.21 (type "Option(I32) -> I32"))
-		(expr @20.9-20.15 (type "* -> {}"))))
+		(expr @20.9-20.15 (type "arg -> {}"))))
 ~~~

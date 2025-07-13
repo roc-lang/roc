@@ -1,4 +1,8 @@
-//! TODO module doc comment here
+//! Tests for fractional literal canonicalization during the canonicalization phase.
+//!
+//! This module contains unit tests that verify the correct canonicalization
+//! of fractional literals and decimal expressions from parsed AST into the
+//! compiler's canonical internal representation (CIR).
 
 const std = @import("std");
 const testing = std.testing;
@@ -19,7 +23,7 @@ fn parseAndCanonicalizeFrac(allocator: std.mem.Allocator, source: []const u8) !s
     expr_idx: CIR.Expr.Idx,
 } {
     const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = base.ModuleEnv.init(allocator);
+    module_env.* = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
 
     const parse_ast = try allocator.create(parse.AST);
     parse_ast.* = parse.parseExpr(module_env, source);
@@ -298,7 +302,7 @@ test "fractional literal - NaN handling" {
     // The parser will fail before canonicalization
     // This test verifies that behavior
     const module_env = try test_allocator.create(base.ModuleEnv);
-    module_env.* = base.ModuleEnv.init(test_allocator);
+    module_env.* = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, "NaN"));
     defer {
         module_env.deinit();
         test_allocator.destroy(module_env);
@@ -320,7 +324,7 @@ test "fractional literal - infinity handling" {
     // The parser will fail before canonicalization
     // This test verifies that behavior
     const module_env = try test_allocator.create(base.ModuleEnv);
-    module_env.* = base.ModuleEnv.init(test_allocator);
+    module_env.* = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, "Infinity"));
     defer {
         module_env.deinit();
         test_allocator.destroy(module_env);
