@@ -88,7 +88,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.8 (type "*, * -> *")))
+		(patt @7.1-7.8 (type "a, b -> c")))
 	(expressions
-		(expr @1.1-1.1 (type "*, * -> *"))))
+		(expr @1.1-1.1 (type "a, b -> c"))))
 ~~~

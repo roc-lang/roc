@@ -203,7 +203,7 @@ processItems = |items| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.13 (type "* -> *")))
+		(patt @4.1-4.13 (type "a -> b")))
 	(expressions
-		(expr @4.16-21.2 (type "* -> *"))))
+		(expr @4.16-21.2 (type "a -> b"))))
 ~~~

@@ -172,5 +172,5 @@ CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-17.2 (type "(*, *, *, *, *, *, *, *, *, *, *, *, *, *, *)"))
+(expr @1.1-17.2 (type "(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o)"))
 ~~~

@@ -57,10 +57,10 @@ This expression is used in an unexpected way:
          ^^^^^^^^
 
 It is of type:
-    _Pair(a, b), Num(*) -> Num(*), Num(*) -> Num(*) -> Pair(c, d)_
+    _Pair(a, b), Num(h) -> Num(i), Num(j) -> Num(k) -> Pair(c, d)_
 
 But you are trying to use it as:
-    _Num(*), Num(*), * -> *, * -> * -> *_
+    _Num(a), Num(b), c -> d, e -> f -> g_
 
 # TOKENS
 ~~~zig
@@ -327,9 +327,9 @@ main = {
 	(defs
 		(patt @8.1-8.10 (type "Pair(a, b) -> Pair(b, a)"))
 		(patt @12.1-12.9 (type "Error"))
-		(patt @17.1-17.5 (type "*")))
+		(patt @17.1-17.5 (type "a")))
 	(type_decls
-		(alias @4.1-4.20 (type "Pair(*, *)")
+		(alias @4.1-4.20 (type "Pair(a, b)")
 			(ty-header @4.1-4.11 (name "Pair")
 				(ty-args
 					(ty-var @4.6-4.7 (name "a"))
@@ -337,5 +337,5 @@ main = {
 	(expressions
 		(expr @8.13-8.28 (type "Pair(a, b) -> Pair(b, a)"))
 		(expr @12.12-12.39 (type "Error"))
-		(expr @17.8-26.2 (type "*"))))
+		(expr @17.8-26.2 (type "a"))))
 ~~~

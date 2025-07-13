@@ -124,8 +124,8 @@ main! = |_| processNested([])
 (inferred-types
 	(defs
 		(patt @4.1-4.14 (type "Error -> Error"))
-		(patt @6.1-6.6 (type "* -> Error")))
+		(patt @6.1-6.6 (type "a -> Error")))
 	(expressions
 		(expr @4.17-4.38 (type "Error -> Error"))
-		(expr @6.9-6.30 (type "* -> Error"))))
+		(expr @6.9-6.30 (type "a -> Error"))))
 ~~~

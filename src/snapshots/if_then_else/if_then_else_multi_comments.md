@@ -66,5 +66,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-7.4 (type "Num(*)"))
+(expr @1.1-7.4 (type "Num(a)"))
 ~~~

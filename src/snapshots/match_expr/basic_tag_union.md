@@ -40,7 +40,7 @@ The third branch has this type;
     _Str_
 
 But all the previous branches have this type:
-    _Num(*)_
+    _Num(a)_
 
 All branches in an `match` must have compatible types.
 

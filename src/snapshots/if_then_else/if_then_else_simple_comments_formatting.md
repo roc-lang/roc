@@ -57,5 +57,5 @@ if bool { # Comment after then open
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.9 (type "[A, B]*"))
+(expr @1.1-3.9 (type "[A, B]a"))
 ~~~

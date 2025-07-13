@@ -218,7 +218,7 @@ NO CHANGE
 	(defs
 		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> User"))
 		(patt @12.1-12.14 (type "User -> UserName"))
-		(patt @14.1-14.6 (type "* -> UserName")))
+		(patt @14.1-14.6 (type "a -> UserName")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId")))
@@ -231,5 +231,5 @@ NO CHANGE
 	(expressions
 		(expr @9.15-9.46 (type "UserId, UserName, UserAge -> User"))
 		(expr @12.17-12.33 (type "User -> UserName"))
-		(expr @14.9-17.2 (type "* -> UserName"))))
+		(expr @14.9-17.2 (type "a -> UserName"))))
 ~~~

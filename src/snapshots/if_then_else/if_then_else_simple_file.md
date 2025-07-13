@@ -25,7 +25,7 @@ foo = if 1 A
          ^
 
 Right now, it has the type:
-    _Num(*)_
+    _Num(a)_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -45,7 +45,7 @@ The `else` branch has the type:
     _Str_
 
 But the `then` branch has the type:
-    _[A]*_
+    _[A]a_
 
 All branches in an `if` must have compatible types.
 

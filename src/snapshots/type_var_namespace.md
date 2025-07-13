@@ -188,9 +188,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.8 (type "Error -> *"))
-		(patt @16.1-16.6 (type "* -> {}")))
+		(patt @5.1-5.8 (type "Error -> a"))
+		(patt @16.1-16.6 (type "a -> {}")))
 	(expressions
-		(expr @5.11-14.2 (type "Error -> *"))
-		(expr @16.9-16.15 (type "* -> {}"))))
+		(expr @5.11-14.2 (type "Error -> a"))
+		(expr @16.9-16.15 (type "a -> {}"))))
 ~~~

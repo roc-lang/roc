@@ -32,10 +32,10 @@ The eighth and ninth elements in this list have incompatible types:
     ^^^^
 
 The eighth element has this type:
-    _[Err(Str), Just(Num(*)), Left(Num(*)), None, Nothing, Ok(Str), Some(Num(*)), Right(Num(*))]*_
+    _[Err(Str), Just(Num(a)), Left(Num(b)), None, Nothing, Ok(Str), Some(Num(c)), Right(Num(d))]e_
 
 However, the ninth element has this type:
-    _[Some([Ok([Just(Num(*))]*)]*)]_
+    _[Some([Ok([Just(Num(f))]g)]h)]_
 
 All elements in a list must have compatible types.
 

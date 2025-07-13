@@ -47,5 +47,5 @@ if True Ok(0) else Err(1)
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.31 (type "[Ok(Num(*)), Err(Num(*))]*"))
+(expr @1.1-1.31 (type "[Ok(Num(a)), Err(Num(b))]c"))
 ~~~

@@ -19,7 +19,7 @@ The first two elements in this list have incompatible types:
  ^^  ^^^^^^^
 
 The first element has this type:
-    _Num(*)_
+    _Num(a)_
 
 However, the second element has this type:
     _Str_

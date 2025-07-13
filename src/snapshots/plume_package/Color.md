@@ -423,7 +423,7 @@ It is of type:
     _U8_
 
 But you are trying to use it as:
-    _{ to_frac: * }_
+    _{ to_frac: a }_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -437,7 +437,7 @@ It is of type:
     _Str_
 
 But you are trying to use it as:
-    _{ to_utf8: List(Num(*)) }_
+    _{ to_utf8: List(Num(a)) }_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -451,7 +451,7 @@ It is of type:
     _Color_
 
 But you are trying to use it as:
-    _[Named(Str), RGB(*, *, *), RGBA(*, *, *, *), Hex(Str)]*_
+    _[Named(Str), RGB(a, b, c), RGBA(d, e, f, g), Hex(Str)]h_
 
 # TOKENS
 ~~~zig
@@ -1371,7 +1371,7 @@ is_named_color = |str| {
 		(patt @27.1-27.4 (type "Error -> Error"))
 		(patt @49.1-49.7 (type "Error -> Error"))
 		(patt @61.1-61.6 (type "Error"))
-		(patt @67.1-67.15 (type "* -> *")))
+		(patt @67.1-67.15 (type "a -> b")))
 	(type_decls
 		(nominal @10.1-15.2 (type "Error")
 			(ty-header @10.1-10.6 (name "Color"))))
@@ -1381,5 +1381,5 @@ is_named_color = |str| {
 		(expr @27.7-46.2 (type "Error -> Error"))
 		(expr @49.10-54.2 (type "Error -> Error"))
 		(expr @61.9-63.29 (type "Error"))
-		(expr @67.18-71.2 (type "* -> *"))))
+		(expr @67.18-71.2 (type "a -> b"))))
 ~~~

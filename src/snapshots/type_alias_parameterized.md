@@ -29,7 +29,7 @@ It is of type:
     _Pair(a, b) -> Pair(b, a)_
 
 But you are trying to use it as:
-    _Num(*), Num(*) -> *_
+    _Num(a), Num(b) -> c_
 
 # TOKENS
 ~~~zig
@@ -145,14 +145,14 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @6.1-6.9 (type "Error"))
-		(patt @8.1-8.6 (type "* -> *")))
+		(patt @8.1-8.6 (type "a -> b")))
 	(type_decls
-		(alias @3.1-3.20 (type "Pair(*, *)")
+		(alias @3.1-3.20 (type "Pair(a, b)")
 			(ty-header @3.1-3.11 (name "Pair")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.10 (name "b"))))))
 	(expressions
 		(expr @6.12-6.27 (type "Error"))
-		(expr @8.9-8.27 (type "* -> *"))))
+		(expr @8.9-8.27 (type "a -> b"))))
 ~~~

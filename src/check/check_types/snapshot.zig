@@ -527,6 +527,7 @@ pub const SnapshotWriter = struct {
     current_module_name: ?[]const u8,
     can_ir: ?*const @import("../canonicalize/CIR.zig"),
     other_modules: ?[]const *const @import("../canonicalize/CIR.zig"),
+    next_name_index: u32,
 
     pub fn init(writer: std.ArrayList(u8).Writer, snapshots: *const Store, idents: *const Ident.Store) Self {
         return .{
@@ -536,6 +537,7 @@ pub const SnapshotWriter = struct {
             .current_module_name = null,
             .can_ir = null,
             .other_modules = null,
+            .next_name_index = 0,
         };
     }
 
@@ -554,7 +556,31 @@ pub const SnapshotWriter = struct {
             .current_module_name = current_module_name,
             .can_ir = can_ir,
             .other_modules = other_modules,
+            .next_name_index = 0,
         };
+    }
+
+    fn generateNextName(self: *Self) !void {
+        // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
+        var n = self.next_name_index;
+        self.next_name_index += 1;
+
+        var name_buf: [8]u8 = undefined;
+        var name_len: usize = 0;
+
+        while (true) {
+            name_buf[name_len] = @intCast('a' + (n % 26));
+            name_len += 1;
+            n = n / 26;
+            if (n == 0) break;
+            n -= 1;
+        }
+
+        // Names are generated in reverse order, so write them reversed
+        var i: usize = 0;
+        while (i < name_len) : (i += 1) {
+            try self.writer.writeByte(name_buf[name_len - 1 - i]);
+        }
     }
 
     /// Convert a content to a type string
@@ -570,7 +596,7 @@ pub const SnapshotWriter = struct {
                 if (mb_ident_idx) |ident_idx| {
                     _ = try self.writer.write(self.idents.getText(ident_idx));
                 } else {
-                    _ = try self.writer.write("*");
+                    try self.generateNextName();
                 }
             },
             .rigid_var => |ident_idx| {
@@ -624,7 +650,9 @@ pub const SnapshotWriter = struct {
                 _ = try self.writer.write(")");
             },
             .list_unbound => {
-                _ = try self.writer.write("List(*)");
+                _ = try self.writer.write("List(");
+                try self.generateNextName();
+                _ = try self.writer.write(")");
             },
             .tuple => |tuple| {
                 try self.writeTuple(tuple);
@@ -814,7 +842,13 @@ pub const SnapshotWriter = struct {
 
         // Show extension variable if it's not empty
         switch (self.snapshots.contents.get(tag_union.ext).*) {
-            .flex_var => _ = try self.writer.write("*"),
+            .flex_var => |mb_ident| {
+                if (mb_ident) |ident_idx| {
+                    _ = try self.writer.write(self.idents.getText(ident_idx));
+                } else {
+                    try self.generateNextName();
+                }
+            },
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
                 else => {}, // TODO: Error?
@@ -856,13 +890,19 @@ pub const SnapshotWriter = struct {
                 _ = try self.writer.write(")");
             },
             .num_unbound => |_| {
-                _ = try self.writer.write("Num(*)");
+                _ = try self.writer.write("Num(");
+                try self.generateNextName();
+                _ = try self.writer.write(")");
             },
             .int_unbound => |_| {
-                _ = try self.writer.write("Int(*)");
+                _ = try self.writer.write("Int(");
+                try self.generateNextName();
+                _ = try self.writer.write(")");
             },
             .frac_unbound => |_| {
-                _ = try self.writer.write("Frac(*)");
+                _ = try self.writer.write("Frac(");
+                try self.generateNextName();
+                _ = try self.writer.write(")");
             },
             .int_precision => |prec| {
                 try self.writeIntType(prec);

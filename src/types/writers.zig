@@ -73,12 +73,14 @@ pub const TypeWriter = struct {
     env: *const ModuleEnv,
     buf: std.ArrayList(u8),
     seen: std.ArrayList(Var),
+    next_name_index: u32,
 
     pub fn init(gpa: std.mem.Allocator, env: *const ModuleEnv) Allocator.Error!Self {
         return .{
             .env = env,
             .buf = try std.ArrayList(u8).initCapacity(gpa, 32),
             .seen = try std.ArrayList(Var).initCapacity(gpa, 16),
+            .next_name_index = 0,
         };
     }
 
@@ -93,7 +95,31 @@ pub const TypeWriter = struct {
 
     pub fn write(self: *Self, var_: types.Var) Allocator.Error!void {
         self.buf.clearRetainingCapacity();
+        self.next_name_index = 0;
         try self.writeVar(var_);
+    }
+
+    fn generateNextName(self: *Self) !void {
+        // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
+        var n = self.next_name_index;
+        self.next_name_index += 1;
+
+        var name_buf: [8]u8 = undefined;
+        var name_len: usize = 0;
+
+        while (true) {
+            name_buf[name_len] = @intCast('a' + (n % 26));
+            name_len += 1;
+            n = n / 26;
+            if (n == 0) break;
+            n -= 1;
+        }
+
+        // Names are generated in reverse order, so reverse and write
+        var i: usize = 0;
+        while (i < name_len) : (i += 1) {
+            try self.buf.append(name_buf[name_len - 1 - i]);
+        }
     }
 
     fn hasSeenVar(self: *const Self, var_: types.Var) bool {
@@ -121,7 +147,7 @@ pub const TypeWriter = struct {
                         if (mb_ident_idx) |ident_idx| {
                             _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
                         } else {
-                            _ = try self.buf.writer().write("*");
+                            try self.generateNextName();
                         }
                     },
                     .rigid_var => |ident_idx| {
@@ -179,7 +205,9 @@ pub const TypeWriter = struct {
                 _ = try self.buf.writer().write(")");
             },
             .list_unbound => {
-                _ = try self.buf.writer().write("List(*)");
+                _ = try self.buf.writer().write("List(");
+                try self.generateNextName();
+                _ = try self.buf.writer().write(")");
             },
             .tuple => |tuple| {
                 try self.writeTuple(tuple);
@@ -428,7 +456,13 @@ pub const TypeWriter = struct {
         // Show extension variable if it's not empty
         const ext_resolved = self.env.types.resolveVar(tag_union.ext);
         switch (ext_resolved.desc.content) {
-            .flex_var => _ = try self.buf.writer().write("*"),
+            .flex_var => |mb_ident_idx| {
+                if (mb_ident_idx) |ident_idx| {
+                    _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                } else {
+                    try self.generateNextName();
+                }
+            },
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
                 else => {}, // TODO: Error?
@@ -470,13 +504,19 @@ pub const TypeWriter = struct {
                 _ = try self.buf.writer().write(")");
             },
             .num_unbound => |_| {
-                _ = try self.buf.writer().write("Num(*)");
+                _ = try self.buf.writer().write("Num(");
+                try self.generateNextName();
+                _ = try self.buf.writer().write(")");
             },
             .int_unbound => |_| {
-                _ = try self.buf.writer().write("Int(*)");
+                _ = try self.buf.writer().write("Int(");
+                try self.generateNextName();
+                _ = try self.buf.writer().write(")");
             },
             .frac_unbound => |_| {
-                _ = try self.buf.writer().write("Frac(*)");
+                _ = try self.buf.writer().write("Frac(");
+                try self.generateNextName();
+                _ = try self.buf.writer().write(")");
             },
             .int_precision => |prec| {
                 try self.writeIntType(prec);

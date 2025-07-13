@@ -58,5 +58,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.65 (type "* -> Str"))
+(expr @1.1-1.65 (type "a -> Str"))
 ~~~

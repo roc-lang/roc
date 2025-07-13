@@ -139,5 +139,5 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-12.2 (type "{ person: { name: Str, age: Num(*) }, address: { street: Str, city: Str, coordinates: { lat: Frac(*), lng: Frac(*) } }, contact: { email: Str, phone: { home: Str, work: Str } } }"))
+(expr @1.1-12.2 (type "{ person: { name: Str, age: Num(a) }, address: { street: Str, city: Str, coordinates: { lat: Frac(b), lng: Frac(c) } }, contact: { email: Str, phone: { home: Str, work: Str } } }"))
 ~~~

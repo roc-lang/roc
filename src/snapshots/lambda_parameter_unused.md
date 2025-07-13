@@ -302,11 +302,11 @@ main! = |_| {
 		(patt @9.1-9.9 (type "U64 -> U64"))
 		(patt @13.1-13.8 (type "U64 -> U64"))
 		(patt @17.1-17.7 (type "U64 -> U64"))
-		(patt @19.1-19.6 (type "* -> *")))
+		(patt @19.1-19.6 (type "a -> b")))
 	(expressions
 		(expr @5.7-5.18 (type "U64 -> U64"))
 		(expr @9.12-9.33 (type "U64 -> U64"))
 		(expr @13.11-13.23 (type "U64 -> U64"))
 		(expr @17.10-17.27 (type "U64 -> U64"))
-		(expr @19.9-25.2 (type "* -> *"))))
+		(expr @19.9-25.2 (type "a -> b"))))
 ~~~

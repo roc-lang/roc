@@ -381,12 +381,12 @@ Complex : {
 			(ty-header @6.1-6.7 (name "MyBool")))
 		(alias @9.1-9.33 (type "Person")
 			(ty-header @9.1-9.7 (name "Person")))
-		(alias @12.1-12.37 (type "Result(*, *)")
+		(alias @12.1-12.37 (type "Result(a, b)")
 			(ty-header @12.1-12.16 (name "Result")
 				(ty-args
 					(ty-var @12.8-12.10 (name "ok"))
 					(ty-var @12.12-12.15 (name "err")))))
-		(alias @15.1-15.37 (type "Tree(*)")
+		(alias @15.1-15.37 (type "Tree(a)")
 			(ty-header @15.1-15.8 (name "Tree")
 				(ty-args
 					(ty-var @15.6-15.7 (name "a")))))
