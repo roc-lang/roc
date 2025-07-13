@@ -1,3 +1,11 @@
+//! Snapshot testing infrastructure for the Roc compiler.
+//!
+//! This module provides functionality to generate and validate snapshot tests
+//! that capture the compiler's behavior at each stage of compilation. Snapshots
+//! help ensure the compiler continues to behave as expected by showing the
+//! output of tokenization, parsing, canonicalization, type checking etc for
+//! the given Roc code snippet.
+
 const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
