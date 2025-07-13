@@ -1,3 +1,16 @@
+# Roc Compiler (Zig Implementation)
+
+## Navigation
+
+Core compiler directories:
+
+- [base/](./base/) - Core data structures and utilities shared across the compiler
+- [check/](./check/) - Main compilation pipeline (parsing, canonicalization, type checking)  
+- [types/](./types.zig) - Type system definitions and utilities
+- [builtins/](./builtins/) - Built-in types, functions, and operations
+- [reporting/](./reporting/) - Error reporting and diagnostic formatting
+- [collections/](./collections.zig) - Efficient data structures used throughout the compiler
+
 ## Status
 
 This table provides a summary of progress for the zig compiler re-write and should be updated with the PR that includes new features.
