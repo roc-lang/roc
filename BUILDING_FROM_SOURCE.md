@@ -18,7 +18,6 @@ zig build roc
 
 If you're familiar with nix and like using it, you can build the compiler like this:
 ```
-nix develop ./src/flake.nix
+nix develop ./src
 buildcmd
 ```
-
