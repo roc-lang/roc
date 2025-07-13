@@ -220,7 +220,7 @@ parser = Json.create
 		(patt @11.1-11.10 (type "Json.InvalidType -> Str"))
 		(patt @15.1-15.15 (type "Http.Server.Request -> Error"))
 		(patt @18.1-18.7 (type "a"))
-		(patt @21.1-21.7 (type "a"))
+		(patt @21.1-21.7 (type "b"))
 		(patt @24.1-24.7 (type "Error"))
 		(patt @27.1-27.7 (type "Error")))
 	(expressions
@@ -228,7 +228,7 @@ parser = Json.create
 		(expr @11.13-11.40 (type "Json.InvalidType -> Str"))
 		(expr @15.18-15.51 (type "Http.Server.Request -> Error"))
 		(expr @18.10-18.28 (type "a"))
-		(expr @21.10-21.31 (type "a"))
+		(expr @21.10-21.31 (type "b"))
 		(expr @24.10-24.28 (type "Error"))
 		(expr @27.10-27.49 (type "Error"))))
 ~~~

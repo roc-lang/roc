@@ -94,7 +94,7 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.27 (type "Maybe(a)")
+		(alias @3.1-3.27 (type "Maybe(b)")
 			(ty-header @3.1-3.9 (name "Maybe")
 				(ty-args
 					(ty-var @3.7-3.8 (name "a")))))

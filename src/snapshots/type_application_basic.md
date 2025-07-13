@@ -117,8 +117,8 @@ main! = |_| processList(["one", "two", "three"])
 (inferred-types
 	(defs
 		(patt @4.1-4.12 (type "Error -> U64"))
-		(patt @6.1-6.6 (type "a -> U64")))
+		(patt @6.1-6.6 (type "arg -> U64")))
 	(expressions
 		(expr @4.15-4.32 (type "Error -> U64"))
-		(expr @6.9-6.47 (type "a -> U64"))))
+		(expr @6.9-6.47 (type "arg -> U64"))))
 ~~~

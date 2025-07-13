@@ -135,5 +135,5 @@ match sequence {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-7.2 (type "Num(a)"))
+(expr @1.1-7.2 (type "Num(size)"))
 ~~~

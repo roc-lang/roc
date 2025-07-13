@@ -37,7 +37,7 @@ This `if` condition needs to be a _Bool_:
           ^^
 
 Right now, it has the type:
-    _Num(a)_
+    _Num(size)_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -59,7 +59,7 @@ The second branch has this type:
     _[A]a_
 
 But the previous branch has this type:
-    _Num(b)_
+    _Num(size)_
 
 All branches in an `if` must have compatible types.
 

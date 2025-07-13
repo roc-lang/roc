@@ -59,11 +59,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.2 (type "Frac(a)"))
-		(patt @4.1-4.2 (type "Frac(a)"))
-		(patt @5.1-5.2 (type "Frac(a)")))
+		(patt @3.1-3.2 (type "Frac(size)"))
+		(patt @4.1-4.2 (type "Frac(size)"))
+		(patt @5.1-5.2 (type "Frac(size)")))
 	(expressions
-		(expr @3.5-3.9 (type "Frac(a)"))
-		(expr @4.5-4.12 (type "Frac(a)"))
-		(expr @5.5-5.8 (type "Frac(a)"))))
+		(expr @3.5-3.9 (type "Frac(size)"))
+		(expr @4.5-4.12 (type "Frac(size)"))
+		(expr @5.5-5.8 (type "Frac(size)"))))
 ~~~

@@ -33,5 +33,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.5 (type "[Some(Num(a))]b"))
+(expr @1.1-1.5 (type "[Some(Num(size))]a"))
 ~~~

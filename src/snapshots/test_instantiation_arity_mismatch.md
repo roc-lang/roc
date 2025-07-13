@@ -24,10 +24,10 @@ This expression is used in an unexpected way:
     ^^^^^^^^
 
 It is of type:
-    _d -> e_
+    _arg -> d_
 
 But you are trying to use it as:
-    _Num(a), Num(b) -> c_
+    _Num(size), Num(size2) -> c_
 
 # TOKENS
 ~~~zig
@@ -95,5 +95,5 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "a"))
+(expr @1.1-6.2 (type "c"))
 ~~~

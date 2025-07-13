@@ -160,16 +160,16 @@ none2 = None
 	(defs
 		(patt @6.1-6.6 (type "a -> Maybe(a)"))
 		(patt @9.1-9.6 (type "Maybe(a)"))
-		(patt @11.1-11.6 (type "a -> Maybe(b)"))
-		(patt @13.1-13.6 (type "Maybe(a)")))
+		(patt @11.1-11.6 (type "arg -> Maybe(b)"))
+		(patt @13.1-13.6 (type "Maybe(c)")))
 	(type_decls
-		(nominal @3.1-3.28 (type "Maybe(a)")
+		(nominal @3.1-3.28 (type "Maybe(d)")
 			(ty-header @3.1-3.9 (name "Maybe")
 				(ty-args
 					(ty-var @3.7-3.8 (name "a"))))))
 	(expressions
 		(expr @6.9-6.26 (type "a -> Maybe(a)"))
 		(expr @9.9-9.14 (type "Maybe(a)"))
-		(expr @11.9-11.26 (type "a -> Maybe(b)"))
-		(expr @13.9-13.14 (type "Maybe(a)"))))
+		(expr @11.9-11.26 (type "arg -> Maybe(b)"))
+		(expr @13.9-13.14 (type "Maybe(c)"))))
 ~~~

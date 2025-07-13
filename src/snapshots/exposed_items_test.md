@@ -55,7 +55,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "Num(a)")))
+		(patt @5.1-5.5 (type "Num(size)")))
 	(expressions
-		(expr @5.8-5.10 (type "Num(a)"))))
+		(expr @5.8-5.10 (type "Num(size)"))))
 ~~~

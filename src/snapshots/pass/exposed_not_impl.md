@@ -120,10 +120,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.4 (type "Num(a)")))
+		(patt @8.1-8.4 (type "Num(size)")))
 	(type_decls
 		(alias @10.1-10.19 (type "MyType")
 			(ty-header @10.1-10.7 (name "MyType"))))
 	(expressions
-		(expr @8.7-8.9 (type "Num(a)"))))
+		(expr @8.7-8.9 (type "Num(size)"))))
 ~~~

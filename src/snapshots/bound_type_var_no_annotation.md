@@ -254,13 +254,13 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.9 (type "a -> a"))
+		(patt @3.1-3.9 (type "arg -> arg"))
 		(patt @7.1-7.8 (type "a, b -> (a, b)"))
 		(patt @11.1-11.7 (type "U64 -> U64"))
-		(patt @13.1-13.6 (type "a -> U64")))
+		(patt @13.1-13.6 (type "arg2 -> U64")))
 	(expressions
-		(expr @3.12-3.17 (type "a -> a"))
+		(expr @3.12-3.17 (type "arg -> arg"))
 		(expr @7.11-7.42 (type "a, b -> (a, b)"))
 		(expr @11.10-11.19 (type "U64 -> U64"))
-		(expr @13.9-25.2 (type "a -> U64"))))
+		(expr @13.9-25.2 (type "arg2 -> U64"))))
 ~~~

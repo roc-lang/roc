@@ -245,7 +245,7 @@ NO CHANGE
 	(defs
 		(patt @18.1-18.14 (type "Result -> Str"))
 		(patt @22.1-22.15 (type "Response -> Str"))
-		(patt @24.1-24.6 (type "a -> {}")))
+		(patt @24.1-24.6 (type "arg -> {}")))
 	(type_decls
 		(alias @4.1-4.37 (type "Status")
 			(ty-header @4.1-4.7 (name "Status")))
@@ -260,5 +260,5 @@ NO CHANGE
 	(expressions
 		(expr @18.17-18.38 (type "Result -> Str"))
 		(expr @22.18-22.39 (type "Response -> Str"))
-		(expr @24.9-24.15 (type "a -> {}"))))
+		(expr @24.9-24.15 (type "arg -> {}"))))
 ~~~

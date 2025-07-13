@@ -365,32 +365,32 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @27.1-27.6 (type "a -> Num(b)")))
+		(patt @27.1-27.6 (type "arg -> Num(size2)")))
 	(type_decls
 		(alias @4.1-4.13 (type "UserId")
 			(ty-header @4.1-4.7 (name "UserId")))
-		(alias @7.1-7.37 (type "Result(a, b)")
+		(alias @7.1-7.37 (type "Result(c, d)")
 			(ty-header @7.1-7.16 (name "Result")
 				(ty-args
 					(ty-var @7.8-7.10 (name "ok"))
 					(ty-var @7.12-7.15 (name "err")))))
 		(alias @10.1-10.35 (type "Person")
 			(ty-header @10.1-10.7 (name "Person")))
-		(alias @13.1-13.21 (type "MapFn(a, b)")
+		(alias @13.1-13.21 (type "MapFn(e, f)")
 			(ty-header @13.1-13.12 (name "MapFn")
 				(ty-args
 					(ty-var @13.7-13.8 (name "a"))
 					(ty-var @13.10-13.11 (name "b")))))
-		(alias @16.1-16.38 (type "ApiResponse(a)")
+		(alias @16.1-16.38 (type "ApiResponse(g)")
 			(ty-header @16.1-16.18 (name "ApiResponse")
 				(ty-args
 					(ty-var @16.13-16.17 (name "data")))))
 		(alias @19.1-19.47 (type "Color")
 			(ty-header @19.1-19.6 (name "Color")))
-		(alias @22.1-25.2 (type "Container(a)")
+		(alias @22.1-25.2 (type "Container(h)")
 			(ty-header @22.1-22.16 (name "Container")
 				(ty-args
 					(ty-var @22.11-22.15 (name "item"))))))
 	(expressions
-		(expr @27.9-39.2 (type "a -> Num(a)"))))
+		(expr @27.9-39.2 (type "arg -> Num(size2)"))))
 ~~~

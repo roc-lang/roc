@@ -135,9 +135,9 @@ result = redeclareTest({})
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.14 (type "a -> b"))
-		(patt @11.1-11.7 (type "a")))
+		(patt @4.1-4.14 (type "arg -> a"))
+		(patt @11.1-11.7 (type "b")))
 	(expressions
-		(expr @4.17-9.2 (type "a -> b"))
-		(expr @11.10-11.27 (type "a"))))
+		(expr @4.17-9.2 (type "arg -> a"))
+		(expr @11.10-11.27 (type "b"))))
 ~~~

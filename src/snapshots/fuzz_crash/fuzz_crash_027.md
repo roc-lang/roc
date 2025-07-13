@@ -819,7 +819,7 @@ The third pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red, Blue]a_
+    _[Red, Blue]d_
 
 All patterns in an `match` must have compatible types.
 
@@ -834,10 +834,10 @@ This expression is used in an unexpected way:
  ^^^^^^^^^^
 
 It is of type:
-    _[Red, Blue]c, d -> Error_
+    _[Red, Blue]arg2, arg3 -> Error_
 
 But you are trying to use it as:
-    _a -> b_
+    _arg -> d_
 
 # TOKENS
 ~~~zig
@@ -2114,12 +2114,12 @@ main! = |_| { # Yeah Ie
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @45.1-45.4 (type "Bool -> Num(a)"))
+		(patt @45.1-45.4 (type "Bool -> Num(size)"))
 		(patt @48.1-48.8 (type "Error -> Error"))
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error")))
 	(type_decls
-		(alias @15.1-15.41 (type "Map(a, b)")
+		(alias @15.1-15.41 (type "Map(d, f)")
 			(ty-header @15.1-15.10 (name "Map")
 				(ty-args
 					(ty-var @15.5-15.6 (name "a"))
@@ -2150,7 +2150,7 @@ main! = |_| { # Yeah Ie
 				(ty-args
 					(ty-var @43.6-43.7 (name "a"))))))
 	(expressions
-		(expr @45.7-45.28 (type "Bool -> Num(a)"))
+		(expr @45.7-45.28 (type "Bool -> Num(size)"))
 		(expr @48.11-58.2 (type "Error -> Error"))
 		(expr @60.14-94.3 (type "Error"))
 		(expr @100.9-159.2 (type "Error -> Error"))))
