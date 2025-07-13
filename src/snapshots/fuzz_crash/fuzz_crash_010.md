@@ -13,6 +13,7 @@ foo =
 ~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - fuzz_crash_010.md:1:1:1:2
+PARSE ERROR - fuzz_crash_010.md:5:35:5:35
 INVALID STATEMENT - fuzz_crash_010.md:1:2:2:7
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
@@ -38,6 +39,18 @@ Here is the problematic code:
 H{o,
 ```
 ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `string_unclosed`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_010.md:5:35:5:35:**
+```roc
+    "on        (string 'onmo %')))
+```
+                                  
 
 
 **INVALID STATEMENT**

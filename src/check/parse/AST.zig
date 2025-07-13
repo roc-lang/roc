@@ -619,6 +619,7 @@ pub const Diagnostic = struct {
         statement_unexpected_token,
         string_unexpected_token,
         string_expected_close_interpolation,
+        string_unclosed,
         expr_if_missing_else,
         expr_no_space_dot_int,
         import_exposing_no_open,

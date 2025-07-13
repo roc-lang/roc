@@ -14,6 +14,7 @@ foo =
 ~~~
 # EXPECTED
 MISMATCHED BRACE - fuzz_crash_009.md:1:2:1:3
+PARSE ERROR - fuzz_crash_009.md:6:12:6:12
 INVALID STATEMENT - fuzz_crash_009.md:1:3:2:7
 # PROBLEMS
 **MISMATCHED BRACE**
@@ -36,6 +37,18 @@ Here is the problematic code:
  f{o,
 ```
  ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `string_unclosed`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_009.md:6:12:6:12:**
+```roc
+    "onmo %
+```
+           
 
 
 **INVALID STATEMENT**

@@ -2146,11 +2146,8 @@ pub fn parseStringExpr(self: *Parser) AST.Expr.Idx {
     self.advance();
     const scratch_top = self.store.scratchExprTop();
     while (self.peek() != .EndOfFile) {
-        var string_end = self.pos;
         switch (self.peek()) {
             .StringEnd => {
-                string_end = self.pos;
-                self.advance(); // Advance past the StringEnd
                 break;
             },
             .StringPart => {
@@ -2177,6 +2174,14 @@ pub fn parseStringExpr(self: *Parser) AST.Expr.Idx {
             },
         }
     }
+
+    self.expect(.StringEnd) catch {
+        self.pushDiagnostic(.string_unclosed, .{
+            .start = self.pos,
+            .end = self.pos,
+        });
+    };
+
     const parts = self.store.exprSpanFrom(scratch_top);
     const expr = self.store.addExpr(.{
         .string = .{
