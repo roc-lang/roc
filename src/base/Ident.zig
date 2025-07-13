@@ -8,7 +8,6 @@
 const std = @import("std");
 const collections = @import("../collections.zig");
 const Region = @import("Region.zig");
-const ModuleImport = @import("ModuleImport.zig");
 const serialization = @import("../serialization/mod.zig");
 
 const SmallStringInterner = collections.SmallStringInterner;
@@ -102,12 +101,6 @@ pub const Attributes = packed struct(u3) {
 /// An interner for identifier names.
 pub const Store = struct {
     interner: SmallStringInterner = .{},
-    /// The index of the local module import that this ident comes from.
-    ///
-    /// By default, this is set to index 0, the primary module being compiled.
-    /// This needs to be set when the ident is first seen during canonicalization
-    /// before doing anything else.
-    exposing_modules: std.ArrayListUnmanaged(ModuleImport.Idx) = .{},
     attributes: std.ArrayListUnmanaged(Attributes) = .{},
     next_unique_name: u32 = 0,
 
@@ -115,7 +108,6 @@ pub const Store = struct {
     pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) Store {
         return .{
             .interner = SmallStringInterner.initCapacity(gpa, capacity),
-            .exposing_modules = std.ArrayListUnmanaged(ModuleImport.Idx).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
             .attributes = std.ArrayListUnmanaged(Attributes).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
         };
     }
@@ -123,14 +115,12 @@ pub const Store = struct {
     /// Deinitialize the memory for an `Ident.Store`.
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         self.interner.deinit(gpa);
-        self.exposing_modules.deinit(gpa);
         self.attributes.deinit(gpa);
     }
 
     /// Insert a new identifier into the store.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident, region: Region) Idx {
         const idx = self.interner.insert(gpa, ident.raw_text, region);
-        self.exposing_modules.append(gpa, @enumFromInt(0)) catch |err| exitOnOom(err);
         self.attributes.append(gpa, ident.attributes) catch |err| exitOnOom(err);
 
         return Idx{
@@ -166,7 +156,6 @@ pub const Store = struct {
         const name = str_buffer[digit_index + 1 ..];
 
         const idx = self.interner.insert(gpa, name, Region.zero());
-        self.exposing_modules.append(gpa, @enumFromInt(0)) catch |err| exitOnOom(err);
 
         const attributes = Attributes{
             .effectful = false,
@@ -220,10 +209,6 @@ pub const Store = struct {
         size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
 
         // Store components
-        size += @sizeOf(u32); // exposing_modules_len
-        size += self.exposing_modules.items.len * @sizeOf(@TypeOf(self.exposing_modules.items[0])); // exposing_modules data
-        size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
-
         size += @sizeOf(u32); // attributes_len
         size += self.attributes.items.len * @sizeOf(u8); // attributes data (packed as bytes)
         size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
@@ -270,17 +255,6 @@ pub const Store = struct {
             const regions_bytes = regions_len * @sizeOf(@TypeOf(self.interner.regions.items[0]));
             @memcpy(buffer[offset .. offset + regions_bytes], std.mem.sliceAsBytes(self.interner.regions.items));
             offset += regions_bytes;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Serialize exposing_modules
-        const exposing_modules_len = @as(u32, @intCast(self.exposing_modules.items.len));
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = exposing_modules_len;
-        offset += @sizeOf(u32);
-        if (exposing_modules_len > 0) {
-            const exposing_modules_bytes = exposing_modules_len * @sizeOf(@TypeOf(self.exposing_modules.items[0]));
-            @memcpy(buffer[offset .. offset + exposing_modules_bytes], std.mem.sliceAsBytes(self.exposing_modules.items));
-            offset += exposing_modules_bytes;
         }
         offset = std.mem.alignForward(usize, offset, @alignOf(u32));
 
@@ -355,19 +329,6 @@ pub const Store = struct {
         }
         offset = std.mem.alignForward(usize, offset, @alignOf(u32));
 
-        // Deserialize exposing_modules
-        const exposing_modules_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-        var exposing_modules = std.ArrayListUnmanaged(ModuleImport.Idx){};
-        if (exposing_modules_len > 0) {
-            const exposing_modules_bytes = exposing_modules_len * @sizeOf(ModuleImport.Idx);
-            if (offset + exposing_modules_bytes > buffer.len) return error.BufferTooSmall;
-            const exposing_modules_data = @as([*]const ModuleImport.Idx, @ptrCast(@alignCast(buffer.ptr + offset)));
-            try exposing_modules.appendSlice(gpa, exposing_modules_data[0..exposing_modules_len]);
-            offset += exposing_modules_bytes;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
         // Deserialize attributes
         const attributes_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
         offset += @sizeOf(u32);
@@ -410,7 +371,6 @@ pub const Store = struct {
 
         return Store{
             .interner = interner,
-            .exposing_modules = exposing_modules,
             .attributes = attributes,
             .next_unique_name = next_unique_name,
         };
@@ -419,22 +379,6 @@ pub const Store = struct {
     /// Get the region for an identifier.
     pub fn getRegion(self: *const Store, idx: Idx) Region {
         return self.interner.getRegion(@enumFromInt(@as(u32, idx.idx)));
-    }
-
-    // TODO: should this get moved out of here and into canonicalization?
-    //
-    /// Get the index of the imported module for an identifier.
-    pub fn getExposingModule(self: *const Store, idx: Idx) ModuleImport.Idx {
-        return self.exposing_modules.items[@as(usize, idx.idx)];
-    }
-
-    /// Set the module import that exposes this ident.
-    ///
-    /// NOTE: This should be called as soon as an ident is encountered during
-    /// canonicalization to make sure that we don't have to worry if the exposing
-    /// module is zero because it hasn't been set yet or if it's actually zero.
-    pub fn setExposingModule(self: *const Store, idx: Idx, exposing_module: ModuleImport.Idx) void {
-        self.exposing_modules.items[@as(usize, idx.idx)] = exposing_module;
     }
 };
 
@@ -530,7 +474,6 @@ test "Ident.Store serialization round-trip" {
     try std.testing.expectEqual(original_store.next_unique_name, restored_store.next_unique_name);
 
     // Verify structural integrity
-    try std.testing.expectEqual(original_store.exposing_modules.items.len, restored_store.exposing_modules.items.len);
     try std.testing.expectEqual(original_store.attributes.items.len, restored_store.attributes.items.len);
     try std.testing.expectEqual(original_store.interner.bytes.items.len, restored_store.interner.bytes.items.len);
     try std.testing.expectEqual(original_store.interner.outer_indices.items.len, restored_store.interner.outer_indices.items.len);
