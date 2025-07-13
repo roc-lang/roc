@@ -334,8 +334,8 @@ fn Unifier(comptime StoreTypeB: type) type {
         // merge
 
         /// Link the variables & updated the content in the type_store
-        /// In the old compiler, this function was called "merge"
         fn merge(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) void {
+            // TODO: Why is this types_store_a?
             self.types_store_a.union_(vars.a.var_, vars.b.var_, .{
                 .content = new_content,
                 .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
@@ -544,7 +544,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
             // Rust compiler comment:
             // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
-            const a_backing_var = self.types_store_a.getAliasBackingVar(a_alias);
+            const a_backing_var = self.types_store_b.getAliasBackingVar(a_alias);
             const b_backing_var = self.types_store_b.getAliasBackingVar(b_alias);
             self.unifyGuarded(a_backing_var, b_backing_var) catch {};
 
@@ -5330,24 +5330,22 @@ test "unify - succeeds on nominal, tag union recursion" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    var types_store = env.module_env.types;
+    var types_store = &env.module_env.types;
 
     // Create vars in the required order for adjacency to work out
-    const b = types_store.fresh();
     const a = types_store.fresh();
+    const b = types_store.fresh();
     const elem = types_store.fresh();
     const ext = types_store.fresh();
 
     // Create the tag union content that references type_a_nominal
-    const a_cons_tag_args = types_store.appendTagArgs(&[_]Var{ elem, a });
-    const a_cons_tag = Tag{ .name = undefined, .args = a_cons_tag_args };
-    const a_nil_tag = Tag{ .name = undefined, .args = Var.SafeList.Range.empty };
+    const a_cons_tag = env.mkTag("Cons", &[_]Var{ elem, a });
+    const a_nil_tag = env.mkTag("Nil", &[_]Var{});
     const a_backing = types_store.freshFromContent(types_store.mkTagUnion(&.{ a_cons_tag, a_nil_tag }, ext));
-    try types_store.setVarContent(b, env.mkNominalType("TypeA", a_backing, &.{}));
+    try types_store.setVarContent(a, env.mkNominalType("TypeA", a_backing, &.{}));
 
-    const b_cons_tag_args = types_store.appendTagArgs(&[_]Var{ elem, a });
-    const b_cons_tag = Tag{ .name = undefined, .args = b_cons_tag_args };
-    const b_nil_tag = Tag{ .name = undefined, .args = Var.SafeList.Range.empty };
+    const b_cons_tag = env.mkTag("Cons", &[_]Var{ elem, b });
+    const b_nil_tag = env.mkTag("Nil", &[_]Var{});
     const b_backing = types_store.freshFromContent(types_store.mkTagUnion(&.{ b_cons_tag, b_nil_tag }, ext));
     try types_store.setVarContent(b, env.mkNominalType("TypeA", b_backing, &.{}));
 

@@ -145,7 +145,7 @@ pub const Store = struct {
     }
 
     /// Return the number of type variables in the store.
-    pub fn len(self: *Self) usize {
+    pub fn len(self: *const Self) usize {
         return self.slots.backing.len();
     }
 
@@ -181,75 +181,21 @@ pub const Store = struct {
 
     // setting variables //
 
-    pub const SetVarError = error{VarNotInitialized};
-
-    /// Create a new unbound, flexible type variable without a name at the given idx
-    ///
-    /// This function may allocate if the provided index is greater than the
-    /// current capacities of descs or slots.
-    ///
-    /// Used in canonicalization when creating type slots
-    pub fn setVarFlex(self: *Self, target_var: Var) SetVarError!Var {
-        return self.setVarContent(target_var, Content{ .flex_var = null });
-    }
-
-    /// Create a new variable with the provided desc at the given index
-    ///
-    /// This function may allocate if the provided index is greater than the
-    /// current capacities of descs or slots.
-    ///
-    /// Used in canonicalization when creating type slots
-    ///
-    /// If the store size is less than the specified target_var, fill in slots
-    /// thru that index
+    /// Set a type variable to the provided content
     pub fn setVarContent(self: *Self, target_var: Var, content: Content) Allocator.Error!void {
-        try self.fillInSlotsThru(target_var);
-
+        std.debug.assert(@intFromEnum(target_var) < self.len());
         const resolved = self.resolveVar(target_var);
         var desc = resolved.desc;
         desc.content = content;
         self.descs.set(resolved.desc_idx, desc);
     }
 
-    /// Create a new variable with the provided desc at the given index
-    ///
-    /// This function may allocate if the provided index is greater than the
-    /// current capacities of descs or slots.
-    ///
-    /// Used in canonicalization when creating type slots
-    ///
-    /// If the store size is less than the specified target_var, fill in slots
-    /// thru that index
+    /// Set a type variable to redirect to the provided redirect
     pub fn setVarRedirect(self: *Self, target_var: Var, redirect_to: Var) Allocator.Error!void {
-        try self.fillInSlotsThru(target_var);
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        std.debug.assert(@intFromEnum(redirect_to) < self.len());
         const slot_idx = Self.varToSlotIdx(target_var);
         self.slots.set(slot_idx, .{ .redirect = redirect_to });
-    }
-
-    /// Given a target variable, check that the var is in bounds
-    /// If it is, do nothing
-    /// If it's not, then fill in the types store with flex vars for all missing
-    /// intervening vars, *up to and including* the provided var
-    pub fn fillInSlotsThru(self: *Self, target_var: Var) Allocator.Error!void {
-        const idx = @intFromEnum(target_var);
-
-        if (idx > self.descs.backing.len) {
-            try self.descs.backing.ensureTotalCapacity(
-                self.gpa,
-                idx - self.descs.backing.len + 1,
-            );
-        }
-        if (idx > self.slots.backing.len()) {
-            // SafeList doesn't have ensureTotalCapacity, we'll grow as needed
-        }
-
-        while (self.slots.backing.len() <= idx) {
-            const desc_idx = self.descs.insert(
-                self.gpa,
-                .{ .content = .{ .flex_var = null }, .rank = Rank.top_level, .mark = Mark.none },
-            );
-            _ = self.slots.insert(self.gpa, .{ .root = desc_idx });
-        }
     }
 
     // make builtin types //
@@ -642,6 +588,7 @@ pub const Store = struct {
     pub fn resolveVar(self: *const Self, initial_var: Var) ResolvedVarDesc {
         var redirected_slot_idx = Self.varToSlotIdx(initial_var);
         var redirected_slot: Slot = self.slots.get(redirected_slot_idx);
+
         while (true) {
             switch (redirected_slot) {
                 .redirect => |next_redirect_var| {
@@ -685,10 +632,6 @@ pub const Store = struct {
     ///
     /// If the vars are *not equivalent, then return the resolved vars & descs
     pub fn checkVarsEquiv(self: *Self, a_var: Var, b_var: Var) VarEquivResult {
-        // Ensure both variables are in bounds before resolving
-        self.fillInSlotsThru(a_var) catch unreachable;
-        self.fillInSlotsThru(b_var) catch unreachable;
-
         const a = self.resolveVarAndCompressPath(a_var);
         const b = self.resolveVarAndCompressPath(b_var);
         if (a.desc_idx == b.desc_idx) {
@@ -760,6 +703,24 @@ pub const Store = struct {
             .redirect => {
                 return error.VarNotRoot;
             },
+        }
+    }
+
+    // test helpers //
+
+    /// Given a target variable, check that the var is in bounds
+    /// If it is, do nothing
+    /// If it's not, then fill in the types store with flex vars for all missing
+    /// intervening vars, *up to and including* the provided var
+    pub fn testOnlyFillInSlotsThru(self: *Self, target_var: Var) Allocator.Error!void {
+        const idx = @intFromEnum(target_var);
+
+        while (self.slots.backing.len() <= idx) {
+            const desc_idx = self.descs.insert(
+                self.gpa,
+                .{ .content = .{ .flex_var = null }, .rank = Rank.top_level, .mark = Mark.none },
+            );
+            _ = self.slots.insert(self.gpa, .{ .root = desc_idx });
         }
     }
 

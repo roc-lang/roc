@@ -993,6 +993,9 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
 }
 
 /// Adds a statement to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Region) CIR.Statement.Idx {
     var node = Node{
         .data_1 = 0,
@@ -1157,6 +1160,9 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Re
 }
 
 /// Adds an expression node to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) CIR.Expr.Idx {
     var node = Node{
         .data_1 = 0,
@@ -1409,6 +1415,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) CIR.Expr.
 }
 
 /// Adds a record field to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: base.Region) CIR.RecordField.Idx {
     const node = Node{
         .data_1 = @bitCast(recordField.name),
@@ -1423,6 +1432,9 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: b
 }
 
 /// Adds a record destructuring to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordDestruct, region: base.Region) CIR.Pattern.RecordDestruct.Idx {
     var node = Node{
         .data_1 = @bitCast(record_destruct.label),
@@ -1455,6 +1467,9 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
 }
 
 /// Adds a 'match' branch to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: base.Region) CIR.Expr.Match.Branch.Idx {
     var node = Node{
         .data_1 = 0,
@@ -1479,6 +1494,9 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
 }
 
 /// Adds a 'match' branch to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.BranchPattern, region: base.Region) CIR.Expr.Match.BranchPattern.Idx {
     const node = Node{
         .data_1 = @intFromEnum(branchPattern.pattern),
@@ -1492,6 +1510,9 @@ pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.Br
 }
 
 /// Adds a 'where' clause to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: base.Region) CIR.WhereClause.Idx {
     var node = Node{
         .data_1 = 0,
@@ -1536,6 +1557,9 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
 }
 
 /// Adds a pattern to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) std.mem.Allocator.Error!CIR.Pattern.Idx {
     var node = Node{
         .data_1 = 0,
@@ -1658,6 +1682,9 @@ pub fn addPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternR
 }
 
 /// Adds a type annotation to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Region) CIR.TypeAnno.Idx {
     var node = Node{
         .data_1 = 0,
@@ -1726,6 +1753,9 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
 }
 
 /// Adds a type header to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base.Region) CIR.TypeHeader.Idx {
     const node = Node{
         .data_1 = @bitCast(typeHeader.name),
@@ -1740,6 +1770,9 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base
 }
 
 /// Adds an annotation record field to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.RecordField, region: base.Region) CIR.TypeAnno.RecordField.Idx {
     const node = Node{
         .data_1 = @bitCast(annoRecordField.name),
@@ -1754,6 +1787,9 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
 }
 
 /// Adds an annotation to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base.Region) CIR.Annotation.Idx {
     const node = Node{
         .data_1 = @intFromEnum(annotation.signature),
@@ -1768,6 +1804,9 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
 }
 
 /// Adds an exposed item to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: base.Region) CIR.ExposedItem.Idx {
     const node = Node{
         .data_1 = @bitCast(exposedItem.name),
@@ -1782,6 +1821,9 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: b
 }
 
 /// Adds a definition to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) CIR.Def.Idx {
     var node = Node{
         .data_1 = 0,
@@ -2173,6 +2215,9 @@ pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) CIR.Expr.IfBranch.Span {
 }
 
 /// Adds an if branch to the store and returns its index.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch, region: base.Region) CIR.Expr.IfBranch.Idx {
     const node = Node{
         .data_1 = @intFromEnum(if_branch.cond),
@@ -2224,6 +2269,9 @@ pub fn sliceRecordDestructs(store: *const NodeStore, span: CIR.Pattern.RecordDes
 /// To create a malformed node that represents a runtime error, use `addMalformed()` instead.
 ///
 /// Returns: Index to the created diagnostic node
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.Idx {
     var node = Node{
         .data_1 = 0,
@@ -2470,6 +2518,9 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
 ///
 /// The malformed node will generate a runtime_error in the CIR that properly
 /// references the diagnostic index.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) CIR.Node.Idx {
     const malformed_node = Node{
         .data_1 = @intFromEnum(diagnostic_idx),
@@ -2710,6 +2761,9 @@ pub fn predictNodeIndex(store: *NodeStore, count: u32) Node.Idx {
 }
 
 /// Adds an type variable slot to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
 pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base.Region) Node.Idx {
     const nid = store.nodes.append(store.gpa, .{
         .tag = .type_var_slot,
