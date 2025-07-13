@@ -92,5 +92,5 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.103 (type "arg -> { greeting: Str, full_record: arg, is_adult: b }"))
+(expr @1.1-1.103 (type "arg -> { greeting: Str, full_record: arg, is_adult: field }"))
 ~~~

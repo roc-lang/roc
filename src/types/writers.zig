@@ -70,6 +70,7 @@ const TypeContext = enum {
     NumContent,
     ListContent,
     RecordExtension,
+    RecordFieldContent,
     FunctionArgument,
 };
 
@@ -180,6 +181,7 @@ pub const TypeWriter = struct {
             .NumContent => "size",
             .ListContent => "elem",
             .RecordExtension => "others",
+            .RecordFieldContent => "field",
             .FunctionArgument => "arg",
             .General => {
                 // Fall back to generic name generation
@@ -452,14 +454,14 @@ pub const TypeWriter = struct {
         // Write first field - we already verified that there's at least one field
         _ = try self.buf.writer().write(self.env.idents.getText(fields_slice.items(.name)[0]));
         _ = try self.buf.writer().write(": ");
-        try self.writeVar(fields_slice.items(.var_)[0]);
+        try self.writeVarWithContext(fields_slice.items(.var_)[0], .RecordFieldContent);
 
         // Write remaining fields
         for (fields_slice.items(.name)[1..], fields_slice.items(.var_)[1..]) |name, var_| {
             _ = try self.buf.writer().write(", ");
             _ = try self.buf.writer().write(self.env.idents.getText(name));
             _ = try self.buf.writer().write(": ");
-            try self.writeVar(var_);
+            try self.writeVarWithContext(var_, .RecordFieldContent);
         }
 
         _ = try self.buf.writer().write(" }");
@@ -495,7 +497,7 @@ pub const TypeWriter = struct {
             if (i > 0) _ = try self.buf.writer().write(", ");
             _ = try self.buf.writer().write(self.env.idents.getText(field_name));
             _ = try self.buf.writer().write(": ");
-            try self.writeVar(field_var);
+            try self.writeVarWithContext(field_var, .RecordFieldContent);
         }
 
         // Show extension variable if it's not empty
@@ -510,7 +512,7 @@ pub const TypeWriter = struct {
                         if (fields.len > 0 or ext_fields.len > 0) _ = try self.buf.writer().write(", ");
                         _ = try self.buf.writer().write(self.env.idents.getText(field_name));
                         _ = try self.buf.writer().write(": ");
-                        try self.writeVar(field_var);
+                        try self.writeVarWithContext(field_var, .RecordFieldContent);
                     }
                     // Recursively handle the extension's extension
                     try self.writeRecordExtension(ext_record.ext, fields.len + ext_fields.len);
@@ -556,7 +558,7 @@ pub const TypeWriter = struct {
                         _ = try self.buf.writer().write(", ");
                         _ = try self.buf.writer().write(self.env.idents.getText(field_name));
                         _ = try self.buf.writer().write(": ");
-                        try self.writeVar(field_var);
+                        try self.writeVarWithContext(field_var, .RecordFieldContent);
                     }
                     // Recursively handle the extension's extension
                     try self.writeRecordExtension(ext_record.ext, num_fields + ext_fields.len);
