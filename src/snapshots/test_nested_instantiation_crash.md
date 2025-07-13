@@ -199,13 +199,13 @@ answer = composed([42])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.12 (type "a -> { value: a, tag: Str }"))
-		(patt @9.1-9.10 (type "{ value: a, tag: Str } -> a"))
+		(patt @6.1-6.12 (type "a -> { tag: Str, value: a }"))
+		(patt @9.1-9.10 (type "{ tag: Str, value: a } -> a"))
 		(patt @12.1-12.9 (type "Error -> Str"))
 		(patt @14.1-14.7 (type "Str")))
 	(expressions
-		(expr @6.15-6.44 (type "a -> { value: a, tag: Str }"))
-		(expr @9.13-9.24 (type "{ value: a, tag: Str } -> a"))
+		(expr @6.15-6.44 (type "a -> { tag: Str, value: a }"))
+		(expr @9.13-9.24 (type "{ tag: Str, value: a } -> a"))
 		(expr @12.12-12.41 (type "Error -> Str"))
 		(expr @14.10-14.24 (type "Str"))))
 ~~~

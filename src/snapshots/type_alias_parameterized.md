@@ -147,7 +147,7 @@ NO CHANGE
 		(patt @6.1-6.9 (type "Error"))
 		(patt @8.1-8.6 (type "* -> *")))
 	(type_decls
-		(alias @3.1-3.20 (type "Pair(a, b)")
+		(alias @3.1-3.20 (type "Pair(*, *)")
 			(ty-header @3.1-3.11 (name "Pair")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))

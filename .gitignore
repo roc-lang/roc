@@ -137,3 +137,6 @@ flamegraph.svg
 
 # Ignore html files in the snapshot directory
 src/snapshots/**/*.html
+
+# Local claude-code settings
+.claude/settings.local.json

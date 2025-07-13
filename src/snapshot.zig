@@ -457,10 +457,22 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         .app => try can.canonicalizeFile(),
     }
 
+    // Assert that everything is in-sync
+    can_ir.debugAssertArraysInSync();
+
     // Types
     const empty_modules: []const *CIR = &.{};
-    var solver = try Solver.init(allocator, &can_ir.env.types, &can_ir, empty_modules);
+    var solver = try Solver.init(
+        allocator,
+        &can_ir.env.types,
+        &can_ir,
+        empty_modules,
+        &can_ir.store.regions,
+    );
     defer solver.deinit();
+
+    // Assert that we have regions for every type variable
+    solver.debugAssertArraysInSync();
 
     if (maybe_expr_idx) |expr_idx| {
         _ = try solver.checkExpr(expr_idx);

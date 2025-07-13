@@ -260,6 +260,9 @@ fn processSourceInternal(
 
     collectTiming(config, &timer, &timing_info, "canonicalize_ns");
 
+    // Assert that everything is in-sync
+    cir.debugAssertArraysInSync();
+
     // Get diagnostic Reports from CIR
     const diagnostics = cir.getDiagnostics();
     defer gpa.free(diagnostics);
@@ -272,13 +275,16 @@ fn processSourceInternal(
 
     // Type checking
     const empty_modules: []const *CIR = &.{};
-    var solver = try Solver.init(gpa, &module_env.types, cir, empty_modules);
+    var solver = try Solver.init(gpa, &module_env.types, cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 
     // Check for type errors
     try solver.checkDefs();
 
     collectTiming(config, &timer, &timing_info, "type_checking_ns");
+
+    // Assert that we have regions for every type variable
+    solver.debugAssertArraysInSync();
 
     // Get type checking diagnostic Reports
     var report_builder = types_problem_mod.ReportBuilder.init(

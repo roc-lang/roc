@@ -407,40 +407,6 @@ pub const Expr = union(enum) {
         }
     };
 
-    pub fn toRegion(self: *const @This()) ?Region {
-        switch (self.*) {
-            .e_int => |e| return e.region,
-            .e_frac_f64 => |e| return e.region,
-            .e_frac_dec => |e| return e.region,
-            .e_dec_small => |e| return e.region,
-            .e_str_segment => |e| return e.region,
-            .e_str => |e| return e.region,
-            .e_lookup_local => |e| return e.region,
-            .e_lookup_external => |e| return e.region,
-            .e_list => |e| return e.region,
-            .e_tuple => |e| return e.region,
-            .e_match => |e| return e.region,
-            .e_if => |e| return e.region,
-            .e_empty_list => |e| return e.region,
-            .e_call => |e| return e.region,
-            .e_record => |e| return e.region,
-            .e_empty_record => |e| return e.region,
-            .e_record_access => |e| return e.region,
-            .e_dot_access => |e| return e.region,
-            .e_tag => |e| return e.region,
-            .e_tag_qualified => |e| return e.region,
-            .e_zero_argument_tag => |e| return e.region,
-            .e_binop => |e| return e.region,
-            .e_block => |e| return e.region,
-            .e_lambda => |e| return e.region,
-            .e_runtime_error => |e| return e.region,
-            .e_crash => |e| return e.region,
-            .e_dbg => |e| return e.region,
-            .e_ellipsis => |e| return e.region,
-            .e_expect => |e| return e.region,
-        }
-    }
-
     /// The type inside a nominal var
     pub const NominalBackingType = enum { tag, record, tuple, value };
 
