@@ -17,6 +17,12 @@ const cli_args = @import("cli_args.zig");
 const cache_mod = @import("cache/mod.zig");
 const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
+const tokenize = @import("check/parse/tokenize.zig");
+const parse = @import("check/parse.zig");
+const bench = @import("bench.zig");
+
+const benchTokenizer = bench.benchTokenizer;
+const benchParse = bench.benchParse;
 
 const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
@@ -84,9 +90,18 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     fatal("run not implemented", .{});
 }
 
-fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) void {
-    _ = gpa;
-    _ = args;
+fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
+    // Handle the --z-bench-tokenize flag
+    if (args.z_bench_tokenize) |file_path| {
+        try benchTokenizer(gpa, file_path);
+        return;
+    }
+
+    // Handle the --z-bench-parse flag
+    if (args.z_bench_parse) |directory_path| {
+        try benchParse(gpa, directory_path);
+        return;
+    }
 
     fatal("build not implemented", .{});
 }
