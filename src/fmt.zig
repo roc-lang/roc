@@ -433,9 +433,8 @@ const Formatter = struct {
                             fmt.curr_indent += 1;
                         }
                         var x: usize = 0;
-                        var arg_region = fmt.nodeRegion(@intFromEnum(items[0]));
                         for (items) |item| {
-                            arg_region = fmt.nodeRegion(@intFromEnum(item));
+                            const arg_region = fmt.nodeRegion(@intFromEnum(item));
                             if (items_multiline) {
                                 _ = try fmt.flushCommentsBefore(arg_region.start);
                                 try fmt.pushIndent();
@@ -446,19 +445,13 @@ const Formatter = struct {
                             }
                             if (items_multiline) {
                                 try fmt.push(',');
-                            }
-                            if (items_multiline) {
-                                if (arg_region.end < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[arg_region.end] == .Comma) {
+                                if (x == items.len - 1) {
                                     _ = try fmt.flushCommentsAfter(arg_region.end);
                                 }
                             }
                             x += 1;
                         }
                         if (items_multiline) {
-                            _ = try fmt.flushCommentsAfter(arg_region.end);
-                            if (arg_region.end < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[arg_region.end] == .Comma) {
-                                _ = try fmt.flushCommentsAfter(arg_region.end);
-                            }
                             fmt.curr_indent -= 1;
                             try fmt.pushIndent();
                         }
@@ -752,9 +745,6 @@ const Formatter = struct {
             if (multiline) {
                 try fmt.push(',');
             }
-            if (item_region.end < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[item_region.end] == .Comma) {
-                _ = try fmt.flushCommentsBefore(item_region.end);
-            }
             i += 1;
         }
         if (multiline) {
@@ -966,9 +956,6 @@ const Formatter = struct {
                     if (args_are_multiline) {
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(arg_region.end);
-                        if (arg_region.end < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[arg_region.end] == .Comma) {
-                            _ = try fmt.flushCommentsAfter(arg_region.end);
-                        }
                         try fmt.ensureNewline();
                         if (i < args.len - 1) {
                             try fmt.pushIndent();
@@ -1431,9 +1418,7 @@ const Formatter = struct {
                     } else if (packages_multiline) {
                         try fmt.push(',');
                     }
-                    if (item_region.end < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[item_region.end] == .Comma) {
-                        _ = try fmt.flushCommentsBefore(item_region.end);
-                    }
+                    _ = try fmt.flushCommentsBefore(item_region.end);
                 }
                 if (packages_multiline) {
                     _ = try fmt.flushCommentsBefore(packages.region.end - 1);
