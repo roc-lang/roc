@@ -21,7 +21,7 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !s
 } {
     // Initialize the ModuleEnv
     const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = base.ModuleEnv.init(allocator);
+    module_env.* = base.ModuleEnv.init(allocator, "");
 
     // Parse the source code as an expression
     const parse_ast = try allocator.create(parse.AST);
@@ -32,15 +32,15 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !s
 
     // Create CIR
     const cir = try allocator.create(CIR);
-    cir.* = CIR.init(module_env);
+    cir.* = CIR.init(module_env, "test");
 
     // Create canonicalizer
     const can = try allocator.create(canonicalize);
-    can.* = canonicalize.init(cir, parse_ast);
+    can.* = try canonicalize.init(cir, parse_ast, null);
 
     // Canonicalize the expression
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
         // If canonicalization fails, create a runtime error
         const diagnostic_idx = cir.store.addDiagnostic(.{ .not_implemented = .{
             .feature = cir.env.strings.insert(allocator, "canonicalization failed"),
@@ -51,10 +51,9 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !s
             .parse_ast = parse_ast,
             .cir = cir,
             .can = can,
-            .expr_idx = cir.store.addExpr(.{ .runtime_error = .{
+            .expr_idx = cir.store.addExpr(.{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
-                .region = base.Region.zero(),
-            } }),
+            } }, base.Region.zero()),
         };
     };
 
@@ -106,7 +105,7 @@ test "eval runtime error - returns crash error" {
     defer eval_stack.deinit();
 
     // Create layout store
-    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
     // Evaluating a runtime error should return an error
@@ -122,7 +121,7 @@ test "eval tag - already primitive" {
 
     // Check if this resulted in a runtime error due to failed canonicalization
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .runtime_error) {
+    if (expr == .e_runtime_error) {
         // Expected - canonicalization of tags may not be fully implemented
         return;
     }
@@ -132,7 +131,7 @@ test "eval tag - already primitive" {
     defer eval_stack.deinit();
 
     // Create layout store
-    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
     // Evaluate the tag
@@ -154,7 +153,7 @@ test "eval binop - not yet implemented" {
     defer eval_stack.deinit();
 
     // Create layout store
-    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
     // For now, binop evaluation is not implemented
@@ -170,11 +169,11 @@ test "eval call - not yet implemented" {
 
     // Check if this resulted in a runtime error due to failed canonicalization
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .runtime_error) {
+    if (expr == .e_runtime_error) {
         // Expected - canonicalization of calls may not be fully implemented
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -182,7 +181,7 @@ test "eval call - not yet implemented" {
         // For now, call evaluation is not implemented
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
         try testing.expectError(eval.EvalError.LayoutError, result);
@@ -209,14 +208,14 @@ test "eval if expression with boolean tags" {
         const expr = resources.cir.store.getExpr(resources.expr_idx);
 
         // Check if canonicalization succeeded
-        if (expr == .runtime_error) {
+        if (expr == .e_runtime_error) {
             // If it failed, skip this test case - boolean canonicalization may not be complete
             continue;
         }
 
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
         const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
@@ -246,11 +245,11 @@ test "eval if expression - demonstrate evaluation logic" {
 
     // Check if this resulted in a runtime error due to failed canonicalization
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .runtime_error) {
+    if (expr == .e_runtime_error) {
         // Expected - canonicalization of if expressions with comparisons is not yet implemented
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -260,7 +259,7 @@ test "eval if expression - demonstrate evaluation logic" {
     // Once canonicalization is implemented, this code will run:
     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
     defer eval_stack.deinit();
-    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
     const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
@@ -287,11 +286,11 @@ test "eval if expression with non-boolean condition" {
 
     // Check if this resulted in a runtime error due to failed canonicalization
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .runtime_error) {
+    if (expr == .e_runtime_error) {
         // Expected - canonicalization should catch this type error
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -301,7 +300,7 @@ test "eval if expression with non-boolean condition" {
     // If canonicalization doesn't catch it (once implemented), eval should
     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
     defer eval_stack.deinit();
-    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
     const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
@@ -336,10 +335,10 @@ test "eval if expression - multiple branch conditions" {
 
     // Currently results in runtime error due to canonicalization limitations
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .runtime_error) {
+    if (expr == .e_runtime_error) {
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -365,10 +364,10 @@ test "eval if expression - nested if expressions" {
     defer cleanupParseAndCanonical(test_allocator, resources);
 
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .runtime_error) {
+    if (expr == .e_runtime_error) {
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -395,10 +394,10 @@ test "eval if expression - all conditions false falls to final else" {
     defer cleanupParseAndCanonical(test_allocator, resources);
 
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .runtime_error) {
+    if (expr == .e_runtime_error) {
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -422,10 +421,10 @@ test "eval if expression - type mismatch in different branches" {
 
     // This should be caught during canonicalization/type checking
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .runtime_error) {
+    if (expr == .e_runtime_error) {
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -473,7 +472,7 @@ test "eval simple number" {
     defer eval_stack.deinit();
 
     // Create layout store
-    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
     // Evaluate the number
@@ -512,7 +511,7 @@ test "eval negative number" {
     defer eval_stack.deinit();
 
     // Create layout store
-    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
     // Evaluate the number
@@ -551,7 +550,7 @@ test "eval list literal" {
     defer eval_stack.deinit();
 
     // Create layout store
-    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
     // List literals are not yet implemented
@@ -567,11 +566,11 @@ test "eval record literal" {
 
     // Check if this resulted in a runtime error due to failed canonicalization
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .runtime_error) {
+    if (expr == .e_runtime_error) {
         // Expected - canonicalization of records may not be fully implemented
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -579,7 +578,7 @@ test "eval record literal" {
         // Record literals are not yet implemented
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
         try testing.expectError(eval.EvalError.LayoutError, result);
@@ -594,11 +593,11 @@ test "eval empty record" {
 
     // Check if this resulted in a runtime error due to incomplete canonicalization
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .runtime_error) {
+    if (expr == .e_runtime_error) {
         // Expected - canonicalization of empty records may not be fully implemented
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -608,7 +607,7 @@ test "eval empty record" {
         defer eval_stack.deinit();
 
         // Create layout store
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
         // Empty records should work
@@ -647,31 +646,26 @@ test "eval empty record" {
 
 test "eval integer literal directly from CIR node" {
     // Create a minimal CIR environment
-    var module_env = base.ModuleEnv.init(test_allocator);
+    var module_env = base.ModuleEnv.init(test_allocator, "");
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env);
+    var cir = CIR.init(&module_env, "test");
     defer cir.deinit();
 
     // Create an integer literal node directly
     // Note: Currently using placeholder values since actual parsing isn't implemented
     const int_value = CIR.IntValue.placeholder();
 
-    const int_expr_idx = cir.store.addExpr(.{ .int = .{
-        .int_var = @enumFromInt(0),
-        .precision_var = @enumFromInt(0),
-        .literal = @enumFromInt(0),
+    const int_expr_idx = cir.store.addExpr(.{ .e_int = .{
         .value = int_value,
-        .bound = .i128,
-        .region = base.Region.zero(),
-    } });
+    } }, base.Region.zero());
 
     // Create a stack for evaluation
     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
     defer eval_stack.deinit();
 
     // Create layout store
-    var layout_cache = try layout_store.Store.init(&module_env, &module_env.types_store);
+    var layout_cache = try layout_store.Store.init(&module_env, &module_env.types);
     defer layout_cache.deinit();
 
     // Evaluate the integer

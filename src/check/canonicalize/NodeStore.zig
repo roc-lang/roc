@@ -441,20 +441,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
-        .expr_zero_argument_tag => {
-            // Get the extra_data index from data_1
-            const extra_idx = node.data_1;
 
-            return .{
-                .zero_argument_tag = .{
-                    .closure_name = @bitCast(store.extra_data.items[extra_idx]),
-                    .variant_var = @enumFromInt(node.data_2),
-                    .ext_var = @enumFromInt(node.data_3),
-                    .name = @bitCast(store.extra_data.items[extra_idx + 1]),
-                    .region = node.region,
-                },
-            };
-        },
         .expr_bin_op => {
             return CIR.Expr{
                 .e_binop = CIR.Expr.Binop.init(
