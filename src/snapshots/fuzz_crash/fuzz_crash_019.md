@@ -1690,7 +1690,7 @@ expect {
 		(patt @75.1-75.3 (type "arg -> [Stdo!(Str)]others"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
-		(alias @13.1-13.33 (type "Map(f, j)")
+		(alias @13.1-13.33 (type "Map(a, b)")
 			(ty-header @13.1-13.10 (name "Map")
 				(ty-args
 					(ty-var @13.5-13.6 (name "a"))

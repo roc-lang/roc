@@ -5230,7 +5230,7 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) s
                     // Create a basic type annotation for the scope
                     const ty_var_anno = try self.can_ir.addTypeAnnoAndTypeVar(
                         .{ .ty_var = .{ .name = tv.name } },
-                        .{ .flex_var = null },
+                        .{ .flex_var = tv.name },
                         region,
                     );
 

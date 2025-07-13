@@ -75,7 +75,7 @@ Cache(k, v) := Dict(U64, v)
 (inferred-types
 	(defs)
 	(type_decls
-		(nominal @3.1-5.31 (type "Cache(a, b)")
+		(nominal @3.1-5.31 (type "Cache(k, v)")
 			(ty-header @3.1-3.12 (name "Cache")
 				(ty-args
 					(ty-var @3.7-3.8 (name "k"))
