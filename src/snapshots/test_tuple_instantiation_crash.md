@@ -30,7 +30,7 @@ It is of type:
     _(a, b) -> (b, a)_
 
 But you are trying to use it as:
-    _Num(a), Num(b) -> c_
+    _Num(size), Num(size2) -> c_
 
 # TOKENS
 ~~~zig
@@ -121,8 +121,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @5.1-5.5 (type "Error"))
-		(patt @9.1-9.5 (type "a")))
+		(patt @9.1-9.5 (type "c")))
 	(expressions
 		(expr @5.8-5.23 (type "Error"))
-		(expr @9.8-9.18 (type "a"))))
+		(expr @9.8-9.18 (type "c"))))
 ~~~

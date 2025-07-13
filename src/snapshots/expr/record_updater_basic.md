@@ -77,9 +77,9 @@ updated = {..person, age: 31}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.7 (type "{ name: Str, age: Num(a) }"))
-		(patt @4.1-4.8 (type "{ age: Num(a) }")))
+		(patt @3.1-3.7 (type "{ name: Str, age: Num(size) }"))
+		(patt @4.1-4.8 (type "{ age: Num(size) }")))
 	(expressions
-		(expr @3.10-3.36 (type "{ name: Str, age: Num(a) }"))
-		(expr @4.11-4.32 (type "{ age: Num(a) }"))))
+		(expr @3.10-3.36 (type "{ name: Str, age: Num(size) }"))
+		(expr @4.11-4.32 (type "{ age: Num(size) }"))))
 ~~~

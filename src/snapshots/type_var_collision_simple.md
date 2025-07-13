@@ -239,19 +239,19 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.2 (type "Num(d)"))
-		(patt @5.1-5.2 (type "Num(d)"))
-		(patt @6.1-6.2 (type "Num(d)"))
-		(patt @9.1-9.9 (type "d -> d"))
-		(patt @12.1-12.10 (type "e -> e"))
-		(patt @15.1-15.5 (type "f, g -> (f, g)"))
-		(patt @17.1-17.6 (type "h -> i")))
+		(patt @4.1-4.2 (type "Num(size)"))
+		(patt @5.1-5.2 (type "Num(size)"))
+		(patt @6.1-6.2 (type "Num(size)"))
+		(patt @9.1-9.9 (type "arg -> arg"))
+		(patt @12.1-12.10 (type "arg2 -> arg2"))
+		(patt @15.1-15.5 (type "arg3, arg4 -> (arg3, arg4)"))
+		(patt @17.1-17.6 (type "arg5 -> d")))
 	(expressions
-		(expr @4.5-4.6 (type "Num(j)"))
-		(expr @5.5-5.6 (type "Num(j)"))
-		(expr @6.5-6.6 (type "Num(j)"))
-		(expr @9.12-9.17 (type "d -> d"))
-		(expr @12.13-12.18 (type "e -> e"))
-		(expr @15.8-15.39 (type "f, g -> (f, g)"))
-		(expr @17.9-23.2 (type "h -> i"))))
+		(expr @4.5-4.6 (type "Num(size)"))
+		(expr @5.5-5.6 (type "Num(size)"))
+		(expr @6.5-6.6 (type "Num(size)"))
+		(expr @9.12-9.17 (type "arg -> arg"))
+		(expr @12.13-12.18 (type "arg2 -> arg2"))
+		(expr @15.8-15.39 (type "arg3, arg4 -> (arg3, arg4)"))
+		(expr @17.9-23.2 (type "arg5 -> d"))))
 ~~~

@@ -19,7 +19,7 @@ The second and third elements in this list have incompatible types:
      ^^^  ^^^^^^^^^
 
 The second element has this type:
-    _List(Num(a))_
+    _List(Num(size))_
 
 However, the third element has this type:
     _List(Str)_

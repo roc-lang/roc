@@ -78,5 +78,5 @@ if # Comment after if
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-9.6 (type "Num(a)"))
+(expr @1.1-9.6 (type "Num(size)"))
 ~~~

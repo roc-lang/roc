@@ -115,8 +115,8 @@ main! = |_| getName({name: "luke", age: 21})
 (inferred-types
 	(defs
 		(patt @4.1-4.8 (type "{ age: U64, name: Str } -> Str"))
-		(patt @6.1-6.6 (type "a -> Str")))
+		(patt @6.1-6.6 (type "arg -> Str")))
 	(expressions
 		(expr @4.11-4.28 (type "{ age: U64, name: Str } -> Str"))
-		(expr @6.9-6.44 (type "a -> Str"))))
+		(expr @6.9-6.44 (type "arg -> Str"))))
 ~~~

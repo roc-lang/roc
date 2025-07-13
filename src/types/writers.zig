@@ -65,6 +65,14 @@ pub const SExprWriter = struct {
     }
 };
 
+const TypeContext = enum {
+    General,
+    NumContent,
+    ListContent,
+    RecordExtension,
+    FunctionArgument,
+};
+
 /// Helper that accepts a `Var` and write it as a nice string.
 /// Entry point is `writeVar`
 pub const TypeWriter = struct {
@@ -74,6 +82,8 @@ pub const TypeWriter = struct {
     buf: std.ArrayList(u8),
     seen: std.ArrayList(Var),
     next_name_index: u32,
+    context_stack: std.ArrayList(TypeContext),
+    name_counters: std.EnumMap(TypeContext, u32),
 
     /// Initialize a TypeWriter with a mutable ModuleEnv reference.
     ///
@@ -89,12 +99,15 @@ pub const TypeWriter = struct {
             .buf = try std.ArrayList(u8).initCapacity(gpa, 32),
             .seen = try std.ArrayList(Var).initCapacity(gpa, 16),
             .next_name_index = 0,
+            .context_stack = try std.ArrayList(TypeContext).initCapacity(gpa, 8),
+            .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.buf.deinit();
         self.seen.deinit();
+        self.context_stack.deinit();
     }
 
     pub fn get(self: *const Self) []u8 {
@@ -104,6 +117,7 @@ pub const TypeWriter = struct {
     pub fn write(self: *Self, var_: types.Var) Allocator.Error!void {
         self.buf.clearRetainingCapacity();
         self.next_name_index = 0;
+        self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
         try self.writeVar(var_);
     }
 
@@ -154,7 +168,96 @@ pub const TypeWriter = struct {
         }
     }
 
-    fn hasSeenVar(self: *const Self, var_: types.Var) bool {
+    fn generateContextualName(self: *Self) Allocator.Error!void {
+        const context = if (self.context_stack.items.len > 0)
+            self.context_stack.items[self.context_stack.items.len - 1]
+        else
+            TypeContext.General;
+
+        const base_name = switch (context) {
+            .NumContent => "size",
+            .ListContent => "elem",
+            .RecordExtension => "others",
+            .FunctionArgument => "arg",
+            .General => {
+                // Fall back to generic name generation
+                try self.generateNextName();
+                return;
+            },
+        };
+
+        // Try to generate a name with increasing counters until we find one that doesn't collide
+        var counter = self.name_counters.get(context) orelse 0;
+        var found = false;
+
+        while (!found) {
+            var buf: [32]u8 = undefined;
+            const candidate_name = if (counter == 0)
+                base_name
+            else blk: {
+                const name = std.fmt.bufPrint(&buf, "{s}{}", .{ base_name, counter + 1 }) catch {
+                    // Buffer too small, fall back to generic name
+                    try self.generateNextName();
+                    return;
+                };
+                break :blk name;
+            };
+
+            // Check if this name already exists in the identifier store
+            var exists = false;
+            var i: u32 = 0;
+            while (i < self.env.idents.interner.outer_indices.items.len) : (i += 1) {
+                const ident_idx = Ident.Idx{ .idx = @truncate(i), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+                const existing_name = self.env.idents.getText(ident_idx);
+                if (std.mem.eql(u8, existing_name, candidate_name)) {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists) {
+                // This name is available, write it to the buffer
+                for (candidate_name) |c| {
+                    try self.buf.append(c);
+                }
+                found = true;
+            } else {
+                // Try next counter
+                counter += 1;
+            }
+        }
+
+        self.name_counters.put(context, counter + 1);
+    }
+
+    fn writeNameCheckingCollisions(self: *Self, candidate_name: []const u8) Allocator.Error!void {
+        // Check if this name already exists in the identifier store
+        var exists = false;
+
+        // Check all identifiers in the store
+        var i: u32 = 0;
+        while (i < self.env.idents.interner.outer_indices.items.len) : (i += 1) {
+            const ident_idx = Ident.Idx{ .idx = @truncate(i), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+            const existing_name = self.env.idents.getText(ident_idx);
+            if (std.mem.eql(u8, existing_name, candidate_name)) {
+                exists = true;
+                break;
+            }
+        }
+
+        if (!exists) {
+            // This name is available, write it to the buffer
+            for (candidate_name) |c| {
+                try self.buf.append(c);
+            }
+        } else {
+            // Name collision - we need to handle this differently
+            // For now, just fall back to generic name generation
+            try self.generateNextName();
+        }
+    }
+
+    fn hasSeenVar(self: *const Self, var_: Var) bool {
         for (self.seen.items) |seen| {
             if (seen == var_) return true;
         }
@@ -181,7 +284,7 @@ pub const TypeWriter = struct {
                         } else {
                             // Generate a name and update the type variable to have this name
                             const start_pos = self.buf.items.len;
-                            try self.generateNextName();
+                            try self.generateContextualName();
                             const generated_name = self.buf.items[start_pos..];
 
                             // Update the type variable to have this generated name
@@ -240,12 +343,16 @@ pub const TypeWriter = struct {
             },
             .list => |sub_var| {
                 _ = try self.buf.writer().write("List(");
+                try self.context_stack.append(.ListContent);
                 try self.writeVar(sub_var);
+                _ = self.context_stack.pop();
                 _ = try self.buf.writer().write(")");
             },
             .list_unbound => {
                 _ = try self.buf.writer().write("List(");
-                try self.generateNextName();
+                try self.context_stack.append(.ListContent);
+                try self.generateContextualName();
+                _ = self.context_stack.pop();
                 _ = try self.buf.writer().write(")");
             },
             .tuple => |tuple| {
@@ -355,11 +462,15 @@ pub const TypeWriter = struct {
         if (args.len == 0) {
             _ = try self.buf.writer().write("({})");
         } else if (args.len == 1) {
+            try self.context_stack.append(.FunctionArgument);
             try self.writeVar(args[0]);
+            _ = self.context_stack.pop();
         } else {
             for (args, 0..) |arg, i| {
                 if (i > 0) _ = try self.buf.writer().write(", ");
+                try self.context_stack.append(.FunctionArgument);
                 try self.writeVar(arg);
+                _ = self.context_stack.pop();
             }
         }
 
@@ -399,16 +510,18 @@ pub const TypeWriter = struct {
                 },
                 else => {
                     if (fields.len > 0) _ = try self.buf.writer().write(", ");
-                    _ = try self.buf.writer().write("* ");
+                    try self.context_stack.append(.RecordExtension);
                     try self.writeVar(record.ext);
+                    _ = self.context_stack.pop();
                 },
             },
             .flex_var => |mb_ident| {
                 // Only show flex vars if they have a name
                 if (mb_ident) |_| {
                     if (fields.len > 0) _ = try self.buf.writer().write(", ");
-                    _ = try self.buf.writer().write("* ");
+                    try self.context_stack.append(.RecordExtension);
                     try self.writeVar(record.ext);
+                    _ = self.context_stack.pop();
                 }
                 // Otherwise hide unnamed flex vars, so they render as no extension.
             },
@@ -419,10 +532,10 @@ pub const TypeWriter = struct {
                 _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
             },
             else => {
-                // Show other types (aliases, errors, etc)
                 if (fields.len > 0) _ = try self.buf.writer().write(", ");
-                _ = try self.buf.writer().write("* ");
+                try self.context_stack.append(.RecordExtension);
                 try self.writeVar(record.ext);
+                _ = self.context_stack.pop();
             },
         }
 
@@ -449,16 +562,18 @@ pub const TypeWriter = struct {
                 },
                 else => {
                     if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                    _ = try self.buf.writer().write("* ");
+                    try self.context_stack.append(.RecordExtension);
                     try self.writeVar(ext_var);
+                    _ = self.context_stack.pop();
                 },
             },
             .flex_var => |mb_ident| {
                 // Only show flex vars if they have a name
                 if (mb_ident) |_| {
                     if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                    _ = try self.buf.writer().write("* ");
+                    try self.context_stack.append(.RecordExtension);
                     try self.writeVar(ext_var);
+                    _ = self.context_stack.pop();
                 }
                 // Otherwise hide unnamed flex vars, so they render as no extension.
             },
@@ -471,8 +586,9 @@ pub const TypeWriter = struct {
             else => {
                 // Show other types (aliases, errors, etc)
                 if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                _ = try self.buf.writer().write("* ");
+                try self.context_stack.append(.RecordExtension);
                 try self.writeVar(ext_var);
+                _ = self.context_stack.pop();
             },
         }
     }
@@ -536,32 +652,44 @@ pub const TypeWriter = struct {
         switch (num) {
             .num_poly => |poly| {
                 _ = try self.buf.writer().write("Num(");
+                try self.context_stack.append(.NumContent);
                 try self.writeVar(poly.var_);
+                _ = self.context_stack.pop();
                 _ = try self.buf.writer().write(")");
             },
             .int_poly => |poly| {
                 _ = try self.buf.writer().write("Int(");
+                try self.context_stack.append(.NumContent);
                 try self.writeVar(poly.var_);
+                _ = self.context_stack.pop();
                 _ = try self.buf.writer().write(")");
             },
             .frac_poly => |poly| {
                 _ = try self.buf.writer().write("Frac(");
+                try self.context_stack.append(.NumContent);
                 try self.writeVar(poly.var_);
+                _ = self.context_stack.pop();
                 _ = try self.buf.writer().write(")");
             },
             .num_unbound => |_| {
                 _ = try self.buf.writer().write("Num(");
-                try self.generateNextName();
+                try self.context_stack.append(.NumContent);
+                try self.generateContextualName();
+                _ = self.context_stack.pop();
                 _ = try self.buf.writer().write(")");
             },
             .int_unbound => |_| {
                 _ = try self.buf.writer().write("Int(");
-                try self.generateNextName();
+                try self.context_stack.append(.NumContent);
+                try self.generateContextualName();
+                _ = self.context_stack.pop();
                 _ = try self.buf.writer().write(")");
             },
             .frac_unbound => |_| {
                 _ = try self.buf.writer().write("Frac(");
-                try self.generateNextName();
+                try self.context_stack.append(.NumContent);
+                try self.generateContextualName();
+                _ = self.context_stack.pop();
                 _ = try self.buf.writer().write(")");
             },
             .int_precision => |prec| {

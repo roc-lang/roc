@@ -151,11 +151,11 @@ outerFunc = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.2 (type "Num(a)"))
-		(patt @5.1-5.2 (type "Num(a)"))
-		(patt @8.1-8.10 (type "a -> b")))
+		(patt @4.1-4.2 (type "Num(size)"))
+		(patt @5.1-5.2 (type "Num(size)"))
+		(patt @8.1-8.10 (type "arg -> a")))
 	(expressions
-		(expr @4.5-4.6 (type "Num(a)"))
-		(expr @5.5-5.7 (type "Num(a)"))
-		(expr @8.13-16.2 (type "a -> b"))))
+		(expr @4.5-4.6 (type "Num(size)"))
+		(expr @5.5-5.7 (type "Num(size)"))
+		(expr @8.13-16.2 (type "arg -> a"))))
 ~~~

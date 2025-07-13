@@ -713,7 +713,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue]a_
+    _[Blue]f_
 
 All patterns in an `match` must have compatible types.
 
@@ -728,10 +728,10 @@ This expression is used in an unexpected way:
  ^^
 
 It is of type:
-    _[Blue]c, [Tb]d -> Error_
+    _[Blue]arg2, [Tb]arg3 -> Error_
 
 But you are trying to use it as:
-    _a -> b_
+    _arg -> f_
 
 # TOKENS
 ~~~zig
@@ -1684,13 +1684,13 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @35.1-35.4 (type "Bool -> Num(a)"))
+		(patt @35.1-35.4 (type "Bool -> Num(size)"))
 		(patt @38.1-38.4 (type "Bool -> Error"))
 		(patt @49.1-49.3 (type "Error"))
-		(patt @75.1-75.3 (type "a -> [Stdo!(Str)]b"))
+		(patt @75.1-75.3 (type "arg -> [Stdo!(Str)]f"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
-		(alias @13.1-13.33 (type "Map(a, b)")
+		(alias @13.1-13.33 (type "Map(j, k)")
 			(ty-header @13.1-13.10 (name "Map")
 				(ty-args
 					(ty-var @13.5-13.6 (name "a"))
@@ -1716,9 +1716,9 @@ expect {
 				(ty-args
 					(ty-var @32.8-32.9 (name "a"))))))
 	(expressions
-		(expr @35.7-35.28 (type "Bool -> Num(a)"))
+		(expr @35.7-35.28 (type "Bool -> Num(size)"))
 		(expr @38.7-47.2 (type "Bool -> Error"))
 		(expr @49.6-69.3 (type "Error"))
-		(expr @75.5-111.2 (type "a -> [Stdo!(Str)]b"))
+		(expr @75.5-111.2 (type "arg -> [Stdo!(Str)]f"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

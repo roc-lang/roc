@@ -138,13 +138,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.9 (type "a, b -> c"))
-		(patt @9.1-9.14 (type "a -> b"))
-		(patt @12.1-12.9 (type "a -> b"))
-		(patt @14.1-14.6 (type "a")))
+		(patt @6.1-6.9 (type "arg, arg2 -> a"))
+		(patt @9.1-9.14 (type "arg3 -> b"))
+		(patt @12.1-12.9 (type "arg4 -> c"))
+		(patt @14.1-14.6 (type "d")))
 	(expressions
-		(expr @6.12-6.24 (type "a, b -> c"))
-		(expr @9.17-9.36 (type "a -> b"))
-		(expr @12.12-12.45 (type "a -> b"))
-		(expr @14.9-14.21 (type "a"))))
+		(expr @6.12-6.24 (type "arg, arg2 -> a"))
+		(expr @9.17-9.36 (type "arg3 -> b"))
+		(expr @12.12-12.45 (type "arg4 -> c"))
+		(expr @14.9-14.21 (type "d"))))
 ~~~

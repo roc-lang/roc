@@ -30,7 +30,7 @@ The second branch has this type;
     _Str_
 
 But the previous branch has this type:
-    _Num(a)_
+    _Num(size)_
 
 All branches in an `match` must have compatible types.
 
@@ -51,10 +51,10 @@ match Answer {
     ^^
 
 The fourth pattern has this type:
-    _Num(a)_
+    _Num(size)_
 
 But all the previous patterns have this type: 
-    _[Answer, Zero, Greeting]b_
+    _[Answer, Zero, Greeting]a_
 
 All patterns in an `match` must have compatible types.
 

@@ -118,11 +118,11 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @6.1-6.8 (type "UserId -> Str"))
-		(patt @8.1-8.6 (type "a -> Str")))
+		(patt @8.1-8.6 (type "arg -> Str")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
 		(expr @6.11-6.47 (type "UserId -> Str"))
-		(expr @8.9-8.25 (type "a -> Str"))))
+		(expr @8.9-8.25 (type "arg -> Str"))))
 ~~~

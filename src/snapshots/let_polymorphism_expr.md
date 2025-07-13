@@ -84,5 +84,5 @@ match [] {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "{ ints: List(Num(a)), strs: List(Str), empty: List(b) }"))
+(expr @1.1-3.2 (type "{ ints: List(Num(size)), strs: List(Str), empty: List(elem) }"))
 ~~~

@@ -105,7 +105,7 @@ Decode(a) : a where module(a).decode : List(U8) -> a
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-6.25 (type "Hash(a, b)")
+		(alias @3.1-6.25 (type "Hash(b, c)")
 			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))

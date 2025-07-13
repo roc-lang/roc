@@ -34,10 +34,10 @@ if bool {
        ^
 
 The `else` branch has the type:
-    _Num(a)_
+    _Num(size)_
 
 But the `then` branch has the type:
-    _[A]b_
+    _[A]a_
 
 All branches in an `if` must have compatible types.
 

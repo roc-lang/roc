@@ -129,13 +129,13 @@ final = {..updated2, name: "Alice Smith", age: 32}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.7 (type "{ name: Str, age: Num(a), city: Str }"))
-		(patt @4.1-4.12 (type "{ age: Num(a) }"))
+		(patt @3.1-3.7 (type "{ name: Str, age: Num(size), city: Str }"))
+		(patt @4.1-4.12 (type "{ age: Num(size) }"))
 		(patt @5.1-5.9 (type "{ city: Str }"))
-		(patt @6.1-6.6 (type "{ name: Str, age: Num(a) }")))
+		(patt @6.1-6.6 (type "{ name: Str, age: Num(size) }")))
 	(expressions
-		(expr @3.10-3.52 (type "{ name: Str, age: Num(a), city: Str }"))
-		(expr @4.15-4.36 (type "{ age: Num(a) }"))
+		(expr @3.10-3.52 (type "{ name: Str, age: Num(size), city: Str }"))
+		(expr @4.15-4.36 (type "{ age: Num(size) }"))
 		(expr @5.12-5.47 (type "{ city: Str }"))
-		(expr @6.9-6.53 (type "{ name: Str, age: Num(a) }"))))
+		(expr @6.9-6.53 (type "{ name: Str, age: Num(size) }"))))
 ~~~

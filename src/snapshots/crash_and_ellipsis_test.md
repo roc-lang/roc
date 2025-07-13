@@ -305,10 +305,10 @@ main! = |_| {
 		(patt @5.1-5.13 (type "Error -> Error"))
 		(patt @9.1-9.10 (type "Error -> Error"))
 		(patt @13.1-13.16 (type "Error -> Error"))
-		(patt @15.1-15.6 (type "a -> List(b)")))
+		(patt @15.1-15.6 (type "arg -> List(elem)")))
 	(expressions
 		(expr @5.16-5.23 (type "Error -> Error"))
 		(expr @9.13-9.22 (type "Error -> Error"))
 		(expr @13.19-13.28 (type "Error -> Error"))
-		(expr @15.9-20.2 (type "a -> List(a)"))))
+		(expr @15.9-20.2 (type "arg -> List(elem)"))))
 ~~~

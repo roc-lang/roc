@@ -25,7 +25,7 @@ foo = if 1 A
          ^
 
 Right now, it has the type:
-    _Num(a)_
+    _Num(size)_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 

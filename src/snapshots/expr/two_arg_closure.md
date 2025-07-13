@@ -37,5 +37,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.10 (type "a, b -> Num(c)"))
+(expr @1.1-1.10 (type "arg, arg2 -> Num(size)"))
 ~~~
