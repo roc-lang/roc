@@ -17,7 +17,6 @@ value = 42
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
-TYPE MISMATCH - usage_test.md:7:9:7:17
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -40,20 +39,6 @@ Underscores are not allowed in type alias declarations.
 
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**usage_test.md:7:9:7:17:**
-```roc
-value : UsedType
-```
-        ^^^^^^^^
-
-It is of type:
-    _UsedType_
-
-But you are trying to use it as:
-    _Num(_size)_
 
 # TOKENS
 ~~~zig
@@ -109,7 +94,7 @@ NO CHANGE
 	(defs
 		(patt @8.1-8.6 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.16 (type "UnusedType")
+		(nominal @3.1-3.16 (type "Error")
 			(ty-header @3.1-3.11 (name "UnusedType")))
 		(nominal @5.1-5.14 (type "Error")
 			(ty-header @5.1-5.9 (name "UsedType"))))

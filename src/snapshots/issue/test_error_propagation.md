@@ -82,12 +82,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.6 (type "Str")))
+		(patt @8.1-8.6 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.13 (type "BadBase")
+		(nominal @3.1-3.13 (type "Error")
 			(ty-header @3.1-3.8 (name "BadBase")))
-		(nominal @5.1-5.21 (type "Str")
+		(nominal @5.1-5.21 (type "Error")
 			(ty-header @5.1-5.10 (name "GoodAlias"))))
 	(expressions
-		(expr @8.9-8.15 (type "Str"))))
+		(expr @8.9-8.15 (type "Error"))))
 ~~~

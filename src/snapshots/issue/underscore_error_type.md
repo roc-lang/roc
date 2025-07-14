@@ -39,8 +39,6 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:23:14:23:14
-TYPE MISMATCH - underscore_error_type.md:5:7:5:14
-TYPE MISMATCH - underscore_error_type.md:10:7:10:14
 TYPE MISMATCH - underscore_error_type.md:15:7:15:16
 TYPE MISMATCH - underscore_error_type.md:20:7:20:18
 TYPE MISMATCH - underscore_error_type.md:25:8:25:16
@@ -110,34 +108,6 @@ BadTuple := (_, U32)
              
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_type.md:5:7:5:14:**
-```roc
-foo : BadType
-```
-      ^^^^^^^
-
-It is of type:
-    _BadType_
-
-But you are trying to use it as:
-    _Num(_size)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_type.md:10:7:10:14:**
-```roc
-bar : BadList
-```
-      ^^^^^^^
-
-It is of type:
-    _BadList_
-
-But you are trying to use it as:
-    _List(Num(_size))_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

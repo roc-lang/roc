@@ -38,20 +38,6 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**underscore_error_propagation.md:7:9:7:19:**
-```roc
-value : BadDerived
-```
-        ^^^^^^^^^^
-
-It is of type:
-    _BadDerived_
-
-But you are trying to use it as:
-    _Str_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
 **underscore_error_propagation.md:14:13:14:24:**
 ```roc
 goodValue : GoodDerived
@@ -152,7 +138,7 @@ NO CHANGE
 		(patt @8.1-8.6 (type "Error"))
 		(patt @15.1-15.10 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.13 (type "BadBase")
+		(nominal @3.1-3.13 (type "Error")
 			(ty-header @3.1-3.8 (name "BadBase")))
 		(nominal @5.1-5.22 (type "Error")
 			(ty-header @5.1-5.11 (name "BadDerived")))

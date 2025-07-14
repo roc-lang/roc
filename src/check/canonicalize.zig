@@ -433,6 +433,10 @@ pub fn canonicalizeFile(
                     break :blk try self.canonicalizeTypeAnnoToTypeVar(anno_idx);
                 };
 
+                // Check if the backing type is already an error type
+                const backing_resolved = self.can_ir.env.types.resolveVar(anno_var);
+                const backing_is_error = backing_resolved.desc.content == .err;
+
                 // Create types for each arg annotation
                 const scratch_anno_start = self.scratch_vars.top();
                 for (self.can_ir.store.sliceTypeAnnos(type_header.args)) |arg_anno_idx| {
@@ -461,6 +465,11 @@ pub fn canonicalizeFile(
                 const real_cir_type_decl, const type_decl_content = blk: {
                     switch (type_decl.kind) {
                         .alias => {
+                            const alias_content = if (backing_is_error)
+                                types.Content{ .err = {} }
+                            else
+                                try self.can_ir.env.types.mkAlias(type_ident, anno_var, arg_anno_slice);
+
                             break :blk .{
                                 CIR.Statement{
                                     .s_alias_decl = .{
@@ -470,10 +479,20 @@ pub fn canonicalizeFile(
                                         .where = where_clauses,
                                     },
                                 },
-                                try self.can_ir.env.types.mkAlias(type_ident, anno_var, arg_anno_slice),
+                                alias_content,
                             };
                         },
                         .nominal => {
+                            const nominal_content = if (backing_is_error)
+                                types.Content{ .err = {} }
+                            else
+                                try self.can_ir.env.types.mkNominal(
+                                    type_ident,
+                                    anno_var,
+                                    arg_anno_slice,
+                                    try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.can_ir.module_name), Region.zero()),
+                                );
+
                             break :blk .{
                                 CIR.Statement{
                                     .s_nominal_decl = .{
@@ -483,12 +502,7 @@ pub fn canonicalizeFile(
                                         .where = where_clauses,
                                     },
                                 },
-                                try self.can_ir.env.types.mkNominal(
-                                    type_ident,
-                                    anno_var,
-                                    arg_anno_slice,
-                                    try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.can_ir.module_name), Region.zero()),
-                                ),
+                                nominal_content,
                             };
                         },
                     }
@@ -4469,7 +4483,20 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, can_intro
                 } }, Content{ .flex_var = null }, param_region);
                 try self.can_ir.store.addScratchTypeAnno(param_anno);
             },
+            .underscore => |underscore_param| {
+                // Handle underscore type parameters
+                const param_region = self.parse_ir.tokenizedRegionToRegion(underscore_param.region);
 
+                // Push underscore diagnostic for underscore type parameters
+                try self.can_ir.pushDiagnostic(CIR.Diagnostic{ .underscore_in_type_declaration = .{
+                    .is_alias = true,
+                    .region = param_region,
+                } });
+
+                // Create underscore type annotation
+                const underscore_anno = try self.can_ir.addTypeAnnoAndTypeVar(.{ .underscore = {} }, Content{ .err = {} }, param_region);
+                try self.can_ir.store.addScratchTypeAnno(underscore_anno);
+            },
             .malformed => |malformed_param| {
                 // Handle malformed underscore type parameters
                 const param_region = self.parse_ir.tokenizedRegionToRegion(malformed_param.region);

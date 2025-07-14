@@ -141,7 +141,7 @@ AnotherType : SomeModule.MissingType
 	(defs
 		(patt @6.1-6.13 (type "Error -> Str")))
 	(type_decls
-		(alias @3.1-3.21 (type "MyType")
+		(alias @3.1-3.21 (type "Error")
 			(ty-header @3.1-3.7 (name "MyType")))
 		(alias @10.1-10.37 (type "AnotherType")
 			(ty-header @10.1-10.12 (name "AnotherType"))))

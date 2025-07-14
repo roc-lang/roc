@@ -14,7 +14,6 @@ foo = 42
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
-TYPE MISMATCH - simple_underscore_error.md:5:7:5:14
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -26,20 +25,6 @@ Underscores are not allowed in type alias declarations.
 
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**simple_underscore_error.md:5:7:5:14:**
-```roc
-foo : BadType
-```
-      ^^^^^^^
-
-It is of type:
-    _BadType_
-
-But you are trying to use it as:
-    _Num(_size)_
 
 # TOKENS
 ~~~zig

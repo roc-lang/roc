@@ -149,7 +149,7 @@ main.roc
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.15 (type "Fli")
+		(alias @3.1-3.15 (type "Error")
 			(ty-header @3.1-3.11 (name "Fli"))))
 	(expressions))
 ~~~

@@ -242,11 +242,11 @@ TagType := [Some(_), None]
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.11 (type "MyType")
+		(alias @3.1-3.11 (type "Error")
 			(ty-header @3.1-3.7 (name "MyType")))
-		(nominal @5.1-5.15 (type "OtherType")
+		(nominal @5.1-5.15 (type "Error")
 			(ty-header @5.1-5.10 (name "OtherType")))
-		(nominal @7.1-7.23 (type "ComplexType")
+		(nominal @7.1-7.23 (type "Error")
 			(ty-header @7.1-7.12 (name "ComplexType")))
 		(nominal @9.1-9.39 (type "RecordType")
 			(ty-header @9.1-9.11 (name "RecordType")))
