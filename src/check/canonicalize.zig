@@ -4469,6 +4469,20 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, can_intro
                 } }, Content{ .flex_var = null }, param_region);
                 try self.can_ir.store.addScratchTypeAnno(param_anno);
             },
+            .underscore => |underscore_param| {
+                // Handle underscore type parameters
+                const param_region = self.parse_ir.tokenizedRegionToRegion(underscore_param.region);
+
+                // Push underscore diagnostic for underscore type parameters
+                try self.can_ir.pushDiagnostic(CIR.Diagnostic{ .underscore_in_type_declaration = .{
+                    .is_alias = true,
+                    .region = param_region,
+                } });
+
+                // Create underscore type annotation
+                const underscore_anno = try self.can_ir.addTypeAnnoAndTypeVar(.{ .underscore = {} }, Content{ .err = {} }, param_region);
+                try self.can_ir.store.addScratchTypeAnno(underscore_anno);
+            },
             .malformed => |malformed_param| {
                 // Handle malformed underscore type parameters
                 const param_region = self.parse_ir.tokenizedRegionToRegion(malformed_param.region);

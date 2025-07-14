@@ -36,18 +36,6 @@ INVALID STATEMENT - underscore_type_decl.md:7:6:7:12
 INVALID STATEMENT - underscore_type_decl.md:7:13:7:14
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_type_decl.md:5:10:5:11:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-         ^
-
-
-**PARSE ERROR**
 Type applications require parentheses around their type arguments.
 
 I found a type followed by what looks like a type argument, but they need to be connected with parentheses.

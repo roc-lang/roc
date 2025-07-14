@@ -23,12 +23,6 @@ ComplexType(_, b) : { field: b }
 MultiType(_, _, c) : c
 ~~~
 # EXPECTED
-PARSE ERROR - underscore_in_type_parameters.md:4:8:4:9
-PARSE ERROR - underscore_in_type_parameters.md:7:9:7:10
-PARSE ERROR - underscore_in_type_parameters.md:10:12:10:13
-PARSE ERROR - underscore_in_type_parameters.md:13:13:13:14
-PARSE ERROR - underscore_in_type_parameters.md:16:11:16:12
-PARSE ERROR - underscore_in_type_parameters.md:16:14:16:15
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:4:8:4:9
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:7:9:7:10
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:10:12:10:13
@@ -36,78 +30,6 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:13:13:13:14
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:16:11:16:12
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:16:14:16:15
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_type_parameters.md:4:8:4:9:**
-```roc
-MyType(_) : Str
-```
-       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_type_parameters.md:7:9:7:10:**
-```roc
-MyType2(_, b) : b
-```
-        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_type_parameters.md:10:12:10:13:**
-```roc
-MyType3(a, _) : a
-```
-           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_type_parameters.md:13:13:13:14:**
-```roc
-ComplexType(_, b) : { field: b }
-```
-            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_type_parameters.md:16:11:16:12:**
-```roc
-MultiType(_, _, c) : c
-```
-          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_type_parameters.md:16:14:16:15:**
-```roc
-MultiType(_, _, c) : c
-```
-             ^
-
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
@@ -118,9 +40,6 @@ MyType(_) : Str
        ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
 
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -133,9 +52,6 @@ MyType2(_, b) : b
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
@@ -146,9 +62,6 @@ MyType3(a, _) : a
            ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
 
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -161,9 +74,6 @@ ComplexType(_, b) : { field: b }
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
@@ -175,9 +85,6 @@ MultiType(_, _, c) : c
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
@@ -188,9 +95,6 @@ MultiType(_, _, c) : c
              ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig
@@ -210,24 +114,24 @@ UpperIdent(16:1-16:10),NoSpaceOpenRound(16:10-16:11),Underscore(16:11-16:12),Com
 		(s-type-decl @4.1-4.16
 			(header @4.1-4.10 (name "MyType")
 				(args
-					(ty-malformed @4.8-4.9 (tag "invalid_type_arg"))))
+					(_)))
 			(ty @4.13-4.16 (name "Str")))
 		(s-type-decl @7.1-7.18
 			(header @7.1-7.14 (name "MyType2")
 				(args
-					(ty-malformed @7.9-7.10 (tag "invalid_type_arg"))
+					(_)
 					(ty-var @7.12-7.13 (raw "b"))))
 			(ty-var @7.17-7.18 (raw "b")))
 		(s-type-decl @10.1-10.18
 			(header @10.1-10.14 (name "MyType3")
 				(args
 					(ty-var @10.9-10.10 (raw "a"))
-					(ty-malformed @10.12-10.13 (tag "invalid_type_arg"))))
+					(_)))
 			(ty-var @10.17-10.18 (raw "a")))
 		(s-type-decl @13.1-13.33
 			(header @13.1-13.18 (name "ComplexType")
 				(args
-					(ty-malformed @13.13-13.14 (tag "invalid_type_arg"))
+					(_)
 					(ty-var @13.16-13.17 (raw "b"))))
 			(ty-record @13.21-13.33
 				(anno-record-field @13.23-13.31 (name "field")
@@ -235,8 +139,8 @@ UpperIdent(16:1-16:10),NoSpaceOpenRound(16:10-16:11),Underscore(16:11-16:12),Com
 		(s-type-decl @16.1-16.23
 			(header @16.1-16.19 (name "MultiType")
 				(args
-					(ty-malformed @16.11-16.12 (tag "invalid_type_arg"))
-					(ty-malformed @16.14-16.15 (tag "invalid_type_arg"))
+					(_)
+					(_)
 					(ty-var @16.17-16.18 (raw "c"))))
 			(ty-var @16.22-16.23 (raw "c")))))
 ~~~
@@ -245,19 +149,19 @@ UpperIdent(16:1-16:10),NoSpaceOpenRound(16:10-16:11),Underscore(16:11-16:12),Com
 module []
 
 # Type with underscore in parameter position
-MyType() : Str
+MyType(_) : Str
 
 # Type with underscore and regular parameter
-MyType2(, b) : b
+MyType2(_, b) : b
 
 # Type with parameters where underscore comes second
-MyType3(a, ) : a
+MyType3(a, _) : a
 
 # More complex type with underscore parameter
-ComplexType(, b) : { field : b }
+ComplexType(_, b) : { field : b }
 
 # Type with multiple underscores
-MultiType(, , c) : c
+MultiType(_, _, c) : c
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -265,24 +169,24 @@ MultiType(, , c) : c
 	(s-alias-decl @4.1-4.16
 		(ty-header @4.1-4.10 (name "MyType")
 			(ty-args
-				(ty-malformed @4.8-4.9)))
+				(ty-underscore @4.8-4.9)))
 		(ty @4.13-4.16 (name "Str")))
 	(s-alias-decl @7.1-7.18
 		(ty-header @7.1-7.14 (name "MyType2")
 			(ty-args
-				(ty-malformed @7.9-7.10)
+				(ty-underscore @7.9-7.10)
 				(ty-var @7.12-7.13 (name "b"))))
 		(ty-var @7.17-7.18 (name "b")))
 	(s-alias-decl @10.1-10.18
 		(ty-header @10.1-10.14 (name "MyType3")
 			(ty-args
 				(ty-var @10.9-10.10 (name "a"))
-				(ty-malformed @10.12-10.13)))
+				(ty-underscore @10.12-10.13)))
 		(ty-var @10.17-10.18 (name "a")))
 	(s-alias-decl @13.1-13.33
 		(ty-header @13.1-13.18 (name "ComplexType")
 			(ty-args
-				(ty-malformed @13.13-13.14)
+				(ty-underscore @13.13-13.14)
 				(ty-var @13.16-13.17 (name "b"))))
 		(ty-record @13.21-13.33
 			(field (field "field")
@@ -290,8 +194,8 @@ MultiType(, , c) : c
 	(s-alias-decl @16.1-16.23
 		(ty-header @16.1-16.19 (name "MultiType")
 			(ty-args
-				(ty-malformed @16.11-16.12)
-				(ty-malformed @16.14-16.15)
+				(ty-underscore @16.11-16.12)
+				(ty-underscore @16.14-16.15)
 				(ty-var @16.17-16.18 (name "c"))))
 		(ty-var @16.22-16.23 (name "c"))))
 ~~~
@@ -303,27 +207,27 @@ MultiType(, , c) : c
 		(alias @4.1-4.16 (type "MyType(Error)")
 			(ty-header @4.1-4.10 (name "MyType")
 				(ty-args
-					(ty-malformed @4.8-4.9))))
+					(ty-underscore @4.8-4.9))))
 		(alias @7.1-7.18 (type "MyType2(Error, b)")
 			(ty-header @7.1-7.14 (name "MyType2")
 				(ty-args
-					(ty-malformed @7.9-7.10)
+					(ty-underscore @7.9-7.10)
 					(ty-var @7.12-7.13 (name "b")))))
 		(alias @10.1-10.18 (type "MyType3(a, Error)")
 			(ty-header @10.1-10.14 (name "MyType3")
 				(ty-args
 					(ty-var @10.9-10.10 (name "a"))
-					(ty-malformed @10.12-10.13))))
+					(ty-underscore @10.12-10.13))))
 		(alias @13.1-13.33 (type "ComplexType(Error, b)")
 			(ty-header @13.1-13.18 (name "ComplexType")
 				(ty-args
-					(ty-malformed @13.13-13.14)
+					(ty-underscore @13.13-13.14)
 					(ty-var @13.16-13.17 (name "b")))))
 		(alias @16.1-16.23 (type "MultiType(Error, Error, c)")
 			(ty-header @16.1-16.19 (name "MultiType")
 				(ty-args
-					(ty-malformed @16.11-16.12)
-					(ty-malformed @16.14-16.15)
+					(ty-underscore @16.11-16.12)
+					(ty-underscore @16.14-16.15)
 					(ty-var @16.17-16.18 (name "c"))))))
 	(expressions))
 ~~~
