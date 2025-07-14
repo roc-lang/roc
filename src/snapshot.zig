@@ -24,6 +24,7 @@ const types = @import("types.zig");
 const reporting = @import("reporting.zig");
 const tokenize = @import("check/parse/tokenize.zig");
 const SExprTree = @import("base/SExprTree.zig");
+const repl = @import("repl/eval.zig");
 
 const AST = parse.AST;
 const Report = reporting.Report;
@@ -411,6 +412,11 @@ fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_c
 fn processSnapshotContent(allocator: Allocator, content: Content, output_path: []const u8, generate_html: bool) !void {
     log("Generating snapshot for: {s}", .{output_path});
 
+    // Handle REPL snapshots separately
+    if (content.meta.node_type == .repl) {
+        return processReplSnapshot(allocator, content, output_path, generate_html);
+    }
+
     // Process the content through the compilation pipeline
     const source_copy = try allocator.dupe(u8, content.source);
     var module_env = try base.ModuleEnv.init(allocator, source_copy);
@@ -425,6 +431,7 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         .package => try parse.parse(&module_env, content.source),
         .platform => try parse.parse(&module_env, content.source),
         .app => try parse.parse(&module_env, content.source),
+        .repl => unreachable, // Handled above
     };
     defer parse_ast.deinit(allocator);
 
@@ -463,6 +470,7 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         .package => try can.canonicalizeFile(),
         .platform => try can.canonicalizeFile(),
         .app => try can.canonicalizeFile(),
+        .repl => unreachable, // Handled above
     }
 
     // Assert that everything is in-sync
@@ -807,6 +815,7 @@ pub const NodeType = enum {
     package,
     platform,
     app,
+    repl,
 
     pub const HEADER = "header";
     pub const EXPR = "expr";
@@ -815,6 +824,7 @@ pub const NodeType = enum {
     pub const PACKAGE = "package";
     pub const PLATFORM = "platform";
     pub const APP = "app";
+    pub const REPL = "repl";
 
     fn fromString(str: []const u8) !NodeType {
         if (std.mem.eql(u8, str, HEADER)) return .header;
@@ -824,6 +834,7 @@ pub const NodeType = enum {
         if (std.mem.eql(u8, str, PACKAGE)) return .package;
         if (std.mem.eql(u8, str, PLATFORM)) return .platform;
         if (std.mem.eql(u8, str, APP)) return .app;
+        if (std.mem.eql(u8, str, REPL)) return .repl;
         return Error.InvalidNodeType;
     }
 
@@ -836,6 +847,7 @@ pub const NodeType = enum {
             .package => "package",
             .platform => "platform",
             .app => "app",
+            .repl => "repl",
         };
     }
 };
@@ -1429,6 +1441,10 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             const file = parse_ast.store.getFile();
             try file.pushToSExprTree(env, parse_ast, &tree);
         },
+        .repl => {
+            // REPL doesn't use parse trees
+            return;
+        },
     }
 
     // Only generate section if we have content on the stack
@@ -1484,6 +1500,10 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         },
         .app => {
             try fmt.formatAst(parse_ast.*, formatted.writer().any());
+        },
+        .repl => {
+            // REPL doesn't use formatting
+            return;
         },
     }
 
@@ -1862,4 +1882,150 @@ fn extractSections(gpa: Allocator, content: []const u8) !Content {
     }
 
     return try Content.from_ranges(ranges, content);
+}
+
+fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, generate_html: bool) !void {
+    log("Processing REPL snapshot: {s}", .{output_path});
+
+    // Buffer all output in memory before writing files
+    var md_buffer = std.ArrayList(u8).init(allocator);
+    defer md_buffer.deinit();
+
+    var html_buffer = if (generate_html) std.ArrayList(u8).init(allocator) else null;
+    defer if (html_buffer) |*buf| buf.deinit();
+
+    var output = DualOutput.init(allocator, &md_buffer, if (html_buffer) |*buf| buf else null);
+
+    // Generate HTML wrapper
+    try generateHtmlWrapper(&output, &content);
+
+    // Generate all sections
+    try generateMetaSection(&output, &content);
+    try generateSourceSection(&output, &content);
+    try generateReplExpectedSection(&output, &content);
+    try generateReplProblemsSection(&output, &content);
+
+    try generateHtmlClosing(&output);
+
+    // Write the markdown file
+    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        warn("Failed to create {s}: {}", .{ output_path, err });
+        return;
+    };
+    defer md_file.close();
+
+    try md_file.writeAll(md_buffer.items);
+
+    if (html_buffer) |*buf| {
+        writeHtmlFile(allocator, output_path, buf) catch |err| {
+            warn("Failed to write HTML file for {s}: {}", .{ output_path, err });
+        };
+    }
+}
+
+fn generateReplExpectedSection(output: *DualOutput, content: *const Content) !void {
+    try output.begin_section("EXPECTED");
+
+    // Parse REPL inputs from the source
+    var lines = std.mem.tokenizeScalar(u8, content.source, '\n');
+    var inputs = std.ArrayList([]const u8).init(output.gpa);
+    defer inputs.deinit();
+
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len > 2 and std.mem.startsWith(u8, trimmed, "» ")) {
+            try inputs.append(trimmed[2..]);
+        }
+    }
+
+    // Initialize REPL
+    var repl_instance = try repl.Repl.init(output.gpa);
+    defer repl_instance.deinit();
+
+    // Process each input and generate output
+    var actual_outputs = std.ArrayList([]const u8).init(output.gpa);
+    defer {
+        for (actual_outputs.items) |item| {
+            output.gpa.free(item);
+        }
+        actual_outputs.deinit();
+    }
+
+    for (inputs.items) |input| {
+        const repl_output = try repl_instance.step(input);
+        try actual_outputs.append(repl_output);
+    }
+
+    // Compare with expected output if provided
+    if (content.expected) |expected| {
+        // Parse expected outputs
+        var expected_outputs = std.ArrayList([]const u8).init(output.gpa);
+        defer expected_outputs.deinit();
+
+        var expected_lines = std.mem.splitSequence(u8, expected, "\n---\n");
+        while (expected_lines.next()) |output_str| {
+            const trimmed = std.mem.trim(u8, output_str, " \t\r\n");
+            if (trimmed.len > 0) {
+                try expected_outputs.append(trimmed);
+            }
+        }
+
+        // Verify the outputs match
+        if (actual_outputs.items.len != expected_outputs.items.len) {
+            std.log.err("REPL output count mismatch: got {} outputs, expected {}", .{
+                actual_outputs.items.len,
+                expected_outputs.items.len,
+            });
+        } else {
+            for (actual_outputs.items, expected_outputs.items, 0..) |actual, expected_output, i| {
+                if (!std.mem.eql(u8, actual, expected_output)) {
+                    std.log.err("REPL output mismatch at index {}: got '{s}', expected '{s}'", .{
+                        i,
+                        actual,
+                        expected_output,
+                    });
+                }
+            }
+        }
+    }
+
+    // Write actual outputs
+    for (actual_outputs.items, 0..) |repl_output, i| {
+        if (i > 0) {
+            try output.md_writer.writeAll("---\n");
+        }
+        try output.md_writer.writeAll(repl_output);
+        try output.md_writer.writeByte('\n');
+
+        // HTML output
+        if (output.html_writer) |writer| {
+            if (i > 0) {
+                try writer.writeAll("                <hr>\n");
+            }
+            try writer.writeAll("                <div class=\"repl-output\">");
+            for (repl_output) |char| {
+                try escapeHtmlChar(writer, char);
+            }
+            try writer.writeAll("</div>\n");
+        }
+    }
+
+    try output.end_section();
+}
+
+fn generateReplProblemsSection(output: *DualOutput, content: *const Content) !void {
+    _ = content;
+    try output.begin_section("PROBLEMS");
+    try output.md_writer.writeAll("NIL\n");
+
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <div class="problems">
+            \\                    <p>NIL</p>
+            \\                </div>
+            \\
+        );
+    }
+
+    try output.end_section();
 }
