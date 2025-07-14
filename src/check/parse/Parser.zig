@@ -1624,36 +1624,35 @@ const QualificationResult = struct {
 /// Parses a qualification chain (e.g., "json.Core.Utf8" -> ["json", "Core"])
 /// Returns the qualifiers and the final token
 fn parseQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationResult {
+    std.debug.assert(self.peek() == .UpperIdent);
+
     const scratch_top = self.store.scratchTokenTop();
     var final_token = self.pos;
     var is_upper = false;
 
-    // First token should be UpperIdent
-    if (self.peek() == .UpperIdent) {
-        final_token = self.pos; // Capture position of the identifier
-        is_upper = true;
+    final_token = self.pos; // Capture position of the identifier
+    is_upper = true;
 
-        // Check if there's a qualification chain by looking ahead
-        const saved_pos = self.pos;
-        self.advance();
+    // Check if there's a qualification chain by looking ahead
+    const saved_pos = self.pos;
+    self.advance();
 
-        if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
-            // There is a qualification chain, continue parsing
-            while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
-                // Add the current token as a qualifier before moving to the next
-                try self.store.addScratchToken(final_token);
+    if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
+        // There is a qualification chain, continue parsing
+        while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
+            // Add the current token as a qualifier before moving to the next
+            try self.store.addScratchToken(final_token);
 
-                // Capture position of the dot-prefixed token
-                final_token = self.pos;
-                is_upper = (self.tok_buf.tokens.items(.tag)[final_token] == .NoSpaceDotUpperIdent);
+            // Capture position of the dot-prefixed token
+            final_token = self.pos;
+            is_upper = (self.tok_buf.tokens.items(.tag)[final_token] == .NoSpaceDotUpperIdent);
 
-                // Move past this token
-                self.advance();
-            }
-        } else {
-            // No qualification chain, restore position
-            self.pos = saved_pos;
+            // Move past this token
+            self.advance();
         }
+    } else {
+        // No qualification chain, restore position
+        self.pos = saved_pos;
     }
 
     const qualifiers = try self.store.tokenSpanFrom(scratch_top);
