@@ -907,31 +907,33 @@ const Formatter = struct {
                 }
 
                 // Format fields
+                if (is_multiline and !has_items and fields.len > 0) {
+                    _ = try fmt.flushCommentsAfter(r.region.start);
+                    fmt.curr_indent += 1;
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
+
                 for (fields, 0..) |field_idx, i| {
-                    if (i == 0 and !has_items) {
-                        if (is_multiline) {
-                            _ = try fmt.flushCommentsAfter(r.region.start);
-                            fmt.curr_indent += 1;
-                            try fmt.ensureNewline();
-                            try fmt.pushIndent();
-                        }
-                    }
-                    _ = try fmt.formatRecordField(field_idx);
+                    const field_region = try fmt.formatRecordField(field_idx);
                     if (i < fields.len - 1) {
                         try fmt.push(',');
                         if (is_multiline) {
-                            try fmt.newline();
+                            _ = try fmt.flushCommentsAfter(field_region.end);
+                            try fmt.ensureNewline();
                             try fmt.pushIndent();
                         } else {
                             try fmt.push(' ');
                         }
+                    } else if (is_multiline) {
+                        // Comments after last field
+                        _ = try fmt.flushCommentsAfter(field_region.end);
                     }
                 }
 
                 if (is_multiline and (has_items or fields.len > 0)) {
                     fmt.curr_indent -= 1;
-                    _ = try fmt.flushCommentsBefore(r.region.end);
-                    try fmt.newline();
+                    try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
                 try fmt.push('}');

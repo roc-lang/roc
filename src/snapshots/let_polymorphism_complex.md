@@ -52,15 +52,15 @@ config1 = {
     name: "integers",
 }
 
-config2 = {
-    data: ["apple", "banana", "cherry"],
-    metadata: {
-        version: num,
-        ratio: frac,
-        description: str,
-    },
-    name: "fruits",
-}
+config2 = { # Test comment 1
+    data: ["apple", "banana", "cherry"], # Test comment 2
+    metadata: { # Test comment 3
+        version: num, # Test comment 4
+        ratio: frac, # Test comment 5
+        description: str, # Test comment 6
+    }, # Test comment 7
+    name: "fruits", # Test comment 8
+} # Test comment 9
 
 # Polymorphic function-like structures
 make_container = |val| { value: val, wrapper: [val] }
@@ -562,9 +562,6 @@ base_config = {
 		ratio: frac,
 		description: str
 	}
-
-# Different instantiations of base_config
-
 }
 
 # Different instantiations of base_config
@@ -576,22 +573,17 @@ config1 = {
 		description: str
 	},
 	name: "integers"
-
-
 }
 
-config2 = {
-	data: ["apple", "banana", "cherry"],
-	metadata: {
-		version: num,
-		ratio: frac,
-		description: str
-	},
-	name: "fruits"
-
-# Polymorphic function-like structures
-
-}
+config2 = { # Test comment 1
+	data: ["apple", "banana", "cherry"], # Test comment 2
+	metadata: { # Test comment 3
+		version: num, # Test comment 4
+		ratio: frac, # Test comment 5
+		description: str # Test comment 6
+	}, # Test comment 7
+	name: "fruits" # Test comment 8
+} # Test comment 9
 
 # Polymorphic function-like structures
 make_container = |val| {value: val, wrapper: [val]}
@@ -616,9 +608,6 @@ deep = {
 		{data: [1, 2], tag: "ints"},
 		{data: [1, 2, 3], tag: "more"},
 	]
-
-# Polymorphic values used in computations
-
 }
 
 # Polymorphic values used in computations
@@ -641,8 +630,6 @@ mixed = {
 		from_frac: frac * 10.0,
 		list_from_num: [num, num, num]
 	}
-
-
 }
 
 main = |_| {
