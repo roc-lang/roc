@@ -1466,14 +1466,14 @@ app [main!] { pf: platform "c" }
 import pf.Stdout exposing [line!, e!]
 
 import Stdot
-	 # Cose
+# Cose
 
 import pkg.S exposing [func as fry, Custom.*]
 
 import Bae as Gooe
 import
 	Ba
-		
+
 Map(a, b) : List(a), (a -> b) -> List(b)
 MapML( # Cere
 	a, # Anre
@@ -1515,7 +1515,6 @@ add_one = |num| {
 		dbg 123
 		other
 	}
-
 }
 
 match_time = |

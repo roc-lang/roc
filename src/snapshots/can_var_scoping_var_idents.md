@@ -61,16 +61,7 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-# Function showing var vs regular identifier independence
-testFunc = |input| {
-	sum = input # Regular identifier
-	var sum_ = input * 2 # Var with underscore - should not conflict
-
-	sum_ = sum_ + sum # Reassign var - should work
-	sum + sum_
-}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

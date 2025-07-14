@@ -244,8 +244,6 @@ swap = |pair| {
 	
 	pair
 	(y, x)
-
-	# Multiple uses that would conflict if 'a' and 'b' weren't instantiated
 }
 
 # Multiple uses that would conflict if 'a' and 'b' weren't instantiated

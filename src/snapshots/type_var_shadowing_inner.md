@@ -88,7 +88,6 @@ outer = |x| {
 	inner = |y| y
 
 	inner(x)
-
 }
 
 main! = |_| {}

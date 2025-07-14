@@ -1200,7 +1200,7 @@ import Stdot
 import Bae as Gooe
 import
 	Ba
-		
+
 Map(a, b) : Lis, (ab) -> List(b)
 MapML # Ag
 	: # Aon
@@ -1230,7 +1230,6 @@ add = |num| {
 		dbg 123
 		r
 	}
-
 }
 
 me = |
@@ -1310,8 +1309,7 @@ ma = |_| {
 		"Ho${
 			r(nu) # xpr
 		} ",
-	) # Cocl
-
+	)
 } # Cocl
 
 y : {}

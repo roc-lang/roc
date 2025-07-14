@@ -911,7 +911,6 @@ rgba : U8, U8, U8, U8 -> Color
 rgba = |r, g, b, a| {
 	rounded = a.to_frac() / 255.0
 	RGBA(r, g, b, rounded)
-
 }
 
 hex : Str -> Result(Color, [InvalidHex(Str)])
@@ -934,7 +933,6 @@ hex = |str| {
 		}
 		_ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
 	}
-
 }
 
 to_str : Color -> Str

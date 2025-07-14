@@ -288,7 +288,6 @@ handleApi = |request| {
 		Ok(data) => Ok(Http.success(data))
 		Err(err) => Err(err)
 	}
-
 }
 
 config : Json.Config

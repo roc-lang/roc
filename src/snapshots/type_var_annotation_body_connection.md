@@ -79,7 +79,6 @@ identity = |x| {
 	thing : a # refers to the type var introduced in function type annotation
 	thing = x # refers to the value from the function parameter
 	thing
-
 }
 
 main! = |_| {}

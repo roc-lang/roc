@@ -87,7 +87,6 @@ StringStart(5:5-5:6),StringPart(5:6-5:35),EndOfFile(5:35-5:35),
 ~~~roc
 {
 	o
-
 }
 foo = 
 

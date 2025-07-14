@@ -192,8 +192,6 @@ map_result = |result, transform| {
 		Ok(value) => Ok(transform(value))
 		Err(error) => Err(error)
 	}
-
-	# Simple identity function with type variable
 }
 
 # Simple identity function with type variable
