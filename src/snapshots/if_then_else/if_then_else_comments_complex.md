@@ -54,15 +54,7 @@ CloseCurly(9:5-9:6),EndOfFile(9:6-9:6),
 ~~~
 # FORMATTED
 ~~~roc
-if # Comment after if
-	bool # Comment after cond
-		{ # Comment after then open
-			1 # Comment after then close
-		} # Comment after then close
-			else # Comment after else
-				{ # Comment else open
-					2
-				}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

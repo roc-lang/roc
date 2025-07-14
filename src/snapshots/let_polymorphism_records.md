@@ -242,8 +242,6 @@ update_data = |container, new_value| {
 	container
 	
 	data : new_value
-
-	# Used with different record types
 }
 
 # Used with different record types

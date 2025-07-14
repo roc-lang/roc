@@ -546,8 +546,6 @@ handleRequest = |req| {
 		Ok(value) => Http.ok(value)
 		Err(error) => Http.badRequest(error)
 	}
-
-	# Test using exposed types in complex signatures
 }
 
 # Test using exposed types in complex signatures

@@ -1610,7 +1610,6 @@ add_one = |num| {
 		dbg 123
 		other
 	}
-
 }
 
 match_time = |
@@ -1728,8 +1727,7 @@ main! = |_| { # Yeah I can leave a comment here
 		"How about ${ # Comment after string interpolation open
 			Num.toStr(number) # Comment after string interpolation expr
 		} as a string?",
-	) # Comment after top-level decl
-
+	)
 } # Comment after top-level decl
 
 empty : {}

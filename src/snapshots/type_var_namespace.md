@@ -140,7 +140,6 @@ process = |list| {
 	Result.withDefault(elem)
 
 	result
-
 }
 
 main! = |_| {}

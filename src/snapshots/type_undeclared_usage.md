@@ -105,7 +105,6 @@ MyType : UnknownType
 processValue : UndeclaredResult -> Str
 processValue = |value| {
 	"processed"
-
 }
 
 AnotherType : SomeModule.MissingType

@@ -1626,14 +1626,17 @@ const Formatter = struct {
         if (multiline or body.statements.span.len > 1) {
             fmt.curr_indent += 1;
             try fmt.push('{');
-            for (fmt.ast.store.statementSlice(body.statements)) |s| {
+            for (fmt.ast.store.statementSlice(body.statements), 0..) |s, i| {
                 const region = fmt.nodeRegion(@intFromEnum(s));
                 _ = try fmt.flushCommentsBefore(region.start);
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
                 try fmt.formatStatement(s);
+
+                if (i == body.statements.span.len - 1) {
+                    _ = try fmt.flushCommentsBefore(region.end);
+                }
             }
-            _ = try fmt.flushCommentsBefore(body.region.end);
             try fmt.ensureNewline();
             fmt.curr_indent -= 1;
             try fmt.pushIndent();
