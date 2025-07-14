@@ -413,7 +413,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     const backing_var = self.types_store_b.getAliasBackingVar(a_alias);
                     const backing_resolved = self.types_store_b.resolveVar(backing_var);
                     if (backing_resolved.desc.content == .err) {
-                        // Invalid alias (contains underscore) - treat as transparent
+                        // Invalid alias - treat as transparent
                         self.merge(vars, vars.b.desc.content);
                         return;
                     }
@@ -515,7 +515,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     const b_backing_var = self.types_store_b.getAliasBackingVar(b_alias);
                     const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
                     if (b_backing_resolved.desc.content == .err) {
-                        // Invalid alias (contains underscore) - treat as transparent
+                        // Invalid alias - treat as transparent
                         self.merge(vars, vars.a.desc.content);
                         return;
                     }
@@ -612,7 +612,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             const b_backing_var = self.types_store_b.getNominalBackingVar(b_type);
                             const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
                             if (b_backing_resolved.desc.content == .err) {
-                                // Invalid nominal type (contains underscore) - treat as transparent
+                                // Invalid nominal type - treat as transparent
                                 self.merge(vars, vars.a.desc.content);
                                 return;
                             }
@@ -676,7 +676,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     const a_backing_var = self.types_store_b.getNominalBackingVar(a_type);
                     const a_backing_resolved = self.types_store_b.resolveVar(a_backing_var);
                     if (a_backing_resolved.desc.content == .err) {
-                        // Invalid nominal type (contains underscore) - treat as transparent
+                        // Invalid nominal type - treat as transparent
                         self.merge(vars, vars.b.desc.content);
                         return;
                     }
@@ -686,7 +686,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             const b_backing_var = self.types_store_b.getNominalBackingVar(b_type);
                             const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
                             if (b_backing_resolved.desc.content == .err) {
-                                // Invalid nominal type (contains underscore) - treat as transparent
+                                // Invalid nominal type - treat as transparent
                                 self.merge(vars, vars.a.desc.content);
                                 return;
                             }
@@ -1698,11 +1698,11 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
-            // Check if either nominal type has an invalid backing variable (contains underscore)
+            // Check if either nominal type has an invalid backing variable
             const a_backing_var = self.types_store_b.getNominalBackingVar(a_type);
             const a_backing_resolved = self.types_store_b.resolveVar(a_backing_var);
             if (a_backing_resolved.desc.content == .err) {
-                // Invalid nominal type (contains underscore) - treat as transparent
+                // Invalid nominal type - treat as transparent
                 self.merge(vars, vars.b.desc.content);
                 return;
             }
@@ -1710,7 +1710,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             const b_backing_var = self.types_store_b.getNominalBackingVar(b_type);
             const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
             if (b_backing_resolved.desc.content == .err) {
-                // Invalid nominal type (contains underscore) - treat as transparent
+                // Invalid nominal type - treat as transparent
                 self.merge(vars, vars.a.desc.content);
                 return;
             }

@@ -3934,7 +3934,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             const canonicalized_base = try self.canonicalizeTypeAnno(args_slice[0], can_intro_vars, in_type_declaration);
             const base_cir_type = self.can_ir.store.getTypeAnno(canonicalized_base);
 
-            // Check if base type contains underscores
+            // Check if base type is invalid
             if (in_type_declaration) {
                 const base_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized_base)));
                 const base_resolved = self.can_ir.env.types.resolveVar(base_var);
@@ -3957,7 +3957,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                         const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, in_type_declaration);
                         try self.can_ir.store.addScratchTypeAnno(canonicalized);
 
-                        // Check if this argument contains underscores
+                        // Check if this argument is invalid
                         if (in_type_declaration) {
                             const arg_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
                             const arg_resolved = self.can_ir.env.types.resolveVar(arg_var);
@@ -3990,7 +3990,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                 const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, in_type_declaration);
                 try self.can_ir.store.addScratchTypeAnno(canonicalized);
 
-                // Check if this argument contains underscores
+                // Check if this argument is invalid
                 if (in_type_declaration) {
                     const arg_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
                     const arg_resolved = self.can_ir.env.types.resolveVar(arg_var);
@@ -4207,7 +4207,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                 const canonicalized = try self.canonicalizeTypeAnno(elem_idx, can_intro_vars, in_type_declaration);
                 try self.can_ir.store.addScratchTypeAnno(canonicalized);
 
-                // Check if this element contains underscores
+                // Check if this element is invalid
                 if (in_type_declaration) {
                     const elem_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
                     const elem_resolved = self.can_ir.env.types.resolveVar(elem_var);
@@ -4262,7 +4262,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                 // Canonicalize field type
                 const canonicalized_ty = try self.canonicalizeTypeAnno(ast_field.ty, can_intro_vars, in_type_declaration);
 
-                // Check if this field type contains underscores
+                // Check if this field type is invalid
                 if (in_type_declaration) {
                     const field_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized_ty)));
                     const field_resolved = self.can_ir.env.types.resolveVar(field_var);
@@ -4302,7 +4302,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                 const canonicalized = try self.canonicalizeTagVariant(tag_idx);
                 try self.can_ir.store.addScratchTypeAnno(canonicalized);
 
-                // Check if this tag contains underscores
+                // Check if this tag is invalid
                 if (in_type_declaration) {
                     const tag_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
                     const tag_resolved = self.can_ir.env.types.resolveVar(tag_var);
@@ -4318,7 +4318,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             const ext = if (tag_union.open_anno) |open_idx| blk: {
                 const open_canonicalized = try self.canonicalizeTypeAnno(open_idx, can_intro_vars, in_type_declaration);
 
-                // Check if the open annotation contains underscores
+                // Check if the open annotation is invalid
                 if (in_type_declaration) {
                     const open_var = @as(types.Var, @enumFromInt(@intFromEnum(open_canonicalized)));
                     const open_resolved = self.can_ir.env.types.resolveVar(open_var);
@@ -4352,7 +4352,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                 const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, in_type_declaration);
                 try self.can_ir.store.addScratchTypeAnno(canonicalized);
 
-                // Check if this argument contains underscores
+                // Check if this argument is invalid
                 if (in_type_declaration) {
                     const arg_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
                     const arg_resolved = self.can_ir.env.types.resolveVar(arg_var);
@@ -4367,7 +4367,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             // Canonicalize return type
             const ret = try self.canonicalizeTypeAnno(fn_anno.ret, can_intro_vars, in_type_declaration);
 
-            // Check if the return type contains underscores
+            // Check if the return type is invalid
             if (in_type_declaration) {
                 const ret_var = @as(types.Var, @enumFromInt(@intFromEnum(ret)));
                 const ret_resolved = self.can_ir.env.types.resolveVar(ret_var);
@@ -4392,7 +4392,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             const region = self.parse_ir.tokenizedRegionToRegion(parens.region);
             const inner_anno = try self.canonicalizeTypeAnno(parens.anno, can_intro_vars, in_type_declaration);
 
-            // Check if the inner annotation contains underscores
+            // Check if the inner annotation is invalid
             if (in_type_declaration) {
                 const inner_var = @as(types.Var, @enumFromInt(@intFromEnum(inner_anno)));
                 const inner_resolved = self.can_ir.env.types.resolveVar(inner_var);
