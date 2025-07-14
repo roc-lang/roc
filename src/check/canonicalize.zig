@@ -202,7 +202,7 @@ fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Id
     const ident_store = &ir.env.idents;
     const ident_add = try ir.env.idents.insert(gpa, base.Ident.for_text(ident_text), Region.zero());
     const pattern_idx_add = try ir.addPatternAndTypeVar(CIR.Pattern{ .assign = .{ .ident = ident_add } }, Content{ .flex_var = null }, Region.zero());
-    _ = self.scopeIntroduceInternal(gpa, ident_store, .ident, ident_add, pattern_idx_add, false, true);
+    _ = try self.scopeIntroduceInternal(gpa, ident_store, .ident, ident_add, pattern_idx_add, false, true);
     std.debug.assert(idx == pattern_idx_add);
 }
 
@@ -242,7 +242,7 @@ fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8, content: types.C
 
     // Add to scope without any error checking (built-ins are always valid)
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
+    try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
 
     return type_decl_idx;
 }
@@ -295,7 +295,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
 
     // Add to scope without any error checking (built-ins are always valid)
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
+    try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
 
     try ir.redirectTypeTo(CIR.Pattern.Idx, BUILTIN_BOOL, CIR.varFrom(type_decl_idx));
 }
@@ -482,7 +482,7 @@ pub fn canonicalizeFile(
                 self.scratch_vars.clearFrom(scratch_anno_start);
 
                 // Update the scope to point to the real statement instead of the placeholder
-                self.scopeUpdateTypeDecl(type_header.name, type_decl_stmt_idx);
+                try self.scopeUpdateTypeDecl(type_header.name, type_decl_stmt_idx);
 
                 // Remove from exposed_type_texts since the type is now fully defined
                 const type_text = self.can_ir.env.idents.getText(type_header.name);
@@ -776,7 +776,7 @@ fn createExposedScope(
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
                     // Use a dummy pattern index - we just need to track that it's exposed
                     const dummy_idx = @as(CIR.Pattern.Idx, @enumFromInt(0));
-                    self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
+                    try self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
                 }
 
                 // Store by text in a temporary hash map, since indices may change
@@ -809,7 +809,7 @@ fn createExposedScope(
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(CIR.Statement.Idx, @enumFromInt(0));
-                    self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
+                    try self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
                 }
 
                 // Store by text in a temporary hash map, since indices may change
@@ -842,7 +842,7 @@ fn createExposedScope(
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(CIR.Statement.Idx, @enumFromInt(0));
-                    self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
+                    try self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
                 }
 
                 // Store by text in a temporary hash map, since indices may change
@@ -1066,7 +1066,7 @@ fn canonicalizeImportStatement(
     try self.scopeIntroduceModuleAlias(alias, module_name);
 
     // Process type imports from this module
-    self.processTypeImports(module_name, alias);
+    try self.processTypeImports(module_name, alias);
 
     // 5. Convert exposed items and introduce them into scope
     const cir_exposes = try self.convertASTExposesToCIR(import_stmt.exposes);
@@ -1091,7 +1091,7 @@ fn canonicalizeImportStatement(
 
     // 8. Add the module to the current scope so it can be used in qualified lookups
     const current_scope = self.currentScope();
-    _ = current_scope.introduceImportedModule(self.can_ir.env.gpa, module_name_text, module_import_idx);
+    _ = try current_scope.introduceImportedModule(self.can_ir.env.gpa, module_name_text, module_import_idx);
 
     return import_idx;
 }
@@ -2632,7 +2632,7 @@ fn canonicalizePattern(
                 } }, .{ .flex_var = null }, region);
 
                 // Introduce the identifier into scope mapping to this pattern node
-                switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true)) {
+                switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true)) {
                     .success => {},
                     .shadowing_warning => |shadowed_pattern_idx| {
                         const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
@@ -2946,7 +2946,7 @@ fn canonicalizePattern(
                         } }, .{ .flex_var = null }, field_region);
 
                         // Introduce the identifier into scope
-                        switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, field_name_ident, assign_pattern_idx, false, true)) {
+                        switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, field_name_ident, assign_pattern_idx, false, true)) {
                             .success => {},
                             .shadowing_warning => |shadowed_pattern_idx| {
                                 const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
@@ -3078,7 +3078,7 @@ fn canonicalizePattern(
                             } }, Content{ .flex_var = null }, name_region);
 
                             // Introduce the identifier into scope
-                            switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
+                            switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
                                 .success => {},
                                 .shadowing_warning => |shadowed_pattern_idx| {
                                     const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
@@ -3225,7 +3225,7 @@ fn canonicalizePattern(
                 const pattern_idx = try self.can_ir.addPatternAndTypeVar(as_pattern, .{ .flex_var = null }, region);
 
                 // Introduce the identifier into scope
-                switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true)) {
+                switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true)) {
                     .success => {},
                     .shadowing_warning => |shadowed_pattern_idx| {
                         const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
@@ -3649,7 +3649,7 @@ fn scopeIntroduceVar(
     is_declaration: bool,
     comptime T: type,
 ) std.mem.Allocator.Error!T {
-    const result = self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, true, is_declaration);
+    const result = try self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, true, is_declaration);
 
     switch (result) {
         .success => {
@@ -4532,7 +4532,7 @@ fn scopeIntroduceTypeVar(self: *Self, name: Ident.Idx, type_var_anno: CIR.TypeAn
 
     // Don't use parent lookup function for now - just introduce directly
     // Type variable shadowing is allowed in Roc
-    const result = current_scope.introduceTypeVar(gpa, &self.can_ir.env.idents, name, type_var_anno, null);
+    const result = try current_scope.introduceTypeVar(gpa, &self.can_ir.env.idents, name, type_var_anno, null);
 
     switch (result) {
         .success => {},
@@ -4734,7 +4734,7 @@ fn scopeIntroduceInternal(
     pattern_idx: CIR.Pattern.Idx,
     is_var: bool,
     is_declaration: bool,
-) Scope.IntroduceResult {
+) std.mem.Allocator.Error!Scope.IntroduceResult {
     // Check if var is being used at top-level
     if (is_var and self.scopes.items.len == 1) {
         return Scope.IntroduceResult{ .top_level_var_error = {} };
@@ -4784,14 +4784,14 @@ fn scopeIntroduceInternal(
                     return Scope.IntroduceResult{ .var_across_function_boundary = existing_pattern };
                 } else {
                     // Same function, allow reassignment without warning
-                    self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+                    try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
                     return Scope.IntroduceResult{ .success = {} };
                 }
             }
         }
 
         // Regular shadowing case - produce warning but still introduce
-        self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+        try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
         return Scope.IntroduceResult{ .shadowing_warning = existing_pattern };
     }
 
@@ -4803,13 +4803,13 @@ fn scopeIntroduceInternal(
     while (iter.next()) |entry| {
         if (ident_store.identsHaveSameText(ident_idx, entry.key_ptr.*)) {
             // Duplicate in same scope - still introduce but return shadowing warning
-            self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+            try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
             return Scope.IntroduceResult{ .shadowing_warning = entry.value_ptr.* };
         }
     }
 
     // No conflicts, introduce successfully
-    self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+    try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
     return Scope.IntroduceResult{ .success = {} };
 }
 
@@ -4906,7 +4906,7 @@ fn scopeIntroduceTypeDecl(
         }
     }
 
-    const result = current_scope.introduceTypeDecl(gpa, &self.can_ir.env.idents, name_ident, type_decl_stmt, null);
+    const result = try current_scope.introduceTypeDecl(gpa, &self.can_ir.env.idents, name_ident, type_decl_stmt, null);
 
     switch (result) {
         .success => {
@@ -4994,10 +4994,10 @@ fn scopeUpdateTypeDecl(
     self: *Self,
     name_ident: Ident.Idx,
     new_type_decl_stmt: CIR.Statement.Idx,
-) void {
+) std.mem.Allocator.Error!void {
     const gpa = self.can_ir.env.gpa;
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    current_scope.updateTypeDecl(gpa, &self.can_ir.env.idents, name_ident, new_type_decl_stmt);
+    try current_scope.updateTypeDecl(gpa, &self.can_ir.env.idents, name_ident, new_type_decl_stmt);
 }
 
 fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?CIR.Statement.Idx {
@@ -5039,7 +5039,7 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Simplified introduction without parent lookup for now
-    const result = current_scope.introduceModuleAlias(gpa, &self.can_ir.env.idents, alias_name, module_name, null);
+    const result = try current_scope.introduceModuleAlias(gpa, &self.can_ir.env.idents, alias_name, module_name, null);
 
     switch (result) {
         .success => {},
@@ -5111,7 +5111,7 @@ fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Simplified introduction without parent lookup for now
-    const result = current_scope.introduceExposedItem(gpa, &self.can_ir.env.idents, item_name, item_info, null);
+    const result = try current_scope.introduceExposedItem(gpa, &self.can_ir.env.idents, item_name, item_info, null);
 
     switch (result) {
         .success => {},
@@ -5235,7 +5235,7 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) s
 
                     // Add to scope (simplified - ignoring result for now)
                     // TODO: Handle scope result and possible error
-                    _ = scope.introduceTypeVar(self.can_ir.env.gpa, ident_store, tv.name, ty_var_anno, null);
+                    _ = try scope.introduceTypeVar(self.can_ir.env.gpa, ident_store, tv.name, ty_var_anno, null);
 
                     return CIR.castIdx(CIR.TypeAnno.Idx, TypeVar, ty_var_anno);
                 },
@@ -5794,10 +5794,10 @@ fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _:
 /// NOTE: When qualified types are encountered (e.g. `SomeModule.TypeName`)
 /// we create external declarations that will be resolved later when
 /// we have access to the other module's IR after it has been type checked.
-fn processTypeImports(self: *Self, module_name: Ident.Idx, alias_name: Ident.Idx) void {
+fn processTypeImports(self: *Self, module_name: Ident.Idx, alias_name: Ident.Idx) std.mem.Allocator.Error!void {
     // Set up the module alias for qualified lookups
     const scope = self.currentScope();
-    _ = scope.introduceModuleAlias(
+    _ = try scope.introduceModuleAlias(
         self.can_ir.env.gpa,
         &self.can_ir.env.idents,
         alias_name,

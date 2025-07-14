@@ -21,7 +21,6 @@ const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
 pub const Token = tokenize.Token;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
-const deprecatedExitOnOom = collections.utils.deprecatedExitOnOom;
 
 const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
@@ -899,7 +898,7 @@ pub const Statement = union(enum) {
                         module_name_raw;
 
                     // Combine qualifier and module name
-                    const full_module_name = std.fmt.allocPrint(env.gpa, "{s}.{s}", .{ qualifier_str, module_name_clean }) catch |err| deprecatedExitOnOom(err);
+                    const full_module_name = try std.fmt.allocPrint(env.gpa, "{s}.{s}", .{ qualifier_str, module_name_clean });
                     defer env.gpa.free(full_module_name);
                     try tree.pushStringPair("raw", full_module_name);
                 } else {

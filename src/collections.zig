@@ -38,8 +38,6 @@ pub const NonEmptyRange = struct {
 
 pub const SmallStringInterner = @import("collections/SmallStringInterner.zig");
 
-pub const deprecatedExitOnOom = @import("collections/utils.zig").deprecatedExitOnOom;
-
 /// A key-value map that uses direct array indexing instead of hashing.
 /// Keys must be enums that are convertible to indices, and key value 0 is reserved
 /// as a sentinel value which indicates an empty slot.

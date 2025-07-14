@@ -14,7 +14,6 @@ const AST = parse.AST;
 const Node = parse.Node;
 const NodeStore = parse.NodeStore;
 
-const deprecatedExitOnOom = collections.utils.deprecatedExitOnOom;
 const fatal = collections.utils.fatal;
 
 const FormatFlags = enum {
@@ -2059,7 +2058,7 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
 
     const expr = parser.parseExpr();
 
-    const errors = parser.diagnostics.toOwnedSlice(gpa) catch |err| deprecatedExitOnOom(err);
+    const errors = try parser.diagnostics.toOwnedSlice(gpa);
 
     var parse_ast = AST{
         .source = source,
@@ -2140,5 +2139,5 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     if (debug) {
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.items});
     }
-    return result.toOwnedSlice() catch |err| deprecatedExitOnOom(err);
+    return try result.toOwnedSlice();
 }

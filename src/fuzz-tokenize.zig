@@ -32,5 +32,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     const buf_slice = buf[0..@intCast(len)];
 
-    tokenize.checkTokenizerInvariants(gpa, buf_slice, debug) catch |err| collections.utils.deprecatedExitOnOom(err);
+    tokenize.checkTokenizerInvariants(gpa, buf_slice, debug) catch {
+        @panic("Out of memory");
+    };
 }
