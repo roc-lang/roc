@@ -3,6 +3,7 @@
 const std = @import("std");
 const base = @import("base.zig");
 const tracy = @import("tracy.zig");
+const builtin = @import("builtin");
 const parse = @import("check/parse.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const Solver = @import("check/check_types.zig");
@@ -20,6 +21,8 @@ const CacheConfig = cache_mod.CacheConfig;
 
 const CacheResult = cache_mod.CacheResult;
 const CacheHit = cache_mod.CacheHit;
+
+const is_wasm = builtin.target.cpu.arch == .wasm32;
 
 /// Timing information for different compilation phases
 pub const TimingInfo = struct {
@@ -163,6 +166,7 @@ pub const ProcessConfig = struct {
 
 /// Helper function to collect timing information and reset timer
 fn collectTiming(config: ProcessConfig, timer: *?std.time.Timer, timing_info: *?TimingInfo, field: []const u8) void {
+    if (comptime is_wasm) return; // Skip timing on WASM
     if (config.collect_timing and timer.* != null and timing_info.* != null) {
         const elapsed = timer.*.?.read();
         if (std.mem.eql(u8, field, "tokenize_parse_ns")) {
@@ -199,7 +203,7 @@ fn processSourceInternal(
     var timing_info: ?TimingInfo = null;
     var timer: ?std.time.Timer = null;
 
-    if (config.collect_timing) {
+    if (config.collect_timing and !is_wasm) {
         timer = std.time.Timer.start() catch null;
         timing_info = TimingInfo{
             .tokenize_parse_ns = 0,

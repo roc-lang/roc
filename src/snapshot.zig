@@ -923,7 +923,7 @@ const Meta = struct {
 };
 
 /// Content of a snapshot file, references the Metadata and Source sections etc
-const Content = struct {
+pub const Content = struct {
     meta: Meta,
     source: []const u8,
     expected: ?[]const u8,
@@ -987,12 +987,12 @@ const Content = struct {
 const Error = error{ MissingSnapshotHeader, MissingSnapshotSource, InvalidNodeType, BadSectionHeader };
 
 /// Dual output writers for markdown and HTML generation
-const DualOutput = struct {
+pub const DualOutput = struct {
     md_writer: std.ArrayList(u8).Writer,
     html_writer: ?std.ArrayList(u8).Writer,
     gpa: Allocator,
 
-    fn init(gpa: Allocator, md_buffer: *std.ArrayList(u8), html_buffer: ?*std.ArrayList(u8)) DualOutput {
+    pub fn init(gpa: Allocator, md_buffer: *std.ArrayList(u8), html_buffer: ?*std.ArrayList(u8)) DualOutput {
         return .{
             .md_writer = md_buffer.writer(),
             .html_writer = if (html_buffer) |buf| buf.writer() else null,
@@ -1318,7 +1318,7 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
 }
 
 /// Generate TOKENS section for both markdown and HTML
-fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const Content, module_env: *base.ModuleEnv) !void {
+pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const Content, module_env: *base.ModuleEnv) !void {
     try output.begin_section("TOKENS");
     try output.begin_code_block("zig");
 

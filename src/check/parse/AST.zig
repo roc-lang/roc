@@ -772,6 +772,17 @@ pub fn toSExprStr(ast: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter)
     try tree.toStringPretty(writer);
 }
 
+pub fn toSExprHtml(ast: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
+    const file = ast.store.getFile();
+
+    var tree = SExprTree.init(env.gpa);
+    defer tree.deinit();
+
+    try file.pushToSExprTree(env, ast, &tree);
+
+    try tree.toHtml(writer);
+}
+
 /// The kind of the type declaration represented, either:
 /// 1. An alias of the form `Foo = (Bar, Baz)`
 /// 2. A nominal type of the form `Foo := [Bar, Baz]`

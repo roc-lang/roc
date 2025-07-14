@@ -547,7 +547,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_suffix_single_question,
         .expr_record_builder,
         => {
-            std.log.debug("TODO: implement getExpr for node type {?}", .{node.tag});
             return CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = @enumFromInt(0),
             } };
@@ -2730,16 +2729,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         else => {
-            std.debug.print("Error: getDiagnostic called with non-diagnostic node!\n", .{});
-            std.debug.print("  Node tag: {}\n", .{node.tag});
-            std.debug.print("  Diagnostic index: {}\n", .{diagnostic});
-            std.debug.print("  Node index: {}\n", .{node_idx});
-            const region = store.getRegionAt(node_idx);
-            std.debug.print("  Region: {}..{}\n", .{ region.start.offset, region.end.offset });
-            std.debug.print("\nThis indicates that a non-diagnostic node was added to the diagnostics list.\n", .{});
-            std.debug.print("Check that addDiagnostic is only called with CIR.Diagnostic values,\n", .{});
-            std.debug.print("and that no other nodes are being added to scratch_diagnostics.\n", .{});
-            @panic("unreachable, node is not a diagnostic tag");
+            @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
         },
     }
 }
