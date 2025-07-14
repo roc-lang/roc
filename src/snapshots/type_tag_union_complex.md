@@ -70,7 +70,8 @@ LowerIdent(24:1-24:6),OpAssign(24:7-24:8),OpBar(24:9-24:10),Underscore(24:10-24:
 (file @1.1-24.15
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -245,7 +246,7 @@ NO CHANGE
 	(defs
 		(patt @18.1-18.14 (type "Result -> Str"))
 		(patt @22.1-22.15 (type "Response -> Str"))
-		(patt @24.1-24.6 (type "arg -> {}")))
+		(patt @24.1-24.6 (type "_arg -> {}")))
 	(type_decls
 		(alias @4.1-4.37 (type "Status")
 			(ty-header @4.1-4.7 (name "Status")))
@@ -260,5 +261,5 @@ NO CHANGE
 	(expressions
 		(expr @18.17-18.38 (type "Result -> Str"))
 		(expr @22.18-22.39 (type "Response -> Str"))
-		(expr @24.9-24.15 (type "arg -> {}"))))
+		(expr @24.9-24.15 (type "_arg -> {}"))))
 ~~~

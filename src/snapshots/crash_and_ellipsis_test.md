@@ -144,7 +144,8 @@ CloseCurly(20:1-20:2),EndOfFile(20:2-20:2),
 (file @1.1-20.2
 	(app @1.1-1.57
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
@@ -305,10 +306,10 @@ main! = |_| {
 		(patt @5.1-5.13 (type "Error -> Error"))
 		(patt @9.1-9.10 (type "Error -> Error"))
 		(patt @13.1-13.16 (type "Error -> Error"))
-		(patt @15.1-15.6 (type "arg -> List(elem)")))
+		(patt @15.1-15.6 (type "_arg -> List(_elem)")))
 	(expressions
 		(expr @5.16-5.23 (type "Error -> Error"))
 		(expr @9.13-9.22 (type "Error -> Error"))
 		(expr @13.19-13.28 (type "Error -> Error"))
-		(expr @15.9-20.2 (type "arg -> List(elem)"))))
+		(expr @15.9-20.2 (type "_arg -> List(_elem)"))))
 ~~~

@@ -37,7 +37,7 @@ This `if` condition needs to be a _Bool_:
           ^^
 
 Right now, it has the type:
-    _Num(size)_
+    _Num(_size)_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -56,10 +56,10 @@ if bool {
  ^
 
 The second branch has this type:
-    _[A]others_
+    _[A]_others_
 
 But the previous branch has this type:
-    _Num(size)_
+    _Num(_size)_
 
 All branches in an `if` must have compatible types.
 

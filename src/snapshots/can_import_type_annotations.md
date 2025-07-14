@@ -218,18 +218,18 @@ CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
 			(ty-fn @30.18-30.71
 				(ty-apply @30.18-30.32
 					(ty @30.18-30.24 (name "Result"))
-					(ty-var @30.25-30.25 (raw "a"))
-					(ty-var @1.1-1.1 (raw "err")))
+					(ty-var @30.25-30.26 (raw "a"))
+					(ty-var @30.28-30.31 (raw "err")))
 				(ty-apply @30.34-30.48
 					(ty @30.34-30.40 (name "Result"))
-					(ty-var @30.41-30.41 (raw "b"))
-					(ty-var @1.1-1.1 (raw "err")))
+					(ty-var @30.41-30.42 (raw "b"))
+					(ty-var @30.44-30.47 (raw "err")))
 				(ty-apply @30.52-30.71
 					(ty @30.52-30.58 (name "Result"))
 					(ty-tuple @30.59-30.65
-						(ty-var @30.60-30.60 (raw "a"))
-						(ty-var @1.1-1.1 (raw "b")))
-					(ty-var @1.1-1.1 (raw "err")))))
+						(ty-var @30.60-30.61 (raw "a"))
+						(ty-var @30.63-30.64 (raw "b")))
+					(ty-var @30.67-30.70 (raw "err")))))
 		(s-decl @31.1-39.6
 			(p-ident @31.1-31.15 (raw "combineResults"))
 			(e-lambda @31.18-39.6
@@ -288,14 +288,13 @@ handleApi = |request| {
 		Ok(data) => Ok(Http.success(data))
 		Err(err) => Err(err)
 	}
-
 }
 
 config : Json.Config
 config = Json.defaultConfig
 
 # Test nested type qualification
-advancedParser : Json..Parser.Config, Str -> Result(Json.Value, Json..Parser.Error)
+advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
 advancedParser = |parserConfig, input| Json.parseWith(parserConfig, input)
 
 # Test function with multiple type parameters
@@ -489,16 +488,16 @@ combineResults = |result1, result2|
 			(declared-type
 				(ty-fn @30.18-30.71 (effectful false)
 					(ty-apply @30.18-30.32 (symbol "Result")
-						(ty-var @30.25-30.25 (name "a"))
-						(ty-var @1.1-1.1 (name "err")))
+						(ty-var @30.25-30.26 (name "a"))
+						(ty-var @30.28-30.31 (name "err")))
 					(ty-apply @30.34-30.48 (symbol "Result")
-						(ty-var @30.41-30.41 (name "b"))
-						(ty-var @1.1-1.1 (name "err")))
+						(ty-var @30.41-30.42 (name "b"))
+						(ty-var @30.44-30.47 (name "err")))
 					(ty-apply @30.52-30.71 (symbol "Result")
 						(ty-tuple @30.59-30.65
-							(ty-var @30.60-30.60 (name "a"))
-							(ty-var @1.1-1.1 (name "b")))
-						(ty-var @1.1-1.1 (name "err")))))))
+							(ty-var @30.60-30.61 (name "a"))
+							(ty-var @30.63-30.64 (name "b")))
+						(ty-var @30.67-30.70 (name "err")))))))
 	(s-import @3.1-3.56 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes
 			(exposed (name "Request") (wildcard false))
@@ -523,14 +522,14 @@ combineResults = |result1, result2|
 	(defs
 		(patt @8.1-8.15 (type "Error -> Error"))
 		(patt @11.1-11.10 (type "Str -> Json.Value"))
-		(patt @14.1-14.10 (type "{ body: field } -> Error"))
+		(patt @14.1-14.10 (type "{ body: _field } -> Error"))
 		(patt @23.1-23.7 (type "Error"))
 		(patt @27.1-27.15 (type "Json.Parser.Config, Str -> Error"))
 		(patt @31.1-31.15 (type "Error, Error -> Error")))
 	(expressions
 		(expr @8.18-8.44 (type "Error -> Error"))
 		(expr @11.13-11.38 (type "Str -> Json.Value"))
-		(expr @14.13-20.2 (type "{ body: field } -> Error"))
+		(expr @14.13-20.2 (type "{ body: _field } -> Error"))
 		(expr @23.10-23.28 (type "Error"))
 		(expr @27.18-27.82 (type "Json.Parser.Config, Str -> Error"))
 		(expr @31.18-39.6 (type "Error, Error -> Error"))))

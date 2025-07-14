@@ -20,29 +20,30 @@ test "cross-module type checking - monomorphic function" {
     const allocator = testing.allocator;
 
     // Create module A that exports a simple function
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
     // Create a simple integer expression as a placeholder
-    const func_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const func_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Now create the function type with fresh variables
     // Since func_expr_idx is 0, we need to start allocating type variables from 1
-    _ = module_a_env.types.fresh(); // This will be var 0, matching expr 0
+    _ = try module_a_env.types.fresh(); // This will be var 0, matching expr 0
 
     const i32_content = Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
-    const arg1_var = module_a_env.types.freshFromContent(i32_content);
-    const arg2_var = module_a_env.types.freshFromContent(i32_content);
-    const ret_var = module_a_env.types.freshFromContent(i32_content);
+    const arg1_var = try module_a_env.types.freshFromContent(i32_content);
+    const arg2_var = try module_a_env.types.freshFromContent(i32_content);
+    const ret_var = try module_a_env.types.freshFromContent(i32_content);
 
-    const func_content = module_a_env.types.mkFuncPure(&[_]Var{ arg1_var, arg2_var }, ret_var);
+    const func_content = try module_a_env.types.mkFuncPure(&[_]Var{ arg1_var, arg2_var }, ret_var);
 
     // Set the type of expression 0 (which maps to var 0)
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Create array of module CIRs
@@ -52,17 +53,17 @@ test "cross-module type checking - monomorphic function" {
     try modules.append(&module_a_cir);
 
     // Create module B that imports and uses the function from module A
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Register the import of module A
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    const external_lookup_expr = module_b_cir.store.addExpr(.{
+    const external_lookup_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
@@ -109,25 +110,26 @@ test "cross-module type checking - polymorphic function" {
     const allocator = testing.allocator;
 
     // Create module A that exports a polymorphic identity function
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
     // Create a simple integer expression as a placeholder
-    const func_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const func_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Allocate var 0 to match expr 0
-    _ = module_a_env.types.fresh();
+    _ = try module_a_env.types.fresh();
 
     // Create a function: identity : a -> a
-    const type_var_a = module_a_env.types.fresh();
-    const func_content = module_a_env.types.mkFuncPure(&[_]Var{type_var_a}, type_var_a);
+    const type_var_a = try module_a_env.types.fresh();
+    const func_content = try module_a_env.types.mkFuncPure(&[_]Var{type_var_a}, type_var_a);
 
     // Set the type of this expression to our polymorphic function type
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Create array of module CIRs
@@ -137,17 +139,17 @@ test "cross-module type checking - polymorphic function" {
     try modules.append(&module_a_cir);
 
     // Create module B that imports and uses the polymorphic function
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Register the import of module A
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    const external_lookup_expr = module_b_cir.store.addExpr(.{
+    const external_lookup_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
@@ -187,35 +189,35 @@ test "cross-module type checking - record type" {
     const allocator = testing.allocator;
 
     // Create module A that exports a record type
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
     // Create a simple integer expression as a placeholder
-    const record_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const record_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Allocate var 0 to match expr 0
-    _ = module_a_env.types.fresh();
+    _ = try module_a_env.types.fresh();
 
     // Create a record type { x: I32, y: Str }
     var record_fields = std.ArrayList(types_mod.RecordField).init(allocator);
     defer record_fields.deinit();
 
-    const x_ident = module_a_env.idents.insert(allocator, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident = module_a_env.idents.insert(allocator, base.Ident.for_text("y"), base.Region.zero());
+    const x_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("x"), base.Region.zero());
+    const y_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("y"), base.Region.zero());
 
-    const i32_var = module_a_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i32 } } });
-    const str_var = module_a_env.types.freshFromContent(Content{ .structure = .str });
+    const i32_var = try module_a_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i32 } } });
+    const str_var = try module_a_env.types.freshFromContent(Content{ .structure = .str });
 
     try record_fields.append(.{ .name = x_ident, .var_ = i32_var });
     try record_fields.append(.{ .name = y_ident, .var_ = str_var });
 
-    const fields_range = module_a_env.types.appendRecordFields(record_fields.items);
-    const ext_var = module_a_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const fields_range = try module_a_env.types.appendRecordFields(record_fields.items);
+    const ext_var = try module_a_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const record_content = Content{
         .structure = .{
@@ -227,6 +229,7 @@ test "cross-module type checking - record type" {
     };
 
     // Set the type of this expression to our record type
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(record_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(record_expr_idx)), record_content);
 
     // Create array of module CIRs
@@ -236,17 +239,17 @@ test "cross-module type checking - record type" {
     try modules.append(&module_a_cir);
 
     // Create module B that imports and uses the record from module A
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Register the import of module A
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    const external_lookup_expr = module_b_cir.store.addExpr(.{
+    const external_lookup_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(record_expr_idx)),
@@ -294,35 +297,36 @@ test "cross-module type checking - type mismatch error" {
     const allocator = testing.allocator;
 
     // Create module A that exports an I32
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
     // Create an I32 type
     const i32_content = Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
 
     // Store this as an integer literal expression
-    const func_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const func_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{ 42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .kind = .i128 },
     } }, base.Region.zero());
 
     // Set the expression's type to I32
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), i32_content);
 
     // Create module B that imports the I32 but tries to use it as a String
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Register the import of module A
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    const external_lookup_expr = module_b_cir.store.addExpr(.{
+    const external_lookup_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
@@ -331,11 +335,11 @@ test "cross-module type checking - type mismatch error" {
     }, base.Region.zero());
 
     // Ensure we have type variables allocated for both expressions in module B
-    _ = module_b_env.types.fresh(); // var 0 for external_lookup_expr
-    _ = module_b_env.types.fresh(); // var 1 for str_expr
+    _ = try module_b_env.types.fresh(); // var 0 for external_lookup_expr
+    _ = try module_b_env.types.fresh(); // var 1 for str_expr
 
     // Create a string literal expression
-    const str_expr = module_b_cir.store.addExpr(.{
+    const str_expr = try module_b_cir.store.addExpr(.{
         .e_str_segment = .{
             .literal = @enumFromInt(0), // placeholder string literal
         },
@@ -363,7 +367,7 @@ test "cross-module type checking - type mismatch error" {
     const external_var = @as(Var, @enumFromInt(@intFromEnum(external_lookup_expr)));
     const string_var = @as(Var, @enumFromInt(@intFromEnum(str_expr)));
 
-    const result = checker.unify(external_var, string_var);
+    const result = try checker.unify(external_var, string_var);
     try testing.expect(result.isProblem());
 }
 
@@ -371,40 +375,41 @@ test "cross-module type checking - polymorphic instantiation" {
     const allocator = testing.allocator;
 
     // Create module A that exports a polymorphic list function
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
     // Store this as an integer literal expression (placeholder)
-    const func_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const func_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Create a function: listLength : List a -> I64
-    const type_var_a = module_a_env.types.fresh(); // var 0
+    const type_var_a = try module_a_env.types.fresh(); // var 0
     const list_content = Content{ .structure = .{ .list = type_var_a } };
-    const list_var = module_a_env.types.freshFromContent(list_content);
-    const i64_var = module_a_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i64 } } });
+    const list_var = try module_a_env.types.freshFromContent(list_content);
+    const i64_var = try module_a_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i64 } } });
 
-    const func_content = module_a_env.types.mkFuncPure(&[_]Var{list_var}, i64_var);
+    const func_content = try module_a_env.types.mkFuncPure(&[_]Var{list_var}, i64_var);
 
     // Set the type of expression 0 to our function type (using var 0)
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Create module B that imports and uses the function with a specific type
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Register the import of module A
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    const external_lookup_expr = module_b_cir.store.addExpr(.{
+    const external_lookup_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
@@ -413,15 +418,15 @@ test "cross-module type checking - polymorphic instantiation" {
     }, base.Region.zero());
 
     // Ensure we have type variable 0 allocated for external_lookup_expr (expr 0)
-    _ = module_b_env.types.fresh(); // var 0
+    _ = try module_b_env.types.fresh(); // var 0
 
     // Create an empty list expression
-    const list_expr = module_b_cir.store.addExpr(.{
+    const list_expr = try module_b_cir.store.addExpr(.{
         .e_empty_list = .{},
     }, base.Region.zero());
 
     // Create a list type with strings as elements
-    const str_var = module_b_env.types.freshFromContent(Content{ .structure = .str });
+    const str_var = try module_b_env.types.freshFromContent(Content{ .structure = .str });
     const str_list_content = Content{ .structure = .{ .list = str_var } };
 
     // Set the list expression's type
@@ -463,22 +468,23 @@ test "cross-module type checking - preserves module A types" {
     const allocator = testing.allocator;
 
     // Create module A
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
     // Create a flex var in module A
-    const flex_var_a = module_a_env.types.fresh();
+    const flex_var_a = try module_a_env.types.fresh();
 
     // Store this as an integer literal expression (placeholder)
-    const flex_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const flex_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Set the type of this expression to our flex var
     // Set the expression's type variable to the flex var
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(flex_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(flex_expr_idx)), .{ .flex_var = null });
 
     // Remember the original state
@@ -486,17 +492,17 @@ test "cross-module type checking - preserves module A types" {
     try testing.expect(original_content == .flex_var);
 
     // Create module B
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Register the import of module A
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    const external_lookup_expr = module_b_cir.store.addExpr(.{
+    const external_lookup_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(flex_expr_idx)),
@@ -505,8 +511,8 @@ test "cross-module type checking - preserves module A types" {
     }, base.Region.zero());
 
     // Create a concrete type in module B to unify with
-    const i32_var = module_b_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i32 } } });
-    const i32_expr = module_b_cir.store.addExpr(.{ .e_int = .{
+    const i32_var = try module_b_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i32 } } });
+    const i32_expr = try module_b_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{ 123, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .kind = .i128 },
     } }, base.Region.zero());
 
@@ -526,7 +532,7 @@ test "cross-module type checking - preserves module A types" {
 
     // Unify the imported type with I32
     const external_var = @as(Var, @enumFromInt(@intFromEnum(external_lookup_expr)));
-    const result = checker.unify(external_var, i32_var);
+    const result = try checker.unify(external_var, i32_var);
     try testing.expect(result.isOk());
 
     // Module A's type should remain unchanged (still a flex var)
@@ -546,40 +552,41 @@ test "cross-module type checking - three module chain monomorphic" {
     const allocator = testing.allocator;
 
     // Module A exports a simple function: add : I32, I32 -> I32
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
-    const func_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const func_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Allocate var 0 to match expr 0
-    _ = module_a_env.types.fresh();
+    _ = try module_a_env.types.fresh();
 
     // Create a function: add : I32, I32 -> I32
     const i32_content = Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
-    const arg1_var = module_a_env.types.freshFromContent(i32_content);
-    const arg2_var = module_a_env.types.freshFromContent(i32_content);
-    const ret_var = module_a_env.types.freshFromContent(i32_content);
+    const arg1_var = try module_a_env.types.freshFromContent(i32_content);
+    const arg2_var = try module_a_env.types.freshFromContent(i32_content);
+    const ret_var = try module_a_env.types.freshFromContent(i32_content);
 
-    const func_content = module_a_env.types.mkFuncPure(&[_]Var{ arg1_var, arg2_var }, ret_var);
+    const func_content = try module_a_env.types.mkFuncPure(&[_]Var{ arg1_var, arg2_var }, ret_var);
 
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Module B imports from A and re-exports it
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Module B imports A's function
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
-    const b_lookup_expr = module_b_cir.store.addExpr(.{
+    const b_lookup_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
@@ -588,15 +595,15 @@ test "cross-module type checking - three module chain monomorphic" {
     }, base.Region.zero());
 
     // Module C imports from B
-    var module_c_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_c_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_c_env.deinit();
 
-    var module_c_cir = CIR.init(&module_c_env, "ModuleC");
+    var module_c_cir = try CIR.init(&module_c_env, "ModuleC");
     defer module_c_cir.deinit();
 
     // Module C imports from B (not A)
     _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
-    const c_lookup_expr = module_c_cir.store.addExpr(.{
+    const c_lookup_expr = try module_c_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(1), // Direct index to module B in the array
             .target_node_idx = @intCast(@intFromEnum(b_lookup_expr)),
@@ -655,34 +662,35 @@ test "cross-module type checking - three module chain polymorphic" {
     const allocator = testing.allocator;
 
     // Module A exports a polymorphic function: identity : a -> a
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
-    const func_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const func_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Allocate var 0 to match expr 0
-    _ = module_a_env.types.fresh();
+    _ = try module_a_env.types.fresh();
 
-    const type_var_a = module_a_env.types.fresh();
-    const func_content = module_a_env.types.mkFuncPure(&[_]Var{type_var_a}, type_var_a);
+    const type_var_a = try module_a_env.types.fresh();
+    const func_content = try module_a_env.types.mkFuncPure(&[_]Var{type_var_a}, type_var_a);
 
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
     // Module B imports from A and re-exports it
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Module B imports from A
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
-    const b_lookup_expr = module_b_cir.store.addExpr(.{
+    const b_lookup_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
@@ -691,15 +699,15 @@ test "cross-module type checking - three module chain polymorphic" {
     }, base.Region.zero());
 
     // Module C imports from B
-    var module_c_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_c_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_c_env.deinit();
 
-    var module_c_cir = CIR.init(&module_c_env, "ModuleC");
+    var module_c_cir = try CIR.init(&module_c_env, "ModuleC");
     defer module_c_cir.deinit();
 
     // Module C imports from B
     _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
-    const c_lookup_expr = module_c_cir.store.addExpr(.{
+    const c_lookup_expr = try module_c_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(1), // Direct index to module B in the array
             .target_node_idx = @intCast(@intFromEnum(b_lookup_expr)),
@@ -751,50 +759,51 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     const allocator = testing.allocator;
 
     // Module A exports: map : (a -> b), List a -> List b
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
-    const map_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const map_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Allocate var 0 to match expr 0
-    _ = module_a_env.types.fresh();
+    _ = try module_a_env.types.fresh();
 
     // Module A exports: map : (a -> b), List a -> List b
-    const type_var_a = module_a_env.types.fresh();
-    const type_var_b = module_a_env.types.fresh();
+    const type_var_a = try module_a_env.types.fresh();
+    const type_var_b = try module_a_env.types.fresh();
 
     // Create (a -> b)
-    const mapper_func_content = module_a_env.types.mkFuncPure(&[_]Var{type_var_a}, type_var_b);
-    const mapper_var = module_a_env.types.freshFromContent(mapper_func_content);
+    const mapper_func_content = try module_a_env.types.mkFuncPure(&[_]Var{type_var_a}, type_var_b);
+    const mapper_var = try module_a_env.types.freshFromContent(mapper_func_content);
 
     // Create List a
     const list_a_content = Content{ .structure = .{ .list = type_var_a } };
-    const list_a_var = module_a_env.types.freshFromContent(list_a_content);
+    const list_a_var = try module_a_env.types.freshFromContent(list_a_content);
 
     // Create List b
     const list_b_content = Content{ .structure = .{ .list = type_var_b } };
-    const list_b_var = module_a_env.types.freshFromContent(list_b_content);
+    const list_b_var = try module_a_env.types.freshFromContent(list_b_content);
 
     // Create map : (a -> b), List a -> List b
-    const map_func_content = module_a_env.types.mkFuncPure(&[_]Var{ mapper_var, list_a_var }, list_b_var);
+    const map_func_content = try module_a_env.types.mkFuncPure(&[_]Var{ mapper_var, list_a_var }, list_b_var);
 
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(map_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(map_expr_idx)), map_func_content);
 
     // Module B imports map and partially applies it with I32
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Module B imports from A
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
-    const b_lookup_expr = module_b_cir.store.addExpr(.{
+    const b_lookup_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(map_expr_idx)),
@@ -803,46 +812,46 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     }, base.Region.zero());
 
     // Allocate var 0 to match b_lookup_expr (expr 0)
-    _ = module_b_env.types.fresh();
+    _ = try module_b_env.types.fresh();
 
     // Create specialized version: mapI32 : (I32 -> b), List I32 -> List b
     // First create the expression to get expr 1
-    const map_i32_expr_idx = module_b_cir.store.addExpr(.{ .e_int = .{
+    const map_i32_expr_idx = try module_b_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Now allocate var 1 to match map_i32_expr_idx (expr 1)
-    _ = module_b_env.types.fresh();
+    _ = try module_b_env.types.fresh();
 
     // Now create the type content
     const i32_content = Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
-    const i32_var = module_b_env.types.freshFromContent(i32_content);
-    const b_type_var_b = module_b_env.types.fresh();
+    const i32_var = try module_b_env.types.freshFromContent(i32_content);
+    const b_type_var_b = try module_b_env.types.fresh();
 
-    const i32_to_b_content = module_b_env.types.mkFuncPure(&[_]Var{i32_var}, b_type_var_b);
-    const i32_to_b_var = module_b_env.types.freshFromContent(i32_to_b_content);
+    const i32_to_b_content = try module_b_env.types.mkFuncPure(&[_]Var{i32_var}, b_type_var_b);
+    const i32_to_b_var = try module_b_env.types.freshFromContent(i32_to_b_content);
 
     const list_i32_content = Content{ .structure = .{ .list = i32_var } };
-    const list_i32_var = module_b_env.types.freshFromContent(list_i32_content);
+    const list_i32_var = try module_b_env.types.freshFromContent(list_i32_content);
 
     const list_b_content_2 = Content{ .structure = .{ .list = b_type_var_b } };
-    const list_b_var_2 = module_b_env.types.freshFromContent(list_b_content_2);
+    const list_b_var_2 = try module_b_env.types.freshFromContent(list_b_content_2);
 
-    const map_i32_content = module_b_env.types.mkFuncPure(&[_]Var{ i32_to_b_var, list_i32_var }, list_b_var_2);
+    const map_i32_content = try module_b_env.types.mkFuncPure(&[_]Var{ i32_to_b_var, list_i32_var }, list_b_var_2);
 
     // Set the type on var 1 (for expr 1)
     try module_b_env.types.setVarContent(@enumFromInt(@intFromEnum(map_i32_expr_idx)), map_i32_content);
 
     // Module C imports the partially specialized version from B
-    var module_c_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_c_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_c_env.deinit();
 
-    var module_c_cir = CIR.init(&module_c_env, "ModuleC");
+    var module_c_cir = try CIR.init(&module_c_env, "ModuleC");
     defer module_c_cir.deinit();
 
     // Module C imports from B and uses the partially specialized function
     _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
-    const c_lookup_expr = module_c_cir.store.addExpr(.{
+    const c_lookup_expr = try module_c_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(1), // Direct index to module B in the array
             .target_node_idx = @intCast(@intFromEnum(map_i32_expr_idx)),
@@ -931,28 +940,28 @@ test "cross-module type checking - record type chain" {
     const allocator = testing.allocator;
 
     // Module A exports a record type: { x: I32, y: Str }
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
-    const record_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const record_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Allocate var 0 to match expr 0
-    _ = module_a_env.types.fresh();
+    _ = try module_a_env.types.fresh();
 
     // Module A exports a record type: { x: I32, y: Str }
     const i32_content = Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
-    const i32_var = module_a_env.types.freshFromContent(i32_content);
+    const i32_var = try module_a_env.types.freshFromContent(i32_content);
 
     const str_content = Content{ .structure = .str };
-    const str_var = module_a_env.types.freshFromContent(str_content);
+    const str_var = try module_a_env.types.freshFromContent(str_content);
 
-    const x_ident = module_a_env.idents.insert(allocator, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident = module_a_env.idents.insert(allocator, base.Ident.for_text("y"), base.Region.zero());
+    const x_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("x"), base.Region.zero());
+    const y_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("y"), base.Region.zero());
 
     var record_fields = std.ArrayList(types_mod.RecordField).init(allocator);
     defer record_fields.deinit();
@@ -960,23 +969,24 @@ test "cross-module type checking - record type chain" {
     try record_fields.append(.{ .name = x_ident, .var_ = i32_var });
     try record_fields.append(.{ .name = y_ident, .var_ = str_var });
 
-    const fields_range = module_a_env.types.appendRecordFields(record_fields.items);
-    const ext_var = module_a_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const fields_range = try module_a_env.types.appendRecordFields(record_fields.items);
+    const ext_var = try module_a_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const record_content = Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } };
 
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(record_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(record_expr_idx)), record_content);
 
     // Module B imports and re-exports the record
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Module B imports from A and partially specializes
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
-    const b_lookup_expr = module_b_cir.store.addExpr(.{
+    const b_lookup_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(record_expr_idx)),
@@ -985,15 +995,15 @@ test "cross-module type checking - record type chain" {
     }, base.Region.zero());
 
     // Module C imports from B
-    var module_c_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_c_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_c_env.deinit();
 
-    var module_c_cir = CIR.init(&module_c_env, "ModuleC");
+    var module_c_cir = try CIR.init(&module_c_env, "ModuleC");
     defer module_c_cir.deinit();
 
     // Module C imports from B
     _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
-    const c_lookup_expr = module_c_cir.store.addExpr(.{
+    const c_lookup_expr = try module_c_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(1), // Direct index to module B in the array
             .target_node_idx = @intCast(@intFromEnum(b_lookup_expr)),
@@ -1056,27 +1066,27 @@ test "cross-module type checking - polymorphic record chain" {
     const allocator = testing.allocator;
 
     // Module A exports a polymorphic record: { value: a, next: List a }
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
-    const record_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const record_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Allocate var 0 to match expr 0
-    _ = module_a_env.types.fresh();
+    _ = try module_a_env.types.fresh();
 
     // Module A exports a polymorphic record: { value: a, next: List a }
-    const type_var_a = module_a_env.types.fresh();
+    const type_var_a = try module_a_env.types.fresh();
 
     const list_a_content = Content{ .structure = .{ .list = type_var_a } };
-    const list_a_var = module_a_env.types.freshFromContent(list_a_content);
+    const list_a_var = try module_a_env.types.freshFromContent(list_a_content);
 
-    const value_ident = module_a_env.idents.insert(allocator, base.Ident.for_text("value"), base.Region.zero());
-    const next_ident = module_a_env.idents.insert(allocator, base.Ident.for_text("next"), base.Region.zero());
+    const value_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("value"), base.Region.zero());
+    const next_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("next"), base.Region.zero());
 
     var record_fields = std.ArrayList(types_mod.RecordField).init(allocator);
     defer record_fields.deinit();
@@ -1084,23 +1094,24 @@ test "cross-module type checking - polymorphic record chain" {
     try record_fields.append(.{ .name = value_ident, .var_ = type_var_a });
     try record_fields.append(.{ .name = next_ident, .var_ = list_a_var });
 
-    const fields_range = module_a_env.types.appendRecordFields(record_fields.items);
-    const ext_var = module_a_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const fields_range = try module_a_env.types.appendRecordFields(record_fields.items);
+    const ext_var = try module_a_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const record_content = Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } };
 
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(record_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(record_expr_idx)), record_content);
 
     // Module B imports and partially specializes to Str
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Module B imports from A
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
-    const b_lookup_expr = module_b_cir.store.addExpr(.{
+    const b_lookup_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(record_expr_idx)),
@@ -1109,25 +1120,25 @@ test "cross-module type checking - polymorphic record chain" {
     }, base.Region.zero());
 
     // Allocate var 0 to match b_lookup_expr (expr 0)
-    _ = module_b_env.types.fresh();
+    _ = try module_b_env.types.fresh();
 
     // Create the expression first to get expr 1
-    const str_record_expr_idx = module_b_cir.store.addExpr(.{ .e_int = .{
+    const str_record_expr_idx = try module_b_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Allocate var 1 to match str_record_expr_idx (expr 1)
-    _ = module_b_env.types.fresh();
+    _ = try module_b_env.types.fresh();
 
     // Create specialized version: { value: Str, next: List Str }
     const str_content = Content{ .structure = .str };
-    const str_var = module_b_env.types.freshFromContent(str_content);
+    const str_var = try module_b_env.types.freshFromContent(str_content);
 
     const list_str_content = Content{ .structure = .{ .list = str_var } };
-    const list_str_var = module_b_env.types.freshFromContent(list_str_content);
+    const list_str_var = try module_b_env.types.freshFromContent(list_str_content);
 
-    const value_ident_b = module_b_env.idents.insert(allocator, base.Ident.for_text("value"), base.Region.zero());
-    const next_ident_b = module_b_env.idents.insert(allocator, base.Ident.for_text("next"), base.Region.zero());
+    const value_ident_b = try module_b_env.idents.insert(allocator, base.Ident.for_text("value"), base.Region.zero());
+    const next_ident_b = try module_b_env.idents.insert(allocator, base.Ident.for_text("next"), base.Region.zero());
 
     var str_record_fields = std.ArrayList(types_mod.RecordField).init(allocator);
     defer str_record_fields.deinit();
@@ -1135,8 +1146,8 @@ test "cross-module type checking - polymorphic record chain" {
     try str_record_fields.append(.{ .name = value_ident_b, .var_ = str_var });
     try str_record_fields.append(.{ .name = next_ident_b, .var_ = list_str_var });
 
-    const str_fields_range = module_b_env.types.appendRecordFields(str_record_fields.items);
-    const str_ext_var = module_b_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const str_fields_range = try module_b_env.types.appendRecordFields(str_record_fields.items);
+    const str_ext_var = try module_b_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const str_record_content = Content{ .structure = .{ .record = .{ .fields = str_fields_range, .ext = str_ext_var } } };
 
@@ -1144,15 +1155,15 @@ test "cross-module type checking - polymorphic record chain" {
     try module_b_env.types.setVarContent(@enumFromInt(@intFromEnum(str_record_expr_idx)), str_record_content);
 
     // Module C imports the specialized version from B
-    var module_c_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_c_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_c_env.deinit();
 
-    var module_c_cir = CIR.init(&module_c_env, "ModuleC");
+    var module_c_cir = try CIR.init(&module_c_env, "ModuleC");
     defer module_c_cir.deinit();
 
     // Module C imports from B
     _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
-    const c_lookup_expr = module_c_cir.store.addExpr(.{
+    const c_lookup_expr = try module_c_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(1), // Direct index to module B in the array
             .target_node_idx = @intCast(@intFromEnum(str_record_expr_idx)),
@@ -1219,51 +1230,52 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     const allocator = testing.allocator;
 
     // Module A exports: compose : (b -> c), (a -> b) -> (a -> c)
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
-    const compose_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const compose_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Allocate var 0 to match expr 0
-    _ = module_a_env.types.fresh();
+    _ = try module_a_env.types.fresh();
 
     // Module A exports: compose : (b -> c), (a -> b) -> (a -> c)
-    const type_var_a = module_a_env.types.fresh();
-    const type_var_b = module_a_env.types.fresh();
-    const type_var_c = module_a_env.types.fresh();
+    const type_var_a = try module_a_env.types.fresh();
+    const type_var_b = try module_a_env.types.fresh();
+    const type_var_c = try module_a_env.types.fresh();
 
     // Create (b -> c)
-    const b_to_c_content = module_a_env.types.mkFuncPure(&[_]Var{type_var_b}, type_var_c);
-    const b_to_c_var = module_a_env.types.freshFromContent(b_to_c_content);
+    const b_to_c_content = try module_a_env.types.mkFuncPure(&[_]Var{type_var_b}, type_var_c);
+    const b_to_c_var = try module_a_env.types.freshFromContent(b_to_c_content);
 
     // Create (a -> b)
-    const a_to_b_content = module_a_env.types.mkFuncPure(&[_]Var{type_var_a}, type_var_b);
-    const a_to_b_var = module_a_env.types.freshFromContent(a_to_b_content);
+    const a_to_b_content = try module_a_env.types.mkFuncPure(&[_]Var{type_var_a}, type_var_b);
+    const a_to_b_var = try module_a_env.types.freshFromContent(a_to_b_content);
 
     // Create (a -> c)
-    const a_to_c_content = module_a_env.types.mkFuncPure(&[_]Var{type_var_a}, type_var_c);
-    const a_to_c_var = module_a_env.types.freshFromContent(a_to_c_content);
+    const a_to_c_content = try module_a_env.types.mkFuncPure(&[_]Var{type_var_a}, type_var_c);
+    const a_to_c_var = try module_a_env.types.freshFromContent(a_to_c_content);
 
     // Create compose : (b -> c), (a -> b) -> (a -> c)
-    const compose_content = module_a_env.types.mkFuncPure(&[_]Var{ b_to_c_var, a_to_b_var }, a_to_c_var);
+    const compose_content = try module_a_env.types.mkFuncPure(&[_]Var{ b_to_c_var, a_to_b_var }, a_to_c_var);
 
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(compose_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(compose_expr_idx)), compose_content);
 
     // Module B imports compose and partially applies with b = Str
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Module B imports from A and makes a new record type
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
-    const b_lookup_expr = module_b_cir.store.addExpr(.{
+    const b_lookup_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(compose_expr_idx)),
@@ -1272,50 +1284,50 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     }, base.Region.zero());
 
     // Allocate var 0 to match b_lookup_expr (expr 0)
-    _ = module_b_env.types.fresh();
+    _ = try module_b_env.types.fresh();
 
     // Create the expression first to get expr 1
-    const compose_str_expr_idx = module_b_cir.store.addExpr(.{ .e_int = .{
+    const compose_str_expr_idx = try module_b_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Allocate var 1 to match compose_str_expr_idx (expr 1)
-    _ = module_b_env.types.fresh();
+    _ = try module_b_env.types.fresh();
 
     // Create partially specialized version with b = Str
     const str_content = Content{ .structure = .str };
-    const str_var = module_b_env.types.freshFromContent(str_content);
-    const b_type_var_a = module_b_env.types.fresh();
-    const b_type_var_c = module_b_env.types.fresh();
+    const str_var = try module_b_env.types.freshFromContent(str_content);
+    const b_type_var_a = try module_b_env.types.fresh();
+    const b_type_var_c = try module_b_env.types.fresh();
 
     // Create (Str -> c)
-    const str_to_c_content = module_b_env.types.mkFuncPure(&[_]Var{str_var}, b_type_var_c);
-    const str_to_c_var = module_b_env.types.freshFromContent(str_to_c_content);
+    const str_to_c_content = try module_b_env.types.mkFuncPure(&[_]Var{str_var}, b_type_var_c);
+    const str_to_c_var = try module_b_env.types.freshFromContent(str_to_c_content);
 
     // Create (a -> Str)
-    const a_to_str_content = module_b_env.types.mkFuncPure(&[_]Var{b_type_var_a}, str_var);
-    const a_to_str_var = module_b_env.types.freshFromContent(a_to_str_content);
+    const a_to_str_content = try module_b_env.types.mkFuncPure(&[_]Var{b_type_var_a}, str_var);
+    const a_to_str_var = try module_b_env.types.freshFromContent(a_to_str_content);
 
     // Create (a -> c)
-    const b_a_to_c_content = module_b_env.types.mkFuncPure(&[_]Var{b_type_var_a}, b_type_var_c);
-    const b_a_to_c_var = module_b_env.types.freshFromContent(b_a_to_c_content);
+    const b_a_to_c_content = try module_b_env.types.mkFuncPure(&[_]Var{b_type_var_a}, b_type_var_c);
+    const b_a_to_c_var = try module_b_env.types.freshFromContent(b_a_to_c_content);
 
     // Create composeStr : (Str -> c), (a -> Str) -> (a -> c)
-    const compose_str_content = module_b_env.types.mkFuncPure(&[_]Var{ str_to_c_var, a_to_str_var }, b_a_to_c_var);
+    const compose_str_content = try module_b_env.types.mkFuncPure(&[_]Var{ str_to_c_var, a_to_str_var }, b_a_to_c_var);
 
     // Set the type on var 1 (for expr 1)
     try module_b_env.types.setVarContent(@enumFromInt(@intFromEnum(compose_str_expr_idx)), compose_str_content);
 
     // Module C imports the partially specialized version and further specializes c = I32
-    var module_c_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_c_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_c_env.deinit();
 
-    var module_c_cir = CIR.init(&module_c_env, "ModuleC");
+    var module_c_cir = try CIR.init(&module_c_env, "ModuleC");
     defer module_c_cir.deinit();
 
     // Module C imports from B and uses the wrapper
     _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
-    const c_lookup_expr = module_c_cir.store.addExpr(.{
+    const c_lookup_expr = try module_c_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(1), // Direct index to module B in the array
             .target_node_idx = @intCast(@intFromEnum(compose_str_expr_idx)),
@@ -1349,27 +1361,27 @@ test "cross-module type checking - complex polymorphic chain with unification" {
 
     // Create a concrete instance where c = I32
     const i32_content = Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
-    const i32_var = module_c_env.types.freshFromContent(i32_content);
-    const c_type_var_a = module_c_env.types.fresh();
+    const i32_var = try module_c_env.types.freshFromContent(i32_content);
+    const c_type_var_a = try module_c_env.types.fresh();
 
     // Create (Str -> I32)
-    const str_to_i32_content = module_c_env.types.mkFuncPure(&[_]Var{str_var}, i32_var);
-    const str_to_i32_var = module_c_env.types.freshFromContent(str_to_i32_content);
+    const str_to_i32_content = try module_c_env.types.mkFuncPure(&[_]Var{str_var}, i32_var);
+    const str_to_i32_var = try module_c_env.types.freshFromContent(str_to_i32_content);
 
     // Create (a -> Str)
-    const c_a_to_str_content = module_c_env.types.mkFuncPure(&[_]Var{c_type_var_a}, str_var);
-    const c_a_to_str_var = module_c_env.types.freshFromContent(c_a_to_str_content);
+    const c_a_to_str_content = try module_c_env.types.mkFuncPure(&[_]Var{c_type_var_a}, str_var);
+    const c_a_to_str_var = try module_c_env.types.freshFromContent(c_a_to_str_content);
 
     // Create (a -> I32)
-    const a_to_i32_content = module_c_env.types.mkFuncPure(&[_]Var{c_type_var_a}, i32_var);
-    const a_to_i32_var = module_c_env.types.freshFromContent(a_to_i32_content);
+    const a_to_i32_content = try module_c_env.types.mkFuncPure(&[_]Var{c_type_var_a}, i32_var);
+    const a_to_i32_var = try module_c_env.types.freshFromContent(a_to_i32_content);
 
     // Create the expected type: (Str -> I32), (a -> Str) -> (a -> I32)
-    const expected_content = module_c_env.types.mkFuncPure(&[_]Var{ str_to_i32_var, c_a_to_str_var }, a_to_i32_var);
-    const expected_var = module_c_env.types.freshFromContent(expected_content);
+    const expected_content = try module_c_env.types.mkFuncPure(&[_]Var{ str_to_i32_var, c_a_to_str_var }, a_to_i32_var);
+    const expected_var = try module_c_env.types.freshFromContent(expected_content);
 
     // Unify the imported type with the expected type
-    const result = checker_c.unify(c_var, expected_var);
+    const result = try checker_c.unify(c_var, expected_var);
     try testing.expect(result.isOk());
 
     // Verify the unified type
@@ -1442,30 +1454,31 @@ test "cross-module type checking - type mismatch with proper error message" {
     const allocator = testing.allocator;
 
     // Module A: Exports a string value
-    var module_a_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_a_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_a_env.deinit();
 
-    var module_a_cir = CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
     defer module_a_cir.deinit();
 
     // Create a string value in module A
-    const str_expr_idx = module_a_cir.store.addExpr(.{ .e_int = .{
+    const str_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
         .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
     } }, base.Region.zero());
 
     // Allocate var 0 to match expr 0
-    _ = module_a_env.types.fresh();
+    _ = try module_a_env.types.fresh();
+    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(str_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(str_expr_idx)), .{ .structure = .str });
 
     // Module B: Tries to use the string as a number
-    var module_b_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    var module_b_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer module_b_env.deinit();
 
-    var module_b_cir = CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
     defer module_b_cir.deinit();
 
     // Create an import expression that references module A's string
-    const import_expr = module_b_cir.store.addExpr(.{
+    const import_expr = try module_b_cir.store.addExpr(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0),
             .target_node_idx = @intCast(@intFromEnum(str_expr_idx)),
@@ -1491,9 +1504,9 @@ test "cross-module type checking - type mismatch with proper error message" {
     // Now try to unify the import (which has Str type) with I32
     const import_var = @as(types_mod.Var, @enumFromInt(@intFromEnum(import_expr)));
     const i32_content = Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
-    const i32_var = module_b_env.types.freshFromContent(i32_content);
+    const i32_var = try module_b_env.types.freshFromContent(i32_content);
 
-    const result = checker.unify(import_var, i32_var);
+    const result = try checker.unify(import_var, i32_var);
 
     // The unification should fail
     try testing.expect(result.isProblem());

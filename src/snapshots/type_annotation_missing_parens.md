@@ -56,7 +56,8 @@ LowerIdent(3:1-3:5),OpColon(3:6-3:7),UpperIdent(3:8-3:12),UpperIdent(3:13-3:15),
 (file @1.1-3.15
 	(module @1.1-1.14
 		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13 (text "nums"))))
+			(exposed-lower-ident @1.9-1.13
+				(text "nums"))))
 	(statements
 		(s-type-anno @3.1-3.12 (name "nums")
 			(ty @3.8-3.12 (name "List")))

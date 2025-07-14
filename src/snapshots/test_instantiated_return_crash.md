@@ -35,8 +35,8 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 	(statements
 		(s-type-anno @2.5-2.22 (name "identity")
 			(ty-fn @2.16-2.22
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "a"))))
+				(ty-var @2.16-2.17 (raw "a"))
+				(ty-var @2.21-2.22 (raw "a"))))
 		(s-decl @3.5-3.21
 			(p-ident @3.5-3.13 (raw "identity"))
 			(e-lambda @3.16-3.21
@@ -80,8 +80,8 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 (e-block @1.1-9.2
 	(s-type-anno @2.5-2.22 (name "identity")
 		(ty-fn @2.16-2.22 (effectful false)
-			(ty-var @1.1-1.1 (name "a"))
-			(ty-var @1.1-1.1 (name "a"))))
+			(ty-var @2.16-2.17 (name "a"))
+			(ty-var @2.21-2.22 (name "a"))))
 	(s-let @3.5-3.21
 		(p-assign @3.5-3.13 (ident "identity"))
 		(e-lambda @3.16-3.21

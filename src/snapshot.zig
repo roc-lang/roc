@@ -24,6 +24,7 @@ const types = @import("types.zig");
 const reporting = @import("reporting.zig");
 const tokenize = @import("check/parse/tokenize.zig");
 const SExprTree = @import("base/SExprTree.zig");
+const repl = @import("repl/eval.zig");
 
 const AST = parse.AST;
 const Report = reporting.Report;
@@ -65,7 +66,7 @@ fn tokenToCategory(token: tokenize.Token.Tag) TokenCategory {
         .UpperIdent, .LowerIdent, .DotLowerIdent, .DotUpperIdent, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .NamedUnderscore, .OpaqueName => .identifier,
 
         // Strings
-        .StringStart, .StringEnd, .StringPart, .MultilineStringStart, .MultilineStringEnd, .SingleQuote => .string,
+        .StringStart, .StringEnd, .StringPart, .MultilineStringStart, .MultilineStringEnd, .SingleQuote, .MalformedSingleQuoteUnclosed => .string,
 
         // Numbers
         .Float, .Int, .DotInt, .NoSpaceDotInt, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits => .number,
@@ -411,20 +412,26 @@ fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_c
 fn processSnapshotContent(allocator: Allocator, content: Content, output_path: []const u8, generate_html: bool) !void {
     log("Generating snapshot for: {s}", .{output_path});
 
+    // Handle REPL snapshots separately
+    if (content.meta.node_type == .repl) {
+        return processReplSnapshot(allocator, content, output_path, generate_html);
+    }
+
     // Process the content through the compilation pipeline
     const source_copy = try allocator.dupe(u8, content.source);
-    var module_env = base.ModuleEnv.init(allocator, source_copy);
+    var module_env = try base.ModuleEnv.init(allocator, source_copy);
     defer module_env.deinit();
 
     // Parse the source code based on node type
-    var parse_ast = switch (content.meta.node_type) {
-        .file => parse.parse(&module_env, content.source),
-        .header => parse.parseHeader(&module_env, content.source),
-        .expr => parse.parseExpr(&module_env, content.source),
-        .statement => parse.parseStatement(&module_env, content.source),
-        .package => parse.parse(&module_env, content.source),
-        .platform => parse.parse(&module_env, content.source),
-        .app => parse.parse(&module_env, content.source),
+    var parse_ast: AST = switch (content.meta.node_type) {
+        .file => try parse.parse(&module_env, content.source),
+        .header => try parse.parseHeader(&module_env, content.source),
+        .expr => try parse.parseExpr(&module_env, content.source),
+        .statement => try parse.parseStatement(&module_env, content.source),
+        .package => try parse.parse(&module_env, content.source),
+        .platform => try parse.parse(&module_env, content.source),
+        .app => try parse.parse(&module_env, content.source),
+        .repl => unreachable, // Handled above
     };
     defer parse_ast.deinit(allocator);
 
@@ -436,7 +443,7 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         basename[0..dot_idx]
     else
         basename;
-    var can_ir = CIR.init(&module_env, module_name);
+    var can_ir = try CIR.init(&module_env, module_name);
     defer can_ir.deinit();
 
     var can = try canonicalize.init(&can_ir, &parse_ast, null);
@@ -458,11 +465,12 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
             const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
             const scratch_statements_start = can_ir.store.scratch_statements.top();
             _ = try can.canonicalizeStatement(stmt_idx);
-            can_ir.all_statements = can_ir.store.statementSpanFrom(scratch_statements_start);
+            can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
         },
         .package => try can.canonicalizeFile(),
         .platform => try can.canonicalizeFile(),
         .app => try can.canonicalizeFile(),
+        .repl => unreachable, // Handled above
     }
 
     // Assert that everything is in-sync
@@ -493,11 +501,11 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         // Generate original S-expression for comparison
         var original_tree = SExprTree.init(allocator);
         defer original_tree.deinit();
-        CIR.pushToSExprTree(&can_ir, null, &original_tree, content.source);
+        try CIR.pushToSExprTree(&can_ir, null, &original_tree, content.source);
 
         var original_sexpr = std.ArrayList(u8).init(allocator);
         defer original_sexpr.deinit();
-        original_tree.toStringPretty(original_sexpr.writer().any());
+        try original_tree.toStringPretty(original_sexpr.writer().any());
 
         // Create and serialize MmapCache
         const cache_data = try cache.CacheModule.create(allocator, &module_env, &can_ir, 0, 0);
@@ -518,11 +526,11 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         // Generate S-expression from restored CIR
         var restored_tree = SExprTree.init(allocator);
         defer restored_tree.deinit();
-        CIR.pushToSExprTree(&restored.cir, null, &restored_tree, content.source);
+        try CIR.pushToSExprTree(&restored.cir, null, &restored_tree, content.source);
 
         var restored_sexpr = std.ArrayList(u8).init(allocator);
         defer restored_sexpr.deinit();
-        restored_tree.toStringPretty(restored_sexpr.writer().any());
+        try restored_tree.toStringPretty(restored_sexpr.writer().any());
 
         // Compare S-expressions - crash if they don't match
         if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
@@ -807,6 +815,7 @@ pub const NodeType = enum {
     package,
     platform,
     app,
+    repl,
 
     pub const HEADER = "header";
     pub const EXPR = "expr";
@@ -815,6 +824,7 @@ pub const NodeType = enum {
     pub const PACKAGE = "package";
     pub const PLATFORM = "platform";
     pub const APP = "app";
+    pub const REPL = "repl";
 
     fn fromString(str: []const u8) !NodeType {
         if (std.mem.eql(u8, str, HEADER)) return .header;
@@ -824,6 +834,7 @@ pub const NodeType = enum {
         if (std.mem.eql(u8, str, PACKAGE)) return .package;
         if (std.mem.eql(u8, str, PLATFORM)) return .platform;
         if (std.mem.eql(u8, str, APP)) return .app;
+        if (std.mem.eql(u8, str, REPL)) return .repl;
         return Error.InvalidNodeType;
     }
 
@@ -836,6 +847,7 @@ pub const NodeType = enum {
             .package => "package",
             .platform => "platform",
             .app => "app",
+            .repl => "repl",
         };
     }
 };
@@ -1224,7 +1236,7 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
     }
 
     // Canonicalization Diagnostics
-    const diagnostics = can_ir.getDiagnostics();
+    const diagnostics = try can_ir.getDiagnostics();
     // Don't free diagnostics here - CIR owns them and will free them in deinit()
     for (diagnostics) |diagnostic| {
         canonicalize_problems += 1;
@@ -1403,31 +1415,35 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
     switch (content.meta.node_type) {
         .file => {
             const file = parse_ast.store.getFile();
-            file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .header => {
             const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
-            header.pushToSExprTree(env, parse_ast, &tree);
+            try header.pushToSExprTree(env, parse_ast, &tree);
         },
         .expr => {
             const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
-            expr.pushToSExprTree(env, parse_ast, &tree);
+            try expr.pushToSExprTree(env, parse_ast, &tree);
         },
         .statement => {
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
-            stmt.pushToSExprTree(env, parse_ast, &tree);
+            try stmt.pushToSExprTree(env, parse_ast, &tree);
         },
         .package => {
             const file = parse_ast.store.getFile();
-            file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .platform => {
             const file = parse_ast.store.getFile();
-            file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .app => {
             const file = parse_ast.store.getFile();
-            file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
+        },
+        .repl => {
+            // REPL doesn't use parse trees
+            return;
         },
     }
 
@@ -1436,7 +1452,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
         try output.begin_section("PARSE");
         try output.begin_code_block("clojure");
 
-        tree.toStringPretty(output.md_writer.any());
+        try tree.toStringPretty(output.md_writer.any());
         try output.md_writer.writeAll("\n");
 
         // Generate HTML output with syntax highlighting
@@ -1445,7 +1461,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
                 \\                <pre class="ast-parse">
             );
 
-            tree.toHtml(writer.any());
+            try tree.toHtml(writer.any());
 
             try writer.writeAll(
                 \\</pre>
@@ -1485,6 +1501,10 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         .app => {
             try fmt.formatAst(parse_ast.*, formatted.writer().any());
         },
+        .repl => {
+            // REPL doesn't use formatting
+            return;
+        },
     }
 
     const is_changed = !std.mem.eql(u8, formatted.items, content.source);
@@ -1520,19 +1540,19 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
-    can_ir.pushToSExprTree(maybe_expr_idx, &tree, content.source);
+    try can_ir.pushToSExprTree(maybe_expr_idx, &tree, content.source);
 
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
 
-    tree.toStringPretty(output.md_writer.any());
+    try tree.toStringPretty(output.md_writer.any());
     try output.md_writer.writeAll("\n");
 
     if (output.html_writer) |writer| {
         try writer.writeAll(
             \\                <pre>
         );
-        tree.toHtml(writer.any());
+        try tree.toHtml(writer.any());
         try writer.writeAll(
             \\</pre>
             \\
@@ -1551,7 +1571,7 @@ fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *C
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
-    tree.toStringPretty(output.md_writer.any());
+    try tree.toStringPretty(output.md_writer.any());
     try output.md_writer.writeAll("\n");
 
     // HTML TYPES section
@@ -1559,7 +1579,7 @@ fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *C
         try writer.writeAll(
             \\                <pre>
         );
-        tree.toHtml(writer.any());
+        try tree.toHtml(writer.any());
         try writer.writeAll(
             \\</pre>
             \\
@@ -1862,4 +1882,150 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
     }
 
     return try Content.from_ranges(ranges, content);
+}
+
+fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, generate_html: bool) !void {
+    log("Processing REPL snapshot: {s}", .{output_path});
+
+    // Buffer all output in memory before writing files
+    var md_buffer = std.ArrayList(u8).init(allocator);
+    defer md_buffer.deinit();
+
+    var html_buffer = if (generate_html) std.ArrayList(u8).init(allocator) else null;
+    defer if (html_buffer) |*buf| buf.deinit();
+
+    var output = DualOutput.init(allocator, &md_buffer, if (html_buffer) |*buf| buf else null);
+
+    // Generate HTML wrapper
+    try generateHtmlWrapper(&output, &content);
+
+    // Generate all sections
+    try generateMetaSection(&output, &content);
+    try generateSourceSection(&output, &content);
+    try generateReplExpectedSection(&output, &content);
+    try generateReplProblemsSection(&output, &content);
+
+    try generateHtmlClosing(&output);
+
+    // Write the markdown file
+    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        warn("Failed to create {s}: {}", .{ output_path, err });
+        return;
+    };
+    defer md_file.close();
+
+    try md_file.writeAll(md_buffer.items);
+
+    if (html_buffer) |*buf| {
+        writeHtmlFile(allocator, output_path, buf) catch |err| {
+            warn("Failed to write HTML file for {s}: {}", .{ output_path, err });
+        };
+    }
+}
+
+fn generateReplExpectedSection(output: *DualOutput, content: *const Content) !void {
+    try output.begin_section("EXPECTED");
+
+    // Parse REPL inputs from the source
+    var lines = std.mem.tokenizeScalar(u8, content.source, '\n');
+    var inputs = std.ArrayList([]const u8).init(output.gpa);
+    defer inputs.deinit();
+
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len > 2 and std.mem.startsWith(u8, trimmed, "» ")) {
+            try inputs.append(trimmed[2..]);
+        }
+    }
+
+    // Initialize REPL
+    var repl_instance = try repl.Repl.init(output.gpa);
+    defer repl_instance.deinit();
+
+    // Process each input and generate output
+    var actual_outputs = std.ArrayList([]const u8).init(output.gpa);
+    defer {
+        for (actual_outputs.items) |item| {
+            output.gpa.free(item);
+        }
+        actual_outputs.deinit();
+    }
+
+    for (inputs.items) |input| {
+        const repl_output = try repl_instance.step(input);
+        try actual_outputs.append(repl_output);
+    }
+
+    // Compare with expected output if provided
+    if (content.expected) |expected| {
+        // Parse expected outputs
+        var expected_outputs = std.ArrayList([]const u8).init(output.gpa);
+        defer expected_outputs.deinit();
+
+        var expected_lines = std.mem.splitSequence(u8, expected, "\n---\n");
+        while (expected_lines.next()) |output_str| {
+            const trimmed = std.mem.trim(u8, output_str, " \t\r\n");
+            if (trimmed.len > 0) {
+                try expected_outputs.append(trimmed);
+            }
+        }
+
+        // Verify the outputs match
+        if (actual_outputs.items.len != expected_outputs.items.len) {
+            std.log.err("REPL output count mismatch: got {} outputs, expected {}", .{
+                actual_outputs.items.len,
+                expected_outputs.items.len,
+            });
+        } else {
+            for (actual_outputs.items, expected_outputs.items, 0..) |actual, expected_output, i| {
+                if (!std.mem.eql(u8, actual, expected_output)) {
+                    std.log.err("REPL output mismatch at index {}: got '{s}', expected '{s}'", .{
+                        i,
+                        actual,
+                        expected_output,
+                    });
+                }
+            }
+        }
+    }
+
+    // Write actual outputs
+    for (actual_outputs.items, 0..) |repl_output, i| {
+        if (i > 0) {
+            try output.md_writer.writeAll("---\n");
+        }
+        try output.md_writer.writeAll(repl_output);
+        try output.md_writer.writeByte('\n');
+
+        // HTML output
+        if (output.html_writer) |writer| {
+            if (i > 0) {
+                try writer.writeAll("                <hr>\n");
+            }
+            try writer.writeAll("                <div class=\"repl-output\">");
+            for (repl_output) |char| {
+                try escapeHtmlChar(writer, char);
+            }
+            try writer.writeAll("</div>\n");
+        }
+    }
+
+    try output.end_section();
+}
+
+fn generateReplProblemsSection(output: *DualOutput, content: *const Content) !void {
+    _ = content;
+    try output.begin_section("PROBLEMS");
+    try output.md_writer.writeAll("NIL\n");
+
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <div class="problems">
+            \\                    <p>NIL</p>
+            \\                </div>
+            \\
+        );
+    }
+
+    try output.end_section();
 }

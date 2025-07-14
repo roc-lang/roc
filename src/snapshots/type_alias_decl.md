@@ -120,7 +120,8 @@ CloseCurly(39:1-39:2),EndOfFile(39:2-39:2),
 (file @1.1-39.2
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -142,10 +143,10 @@ CloseCurly(39:1-39:2),EndOfFile(39:2-39:2),
 				(tags
 					(ty-apply @7.20-7.26
 						(ty @7.20-7.22 (name "Ok"))
-						(ty-var @7.23-7.23 (raw "ok")))
+						(ty-var @7.23-7.25 (raw "ok")))
 					(ty-apply @7.28-7.36
 						(ty @7.28-7.31 (name "Err"))
-						(ty-var @7.32-7.32 (raw "err"))))))
+						(ty-var @7.32-7.35 (raw "err"))))))
 		(s-type-decl @10.1-10.35
 			(header @10.1-10.7 (name "Person")
 				(args))
@@ -160,15 +161,15 @@ CloseCurly(39:1-39:2),EndOfFile(39:2-39:2),
 					(ty-var @13.7-13.8 (raw "a"))
 					(ty-var @13.10-13.11 (raw "b"))))
 			(ty-fn @13.15-13.21
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "b"))))
+				(ty-var @13.15-13.16 (raw "a"))
+				(ty-var @13.20-13.21 (raw "b"))))
 		(s-type-decl @16.1-16.38
 			(header @16.1-16.18 (name "ApiResponse")
 				(args
 					(ty-var @16.13-16.17 (raw "data"))))
 			(ty-apply @16.21-16.38
 				(ty @16.21-16.27 (name "Result"))
-				(ty-var @16.28-16.28 (raw "data"))
+				(ty-var @16.28-16.32 (raw "data"))
 				(ty @16.34-16.37 (name "Str"))))
 		(s-type-decl @19.1-19.47
 			(header @19.1-19.6 (name "Color")
@@ -191,7 +192,7 @@ CloseCurly(39:1-39:2),EndOfFile(39:2-39:2),
 				(anno-record-field @23.5-23.26 (name "contents")
 					(ty-apply @23.16-23.26
 						(ty @23.16-23.20 (name "List"))
-						(ty-var @23.21-23.21 (raw "item"))))
+						(ty-var @23.21-23.25 (raw "item"))))
 				(anno-record-field @24.5-24.45 (name "metadata")
 					(ty-record @24.16-24.45
 						(anno-record-field @24.18-24.28 (name "size")
@@ -311,9 +312,9 @@ main! = |_| {
 				(ty-var @7.12-7.15 (name "err"))))
 		(ty-tag-union @7.19-7.37
 			(ty-apply @7.20-7.26 (symbol "Ok")
-				(ty-var @7.23-7.23 (name "ok")))
+				(ty-var @7.23-7.25 (name "ok")))
 			(ty-apply @7.28-7.36 (symbol "Err")
-				(ty-var @7.32-7.32 (name "err")))))
+				(ty-var @7.32-7.35 (name "err")))))
 	(s-alias-decl @10.1-10.35
 		(ty-header @10.1-10.7 (name "Person"))
 		(ty-record @10.10-10.35
@@ -327,14 +328,14 @@ main! = |_| {
 				(ty-var @13.7-13.8 (name "a"))
 				(ty-var @13.10-13.11 (name "b"))))
 		(ty-fn @13.15-13.21 (effectful false)
-			(ty-var @1.1-1.1 (name "a"))
-			(ty-var @1.1-1.1 (name "b"))))
+			(ty-var @13.15-13.16 (name "a"))
+			(ty-var @13.20-13.21 (name "b"))))
 	(s-alias-decl @16.1-16.38
 		(ty-header @16.1-16.18 (name "ApiResponse")
 			(ty-args
 				(ty-var @16.13-16.17 (name "data"))))
 		(ty-apply @16.21-16.38 (symbol "Result")
-			(ty-var @16.28-16.28 (name "data"))
+			(ty-var @16.28-16.32 (name "data"))
 			(ty @16.34-16.37 (name "Str"))))
 	(s-alias-decl @19.1-19.47
 		(ty-header @19.1-19.6 (name "Color"))
@@ -353,7 +354,7 @@ main! = |_| {
 		(ty-record @22.19-25.2
 			(field (field "contents")
 				(ty-apply @23.16-23.26 (symbol "List")
-					(ty-var @23.21-23.21 (name "item"))))
+					(ty-var @23.21-23.25 (name "item"))))
 			(field (field "metadata")
 				(ty-record @24.16-24.45
 					(field (field "size")
@@ -365,32 +366,32 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @27.1-27.6 (type "arg -> Num(size2)")))
+		(patt @27.1-27.6 (type "_arg -> Num(_size2)")))
 	(type_decls
 		(alias @4.1-4.13 (type "UserId")
 			(ty-header @4.1-4.7 (name "UserId")))
-		(alias @7.1-7.37 (type "Result(c, d)")
+		(alias @7.1-7.37 (type "Result(ok, err)")
 			(ty-header @7.1-7.16 (name "Result")
 				(ty-args
 					(ty-var @7.8-7.10 (name "ok"))
 					(ty-var @7.12-7.15 (name "err")))))
 		(alias @10.1-10.35 (type "Person")
 			(ty-header @10.1-10.7 (name "Person")))
-		(alias @13.1-13.21 (type "MapFn(e, f)")
+		(alias @13.1-13.21 (type "MapFn(a, b)")
 			(ty-header @13.1-13.12 (name "MapFn")
 				(ty-args
 					(ty-var @13.7-13.8 (name "a"))
 					(ty-var @13.10-13.11 (name "b")))))
-		(alias @16.1-16.38 (type "ApiResponse(g)")
+		(alias @16.1-16.38 (type "ApiResponse(data)")
 			(ty-header @16.1-16.18 (name "ApiResponse")
 				(ty-args
 					(ty-var @16.13-16.17 (name "data")))))
 		(alias @19.1-19.47 (type "Color")
 			(ty-header @19.1-19.6 (name "Color")))
-		(alias @22.1-25.2 (type "Container(h)")
+		(alias @22.1-25.2 (type "Container(item)")
 			(ty-header @22.1-22.16 (name "Container")
 				(ty-args
 					(ty-var @22.11-22.15 (name "item"))))))
 	(expressions
-		(expr @27.9-39.2 (type "arg -> Num(size2)"))))
+		(expr @27.9-39.2 (type "_arg -> Num(_size2)"))))
 ~~~

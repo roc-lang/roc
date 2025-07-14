@@ -14,7 +14,6 @@ const Region = AST.TokenizedRegion;
 const Diagnostic = AST.Diagnostic;
 
 const sexpr = base.sexpr;
-const exitOnOom = collections.utils.exitOnOom;
 
 const NodeStore = @This();
 
@@ -50,25 +49,25 @@ pub const AST_EXPR_NODE_COUNT = 24;
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens
 /// very rarely.
-pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
+pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!NodeStore {
     var store: NodeStore = .{
         .gpa = gpa,
-        .nodes = Node.List.initCapacity(gpa, capacity),
-        .extra_data = std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2) catch |err| exitOnOom(err),
-        .scratch_statements = base.Scratch(AST.Statement.Idx).init(gpa),
-        .scratch_tokens = base.Scratch(Token.Idx).init(gpa),
-        .scratch_exprs = base.Scratch(AST.Expr.Idx).init(gpa),
-        .scratch_patterns = base.Scratch(AST.Pattern.Idx).init(gpa),
-        .scratch_record_fields = base.Scratch(AST.RecordField.Idx).init(gpa),
-        .scratch_pattern_record_fields = base.Scratch(AST.PatternRecordField.Idx).init(gpa),
-        .scratch_match_branches = base.Scratch(AST.MatchBranch.Idx).init(gpa),
-        .scratch_type_annos = base.Scratch(AST.TypeAnno.Idx).init(gpa),
-        .scratch_anno_record_fields = base.Scratch(AST.AnnoRecordField.Idx).init(gpa),
-        .scratch_exposed_items = base.Scratch(AST.ExposedItem.Idx).init(gpa),
-        .scratch_where_clauses = base.Scratch(AST.WhereClause.Idx).init(gpa),
+        .nodes = try Node.List.initCapacity(gpa, capacity),
+        .extra_data = try std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2),
+        .scratch_statements = try base.Scratch(AST.Statement.Idx).init(gpa),
+        .scratch_tokens = try base.Scratch(Token.Idx).init(gpa),
+        .scratch_exprs = try base.Scratch(AST.Expr.Idx).init(gpa),
+        .scratch_patterns = try base.Scratch(AST.Pattern.Idx).init(gpa),
+        .scratch_record_fields = try base.Scratch(AST.RecordField.Idx).init(gpa),
+        .scratch_pattern_record_fields = try base.Scratch(AST.PatternRecordField.Idx).init(gpa),
+        .scratch_match_branches = try base.Scratch(AST.MatchBranch.Idx).init(gpa),
+        .scratch_type_annos = try base.Scratch(AST.TypeAnno.Idx).init(gpa),
+        .scratch_anno_record_fields = try base.Scratch(AST.AnnoRecordField.Idx).init(gpa),
+        .scratch_exposed_items = try base.Scratch(AST.ExposedItem.Idx).init(gpa),
+        .scratch_where_clauses = try base.Scratch(AST.WhereClause.Idx).init(gpa),
     };
 
-    _ = store.nodes.append(gpa, .{
+    _ = try store.nodes.append(gpa, .{
         .tag = .root,
         .main_token = 0,
         .data = .{ .lhs = 0, .rhs = 0 },
@@ -146,8 +145,8 @@ pub fn debug(store: *NodeStore) void {
 // ------------------------------------------------------------------------
 
 /// Any node type can be malformed, but must come with a diagnostic reason
-pub fn addMalformed(store: *NodeStore, comptime t: type, reason: Diagnostic.Tag, region: Region) t {
-    const nid = store.nodes.append(store.gpa, .{
+pub fn addMalformed(store: *NodeStore, comptime T: type, reason: Diagnostic.Tag, region: Region) std.mem.Allocator.Error!T {
+    const nid = try store.nodes.append(store.gpa, .{
         .tag = .malformed,
         .main_token = 0,
         .data = .{ .lhs = @intFromEnum(reason), .rhs = 0 },
@@ -157,8 +156,8 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: Diagnostic.Tag,
 }
 
 /// Adds a file node to the store.
-pub fn addFile(store: *NodeStore, file: AST.File) void {
-    store.extra_data.append(store.gpa, @intFromEnum(file.header)) catch |err| exitOnOom(err);
+pub fn addFile(store: *NodeStore, file: AST.File) std.mem.Allocator.Error!void {
+    try store.extra_data.append(store.gpa, @intFromEnum(file.header));
     store.nodes.set(@enumFromInt(0), .{
         .tag = .root,
         .main_token = 0,
@@ -168,8 +167,8 @@ pub fn addFile(store: *NodeStore, file: AST.File) void {
 }
 
 /// Adds a AST.Collection node with the specified tag and returns its index.
-pub fn addCollection(store: *NodeStore, tag: Node.Tag, collection: AST.Collection) AST.Collection.Idx {
-    const nid = store.nodes.append(store.gpa, Node{
+pub fn addCollection(store: *NodeStore, tag: Node.Tag, collection: AST.Collection) std.mem.Allocator.Error!AST.Collection.Idx {
+    const nid = try store.nodes.append(store.gpa, Node{
         .tag = tag,
         .main_token = 0,
         .data = .{
@@ -182,7 +181,7 @@ pub fn addCollection(store: *NodeStore, tag: Node.Tag, collection: AST.Collectio
 }
 
 /// Adds a header node of any type (app, module, hosted, package, platform) and returns its index.
-pub fn addHeader(store: *NodeStore, header: AST.Header) AST.Header.Idx {
+pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!AST.Header.Idx {
     var node = Node{
         .tag = .statement,
         .main_token = 0,
@@ -202,7 +201,7 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) AST.Header.Idx {
             node.data.rhs = @intFromEnum(app.packages);
             node.region = app.region;
 
-            store.extra_data.append(store.gpa, @intFromEnum(app.platform_idx)) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, @intFromEnum(app.platform_idx));
         },
         .module => |mod| {
             node.tag = .module_header;
@@ -225,11 +224,11 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) AST.Header.Idx {
             node.main_token = platform.name;
 
             const ed_start = store.extra_data.items.len;
-            store.extra_data.append(store.gpa, @intFromEnum(platform.requires_rigids)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(platform.requires_signatures)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(platform.exposes)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(platform.packages)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(platform.provides)) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, @intFromEnum(platform.requires_rigids));
+            try store.extra_data.append(store.gpa, @intFromEnum(platform.requires_signatures));
+            try store.extra_data.append(store.gpa, @intFromEnum(platform.exposes));
+            try store.extra_data.append(store.gpa, @intFromEnum(platform.packages));
+            try store.extra_data.append(store.gpa, @intFromEnum(platform.provides));
             const ed_len = store.extra_data.items.len - ed_start;
 
             node.data.lhs = @intCast(ed_start);
@@ -242,12 +241,12 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) AST.Header.Idx {
         },
     }
 
-    const node_idx = store.nodes.append(store.gpa, node);
+    const node_idx = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
 /// Adds an exposed item node (function, value, type, etc.) and returns its index.
-pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) AST.ExposedItem.Idx {
+pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) std.mem.Allocator.Error!AST.ExposedItem.Idx {
     var node = Node{
         .tag = .malformed,
         .main_token = 0,
@@ -292,12 +291,12 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) AST.ExposedItem.
         },
     }
 
-    const nid = store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a statement node (value def, type def, import, etc.) and returns its index.
-pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.Idx {
+pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocator.Error!AST.Statement.Idx {
     var node = Node{
         .tag = .statement,
         .main_token = 0,
@@ -365,16 +364,16 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
             // Store all import data in a flat format:
             // [exposes.span.start, exposes.span.len, qualifier_tok?, alias_tok?]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
-            store.extra_data.append(store.gpa, i.exposes.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, i.exposes.span.len) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, i.exposes.span.start);
+            try store.extra_data.append(store.gpa, i.exposes.span.len);
 
             if (i.qualifier_tok) |tok| {
                 rhs.qualified = 1;
-                store.extra_data.append(store.gpa, tok) catch |err| exitOnOom(err);
+                try store.extra_data.append(store.gpa, tok);
             }
             if (i.alias_tok) |tok| {
                 rhs.aliased = 1;
-                store.extra_data.append(store.gpa, tok) catch |err| exitOnOom(err);
+                try store.extra_data.append(store.gpa, tok);
             }
 
             node.data.rhs = @as(u32, @bitCast(rhs));
@@ -405,12 +404,12 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
             @panic("Use addMalformed instead");
         },
     }
-    const nid = store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a pattern node (identifier, literal, record destructure, etc.) and returns its index.
-pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
+pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Error!AST.Pattern.Idx {
     var node = Node{
         .tag = .statement,
         .main_token = 0,
@@ -500,12 +499,12 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
             @panic("Use addMalformed instead");
         },
     }
-    const nid = store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds an expression node (literal, variable, call, record, etc.) and returns its index.
-pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
+pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Expr.Idx {
     var node = Node{
         .tag = .statement,
         .main_token = 0,
@@ -569,12 +568,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             // Store all record data in flat format:
             // [fields.span.start, fields.span.len, ext_or_zero]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
-            store.extra_data.append(store.gpa, r.fields.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, r.fields.span.len) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, r.fields.span.start);
+            try store.extra_data.append(store.gpa, r.fields.span.len);
 
             // Store ext value or 0 for null
             const ext_value = if (r.ext) |ext| @intFromEnum(ext) else 0;
-            store.extra_data.append(store.gpa, ext_value) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, ext_value);
 
             node.data.lhs = data_start;
             node.data.rhs = 0; // Not used
@@ -585,7 +584,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.data.lhs = l.args.span.start;
             node.data.rhs = l.args.span.len;
             const body_idx = store.extra_data.items.len;
-            store.extra_data.append(store.gpa, @intFromEnum(l.body)) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, @intFromEnum(l.body));
             node.main_token = @as(u32, @intCast(body_idx));
         },
         .apply => |app| {
@@ -594,7 +593,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.data.lhs = app.args.span.start;
             node.data.rhs = app.args.span.len;
             const fn_ed_idx = store.extra_data.items.len;
-            store.extra_data.append(store.gpa, @intFromEnum(app.@"fn")) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, @intFromEnum(app.@"fn"));
             node.main_token = @as(u32, @intCast(fn_ed_idx));
         },
         .record_updater => |_| {},
@@ -636,8 +635,8 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.region = i.region;
             node.data.lhs = @intFromEnum(i.condition);
             node.data.rhs = @as(u32, @intCast(store.extra_data.items.len));
-            store.extra_data.append(store.gpa, @intFromEnum(i.then)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(i.@"else")) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, @intFromEnum(i.then));
+            try store.extra_data.append(store.gpa, @intFromEnum(i.@"else"));
         },
         .match => |m| {
             node.tag = .match;
@@ -645,7 +644,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.data.lhs = m.branches.span.start;
             node.data.rhs = m.branches.span.len;
             const expr_idx = store.extra_data.items.len;
-            store.extra_data.append(store.gpa, @intFromEnum(m.expr)) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, @intFromEnum(m.expr));
             node.main_token = @as(u32, @intCast(expr_idx));
         },
         .ident => |id| {
@@ -683,12 +682,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             @panic("Use addMalformed instead");
         },
     }
-    const nid = store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// TODO
-pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) AST.PatternRecordField.Idx {
+pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) std.mem.Allocator.Error!AST.PatternRecordField.Idx {
     var node = Node{
         .tag = .record_field_patt,
         .main_token = field.name,
@@ -701,7 +700,7 @@ pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) A
     if (field.value) |value| {
         node.data.rhs = @intFromEnum(value);
     }
-    const nid = store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -717,7 +716,7 @@ pub fn getPatternRecordField(store: *NodeStore, field: AST.PatternRecordField.Id
 }
 
 /// TODO
-pub fn addRecordField(store: *NodeStore, field: AST.RecordField) AST.RecordField.Idx {
+pub fn addRecordField(store: *NodeStore, field: AST.RecordField) std.mem.Allocator.Error!AST.RecordField.Idx {
     var node = Node{
         .tag = .statement,
         .main_token = 0,
@@ -733,12 +732,12 @@ pub fn addRecordField(store: *NodeStore, field: AST.RecordField) AST.RecordField
         node.data.lhs = @intFromEnum(v);
     }
 
-    const nid = store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// TODO
-pub fn addMatchBranch(store: *NodeStore, branch: AST.MatchBranch) AST.MatchBranch.Idx {
+pub fn addMatchBranch(store: *NodeStore, branch: AST.MatchBranch) std.mem.Allocator.Error!AST.MatchBranch.Idx {
     const node = Node{
         .tag = .branch,
         .main_token = 0,
@@ -749,12 +748,12 @@ pub fn addMatchBranch(store: *NodeStore, branch: AST.MatchBranch) AST.MatchBranc
         .region = branch.region,
     };
 
-    const nid = store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// TODO
-pub fn addTypeHeader(store: *NodeStore, header: AST.TypeHeader) AST.TypeHeader.Idx {
+pub fn addTypeHeader(store: *NodeStore, header: AST.TypeHeader) std.mem.Allocator.Error!AST.TypeHeader.Idx {
     var node = Node{
         .tag = .ty_header,
         .main_token = header.name,
@@ -768,12 +767,12 @@ pub fn addTypeHeader(store: *NodeStore, header: AST.TypeHeader) AST.TypeHeader.I
     node.data.lhs = header.args.span.start;
     node.data.rhs = header.args.span.len;
 
-    const nid = store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// TODO
-pub fn addAnnoRecordField(store: *NodeStore, field: AST.AnnoRecordField) AST.AnnoRecordField.Idx {
+pub fn addAnnoRecordField(store: *NodeStore, field: AST.AnnoRecordField) std.mem.Allocator.Error!AST.AnnoRecordField.Idx {
     const node = Node{
         .tag = .ty_record_field,
         .main_token = 0,
@@ -784,12 +783,12 @@ pub fn addAnnoRecordField(store: *NodeStore, field: AST.AnnoRecordField) AST.Ann
         .region = field.region,
     };
 
-    const nid = store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a WhereClause node to the store, returning a type-safe index to the node.
-pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) AST.WhereClause.Idx {
+pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Allocator.Error!AST.WhereClause.Idx {
     var node = Node{
         .tag = .where_mod_method,
         .main_token = 0,
@@ -806,9 +805,9 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) AST.WhereClaus
             node.region = c.region;
             node.main_token = c.var_tok;
             const ed_start = store.extra_data.items.len;
-            store.extra_data.append(store.gpa, c.name_tok) catch |e| exitOnOom(e);
-            store.extra_data.append(store.gpa, @intFromEnum(c.args)) catch |e| exitOnOom(e);
-            store.extra_data.append(store.gpa, @intFromEnum(c.ret_anno)) catch |e| exitOnOom(e);
+            try store.extra_data.append(store.gpa, c.name_tok);
+            try store.extra_data.append(store.gpa, @intFromEnum(c.args));
+            try store.extra_data.append(store.gpa, @intFromEnum(c.ret_anno));
             node.data.lhs = @intCast(ed_start);
         },
         .mod_alias => |c| {
@@ -822,12 +821,12 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) AST.WhereClaus
         },
     }
 
-    const nid = store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
 
 /// TODO
-pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
+pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Error!AST.TypeAnno.Idx {
     var node = Node{
         .tag = .branch,
         .main_token = 0,
@@ -849,6 +848,11 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
             node.tag = .ty_var;
             node.region = v.region;
             node.main_token = v.tok;
+        },
+        .underscore_type_var => |utv| {
+            node.tag = .ty_underscore_var;
+            node.region = utv.region;
+            node.main_token = utv.tok;
         },
         .underscore => |u| {
             node.tag = .ty_underscore;
@@ -875,8 +879,8 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
             // Store all tag_union data in flat format:
             // [tags.span.start, tags.span.len, open_anno?]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
-            store.extra_data.append(store.gpa, tu.tags.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, tu.tags.span.len) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, tu.tags.span.start);
+            try store.extra_data.append(store.gpa, tu.tags.span.len);
 
             var rhs = AST.TypeAnno.TagUnionRhs{
                 .open = 0,
@@ -884,7 +888,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
             };
             if (tu.open_anno) |a| {
                 rhs.open = 1;
-                store.extra_data.append(store.gpa, @intFromEnum(a)) catch |err| exitOnOom(err);
+                try store.extra_data.append(store.gpa, @intFromEnum(a));
             }
 
             node.data.lhs = data_start;
@@ -911,7 +915,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
                 .args_len = @intCast(f.args.span.len), // We hope a function has less than 2.147b args
             });
             const ret_idx = store.extra_data.items.len;
-            store.extra_data.append(store.gpa, @intFromEnum(f.ret)) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, @intFromEnum(f.ret));
             node.main_token = @intCast(ret_idx);
         },
         .parens => |p| {
@@ -924,7 +928,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
         },
     }
 
-    const nid = store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -1624,6 +1628,12 @@ pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnn
                 .region = node.region,
             } };
         },
+        .ty_underscore_var => {
+            return .{ .underscore_type_var = .{
+                .tok = node.main_token,
+                .region = node.region,
+            } };
+        },
         .ty_underscore => {
             return .{ .underscore = .{
                 .region = node.region,
@@ -1716,7 +1726,7 @@ pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnn
         },
     }
 
-    const nid = store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -1729,21 +1739,21 @@ pub fn scratchExprTop(store: *NodeStore) u32 {
     return store.scratch_exprs.top();
 }
 
-/// Places a new AST.Expr.Idx in the scratch.  Will panic on OOM.
-pub fn addScratchExpr(store: *NodeStore, idx: AST.Expr.Idx) void {
-    store.scratch_exprs.append(store.gpa, idx);
+/// Places a new AST.Expr.Idx in the scratch.
+pub fn addScratchExpr(store: *NodeStore, idx: AST.Expr.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_exprs.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn exprSpanFrom(store: *NodeStore, start: u32) AST.Expr.Span {
+pub fn exprSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.Expr.Span {
     const end = store.scratch_exprs.top();
     defer store.scratch_exprs.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     std.debug.assert(end >= i);
     while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exprs.items.items[i])) catch |err| exitOnOom(err);
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exprs.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -1767,21 +1777,21 @@ pub fn scratchStatementTop(store: *NodeStore) u32 {
     return store.scratch_statements.top();
 }
 
-/// Places a new AST.Statement.Idx in the scratch.  Will panic on OOM.
-pub fn addScratchStatement(store: *NodeStore, idx: AST.Statement.Idx) void {
-    store.scratch_statements.append(store.gpa, idx);
+/// Places a new AST.Statement.Idx in the scratch.
+pub fn addScratchStatement(store: *NodeStore, idx: AST.Statement.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_statements.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn statementSpanFrom(store: *NodeStore, start: u32) AST.Statement.Span {
+pub fn statementSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.Statement.Span {
     const end = store.scratch_statements.top();
     defer store.scratch_statements.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     std.debug.assert(end >= i);
     while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_statements.items.items[i])) catch |err| exitOnOom(err);
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_statements.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -1805,21 +1815,21 @@ pub fn scratchPatternTop(store: *NodeStore) u32 {
     return store.scratch_patterns.top();
 }
 
-/// Places a new AST.Pattern.Idx in the scratch.  Will panic on OOM.
-pub fn addScratchPattern(store: *NodeStore, idx: AST.Pattern.Idx) void {
-    store.scratch_patterns.append(store.gpa, idx);
+/// Places a new AST.Pattern.Idx in the scratch.
+pub fn addScratchPattern(store: *NodeStore, idx: AST.Pattern.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_patterns.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn patternSpanFrom(store: *NodeStore, start: u32) AST.Pattern.Span {
+pub fn patternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.Pattern.Span {
     const end = store.scratch_patterns.top();
     defer store.scratch_patterns.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     std.debug.assert(end >= i);
     while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_patterns.items.items[i])) catch |err| exitOnOom(err);
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_patterns.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -1853,20 +1863,20 @@ pub fn scratchPatternRecordFieldTop(store: *NodeStore) u32 {
     return store.scratch_pattern_record_fields.top();
 }
 
-/// Places a new AST.PatternRecordField.Idx in the scratch.  Will panic on OOM.
-pub fn addScratchPatternRecordField(store: *NodeStore, idx: AST.PatternRecordField.Idx) void {
-    store.scratch_pattern_record_fields.append(store.gpa, idx);
+/// Places a new AST.PatternRecordField.Idx in the scratch.
+pub fn addScratchPatternRecordField(store: *NodeStore, idx: AST.PatternRecordField.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_pattern_record_fields.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn patternRecordFieldSpanFrom(store: *NodeStore, start: u32) AST.PatternRecordField.Span {
+pub fn patternRecordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.PatternRecordField.Span {
     const end = store.scratch_pattern_record_fields.top();
     defer store.scratch_pattern_record_fields.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_pattern_record_fields.items.items[i])) catch |err| exitOnOom(err);
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_pattern_record_fields.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -1889,20 +1899,20 @@ pub fn scratchRecordFieldTop(store: *NodeStore) u32 {
     return store.scratch_record_fields.top();
 }
 
-/// Places a new AST.RecordField.Idx in the scratch.  Will panic on OOM.
-pub fn addScratchRecordField(store: *NodeStore, idx: AST.RecordField.Idx) void {
-    store.scratch_record_fields.append(store.gpa, idx);
+/// Places a new AST.RecordField.Idx in the scratch.
+pub fn addScratchRecordField(store: *NodeStore, idx: AST.RecordField.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_record_fields.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) AST.RecordField.Span {
+pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.RecordField.Span {
     const end = store.scratch_record_fields.top();
     defer store.scratch_record_fields.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_record_fields.items.items[i])) catch |err| exitOnOom(err);
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_record_fields.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -1920,20 +1930,20 @@ pub fn scratchMatchBranchTop(store: *NodeStore) u32 {
     return store.scratch_match_branches.top();
 }
 
-/// Places a new AST.WhenBranch.Idx in the scratch.  Will panic on OOM.
-pub fn addScratchMatchBranch(store: *NodeStore, idx: AST.MatchBranch.Idx) void {
-    store.scratch_match_branches.append(store.gpa, idx);
+/// Places a new AST.WhenBranch.Idx in the scratch.
+pub fn addScratchMatchBranch(store: *NodeStore, idx: AST.MatchBranch.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_match_branches.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) AST.MatchBranch.Span {
+pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.MatchBranch.Span {
     const end = store.scratch_match_branches.top();
     defer store.scratch_match_branches.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_match_branches.items.items[i])) catch |err| exitOnOom(err);
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_match_branches.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -1957,20 +1967,20 @@ pub fn scratchTypeAnnoTop(store: *NodeStore) u32 {
     return store.scratch_type_annos.top();
 }
 
-/// Places a new AST.TypeAnno.Idx in the scratch.  Will panic on OOM.
-pub fn addScratchTypeAnno(store: *NodeStore, idx: AST.TypeAnno.Idx) void {
-    store.scratch_type_annos.append(store.gpa, idx);
+/// Places a new AST.TypeAnno.Idx in the scratch.
+pub fn addScratchTypeAnno(store: *NodeStore, idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_type_annos.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) AST.TypeAnno.Span {
+pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.TypeAnno.Span {
     const end = store.scratch_type_annos.top();
     defer store.scratch_type_annos.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_type_annos.items.items[i])) catch |err| exitOnOom(err);
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_type_annos.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -1994,20 +2004,20 @@ pub fn scratchAnnoRecordFieldTop(store: *NodeStore) u32 {
     return store.scratch_anno_record_fields.top();
 }
 
-/// Places a new AST.AnnoRecordField.Idx in the scratch.  Will panic on OOM.
-pub fn addScratchAnnoRecordField(store: *NodeStore, idx: AST.AnnoRecordField.Idx) void {
-    store.scratch_anno_record_fields.append(store.gpa, idx);
+/// Places a new AST.AnnoRecordField.Idx in the scratch.
+pub fn addScratchAnnoRecordField(store: *NodeStore, idx: AST.AnnoRecordField.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_anno_record_fields.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) AST.AnnoRecordField.Span {
+pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.AnnoRecordField.Span {
     const end = store.scratch_anno_record_fields.top();
     defer store.scratch_anno_record_fields.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_anno_record_fields.items.items[i])) catch |err| exitOnOom(err);
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_anno_record_fields.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2031,20 +2041,20 @@ pub fn scratchTokenTop(store: *NodeStore) u32 {
     return store.scratch_tokens.top();
 }
 
-/// Places a new Token.Idx in the scratch.  Will panic on OOM.
-pub fn addScratchToken(store: *NodeStore, idx: Token.Idx) void {
-    store.scratch_tokens.append(store.gpa, idx);
+/// Places a new Token.Idx in the scratch.
+pub fn addScratchToken(store: *NodeStore, idx: Token.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_tokens.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn tokenSpanFrom(store: *NodeStore, start: u32) Token.Span {
+pub fn tokenSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!Token.Span {
     const end = store.scratch_tokens.top();
     defer store.scratch_tokens.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, store.scratch_tokens.items.items[i]) catch |err| exitOnOom(err);
+        try store.extra_data.append(store.gpa, store.scratch_tokens.items.items[i]);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2068,20 +2078,20 @@ pub fn scratchExposedItemTop(store: *NodeStore) u32 {
     return store.scratch_anno_record_fields.top();
 }
 
-/// Places a new AST.ExposedItem.Idx in the scratch.  Will panic on OOM.
-pub fn addScratchExposedItem(store: *NodeStore, idx: AST.ExposedItem.Idx) void {
-    store.scratch_exposed_items.append(store.gpa, idx);
+/// Places a new AST.ExposedItem.Idx in the scratch.
+pub fn addScratchExposedItem(store: *NodeStore, idx: AST.ExposedItem.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_exposed_items.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) AST.ExposedItem.Span {
+pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.ExposedItem.Span {
     const end = store.scratch_exposed_items.top();
     defer store.scratch_exposed_items.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exposed_items.items.items[i])) catch |err| exitOnOom(err);
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exposed_items.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2105,20 +2115,20 @@ pub fn scratchWhereClauseTop(store: *NodeStore) u32 {
     return store.scratch_where_clauses.top();
 }
 
-/// Places a new AST.WhereClause.Idx in the scratch.  Will panic on OOM.
-pub fn addScratchWhereClause(store: *NodeStore, idx: AST.WhereClause.Idx) void {
-    store.scratch_where_clauses.append(store.gpa, idx);
+/// Places a new AST.WhereClause.Idx in the scratch.
+pub fn addScratchWhereClause(store: *NodeStore, idx: AST.WhereClause.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_where_clauses.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) AST.WhereClause.Span {
+pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.WhereClause.Span {
     const end = store.scratch_where_clauses.top();
     defer store.scratch_where_clauses.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_where_clauses.items.items[i])) catch |err| exitOnOom(err);
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_where_clauses.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };

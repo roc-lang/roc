@@ -26,7 +26,8 @@ KwExpect(5:1-5:7),LowerIdent(5:8-5:11),OpNotEquals(5:12-5:14),UpperIdent(5:15-5:
 (file @1.1-5.25
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12 (text "foo"))))
+			(exposed-lower-ident @1.9-1.12
+				(text "foo"))))
 	(statements
 		(s-decl @3.1-3.16
 			(p-ident @3.1-3.4 (raw "foo"))

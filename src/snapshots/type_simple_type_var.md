@@ -28,7 +28,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 (file @1.1-6.15
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -39,8 +40,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 	(statements
 		(s-type-anno @3.1-3.18 (name "identity")
 			(ty-fn @3.12-3.18
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "a"))))
+				(ty-var @3.12-3.13 (raw "a"))
+				(ty-var @3.17-3.18 (raw "a"))))
 		(s-decl @4.1-4.17
 			(p-ident @4.1-4.9 (raw "identity"))
 			(e-lambda @4.12-4.17
@@ -71,8 +72,8 @@ NO CHANGE
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.18 (effectful false)
-					(ty-var @1.1-1.1 (name "a"))
-					(ty-var @1.1-1.1 (name "a"))))))
+					(ty-var @3.12-3.13 (name "a"))
+					(ty-var @3.17-3.18 (name "a"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
@@ -85,8 +86,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @4.1-4.9 (type "a -> a"))
-		(patt @6.1-6.6 (type "arg -> {}")))
+		(patt @6.1-6.6 (type "_arg -> {}")))
 	(expressions
 		(expr @4.12-4.17 (type "a -> a"))
-		(expr @6.9-6.15 (type "arg -> {}"))))
+		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~

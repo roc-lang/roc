@@ -38,7 +38,8 @@ LowerIdent(6:1-6:4),OpAssign(6:5-6:6),UpperIdent(6:7-6:12),NoSpaceDotUpperIdent(
 (file @1.1-6.20
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12 (text "red"))))
+			(exposed-lower-ident @1.9-1.12
+				(text "red"))))
 	(statements
 		(s-import @3.1-3.13 (raw "Color"))
 		(s-type-anno @5.1-5.16 (name "red")

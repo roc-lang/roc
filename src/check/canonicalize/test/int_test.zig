@@ -22,23 +22,23 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
     expr_idx: CIR.Expr.Idx,
 } {
     const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    module_env.* = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
 
     const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = parse.parseExpr(module_env, source);
+    parse_ast.* = try parse.parseExpr(module_env, source);
 
     parse_ast.store.emptyScratch();
 
     const cir = try allocator.create(CIR);
-    cir.* = CIR.init(module_env, "Test");
+    cir.* = try CIR.init(module_env, "Test");
 
     const can = try allocator.create(canonicalize);
     can.* = try canonicalize.init(cir, parse_ast, null);
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-        const diagnostic_idx = cir.store.addDiagnostic(.{ .not_implemented = .{
-            .feature = cir.env.strings.insert(allocator, "canonicalization failed"),
+        const diagnostic_idx = try cir.store.addDiagnostic(.{ .not_implemented = .{
+            .feature = try cir.env.strings.insert(allocator, "canonicalization failed"),
             .region = base.Region.zero(),
         } });
         return .{
@@ -46,7 +46,7 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
             .parse_ast = parse_ast,
             .cir = cir,
             .can = can,
-            .expr_idx = cir.store.addExpr(CIR.Expr{ .e_runtime_error = .{
+            .expr_idx = try cir.store.addExpr(CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
             } }, base.Region.zero()),
         };
@@ -410,7 +410,7 @@ test "invalid number literal - too large for u128" {
     try testing.expect(expr == .e_runtime_error);
 
     // Check that we have an invalid_num_literal diagnostic
-    const diagnostics = resources.cir.getDiagnostics();
+    const diagnostics = try resources.cir.getDiagnostics();
     // Note: getDiagnostics returns cached diagnostics owned by CIR - don't free them here
     try testing.expect(diagnostics.len > 0);
 
@@ -468,7 +468,7 @@ test "invalid number literal - negative too large for i128" {
     try testing.expect(expr == .e_runtime_error);
 
     // Check that we have an invalid_num_literal diagnostic
-    const diagnostics = resources.cir.getDiagnostics();
+    const diagnostics = try resources.cir.getDiagnostics();
     // Note: getDiagnostics returns cached diagnostics owned by CIR - don't free them here
     try testing.expect(diagnostics.len > 0);
 

@@ -87,5 +87,5 @@ match l {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "[Err([EmptyList]others), Ok(a)]others2"))
+(expr @1.1-4.2 (type "[Err([EmptyList]_others), Ok(_a)]_others2"))
 ~~~

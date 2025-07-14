@@ -29,5 +29,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.4 (type "Frac(size)"))
+(expr @1.1-1.4 (type "Frac(_size)"))
 ~~~

@@ -82,5 +82,5 @@ match numbers {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "a"))
+(expr @1.1-3.2 (type "_a"))
 ~~~

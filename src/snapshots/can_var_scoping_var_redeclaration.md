@@ -91,18 +91,7 @@ LowerIdent(11:1-11:7),OpAssign(11:8-11:9),LowerIdent(11:10-11:23),NoSpaceOpenRou
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-# Test var redeclaration (should produce shadowing warning)
-redeclareTest = |_| {
-	var x_ = 5
-	var x_ = 10 # Redeclare var - should warn but proceed
-	x_ = 15 # Reassign - should work without warning
-	x_
-
-}
-
-result = redeclareTest({})
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -135,9 +124,9 @@ result = redeclareTest({})
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.14 (type "arg -> ret"))
-		(patt @11.1-11.7 (type "a")))
+		(patt @4.1-4.14 (type "_arg -> _ret"))
+		(patt @11.1-11.7 (type "_a")))
 	(expressions
-		(expr @4.17-9.2 (type "arg -> ret"))
-		(expr @11.10-11.27 (type "a"))))
+		(expr @4.17-9.2 (type "_arg -> _ret"))
+		(expr @11.10-11.27 (type "_a"))))
 ~~~

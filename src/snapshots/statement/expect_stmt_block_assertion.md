@@ -31,7 +31,8 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 (file @1.1-7.2
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12 (text "foo"))))
+			(exposed-lower-ident @1.9-1.12
+				(text "foo"))))
 	(statements
 		(s-type-anno @3.1-3.19 (name "foo")
 			(ty-fn @3.7-3.19

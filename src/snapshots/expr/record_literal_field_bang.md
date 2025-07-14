@@ -35,7 +35,6 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 # FORMATTED
 ~~~roc
 {
-
 	answer: 42,
 	launchTheNukes!: |{}| ...
 }
@@ -55,5 +54,5 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "{ answer: Num(size), launchTheNukes!: arg -> ret }"))
+(expr @1.1-4.2 (type "{ answer: Num(_size), launchTheNukes!: _arg -> _ret }"))
 ~~~

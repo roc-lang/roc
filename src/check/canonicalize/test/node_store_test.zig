@@ -16,7 +16,7 @@ const CalledVia = base.CalledVia;
 
 test "NodeStore round trip - Statements" {
     const gpa = testing.allocator;
-    var store = NodeStore.init(gpa);
+    var store = try NodeStore.init(gpa);
     defer store.deinit();
 
     var statements = std.ArrayList(CIR.Statement).init(gpa);
@@ -122,7 +122,7 @@ test "NodeStore round trip - Statements" {
 
     for (statements.items, 0..) |stmt, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));
-        const idx = store.addStatement(stmt, region);
+        const idx = try store.addStatement(stmt, region);
         const retrieved = store.getStatement(idx);
 
         testing.expectEqualDeep(stmt, retrieved) catch |err| {
@@ -142,7 +142,7 @@ test "NodeStore round trip - Statements" {
 
 test "NodeStore round trip - Expressions" {
     const gpa = testing.allocator;
-    var store = NodeStore.init(gpa);
+    var store = try NodeStore.init(gpa);
     defer store.deinit();
 
     var expressions = std.ArrayList(CIR.Expr).init(gpa);
@@ -309,7 +309,7 @@ test "NodeStore round trip - Expressions" {
     });
     for (expressions.items, 0..) |expr, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));
-        const idx = store.addExpr(expr, region);
+        const idx = try store.addExpr(expr, region);
         const retrieved = store.getExpr(idx);
 
         testing.expectEqualDeep(expr, retrieved) catch |err| {
@@ -329,7 +329,7 @@ test "NodeStore round trip - Expressions" {
 
 test "NodeStore round trip - Diagnostics" {
     const gpa = testing.allocator;
-    var store = NodeStore.init(gpa);
+    var store = try NodeStore.init(gpa);
     defer store.deinit();
 
     var diagnostics = std.ArrayList(CIR.Diagnostic).init(gpa);
@@ -559,14 +559,38 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
-        .tuple_elem_not_canonicalized = .{
+        .unused_type_var_name = .{
+            .name = @bitCast(@as(u32, 1819)),
+            .suggested_name = @bitCast(@as(u32, 1820)),
             .region = from_raw_offsets(740, 750),
         },
     });
 
     try diagnostics.append(CIR.Diagnostic{
-        .empty_tuple = .{
+        .type_var_marked_unused = .{
+            .name = @bitCast(@as(u32, 1921)),
+            .suggested_name = @bitCast(@as(u32, 1922)),
             .region = from_raw_offsets(750, 760),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .type_var_ending_in_underscore = .{
+            .name = @bitCast(@as(u32, 2023)),
+            .suggested_name = @bitCast(@as(u32, 2024)),
+            .region = from_raw_offsets(760, 770),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .tuple_elem_not_canonicalized = .{
+            .region = from_raw_offsets(770, 780),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .empty_tuple = .{
+            .region = from_raw_offsets(780, 790),
         },
     });
 
@@ -580,15 +604,15 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(CIR.Diagnostic{
         .redundant_exposed = .{
             .ident = @bitCast(@as(u32, 432)),
-            .region = from_raw_offsets(770, 780),
-            .original_region = from_raw_offsets(780, 790),
+            .region = from_raw_offsets(790, 800),
+            .original_region = from_raw_offsets(800, 810),
         },
     });
 
     try diagnostics.append(CIR.Diagnostic{
         .module_not_found = .{
             .module_name = @bitCast(@as(u32, 543)),
-            .region = from_raw_offsets(790, 800),
+            .region = from_raw_offsets(810, 820),
         },
     });
 
@@ -596,7 +620,7 @@ test "NodeStore round trip - Diagnostics" {
         .value_not_exposed = .{
             .module_name = @bitCast(@as(u32, 654)),
             .value_name = @bitCast(@as(u32, 655)),
-            .region = from_raw_offsets(800, 810),
+            .region = from_raw_offsets(820, 830),
         },
     });
 
@@ -604,27 +628,27 @@ test "NodeStore round trip - Diagnostics" {
         .type_not_exposed = .{
             .module_name = @bitCast(@as(u32, 765)),
             .type_name = @bitCast(@as(u32, 766)),
-            .region = from_raw_offsets(810, 820),
+            .region = from_raw_offsets(830, 840),
         },
     });
 
     try diagnostics.append(CIR.Diagnostic{
         .module_not_imported = .{
             .module_name = @bitCast(@as(u32, 876)),
-            .region = from_raw_offsets(820, 830),
+            .region = from_raw_offsets(840, 850),
         },
     });
 
     try diagnostics.append(CIR.Diagnostic{
         .too_many_exports = .{
             .count = 65536,
-            .region = from_raw_offsets(830, 840),
+            .region = from_raw_offsets(850, 860),
         },
     });
 
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
-        const idx = store.addDiagnostic(diagnostic);
+        const idx = try store.addDiagnostic(diagnostic);
         const retrieved = store.getDiagnostic(idx);
 
         testing.expectEqualDeep(diagnostic, retrieved) catch |err| {
@@ -644,7 +668,7 @@ test "NodeStore round trip - Diagnostics" {
 
 test "NodeStore round trip - TypeAnno" {
     const gpa = testing.allocator;
-    var store = NodeStore.init(gpa);
+    var store = try NodeStore.init(gpa);
     defer store.deinit();
 
     var type_annos = std.ArrayList(CIR.TypeAnno).init(gpa);
@@ -734,7 +758,7 @@ test "NodeStore round trip - TypeAnno" {
     // Test the round-trip for all type annotations
     for (type_annos.items, 0..) |type_anno, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));
-        const idx = store.addTypeAnno(type_anno, region);
+        const idx = try store.addTypeAnno(type_anno, region);
         const retrieved = store.getTypeAnno(idx);
 
         testing.expectEqualDeep(type_anno, retrieved) catch |err| {
@@ -754,7 +778,7 @@ test "NodeStore round trip - TypeAnno" {
 
 test "NodeStore round trip - Pattern" {
     const gpa = testing.allocator;
-    var store = NodeStore.init(gpa);
+    var store = try NodeStore.init(gpa);
     defer store.deinit();
 
     var patterns = std.ArrayList(CIR.Pattern).init(gpa);

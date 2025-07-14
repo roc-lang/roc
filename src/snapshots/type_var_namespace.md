@@ -78,7 +78,8 @@ LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:
 (file @1.1-16.15
 	(app @1.1-1.57
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
@@ -91,8 +92,8 @@ LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:
 			(ty-fn @4.11-4.29
 				(ty-apply @4.11-4.21
 					(ty @4.11-4.15 (name "List"))
-					(ty-var @4.16-4.16 (raw "elem")))
-				(ty-var @1.1-1.1 (raw "elem"))))
+					(ty-var @4.16-4.20 (raw "elem")))
+				(ty-var @4.25-4.29 (raw "elem"))))
 		(s-decl @5.1-14.2
 			(p-ident @5.1-5.8 (raw "process"))
 			(e-lambda @5.11-14.2
@@ -104,7 +105,7 @@ LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:
 							(p-ident @7.5-7.9 (raw "elem"))
 							(e-int @7.12-7.14 (raw "42")))
 						(s-type-anno @10.5-10.18 (name "result")
-							(ty-var @1.1-1.1 (raw "elem")))
+							(ty-var @10.14-10.18 (raw "elem")))
 						(s-decl @11.5-11.30
 							(p-ident @11.5-11.11 (raw "result"))
 							(e-apply @11.14-11.30
@@ -139,7 +140,6 @@ process = |list| {
 	Result.withDefault(elem)
 
 	result
-
 }
 
 main! = |_| {}
@@ -157,7 +157,7 @@ main! = |_| {}
 					(p-assign @7.5-7.9 (ident "elem"))
 					(e-int @7.12-7.14 (value "42")))
 				(s-type-anno @10.5-10.18 (name "result")
-					(ty-var @1.1-1.1 (name "elem")))
+					(ty-var @10.14-10.18 (name "elem")))
 				(s-let @11.5-11.30
 					(p-assign @11.5-11.11 (ident "result"))
 					(e-call @11.14-11.30
@@ -175,8 +175,8 @@ main! = |_| {}
 			(declared-type
 				(ty-fn @4.11-4.29 (effectful false)
 					(ty-apply @4.11-4.21 (symbol "List")
-						(ty-var @4.16-4.16 (name "elem")))
-					(ty-var @1.1-1.1 (name "elem"))))))
+						(ty-var @4.16-4.20 (name "elem")))
+					(ty-var @4.25-4.29 (name "elem"))))))
 	(d-let
 		(p-assign @16.1-16.6 (ident "main!"))
 		(e-lambda @16.9-16.15
@@ -188,9 +188,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.8 (type "Error -> ret"))
-		(patt @16.1-16.6 (type "arg -> {}")))
+		(patt @5.1-5.8 (type "Error -> elem"))
+		(patt @16.1-16.6 (type "_arg -> {}")))
 	(expressions
-		(expr @5.11-14.2 (type "Error -> ret"))
-		(expr @16.9-16.15 (type "arg -> {}"))))
+		(expr @5.11-14.2 (type "Error -> elem"))
+		(expr @16.9-16.15 (type "_arg -> {}"))))
 ~~~

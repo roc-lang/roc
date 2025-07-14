@@ -34,7 +34,8 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 (file @1.1-9.2
 	(module @1.1-1.14
 		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13 (text "kind"))))
+			(exposed-lower-ident @1.9-1.13
+				(text "kind"))))
 	(statements
 		(s-type-decl @3.1-3.51
 			(header @3.1-3.6 (name "Color")

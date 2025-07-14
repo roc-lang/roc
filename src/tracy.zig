@@ -324,6 +324,49 @@ inline fn freeNamed(ptr: [*]u8, comptime name: [:0]const u8) void {
     }
 }
 
+/// The type of numeric being plotted.
+pub const PlotFormatType = enum(u2) {
+    number = 0, // 0 - Generic number format
+    memory = 1, // 1 - Memory size format (bytes, KB, MB, etc.)
+    percentage = 2, // 2 - Percentage format (0-100%)
+};
+
+/// Whether to plot a continuous or stepped line.
+pub const PlotStep = enum(u1) {
+    continuous = 0, // 0 - Smooth continuous graph
+    step = 1, // 1 - Stair stepped graph
+};
+
+/// Whether to fill the area under the line or not.
+pub const PlotFill = enum(u1) {
+    line_only = 0, // 0 - Only draw the line
+    filled = 1, // 1 - Fill the area under the line
+};
+
+/// Configure how a plot will look.
+pub inline fn plot_config(comptime name: [:0]const u8, format_type: PlotFormatType, step: PlotStep, fill: PlotFill, color: u32) void {
+    if (!enable) return;
+    ___tracy_emit_plot_config(name, @intFromEnum(format_type), @intFromEnum(step), @intFromEnum(fill), color);
+}
+
+/// Create a plot for a f32 value.
+pub inline fn plot_f32(comptime name: [:0]const u8, value: f32) void {
+    if (!enable) return;
+    ___tracy_emit_plot_float(name, value);
+}
+
+/// Create a plot for a f64 value.
+pub inline fn plot_f64(comptime name: [:0]const u8, value: f64) void {
+    if (!enable) return;
+    ___tracy_emit_plot_double(name, value);
+}
+
+/// Create a plot for a i64 value.
+pub inline fn plot_i64(comptime name: [:0]const u8, value: i64) void {
+    if (!enable) return;
+    ___tracy_emit_plot_int(name, value);
+}
+
 extern fn ___tracy_emit_zone_begin(
     srcloc: *const ___tracy_source_location_data,
     active: c_int,
@@ -351,6 +394,10 @@ extern fn ___tracy_emit_messageL(txt: [*:0]const u8, callstack: c_int) void;
 extern fn ___tracy_emit_messageC(txt: [*]const u8, size: usize, color: u32, callstack: c_int) void;
 extern fn ___tracy_emit_messageLC(txt: [*:0]const u8, color: u32, callstack: c_int) void;
 extern fn ___tracy_emit_frame_mark(name: ?[*:0]const u8) void;
+extern fn ___tracy_emit_plot_config(name: ?[*:0]const u8, type: i32, step: i32, fil: i32, color: u32) void;
+extern fn ___tracy_emit_plot_float(name: ?[*:0]const u8, val: f32) void;
+extern fn ___tracy_emit_plot_double(name: ?[*:0]const u8, val: f64) void;
+extern fn ___tracy_emit_plot_int(name: ?[*:0]const u8, val: i64) void;
 extern fn ___tracy_wait_shutdown() void;
 
 /// Wait for the tracy profiler to fully shutdown and finish syncing data.

@@ -48,7 +48,8 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 (file @1.1-20.15
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -66,10 +67,10 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 				(tags
 					(ty-apply @4.22-4.30
 						(ty @4.22-4.26 (name "Good"))
-						(ty-var @4.27-4.27 (raw "ok")))
+						(ty-var @4.27-4.29 (raw "ok")))
 					(ty-apply @4.32-4.40
 						(ty @4.32-4.35 (name "Bad"))
-						(ty-var @4.36-4.36 (raw "err"))))))
+						(ty-var @4.36-4.39 (raw "err"))))))
 		(s-type-anno @7.1-7.36 (name "process")
 			(ty-fn @7.11-7.36
 				(ty-apply @7.11-7.29
@@ -92,7 +93,7 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 				(tags
 					(ty-apply @11.14-11.21
 						(ty @11.14-11.18 (name "Some"))
-						(ty-var @11.19-11.19 (raw "a")))
+						(ty-var @11.19-11.20 (raw "a")))
 					(ty @11.23-11.27 (name "None")))))
 		(s-type-anno @14.1-14.31 (name "getString")
 			(ty-fn @14.13-14.31
@@ -185,16 +186,16 @@ NO CHANGE
 				(ty-var @4.14-4.17 (name "err"))))
 		(ty-tag-union @4.21-4.41
 			(ty-apply @4.22-4.30 (symbol "Good")
-				(ty-var @4.27-4.27 (name "ok")))
+				(ty-var @4.27-4.29 (name "ok")))
 			(ty-apply @4.32-4.40 (symbol "Bad")
-				(ty-var @4.36-4.36 (name "err")))))
+				(ty-var @4.36-4.39 (name "err")))))
 	(s-alias-decl @11.1-11.28
 		(ty-header @11.1-11.10 (name "Option")
 			(ty-args
 				(ty-var @11.8-11.9 (name "a"))))
 		(ty-tag-union @11.13-11.28
 			(ty-apply @11.14-11.21 (symbol "Some")
-				(ty-var @11.19-11.19 (name "a")))
+				(ty-var @11.19-11.20 (name "a")))
 			(ty @11.23-11.27 (name "None")))))
 ~~~
 # TYPES
@@ -204,14 +205,14 @@ NO CHANGE
 		(patt @8.1-8.8 (type "MyResult(Str, I32) -> Str"))
 		(patt @15.1-15.10 (type "Option(Str) -> Str"))
 		(patt @18.1-18.10 (type "Option(I32) -> I32"))
-		(patt @20.1-20.6 (type "arg -> {}")))
+		(patt @20.1-20.6 (type "_arg -> {}")))
 	(type_decls
-		(alias @4.1-4.41 (type "MyResult(b, c)")
+		(alias @4.1-4.41 (type "MyResult(ok, err)")
 			(ty-header @4.1-4.18 (name "MyResult")
 				(ty-args
 					(ty-var @4.10-4.12 (name "ok"))
 					(ty-var @4.14-4.17 (name "err")))))
-		(alias @11.1-11.28 (type "Option(d)")
+		(alias @11.1-11.28 (type "Option(a)")
 			(ty-header @11.1-11.10 (name "Option")
 				(ty-args
 					(ty-var @11.8-11.9 (name "a"))))))
@@ -219,5 +220,5 @@ NO CHANGE
 		(expr @8.11-8.32 (type "MyResult(Str, I32) -> Str"))
 		(expr @15.13-15.29 (type "Option(Str) -> Str"))
 		(expr @18.13-18.21 (type "Option(I32) -> I32"))
-		(expr @20.9-20.15 (type "arg -> {}"))))
+		(expr @20.9-20.15 (type "_arg -> {}"))))
 ~~~

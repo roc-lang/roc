@@ -32,7 +32,8 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 (file @1.1-9.2
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12 (text "foo"))))
+			(exposed-lower-ident @1.9-1.12
+				(text "foo"))))
 	(statements
 		(s-decl @3.1-9.2
 			(p-ident @3.1-3.4 (raw "foo"))
@@ -85,7 +86,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.4 (type "arg -> ret")))
+		(patt @3.1-3.4 (type "_arg -> _ret")))
 	(expressions
-		(expr @3.7-9.2 (type "arg -> ret"))))
+		(expr @3.7-9.2 (type "_arg -> _ret"))))
 ~~~

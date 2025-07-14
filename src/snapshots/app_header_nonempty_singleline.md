@@ -19,7 +19,8 @@ KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),O
 ~~~clojure
 (app @1.1-1.74
 	(provides @1.5-1.12
-		(exposed-lower-ident @1.6-1.11 (text "main!")))
+		(exposed-lower-ident @1.6-1.11
+			(text "main!")))
 	(record-field @1.15-1.41 (name "pf")
 		(e-string @1.28-1.41
 			(e-string-part @1.29-1.40 (raw "../main.roc"))))

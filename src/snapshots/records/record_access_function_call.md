@@ -48,5 +48,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.23 (type "a"))
+(expr @1.1-1.23 (type "_a"))
 ~~~

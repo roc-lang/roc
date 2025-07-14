@@ -47,7 +47,8 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 (file @4.1-12.2
 	(app @4.1-4.57
 		(provides @4.5-4.12
-			(exposed-lower-ident @4.6-4.11 (text "main!")))
+			(exposed-lower-ident @4.6-4.11
+				(text "main!")))
 		(record-field @4.15-4.55 (name "pf")
 			(e-string @4.28-4.55
 				(e-string-part @4.29-4.54 (raw "../basic-cli/platform.roc"))))
@@ -103,7 +104,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.6 (type "arg -> ret")))
+		(patt @8.1-8.6 (type "_arg -> _ret")))
 	(expressions
-		(expr @8.9-12.2 (type "arg -> ret"))))
+		(expr @8.9-12.2 (type "_arg -> _ret"))))
 ~~~

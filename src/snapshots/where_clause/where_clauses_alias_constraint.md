@@ -31,19 +31,20 @@ LowerIdent(7:1-7:5),OpAssign(7:6-7:7),TripleDot(7:8-7:11),EndOfFile(7:11-7:11),
 	(module @1.1-1.20
 		(exposes @1.8-1.20
 			(exposed-upper-ident @1.9-1.13 (text "Sort"))
-			(exposed-lower-ident @1.15-1.19 (text "sort"))))
+			(exposed-lower-ident @1.15-1.19
+				(text "sort"))))
 	(statements
 		(s-type-decl @3.1-4.48
 			(header @3.1-3.8 (name "Sort")
 				(args
 					(ty-var @3.6-3.7 (raw "a"))))
-			(ty-var @1.1-1.1 (raw "a"))
+			(ty-var @3.11-3.12 (raw "a"))
 			(where
 				(method @4.8-4.48 (module-of "a") (name "order")
 					(args
 						(ty-tuple @4.26-4.32
-							(ty-var @4.27-4.27 (raw "a"))
-							(ty-var @1.1-1.1 (raw "a"))))
+							(ty-var @4.27-4.28 (raw "a"))
+							(ty-var @4.30-4.31 (raw "a"))))
 					(ty-tag-union @4.36-4.48
 						(tags
 							(ty @4.37-4.39 (name "LT"))
@@ -53,10 +54,10 @@ LowerIdent(7:1-7:5),OpAssign(7:6-7:7),TripleDot(7:8-7:11),EndOfFile(7:11-7:11),
 			(ty-fn @6.8-6.32
 				(ty-apply @6.8-6.18
 					(ty @6.8-6.12 (name "List"))
-					(ty-var @6.13-6.13 (raw "elem")))
+					(ty-var @6.13-6.17 (raw "elem")))
 				(ty-apply @6.22-6.32
 					(ty @6.22-6.26 (name "List"))
-					(ty-var @6.27-6.27 (raw "elem"))))
+					(ty-var @6.27-6.31 (raw "elem"))))
 			(where
 				(alias @6.39-6.56 (module-of "elem") (name "Sort"))))
 		(s-decl @7.1-7.11
@@ -65,12 +66,7 @@ LowerIdent(7:1-7:5),OpAssign(7:6-7:7),TripleDot(7:8-7:11),EndOfFile(7:11-7:11),
 ~~~
 # FORMATTED
 ~~~roc
-module [Sort, sort]
-
-Sort(a) : a where module(a).order : (a, a) -> [LT, EQ, GT]
-
-sort : List(elem) -> List(elem) where module(elem).Sort
-sort = ...
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -82,20 +78,20 @@ sort = ...
 			(declared-type
 				(ty-fn @6.8-6.32 (effectful false)
 					(ty-apply @6.8-6.18 (symbol "List")
-						(ty-var @6.13-6.13 (name "elem")))
+						(ty-var @6.13-6.17 (name "elem")))
 					(ty-apply @6.22-6.32 (symbol "List")
-						(ty-var @6.27-6.27 (name "elem")))))))
+						(ty-var @6.27-6.31 (name "elem")))))))
 	(s-alias-decl @3.1-4.48
 		(ty-header @3.1-3.8 (name "Sort")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))))
-		(ty-var @1.1-1.1 (name "a"))
+		(ty-var @3.11-3.12 (name "a"))
 		(where
 			(method @4.8-4.48 (module-of "a") (ident "order")
 				(args
 					(ty-tuple @4.26-4.32
-						(ty-var @4.27-4.27 (name "a"))
-						(ty-var @1.1-1.1 (name "a"))))
+						(ty-var @4.27-4.28 (name "a"))
+						(ty-var @4.30-4.31 (name "a"))))
 				(ty-tag-union @4.36-4.48
 					(ty @4.37-4.39 (name "LT"))
 					(ty @4.41-4.43 (name "EQ"))
@@ -103,9 +99,9 @@ sort = ...
 	(s-type-anno @6.1-6.56 (name "sort")
 		(ty-fn @6.8-6.32 (effectful false)
 			(ty-apply @6.8-6.18 (symbol "List")
-				(ty-var @6.13-6.13 (name "elem")))
+				(ty-var @6.13-6.17 (name "elem")))
 			(ty-apply @6.22-6.32 (symbol "List")
-				(ty-var @6.27-6.27 (name "elem"))))
+				(ty-var @6.27-6.31 (name "elem"))))
 		(where
 			(alias @6.39-6.56 (module-of "elem") (ident "Sort"))))
 	(ext-decl @4.8-4.48 (ident "module(a).order") (kind "value"))
@@ -117,7 +113,7 @@ sort = ...
 	(defs
 		(patt @7.1-7.5 (type "Error -> Error")))
 	(type_decls
-		(alias @3.1-4.48 (type "Sort(b)")
+		(alias @3.1-4.48 (type "Sort(a)")
 			(ty-header @3.1-3.8 (name "Sort")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))))))

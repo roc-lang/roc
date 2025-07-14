@@ -43,5 +43,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.13 (type "arg, arg2 -> ret"))
+(expr @1.1-1.13 (type "_arg, _arg2 -> _ret"))
 ~~~

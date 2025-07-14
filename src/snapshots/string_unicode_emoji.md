@@ -28,8 +28,10 @@ LowerIdent(7:1-7:6),OpAssign(7:7-7:8),StringStart(7:9-7:10),StringPart(7:10-7:84
 (file @1.1-7.85
 	(module @1.1-1.24
 		(exposes @1.8-1.24
-			(exposed-lower-ident @1.9-1.16 (text "message"))
-			(exposed-lower-ident @1.18-1.23 (text "greet"))))
+			(exposed-lower-ident @1.9-1.16
+				(text "message"))
+			(exposed-lower-ident @1.18-1.23
+				(text "greet"))))
 	(statements
 		(s-decl @4.1-4.56
 			(p-ident @4.1-4.8 (raw "message"))

@@ -6,7 +6,6 @@
 const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
-const exitOnOom = @import("utils.zig").exitOnOom;
 const serialization = @import("../serialization/mod.zig");
 
 /// A type-safe string hash map with serialization support
@@ -22,9 +21,9 @@ pub fn SafeStringHashMap(comptime V: type) type {
         }
 
         /// Initialize with capacity
-        pub fn initCapacity(gpa: Allocator, capacity: usize) Self {
+        pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
             var map = std.StringHashMapUnmanaged(V){};
-            map.ensureTotalCapacity(gpa, @intCast(capacity)) catch |err| exitOnOom(err);
+            try map.ensureTotalCapacity(gpa, @intCast(capacity));
             return Self{ .map = map };
         }
 
@@ -129,7 +128,7 @@ pub fn SafeStringHashMap(comptime V: type) type {
             offset += @sizeOf(u32);
 
             // Create hash map with capacity
-            var result = Self.initCapacity(allocator, entry_count);
+            var result = try Self.initCapacity(allocator, entry_count);
             errdefer result.deinit(allocator);
 
             // Read entries

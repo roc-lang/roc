@@ -18,7 +18,6 @@ const Ident = @import("../base/Ident.zig");
 
 const MkSafeList = collections.SafeList;
 const MkSafeMultiList = collections.SafeMultiList;
-const exitOnOom = collections.utils.exitOnOom;
 
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
@@ -39,8 +38,8 @@ pub const Var = enum(u32) {
     pub const SafeList = MkSafeList(Var);
 
     /// Debug representation of a type variable, panics on allocation failure
-    pub fn allocPrint(self: Var, gpa: std.mem.Allocator) []u8 {
-        return std.fmt.allocPrint(gpa, "#{d}", .{@intFromEnum(self)}) catch |err| exitOnOom(err);
+    pub fn allocPrint(self: Var, gpa: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        return try std.fmt.allocPrint(gpa, "#{d}", .{@intFromEnum(self)});
     }
 };
 

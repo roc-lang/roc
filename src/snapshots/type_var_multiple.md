@@ -94,7 +94,8 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 (file @1.1-10.15
 	(app @1.1-1.57
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
@@ -106,11 +107,11 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 		(s-type-anno @4.1-4.24 (name "swap")
 			(ty-fn @4.8-4.24
 				(ty-tuple @4.8-4.14
-					(ty-var @4.9-4.9 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @4.9-4.10 (raw "a"))
+					(ty-var @4.12-4.13 (raw "b")))
 				(ty-tuple @4.18-4.24
-					(ty-var @4.19-4.19 (raw "b"))
-					(ty-var @1.1-1.1 (raw "a")))))
+					(ty-var @4.19-4.20 (raw "b"))
+					(ty-var @4.22-4.23 (raw "a")))))
 		(s-decl @5.1-8.2
 			(p-ident @5.1-5.5 (raw "swap"))
 			(e-lambda @5.8-8.2
@@ -144,7 +145,6 @@ swap = |pair| {
 	
 	pair
 	(second, first)
-
 }
 
 main! = |_| {}
@@ -174,11 +174,11 @@ main! = |_| {}
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)
 					(ty-tuple @4.8-4.14
-						(ty-var @4.9-4.9 (name "a"))
-						(ty-var @1.1-1.1 (name "b")))
+						(ty-var @4.9-4.10 (name "a"))
+						(ty-var @4.12-4.13 (name "b")))
 					(ty-tuple @4.18-4.24
-						(ty-var @4.19-4.19 (name "b"))
-						(ty-var @1.1-1.1 (name "a")))))))
+						(ty-var @4.19-4.20 (name "b"))
+						(ty-var @4.22-4.23 (name "a")))))))
 	(d-let
 		(p-assign @10.1-10.6 (ident "main!"))
 		(e-lambda @10.9-10.15
@@ -190,9 +190,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "(field, field2) -> (Error, Error)"))
-		(patt @10.1-10.6 (type "arg -> {}")))
+		(patt @5.1-5.5 (type "(a, b) -> (Error, Error)"))
+		(patt @10.1-10.6 (type "_arg -> {}")))
 	(expressions
-		(expr @5.8-8.2 (type "(field, field2) -> (Error, Error)"))
-		(expr @10.9-10.15 (type "arg -> {}"))))
+		(expr @5.8-8.2 (type "(a, b) -> (Error, Error)"))
+		(expr @10.9-10.15 (type "_arg -> {}"))))
 ~~~

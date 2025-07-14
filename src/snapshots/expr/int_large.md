@@ -29,5 +29,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.31 (type "Num(size)"))
+(expr @1.1-1.31 (type "Num(_size)"))
 ~~~

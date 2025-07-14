@@ -27,7 +27,8 @@ LowerIdent(5:1-5:12),OpAssign(5:13-5:14),OpBar(5:15-5:16),Underscore(5:16-5:17),
 (file @1.1-5.22
 	(module @1.1-1.21
 		(exposes @1.8-1.21
-			(exposed-lower-ident @1.9-1.20 (text "deserialize"))))
+			(exposed-lower-ident @1.9-1.20
+				(text "deserialize"))))
 	(statements
 		(s-type-anno @3.1-4.62 (name "deserialize")
 			(ty-fn @3.15-3.49
@@ -36,7 +37,7 @@ LowerIdent(5:1-5:12),OpAssign(5:13-5:14),OpBar(5:15-5:16),Underscore(5:16-5:17),
 					(ty @3.20-3.22 (name "U8")))
 				(ty-apply @3.27-3.49
 					(ty @3.27-3.33 (name "Result"))
-					(ty-var @3.34-3.34 (raw "a"))
+					(ty-var @3.34-3.35 (raw "a"))
 					(ty-tag-union @3.37-3.48
 						(tags
 							(ty @3.38-3.47 (name "DecodeErr"))))))
@@ -48,7 +49,7 @@ LowerIdent(5:1-5:12),OpAssign(5:13-5:14),OpBar(5:15-5:16),Underscore(5:16-5:17),
 							(ty @4.33-4.35 (name "U8"))))
 					(ty-apply @4.40-4.62
 						(ty @4.40-4.46 (name "Result"))
-						(ty-var @4.47-4.47 (raw "a"))
+						(ty-var @4.47-4.48 (raw "a"))
 						(ty-tag-union @4.50-4.61
 							(tags
 								(ty @4.51-4.60 (name "DecodeErr"))))))))
@@ -82,7 +83,7 @@ deserialize = |_| ...
 					(ty-apply @3.15-3.23 (symbol "List")
 						(ty @3.20-3.22 (name "U8")))
 					(ty-apply @3.27-3.49 (symbol "Result")
-						(ty-var @3.34-3.34 (name "a"))
+						(ty-var @3.34-3.35 (name "a"))
 						(ty-tag-union @3.37-3.48
 							(ty @3.38-3.47 (name "DecodeErr"))))))))
 	(s-type-anno @3.1-4.62 (name "deserialize")
@@ -90,7 +91,7 @@ deserialize = |_| ...
 			(ty-apply @3.15-3.23 (symbol "List")
 				(ty @3.20-3.22 (name "U8")))
 			(ty-apply @3.27-3.49 (symbol "Result")
-				(ty-var @3.34-3.34 (name "a"))
+				(ty-var @3.34-3.35 (name "a"))
 				(ty-tag-union @3.37-3.48
 					(ty @3.38-3.47 (name "DecodeErr")))))
 		(where
@@ -99,7 +100,7 @@ deserialize = |_| ...
 					(ty-apply @4.28-4.36 (symbol "List")
 						(ty @4.33-4.35 (name "U8"))))
 				(ty-apply @4.40-4.62 (symbol "Result")
-					(ty-var @4.47-4.47 (name "a"))
+					(ty-var @4.47-4.48 (name "a"))
 					(ty-tag-union @4.50-4.61
 						(ty @4.51-4.60 (name "DecodeErr")))))))
 	(ext-decl @4.9-4.62 (ident "module(a).decode") (kind "value")))

@@ -41,7 +41,7 @@ pub fn instantiateVar(
     const fresh_content = try instantiateContent(store, resolved.desc.content, substitution);
 
     // Create a fresh variable with the instantiated content
-    const fresh_var = store.freshFromContent(fresh_content);
+    const fresh_var = try store.freshFromContent(fresh_content);
 
     // Remember this substitution for recursive references
     try substitution.put(var_, fresh_var);
@@ -127,7 +127,7 @@ fn instantiateNominalType(
         try fresh_vars.append(fresh_elem);
     }
 
-    const fresh_vars_range = store.appendVars(fresh_vars.items);
+    const fresh_vars_range = try store.appendVars(fresh_vars.items);
     return types_mod.NominalType{
         .ident = nominal.ident,
         .vars = .{ .nonempty = fresh_vars_range },
@@ -149,7 +149,7 @@ fn instantiateTuple(
         try fresh_elems.append(fresh_elem);
     }
 
-    const fresh_elems_range = store.appendTupleElems(fresh_elems.items);
+    const fresh_elems_range = try store.appendTupleElems(fresh_elems.items);
     return types_mod.Tuple{ .elems = fresh_elems_range };
 }
 
@@ -187,7 +187,7 @@ fn instantiateFunc(
     }
 
     const fresh_ret = try instantiateVar(store, func.ret, substitution);
-    const fresh_args_range = store.appendFuncArgs(fresh_args.items);
+    const fresh_args_range = try store.appendFuncArgs(fresh_args.items);
     return Func{
         .args = fresh_args_range,
         .ret = fresh_ret,
@@ -205,7 +205,7 @@ fn instantiateRecordFields(
 
     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
         const fresh_type = try instantiateVar(store, type_var, substitution);
-        _ = store.record_fields.append(store.gpa, RecordField{
+        _ = try store.record_fields.append(store.gpa, RecordField{
             .name = name,
             .var_ = fresh_type,
         });
@@ -229,7 +229,7 @@ fn instantiateRecord(
 
     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
         const fresh_type = try instantiateVar(store, type_var, substitution);
-        _ = store.record_fields.append(store.gpa, RecordField{
+        _ = try store.record_fields.append(store.gpa, RecordField{
             .name = name,
             .var_ = fresh_type,
         });
@@ -262,9 +262,9 @@ fn instantiateTagUnion(
             try fresh_args.append(fresh_arg);
         }
 
-        const fresh_args_range = store.appendTagArgs(fresh_args.items);
+        const fresh_args_range = try store.appendTagArgs(fresh_args.items);
 
-        _ = store.tags.append(store.gpa, Tag{
+        _ = try store.tags.append(store.gpa, Tag{
             .name = tag_name,
             .args = fresh_args_range,
         });

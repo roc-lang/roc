@@ -30,8 +30,10 @@ LowerIdent(7:1-7:10),OpAssign(7:11-7:12),LowerIdent(7:13-7:20),NoSpaceOpenRound(
 (file @1.1-7.24
 	(module @1.1-1.28
 		(exposes @1.8-1.28
-			(exposed-lower-ident @1.9-1.16 (text "add_one"))
-			(exposed-lower-ident @1.18-1.27 (text "my_number"))))
+			(exposed-lower-ident @1.9-1.16
+				(text "add_one"))
+			(exposed-lower-ident @1.18-1.27
+				(text "my_number"))))
 	(statements
 		(s-type-anno @3.1-3.21 (name "add_one")
 			(ty-fn @3.11-3.21

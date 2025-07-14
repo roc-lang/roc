@@ -23,7 +23,8 @@ OpenCurly(3:2-3:3),LowerIdent(3:4-3:6),OpColon(3:6-3:7),KwPlatform(3:8-3:16),Str
 ~~~clojure
 (app @1.1-3.57
 	(provides @2.2-2.10
-		(exposed-lower-ident @2.3-2.8 (text "main!")))
+		(exposed-lower-ident @2.3-2.8
+			(text "main!")))
 	(record-field @3.4-3.30 (name "pf")
 		(e-string @3.17-3.30
 			(e-string-part @3.18-3.29 (raw "../main.roc"))))

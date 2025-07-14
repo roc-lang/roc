@@ -57,10 +57,10 @@ This expression is used in an unexpected way:
          ^^^^^^^^
 
 It is of type:
-    _Pair(a, b), Num(size3) -> Num(size4), Num(size5) -> Num(size6) -> Pair(c, d)_
+    _Pair(a, b), Num(_size3) -> Num(_size4), Num(_size5) -> Num(_size6) -> Pair(c, d)_
 
 But you are trying to use it as:
-    _Num(size), Num(size2), arg -> ret, arg2 -> ret2 -> ret3_
+    _Num(_size), Num(_size2), _arg -> _ret, _arg2 -> _ret2 -> _ret3_
 
 # TOKENS
 ~~~zig
@@ -81,7 +81,8 @@ CloseCurly(26:1-26:2),EndOfFile(26:2-26:2),
 (file @1.1-26.2
 	(app @1.1-1.56
 		(provides @1.5-1.11
-			(exposed-lower-ident @1.6-1.10 (text "main")))
+			(exposed-lower-ident @1.6-1.10
+				(text "main")))
 		(record-field @1.14-1.54 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
@@ -96,18 +97,18 @@ CloseCurly(26:1-26:2),EndOfFile(26:2-26:2),
 					(ty-var @4.6-4.7 (raw "a"))
 					(ty-var @4.9-4.10 (raw "b"))))
 			(ty-tuple @4.14-4.20
-				(ty-var @4.15-4.15 (raw "a"))
-				(ty-var @1.1-1.1 (raw "b"))))
+				(ty-var @4.15-4.16 (raw "a"))
+				(ty-var @4.18-4.19 (raw "b"))))
 		(s-type-anno @7.1-7.37 (name "swap_pair")
 			(ty-fn @7.13-7.37
 				(ty-apply @7.13-7.23
 					(ty @7.13-7.17 (name "Pair"))
-					(ty-var @7.18-7.18 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @7.18-7.19 (raw "a"))
+					(ty-var @7.21-7.22 (raw "b")))
 				(ty-apply @7.27-7.37
 					(ty @7.27-7.31 (name "Pair"))
-					(ty-var @7.32-7.32 (raw "b"))
-					(ty-var @1.1-1.1 (raw "a")))))
+					(ty-var @7.32-7.33 (raw "b"))
+					(ty-var @7.35-7.36 (raw "a")))))
 		(s-decl @8.1-8.28
 			(p-ident @8.1-8.10 (raw "swap_pair"))
 			(e-lambda @8.13-8.28
@@ -122,18 +123,18 @@ CloseCurly(26:1-26:2),EndOfFile(26:2-26:2),
 			(ty-fn @11.12-11.56
 				(ty-apply @11.12-11.22
 					(ty @11.12-11.16 (name "Pair"))
-					(ty-var @11.17-11.17 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @11.17-11.18 (raw "a"))
+					(ty-var @11.20-11.21 (raw "b")))
 				(ty-fn @11.25-11.31
-					(ty-var @11.25-11.25 (raw "a"))
-					(ty-var @1.1-1.1 (raw "c")))
+					(ty-var @11.25-11.26 (raw "a"))
+					(ty-var @11.30-11.31 (raw "c")))
 				(ty-fn @11.35-11.41
-					(ty-var @11.35-11.35 (raw "b"))
-					(ty-var @1.1-1.1 (raw "d")))
+					(ty-var @11.35-11.36 (raw "b"))
+					(ty-var @11.40-11.41 (raw "d")))
 				(ty-apply @11.46-11.56
 					(ty @11.46-11.50 (name "Pair"))
-					(ty-var @11.51-11.51 (raw "c"))
-					(ty-var @1.1-1.1 (raw "d")))))
+					(ty-var @11.51-11.52 (raw "c"))
+					(ty-var @11.54-11.55 (raw "d")))))
 		(s-decl @12.1-12.39
 			(p-ident @12.1-12.9 (raw "map_pair"))
 			(e-lambda @12.12-12.39
@@ -233,11 +234,11 @@ main = {
 			(declared-type
 				(ty-fn @7.13-7.37 (effectful false)
 					(ty-apply @7.13-7.23 (symbol "Pair")
-						(ty-var @7.18-7.18 (name "a"))
-						(ty-var @1.1-1.1 (name "b")))
+						(ty-var @7.18-7.19 (name "a"))
+						(ty-var @7.21-7.22 (name "b")))
 					(ty-apply @7.27-7.37 (symbol "Pair")
-						(ty-var @7.32-7.32 (name "b"))
-						(ty-var @1.1-1.1 (name "a")))))))
+						(ty-var @7.32-7.33 (name "b"))
+						(ty-var @7.35-7.36 (name "a")))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "map_pair"))
 		(e-lambda @12.12-12.39
@@ -264,19 +265,19 @@ main = {
 			(declared-type
 				(ty-fn @11.12-11.56 (effectful false)
 					(ty-apply @11.12-11.22 (symbol "Pair")
-						(ty-var @11.17-11.17 (name "a"))
-						(ty-var @1.1-1.1 (name "b")))
+						(ty-var @11.17-11.18 (name "a"))
+						(ty-var @11.20-11.21 (name "b")))
 					(ty-parens @11.24-11.32
 						(ty-fn @11.25-11.31 (effectful false)
-							(ty-var @11.25-11.25 (name "a"))
-							(ty-var @1.1-1.1 (name "c"))))
+							(ty-var @11.25-11.26 (name "a"))
+							(ty-var @11.30-11.31 (name "c"))))
 					(ty-parens @11.34-11.42
 						(ty-fn @11.35-11.41 (effectful false)
-							(ty-var @11.35-11.35 (name "b"))
-							(ty-var @1.1-1.1 (name "d"))))
+							(ty-var @11.35-11.36 (name "b"))
+							(ty-var @11.40-11.41 (name "d"))))
 					(ty-apply @11.46-11.56 (symbol "Pair")
-						(ty-var @11.51-11.51 (name "c"))
-						(ty-var @1.1-1.1 (name "d")))))))
+						(ty-var @11.51-11.52 (name "c"))
+						(ty-var @11.54-11.55 (name "d")))))))
 	(d-let
 		(p-assign @17.1-17.5 (ident "main"))
 		(e-block @17.8-26.2
@@ -318,8 +319,8 @@ main = {
 				(ty-var @4.6-4.7 (name "a"))
 				(ty-var @4.9-4.10 (name "b"))))
 		(ty-tuple @4.14-4.20
-			(ty-var @4.15-4.15 (name "a"))
-			(ty-var @1.1-1.1 (name "b")))))
+			(ty-var @4.15-4.16 (name "a"))
+			(ty-var @4.18-4.19 (name "b")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -327,9 +328,9 @@ main = {
 	(defs
 		(patt @8.1-8.10 (type "Pair(a, b) -> Pair(b, a)"))
 		(patt @12.1-12.9 (type "Error"))
-		(patt @17.1-17.5 (type "e")))
+		(patt @17.1-17.5 (type "_e")))
 	(type_decls
-		(alias @4.1-4.20 (type "Pair(h, i)")
+		(alias @4.1-4.20 (type "Pair(a, b)")
 			(ty-header @4.1-4.11 (name "Pair")
 				(ty-args
 					(ty-var @4.6-4.7 (name "a"))
@@ -337,5 +338,5 @@ main = {
 	(expressions
 		(expr @8.13-8.28 (type "Pair(a, b) -> Pair(b, a)"))
 		(expr @12.12-12.39 (type "Error"))
-		(expr @17.8-26.2 (type "e"))))
+		(expr @17.8-26.2 (type "_e"))))
 ~~~

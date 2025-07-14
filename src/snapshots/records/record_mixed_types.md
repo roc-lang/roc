@@ -69,5 +69,5 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.86 (type "{ name: Str, age: Num(size), active: Error, scores: List(Num(size2)), balance: Frac(size3) }"))
+(expr @1.1-1.86 (type "{ name: Str, age: Num(_size), active: Error, scores: List(Num(_size2)), balance: Frac(_size3) }"))
 ~~~

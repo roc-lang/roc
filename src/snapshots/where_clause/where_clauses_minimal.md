@@ -29,17 +29,18 @@ LowerIdent(6:1-6:11),OpAssign(6:12-6:13),TripleDot(6:14-6:17),EndOfFile(6:17-6:1
 (file @1.1-6.17
 	(module @1.1-1.20
 		(exposes @1.8-1.20
-			(exposed-lower-ident @1.9-1.19 (text "convert_me"))))
+			(exposed-lower-ident @1.9-1.19
+				(text "convert_me"))))
 	(statements
 		(s-type-anno @3.1-5.29 (name "convert_me")
 			(ty-fn @3.14-3.20
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "b")))
+				(ty-var @3.14-3.15 (raw "a"))
+				(ty-var @3.19-3.20 (raw "b")))
 			(where
 				(method @5.2-5.28 (module-of "a") (name "convert")
 					(args
-						(ty-var @1.1-1.1 (raw "a")))
-					(ty-var @1.1-1.1 (raw "b")))))
+						(ty-var @5.22-5.23 (raw "a")))
+					(ty-var @5.27-5.28 (raw "b")))))
 		(s-decl @6.1-6.17
 			(p-ident @6.1-6.11 (raw "convert_me"))
 			(e-ellipsis))))
@@ -57,24 +58,24 @@ NO CHANGE
 		(annotation @6.1-6.11
 			(declared-type
 				(ty-fn @3.14-3.20 (effectful false)
-					(ty-var @1.1-1.1 (name "a"))
-					(ty-var @1.1-1.1 (name "b"))))))
+					(ty-var @3.14-3.15 (name "a"))
+					(ty-var @3.19-3.20 (name "b"))))))
 	(s-type-anno @3.1-5.29 (name "convert_me")
 		(ty-fn @3.14-3.20 (effectful false)
-			(ty-var @1.1-1.1 (name "a"))
-			(ty-var @1.1-1.1 (name "b")))
+			(ty-var @3.14-3.15 (name "a"))
+			(ty-var @3.19-3.20 (name "b")))
 		(where
 			(method @5.2-5.28 (module-of "a") (ident "convert")
 				(args
-					(ty-var @1.1-1.1 (name "a")))
-				(ty-var @1.1-1.1 (name "b")))))
+					(ty-var @5.22-5.23 (name "a")))
+				(ty-var @5.27-5.28 (name "b")))))
 	(ext-decl @5.2-5.28 (ident "module(a).convert") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.11 (type "arg -> ret")))
+		(patt @6.1-6.11 (type "a -> b")))
 	(expressions
-		(expr @1.1-1.1 (type "arg -> ret"))))
+		(expr @1.1-1.1 (type "a -> b"))))
 ~~~

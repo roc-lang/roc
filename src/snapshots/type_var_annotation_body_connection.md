@@ -36,7 +36,8 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 (file @1.1-10.15
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -47,8 +48,8 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 	(statements
 		(s-type-anno @3.1-3.18 (name "identity")
 			(ty-fn @3.12-3.18
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "a"))))
+				(ty-var @3.12-3.13 (raw "a"))
+				(ty-var @3.17-3.18 (raw "a"))))
 		(s-decl @4.1-8.2
 			(p-ident @4.1-4.9 (raw "identity"))
 			(e-lambda @4.12-8.2
@@ -57,7 +58,7 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 				(e-block @4.16-8.2
 					(statements
 						(s-type-anno @5.5-5.14 (name "thing")
-							(ty-var @1.1-1.1 (raw "a")))
+							(ty-var @5.13-5.14 (raw "a")))
 						(s-decl @6.5-6.14
 							(p-ident @6.5-6.10 (raw "thing"))
 							(e-ident @6.13-6.14 (raw "x")))
@@ -78,7 +79,6 @@ identity = |x| {
 	thing : a # refers to the type var introduced in function type annotation
 	thing = x # refers to the value from the function parameter
 	thing
-
 }
 
 main! = |_| {}
@@ -93,7 +93,7 @@ main! = |_| {}
 				(p-assign @4.13-4.14 (ident "x")))
 			(e-block @4.16-8.2
 				(s-type-anno @5.5-5.14 (name "thing")
-					(ty-var @1.1-1.1 (name "a")))
+					(ty-var @5.13-5.14 (name "a")))
 				(s-let @6.5-6.14
 					(p-assign @6.5-6.10 (ident "thing"))
 					(e-lookup-local @6.13-6.14
@@ -103,8 +103,8 @@ main! = |_| {}
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.18 (effectful false)
-					(ty-var @1.1-1.1 (name "a"))
-					(ty-var @1.1-1.1 (name "a"))))))
+					(ty-var @3.12-3.13 (name "a"))
+					(ty-var @3.17-3.18 (name "a"))))))
 	(d-let
 		(p-assign @10.1-10.6 (ident "main!"))
 		(e-lambda @10.9-10.15
@@ -117,8 +117,8 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt @4.1-4.9 (type "a -> a"))
-		(patt @10.1-10.6 (type "arg -> {}")))
+		(patt @10.1-10.6 (type "_arg -> {}")))
 	(expressions
 		(expr @4.12-8.2 (type "a -> a"))
-		(expr @10.9-10.15 (type "arg -> {}"))))
+		(expr @10.9-10.15 (type "_arg -> {}"))))
 ~~~

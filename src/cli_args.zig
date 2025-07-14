@@ -3,7 +3,6 @@ const std = @import("std");
 const testing = std.testing;
 const mem = std.mem;
 const collections = @import("collections.zig");
-const exitOnOom = collections.utils.exitOnOom;
 
 /// The core type representing a parsed command
 /// We could use anonymous structs for the argument types instead of defining one for each command to be more concise,
@@ -104,12 +103,12 @@ pub const DocsArgs = struct {
 };
 
 /// Parse a list of arguments.
-pub fn parse(gpa: mem.Allocator, args: []const []const u8) CliArgs {
-    if (args.len == 0) return parseRun(gpa, args);
+pub fn parse(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
+    if (args.len == 0) return try parseRun(gpa, args);
 
     if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
-    if (mem.eql(u8, args[0], "format")) return parseFormat(gpa, args[1..]);
+    if (mem.eql(u8, args[0], "format")) return try parseFormat(gpa, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
@@ -117,7 +116,7 @@ pub fn parse(gpa: mem.Allocator, args: []const []const u8) CliArgs {
     if (mem.eql(u8, args[0], "help")) return CliArgs{ .help = main_help };
     if (mem.eql(u8, args[0], "licenses")) return parseLicenses(args[1..]);
 
-    return parseRun(gpa, args);
+    return try parseRun(gpa, args);
 }
 
 const main_help =
@@ -257,7 +256,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .output = output, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse } };
 }
 
-fn parseFormat(gpa: mem.Allocator, args: []const []const u8) CliArgs {
+fn parseFormat(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
     var paths = std.ArrayList([]const u8).init(gpa);
     var stdin = false;
     var check = false;
@@ -287,13 +286,13 @@ fn parseFormat(gpa: mem.Allocator, args: []const []const u8) CliArgs {
         } else if (mem.eql(u8, arg, "--check")) {
             check = true;
         } else {
-            paths.append(arg) catch |err| exitOnOom(err);
+            try paths.append(arg);
         }
     }
     if (paths.items.len == 0) {
-        paths.append("main.roc") catch |err| exitOnOom(err);
+        try paths.append("main.roc");
     }
-    return CliArgs{ .format = FormatArgs{ .paths = paths.toOwnedSlice() catch |err| exitOnOom(err), .stdin = stdin, .check = check } };
+    return CliArgs{ .format = FormatArgs{ .paths = try paths.toOwnedSlice(), .stdin = stdin, .check = check } };
 }
 
 fn parseTest(args: []const []const u8) CliArgs {
@@ -442,7 +441,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
     return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .output = output orelse "generated-docs", .root_dir = root_dir } };
 }
 
-fn parseRun(gpa: mem.Allocator, args: []const []const u8) CliArgs {
+fn parseRun(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
     var app_args = std.ArrayList([]const u8).init(gpa);
@@ -467,13 +466,13 @@ fn parseRun(gpa: mem.Allocator, args: []const []const u8) CliArgs {
             }
         } else {
             if (path != null) {
-                app_args.append(arg) catch |err| exitOnOom(err);
+                try app_args.append(arg);
             } else {
                 path = arg;
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .app_args = app_args.toOwnedSlice() catch |err| exitOnOom(err) } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .app_args = try app_args.toOwnedSlice() } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {
@@ -490,62 +489,62 @@ fn getFlagValue(arg: []const u8) ?[]const u8 {
 test "roc run" {
     const gpa = testing.allocator;
     {
-        const result = parse(gpa, &[_][]const u8{});
+        const result = try parse(gpa, &[_][]const u8{});
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.run.path);
         try testing.expectEqual(.dev, result.run.opt);
         try testing.expectEqualSlices([]const u8, &[_][]const u8{}, result.run.app_args);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "foo.roc", "apparg1", "apparg2" });
+        const result = try parse(gpa, &[_][]const u8{ "foo.roc", "apparg1", "apparg2" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.run.path);
         try testing.expectEqualStrings("apparg1", result.run.app_args[0]);
         try testing.expectEqualStrings("apparg2", result.run.app_args[1]);
     }
     {
-        const result = parse(gpa, &[_][]const u8{"-v"});
+        const result = try parse(gpa, &[_][]const u8{"-v"});
         defer result.deinit(gpa);
         try testing.expectEqual(.version, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{"--version"});
+        const result = try parse(gpa, &[_][]const u8{"--version"});
         defer result.deinit(gpa);
         try testing.expectEqual(.version, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "ignored.roc", "--version" });
+        const result = try parse(gpa, &[_][]const u8{ "ignored.roc", "--version" });
         defer result.deinit(gpa);
         try testing.expectEqual(.version, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{"-h"});
+        const result = try parse(gpa, &[_][]const u8{"-h"});
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{"--help"});
+        const result = try parse(gpa, &[_][]const u8{"--help"});
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "ignored.roc", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "ignored.roc", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "foo.roc", "--opt=speed" });
+        const result = try parse(gpa, &[_][]const u8{ "foo.roc", "--opt=speed" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.run.path);
         try testing.expectEqual(.speed, result.run.opt);
     }
     {
-        const result = parse(gpa, &[_][]const u8{"--opt"});
+        const result = try parse(gpa, &[_][]const u8{"--opt"});
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--opt", result.problem.missing_flag_value.flag);
     }
     {
-        const result = parse(gpa, &[_][]const u8{"--opt=notreal"});
+        const result = try parse(gpa, &[_][]const u8{"--opt=notreal"});
         defer result.deinit(gpa);
         try testing.expectEqualStrings("notreal", result.problem.invalid_flag_value.value);
     }
@@ -554,72 +553,72 @@ test "roc run" {
 test "roc build" {
     const gpa = testing.allocator;
     {
-        const result = parse(gpa, &[_][]const u8{"build"});
+        const result = try parse(gpa, &[_][]const u8{"build"});
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.build.path);
         try testing.expectEqual(.dev, result.build.opt);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "build", "foo.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "build", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.build.path);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "build", "--opt=size" });
+        const result = try parse(gpa, &[_][]const u8{ "build", "--opt=size" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.build.path);
         try testing.expectEqual(OptLevel.size, result.build.opt);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "build", "--opt=dev" });
+        const result = try parse(gpa, &[_][]const u8{ "build", "--opt=dev" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.build.path);
         try testing.expectEqual(OptLevel.dev, result.build.opt);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "build", "--opt" });
+        const result = try parse(gpa, &[_][]const u8{ "build", "--opt" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--opt", result.problem.missing_flag_value.flag);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "build", "--opt=notreal" });
+        const result = try parse(gpa, &[_][]const u8{ "build", "--opt=notreal" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("notreal", result.problem.invalid_flag_value.value);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "build", "--opt=speed", "foo/bar.roc", "--output=mypath" });
+        const result = try parse(gpa, &[_][]const u8{ "build", "--opt=speed", "foo/bar.roc", "--output=mypath" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo/bar.roc", result.build.path);
         try testing.expectEqual(OptLevel.speed, result.build.opt);
         try testing.expectEqualStrings("mypath", result.build.output.?);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "build", "--opt=invalid" });
+        const result = try parse(gpa, &[_][]const u8{ "build", "--opt=invalid" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--opt", result.problem.invalid_flag_value.flag);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "build", "foo.roc", "bar.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "build", "foo.roc", "bar.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("bar.roc", result.problem.unexpected_argument.arg);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "build", "-h" });
+        const result = try parse(gpa, &[_][]const u8{ "build", "-h" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "build", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "build", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "build", "foo.roc", "--opt=size", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "build", "foo.roc", "--opt=size", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "build", "--thisisactuallyafile" });
+        const result = try parse(gpa, &[_][]const u8{ "build", "--thisisactuallyafile" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--thisisactuallyafile", result.build.path);
     }
@@ -628,56 +627,56 @@ test "roc build" {
 test "roc format" {
     const gpa = testing.allocator;
     {
-        const result = parse(gpa, &[_][]const u8{"format"});
+        const result = try parse(gpa, &[_][]const u8{"format"});
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.format.paths[0]);
         try testing.expect(!result.format.stdin);
         try testing.expect(!result.format.check);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "format", "--check" });
+        const result = try parse(gpa, &[_][]const u8{ "format", "--check" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.format.paths[0]);
         try testing.expect(!result.format.stdin);
         try testing.expect(result.format.check);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "format", "--stdin" });
+        const result = try parse(gpa, &[_][]const u8{ "format", "--stdin" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.format.paths[0]);
         try testing.expect(result.format.stdin);
         try testing.expect(!result.format.check);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "format", "--stdin", "--check", "foo.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "format", "--stdin", "--check", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.format.paths[0]);
         try testing.expect(result.format.stdin);
         try testing.expect(result.format.check);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "format", "foo.roc", "bar.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "format", "foo.roc", "bar.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.format.paths[0]);
         try testing.expectEqualStrings("bar.roc", result.format.paths[1]);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "format", "-h" });
+        const result = try parse(gpa, &[_][]const u8{ "format", "-h" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "format", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "format", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "format", "foo.roc", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "format", "foo.roc", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "format", "--thisisactuallyafile" });
+        const result = try parse(gpa, &[_][]const u8{ "format", "--thisisactuallyafile" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--thisisactuallyafile", result.format.paths[0]);
     }
@@ -686,50 +685,50 @@ test "roc format" {
 test "roc test" {
     const gpa = testing.allocator;
     {
-        const result = parse(gpa, &[_][]const u8{"test"});
+        const result = try parse(gpa, &[_][]const u8{"test"});
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.test_cmd.path);
         try testing.expectEqual(null, result.test_cmd.main);
         try testing.expectEqual(.dev, result.test_cmd.opt);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "test", "foo.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "test", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.test_cmd.path);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "test", "foo.roc", "--opt=speed" });
+        const result = try parse(gpa, &[_][]const u8{ "test", "foo.roc", "--opt=speed" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.test_cmd.path);
         try testing.expectEqual(.speed, result.test_cmd.opt);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "test", "--opt" });
+        const result = try parse(gpa, &[_][]const u8{ "test", "--opt" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--opt", result.problem.missing_flag_value.flag);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "test", "--opt=notreal" });
+        const result = try parse(gpa, &[_][]const u8{ "test", "--opt=notreal" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("notreal", result.problem.invalid_flag_value.value);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "test", "foo.roc", "bar.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "test", "foo.roc", "bar.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("bar.roc", result.problem.unexpected_argument.arg);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "test", "-h" });
+        const result = try parse(gpa, &[_][]const u8{ "test", "-h" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "test", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "test", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "test", "foo.roc", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "test", "foo.roc", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
@@ -738,50 +737,50 @@ test "roc test" {
 test "roc check" {
     const gpa = testing.allocator;
     {
-        const result = parse(gpa, &[_][]const u8{"check"});
+        const result = try parse(gpa, &[_][]const u8{"check"});
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.check.path);
         try testing.expectEqual(null, result.check.main);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "check", "foo.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "check", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.check.path);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "check", "--main=mymain.roc", "foo.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "check", "--main=mymain.roc", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.check.path);
         try testing.expectEqualStrings("mymain.roc", result.check.main.?);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "check", "foo.roc", "bar.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "check", "foo.roc", "bar.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("bar.roc", result.problem.unexpected_argument.arg);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "check", "-h" });
+        const result = try parse(gpa, &[_][]const u8{ "check", "-h" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "check", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "check", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "check", "foo.roc", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "check", "foo.roc", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "check", "--time" });
+        const result = try parse(gpa, &[_][]const u8{ "check", "--time" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.check.path);
         try testing.expectEqual(true, result.check.time);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "check", "foo.roc", "--time", "--main=bar.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "check", "foo.roc", "--time", "--main=bar.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.check.path);
         try testing.expectEqualStrings("bar.roc", result.check.main.?);
@@ -792,22 +791,22 @@ test "roc check" {
 test "roc repl" {
     const gpa = testing.allocator;
     {
-        const result = parse(gpa, &[_][]const u8{"repl"});
+        const result = try parse(gpa, &[_][]const u8{"repl"});
         defer result.deinit(gpa);
         try testing.expectEqual(.repl, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "repl", "foo.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "repl", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.problem.unexpected_argument.arg);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "repl", "-h" });
+        const result = try parse(gpa, &[_][]const u8{ "repl", "-h" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "repl", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "repl", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
@@ -816,22 +815,22 @@ test "roc repl" {
 test "roc version" {
     const gpa = testing.allocator;
     {
-        const result = parse(gpa, &[_][]const u8{"version"});
+        const result = try parse(gpa, &[_][]const u8{"version"});
         defer result.deinit(gpa);
         try testing.expectEqual(.version, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "version", "foo.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "version", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.problem.unexpected_argument.arg);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "version", "-h" });
+        const result = try parse(gpa, &[_][]const u8{ "version", "-h" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "version", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "version", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
@@ -840,36 +839,36 @@ test "roc version" {
 test "roc docs" {
     const gpa = testing.allocator;
     {
-        const result = parse(gpa, &[_][]const u8{"docs"});
+        const result = try parse(gpa, &[_][]const u8{"docs"});
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.docs.path);
         try testing.expectEqualStrings("generated-docs", result.docs.output);
         try testing.expectEqual(null, result.docs.root_dir);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "docs", "foo/bar.roc", "--root-dir=/root/dir", "--output=my_output_dir" });
+        const result = try parse(gpa, &[_][]const u8{ "docs", "foo/bar.roc", "--root-dir=/root/dir", "--output=my_output_dir" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo/bar.roc", result.docs.path);
         try testing.expectEqualStrings("my_output_dir", result.docs.output);
         try testing.expectEqualStrings("/root/dir", result.docs.root_dir.?);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "docs", "foo.roc", "--madeup" });
+        const result = try parse(gpa, &[_][]const u8{ "docs", "foo.roc", "--madeup" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--madeup", result.problem.unexpected_argument.arg);
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "docs", "-h" });
+        const result = try parse(gpa, &[_][]const u8{ "docs", "-h" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "docs", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "docs", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "docs", "foo.roc", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "docs", "foo.roc", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
@@ -878,12 +877,12 @@ test "roc docs" {
 test "roc help" {
     const gpa = testing.allocator;
     {
-        const result = parse(gpa, &[_][]const u8{"help"});
+        const result = try parse(gpa, &[_][]const u8{"help"});
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "help", "extrastuff" });
+        const result = try parse(gpa, &[_][]const u8{ "help", "extrastuff" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
@@ -891,12 +890,12 @@ test "roc help" {
 test "roc licenses" {
     const gpa = testing.allocator;
     {
-        const result = parse(gpa, &[_][]const u8{"licenses"});
+        const result = try parse(gpa, &[_][]const u8{"licenses"});
         defer result.deinit(gpa);
         try testing.expectEqual(.licenses, std.meta.activeTag(result));
     }
     {
-        const result = parse(gpa, &[_][]const u8{ "licenses", "extrastuff" });
+        const result = try parse(gpa, &[_][]const u8{ "licenses", "extrastuff" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("extrastuff", result.problem.unexpected_argument.arg);
     }

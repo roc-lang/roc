@@ -52,5 +52,5 @@ OpenCurly(1:1-1:2),DoubleDot(1:3-1:5),LowerIdent(1:5-1:11),Comma(1:11-1:12),Lowe
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.36 (type "{ age: Num(size), active: [True]others }"))
+(expr @1.1-1.36 (type "{ age: Num(_size), active: [True]_others }"))
 ~~~

@@ -12,6 +12,7 @@ vavar t= '
 ~~~
 # EXPECTED
 UNCLOSED SINGLE QUOTE - fuzz_crash_031.md:1:1:1:5
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
 INVALID STATEMENT - fuzz_crash_031.md:1:6:1:8
 INVALID STATEMENT - fuzz_crash_031.md:4:1:4:6
 # PROBLEMS
@@ -32,6 +33,18 @@ Here is the problematic code:
 mule []
 ```
 ^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_031.md:4:10:4:11:**
+```roc
+vavar t= '
+```
+         ^
 
 
 **INVALID STATEMENT**
@@ -56,13 +69,14 @@ vavar t= '
 ^^^^^
 
 
-**INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it appears to be invalid.
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),OpenSquare(1:6-1:7),CloseSquare(1:7-1:8),
-LowerIdent(4:1-4:6),LowerIdent(4:7-4:8),OpAssign(4:8-4:9),SingleQuote(4:10-4:11),EndOfFile(4:11-4:11),
+LowerIdent(4:1-4:6),LowerIdent(4:7-4:8),OpAssign(4:8-4:9),MalformedSingleQuoteUnclosed(4:10-4:11),EndOfFile(4:11-4:11),
 ~~~
 # PARSE
 ~~~clojure
@@ -73,7 +87,7 @@ LowerIdent(4:1-4:6),LowerIdent(4:7-4:8),OpAssign(4:8-4:9),SingleQuote(4:10-4:11)
 		(e-ident @4.1-4.6 (raw "vavar"))
 		(s-decl @4.7-4.11
 			(p-ident @4.7-4.8 (raw "t"))
-			(e-single-quote @4.10-4.11 (raw "'")))))
+			(e-malformed @4.10-4.11 (reason "expr_unexpected_token")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -81,14 +95,14 @@ LowerIdent(4:1-4:6),LowerIdent(4:7-4:8),OpAssign(4:8-4:9),SingleQuote(4:10-4:11)
 
 # el
 vavar
-t = '
+t = 
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign @4.7-4.8 (ident "t"))
-		(e-runtime-error (tag "invalid_single_quote"))))
+		(e-runtime-error (tag "expr_not_canonicalized"))))
 ~~~
 # TYPES
 ~~~clojure

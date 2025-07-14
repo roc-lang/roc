@@ -19,7 +19,6 @@ const base = @import("../../base.zig");
 const types = @import("../../types.zig");
 const CIR = @import("CIR.zig");
 const collections = @import("../../collections.zig");
-const exitOnOom = collections.utils.exitOnOom;
 const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
 const Region = base.Region;
@@ -212,195 +211,195 @@ pub const Pattern = union(enum) {
             /// ```
             SubPattern: Pattern.Idx,
 
-            pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) void {
+            pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) std.mem.Allocator.Error!void {
                 switch (self.*) {
                     .Required => {
                         const begin = tree.beginNode();
-                        tree.pushStaticAtom("required");
+                        try tree.pushStaticAtom("required");
                         const attrs = tree.beginNode();
-                        tree.endNode(begin, attrs);
+                        try tree.endNode(begin, attrs);
                     },
                     .SubPattern => |pattern_idx| {
                         const begin = tree.beginNode();
-                        tree.pushStaticAtom("sub-pattern");
+                        try tree.pushStaticAtom("sub-pattern");
                         const attrs = tree.beginNode();
                         const pattern = ir.store.getPattern(pattern_idx);
-                        pattern.pushToSExprTree(ir, tree, pattern_idx);
-                        tree.endNode(begin, attrs);
+                        try pattern.pushToSExprTree(ir, tree, pattern_idx);
+                        try tree.endNode(begin, attrs);
                     },
                 }
             }
         };
 
-        pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, destruct_idx: RecordDestruct.Idx) void {
+        pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, destruct_idx: RecordDestruct.Idx) std.mem.Allocator.Error!void {
             const begin = tree.beginNode();
-            tree.pushStaticAtom("record-destruct");
-            ir.appendRegionInfoToSExprTree(tree, destruct_idx);
+            try tree.pushStaticAtom("record-destruct");
+            try ir.appendRegionInfoToSExprTree(tree, destruct_idx);
 
             const label_text = ir.env.idents.getText(self.label);
             const ident_text = ir.env.idents.getText(self.ident);
-            tree.pushStringPair("label", label_text);
-            tree.pushStringPair("ident", ident_text);
+            try tree.pushStringPair("label", label_text);
+            try tree.pushStringPair("ident", ident_text);
 
             const attrs = tree.beginNode();
-            self.kind.pushToSExprTree(ir, tree);
-            tree.endNode(begin, attrs);
+            try self.kind.pushToSExprTree(ir, tree);
+            try tree.endNode(begin, attrs);
         }
     };
 
-    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, pattern_idx: Pattern.Idx) void {
+    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .assign => |p| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("p-assign");
-                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try tree.pushStaticAtom("p-assign");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
                 const ident = ir.getIdentText(p.ident);
-                tree.pushStringPair("ident", ident);
+                try tree.pushStringPair("ident", ident);
 
                 const attrs = tree.beginNode();
-                tree.endNode(begin, attrs);
+                try tree.endNode(begin, attrs);
             },
             .as => |p| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("p-as");
-                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try tree.pushStaticAtom("p-as");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const ident = ir.getIdentText(p.ident);
-                tree.pushStringPair("as", ident);
+                try tree.pushStringPair("as", ident);
 
                 const attrs = tree.beginNode();
-                ir.store.getPattern(p.pattern).pushToSExprTree(ir, tree, p.pattern);
-                tree.endNode(begin, attrs);
+                try ir.store.getPattern(p.pattern).pushToSExprTree(ir, tree, p.pattern);
+                try tree.endNode(begin, attrs);
             },
             .applied_tag => {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("p-applied-tag");
-                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try tree.pushStaticAtom("p-applied-tag");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
-                tree.endNode(begin, attrs);
+                try tree.endNode(begin, attrs);
             },
             .record_destructure => |p| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("p-record-destructure");
-                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try tree.pushStaticAtom("p-record-destructure");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
 
                 const destructs_begin = tree.beginNode();
-                tree.pushStaticAtom("destructs");
+                try tree.pushStaticAtom("destructs");
                 const destructs_attrs = tree.beginNode();
 
                 for (ir.store.sliceRecordDestructs(p.destructs)) |destruct_idx| {
                     const destruct = ir.store.getRecordDestruct(destruct_idx);
-                    destruct.pushToSExprTree(ir, tree, destruct_idx);
+                    try destruct.pushToSExprTree(ir, tree, destruct_idx);
                 }
-                tree.endNode(destructs_begin, destructs_attrs);
+                try tree.endNode(destructs_begin, destructs_attrs);
 
-                tree.endNode(begin, attrs);
+                try tree.endNode(begin, attrs);
             },
             .list => |p| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("p-list");
-                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try tree.pushStaticAtom("p-list");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
 
                 const patterns_begin = tree.beginNode();
-                tree.pushStaticAtom("patterns");
+                try tree.pushStaticAtom("patterns");
                 const patterns_attrs = tree.beginNode();
 
                 for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
-                    ir.store.getPattern(patt_idx).pushToSExprTree(ir, tree, patt_idx);
+                    try ir.store.getPattern(patt_idx).pushToSExprTree(ir, tree, patt_idx);
                 }
-                tree.endNode(patterns_begin, patterns_attrs);
+                try tree.endNode(patterns_begin, patterns_attrs);
 
                 if (p.rest_info) |rest| {
                     const rest_begin = tree.beginNode();
-                    tree.pushStaticAtom("rest-at");
+                    try tree.pushStaticAtom("rest-at");
 
                     var index_buf: [32]u8 = undefined;
                     const index_str = std.fmt.bufPrint(&index_buf, "{d}", .{rest.index}) catch "fmt_error";
-                    tree.pushDynamicAtomPair("index", index_str);
+                    try tree.pushDynamicAtomPair("index", index_str);
 
                     const rest_attrs = tree.beginNode();
                     if (rest.pattern) |rest_pattern_idx| {
-                        ir.store.getPattern(rest_pattern_idx).pushToSExprTree(ir, tree, rest_pattern_idx);
+                        try ir.store.getPattern(rest_pattern_idx).pushToSExprTree(ir, tree, rest_pattern_idx);
                     }
-                    tree.endNode(rest_begin, rest_attrs);
+                    try tree.endNode(rest_begin, rest_attrs);
                 }
 
-                tree.endNode(begin, attrs);
+                try tree.endNode(begin, attrs);
             },
             .tuple => |p| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("p-tuple");
-                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try tree.pushStaticAtom("p-tuple");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
 
                 const patterns_begin = tree.beginNode();
-                tree.pushStaticAtom("patterns");
+                try tree.pushStaticAtom("patterns");
                 const patterns_attrs = tree.beginNode();
 
                 for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
-                    ir.store.getPattern(patt_idx).pushToSExprTree(ir, tree, patt_idx);
+                    try ir.store.getPattern(patt_idx).pushToSExprTree(ir, tree, patt_idx);
                 }
-                tree.endNode(patterns_begin, patterns_attrs);
+                try tree.endNode(patterns_begin, patterns_attrs);
 
-                tree.endNode(begin, attrs);
+                try tree.endNode(begin, attrs);
             },
             .int_literal => |p| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("p-int");
-                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try tree.pushStaticAtom("p-int");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
                 const value_i128: i128 = @bitCast(p.value.bytes);
                 var value_buf: [40]u8 = undefined;
                 const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
-                tree.pushStringPair("value", value_str);
+                try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
-                tree.endNode(begin, attrs);
+                try tree.endNode(begin, attrs);
             },
             .small_dec_literal => {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("p-small-dec");
-                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try tree.pushStaticAtom("p-small-dec");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
-                tree.endNode(begin, attrs);
+                try tree.endNode(begin, attrs);
             },
             .dec_literal => {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("p-dec");
-                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try tree.pushStaticAtom("p-dec");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
-                tree.endNode(begin, attrs);
+                try tree.endNode(begin, attrs);
             },
             .str_literal => |p| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("p-str");
-                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try tree.pushStaticAtom("p-str");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
                 const text = ir.env.strings.get(p.literal);
-                tree.pushStringPair("text", text);
+                try tree.pushStringPair("text", text);
 
                 const attrs = tree.beginNode();
-                tree.endNode(begin, attrs);
+                try tree.endNode(begin, attrs);
             },
             .underscore => {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("p-underscore");
-                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try tree.pushStaticAtom("p-underscore");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
-                tree.endNode(begin, attrs);
+                try tree.endNode(begin, attrs);
             },
             .runtime_error => |e| {
                 const begin = tree.beginNode();
-                tree.pushStaticAtom("p-runtime-error");
-                ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try tree.pushStaticAtom("p-runtime-error");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
                 const diagnostic = ir.store.getDiagnostic(e.diagnostic);
-                tree.pushStringPair("tag", @tagName(diagnostic));
+                try tree.pushStringPair("tag", @tagName(diagnostic));
 
                 const attrs = tree.beginNode();
-                tree.endNode(begin, attrs);
+                try tree.endNode(begin, attrs);
             },
         }
     }

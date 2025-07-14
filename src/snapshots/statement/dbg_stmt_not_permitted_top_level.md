@@ -37,7 +37,8 @@ LowerIdent(6:1-6:4),OpAssign(6:5-6:6),TripleDot(6:7-6:10),EndOfFile(6:10-6:10),
 (file @1.1-6.10
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12 (text "foo"))))
+			(exposed-lower-ident @1.9-1.12
+				(text "foo"))))
 	(statements
 		(s-dbg @4.1-4.10
 			(e-string @4.5-4.10
@@ -61,7 +62,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.4 (type "a")))
+		(patt @6.1-6.4 (type "_a")))
 	(expressions
-		(expr @1.1-1.1 (type "a"))))
+		(expr @1.1-1.1 (type "_a"))))
 ~~~

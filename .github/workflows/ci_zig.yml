@@ -70,12 +70,12 @@ jobs:
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
         run: |
-          ./zig-out/bin/roc -h | grep -q "Usage:"
+          ./zig-out/bin/roc check ./src/PROFILING/bench_repeated_check.roc
 
       - name: roc executable minimal check (Windows)
         if: runner.os == 'Windows'
         run: |
-          zig-out\bin\roc.exe -h | findstr "Usage:"
+          zig-out\bin\roc.exe check ./src/PROFILING/bench_repeated_check.roc
 
       - name: zig snapshot tests
         run: zig build snapshot -- --debug

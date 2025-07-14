@@ -232,12 +232,12 @@ ain! = |_| getUser(900)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "arg -> Str"))
-		(patt @8.2-8.6 (type "arg2 -> Str")))
+		(patt @6.1-6.8 (type "_arg -> Str"))
+		(patt @8.2-8.6 (type "_arg -> Str")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
-		(expr @6.11-6.43 (type "arg -> Str"))
-		(expr @8.9-8.25 (type "arg2 -> Str"))))
+		(expr @6.11-6.43 (type "_arg -> Str"))
+		(expr @8.9-8.25 (type "_arg -> Str"))))
 ~~~

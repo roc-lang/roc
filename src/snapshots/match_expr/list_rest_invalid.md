@@ -234,5 +234,5 @@ match items {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "Num(size)"))
+(expr @1.1-5.2 (type "Num(_size)"))
 ~~~

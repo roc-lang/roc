@@ -78,13 +78,15 @@ CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
 						(ty @8.18-8.21 (name "Str")))
 					(ty-record @8.26-8.28))))
 		(exposes @11.3-13.4
-			(exposed-lower-ident @12.4-12.7 (text "foo")))
+			(exposed-lower-ident @12.4-12.7
+				(text "foo")))
 		(packages @15.3-17.4
 			(record-field @16.4-16.31 (name "some_pkg")
 				(e-string @16.14-16.31
 					(e-string-part @16.15-16.30 (raw "../some_pkg.roc")))))
 		(provides @19.3-21.4
-			(exposed-lower-ident @20.4-20.7 (text "bar"))))
+			(exposed-lower-ident @20.4-20.7
+				(text "bar"))))
 	(statements))
 ~~~
 # FORMATTED

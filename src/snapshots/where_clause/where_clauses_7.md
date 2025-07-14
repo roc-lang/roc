@@ -55,25 +55,25 @@ CloseRound(16:3-16:4),OpArrow(16:5-16:7),LowerIdent(16:8-16:9),Comma(16:9-16:10)
 				(args
 					(ty-var @3.6-3.7 (raw "a"))
 					(ty-var @3.9-3.15 (raw "hasher"))))
-			(ty-var @1.1-1.1 (raw "a"))
+			(ty-var @5.3-5.4 (raw "a"))
 			(where
 				(method @7.5-9.13 (module-of "a") (name "hash")
 					(args
-						(ty-var @1.1-1.1 (raw "hasher")))
-					(ty-var @1.1-1.1 (raw "hasher")))
+						(ty-var @7.22-7.28 (raw "hasher")))
+					(ty-var @9.7-9.13 (raw "hasher")))
 				(alias @10.5-10.26 (module-of "hasher") (name "Hasher"))))
 		(s-type-decl @12.1-16.10
 			(header @12.1-12.10 (name "Decode")
 				(args
 					(ty-var @12.8-12.9 (raw "a"))))
-			(ty-var @1.1-1.1 (raw "a"))
+			(ty-var @12.13-12.14 (raw "a"))
 			(where
 				(method @14.3-16.9 (module-of "a") (name "decode")
 					(args
 						(ty-apply @15.4-15.12
 							(ty @15.4-15.8 (name "List"))
 							(ty @15.9-15.11 (name "U8"))))
-					(ty-var @1.1-1.1 (raw "a")))))))
+					(ty-var @16.8-16.9 (raw "a")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -81,12 +81,13 @@ module [Hash]
 
 Hash(a, hasher) # After header
 	: # After colon
-		a # After colon
+		a # After var
  where # After where
 			module(a).hash : hasher -> hasher, # After first clause
 			module(hasher).Hasher,
 
-Decode(a) : a where
+Decode(a) : a
+ where
 	module(a).decode : List(U8) -> a,
 ~~~
 # CANONICALIZE
@@ -97,24 +98,24 @@ Decode(a) : a where
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))
 				(ty-var @3.9-3.15 (name "hasher"))))
-		(ty-var @1.1-1.1 (name "a"))
+		(ty-var @5.3-5.4 (name "a"))
 		(where
 			(method @7.5-9.13 (module-of "a") (ident "hash")
 				(args
-					(ty-var @1.1-1.1 (name "hasher")))
-				(ty-var @1.1-1.1 (name "hasher")))
+					(ty-var @7.22-7.28 (name "hasher")))
+				(ty-var @9.7-9.13 (name "hasher")))
 			(alias @10.5-10.26 (module-of "hasher") (ident "Hasher"))))
 	(s-alias-decl @12.1-16.10
 		(ty-header @12.1-12.10 (name "Decode")
 			(ty-args
 				(ty-var @12.8-12.9 (name "a"))))
-		(ty-var @1.1-1.1 (name "a"))
+		(ty-var @12.13-12.14 (name "a"))
 		(where
 			(method @14.3-16.9 (module-of "a") (ident "decode")
 				(args
 					(ty-apply @15.4-15.12 (symbol "List")
 						(ty @15.9-15.11 (name "U8"))))
-				(ty-var @1.1-1.1 (name "a")))))
+				(ty-var @16.8-16.9 (name "a")))))
 	(ext-decl @7.5-9.13 (ident "module(a).hash") (kind "value"))
 	(ext-decl @10.5-10.26 (ident "module(hasher).Hasher") (kind "type"))
 	(ext-decl @14.3-16.9 (ident "module(a).decode") (kind "value")))
@@ -124,7 +125,7 @@ Decode(a) : a where
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-10.27 (type "Hash(b, c)")
+		(alias @3.1-10.27 (type "Hash(a, hasher)")
 			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))

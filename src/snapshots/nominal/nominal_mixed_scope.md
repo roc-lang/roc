@@ -73,7 +73,8 @@ CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
 	(module @1.1-1.35
 		(exposes @1.8-1.35
 			(exposed-upper-ident @1.9-1.20 (text "LocalStatus"))
-			(exposed-lower-ident @1.22-1.34 (text "processColor"))))
+			(exposed-lower-ident @1.22-1.34
+				(text "processColor"))))
 	(statements
 		(s-type-decl @3.1-3.35
 			(header @3.1-3.12 (name "LocalStatus")
@@ -181,10 +182,10 @@ processColor = |color| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.13 (type "[Green, Red, Blue]others -> LocalStatus")))
+		(patt @6.1-6.13 (type "[Green, Red, Blue]_others -> LocalStatus")))
 	(type_decls
 		(nominal @3.1-3.35 (type "LocalStatus")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
-		(expr @6.16-16.2 (type "[Green, Red, Blue]others -> LocalStatus"))))
+		(expr @6.16-16.2 (type "[Green, Red, Blue]_others -> LocalStatus"))))
 ~~~

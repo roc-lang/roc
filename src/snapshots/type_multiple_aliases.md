@@ -48,7 +48,8 @@ CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 (file @1.1-17.2
 	(app @1.1-1.57
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
@@ -218,7 +219,7 @@ NO CHANGE
 	(defs
 		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> User"))
 		(patt @12.1-12.14 (type "User -> UserName"))
-		(patt @14.1-14.6 (type "arg -> UserName")))
+		(patt @14.1-14.6 (type "_arg -> UserName")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId")))
@@ -231,5 +232,5 @@ NO CHANGE
 	(expressions
 		(expr @9.15-9.46 (type "UserId, UserName, UserAge -> User"))
 		(expr @12.17-12.33 (type "User -> UserName"))
-		(expr @14.9-17.2 (type "arg -> UserName"))))
+		(expr @14.9-17.2 (type "_arg -> UserName"))))
 ~~~

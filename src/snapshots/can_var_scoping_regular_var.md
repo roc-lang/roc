@@ -123,28 +123,7 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-# Regular function with var usage
-processItems = |items| {
-	var count_ = 0
-	var total_ = 0
-
-	# Reassign vars within same function - should work
-	count_ = count_ + 1
-	total_ = total_ + 10
-
-	# Nested function - var reassignment should fail across function boundary
-	nestedFunc = |_| {
-		count_ = count_ + 5 # Should cause error - different function
-		total_ = total_ * 2 # Should cause error - different function
-		count_
-
-	}
-
-	result = nestedFunc({})
-	total_ + result
-}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -203,7 +182,7 @@ processItems = |items| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.13 (type "arg -> ret")))
+		(patt @4.1-4.13 (type "_arg -> _ret")))
 	(expressions
-		(expr @4.16-21.2 (type "arg -> ret"))))
+		(expr @4.16-21.2 (type "_arg -> _ret"))))
 ~~~

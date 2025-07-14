@@ -9,13 +9,11 @@ const base = @import("base.zig");
 const tracy = @import("tracy.zig");
 const tokenize = @import("check/parse/tokenize.zig");
 
-// const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
 const AST = parse.AST;
 const Node = parse.Node;
 const NodeStore = parse.NodeStore;
 
-const exitOnOom = collections.utils.exitOnOom;
 const fatal = collections.utils.fatal;
 
 const FormatFlags = enum {
@@ -160,10 +158,10 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     };
     defer gpa.free(contents);
 
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
     defer module_env.deinit();
 
-    var parse_ast = parse.parse(&module_env, contents);
+    var parse_ast: AST = try parse.parse(&module_env, contents);
     defer parse_ast.deinit(gpa);
 
     // If there are any parsing problems, print them to stderr
@@ -194,10 +192,10 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
     const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
     defer gpa.free(contents);
 
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
     defer module_env.deinit();
 
-    var parse_ast = parse.parse(&module_env, contents);
+    var parse_ast: AST = try parse.parse(&module_env, contents);
     defer parse_ast.deinit(gpa);
 
     // If there are any parsing problems, print them to stderr
@@ -212,12 +210,12 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
     // compute offsets of each line, looping over bytes of the input
-    var line_offsets = @import("collections.zig").SafeList(u32).initCapacity(gpa, 256);
+    var line_offsets = try @import("collections.zig").SafeList(u32).initCapacity(gpa, 256);
     defer line_offsets.deinit(gpa);
-    _ = line_offsets.append(gpa, 0);
+    _ = try line_offsets.append(gpa, 0);
     for (source, 0..) |c, i| {
         if (c == '\n') {
-            _ = line_offsets.append(gpa, @intCast(i));
+            _ = try line_offsets.append(gpa, @intCast(i));
         }
     }
 
@@ -391,12 +389,13 @@ const Formatter = struct {
                 if (multiline) {
                     flushed = try fmt.flushCommentsAfter(i.module_name_tok);
                 }
-                if (flushed) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                }
+
                 if (i.alias_tok) |a| {
                     if (multiline) {
+                        if (flushed) {
+                            fmt.curr_indent += 1;
+                            try fmt.pushIndent();
+                        }
                         try fmt.pushAll("as");
                         flushed = try fmt.flushCommentsBefore(a);
                         if (!flushed) {
@@ -414,6 +413,8 @@ const Formatter = struct {
                 }
                 if (i.exposes.span.len > 0) {
                     if (flushed) {
+                        fmt.curr_indent += 1;
+                        try fmt.pushIndent();
                         try fmt.pushAll("exposing ");
                     } else {
                         try fmt.pushAll(" exposing ");
@@ -433,9 +434,8 @@ const Formatter = struct {
                             fmt.curr_indent += 1;
                         }
                         var x: usize = 0;
-                        var arg_region = fmt.nodeRegion(@intFromEnum(items[0]));
                         for (items) |item| {
-                            arg_region = fmt.nodeRegion(@intFromEnum(item));
+                            const arg_region = fmt.nodeRegion(@intFromEnum(item));
                             if (items_multiline) {
                                 _ = try fmt.flushCommentsBefore(arg_region.start);
                                 try fmt.pushIndent();
@@ -446,19 +446,13 @@ const Formatter = struct {
                             }
                             if (items_multiline) {
                                 try fmt.push(',');
-                            }
-                            if (items_multiline) {
-                                if (arg_region.end < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[arg_region.end] == .Comma) {
+                                if (x == items.len - 1) {
                                     _ = try fmt.flushCommentsAfter(arg_region.end);
                                 }
                             }
                             x += 1;
                         }
                         if (items_multiline) {
-                            _ = try fmt.flushCommentsAfter(arg_region.end);
-                            if (arg_region.end < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[arg_region.end] == .Comma) {
-                                _ = try fmt.flushCommentsAfter(arg_region.end);
-                            }
                             fmt.curr_indent -= 1;
                             try fmt.pushIndent();
                         }
@@ -752,9 +746,6 @@ const Formatter = struct {
             if (multiline) {
                 try fmt.push(',');
             }
-            if (item_region.end < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[item_region.end] == .Comma) {
-                _ = try fmt.flushCommentsBefore(item_region.end);
-            }
             i += 1;
         }
         if (multiline) {
@@ -900,7 +891,7 @@ const Formatter = struct {
                     if (is_multiline) {
                         _ = try fmt.flushCommentsAfter(r.region.start);
                         fmt.curr_indent += 1;
-                        try fmt.newline();
+                        try fmt.ensureNewline();
                         try fmt.pushIndent();
                     }
                     try fmt.pushAll("..");
@@ -919,31 +910,33 @@ const Formatter = struct {
                 }
 
                 // Format fields
+                if (is_multiline and !has_items and fields.len > 0) {
+                    _ = try fmt.flushCommentsAfter(r.region.start);
+                    fmt.curr_indent += 1;
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
+
                 for (fields, 0..) |field_idx, i| {
-                    if (i == 0 and !has_items) {
-                        if (is_multiline) {
-                            _ = try fmt.flushCommentsAfter(r.region.start);
-                            fmt.curr_indent += 1;
-                            try fmt.newline();
-                            try fmt.pushIndent();
-                        }
-                    }
-                    _ = try fmt.formatRecordField(field_idx);
+                    const field_region = try fmt.formatRecordField(field_idx);
                     if (i < fields.len - 1) {
                         try fmt.push(',');
                         if (is_multiline) {
-                            try fmt.newline();
+                            _ = try fmt.flushCommentsAfter(field_region.end);
+                            try fmt.ensureNewline();
                             try fmt.pushIndent();
                         } else {
                             try fmt.push(' ');
                         }
+                    } else if (is_multiline) {
+                        // Comments after last field
+                        _ = try fmt.flushCommentsAfter(field_region.end);
                     }
                 }
 
                 if (is_multiline and (has_items or fields.len > 0)) {
                     fmt.curr_indent -= 1;
-                    _ = try fmt.flushCommentsBefore(r.region.end);
-                    try fmt.newline();
+                    try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
                 try fmt.push('}');
@@ -966,9 +959,6 @@ const Formatter = struct {
                     if (args_are_multiline) {
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(arg_region.end);
-                        if (arg_region.end < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[arg_region.end] == .Comma) {
-                            _ = try fmt.flushCommentsAfter(arg_region.end);
-                        }
                         try fmt.ensureNewline();
                         if (i < args.len - 1) {
                             try fmt.pushIndent();
@@ -1431,9 +1421,7 @@ const Formatter = struct {
                     } else if (packages_multiline) {
                         try fmt.push(',');
                     }
-                    if (item_region.end < fmt.ast.tokens.tokens.len and fmt.ast.tokens.tokens.items(.tag)[item_region.end] == .Comma) {
-                        _ = try fmt.flushCommentsBefore(item_region.end);
-                    }
+                    _ = try fmt.flushCommentsBefore(item_region.end);
                 }
                 if (packages_multiline) {
                     _ = try fmt.flushCommentsBefore(packages.region.end - 1);
@@ -1641,14 +1629,17 @@ const Formatter = struct {
         if (multiline or body.statements.span.len > 1) {
             fmt.curr_indent += 1;
             try fmt.push('{');
-            for (fmt.ast.store.statementSlice(body.statements)) |s| {
+            for (fmt.ast.store.statementSlice(body.statements), 0..) |s, i| {
                 const region = fmt.nodeRegion(@intFromEnum(s));
                 _ = try fmt.flushCommentsBefore(region.start);
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
                 try fmt.formatStatement(s);
+
+                if (i == body.statements.span.len - 1) {
+                    _ = try fmt.flushCommentsBefore(region.end);
+                }
             }
-            _ = try fmt.flushCommentsBefore(body.region.end);
             try fmt.ensureNewline();
             fmt.curr_indent -= 1;
             try fmt.pushIndent();
@@ -1815,38 +1806,21 @@ const Formatter = struct {
                 region = v.region;
                 try fmt.pushTokenText(v.tok);
             },
+            .underscore_type_var => |utv| {
+                region = utv.region;
+                try fmt.pushTokenText(utv.tok);
+            },
             .ty => |t| {
                 const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
 
                 if (qualifier_tokens.len > 0) {
-                    // Handle qualifiers manually
                     for (qualifier_tokens) |tok_idx| {
                         const tok = @as(Token.Idx, @intCast(tok_idx));
                         try fmt.pushAll(fmt.ast.resolve(tok));
-                        try fmt.pushAll(".");
                     }
-                    // Add just the final token text with dot stripping
-                    const strip_tokens = [_]tokenize.Token.Tag{ .NoSpaceDotUpperIdent, .NoSpaceDotLowerIdent };
-                    const final_text = fmt.ast.resolve(t.token);
-                    const token_tag = fmt.ast.tokens.tokens.items(.tag)[@intCast(t.token)];
-
-                    var stripped = false;
-                    for (strip_tokens) |dot_token_tag| {
-                        if (token_tag == dot_token_tag and final_text.len > 0 and final_text[0] == '.') {
-                            try fmt.pushAll(final_text[1..]);
-                            stripped = true;
-                            break;
-                        }
-                    }
-                    if (!stripped) {
-                        try fmt.pushAll(final_text);
-                    }
-                } else {
-                    // Use resolveQualifiedName for the no-qualifiers case
-                    const strip_tokens = [_]tokenize.Token.Tag{ .NoSpaceDotUpperIdent, .NoSpaceDotLowerIdent };
-                    const final_text = fmt.ast.resolveQualifiedName(t.qualifiers, t.token, &strip_tokens);
-                    try fmt.pushAll(final_text);
                 }
+
+                try fmt.pushAll(fmt.ast.resolve(t.token));
             },
             .mod_ty => |t| {
                 try fmt.pushTokenText(t.region.start);
@@ -1879,7 +1853,7 @@ const Formatter = struct {
                         try fmt.pushIndent();
                     }
                     _ = try fmt.formatTypeAnno(idx);
-                    if (i < (f.args.span.len - 1)) {
+                    if (i < args.len - 1) {
                         if (multiline) {
                             try fmt.push(',');
                         } else {
@@ -1905,7 +1879,7 @@ const Formatter = struct {
                 if (multiline) {
                     _ = try fmt.flushCommentsAfter(region.start);
                     fmt.curr_indent += 1;
-                    try fmt.newline();
+                    try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
                 const anno_region = try fmt.formatTypeAnno(p.anno);
@@ -2050,7 +2024,7 @@ const Formatter = struct {
 fn moduleFmtsSame(source: []const u8) !void {
     const gpa = std.testing.allocator;
 
-    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
     var parse_ast = parse(&env, source);
@@ -2081,7 +2055,7 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
 
     const gpa = std.testing.allocator;
 
-    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
     var messages: [1]tokenize.Diagnostic = undefined;
@@ -2096,7 +2070,7 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
 
     const expr = parser.parseExpr();
 
-    const errors = parser.diagnostics.toOwnedSlice(gpa) catch |err| exitOnOom(err);
+    const errors = try parser.diagnostics.toOwnedSlice(gpa);
 
     var parse_ast = AST{
         .source = source,
@@ -2151,10 +2125,10 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, input));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, input));
     defer module_env.deinit();
 
-    var parse_ast = parse.parse(&module_env, input);
+    var parse_ast = try parse.parse(&module_env, input);
     defer parse_ast.deinit(gpa);
 
     // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.
@@ -2177,5 +2151,5 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     if (debug) {
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.items});
     }
-    return result.toOwnedSlice() catch |err| exitOnOom(err);
+    return try result.toOwnedSlice();
 }

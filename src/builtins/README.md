@@ -10,6 +10,5 @@ Implementation of Roc's built-in types and functions.
 - [src/builtins/hash.zig](./hash.zig): Hashing functions and hash-based operations.
 - [src/builtins/sort.zig](./sort.zig): Sorting algorithms and comparison utilities.
 - [src/builtins/panic.zig](./panic.zig): Runtime error handling and panic mechanisms.
-- [src/builtins/utils.zig](./utils.zig): Common utilities shared across builtin implementations.
 - [src/builtins/fuzz_sort.zig](./fuzz_sort.zig): Fuzzing utilities for testing sort implementations.
 - [src/builtins/roc/](./roc/): Roc source files defining builtin interfaces and standard library.
