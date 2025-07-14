@@ -1196,7 +1196,7 @@ import Stdot
 import Bae as Gooe
 import
 	Ba
-		
+
 Map(a, b) : Lis, (ab) -> List(b)
 MapML # Ag
 	: # Aon

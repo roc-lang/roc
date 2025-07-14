@@ -27,8 +27,10 @@ LowerIdent(5:2-5:5),OpColon(5:5-5:6),Int(5:7-5:9),CloseCurly(5:10-5:11),EndOfFil
 (file @1.1-5.11
 	(module @1.1-1.25
 		(exposes @1.8-1.25
-			(exposed-lower-ident @1.9-1.15 (text "person"))
-			(exposed-lower-ident @1.17-1.24 (text "updated"))))
+			(exposed-lower-ident @1.9-1.15
+				(text "person"))
+			(exposed-lower-ident @1.17-1.24
+				(text "updated"))))
 	(statements
 		(s-decl @3.1-3.36
 			(p-ident @3.1-3.7 (raw "person"))
@@ -82,9 +84,9 @@ updated = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.7 (type "{ name: Str, age: Num(size) }"))
-		(patt @4.1-4.8 (type "{ age: Num(size) }")))
+		(patt @3.1-3.7 (type "{ name: Str, age: Num(_size) }"))
+		(patt @4.1-4.8 (type "{ age: Num(_size) }")))
 	(expressions
-		(expr @3.10-3.36 (type "{ name: Str, age: Num(size) }"))
-		(expr @4.11-5.11 (type "{ age: Num(size) }"))))
+		(expr @3.10-3.36 (type "{ name: Str, age: Num(_size) }"))
+		(expr @4.11-5.11 (type "{ age: Num(_size) }"))))
 ~~~

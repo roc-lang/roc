@@ -78,14 +78,14 @@ LowerIdent(9:1-9:10),OpColon(9:11-9:12),UpperIdent(9:13-9:18),NoSpaceOpenRound(9
 		(s-type-anno @4.1-4.21 (name "bar")
 			(ty-apply @4.7-4.21
 				(ty @4.7-4.12 (name "Thing"))
-				(ty-var @4.13-4.13 (raw "a"))
-				(ty-var @1.1-1.1 (raw "b"))
+				(ty-var @4.13-4.14 (raw "a"))
+				(ty-var @4.16-4.17 (raw "b"))
 				(_)))
 		(s-type-anno @5.1-5.16 (name "biz")
 			(ty-tuple @5.7-5.16
-				(ty-var @5.8-5.8 (raw "a"))
-				(ty-var @1.1-1.1 (raw "b"))
-				(ty-var @1.1-1.1 (raw "c"))))
+				(ty-var @5.8-5.9 (raw "a"))
+				(ty-var @5.11-5.12 (raw "b"))
+				(ty-var @5.14-5.15 (raw "c"))))
 		(s-type-anno @6.1-7.16 (name "add_one")
 			(ty-fn @7.1-7.15
 				(ty @7.1-7.3 (name "U8"))
@@ -104,9 +104,9 @@ LowerIdent(9:1-9:10),OpColon(9:11-9:12),UpperIdent(9:13-9:18),NoSpaceOpenRound(9
 			(ty-apply @9.13-9.29
 				(ty @9.13-9.18 (name "Value"))
 				(ty-tuple @9.19-9.28
-					(ty-var @9.20-9.20 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b"))
-					(ty-var @1.1-1.1 (raw "c")))))))
+					(ty-var @9.20-9.21 (raw "a"))
+					(ty-var @9.23-9.24 (raw "b"))
+					(ty-var @9.26-9.27 (raw "c")))))))
 ~~~
 # FORMATTED
 ~~~roc

@@ -389,12 +389,13 @@ const Formatter = struct {
                 if (multiline) {
                     flushed = try fmt.flushCommentsAfter(i.module_name_tok);
                 }
-                if (flushed) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                }
+
                 if (i.alias_tok) |a| {
                     if (multiline) {
+                        if (flushed) {
+                            fmt.curr_indent += 1;
+                            try fmt.pushIndent();
+                        }
                         try fmt.pushAll("as");
                         flushed = try fmt.flushCommentsBefore(a);
                         if (!flushed) {
@@ -412,6 +413,8 @@ const Formatter = struct {
                 }
                 if (i.exposes.span.len > 0) {
                     if (flushed) {
+                        fmt.curr_indent += 1;
+                        try fmt.pushIndent();
                         try fmt.pushAll("exposing ");
                     } else {
                         try fmt.pushAll(" exposing ");
