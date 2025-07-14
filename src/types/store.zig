@@ -431,12 +431,12 @@ pub const Store = struct {
 
     /// Append a slice of tuple elems to the backing list, returning the range
     pub fn appendTupleElems(self: *Self, slice: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.tuple_elems.appendSlice(self.gpa, slice);
+        return try self.tuple_elems.appendSliceRange(self.gpa, slice);
     }
 
     /// Append a slice of func args to the backing list, returning the range
     pub fn appendFuncArgs(self: *Self, slice: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.func_args.appendSlice(self.gpa, slice);
+        return try self.func_args.appendSliceRange(self.gpa, slice);
     }
 
     /// Append a record field to the backing list, returning the idx
@@ -446,7 +446,7 @@ pub const Store = struct {
 
     /// Append a slice of record fields to the backing list, returning the range
     pub fn appendRecordFields(self: *Self, slice: []const RecordField) std.mem.Allocator.Error!RecordFieldSafeMultiList.Range {
-        return try self.record_fields.appendSlice(self.gpa, slice);
+        return try self.record_fields.appendSliceRange(self.gpa, slice);
     }
 
     /// Append a tag to the backing list, returning the idx
@@ -456,39 +456,39 @@ pub const Store = struct {
 
     /// Append a slice of tags to the backing list, returning the range
     pub fn appendTags(self: *Self, slice: []const Tag) std.mem.Allocator.Error!TagSafeMultiList.Range {
-        return try self.tags.appendSlice(self.gpa, slice);
+        return try self.tags.appendSliceRange(self.gpa, slice);
     }
 
     /// Append a slice of tag args to the backing list, returning the range
     pub fn appendTagArgs(self: *Self, slice: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.tag_args.appendSlice(self.gpa, slice);
+        return try self.tag_args.appendSliceRange(self.gpa, slice);
     }
 
     // sub list getters //
 
     /// Given a range, get a slice of tuple from the backing list
     pub fn getTupleElemsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
-        return self.tuple_elems.rangeToSlice(range);
+        return self.tuple_elems.sliceRange(range);
     }
 
     /// Given a range, get a slice of func from the backing list
     pub fn getFuncArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
-        return self.func_args.rangeToSlice(range);
+        return self.func_args.sliceRange(range);
     }
 
     /// Given a range, get a slice of record fields from the backing array
     pub fn getRecordFieldsSlice(self: *const Self, range: RecordFieldSafeMultiList.Range) RecordFieldSafeMultiList.Slice {
-        return self.record_fields.rangeToSlice(range);
+        return self.record_fields.sliceRange(range);
     }
 
     /// Given a range, get a slice of tags from the backing array
     pub fn getTagsSlice(self: *const Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
-        return self.tags.rangeToSlice(range);
+        return self.tags.sliceRange(range);
     }
 
     /// Given a range, get a slice of tag args from the backing list
     pub fn getTagArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
-        return self.tag_args.rangeToSlice(range);
+        return self.tag_args.sliceRange(range);
     }
 
     // helpers - alias types //

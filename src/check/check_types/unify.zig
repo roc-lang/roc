@@ -793,7 +793,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             // Unify shared fields
                             try self.unifySharedFields(
                                 vars,
-                                self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
                                 null,
                                 null,
                                 a_gathered_fields.ext,
@@ -848,7 +848,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             // Unify shared fields
                             try self.unifySharedFields(
                                 vars,
-                                self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
                                 null,
                                 null,
                                 b_gathered_fields.ext,
@@ -886,7 +886,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             const dummy_ext = self.fresh(vars, .{ .structure = .empty_record }) catch return Error.AllocatorError;
                             try self.unifySharedFields(
                                 vars,
-                                self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
                                 null,
                                 null,
                                 dummy_ext,
@@ -922,7 +922,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             // Unify shared fields
                             try self.unifySharedFields(
                                 vars,
-                                self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
                                 null,
                                 null,
                                 b_gathered_fields.ext,
@@ -974,7 +974,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             // Unify shared fields
                             try self.unifySharedFields(
                                 vars,
-                                self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
                                 null,
                                 null,
                                 a_gathered_fields.ext,
@@ -1885,7 +1885,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // This copies fields from scratch into type_store
                     try self.unifySharedFields(
                         vars,
-                        self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                        self.scratch.in_both_fields.sliceRange(partitioned.in_both),
                         null,
                         null,
                         a_gathered_fields.ext,
@@ -1895,7 +1895,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // Create a new variable of a record with only a's uniq fields
                     // This copies fields from scratch into type_store
                     const only_in_a_fields_range = self.types_store_b.appendRecordFields(
-                        self.scratch.only_in_a_fields.rangeToSlice(partitioned.only_in_a),
+                        self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
                     ) catch return Error.AllocatorError;
                     const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                         .fields = only_in_a_fields_range,
@@ -1909,7 +1909,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // This copies fields from scratch into type_store
                     try self.unifySharedFields(
                         vars,
-                        self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                        self.scratch.in_both_fields.sliceRange(partitioned.in_both),
                         null,
                         null,
                         only_in_a_var,
@@ -1919,7 +1919,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // Create a new variable of a record with only b's uniq fields
                     // This copies fields from scratch into type_store
                     const only_in_b_fields_range = self.types_store_b.appendRecordFields(
-                        self.scratch.only_in_b_fields.rangeToSlice(partitioned.only_in_b),
+                        self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
                     ) catch return Error.AllocatorError;
                     const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                         .fields = only_in_b_fields_range,
@@ -1933,7 +1933,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // This copies fields from scratch into type_store
                     try self.unifySharedFields(
                         vars,
-                        self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                        self.scratch.in_both_fields.sliceRange(partitioned.in_both),
                         null,
                         null,
                         only_in_b_var,
@@ -1943,7 +1943,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // Create a new variable of a record with only a's uniq fields
                     // This copies fields from scratch into type_store
                     const only_in_a_fields_range = self.types_store_b.appendRecordFields(
-                        self.scratch.only_in_a_fields.rangeToSlice(partitioned.only_in_a),
+                        self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
                     ) catch return Error.AllocatorError;
                     const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                         .fields = only_in_a_fields_range,
@@ -1953,7 +1953,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // Create a new variable of a record with only b's uniq fields
                     // This copies fields from scratch into type_store
                     const only_in_b_fields_range = self.types_store_b.appendRecordFields(
-                        self.scratch.only_in_b_fields.rangeToSlice(partitioned.only_in_b),
+                        self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
                     ) catch return Error.AllocatorError;
                     const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                         .fields = only_in_b_fields_range,
@@ -1971,9 +1971,9 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // This copies fields from scratch into type_store
                     try self.unifySharedFields(
                         vars,
-                        self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
-                        self.scratch.only_in_a_fields.rangeToSlice(partitioned.only_in_a),
-                        self.scratch.only_in_b_fields.rangeToSlice(partitioned.only_in_b),
+                        self.scratch.in_both_fields.sliceRange(partitioned.in_both),
+                        self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
+                        self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
                         new_ext_var,
                     );
                 },
@@ -2081,9 +2081,9 @@ fn Unifier(comptime StoreTypeB: type) type {
             b_fields_range: RecordFieldSafeList.Range,
         ) std.mem.Allocator.Error!PartitionedRecordFields {
             // First sort the fields
-            const a_fields = scratch.gathered_fields.rangeToSlice(a_fields_range);
+            const a_fields = scratch.gathered_fields.sliceRange(a_fields_range);
             std.mem.sort(RecordField, a_fields, ident_store, comptime RecordField.sortByNameAsc);
-            const b_fields = scratch.gathered_fields.rangeToSlice(b_fields_range);
+            const b_fields = scratch.gathered_fields.sliceRange(b_fields_range);
             std.mem.sort(RecordField, b_fields, ident_store, comptime RecordField.sortByNameAsc);
 
             // Get the start of index of the new range
@@ -2309,7 +2309,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // This copies tags from scratch into type_store
                     try self.unifySharedTags(
                         vars,
-                        self.scratch.in_both_tags.rangeToSlice(partitioned.in_both),
+                        self.scratch.in_both_tags.sliceRange(partitioned.in_both),
                         null,
                         null,
                         a_gathered_tags.ext,
@@ -2319,7 +2319,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // Create a new variable of a tag_union with only a's uniq tags
                     // This copies tags from scratch into type_store
                     const only_in_a_tags_range = self.types_store_b.appendTags(
-                        self.scratch.only_in_a_tags.rangeToSlice(partitioned.only_in_a),
+                        self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
                     ) catch return Error.AllocatorError;
                     const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                         .tags = only_in_a_tags_range,
@@ -2333,7 +2333,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // This copies tags from scratch into type_store
                     try self.unifySharedTags(
                         vars,
-                        self.scratch.in_both_tags.rangeToSlice(partitioned.in_both),
+                        self.scratch.in_both_tags.sliceRange(partitioned.in_both),
                         null,
                         null,
                         only_in_a_var,
@@ -2343,7 +2343,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // Create a new variable of a tag_union with only b's uniq tags
                     // This copies tags from scratch into type_store
                     const only_in_b_tags_range = self.types_store_b.appendTags(
-                        self.scratch.only_in_b_tags.rangeToSlice(partitioned.only_in_b),
+                        self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
                     ) catch return Error.AllocatorError;
                     const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                         .tags = only_in_b_tags_range,
@@ -2357,7 +2357,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // This copies tags from scratch into type_store
                     try self.unifySharedTags(
                         vars,
-                        self.scratch.in_both_tags.rangeToSlice(partitioned.in_both),
+                        self.scratch.in_both_tags.sliceRange(partitioned.in_both),
                         null,
                         null,
                         only_in_b_var,
@@ -2367,7 +2367,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // Create a new variable of a tag_union with only a's uniq tags
                     // This copies tags from scratch into type_store
                     const only_in_a_tags_range = self.types_store_b.appendTags(
-                        self.scratch.only_in_a_tags.rangeToSlice(partitioned.only_in_a),
+                        self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
                     ) catch return Error.AllocatorError;
                     const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                         .tags = only_in_a_tags_range,
@@ -2377,7 +2377,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // Create a new variable of a tag_union with only b's uniq tags
                     // This copies tags from scratch into type_store
                     const only_in_b_tags_range = self.types_store_b.appendTags(
-                        self.scratch.only_in_b_tags.rangeToSlice(partitioned.only_in_b),
+                        self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
                     ) catch return Error.AllocatorError;
                     const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                         .tags = only_in_b_tags_range,
@@ -2395,9 +2395,9 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // This copies tags from scratch into type_store
                     try self.unifySharedTags(
                         vars,
-                        self.scratch.in_both_tags.rangeToSlice(partitioned.in_both),
-                        self.scratch.only_in_a_tags.rangeToSlice(partitioned.only_in_a),
-                        self.scratch.only_in_b_tags.rangeToSlice(partitioned.only_in_b),
+                        self.scratch.in_both_tags.sliceRange(partitioned.in_both),
+                        self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
+                        self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
                         new_ext_var,
                     );
                 },
@@ -2488,9 +2488,9 @@ fn Unifier(comptime StoreTypeB: type) type {
             b_tags_range: TagSafeList.Range,
         ) std.mem.Allocator.Error!PartitionedTags {
             // First sort the tags
-            const a_tags = scratch.gathered_tags.rangeToSlice(a_tags_range);
+            const a_tags = scratch.gathered_tags.sliceRange(a_tags_range);
             std.mem.sort(Tag, a_tags, ident_store, comptime Tag.sortByNameAsc);
-            const b_tags = scratch.gathered_tags.rangeToSlice(b_tags_range);
+            const b_tags = scratch.gathered_tags.sliceRange(b_tags_range);
             std.mem.sort(Tag, b_tags, ident_store, comptime Tag.sortByNameAsc);
 
             // Get the start of index of the new range
@@ -2750,7 +2750,7 @@ pub const Scratch = struct {
         range: RecordFieldSafeMultiList.Range,
     ) std.mem.Allocator.Error!RecordFieldSafeList.Range {
         const start: RecordFieldSafeList.Idx = @enumFromInt(self.gathered_fields.len());
-        const record_fields_slice = multi_list.rangeToSlice(range);
+        const record_fields_slice = multi_list.sliceRange(range);
         for (record_fields_slice.items(.name), record_fields_slice.items(.var_)) |name, var_| {
             _ = try self.gathered_fields.append(
                 self.gpa,
@@ -2768,7 +2768,7 @@ pub const Scratch = struct {
         range: TagSafeMultiList.Range,
     ) std.mem.Allocator.Error!TagSafeList.Range {
         const start: TagSafeList.Idx = @enumFromInt(self.gathered_tags.len());
-        const tag_slice = multi_list.rangeToSlice(range);
+        const tag_slice = multi_list.sliceRange(range);
         for (tag_slice.items(.name), tag_slice.items(.args)) |ident, args| {
             _ = try self.gathered_tags.append(
                 self.gpa,
@@ -2780,11 +2780,11 @@ pub const Scratch = struct {
     }
 
     fn appendSliceGatheredFields(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordFieldSafeList.Range {
-        return try self.gathered_fields.appendSlice(self.gpa, fields);
+        return try self.gathered_fields.appendSliceRange(self.gpa, fields);
     }
 
     fn appendSliceGatheredTags(self: *Self, fields: []const Tag) std.mem.Allocator.Error!TagSafeList.Range {
-        return try self.gathered_tags.appendSlice(self.gpa, fields);
+        return try self.gathered_tags.appendSliceRange(self.gpa, fields);
     }
 
     fn setUnifyErr(self: *Self, err: UnifyErrCtx) void {
@@ -4367,7 +4367,7 @@ test "partitionFields - same record" {
     try std.testing.expectEqual(0, result.only_in_b.len());
     try std.testing.expectEqual(2, result.in_both.len());
 
-    const both_slice = env.scratch.in_both_fields.rangeToSlice(result.in_both);
+    const both_slice = env.scratch.in_both_fields.sliceRange(result.in_both);
     try std.testing.expectEqual(field_x, both_slice[0].a);
     try std.testing.expectEqual(field_x, both_slice[0].b);
     try std.testing.expectEqual(field_y, both_slice[1].a);
@@ -4392,11 +4392,11 @@ test "partitionFields - disjoint fields" {
     try std.testing.expectEqual(1, result.only_in_b.len());
     try std.testing.expectEqual(0, result.in_both.len());
 
-    const only_in_a_slice = env.scratch.only_in_a_fields.rangeToSlice(result.only_in_a);
+    const only_in_a_slice = env.scratch.only_in_a_fields.sliceRange(result.only_in_a);
     try std.testing.expectEqual(a1, only_in_a_slice[0]);
     try std.testing.expectEqual(a2, only_in_a_slice[1]);
 
-    const only_in_b_slice = env.scratch.only_in_b_fields.rangeToSlice(result.only_in_b);
+    const only_in_b_slice = env.scratch.only_in_b_fields.sliceRange(result.only_in_b);
     try std.testing.expectEqual(b1, only_in_b_slice[0]);
 }
 
@@ -4418,14 +4418,14 @@ test "partitionFields - overlapping fields" {
     try std.testing.expectEqual(1, result.only_in_b.len());
     try std.testing.expectEqual(1, result.in_both.len());
 
-    const both_slice = env.scratch.in_both_fields.rangeToSlice(result.in_both);
+    const both_slice = env.scratch.in_both_fields.sliceRange(result.in_both);
     try std.testing.expectEqual(both, both_slice[0].a);
     try std.testing.expectEqual(both, both_slice[0].b);
 
-    const only_in_a_slice = env.scratch.only_in_a_fields.rangeToSlice(result.only_in_a);
+    const only_in_a_slice = env.scratch.only_in_a_fields.sliceRange(result.only_in_a);
     try std.testing.expectEqual(a1, only_in_a_slice[0]);
 
-    const only_in_b_slice = env.scratch.only_in_b_fields.rangeToSlice(result.only_in_b);
+    const only_in_b_slice = env.scratch.only_in_b_fields.sliceRange(result.only_in_b);
     try std.testing.expectEqual(b1, only_in_b_slice[0]);
 }
 
@@ -4447,7 +4447,7 @@ test "partitionFields - reordering is normalized" {
     try std.testing.expectEqual(0, result.only_in_b.len());
     try std.testing.expectEqual(3, result.in_both.len());
 
-    const both = env.scratch.in_both_fields.rangeToSlice(result.in_both);
+    const both = env.scratch.in_both_fields.sliceRange(result.in_both);
     try std.testing.expectEqual(f1, both[0].a);
     try std.testing.expectEqual(f1, both[0].b);
     try std.testing.expectEqual(f2, both[1].a);
@@ -4467,7 +4467,7 @@ test "unify - identical closed records" {
 
     const fields = [_]RecordField{try env.mkRecordField("a", str)};
     const record_data = try env.mkRecordClosed(&fields);
-    const record_data_fields = env.module_env.types.record_fields.rangeToSlice(record_data.record.fields);
+    const record_data_fields = env.module_env.types.record_fields.sliceRange(record_data.record.fields);
 
     const a = try env.module_env.types.freshFromContent(record_data.content);
     const b = try env.module_env.types.freshFromContent(record_data.content);
@@ -4478,7 +4478,7 @@ test "unify - identical closed records" {
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
 
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
-    const b_record_fields = env.module_env.types.record_fields.rangeToSlice(b_record.fields);
+    const b_record_fields = env.module_env.types.record_fields.sliceRange(b_record.fields);
     try std.testing.expectEqualSlices(Ident.Idx, record_data_fields.items(.name), b_record_fields.items(.name));
     try std.testing.expectEqualSlices(Var, record_data_fields.items(.var_), b_record_fields.items(.var_));
 }
@@ -4823,7 +4823,7 @@ test "partitionTags - same tags" {
     try std.testing.expectEqual(0, result.only_in_b.len());
     try std.testing.expectEqual(2, result.in_both.len());
 
-    const both_slice = env.scratch.in_both_tags.rangeToSlice(result.in_both);
+    const both_slice = env.scratch.in_both_tags.sliceRange(result.in_both);
     try std.testing.expectEqual(tag_x, both_slice[0].a);
     try std.testing.expectEqual(tag_x, both_slice[0].b);
     try std.testing.expectEqual(tag_y, both_slice[1].a);
@@ -4848,11 +4848,11 @@ test "partitionTags - disjoint fields" {
     try std.testing.expectEqual(1, result.only_in_b.len());
     try std.testing.expectEqual(0, result.in_both.len());
 
-    const only_in_a_slice = env.scratch.only_in_a_tags.rangeToSlice(result.only_in_a);
+    const only_in_a_slice = env.scratch.only_in_a_tags.sliceRange(result.only_in_a);
     try std.testing.expectEqual(a1, only_in_a_slice[0]);
     try std.testing.expectEqual(a2, only_in_a_slice[1]);
 
-    const only_in_b_slice = env.scratch.only_in_b_tags.rangeToSlice(result.only_in_b);
+    const only_in_b_slice = env.scratch.only_in_b_tags.sliceRange(result.only_in_b);
     try std.testing.expectEqual(b1, only_in_b_slice[0]);
 }
 
@@ -4874,14 +4874,14 @@ test "partitionTags - overlapping tags" {
     try std.testing.expectEqual(1, result.only_in_b.len());
     try std.testing.expectEqual(1, result.in_both.len());
 
-    const both_slice = env.scratch.in_both_tags.rangeToSlice(result.in_both);
+    const both_slice = env.scratch.in_both_tags.sliceRange(result.in_both);
     try std.testing.expectEqual(both, both_slice[0].a);
     try std.testing.expectEqual(both, both_slice[0].b);
 
-    const only_in_a_slice = env.scratch.only_in_a_tags.rangeToSlice(result.only_in_a);
+    const only_in_a_slice = env.scratch.only_in_a_tags.sliceRange(result.only_in_a);
     try std.testing.expectEqual(a1, only_in_a_slice[0]);
 
-    const only_in_b_slice = env.scratch.only_in_b_tags.rangeToSlice(result.only_in_b);
+    const only_in_b_slice = env.scratch.only_in_b_tags.sliceRange(result.only_in_b);
     try std.testing.expectEqual(b1, only_in_b_slice[0]);
 }
 
@@ -4903,7 +4903,7 @@ test "partitionTags - reordering is normalized" {
     try std.testing.expectEqual(0, result.only_in_b.len());
     try std.testing.expectEqual(3, result.in_both.len());
 
-    const both_slice = env.scratch.in_both_tags.rangeToSlice(result.in_both);
+    const both_slice = env.scratch.in_both_tags.sliceRange(result.in_both);
     try std.testing.expectEqual(f1, both_slice[0].a);
     try std.testing.expectEqual(f1, both_slice[0].b);
     try std.testing.expectEqual(f2, both_slice[1].a);
@@ -4934,7 +4934,7 @@ test "unify - identical closed tag_unions" {
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
 
     const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
-    const b_tags = env.module_env.types.tags.rangeToSlice(b_tag_union.tags);
+    const b_tags = env.module_env.types.tags.sliceRange(b_tag_union.tags);
     const b_tags_names = b_tags.items(.name);
     const b_tags_args = b_tags.items(.args);
     try std.testing.expectEqual(1, b_tags.len);
@@ -4943,7 +4943,7 @@ test "unify - identical closed tag_unions" {
 
     try std.testing.expectEqual(1, b_tags.len);
 
-    const b_tag_args = env.module_env.types.tag_args.rangeToSlice(b_tags_args[0]);
+    const b_tag_args = env.module_env.types.tag_args.sliceRange(b_tags_args[0]);
     try std.testing.expectEqual(1, b_tag_args.len);
     try std.testing.expectEqual(str, b_tag_args[0]);
 }
@@ -5002,7 +5002,7 @@ test "unify - identical open tag unions" {
     const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(1, b_tag_union.tags.len());
 
-    const b_tags = env.module_env.types.tags.rangeToSlice(b_tag_union.tags);
+    const b_tags = env.module_env.types.tags.sliceRange(b_tag_union.tags);
     const b_tags_names = b_tags.items(.name);
     const b_tags_args = b_tags.items(.args);
     try std.testing.expectEqual(1, b_tags.len);
@@ -5044,7 +5044,7 @@ test "unify - open tag union a extends b" {
     const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(1, b_tag_union.tags.len());
 
-    const b_tags = env.module_env.types.tags.rangeToSlice(b_tag_union.tags);
+    const b_tags = env.module_env.types.tags.sliceRange(b_tag_union.tags);
     const b_tags_names = b_tags.items(.name);
     const b_tags_args = b_tags.items(.args);
     try std.testing.expectEqual(1, b_tags.len);
@@ -5054,7 +5054,7 @@ test "unify - open tag union a extends b" {
     const b_ext_tag_union = try TestEnv.getTagUnionOrErr(env.module_env.types.resolveVar(b_tag_union.ext).desc);
     try std.testing.expectEqual(1, b_ext_tag_union.tags.len());
 
-    const b_ext_tags = env.module_env.types.tags.rangeToSlice(b_ext_tag_union.tags);
+    const b_ext_tags = env.module_env.types.tags.sliceRange(b_ext_tag_union.tags);
     const b_ext_tags_names = b_ext_tags.items(.name);
     const b_ext_tags_args = b_ext_tags.items(.args);
     try std.testing.expectEqual(1, b_ext_tags.len);
@@ -5097,7 +5097,7 @@ test "unify - open tag union b extends a" {
     const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(1, b_tag_union.tags.len());
 
-    const b_tags = env.module_env.types.tags.rangeToSlice(b_tag_union.tags);
+    const b_tags = env.module_env.types.tags.sliceRange(b_tag_union.tags);
     const b_tags_names = b_tags.items(.name);
     const b_tags_args = b_tags.items(.args);
     try std.testing.expectEqual(1, b_tags.len);
@@ -5107,7 +5107,7 @@ test "unify - open tag union b extends a" {
     const b_ext_tag_union = try TestEnv.getTagUnionOrErr(env.module_env.types.resolveVar(b_tag_union.ext).desc);
     try std.testing.expectEqual(1, b_ext_tag_union.tags.len());
 
-    const b_ext_tags = env.module_env.types.tags.rangeToSlice(b_ext_tag_union.tags);
+    const b_ext_tags = env.module_env.types.tags.sliceRange(b_ext_tag_union.tags);
     const b_ext_tags_names = b_ext_tags.items(.name);
     const b_ext_tags_args = b_ext_tags.items(.args);
     try std.testing.expectEqual(1, b_ext_tags.len);
@@ -5152,7 +5152,7 @@ test "unify - both extend open tag union" {
     const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(3, b_tag_union.tags.len());
 
-    const b_tags = env.module_env.types.tags.rangeToSlice(b_tag_union.tags);
+    const b_tags = env.module_env.types.tags.sliceRange(b_tag_union.tags);
     try std.testing.expectEqual(3, b_tags.len);
     try std.testing.expectEqual(tag_shared, b_tags.get(0));
     try std.testing.expectEqual(tag_a_only, b_tags.get(1));
@@ -5253,7 +5253,7 @@ test "unify - closed tag union extends open" {
     const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(1, b_tag_union.tags.len());
 
-    const b_tags = env.module_env.types.tags.rangeToSlice(b_tag_union.tags);
+    const b_tags = env.module_env.types.tags.sliceRange(b_tag_union.tags);
     const b_tags_names = b_tags.items(.name);
     const b_tags_args = b_tags.items(.args);
     try std.testing.expectEqual(1, b_tags.len);
@@ -5263,7 +5263,7 @@ test "unify - closed tag union extends open" {
     const b_ext_tag_union = try TestEnv.getTagUnionOrErr(env.module_env.types.resolveVar(b_tag_union.ext).desc);
     try std.testing.expectEqual(1, b_ext_tag_union.tags.len());
 
-    const b_ext_tags = env.module_env.types.tags.rangeToSlice(b_ext_tag_union.tags);
+    const b_ext_tags = env.module_env.types.tags.sliceRange(b_ext_tag_union.tags);
     const b_ext_tags_names = b_ext_tags.items(.name);
     const b_ext_tags_args = b_ext_tags.items(.args);
     try std.testing.expectEqual(1, b_ext_tags.len);

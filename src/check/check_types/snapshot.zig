@@ -155,7 +155,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const args_range = try self.alias_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const args_range = try self.alias_args.appendSliceRange(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         return SnapshotAlias{
@@ -178,7 +178,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const elems_range = try self.tuple_elems.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const elems_range = try self.tuple_elems.appendSliceRange(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         return SnapshotTuple{
@@ -246,7 +246,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const args_range = try self.nominal_type_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const args_range = try self.nominal_type_args.appendSliceRange(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         return SnapshotNominalType{
@@ -270,7 +270,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const args_range = try self.func_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const args_range = try self.func_args.appendSliceRange(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         // Deep copy return type
@@ -302,7 +302,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const fields_range = try self.record_fields.appendSlice(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
+        const fields_range = try self.record_fields.appendSliceRange(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
         self.scratch_record_fields.clearFrom(scratch_top);
 
         return fields_range;
@@ -329,7 +329,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const fields_range = try self.record_fields.appendSlice(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
+        const fields_range = try self.record_fields.appendSliceRange(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
         self.scratch_record_fields.clearFrom(scratch_top);
 
         // Deep copy extension type
@@ -364,7 +364,7 @@ pub const Store = struct {
             }
 
             // Append scratch to backing array, and shrink scratch
-            const tag_args_range = try self.tag_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(content_scratch_top));
+            const tag_args_range = try self.tag_args.appendSliceRange(self.gpa, self.scratch_content.sliceFromStart(content_scratch_top));
             self.scratch_content.clearFrom(content_scratch_top);
 
             // Create and append the snapshot tag to scratch
@@ -377,7 +377,7 @@ pub const Store = struct {
         }
 
         // Append scratch tags to backing array, and shrink scratch
-        const tags_range = try self.tags.appendSlice(self.gpa, self.scratch_tags.sliceFromStart(tags_scratch_top));
+        const tags_range = try self.tags.appendSliceRange(self.gpa, self.scratch_tags.sliceFromStart(tags_scratch_top));
         self.scratch_tags.clearFrom(tags_scratch_top);
 
         // Deep copy extension type
@@ -392,31 +392,31 @@ pub const Store = struct {
 
     // Getter methods (similar to Store)
     pub fn getAliasArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.alias_args.rangeToSlice(range);
+        return self.alias_args.sliceRange(range);
     }
 
     pub fn getTupleElemsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.tuple_elems.rangeToSlice(range);
+        return self.tuple_elems.sliceRange(range);
     }
 
     pub fn getNominalTypeArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.nominal_type_args.rangeToSlice(range);
+        return self.nominal_type_args.sliceRange(range);
     }
 
     pub fn getFuncArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.func_args.rangeToSlice(range);
+        return self.func_args.sliceRange(range);
     }
 
     pub fn getRecordFieldsSlice(self: *const Self, range: SnapshotRecordFieldSafeList.Range) SnapshotRecordFieldSafeList.Slice {
-        return self.record_fields.rangeToSlice(range);
+        return self.record_fields.sliceRange(range);
     }
 
     pub fn getTagsSlice(self: *const Self, range: SnapshotTagSafeList.Range) []const SnapshotTag {
-        return self.tags.rangeToSlice(range);
+        return self.tags.sliceRange(range);
     }
 
     pub fn getTagArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.tag_args.rangeToSlice(range);
+        return self.tag_args.sliceRange(range);
     }
 
     pub fn getContent(self: *const Self, idx: SnapshotContentIdx) SnapshotContent {
@@ -755,14 +755,14 @@ pub const SnapshotWriter = struct {
                 self.countContent(search_idx, func.ret, count);
             },
             .record => |record| {
-                const fields = self.snapshots.record_fields.rangeToSlice(record.fields);
+                const fields = self.snapshots.record_fields.sliceRange(record.fields);
                 for (fields.items(.content)) |field_content| {
                     self.countContent(search_idx, field_content, count);
                 }
                 self.countContent(search_idx, record.ext, count);
             },
             .record_unbound => |fields| {
-                const fields_slice = self.snapshots.record_fields.rangeToSlice(fields);
+                const fields_slice = self.snapshots.record_fields.sliceRange(fields);
                 for (fields_slice.items(.content)) |field_content| {
                     self.countContent(search_idx, field_content, count);
                 }
@@ -973,7 +973,7 @@ pub const SnapshotWriter = struct {
     pub fn writeRecord(self: *Self, record: SnapshotRecord, root_idx: SnapshotContentIdx) Allocator.Error!void {
         _ = try self.writer.write("{ ");
 
-        const fields_slice = self.snapshots.record_fields.rangeToSlice(record.fields);
+        const fields_slice = self.snapshots.record_fields.sliceRange(record.fields);
 
         if (fields_slice.len > 0) {
             // Write first field
@@ -1015,7 +1015,7 @@ pub const SnapshotWriter = struct {
             return;
         }
 
-        const fields_slice = self.snapshots.record_fields.rangeToSlice(fields);
+        const fields_slice = self.snapshots.record_fields.sliceRange(fields);
 
         _ = try self.writer.write("{ ");
 

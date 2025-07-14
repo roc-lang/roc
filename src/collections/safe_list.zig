@@ -191,7 +191,7 @@ pub fn SafeList(comptime T: type) type {
         }
 
         /// Add all the items in a slice to the end of this list.
-        pub fn appendSlice(self: *SafeList(T), gpa: Allocator, items: []const T) std.mem.Allocator.Error!Range {
+        pub fn appendSliceRange(self: *SafeList(T), gpa: Allocator, items: []const T) std.mem.Allocator.Error!Range {
             const start_length = self.len();
             try self.items.appendSlice(gpa, items);
             const end_length = self.len();
@@ -217,7 +217,7 @@ pub fn SafeList(comptime T: type) type {
         }
 
         /// Convert a range to a slice
-        pub fn rangeToSlice(self: *const SafeList(T), range: Range) Slice {
+        pub fn sliceRange(self: *const SafeList(T), range: Range) Slice {
             const start: usize = @intFromEnum(range.start);
             const end: usize = @intFromEnum(range.end);
 
@@ -500,7 +500,7 @@ pub fn SafeMultiList(comptime T: type) type {
             return @enumFromInt(@as(u32, @intCast(length)));
         }
 
-        pub fn appendSlice(self: *SafeMultiList(T), gpa: Allocator, elems: []const T) std.mem.Allocator.Error!Range {
+        pub fn appendSliceRange(self: *SafeMultiList(T), gpa: Allocator, elems: []const T) std.mem.Allocator.Error!Range {
             if (elems.len == 0) {
                 return .{ .start = .zero, .end = .zero };
             }
@@ -514,7 +514,7 @@ pub fn SafeMultiList(comptime T: type) type {
         }
 
         /// Convert a range to a slice
-        pub fn rangeToSlice(self: *const SafeMultiList(T), range: Range) Slice {
+        pub fn sliceRange(self: *const SafeMultiList(T), range: Range) Slice {
             const start: usize = @intFromEnum(range.start);
             const end: usize = @intFromEnum(range.end);
 
@@ -675,28 +675,28 @@ test "SafeList(u8) appendSlice" {
     var list = SafeList(u8){};
     defer list.deinit(gpa);
 
-    const rangeA = try list.appendSlice(gpa, &[_]u8{ 'a', 'b', 'c', 'd' });
+    const rangeA = try list.appendSliceRange(gpa, &[_]u8{ 'a', 'b', 'c', 'd' });
     try testing.expectEqual(0, @intFromEnum(rangeA.start));
     try testing.expectEqual(4, @intFromEnum(rangeA.end));
 
-    const rangeB = try list.appendSlice(gpa, &[_]u8{ 'd', 'e', 'f', 'g' });
+    const rangeB = try list.appendSliceRange(gpa, &[_]u8{ 'd', 'e', 'f', 'g' });
     try testing.expectEqual(4, @intFromEnum(rangeB.start));
     try testing.expectEqual(8, @intFromEnum(rangeB.end));
 }
 
-test "SafeList(u8) rangeToSlice" {
+test "SafeList(u8) sliceRange" {
     const gpa = testing.allocator;
 
     var list = SafeList(u8){};
     defer list.deinit(gpa);
 
-    const rangeA = try list.appendSlice(gpa, &[_]u8{ 'a', 'b', 'c', 'd' });
-    const sliceA = list.rangeToSlice(rangeA);
+    const rangeA = try list.appendSliceRange(gpa, &[_]u8{ 'a', 'b', 'c', 'd' });
+    const sliceA = list.sliceRange(rangeA);
     try testing.expectEqual('a', sliceA[0]);
     try testing.expectEqual('d', sliceA[3]);
 
     const rangeB = SafeList(u8).Range{ .start = @enumFromInt(2), .end = @enumFromInt(4) };
-    const sliceB = list.rangeToSlice(rangeB);
+    const sliceB = list.sliceRange(rangeB);
     try testing.expectEqual('c', sliceB[0]);
     try testing.expectEqual('d', sliceB[1]);
 }
@@ -710,16 +710,16 @@ test "SafeMultiList(u8) appendSlice" {
     var multilist = try StructMultiList.initCapacity(gpa, 3);
     defer multilist.deinit(gpa);
 
-    const rangeA = try multilist.appendSlice(gpa, &[_]Struct{ .{ .num = 100, .char = 'a' }, .{ .num = 200, .char = 'b' }, .{ .num = 300, .char = 'd' } });
+    const rangeA = try multilist.appendSliceRange(gpa, &[_]Struct{ .{ .num = 100, .char = 'a' }, .{ .num = 200, .char = 'b' }, .{ .num = 300, .char = 'd' } });
     try testing.expectEqual(0, @intFromEnum(rangeA.start));
     try testing.expectEqual(3, @intFromEnum(rangeA.end));
 
-    const rangeB = try multilist.appendSlice(gpa, &[_]Struct{ .{ .num = 400, .char = 'd' }, .{ .num = 500, .char = 'e' }, .{ .num = 600, .char = 'f' } });
+    const rangeB = try multilist.appendSliceRange(gpa, &[_]Struct{ .{ .num = 400, .char = 'd' }, .{ .num = 500, .char = 'e' }, .{ .num = 600, .char = 'f' } });
     try testing.expectEqual(3, @intFromEnum(rangeB.start));
     try testing.expectEqual(6, @intFromEnum(rangeB.end));
 }
 
-test "SafeMultiList(u8) rangeToSlice" {
+test "SafeMultiList(u8) sliceRange" {
     const gpa = testing.allocator;
 
     const Struct = struct { num: u32, char: u8 };
@@ -728,8 +728,8 @@ test "SafeMultiList(u8) rangeToSlice" {
     var multilist = try StructMultiList.initCapacity(gpa, 3);
     defer multilist.deinit(gpa);
 
-    const range_a = try multilist.appendSlice(gpa, &[_]Struct{ .{ .num = 100, .char = 'a' }, .{ .num = 200, .char = 'b' }, .{ .num = 300, .char = 'c' } });
-    const slice_a = multilist.rangeToSlice(range_a);
+    const range_a = try multilist.appendSliceRange(gpa, &[_]Struct{ .{ .num = 100, .char = 'a' }, .{ .num = 200, .char = 'b' }, .{ .num = 300, .char = 'c' } });
+    const slice_a = multilist.sliceRange(range_a);
 
     const num_slice_a = slice_a.items(.num);
     try testing.expectEqual(3, num_slice_a.len);
@@ -744,7 +744,7 @@ test "SafeMultiList(u8) rangeToSlice" {
     try testing.expectEqual('c', char_slice_a[2]);
 
     const range_b = StructMultiList.Range{ .start = @enumFromInt(1), .end = @enumFromInt(2) };
-    const slice_b = multilist.rangeToSlice(range_b);
+    const slice_b = multilist.sliceRange(range_b);
 
     const num_slice_b = slice_b.items(.num);
     try testing.expectEqual(1, num_slice_b.len);
@@ -765,7 +765,7 @@ test "SafeMultiList empty range at end" {
     defer multilist.deinit(gpa);
 
     // Add 5 items to fill the list
-    _ = try multilist.appendSlice(gpa, &[_]Struct{
+    _ = try multilist.appendSliceRange(gpa, &[_]Struct{
         .{ .num = 100, .char = 'a' },
         .{ .num = 200, .char = 'b' },
         .{ .num = 300, .char = 'c' },
@@ -775,7 +775,7 @@ test "SafeMultiList empty range at end" {
 
     // Create an empty range at the end (start=5, end=5 for a list of length 5)
     const empty_range = StructMultiList.Range{ .start = @enumFromInt(5), .end = @enumFromInt(5) };
-    const empty_slice = multilist.rangeToSlice(empty_range);
+    const empty_slice = multilist.sliceRange(empty_range);
 
     // The slice should be empty
     const num_slice = empty_slice.items(.num);
@@ -839,7 +839,7 @@ test "SafeList(u8) serialization with data" {
     var list = SafeList(u8){};
     defer list.deinit(gpa);
 
-    _ = try list.appendSlice(gpa, "hello");
+    _ = try list.appendSliceRange(gpa, "hello");
 
     const expected_size = std.mem.alignForward(usize, @sizeOf(u32) + 5, SERIALIZATION_ALIGNMENT);
     try testing.expectEqual(expected_size, list.serializedSize());
@@ -906,7 +906,7 @@ test "SafeList(u8) deserialization with data" {
     defer list.deinit(gpa);
 
     try testing.expectEqual(expected_data.len, list.len());
-    const slice = list.rangeToSlice(SafeList(u8).Range{ .start = @enumFromInt(0), .end = @enumFromInt(expected_data.len) });
+    const slice = list.sliceRange(SafeList(u8).Range{ .start = @enumFromInt(0), .end = @enumFromInt(expected_data.len) });
     try testing.expectEqualSlices(u8, expected_data, slice);
 }
 
@@ -918,7 +918,7 @@ test "SafeList(u32) round-trip serialization" {
     defer original.deinit(gpa);
 
     const test_data = [_]u32{ 1, 2, 3, 42, 100, 255 };
-    _ = try original.appendSlice(gpa, &test_data);
+    _ = try original.appendSliceRange(gpa, &test_data);
 
     // Serialize
     var buffer: [1024]u8 align(SERIALIZATION_ALIGNMENT) = undefined;
@@ -1149,7 +1149,7 @@ test "SafeMultiList(struct) round-trip serialization" {
         Point{ .x = 42, .y = 100 },
         Point{ .x = 255, .y = 128 },
     };
-    _ = try original.appendSlice(gpa, &test_data);
+    _ = try original.appendSliceRange(gpa, &test_data);
 
     // Serialize
     var buffer: [2048]u8 align(SERIALIZATION_ALIGNMENT) = undefined;
@@ -1280,7 +1280,7 @@ test "SafeMultiList complex Node-like structure serialization" {
         },
     };
 
-    _ = try list.appendSlice(gpa, &test_nodes);
+    _ = try list.appendSliceRange(gpa, &test_nodes);
 
     // Test serialization
     const expected_size = std.mem.alignForward(usize, @sizeOf(u32) + (test_nodes.len * @sizeOf(ComplexNode)), SERIALIZATION_ALIGNMENT);
