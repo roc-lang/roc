@@ -29,7 +29,8 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 (file @1.1-6.2
 	(module @1.1-1.14
 		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13 (text "test"))))
+			(exposed-lower-ident @1.9-1.13
+				(text "test"))))
 	(statements
 		(s-decl @3.1-6.2
 			(p-ident @3.1-3.5 (raw "test"))
@@ -68,7 +69,7 @@ test = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.5 (type "a")))
+		(patt @3.1-3.5 (type "_a")))
 	(expressions
-		(expr @3.8-6.2 (type "a"))))
+		(expr @3.8-6.2 (type "_a"))))
 ~~~

@@ -20,7 +20,7 @@ Green => LocalStatus-Complete
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_032.md:3:24:3:25
-UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:14
+UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:17
 UNDECLARED TYPE - fuzz_crash_032.md:3:21:3:24
 INVALID STATEMENT - fuzz_crash_032.md:3:24:3:25
 INVALID STATEMENT - fuzz_crash_032.md:3:26:3:45
@@ -56,11 +56,11 @@ The type variable ``lue`` is not declared in this scope.
 Type variables must be introduced in a type annotation before they can be used.
 
 This type variable is referenced here:
-**fuzz_crash_032.md:3:14:3:14:**
+**fuzz_crash_032.md:3:14:3:17:**
 ```roc
 LocalStatus :lue => Loc= [Pending, Complete]
 ```
-             
+             ^^^
 
 
 **UNDECLARED TYPE**
@@ -148,14 +148,16 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 (file @1.1-12.2
 	(module @1.1-1.15
 		(exposes @1.8-1.15
-			(exposed-lower-ident @1.9-1.12 (text "tus"))
-			(exposed-lower-ident @1.13-1.14 (text "r"))))
+			(exposed-lower-ident @1.9-1.12
+				(text "tus"))
+			(exposed-lower-ident @1.13-1.14
+				(text "r"))))
 	(statements
 		(s-type-decl @3.1-3.24
 			(header @3.1-3.12 (name "LocalStatus")
 				(args))
 			(ty-fn @3.14-3.24
-				(ty-var @3.14-3.14 (raw "lue"))
+				(ty-var @3.14-3.17 (raw "lue"))
 				(ty @3.21-3.24 (name "Loc"))))
 		(e-malformed @3.24-3.25 (reason "expr_unexpected_token"))
 		(e-list @3.26-3.45
@@ -164,7 +166,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 		(s-type-anno @5.1-5.16 (name "olor")
 			(ty-fn @5.8-5.16
 				(_)
-				(ty-var @1.1-1.1 (raw "tus"))))
+				(ty-var @5.13-5.16 (raw "tus"))))
 		(s-decl @6.1-12.2
 			(p-ident @6.1-6.5 (raw "olor"))
 			(e-lambda @6.8-12.2
@@ -250,21 +252,21 @@ olor = |color| {
 			(declared-type
 				(ty-fn @5.8-5.16 (effectful false)
 					(ty-underscore @1.1-1.1)
-					(ty-var @1.1-1.1 (name "tus"))))))
+					(ty-var @5.13-5.16 (name "tus"))))))
 	(s-alias-decl @3.1-3.24
 		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-fn @3.14-3.24 (effectful true)
-			(ty-var @3.14-3.14 (name "lue"))
+			(ty-var @3.14-3.17 (name "lue"))
 			(ty @3.21-3.24 (name "Loc")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "[Green, RGB, Blue]others -> Error")))
+		(patt @6.1-6.5 (type "[Green, RGB, Blue]_others -> Error")))
 	(type_decls
 		(alias @3.1-3.24 (type "LocalStatus")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
-		(expr @6.8-12.2 (type "[Green, RGB, Blue]others -> Error"))))
+		(expr @6.8-12.2 (type "[Green, RGB, Blue]_others -> Error"))))
 ~~~

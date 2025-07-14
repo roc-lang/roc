@@ -548,7 +548,8 @@ LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpper
 (file @1.1-14.37
 	(module @1.1-1.22
 		(exposes @1.8-1.22
-			(exposed-lower-ident @1.9-1.21 (text "json_encoder"))))
+			(exposed-lower-ident @1.9-1.21
+				(text "json_encoder"))))
 	(statements
 		(s-import @3.1-3.17 (raw "json.Core"))
 		(e-malformed @3.17-3.22 (reason "expr_unexpected_token"))
@@ -561,7 +562,7 @@ LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpper
 			(p-ident @6.1-6.13 (raw "json_encoder"))
 			(e-ident @6.16-6.45 (raw "Json.Core.Utf8.defaultEncoder")))
 		(s-type-anno @9.1-9.15 (name "process")
-			(ty-var @1.1-1.1 (raw "json")))
+			(ty-var @9.11-9.15 (raw "json")))
 		(e-malformed @9.15-9.20 (reason "expr_unexpected_token"))
 		(e-malformed @9.20-9.25 (reason "expr_unexpected_token"))
 		(e-malformed @9.25-9.33 (reason "expr_unexpected_token"))
@@ -573,7 +574,7 @@ LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpper
 		(e-malformed @10.24-10.34 (reason "expr_unexpected_token"))
 		(e-malformed @10.34-10.35 (reason "expr_unexpected_token"))
 		(s-type-anno @13.1-13.12 (name "data")
-			(ty-var @1.1-1.1 (raw "json")))
+			(ty-var @13.8-13.12 (raw "json")))
 		(e-malformed @13.12-13.17 (reason "expr_unexpected_token"))
 		(e-malformed @13.17-13.22 (reason "expr_unexpected_token"))
 		(e-malformed @13.22-13.34 (reason "expr_unexpected_token"))

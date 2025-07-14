@@ -112,8 +112,10 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 			(exposed-upper-ident @1.19-1.23 (text "Some"))
 			(exposed-upper-ident @1.25-1.30 (text "Maybe"))
 			(exposed-upper-ident @1.32-1.40 (text "SomeFunc"))
-			(exposed-lower-ident @1.42-1.49 (text "add_one"))
-			(exposed-lower-ident @1.51-1.56 (text "main!"))))
+			(exposed-lower-ident @1.42-1.49
+				(text "add_one"))
+			(exposed-lower-ident @1.51-1.56
+				(text "main!"))))
 	(statements
 		(s-type-decl @3.1-3.41
 			(header @3.1-3.10 (name "Map")
@@ -123,13 +125,13 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 			(ty-fn @3.13-3.41
 				(ty-apply @3.13-3.20
 					(ty @3.13-3.17 (name "List"))
-					(ty-var @3.18-3.18 (raw "a")))
+					(ty-var @3.18-3.19 (raw "a")))
 				(ty-fn @3.23-3.29
-					(ty-var @3.23-3.23 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @3.23-3.24 (raw "a"))
+					(ty-var @3.28-3.29 (raw "b")))
 				(ty-apply @3.34-3.41
 					(ty @3.34-3.38 (name "List"))
-					(ty-var @3.39-3.39 (raw "b")))))
+					(ty-var @3.39-3.40 (raw "b")))))
 		(s-type-decl @5.1-5.17
 			(header @5.1-5.4 (name "Foo")
 				(args))
@@ -144,7 +146,7 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 				(anno-record-field @7.13-7.24 (name "foo")
 					(ty-apply @7.19-7.24
 						(ty @7.19-7.21 (name "Ok"))
-						(ty-var @7.22-7.22 (raw "a"))))
+						(ty-var @7.22-7.23 (raw "a"))))
 				(anno-record-field @7.26-7.41 (name "bar")
 					(ty @7.32-7.41 (name "Something")))))
 		(s-type-decl @9.1-9.27
@@ -155,7 +157,7 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 				(tags
 					(ty-apply @9.13-9.20
 						(ty @9.13-9.17 (name "Some"))
-						(ty-var @9.18-9.18 (raw "a")))
+						(ty-var @9.18-9.19 (raw "a")))
 					(ty @9.22-9.26 (name "None")))))
 		(s-type-decl @11.1-11.38
 			(header @11.1-11.12 (name "SomeFunc")
@@ -164,11 +166,11 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 			(ty-fn @11.15-11.38
 				(ty-apply @11.15-11.23
 					(ty @11.15-11.20 (name "Maybe"))
-					(ty-var @11.21-11.21 (raw "a")))
-				(ty-var @1.1-1.1 (raw "a"))
+					(ty-var @11.21-11.22 (raw "a")))
+				(ty-var @11.25-11.26 (raw "a"))
 				(ty-apply @11.30-11.38
 					(ty @11.30-11.35 (name "Maybe"))
-					(ty-var @11.36-11.36 (raw "a")))))
+					(ty-var @11.36-11.37 (raw "a")))))
 		(s-type-decl @13.1-13.13
 			(header @13.1-13.7 (name "MyType")
 				(args))
@@ -192,13 +194,13 @@ NO CHANGE
 				(ty-var @3.8-3.9 (name "b"))))
 		(ty-fn @3.13-3.41 (effectful false)
 			(ty-apply @3.13-3.20 (symbol "List")
-				(ty-var @3.18-3.18 (name "a")))
+				(ty-var @3.18-3.19 (name "a")))
 			(ty-parens @3.22-3.30
 				(ty-fn @3.23-3.29 (effectful false)
-					(ty-var @3.23-3.23 (name "a"))
-					(ty-var @1.1-1.1 (name "b"))))
+					(ty-var @3.23-3.24 (name "a"))
+					(ty-var @3.28-3.29 (name "b"))))
 			(ty-apply @3.34-3.41 (symbol "List")
-				(ty-var @3.39-3.39 (name "b")))))
+				(ty-var @3.39-3.40 (name "b")))))
 	(s-alias-decl @5.1-5.17
 		(ty-header @5.1-5.4 (name "Foo"))
 		(ty-tuple @5.7-5.17
@@ -211,7 +213,7 @@ NO CHANGE
 		(ty-record @7.11-7.43
 			(field (field "foo")
 				(ty-apply @7.19-7.24 (symbol "Ok")
-					(ty-var @7.22-7.22 (name "a"))))
+					(ty-var @7.22-7.23 (name "a"))))
 			(field (field "bar")
 				(ty @7.32-7.41 (name "Something")))))
 	(s-alias-decl @9.1-9.27
@@ -220,7 +222,7 @@ NO CHANGE
 				(ty-var @9.7-9.8 (name "a"))))
 		(ty-tag-union @9.12-9.27
 			(ty-apply @9.13-9.20 (symbol "Some")
-				(ty-var @9.18-9.18 (name "a")))
+				(ty-var @9.18-9.19 (name "a")))
 			(ty @9.22-9.26 (name "None"))))
 	(s-alias-decl @11.1-11.38
 		(ty-header @11.1-11.12 (name "SomeFunc")
@@ -228,10 +230,10 @@ NO CHANGE
 				(ty-var @11.10-11.11 (name "a"))))
 		(ty-fn @11.15-11.38 (effectful false)
 			(ty-apply @11.15-11.23 (symbol "Maybe")
-				(ty-var @11.21-11.21 (name "a")))
-			(ty-var @1.1-1.1 (name "a"))
+				(ty-var @11.21-11.22 (name "a")))
+			(ty-var @11.25-11.26 (name "a"))
 			(ty-apply @11.30-11.38 (symbol "Maybe")
-				(ty-var @11.36-11.36 (name "a")))))
+				(ty-var @11.36-11.37 (name "a")))))
 	(s-alias-decl @13.1-13.13
 		(ty-header @13.1-13.7 (name "MyType"))
 		(ty @13.10-13.13 (name "U64")))

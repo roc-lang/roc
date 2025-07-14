@@ -96,7 +96,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 42;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 45;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 28;
 /// Count of the statement nodes in the CIR
@@ -2492,6 +2492,24 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocato
             node.tag = .diag_f64_pattern_literal;
             region = r.region;
         },
+        .unused_type_var_name => |r| {
+            node.tag = .diag_unused_type_var_name;
+            region = r.region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = @bitCast(r.suggested_name);
+        },
+        .type_var_marked_unused => |r| {
+            node.tag = .diag_type_var_marked_unused;
+            region = r.region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = @bitCast(r.suggested_name);
+        },
+        .type_var_ending_in_underscore => |r| {
+            node.tag = .diag_type_var_ending_in_underscore;
+            region = r.region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = @bitCast(r.suggested_name);
+        },
     }
 
     const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
@@ -2727,6 +2745,21 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_f64_pattern_literal => return CIR.Diagnostic{ .f64_pattern_literal = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_unused_type_var_name => return CIR.Diagnostic{ .unused_type_var_name = .{
+            .name = @bitCast(node.data_1),
+            .suggested_name = @bitCast(node.data_2),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_type_var_marked_unused => return CIR.Diagnostic{ .type_var_marked_unused = .{
+            .name = @bitCast(node.data_1),
+            .suggested_name = @bitCast(node.data_2),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_type_var_ending_in_underscore => return CIR.Diagnostic{ .type_var_ending_in_underscore = .{
+            .name = @bitCast(node.data_1),
+            .suggested_name = @bitCast(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         else => {

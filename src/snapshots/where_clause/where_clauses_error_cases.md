@@ -25,8 +25,8 @@ broken_fn3 : a -> b
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:11
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:8
 INVALID STATEMENT - where_clauses_error_cases.md:6:25:6:26
-UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:1:1:1:1
-UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:1:1:1:1
+UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:24:15:25
+UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:29:15:30
 # PROBLEMS
 **WHERE CLAUSE ERROR**
 Expected a colon **:** after the method name in this where clause constraint.
@@ -80,11 +80,11 @@ The type variable ``c`` is not declared in this scope.
 Type variables must be introduced in a type annotation before they can be used.
 
 This type variable is referenced here:
-**where_clauses_error_cases.md:1:1:1:1:**
+**where_clauses_error_cases.md:15:24:15:25:**
 ```roc
-
+    module(c).method : c -> d,
 ```
-
+                       ^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -93,11 +93,11 @@ The type variable ``d`` is not declared in this scope.
 Type variables must be introduced in a type annotation before they can be used.
 
 This type variable is referenced here:
-**where_clauses_error_cases.md:1:1:1:1:**
+**where_clauses_error_cases.md:15:29:15:30:**
 ```roc
-
+    module(c).method : c -> d,
 ```
-
+                            ^
 
 
 **EXPOSED BUT NOT DEFINED**
@@ -147,32 +147,35 @@ KwModule(15:5-15:11),NoSpaceOpenRound(15:11-15:12),LowerIdent(15:12-15:13),Close
 (file @1.1-15.31
 	(module @1.1-1.44
 		(exposes @1.8-1.44
-			(exposed-lower-ident @1.9-1.19 (text "broken_fn1"))
-			(exposed-lower-ident @1.21-1.31 (text "broken_fn2"))
-			(exposed-lower-ident @1.33-1.43 (text "broken_fn3"))))
+			(exposed-lower-ident @1.9-1.19
+				(text "broken_fn1"))
+			(exposed-lower-ident @1.21-1.31
+				(text "broken_fn2"))
+			(exposed-lower-ident @1.33-1.43
+				(text "broken_fn3"))))
 	(statements
 		(s-type-anno @4.1-6.24 (name "broken_fn1")
 			(ty-fn @4.14-4.20
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "b")))
+				(ty-var @4.14-4.15 (raw "a"))
+				(ty-var @4.19-4.20 (raw "b")))
 			(where
 				(malformed @6.5-6.24 (reason "where_expected_colon"))))
 		(e-ident @6.25-6.26 (raw "b"))
 		(s-type-anno @9.1-10.8 (name "broken_fn2")
 			(ty-fn @9.14-9.20
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "b")))
+				(ty-var @9.14-9.15 (raw "a"))
+				(ty-var @9.19-9.20 (raw "b")))
 			(where
 				(malformed @10.3-10.8 (reason "where_expected_constraints"))))
 		(s-type-anno @13.1-15.31 (name "broken_fn3")
 			(ty-fn @13.14-13.20
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "b")))
+				(ty-var @13.14-13.15 (raw "a"))
+				(ty-var @13.19-13.20 (raw "b")))
 			(where
 				(method @15.5-15.30 (module-of "c") (name "method")
 					(args
-						(ty-var @1.1-1.1 (raw "c")))
-					(ty-var @1.1-1.1 (raw "d")))))))
+						(ty-var @15.24-15.25 (raw "c")))
+					(ty-var @15.29-15.30 (raw "d")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -199,25 +202,25 @@ broken_fn3 : a -> b
 (can-ir
 	(s-type-anno @4.1-6.24 (name "broken_fn1")
 		(ty-fn @4.14-4.20 (effectful false)
-			(ty-var @1.1-1.1 (name "a"))
-			(ty-var @1.1-1.1 (name "b")))
+			(ty-var @4.14-4.15 (name "a"))
+			(ty-var @4.19-4.20 (name "b")))
 		(where
 			(malformed @6.5-6.24)))
 	(s-type-anno @9.1-10.8 (name "broken_fn2")
 		(ty-fn @9.14-9.20 (effectful false)
-			(ty-var @1.1-1.1 (name "a"))
-			(ty-var @1.1-1.1 (name "b")))
+			(ty-var @9.14-9.15 (name "a"))
+			(ty-var @9.19-9.20 (name "b")))
 		(where
 			(malformed @10.3-10.8)))
 	(s-type-anno @13.1-15.31 (name "broken_fn3")
 		(ty-fn @13.14-13.20 (effectful false)
-			(ty-var @1.1-1.1 (name "a"))
-			(ty-var @1.1-1.1 (name "b")))
+			(ty-var @13.14-13.15 (name "a"))
+			(ty-var @13.19-13.20 (name "b")))
 		(where
 			(method @15.5-15.30 (module-of "c") (ident "method")
 				(args
-					(ty-var @1.1-1.1 (name "c")))
-				(ty-var @1.1-1.1 (name "d")))))
+					(ty-var @15.24-15.25 (name "c")))
+				(ty-var @15.29-15.30 (name "d")))))
 	(ext-decl @15.5-15.30 (ident "module(c).method") (kind "value")))
 ~~~
 # TYPES

@@ -28,7 +28,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 (file @1.1-6.15
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -40,11 +41,11 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 		(s-type-anno @3.1-3.24 (name "swap")
 			(ty-fn @3.8-3.24
 				(ty-tuple @3.8-3.14
-					(ty-var @3.9-3.9 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @3.9-3.10 (raw "a"))
+					(ty-var @3.12-3.13 (raw "b")))
 				(ty-tuple @3.18-3.24
-					(ty-var @3.19-3.19 (raw "b"))
-					(ty-var @1.1-1.1 (raw "a")))))
+					(ty-var @3.19-3.20 (raw "b"))
+					(ty-var @3.22-3.23 (raw "a")))))
 		(s-decl @4.1-4.23
 			(p-ident @4.1-4.5 (raw "swap"))
 			(e-lambda @4.8-4.23
@@ -87,11 +88,11 @@ NO CHANGE
 			(declared-type
 				(ty-fn @3.8-3.24 (effectful false)
 					(ty-tuple @3.8-3.14
-						(ty-var @3.9-3.9 (name "a"))
-						(ty-var @1.1-1.1 (name "b")))
+						(ty-var @3.9-3.10 (name "a"))
+						(ty-var @3.12-3.13 (name "b")))
 					(ty-tuple @3.18-3.24
-						(ty-var @3.19-3.19 (name "b"))
-						(ty-var @1.1-1.1 (name "a")))))))
+						(ty-var @3.19-3.20 (name "b"))
+						(ty-var @3.22-3.23 (name "a")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
@@ -104,8 +105,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @4.1-4.5 (type "(a, b) -> (b, a)"))
-		(patt @6.1-6.6 (type "arg -> {}")))
+		(patt @6.1-6.6 (type "_arg -> {}")))
 	(expressions
 		(expr @4.8-4.23 (type "(a, b) -> (b, a)"))
-		(expr @6.9-6.15 (type "arg -> {}"))))
+		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~

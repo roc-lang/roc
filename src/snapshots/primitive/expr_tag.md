@@ -22,7 +22,8 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),UpperIdent(2:7-2:15),EndOfFile(2:15-2:15),
 (file @1.1-2.15
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12 (text "foo"))))
+			(exposed-lower-ident @1.9-1.12
+				(text "foo"))))
 	(statements
 		(s-decl @2.1-2.15
 			(p-ident @2.1-2.4 (raw "foo"))
@@ -43,7 +44,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.4 (type "[FortyTwo]others")))
+		(patt @2.1-2.4 (type "[FortyTwo]_others")))
 	(expressions
-		(expr @2.7-2.15 (type "[FortyTwo]others"))))
+		(expr @2.7-2.15 (type "[FortyTwo]_others"))))
 ~~~

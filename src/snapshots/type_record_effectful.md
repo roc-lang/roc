@@ -36,7 +36,8 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 (file @1.1-10.15
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -134,8 +135,8 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt @6.1-6.10 (type "{ age: U64, name: Str } => Str"))
-		(patt @10.1-10.6 (type "arg -> {}")))
+		(patt @10.1-10.6 (type "_arg -> {}")))
 	(expressions
 		(expr @6.13-9.2 (type "{ age: U64, name: Str } => Str"))
-		(expr @10.9-10.15 (type "arg -> {}"))))
+		(expr @10.9-10.15 (type "_arg -> {}"))))
 ~~~

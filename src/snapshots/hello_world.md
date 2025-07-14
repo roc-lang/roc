@@ -26,7 +26,8 @@ LowerIdent(5:1-5:6),OpAssign(5:7-5:8),OpBar(5:9-5:10),Underscore(5:10-5:11),OpBa
 (file @1.1-5.42
 	(app @1.1-1.57
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
@@ -71,7 +72,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.6 (type "arg -> ret")))
+		(patt @5.1-5.6 (type "_arg -> _ret")))
 	(expressions
-		(expr @5.9-5.42 (type "arg -> ret"))))
+		(expr @5.9-5.42 (type "_arg -> _ret"))))
 ~~~

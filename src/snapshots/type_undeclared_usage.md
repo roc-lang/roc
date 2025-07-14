@@ -71,7 +71,8 @@ UpperIdent(10:1-10:12),OpColon(10:13-10:14),UpperIdent(10:15-10:25),NoSpaceDotUp
 	(module @1.1-1.30
 		(exposes @1.8-1.30
 			(exposed-upper-ident @1.9-1.15 (text "MyType"))
-			(exposed-lower-ident @1.17-1.29 (text "processValue"))))
+			(exposed-lower-ident @1.17-1.29
+				(text "processValue"))))
 	(statements
 		(s-type-decl @3.1-3.21
 			(header @3.1-3.7 (name "MyType")

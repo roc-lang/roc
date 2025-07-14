@@ -47,7 +47,8 @@ LowerIdent(9:1-9:7),OpAssign(9:8-9:9),UpperIdent(9:10-9:15),NoSpaceDotUpperIdent
 	(module @1.1-1.21
 		(exposes @1.8-1.21
 			(exposed-upper-ident @1.9-1.14 (text "Color"))
-			(exposed-lower-ident @1.16-1.20 (text "blue"))))
+			(exposed-lower-ident @1.16-1.20
+				(text "blue"))))
 	(statements
 		(s-type-decl @3.1-3.28
 			(header @3.1-3.6 (name "Color")

@@ -175,7 +175,7 @@ PARSE ERROR - fuzz_crash_027.md:159:2:159:2
 UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
 UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
 UNDECLARED TYPE - fuzz_crash_027.md:32:19:32:21
-UNDECLARED TYPE VARIABLE - fuzz_crash_027.md:1:1:1:1
+UNDECLARED TYPE VARIABLE - fuzz_crash_027.md:32:32:32:33
 UNDECLARED TYPE - fuzz_crash_027.md:34:8:34:11
 UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
 UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
@@ -343,11 +343,11 @@ The type variable ``g`` is not declared in this scope.
 Type variables must be introduced in a type annotation before they can be used.
 
 This type variable is referenced here:
-**fuzz_crash_027.md:1:1:1:1:**
+**fuzz_crash_027.md:32:32:32:33:**
 ```roc
-
+Some(a) : { foo : Ok(a), bar : g }
 ```
-
+                               ^
 
 
 **UNDECLARED TYPE**
@@ -832,7 +832,7 @@ The third pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red, Blue]others_
+    _[Red, Blue]_others_
 
 All patterns in an `match` must have compatible types.
 
@@ -847,10 +847,10 @@ This expression is used in an unexpected way:
  ^^^^^^^^^^
 
 It is of type:
-    _[Red, Blue]others, arg2 -> Error_
+    _[Red, Blue]_others, _arg2 -> Error_
 
 But you are trying to use it as:
-    _arg -> ret_
+    __arg -> _ret_
 
 # TOKENS
 ~~~zig
@@ -997,7 +997,8 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 (file @2.1-159.2
 	(app @2.1-2.33
 		(provides @2.5-2.12
-			(exposed-lower-ident @2.6-2.11 (text "main!")))
+			(exposed-lower-ident @2.6-2.11
+				(text "main!")))
 		(record-field @2.15-2.31 (name "pf")
 			(e-string @2.28-2.31
 				(e-string-part @2.29-2.30 (raw "c"))))
@@ -1008,12 +1009,16 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 	(statements
 		(s-import @4.1-4.38 (raw "pf.Stdout")
 			(exposing
-				(exposed-lower-ident @4.28-4.33 (text "line!"))
-				(exposed-lower-ident @4.35-4.37 (text "e!"))))
+				(exposed-lower-ident @4.28-4.33
+					(text "line!"))
+				(exposed-lower-ident @4.35-4.37
+					(text "e!"))))
 		(s-import @6.1-8.4 (raw "Stdot"))
 		(s-import @10.1-10.46 (raw "pkg.S")
 			(exposing
-				(exposed-lower-ident @10.24-10.35 (text "func") (as "fry"))
+				(exposed-lower-ident @10.24-10.35
+					(text "func")
+					(as "fry"))
 				(exposed-upper-ident-star @10.37-10.45 (text "Custom"))))
 		(s-import @12.1-12.19 (raw "Bae") (alias "Gooe"))
 		(s-import @13.1-14.4 (raw "Ba"))
@@ -1025,13 +1030,13 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 			(ty-fn @15.13-15.41
 				(ty-apply @15.13-15.20
 					(ty @15.13-15.17 (name "List"))
-					(ty-var @15.18-15.18 (raw "a")))
+					(ty-var @15.18-15.19 (raw "a")))
 				(ty-fn @15.23-15.29
-					(ty-var @15.23-15.23 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @15.23-15.24 (raw "a"))
+					(ty-var @15.28-15.29 (raw "b")))
 				(ty-apply @15.34-15.41
 					(ty @15.34-15.38 (name "List"))
-					(ty-var @15.39-15.39 (raw "b")))))
+					(ty-var @15.39-15.40 (raw "b")))))
 		(s-type-decl @16.1-24.15
 			(header @16.1-19.2 (name "MapML")
 				(args
@@ -1041,11 +1046,11 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 				(ty-apply @21.3-22.4
 					(ty @21.3-21.7 (name "List")))
 				(ty-fn @23.4-23.10
-					(ty-var @23.4-23.4 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @23.4-23.5 (raw "a"))
+					(ty-var @23.9-23.10 (raw "b")))
 				(ty-apply @24.4-24.15
 					(ty @24.4-24.8 (name "List"))
-					(ty-var @1.1-1.1 (raw "b")))))
+					(ty-var @24.12-24.13 (raw "b")))))
 		(s-type-decl @26.1-26.17
 			(header @26.1-26.4 (name "Foo")
 				(args))
@@ -1064,9 +1069,9 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 				(anno-record-field @32.13-32.24 (name "foo")
 					(ty-apply @32.19-32.24
 						(ty @32.19-32.21 (name "Ok"))
-						(ty-var @32.22-32.22 (raw "a"))))
+						(ty-var @32.22-32.23 (raw "a"))))
 				(anno-record-field @32.26-32.33 (name "bar")
-					(ty-var @1.1-1.1 (raw "g")))))
+					(ty-var @32.32-32.33 (raw "g")))))
 		(s-type-decl @33.1-35.2
 			(header @33.1-33.6 (name "Ml")
 				(args
@@ -1093,11 +1098,11 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 			(ty-fn @43.11-43.34
 				(ty-apply @43.11-43.19
 					(ty @43.11-43.16 (name "Maybe"))
-					(ty-var @43.17-43.17 (raw "a")))
-				(ty-var @1.1-1.1 (raw "a"))
+					(ty-var @43.17-43.18 (raw "a")))
+				(ty-var @43.21-43.22 (raw "a"))
 				(ty-apply @43.26-43.34
 					(ty @43.26-43.31 (name "Maybe"))
-					(ty-var @43.32-43.32 (raw "a")))))
+					(ty-var @43.32-43.33 (raw "a")))))
 		(s-decl @45.1-45.28
 			(p-ident @45.1-45.4 (raw "ane"))
 			(e-lambda @45.7-45.28
@@ -1437,9 +1442,9 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 							(ty-apply @153.9-153.25
 								(ty @153.9-153.14 (name "Value"))
 								(ty-tuple @153.15-153.24
-									(ty-var @153.16-153.16 (raw "a"))
-									(ty-var @1.1-1.1 (raw "b"))
-									(ty-var @1.1-1.1 (raw "c")))))
+									(ty-var @153.16-153.17 (raw "a"))
+									(ty-var @153.19-153.20 (raw "b"))
+									(ty-var @153.22-153.23 (raw "c")))))
 						(s-expect @155.1-159.2
 							(e-block @155.8-159.2
 								(statements
@@ -1996,9 +2001,9 @@ main! = |_| { # Yeah Ie
 				(s-type-anno @153.1-153.25 (name "tuple")
 					(ty-apply @153.9-153.25 (symbol "Value")
 						(ty-tuple @153.15-153.24
-							(ty-var @153.16-153.16 (name "a"))
-							(ty-var @1.1-1.1 (name "b"))
-							(ty-var @1.1-1.1 (name "c")))))
+							(ty-var @153.16-153.17 (name "a"))
+							(ty-var @153.19-153.20 (name "b"))
+							(ty-var @153.22-153.23 (name "c")))))
 				(s-expect @155.1-159.2
 					(e-block @155.8-159.2
 						(s-let @156.2-156.9
@@ -2040,13 +2045,13 @@ main! = |_| { # Yeah Ie
 				(ty-var @15.8-15.9 (name "b"))))
 		(ty-fn @15.13-15.41 (effectful false)
 			(ty-apply @15.13-15.20 (symbol "List")
-				(ty-var @15.18-15.18 (name "a")))
+				(ty-var @15.18-15.19 (name "a")))
 			(ty-parens @15.22-15.30
 				(ty-fn @15.23-15.29 (effectful false)
-					(ty-var @15.23-15.23 (name "a"))
-					(ty-var @1.1-1.1 (name "b"))))
+					(ty-var @15.23-15.24 (name "a"))
+					(ty-var @15.28-15.29 (name "b"))))
 			(ty-apply @15.34-15.41 (symbol "List")
-				(ty-var @15.39-15.39 (name "b")))))
+				(ty-var @15.39-15.40 (name "b")))))
 	(s-alias-decl @16.1-24.15
 		(ty-header @16.1-19.2 (name "MapML")
 			(ty-args
@@ -2056,10 +2061,10 @@ main! = |_| { # Yeah Ie
 			(ty-apply @21.3-22.4 (symbol "List"))
 			(ty-parens @23.3-23.11
 				(ty-fn @23.4-23.10 (effectful false)
-					(ty-var @23.4-23.4 (name "a"))
-					(ty-var @1.1-1.1 (name "b"))))
+					(ty-var @23.4-23.5 (name "a"))
+					(ty-var @23.9-23.10 (name "b"))))
 			(ty-apply @24.4-24.15 (symbol "List")
-				(ty-var @1.1-1.1 (name "b")))))
+				(ty-var @24.12-24.13 (name "b")))))
 	(s-alias-decl @26.1-26.17
 		(ty-header @26.1-26.4 (name "Foo"))
 		(ty-tuple @26.7-26.17
@@ -2072,9 +2077,9 @@ main! = |_| { # Yeah Ie
 		(ty-record @32.11-32.35
 			(field (field "foo")
 				(ty-apply @32.19-32.24 (symbol "Ok")
-					(ty-var @32.22-32.22 (name "a"))))
+					(ty-var @32.22-32.23 (name "a"))))
 			(field (field "bar")
-				(ty-var @1.1-1.1 (name "g")))))
+				(ty-var @32.32-32.33 (name "g")))))
 	(s-alias-decl @33.1-35.2
 		(ty-header @33.1-33.6 (name "Ml")
 			(ty-args
@@ -2098,10 +2103,10 @@ main! = |_| { # Yeah Ie
 				(ty-var @43.6-43.7 (name "a"))))
 		(ty-fn @43.11-43.34 (effectful false)
 			(ty-apply @43.11-43.19 (symbol "Maybe")
-				(ty-var @43.17-43.17 (name "a")))
-			(ty-var @1.1-1.1 (name "a"))
+				(ty-var @43.17-43.18 (name "a")))
+			(ty-var @43.21-43.22 (name "a"))
 			(ty-apply @43.26-43.34 (symbol "Maybe")
-				(ty-var @43.32-43.32 (name "a")))))
+				(ty-var @43.32-43.33 (name "a")))))
 	(s-import @4.1-4.38 (module "pf.Stdout") (qualifier "pf")
 		(exposes
 			(exposed (name "line!") (wildcard false))
@@ -2125,7 +2130,7 @@ main! = |_| { # Yeah Ie
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @45.1-45.4 (type "Bool -> Num(size)"))
+		(patt @45.1-45.4 (type "Bool -> Num(_size)"))
 		(patt @48.1-48.8 (type "Error -> Error"))
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error")))
@@ -2161,7 +2166,7 @@ main! = |_| { # Yeah Ie
 				(ty-args
 					(ty-var @43.6-43.7 (name "a"))))))
 	(expressions
-		(expr @45.7-45.28 (type "Bool -> Num(size)"))
+		(expr @45.7-45.28 (type "Bool -> Num(_size)"))
 		(expr @48.11-58.2 (type "Error -> Error"))
 		(expr @60.14-94.3 (type "Error"))
 		(expr @100.9-159.2 (type "Error -> Error"))))

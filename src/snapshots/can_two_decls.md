@@ -25,7 +25,8 @@ LowerIdent(4:1-4:2),OpAssign(4:3-4:4),LowerIdent(4:5-4:6),OpPlus(4:7-4:8),Int(4:
 (file @1.1-4.10
 	(app @1.1-1.57
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
@@ -64,9 +65,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.2 (type "Num(size)"))
-		(patt @4.1-4.2 (type "c")))
+		(patt @3.1-3.2 (type "Num(_size)"))
+		(patt @4.1-4.2 (type "_c")))
 	(expressions
-		(expr @3.5-3.6 (type "Num(size)"))
-		(expr @4.5-4.10 (type "c"))))
+		(expr @3.5-3.6 (type "Num(_size)"))
+		(expr @4.5-4.10 (type "_c"))))
 ~~~

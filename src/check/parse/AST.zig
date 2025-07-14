@@ -1693,22 +1693,34 @@ pub const ExposedItem = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("exposed-lower-ident");
                 try ast.appendRegionInfoToSexprTree(env, tree, i.region);
-                // text attribute
-                const token = ast.tokens.tokens.get(i.ident);
-                const text = env.idents.getText(token.extra.interned);
+
+                const attrs = tree.beginNode();
+
                 const text_begin = tree.beginNode();
                 try tree.pushStaticAtom("text");
+                const ident_idx = ast.tokens.resolveIdentifier(i.ident) orelse {
+                    // Fallback for malformed tokens
+                    try tree.pushString("MALFORMED");
+                    const attrs2 = tree.beginNode();
+                    try tree.endNode(text_begin, attrs2);
+                    try tree.endNode(begin, attrs);
+                    return;
+                };
+                const text = env.idents.getText(ident_idx);
                 try tree.pushString(text);
                 const attrs2 = tree.beginNode();
                 try tree.endNode(text_begin, attrs2);
 
                 // as attribute if present
                 if (i.as) |a| {
-                    const as_tok = ast.tokens.tokens.get(a);
-                    const as_text = env.idents.getText(as_tok.extra.interned);
+                    const as_ident = ast.tokens.resolveIdentifier(a) orelse {
+                        try tree.pushStringPair("as", "MALFORMED");
+                        try tree.endNode(begin, attrs);
+                        return;
+                    };
+                    const as_text = env.idents.getText(as_ident);
                     try tree.pushStringPair("as", as_text);
                 }
-                const attrs = tree.beginNode();
 
                 try tree.endNode(begin, attrs);
             },
@@ -1786,6 +1798,10 @@ pub const TypeAnno = union(enum) {
         tok: Token.Idx,
         region: TokenizedRegion,
     },
+    underscore_type_var: struct {
+        tok: Token.Idx,
+        region: TokenizedRegion,
+    },
     underscore: struct {
         region: TokenizedRegion,
     },
@@ -1839,6 +1855,7 @@ pub const TypeAnno = union(enum) {
         switch (self.*) {
             .apply => |a| return a.region,
             .ty_var => |tv| return tv.region,
+            .underscore_type_var => |utv| return utv.region,
             .underscore => |u| return u.region,
             .ty => |t| return t.region,
             .mod_ty => |t| return t.region,
@@ -1868,6 +1885,14 @@ pub const TypeAnno = union(enum) {
             .ty_var => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("ty-var");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try tree.pushStringPair("raw", ast.resolve(a.tok));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .underscore_type_var => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("underscore-ty-var");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.tok));
                 const attrs = tree.beginNode();

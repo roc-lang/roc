@@ -43,7 +43,8 @@ OpenCurly(3:2-3:3),LowerIdent(3:4-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14
 (file @1.1-3.29
 	(package @1.1-3.29
 		(exposes @2.2-2.24
-			(exposed-lower-ident @2.3-2.12 (text "something"))
+			(exposed-lower-ident @2.3-2.12
+				(text "something"))
 			(exposed-upper-ident @2.14-2.22 (text "SomeType")))
 		(packages @3.2-3.29
 			(record-field @3.4-3.26 (name "somePkg")

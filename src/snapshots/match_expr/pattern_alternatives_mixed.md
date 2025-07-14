@@ -36,7 +36,7 @@ The second pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _Num(size)_
+    _Num(_size)_
 
 All patterns in an `match` must have compatible types.
 

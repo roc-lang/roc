@@ -25,17 +25,18 @@ LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:13),Op
 (file @1.1-4.23
 	(module @1.1-1.17
 		(exposes @1.8-1.17
-			(exposed-lower-ident @1.9-1.16 (text "convert"))))
+			(exposed-lower-ident @1.9-1.16
+				(text "convert"))))
 	(statements
 		(s-type-anno @3.1-3.47 (name "convert")
 			(ty-fn @3.11-3.17
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "b")))
+				(ty-var @3.11-3.12 (raw "a"))
+				(ty-var @3.16-3.17 (raw "b")))
 			(where
 				(method @3.24-3.47 (module-of "a") (name "to_b")
 					(args
-						(ty-var @1.1-1.1 (raw "a")))
-					(ty-var @1.1-1.1 (raw "b")))))
+						(ty-var @3.41-3.42 (raw "a")))
+					(ty-var @3.46-3.47 (raw "b")))))
 		(s-decl @4.1-4.23
 			(p-ident @4.1-4.8 (raw "convert"))
 			(e-lambda @4.11-4.23
@@ -66,17 +67,17 @@ NO CHANGE
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.17 (effectful false)
-					(ty-var @1.1-1.1 (name "a"))
-					(ty-var @1.1-1.1 (name "b"))))))
+					(ty-var @3.11-3.12 (name "a"))
+					(ty-var @3.16-3.17 (name "b"))))))
 	(s-type-anno @3.1-3.47 (name "convert")
 		(ty-fn @3.11-3.17 (effectful false)
-			(ty-var @1.1-1.1 (name "a"))
-			(ty-var @1.1-1.1 (name "b")))
+			(ty-var @3.11-3.12 (name "a"))
+			(ty-var @3.16-3.17 (name "b")))
 		(where
 			(method @3.24-3.47 (module-of "a") (ident "to_b")
 				(args
-					(ty-var @1.1-1.1 (name "a")))
-				(ty-var @1.1-1.1 (name "b")))))
+					(ty-var @3.41-3.42 (name "a")))
+				(ty-var @3.46-3.47 (name "b")))))
 	(ext-decl @3.24-3.47 (ident "module(a).to_b") (kind "value")))
 ~~~
 # TYPES

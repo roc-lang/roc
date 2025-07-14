@@ -49,7 +49,8 @@ CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
 (file @1.1-11.2
 	(module @1.1-1.22
 		(exposes @1.8-1.22
-			(exposed-lower-ident @1.9-1.21 (text "handleResult"))))
+			(exposed-lower-ident @1.9-1.21
+				(text "handleResult"))))
 	(statements
 		(s-import @3.1-3.22 (raw "MyResultModule"))
 		(s-type-anno @5.1-5.60 (name "handleResult")

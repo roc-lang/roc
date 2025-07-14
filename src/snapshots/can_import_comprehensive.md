@@ -81,8 +81,10 @@ CloseCurly(35:1-35:2),EndOfFile(35:2-35:2),
 		(s-import @3.1-3.17 (raw "json.Json"))
 		(s-import @4.1-4.48 (raw "http.Client") (alias "Http")
 			(exposing
-				(exposed-lower-ident @4.38-4.41 (text "get"))
-				(exposed-lower-ident @4.43-4.47 (text "post"))))
+				(exposed-lower-ident @4.38-4.41
+					(text "get"))
+				(exposed-lower-ident @4.43-4.47
+					(text "post"))))
 		(s-import @5.1-5.27 (raw "utils.String") (alias "Str"))
 		(s-decl @7.1-35.2
 			(p-ident @7.1-7.5 (raw "main"))

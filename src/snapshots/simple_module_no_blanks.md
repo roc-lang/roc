@@ -26,8 +26,10 @@ LowerIdent(4:1-4:6),OpAssign(4:7-4:8),StringStart(4:9-4:10),StringPart(4:10-4:15
 (file @1.1-4.16
 	(module @1.1-1.23
 		(exposes @1.8-1.23
-			(exposed-lower-ident @1.9-1.15 (text "hello!"))
-			(exposed-lower-ident @1.17-1.22 (text "world"))))
+			(exposed-lower-ident @1.9-1.15
+				(text "hello!"))
+			(exposed-lower-ident @1.17-1.22
+				(text "world"))))
 	(statements
 		(s-import @2.1-2.17 (raw "pf.Stdout"))
 		(s-decl @3.1-3.31
@@ -67,9 +69,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.7 (type "a"))
+		(patt @3.1-3.7 (type "_a"))
 		(patt @4.1-4.6 (type "Str")))
 	(expressions
-		(expr @3.10-3.31 (type "a"))
+		(expr @3.10-3.31 (type "_a"))
 		(expr @4.9-4.16 (type "Str"))))
 ~~~

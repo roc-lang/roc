@@ -28,7 +28,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:15),NoSpaceDotUpperIdent(
 (file @1.1-6.20
 	(module @1.1-1.15
 		(exposes @1.8-1.15
-			(exposed-lower-ident @1.9-1.14 (text "value"))))
+			(exposed-lower-ident @1.9-1.14
+				(text "value"))))
 	(statements
 		(s-type-decl @3.1-3.23
 			(header @3.1-3.7 (name "MyType")

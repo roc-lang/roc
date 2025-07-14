@@ -33,5 +33,5 @@ OpAmpersand(3:1-3:2),LowerIdent(3:2-3:3),NoSpaceDotLowerIdent(3:3-3:5),EndOfFile
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.2 (type "Num(size)"))
+(expr @1.1-1.2 (type "Num(_size)"))
 ~~~

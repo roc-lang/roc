@@ -37,11 +37,11 @@ KwModule(5:5-5:11),NoSpaceOpenRound(5:11-5:12),LowerIdent(5:12-5:13),CloseRound(
 			(ty-apply @3.16-3.28
 				(ty @3.16-3.20 (name "Dict"))
 				(ty @3.21-3.24 (name "U64"))
-				(ty-var @1.1-1.1 (raw "v")))
+				(ty-var @3.26-3.27 (raw "v")))
 			(where
 				(method @5.5-5.30 (module-of "k") (name "hash")
 					(args
-						(ty-var @1.1-1.1 (raw "k")))
+						(ty-var @5.22-5.23 (raw "k")))
 					(ty @5.27-5.30 (name "U64")))))))
 ~~~
 # FORMATTED
@@ -62,11 +62,11 @@ Cache(k, v) := Dict(U64, v)
 				(ty-var @3.10-3.11 (name "v"))))
 		(ty-apply @3.16-3.28 (symbol "Dict")
 			(ty @3.21-3.24 (name "U64"))
-			(ty-var @1.1-1.1 (name "v")))
+			(ty-var @3.26-3.27 (name "v")))
 		(where
 			(method @5.5-5.30 (module-of "k") (ident "hash")
 				(args
-					(ty-var @1.1-1.1 (name "k")))
+					(ty-var @5.22-5.23 (name "k")))
 				(ty @5.27-5.30 (name "U64")))))
 	(ext-decl @5.5-5.30 (ident "module(k).hash") (kind "value")))
 ~~~

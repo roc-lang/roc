@@ -39,7 +39,8 @@ LowerIdent(13:1-13:6),OpAssign(13:7-13:8),OpBar(13:9-13:10),Underscore(13:10-13:
 (file @1.1-13.15
 	(app @1.1-1.57
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
@@ -50,8 +51,8 @@ LowerIdent(13:1-13:6),OpAssign(13:7-13:8),OpBar(13:9-13:10),Underscore(13:10-13:
 	(statements
 		(s-type-anno @4.1-4.15 (name "outer")
 			(ty-fn @4.9-4.15
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "a"))))
+				(ty-var @4.9-4.10 (raw "a"))
+				(ty-var @4.14-4.15 (raw "a"))))
 		(s-decl @5.1-11.2
 			(p-ident @5.1-5.6 (raw "outer"))
 			(e-lambda @5.9-11.2
@@ -61,8 +62,8 @@ LowerIdent(13:1-13:6),OpAssign(13:7-13:8),OpBar(13:9-13:10),Underscore(13:10-13:
 					(statements
 						(s-type-anno @7.5-7.19 (name "inner")
 							(ty-fn @7.13-7.19
-								(ty-var @1.1-1.1 (raw "a"))
-								(ty-var @1.1-1.1 (raw "a"))))
+								(ty-var @7.13-7.14 (raw "a"))
+								(ty-var @7.18-7.19 (raw "a"))))
 						(s-decl @8.5-8.18
 							(p-ident @8.5-8.10 (raw "inner"))
 							(e-lambda @8.13-8.18
@@ -107,8 +108,8 @@ main! = |_| {}
 			(e-block @5.13-11.2
 				(s-type-anno @7.5-7.19 (name "inner")
 					(ty-fn @7.13-7.19 (effectful false)
-						(ty-var @1.1-1.1 (name "a"))
-						(ty-var @1.1-1.1 (name "a"))))
+						(ty-var @7.13-7.14 (name "a"))
+						(ty-var @7.18-7.19 (name "a"))))
 				(s-let @8.5-8.18
 					(p-assign @8.5-8.10 (ident "inner"))
 					(e-lambda @8.13-8.18
@@ -124,8 +125,8 @@ main! = |_| {}
 		(annotation @5.1-5.6
 			(declared-type
 				(ty-fn @4.9-4.15 (effectful false)
-					(ty-var @1.1-1.1 (name "a"))
-					(ty-var @1.1-1.1 (name "a"))))))
+					(ty-var @4.9-4.10 (name "a"))
+					(ty-var @4.14-4.15 (name "a"))))))
 	(d-let
 		(p-assign @13.1-13.6 (ident "main!"))
 		(e-lambda @13.9-13.15
@@ -138,8 +139,8 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt @5.1-5.6 (type "a -> a"))
-		(patt @13.1-13.6 (type "arg -> {}")))
+		(patt @13.1-13.6 (type "_arg -> {}")))
 	(expressions
 		(expr @5.9-11.2 (type "a -> a"))
-		(expr @13.9-13.15 (type "arg -> {}"))))
+		(expr @13.9-13.15 (type "_arg -> {}"))))
 ~~~

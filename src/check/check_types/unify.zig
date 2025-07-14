@@ -336,8 +336,8 @@ fn Unifier(comptime StoreTypeB: type) type {
         // merge
 
         /// Link the variables & updated the content in the type_store
+        /// In the old compiler, this function was called "merge"
         fn merge(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) void {
-            // TODO: Why is this types_store_a?
             self.types_store_a.union_(vars.a.var_, vars.b.var_, .{
                 .content = new_content,
                 .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),

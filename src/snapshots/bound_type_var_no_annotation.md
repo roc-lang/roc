@@ -67,7 +67,8 @@ CloseCurly(25:1-25:2),EndOfFile(25:2-25:2),
 (file @1.1-25.2
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -84,11 +85,11 @@ CloseCurly(25:1-25:2),EndOfFile(25:2-25:2),
 				(e-ident @3.16-3.17 (raw "x"))))
 		(s-type-anno @6.1-6.25 (name "combine")
 			(ty-fn @6.11-6.25
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "b"))
+				(ty-var @6.11-6.12 (raw "a"))
+				(ty-var @6.14-6.15 (raw "b"))
 				(ty-tuple @6.19-6.25
-					(ty-var @6.20-6.20 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))))
+					(ty-var @6.20-6.21 (raw "a"))
+					(ty-var @6.23-6.24 (raw "b")))))
 		(s-decl @7.1-7.42
 			(p-ident @7.1-7.8 (raw "combine"))
 			(e-lambda @7.11-7.42
@@ -194,11 +195,11 @@ main! = |_| {
 		(annotation @7.1-7.8
 			(declared-type
 				(ty-fn @6.11-6.25 (effectful false)
-					(ty-var @1.1-1.1 (name "a"))
-					(ty-var @1.1-1.1 (name "b"))
+					(ty-var @6.11-6.12 (name "a"))
+					(ty-var @6.14-6.15 (name "b"))
 					(ty-tuple @6.19-6.25
-						(ty-var @6.20-6.20 (name "a"))
-						(ty-var @1.1-1.1 (name "b")))))))
+						(ty-var @6.20-6.21 (name "a"))
+						(ty-var @6.23-6.24 (name "b")))))))
 	(d-let
 		(p-assign @11.1-11.7 (ident "addOne"))
 		(e-lambda @11.10-11.19
@@ -254,13 +255,13 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.9 (type "arg -> arg"))
+		(patt @3.1-3.9 (type "_arg -> _ret"))
 		(patt @7.1-7.8 (type "a, b -> (a, b)"))
 		(patt @11.1-11.7 (type "U64 -> U64"))
-		(patt @13.1-13.6 (type "arg2 -> U64")))
+		(patt @13.1-13.6 (type "_arg -> U64")))
 	(expressions
-		(expr @3.12-3.17 (type "arg -> arg"))
+		(expr @3.12-3.17 (type "_arg -> _ret"))
 		(expr @7.11-7.42 (type "a, b -> (a, b)"))
 		(expr @11.10-11.19 (type "U64 -> U64"))
-		(expr @13.9-25.2 (type "arg2 -> U64"))))
+		(expr @13.9-25.2 (type "_arg -> U64"))))
 ~~~

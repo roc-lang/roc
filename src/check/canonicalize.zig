@@ -20,6 +20,18 @@ const Node = @import("./canonicalize/Node.zig");
 const AST = parse.AST;
 const Token = tokenize.Token;
 
+const TypeVarProblemKind = enum {
+    unused_type_var,
+    type_var_marked_unused,
+    type_var_ending_in_underscore,
+};
+
+const TypeVarProblem = struct {
+    ident: Ident.Idx,
+    problem: TypeVarProblemKind,
+    ast_anno: AST.TypeAnno.Idx,
+};
+
 can_ir: *CIR,
 parse_ir: *AST,
 scopes: std.ArrayListUnmanaged(Scope) = .{},
@@ -45,6 +57,10 @@ import_indices: std.StringHashMapUnmanaged(CIR.Import.Idx),
 scratch_vars: base.Scratch(TypeVar),
 /// Scratch ident
 scratch_idents: base.Scratch(Ident.Idx),
+/// Scratch type variable identifiers for underscore validation
+scratch_type_var_validation: base.Scratch(Ident.Idx),
+/// Scratch type variable problems
+scratch_type_var_problems: base.Scratch(TypeVarProblem),
 /// Scratch ident
 scratch_record_fields: base.Scratch(types.RecordField),
 /// Scratch ident
@@ -115,6 +131,8 @@ pub fn deinit(
     self.used_patterns.deinit(gpa);
     self.scratch_vars.deinit(gpa);
     self.scratch_idents.deinit(gpa);
+    self.scratch_type_var_validation.deinit(gpa);
+    self.scratch_type_var_problems.deinit(gpa);
     self.scratch_record_fields.deinit(gpa);
     self.scratch_seen_record_fields.deinit(gpa);
     self.import_indices.deinit(gpa);
@@ -137,6 +155,8 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
         .import_indices = std.StringHashMapUnmanaged(CIR.Import.Idx){},
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
         .scratch_idents = try base.Scratch(Ident.Idx).init(gpa),
+        .scratch_type_var_validation = try base.Scratch(Ident.Idx).init(gpa),
+        .scratch_type_var_problems = try base.Scratch(TypeVarProblem).init(gpa),
         .scratch_record_fields = try base.Scratch(types.RecordField).init(gpa),
         .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
         .exposed_scope = Scope.init(false),
@@ -3757,6 +3777,128 @@ fn canonicalizeTagVariant(self: *Self, anno_idx: AST.TypeAnno.Idx) std.mem.Alloc
 // Others, however, like alias or nominal tag annotations, cannot.
 const CanIntroduceVars = enum(u1) { can_introduce_vars, cannot_introduce_vars };
 
+fn collectTypeVarProblems(ident: Ident.Idx, is_single_use: bool, ast_anno: AST.TypeAnno.Idx, gpa: std.mem.Allocator, scratch: *base.Scratch(TypeVarProblem)) void {
+    // Warn for type variables with trailing underscores
+    if (ident.attributes.reassignable) {
+        scratch.append(gpa, .{ .ident = ident, .problem = .type_var_ending_in_underscore, .ast_anno = ast_anno });
+    }
+
+    // Should start with underscore but doesn't, or should not start with underscore but does.
+    if (is_single_use != ident.attributes.ignored) {
+        const problem_type: TypeVarProblemKind = if (is_single_use) .unused_type_var else .type_var_marked_unused;
+        scratch.append(gpa, .{ .ident = ident, .problem = problem_type, .ast_anno = ast_anno });
+    }
+}
+
+fn reportTypeVarProblems(self: *Self, problems: []const TypeVarProblem) std.mem.Allocator.Error!void {
+    for (problems) |problem| {
+        const region = self.getTypeVarRegionFromAST(problem.ast_anno, problem.ident) orelse Region.zero();
+        const name_text = self.can_ir.env.idents.getText(problem.ident);
+
+        switch (problem.problem) {
+            .type_var_ending_in_underscore => {
+                const suggested_name_text = name_text[0 .. name_text.len - 1]; // Remove the trailing underscore
+                const suggested_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(suggested_name_text), Region.zero());
+
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .type_var_ending_in_underscore = .{
+                    .name = problem.ident,
+                    .suggested_name = suggested_ident,
+                    .region = region,
+                } });
+            },
+            .unused_type_var => {
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .unused_type_var_name = .{
+                    .name = problem.ident,
+                    .suggested_name = problem.ident,
+                    .region = region,
+                } });
+            },
+            .type_var_marked_unused => {
+                const suggested_name_text = name_text[1..]; // Remove the underscore
+                const suggested_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(suggested_name_text), Region.zero());
+
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .type_var_marked_unused = .{
+                    .name = problem.ident,
+                    .suggested_name = suggested_ident,
+                    .region = region,
+                } });
+            },
+        }
+    }
+}
+
+fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
+    // Process all type variables collected during type annotation parsing
+    // and report any underscore convention violations
+    const problems_start = self.scratch_type_var_problems.top();
+    defer self.scratch_type_var_problems.clearFrom(problems_start);
+
+    // Process from the end to avoid index shifting
+    while (self.scratch_type_var_validation.items.items.len > 0) {
+        // Pop the last item
+        const last_idx = self.scratch_type_var_validation.items.items.len - 1;
+        const first_ident = self.scratch_type_var_validation.items.items[last_idx];
+        self.scratch_type_var_validation.items.shrinkRetainingCapacity(last_idx);
+        var found_another = false;
+
+        // Check if there are any other occurrences of this variable
+        var i: usize = 0;
+        while (i < self.scratch_type_var_validation.items.items.len) {
+            if (self.scratch_type_var_validation.items.items[i].idx == first_ident.idx) {
+                found_another = true;
+                // Remove this occurrence by swapping with the last element and shrinking
+                const last = self.scratch_type_var_validation.items.items.len - 1;
+                self.scratch_type_var_validation.items.items[i] = self.scratch_type_var_validation.items.items[last];
+                self.scratch_type_var_validation.items.shrinkRetainingCapacity(last);
+            } else {
+                i += 1;
+            }
+        }
+
+        // Collect problems for this type variable
+        const is_single_use = !found_another;
+        // Use a dummy AST annotation index since we don't have the context
+        collectTypeVarProblems(first_ident, is_single_use, @enumFromInt(0), self.can_ir.env.gpa, &self.scratch_type_var_problems);
+    }
+
+    // Report any problems we found
+    const problems = self.scratch_type_var_problems.slice(problems_start, self.scratch_type_var_problems.top());
+    // Report problems with zero regions since we don't have AST context
+    for (problems) |problem| {
+        const name_text = self.can_ir.env.idents.getText(problem.ident);
+
+        switch (problem.problem) {
+            .type_var_ending_in_underscore => {
+                const suggested_name_text = name_text[0 .. name_text.len - 1]; // Remove the trailing underscore
+                const suggested_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(suggested_name_text), Region.zero());
+
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .type_var_ending_in_underscore = .{
+                    .name = problem.ident,
+                    .suggested_name = suggested_ident,
+                    .region = Region.zero(),
+                } });
+            },
+            .unused_type_var => {
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .unused_type_var_name = .{
+                    .name = problem.ident,
+                    .suggested_name = problem.ident,
+                    .region = Region.zero(),
+                } });
+            },
+            .type_var_marked_unused => {
+                const suggested_name_text = name_text[1..]; // Remove the underscore
+                const suggested_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(suggested_name_text), Region.zero());
+
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .type_var_marked_unused = .{
+                    .name = problem.ident,
+                    .suggested_name = suggested_ident,
+                    .region = Region.zero(),
+                } });
+            },
+        }
+    }
+}
+
 /// Canonicalize a statement within a block
 fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars: CanIntroduceVars) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
     const trace = tracy.trace(@src());
@@ -3833,6 +3975,34 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                     .region = region,
                 } });
             }
+
+            // Track this type variable for underscore validation
+            try self.scratch_type_var_validation.append(self.can_ir.env.gpa, name_ident);
+
+            return try self.can_ir.addTypeAnnoAndTypeVar(.{ .ty_var = .{
+                .name = name_ident,
+            } }, Content{ .flex_var = null }, region);
+        },
+        .underscore_type_var => |underscore_ty_var| {
+            const region = self.parse_ir.tokenizedRegionToRegion(underscore_ty_var.region);
+            const name_ident = self.parse_ir.tokens.resolveIdentifier(underscore_ty_var.tok) orelse {
+                return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{
+                    .region = region,
+                } });
+            };
+
+            // Check if this type variable is in scope
+            const type_var_in_scope = self.scopeLookupTypeVar(name_ident);
+            if (type_var_in_scope == null and can_intro_vars == .cannot_introduce_vars) {
+                // Type variable not found in scope - issue diagnostic
+                try self.can_ir.pushDiagnostic(CIR.Diagnostic{ .undeclared_type_var = .{
+                    .name = name_ident,
+                    .region = region,
+                } });
+            }
+
+            // Track this type variable for underscore validation
+            try self.scratch_type_var_validation.append(self.can_ir.env.gpa, name_ident);
 
             return try self.can_ir.addTypeAnnoAndTypeVar(.{ .ty_var = .{
                 .name = name_ident,
@@ -4040,6 +4210,9 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             } });
         },
     }
+
+    // Process any type variables collected during canonicalization
+    try self.processCollectedTypeVars();
 }
 
 fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, can_intro_vars: CanIntroduceVars) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
@@ -4621,6 +4794,15 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
                 _ = try self.scratch_idents.append(self.can_ir.env.gpa, ident);
             }
         },
+        .underscore_type_var => |underscore_ty_var| {
+            if (self.parse_ir.tokens.resolveIdentifier(underscore_ty_var.tok)) |ident| {
+                // Check if we already have this type variable
+                for (self.scratch_idents.sliceFromStart(idents_start_idx)) |existing| {
+                    if (existing.idx == ident.idx) return; // Already added
+                }
+                try self.scratch_idents.append(self.can_ir.env.gpa, ident);
+            }
+        },
         .apply => |apply| {
             for (self.parse_ir.store.typeAnnoSlice(apply.args)) |arg_idx| {
                 try self.extractTypeVarIdentsFromASTAnno(arg_idx, idents_start_idx);
@@ -4664,6 +4846,14 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
                 if (ident.idx == target_ident.idx) {
                     return self.parse_ir.tokenizedRegionToRegion(ty_var.region);
+                }
+            }
+            return null;
+        },
+        .underscore_type_var => |underscore_ty_var| {
+            if (self.parse_ir.tokens.resolveIdentifier(underscore_ty_var.tok)) |ident| {
+                if (ident.idx == target_ident.idx) {
+                    return self.parse_ir.tokenizedRegionToRegion(underscore_ty_var.region);
                 }
             }
             return null;

@@ -83,5 +83,5 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.21 (type "a"))
+(expr @1.1-1.21 (type "_a"))
 ~~~

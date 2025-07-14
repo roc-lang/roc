@@ -173,6 +173,21 @@ pub const Diagnostic = union(enum) {
     f64_pattern_literal: struct {
         region: Region,
     },
+    unused_type_var_name: struct {
+        name: Ident.Idx,
+        suggested_name: Ident.Idx,
+        region: Region,
+    },
+    type_var_marked_unused: struct {
+        name: Ident.Idx,
+        suggested_name: Ident.Idx,
+        region: Region,
+    },
+    type_var_ending_in_underscore: struct {
+        name: Ident.Idx,
+        suggested_name: Ident.Idx,
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -222,6 +237,9 @@ pub const Diagnostic = union(enum) {
             .empty_single_quote => |d| d.region,
             .empty_tuple => |d| d.region,
             .f64_pattern_literal => |d| d.region,
+            .unused_type_var_name => |d| d.region,
+            .type_var_marked_unused => |d| d.region,
+            .type_var_ending_in_underscore => |d| d.region,
         };
     }
 
@@ -1206,6 +1224,103 @@ pub const Diagnostic = union(enum) {
             .error_highlight,
             owned_filename,
         );
+
+        return report;
+    }
+
+    /// Build a report for "unused type variable name" diagnostic
+    pub fn buildUnusedTypeVarNameReport(
+        allocator: Allocator,
+        type_var_name: []const u8,
+        suggested_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "UNUSED TYPE VARIABLE NAME", .warning);
+        const owned_type_var_name = try report.addOwnedString(type_var_name);
+        const suggested_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{suggested_name});
+        const owned_suggested_name = try report.addOwnedString(suggested_with_underscore);
+
+        try report.document.addText("The type variable `");
+        try report.document.addUnqualifiedSymbol(owned_type_var_name);
+        try report.document.addText("` appears only once in this type annotation.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Since this type variable is only used once, it should start with an underscore to indicate it's unbound. Try `");
+        try report.document.addInlineCode(owned_suggested_name);
+        try report.document.addReflowingText("` instead.");
+
+        return report;
+    }
+
+    /// Build a report for "type variable marked unused" diagnostic
+    pub fn buildTypeVarMarkedUnusedReport(
+        allocator: Allocator,
+        type_var_name: []const u8,
+        suggested_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "TYPE VARIABLE MARKED UNUSED", .warning);
+        const owned_type_var_name = try report.addOwnedString(type_var_name);
+        const owned_suggested_name = try report.addOwnedString(suggested_name);
+
+        try report.document.addText("The type variable `");
+        try report.document.addUnqualifiedSymbol(owned_type_var_name);
+        try report.document.addText("` starts with an underscore but appears multiple times in this type annotation.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Since this type variable is used multiple times, it should not start with an underscore. Try `");
+        try report.document.addInlineCode(owned_suggested_name);
+        try report.document.addReflowingText("` instead.");
+
+        return report;
+    }
+
+    /// Build a report for "type variable ending in underscore" diagnostic
+    pub fn buildTypeVarEndingInUnderscoreReport(
+        allocator: Allocator,
+        type_var_name: []const u8,
+        suggested_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "TYPE VARIABLE ENDING IN UNDERSCORE", .warning);
+        const owned_type_var_name = try report.addOwnedString(type_var_name);
+        const owned_suggested_name = try report.addOwnedString(suggested_name);
+
+        try report.document.addText("The type variable `");
+        try report.document.addUnqualifiedSymbol(owned_type_var_name);
+        try report.document.addText("` ends with an underscore.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Type variables should only end with underscores if they were declared with the `var` keyword. Since type variables cannot be declared with `var`, they should never end with an underscore. Try `");
+        try report.document.addInlineCode(owned_suggested_name);
+        try report.document.addReflowingText("` instead.");
 
         return report;
     }

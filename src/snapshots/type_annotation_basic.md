@@ -70,7 +70,8 @@ CloseCurly(27:1-27:2),EndOfFile(27:2-27:2),
 (file @1.1-27.2
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -81,8 +82,8 @@ CloseCurly(27:1-27:2),EndOfFile(27:2-27:2),
 	(statements
 		(s-type-anno @4.1-4.18 (name "identity")
 			(ty-fn @4.12-4.18
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "a"))))
+				(ty-var @4.12-4.13 (raw "a"))
+				(ty-var @4.17-4.18 (raw "a"))))
 		(s-decl @5.1-5.17
 			(p-ident @5.1-5.9 (raw "identity"))
 			(e-lambda @5.12-5.17
@@ -91,11 +92,11 @@ CloseCurly(27:1-27:2),EndOfFile(27:2-27:2),
 				(e-ident @5.16-5.17 (raw "x"))))
 		(s-type-anno @8.1-8.25 (name "combine")
 			(ty-fn @8.11-8.25
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "b"))
+				(ty-var @8.11-8.12 (raw "a"))
+				(ty-var @8.14-8.15 (raw "b"))
 				(ty-tuple @8.19-8.25
-					(ty-var @8.20-8.20 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))))
+					(ty-var @8.20-8.21 (raw "a"))
+					(ty-var @8.23-8.24 (raw "b")))))
 		(s-decl @9.1-9.42
 			(p-ident @9.1-9.8 (raw "combine"))
 			(e-lambda @9.11-9.42
@@ -191,8 +192,8 @@ main! = |_| {
 		(annotation @5.1-5.9
 			(declared-type
 				(ty-fn @4.12-4.18 (effectful false)
-					(ty-var @1.1-1.1 (name "a"))
-					(ty-var @1.1-1.1 (name "a"))))))
+					(ty-var @4.12-4.13 (name "a"))
+					(ty-var @4.17-4.18 (name "a"))))))
 	(d-let
 		(p-assign @9.1-9.8 (ident "combine"))
 		(e-lambda @9.11-9.42
@@ -208,11 +209,11 @@ main! = |_| {
 		(annotation @9.1-9.8
 			(declared-type
 				(ty-fn @8.11-8.25 (effectful false)
-					(ty-var @1.1-1.1 (name "a"))
-					(ty-var @1.1-1.1 (name "b"))
+					(ty-var @8.11-8.12 (name "a"))
+					(ty-var @8.14-8.15 (name "b"))
 					(ty-tuple @8.19-8.25
-						(ty-var @8.20-8.20 (name "a"))
-						(ty-var @1.1-1.1 (name "b")))))))
+						(ty-var @8.20-8.21 (name "a"))
+						(ty-var @8.23-8.24 (name "b")))))))
 	(d-let
 		(p-assign @13.1-13.7 (ident "addOne"))
 		(e-lambda @13.10-13.19
@@ -271,10 +272,10 @@ main! = |_| {
 		(patt @5.1-5.9 (type "a -> a"))
 		(patt @9.1-9.8 (type "a, b -> (a, b)"))
 		(patt @13.1-13.7 (type "U64 -> U64"))
-		(patt @15.1-15.6 (type "arg -> U64")))
+		(patt @15.1-15.6 (type "_arg -> U64")))
 	(expressions
 		(expr @5.12-5.17 (type "a -> a"))
 		(expr @9.11-9.42 (type "a, b -> (a, b)"))
 		(expr @13.10-13.19 (type "U64 -> U64"))
-		(expr @15.9-27.2 (type "arg -> U64"))))
+		(expr @15.9-27.2 (type "_arg -> U64"))))
 ~~~

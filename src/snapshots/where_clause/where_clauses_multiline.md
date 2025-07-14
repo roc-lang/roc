@@ -31,22 +31,23 @@ LowerIdent(7:1-7:8),OpAssign(7:9-7:10),TripleDot(7:11-7:14),EndOfFile(7:14-7:14)
 (file @1.1-7.14
 	(module @1.1-1.17
 		(exposes @1.8-1.17
-			(exposed-lower-ident @1.9-1.16 (text "process"))))
+			(exposed-lower-ident @1.9-1.16
+				(text "process"))))
 	(statements
 		(s-type-anno @3.1-6.31 (name "process")
 			(ty-fn @3.11-3.20
-				(ty-var @1.1-1.1 (raw "a"))
-				(ty-var @1.1-1.1 (raw "b"))
-				(ty-var @1.1-1.1 (raw "c")))
+				(ty-var @3.11-3.12 (raw "a"))
+				(ty-var @3.14-3.15 (raw "b"))
+				(ty-var @3.19-3.20 (raw "c")))
 			(where
 				(method @5.2-5.28 (module-of "a") (name "convert")
 					(args
-						(ty-var @1.1-1.1 (raw "a")))
-					(ty-var @1.1-1.1 (raw "c")))
+						(ty-var @5.22-5.23 (raw "a")))
+					(ty-var @5.27-5.28 (raw "c")))
 				(method @6.2-6.30 (module-of "b") (name "transform")
 					(args
-						(ty-var @1.1-1.1 (raw "b")))
-					(ty-var @1.1-1.1 (raw "c")))))
+						(ty-var @6.24-6.25 (raw "b")))
+					(ty-var @6.29-6.30 (raw "c")))))
 		(s-decl @7.1-7.14
 			(p-ident @7.1-7.8 (raw "process"))
 			(e-ellipsis))))
@@ -64,23 +65,23 @@ NO CHANGE
 		(annotation @7.1-7.8
 			(declared-type
 				(ty-fn @3.11-3.20 (effectful false)
-					(ty-var @1.1-1.1 (name "a"))
-					(ty-var @1.1-1.1 (name "b"))
-					(ty-var @1.1-1.1 (name "c"))))))
+					(ty-var @3.11-3.12 (name "a"))
+					(ty-var @3.14-3.15 (name "b"))
+					(ty-var @3.19-3.20 (name "c"))))))
 	(s-type-anno @3.1-6.31 (name "process")
 		(ty-fn @3.11-3.20 (effectful false)
-			(ty-var @1.1-1.1 (name "a"))
-			(ty-var @1.1-1.1 (name "b"))
-			(ty-var @1.1-1.1 (name "c")))
+			(ty-var @3.11-3.12 (name "a"))
+			(ty-var @3.14-3.15 (name "b"))
+			(ty-var @3.19-3.20 (name "c")))
 		(where
 			(method @5.2-5.28 (module-of "a") (ident "convert")
 				(args
-					(ty-var @1.1-1.1 (name "a")))
-				(ty-var @1.1-1.1 (name "c")))
+					(ty-var @5.22-5.23 (name "a")))
+				(ty-var @5.27-5.28 (name "c")))
 			(method @6.2-6.30 (module-of "b") (ident "transform")
 				(args
-					(ty-var @1.1-1.1 (name "b")))
-				(ty-var @1.1-1.1 (name "c")))))
+					(ty-var @6.24-6.25 (name "b")))
+				(ty-var @6.29-6.30 (name "c")))))
 	(ext-decl @5.2-5.28 (ident "module(a).convert") (kind "value"))
 	(ext-decl @6.2-6.30 (ident "module(b).transform") (kind "value")))
 ~~~

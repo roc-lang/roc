@@ -31,7 +31,8 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 (file @1.1-8.25
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -118,11 +119,11 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @6.1-6.8 (type "UserId -> Str"))
-		(patt @8.1-8.6 (type "arg -> Str")))
+		(patt @8.1-8.6 (type "_arg -> Str")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
 		(expr @6.11-6.47 (type "UserId -> Str"))
-		(expr @8.9-8.25 (type "arg -> Str"))))
+		(expr @8.9-8.25 (type "_arg -> Str"))))
 ~~~

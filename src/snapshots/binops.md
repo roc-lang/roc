@@ -172,5 +172,5 @@ CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-17.2 (type "(field, field2, field3, field4, field5, field6, field7, field8, field9, field10, field11, field12, field13, field14, field15)"))
+(expr @1.1-17.2 (type "(_field, _field2, _field3, _field4, _field5, _field6, _field7, _field8, _field9, _field10, _field11, _field12, _field13, _field14, _field15)"))
 ~~~

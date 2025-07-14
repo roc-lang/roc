@@ -108,7 +108,7 @@ testFunc = |input| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.9 (type "arg -> ret")))
+		(patt @4.1-4.9 (type "_arg -> _ret")))
 	(expressions
-		(expr @4.12-10.2 (type "arg -> ret"))))
+		(expr @4.12-10.2 (type "_arg -> _ret"))))
 ~~~
