@@ -25,8 +25,6 @@ const benchTokenizer = bench.benchTokenizer;
 const benchParse = bench.benchParse;
 
 const Allocator = std.mem.Allocator;
-const exitOnOom = collections.utils.exitOnOom;
-const fatal = collections.utils.fatal;
 const ColorPalette = reporting.ColorPalette;
 
 const legalDetailsFileContent = @embedFile("legal_details");
@@ -60,7 +58,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
 
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
-    const parsed_args = cli_args.parse(gpa, args[1..]);
+    const parsed_args = try cli_args.parse(gpa, args[1..]);
     defer parsed_args.deinit(gpa);
     try switch (parsed_args) {
         .run => |run_args| rocRun(gpa, run_args),
@@ -330,4 +328,13 @@ fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
     _ = gpa;
     _ = args;
     fatal("docs not implemented", .{});
+}
+
+/// Log a fatal error and exit the process with a non-zero code.
+pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
+    std.io.getStdErr().writer().print(format, args) catch unreachable;
+    if (tracy.enable) {
+        tracy.waitForShutdown() catch unreachable;
+    }
+    std.process.exit(1);
 }

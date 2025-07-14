@@ -4,9 +4,6 @@
 //! memory alignment constants used throughout the compiler, particularly
 //! for stack allocations in the interpreter.
 
-/// Utilities for managing collections.
-pub const utils = @import("collections/utils.zig");
-
 const std = @import("std");
 
 /// The highest alignment any Roc type can have.
@@ -37,8 +34,6 @@ pub const NonEmptyRange = struct {
 };
 
 pub const SmallStringInterner = @import("collections/SmallStringInterner.zig");
-
-pub const exitOnOom = @import("collections/utils.zig").exitOnOom;
 
 /// A key-value map that uses direct array indexing instead of hashing.
 /// Keys must be enums that are convertible to indices, and key value 0 is reserved

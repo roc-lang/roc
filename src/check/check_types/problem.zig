@@ -1361,9 +1361,9 @@ pub const Store = struct {
 
     problems: Problem.SafeMultiList,
 
-    pub fn initCapacity(gpa: Allocator, capacity: usize) Self {
+    pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
-            .problems = Problem.SafeMultiList.initCapacity(gpa, capacity),
+            .problems = try Problem.SafeMultiList.initCapacity(gpa, capacity),
         };
     }
 
@@ -1372,7 +1372,7 @@ pub const Store = struct {
     }
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
-    pub fn appendProblem(self: *Self, gpa: Allocator, problem: Problem) Problem.SafeMultiList.Idx {
-        return self.problems.append(gpa, problem);
+    pub fn appendProblem(self: *Self, gpa: Allocator, problem: Problem) std.mem.Allocator.Error!Problem.SafeMultiList.Idx {
+        return try self.problems.append(gpa, problem);
     }
 };

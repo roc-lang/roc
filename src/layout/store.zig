@@ -24,7 +24,6 @@ const TupleData = layout_.TupleData;
 const TupleIdx = layout_.TupleIdx;
 const SizeAlign = layout_.SizeAlign;
 const Work = work.Work;
-const exitOnOom = collections.utils.exitOnOom;
 
 /// Errors that can occur during layout computation
 pub const LayoutError = error{
@@ -108,22 +107,22 @@ pub const Store = struct {
 
         // Pre-populate primitive type layouts in order matching the Idx enum.
         // Changing the order of these can break things!
-        _ = layouts.append(env.gpa, Layout.boolType());
-        _ = layouts.append(env.gpa, Layout.str());
-        _ = layouts.append(env.gpa, Layout.opaquePtr());
-        _ = layouts.append(env.gpa, Layout.int(.u8));
-        _ = layouts.append(env.gpa, Layout.int(.i8));
-        _ = layouts.append(env.gpa, Layout.int(.u16));
-        _ = layouts.append(env.gpa, Layout.int(.i16));
-        _ = layouts.append(env.gpa, Layout.int(.u32));
-        _ = layouts.append(env.gpa, Layout.int(.i32));
-        _ = layouts.append(env.gpa, Layout.int(.u64));
-        _ = layouts.append(env.gpa, Layout.int(.i64));
-        _ = layouts.append(env.gpa, Layout.int(.u128));
-        _ = layouts.append(env.gpa, Layout.int(.i128));
-        _ = layouts.append(env.gpa, Layout.frac(.f32));
-        _ = layouts.append(env.gpa, Layout.frac(.f64));
-        _ = layouts.append(env.gpa, Layout.frac(.dec));
+        _ = try layouts.append(env.gpa, Layout.boolType());
+        _ = try layouts.append(env.gpa, Layout.str());
+        _ = try layouts.append(env.gpa, Layout.opaquePtr());
+        _ = try layouts.append(env.gpa, Layout.int(.u8));
+        _ = try layouts.append(env.gpa, Layout.int(.i8));
+        _ = try layouts.append(env.gpa, Layout.int(.u16));
+        _ = try layouts.append(env.gpa, Layout.int(.i16));
+        _ = try layouts.append(env.gpa, Layout.int(.u32));
+        _ = try layouts.append(env.gpa, Layout.int(.i32));
+        _ = try layouts.append(env.gpa, Layout.int(.u64));
+        _ = try layouts.append(env.gpa, Layout.int(.i64));
+        _ = try layouts.append(env.gpa, Layout.int(.u128));
+        _ = try layouts.append(env.gpa, Layout.int(.i128));
+        _ = try layouts.append(env.gpa, Layout.frac(.f32));
+        _ = try layouts.append(env.gpa, Layout.frac(.f64));
+        _ = try layouts.append(env.gpa, Layout.frac(.dec));
 
         std.debug.assert(layouts.len() == num_scalars);
 
@@ -131,11 +130,11 @@ pub const Store = struct {
             .env = env,
             .types_store = type_store,
             .layouts = layouts,
-            .tuple_elems = collections.SafeList(Idx).initCapacity(env.gpa, 512),
-            .record_fields = RecordField.SafeMultiList.initCapacity(env.gpa, 256),
-            .record_data = collections.SafeList(RecordData).initCapacity(env.gpa, 256),
-            .tuple_fields = TupleField.SafeMultiList.initCapacity(env.gpa, 256),
-            .tuple_data = collections.SafeList(TupleData).initCapacity(env.gpa, 256),
+            .tuple_elems = try collections.SafeList(Idx).initCapacity(env.gpa, 512),
+            .record_fields = try RecordField.SafeMultiList.initCapacity(env.gpa, 256),
+            .record_data = try collections.SafeList(RecordData).initCapacity(env.gpa, 256),
+            .tuple_fields = try TupleField.SafeMultiList.initCapacity(env.gpa, 256),
+            .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
         };
@@ -371,7 +370,7 @@ pub const Store = struct {
 
         // Now add them to the record_fields store in the sorted order
         for (temp_fields.items) |sorted_field| {
-            _ = self.record_fields.append(self.env.gpa, sorted_field);
+            _ = try self.record_fields.append(self.env.gpa, sorted_field);
         }
 
         // Calculate max alignment and total size of all fields
@@ -404,7 +403,7 @@ pub const Store = struct {
 
         // Store the record data
         const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
-        _ = self.record_data.append(self.env.gpa, RecordData{
+        _ = try self.record_data.append(self.env.gpa, RecordData{
             .size = total_size,
             .fields = fields_range,
         });
@@ -469,7 +468,7 @@ pub const Store = struct {
 
         // Now add them to the tuple_fields store in the sorted order
         for (temp_fields.items) |sorted_field| {
-            _ = self.tuple_fields.append(self.env.gpa, sorted_field);
+            _ = try self.tuple_fields.append(self.env.gpa, sorted_field);
         }
 
         // Calculate max alignment and total size of all fields
@@ -502,7 +501,7 @@ pub const Store = struct {
 
         // Store the tuple data
         const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
-        _ = self.tuple_data.append(self.env.gpa, TupleData{
+        _ = try self.tuple_data.append(self.env.gpa, TupleData{
             .size = total_size,
             .fields = fields_range,
         });
@@ -938,7 +937,7 @@ pub const Store = struct {
         }
 
         // For non-scalar types, insert as normal
-        const safe_list_idx = self.layouts.append(self.env.gpa, layout);
+        const safe_list_idx = try self.layouts.append(self.env.gpa, layout);
         return @enumFromInt(@intFromEnum(safe_list_idx));
     }
 };

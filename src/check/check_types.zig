@@ -24,7 +24,6 @@ const Region = base.Region;
 const Func = types_mod.Func;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
-const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
 
@@ -94,10 +93,10 @@ pub fn init(
         .cir = cir,
         .other_modules = other_modules,
         .regions = regions,
-        .snapshots = snapshot.Store.initCapacity(gpa, 512),
-        .problems = problem.Store.initCapacity(gpa, 64),
-        .unify_scratch = unifier.Scratch.init(gpa),
-        .occurs_scratch = occurs.Scratch.init(gpa),
+        .snapshots = try snapshot.Store.initCapacity(gpa, 512),
+        .problems = try problem.Store.initCapacity(gpa, 64),
+        .unify_scratch = try unifier.Scratch.init(gpa),
+        .occurs_scratch = try occurs.Scratch.init(gpa),
         .instantiate_subs = instantiate.VarSubstitution.init(gpa),
         .import_cache = ImportCache{},
     };
@@ -130,11 +129,11 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 // unify //
 
 /// Unify two types
-pub fn unify(self: *Self, a: Var, b: Var) unifier.Result {
+pub fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return unifier.unify(
+    return try unifier.unify(
         self.cir.env,
         self.types,
         &self.problems,
@@ -221,7 +220,7 @@ fn setRegionAt(self: *Self, target_var: Var, new_region: Region) void {
 
 /// The the region for a variable
 fn fresh(self: *Self, new_region: Region) Allocator.Error!Var {
-    const var_ = self.types.fresh();
+    const var_ = try self.types.fresh();
     try self.fillInRegionsThrough(var_);
     self.setRegionAt(var_, new_region);
     return var_;
@@ -229,7 +228,7 @@ fn fresh(self: *Self, new_region: Region) Allocator.Error!Var {
 
 /// The the region for a variable
 fn freshFromContent(self: *Self, content: Content, new_region: Region) Allocator.Error!Var {
-    const var_ = self.types.freshFromContent(content);
+    const var_ = try self.types.freshFromContent(content);
     try self.fillInRegionsThrough(var_);
     self.setRegionAt(var_, new_region);
     return var_;
@@ -279,15 +278,15 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
         }
 
         // Unify the expression with its annotation
-        _ = self.unify(expr_var, annotation.signature);
+        _ = try self.unify(expr_var, annotation.signature);
     }
 
     // Unify the def with its expression
-    _ = self.unify(def_var, CIR.varFrom(def.expr));
+    _ = try self.unify(def_var, CIR.varFrom(def.expr));
 
     // Also unify the pattern with the def - needed so lookups work correctly
     // TODO could we unify directly with the pattern elsewhere, to save a type var and unify() here?
-    _ = self.unify(CIR.varFrom(def.pattern), def_var);
+    _ = try self.unify(CIR.varFrom(def.pattern), def_var);
 }
 
 /// Check the types for an exprexpression. Returns whether evaluating the expr might perform side effects.
@@ -310,7 +309,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // The lookup expression should have the same type as the pattern it refers to
             const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
             const pattern_var = @as(Var, @enumFromInt(@intFromEnum(local.pattern_idx)));
-            _ = self.unify(lookup_var, pattern_var);
+            _ = try self.unify(lookup_var, pattern_var);
         },
         .e_lookup_external => |e| {
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
@@ -352,7 +351,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 // Note: This unification uses "preserve" mode internally (via copy_import),
                 // which means the imported type (copied_var) is read-only. This is why
                 // we can safely cache and reuse copied_var for multiple imports.
-                const result = self.unify(expr_var, copied_var);
+                const result = try self.unify(expr_var, copied_var);
                 if (result.isProblem()) {
                     self.setProblemTypeMismatchDetail(result.problem, .{
                         .cross_module_import = .{
@@ -384,7 +383,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 does_fx = try self.checkExpr(elem_expr_id) or does_fx;
 
                 // Unify each element's var with the list's elem var
-                const result = self.unify(elem_var, @enumFromInt(@intFromEnum(elem_expr_id)));
+                const result = try self.unify(elem_var, @enumFromInt(@intFromEnum(elem_expr_id)));
                 self.setDetailIfTypeMismatch(result, problem.TypeMismatchDetail{ .incompatible_list_elements = .{
                     .last_elem_expr = last_elem_idx,
                     .incompatible_elem_index = @intCast(i),
@@ -504,9 +503,9 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 // TODO: Do we need to insert a CIR placeholder node here as well?
                 // What happens if later this type variable has a problem, and we
                 // try to look up its region in CIR?
-                const func_content = self.types.mkFuncUnbound(arg_vars, call_var);
+                const func_content = try self.types.mkFuncUnbound(arg_vars, call_var);
                 const expected_func_var = try self.freshFromContent(func_content, expr_region);
-                _ = self.unify(expected_func_var, current_func_var);
+                _ = try self.unify(expected_func_var, current_func_var);
             }
         },
         .e_record => |e| {
@@ -547,7 +546,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                             // STEP 4: Unify field type variable with field value type variable
                             // This is where concrete types (like Str, Num) get propagated
                             // from field values to the record structure
-                            _ = self.unify(type_field_var, field_expr_type_var);
+                            _ = try self.unify(type_field_var, field_expr_type_var);
                             break;
                         }
                     }
@@ -598,7 +597,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, .{ .explicit = expr_region });
 
             // Then, unify the nominal type's backing var against the CIR backing var
-            const result = self.unify(instantiated_backing_var, expr_backing_var);
+            const result = try self.unify(instantiated_backing_var, expr_backing_var);
 
             // Handle the result
             switch (result) {
@@ -607,7 +606,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     const instantiated_qualified_var = try self.instantiateVar(nominal_var, .{ .explicit = expr_region });
 
                     // Unify - this should always succeed expr_var should be flex var
-                    _ = self.unify(expr_var, instantiated_qualified_var);
+                    _ = try self.unify(expr_var, instantiated_qualified_var);
                 },
                 .problem => |problem_idx| {
                     // Depending on the type of the backing variable, set the type
@@ -644,7 +643,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         // Unify the pattern with the expression
                         const pattern_var: Var = @enumFromInt(@intFromEnum(decl_stmt.pattern));
                         const expr_var: Var = @enumFromInt(@intFromEnum(decl_stmt.expr));
-                        _ = self.unify(pattern_var, expr_var);
+                        _ = try self.unify(pattern_var, expr_var);
                     },
                     .s_reassign => |reassign| {
                         does_fx = try self.checkExpr(reassign.expr) or does_fx;
@@ -662,7 +661,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             does_fx = try self.checkExpr(block.final_expr) or does_fx;
 
             // Link the root expr with the final expr
-            _ = self.unify(
+            _ = try self.unify(
                 @enumFromInt(@intFromEnum(expr_idx)),
                 @enumFromInt(@intFromEnum(block.final_expr)),
             );
@@ -703,13 +702,13 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                             var origin_module: ?*const CIR = null;
 
                             // Check if it's the current module
-                            const current_module_ident = self.cir.env.idents.insert(self.gpa, base.Ident.for_text(self.cir.module_name), base.Region.zero());
+                            const current_module_ident = try self.cir.env.idents.insert(self.gpa, base.Ident.for_text(self.cir.module_name), base.Region.zero());
                             if (std.mem.eql(u8, origin_module_path, self.cir.env.idents.getText(current_module_ident))) {
                                 origin_module = self.cir;
                             } else {
                                 // Search through imported modules
                                 for (self.other_modules, 0..) |other_module, idx| {
-                                    const other_module_ident = other_module.env.idents.insert(self.gpa, base.Ident.for_text(other_module.module_name), base.Region.zero());
+                                    const other_module_ident = try other_module.env.idents.insert(self.gpa, base.Ident.for_text(other_module.module_name), base.Region.zero());
                                     const other_path = other_module.env.idents.getText(other_module_ident);
                                     if (std.mem.eql(u8, origin_module_path, other_path)) {
                                         origin_module_idx = @enumFromInt(idx);
@@ -775,11 +774,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
                                     // Create a function type for the method call
                                     const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                                    const func_content = self.types.mkFuncUnbound(args.items, dot_access_var);
+                                    const func_content = try self.types.mkFuncUnbound(args.items, dot_access_var);
                                     const expected_func_var = try self.freshFromContent(func_content, expr_region);
 
                                     // Unify with the imported method type
-                                    _ = self.unify(expected_func_var, method_var);
+                                    _ = try self.unify(expected_func_var, method_var);
 
                                     // Store the resolved method info for code generation
                                     // This will be used by the code generator to emit the correct function call
@@ -809,7 +808,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                             if (field_name == dot_access.field_name) {
                                 // Unify the dot access expression with the field type
                                 const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                                _ = self.unify(dot_access_var, field_var);
+                                _ = try self.unify(dot_access_var, field_var);
                                 break;
                             }
                         }
@@ -823,7 +822,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                             if (field_name == dot_access.field_name) {
                                 // Unify the dot access expression with the field type
                                 const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                                _ = self.unify(dot_access_var, field_var);
+                                _ = try self.unify(dot_access_var, field_var);
                                 break;
                             }
                         }
@@ -838,10 +837,10 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     // Create a fresh variable for the field type
                     const field_var = try self.fresh(expr_region);
                     const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                    _ = self.unify(dot_access_var, field_var);
+                    _ = try self.unify(dot_access_var, field_var);
 
                     // Create a record type with this field
-                    const field_idx = self.types.appendRecordField(.{
+                    const field_idx = try self.types.appendRecordField(.{
                         .name = dot_access.field_name,
                         .var_ = field_var,
                     });
@@ -864,7 +863,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     // What happens if later this type variable has a problem, and we
                     // try to look up it's region in CIR?
                     const record_var = try self.freshFromContent(record_content, expr_region);
-                    _ = self.unify(receiver_var, record_var);
+                    _ = try self.unify(receiver_var, record_var);
                 },
                 else => {
                     // Other cases (rigid_var, alias, etc.) - let unification handle errors
@@ -898,16 +897,16 @@ fn unifyCallWithFunc(
     // unification process handle the arity mismatch error
     if (inst_args.len == arg_vars.len) {
         for (inst_args, arg_vars) |inst_arg, actual_arg| {
-            _ = self.unify(actual_arg, inst_arg);
+            _ = try self.unify(actual_arg, inst_arg);
         }
         // The call's type is the instantiated return type
-        _ = self.unify(call_var, func.ret);
+        _ = try self.unify(call_var, func.ret);
     } else {
         // Fall back to normal unification to get proper error message
         // Use the original func_var to avoid issues with instantiated variables in error reporting
-        const func_content = self.types.mkFuncUnbound(arg_vars, call_var);
+        const func_content = try self.types.mkFuncUnbound(arg_vars, call_var);
         const expected_func_var = try self.freshFromContent(func_content, region);
-        _ = self.unify(expected_func_var, original_func_var);
+        _ = try self.unify(expected_func_var, original_func_var);
     }
 }
 
@@ -940,11 +939,11 @@ fn checkLambdaWithExpected(
 
     if (is_effectful) {
         // If the function body does effects, create an effectful function.
-        _ = try self.types.setVarContent(fn_var, self.types.mkFuncEffectful(arg_vars, return_var));
+        _ = try self.types.setVarContent(fn_var, try self.types.mkFuncEffectful(arg_vars, return_var));
     } else {
         // If the function body does *not* do effects, create an unbound function.
         // (Pure would mean it's *annotated* as pure, but we aren't claiming that here!)
-        _ = try self.types.setVarContent(fn_var, self.types.mkFuncUnbound(arg_vars, return_var));
+        _ = try self.types.setVarContent(fn_var, try self.types.mkFuncUnbound(arg_vars, return_var));
     }
 
     // If the expected type is a function, then check the args and return type
@@ -962,19 +961,19 @@ fn checkLambdaWithExpected(
                     if (expected_args.len == arg_patterns.len) {
                         for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
                             const pattern_var = CIR.varFrom(pattern_idx);
-                            _ = self.unify(pattern_var, expected_arg);
+                            _ = try self.unify(pattern_var, expected_arg);
                         }
-                        _ = self.unify(return_var, func.ret);
+                        _ = try self.unify(return_var, func.ret);
                     } else {
-                        _ = self.unify(fn_var, instantiated_var);
+                        _ = try self.unify(fn_var, instantiated_var);
                     }
                 },
                 else => {
-                    _ = self.unify(fn_var, instantiated_var);
+                    _ = try self.unify(fn_var, instantiated_var);
                 },
             }
         } else {
-            _ = self.unify(fn_var, instantiated_var);
+            _ = try self.unify(fn_var, instantiated_var);
         }
     }
 
@@ -997,7 +996,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
         },
         .@"and" => {
             const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
-            const lhs_result = self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
+            const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
                 .problem_side = .lhs,
@@ -1006,7 +1005,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
 
             if (lhs_result.isOk()) {
                 const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
-                const rhs_result = self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
+                const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
                     .problem_side = .rhs,
@@ -1016,7 +1015,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
         },
         .@"or" => {
             const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
-            const lhs_result = self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
+            const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
                 .problem_side = .lhs,
@@ -1025,7 +1024,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
 
             if (lhs_result.isOk()) {
                 const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
-                const rhs_result = self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
+                const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
                     .problem_side = .rhs,
@@ -1065,7 +1064,7 @@ fn checkIfElseExpr(
     var does_fx = try self.checkExpr(first_branch.cond);
     const first_cond_var: Var = @enumFromInt(@intFromEnum(first_branch.cond));
     const bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
-    const first_cond_result = self.unify(bool_var, first_cond_var);
+    const first_cond_result = try self.unify(bool_var, first_cond_var);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
     // Then we check the 1st branch's body
@@ -1085,13 +1084,13 @@ fn checkIfElseExpr(
         does_fx = try self.checkExpr(branch.cond) or does_fx;
         const cond_var: Var = @enumFromInt(@intFromEnum(branch.cond));
         const branch_bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
-        const cond_result = self.unify(branch_bool_var, cond_var);
+        const cond_result = try self.unify(branch_bool_var, cond_var);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
         // Check the branch body
         does_fx = try self.checkExpr(branch.body) or does_fx;
         const body_var: Var = @enumFromInt(@intFromEnum(branch.body));
-        const body_result = self.unify(branch_var, body_var);
+        const body_result = try self.unify(branch_var, body_var);
         self.setDetailIfTypeMismatch(body_result, problem.TypeMismatchDetail{ .incompatible_if_branches = .{
             .parent_if_expr = if_expr_idx,
             .last_if_branch = last_if_branch,
@@ -1108,7 +1107,7 @@ fn checkIfElseExpr(
                 const remaining_cond_var: Var = @enumFromInt(@intFromEnum(remaining_branch.cond));
 
                 const fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
-                const remaining_cond_result = self.unify(fresh_bool, remaining_cond_var);
+                const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 
                 does_fx = try self.checkExpr(remaining_branch.body) or does_fx;
@@ -1125,7 +1124,7 @@ fn checkIfElseExpr(
     // Check the final else
     does_fx = try self.checkExpr(if_.final_else) or does_fx;
     const final_else_var: Var = @enumFromInt(@intFromEnum(if_.final_else));
-    const final_else_result = self.unify(branch_var, final_else_var);
+    const final_else_result = try self.unify(branch_var, final_else_var);
     self.setDetailIfTypeMismatch(final_else_result, problem.TypeMismatchDetail{ .incompatible_if_branches = .{
         .parent_if_expr = if_expr_idx,
         .last_if_branch = last_if_branch,
@@ -1167,7 +1166,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
         try self.checkPattern(branch_ptrn.pattern);
         const branch_ptrn_var = CIR.varFrom(branch_ptrn.pattern);
 
-        const ptrn_result = self.unify(cond_var, branch_ptrn_var);
+        const ptrn_result = try self.unify(cond_var, branch_ptrn_var);
         self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
             .match_expr = expr_idx,
             .num_branches = @intCast(match.branches.span.len),
@@ -1194,7 +1193,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
             // Check the pattern against the cond
             const branch_ptrn_var = CIR.varFrom(branch_ptrn.pattern);
-            const ptrn_result = self.unify(cond_var, branch_ptrn_var);
+            const ptrn_result = try self.unify(cond_var, branch_ptrn_var);
             self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                 .match_expr = expr_idx,
                 .num_branches = @intCast(match.branches.span.len),
@@ -1206,7 +1205,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
         // Then, check the body
         does_fx = try self.checkExpr(branch.value) or does_fx;
-        const branch_result = self.unify(branch_var, CIR.varFrom(branch.value));
+        const branch_result = try self.unify(branch_var, CIR.varFrom(branch.value));
         self.setDetailIfTypeMismatch(branch_result, problem.TypeMismatchDetail{ .incompatible_match_branches = .{
             .match_expr = expr_idx,
             .num_branches = @intCast(match.branches.span.len),
@@ -1228,7 +1227,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
                     // Check the pattern against the cond
                     const other_branch_ptrn_var = CIR.varFrom(other_branch_ptrn.pattern);
-                    const ptrn_result = self.unify(cond_var, other_branch_ptrn_var);
+                    const ptrn_result = try self.unify(cond_var, other_branch_ptrn_var);
                     self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                         .match_expr = expr_idx,
                         .num_branches = @intCast(match.branches.span.len),
@@ -1304,19 +1303,19 @@ test "minimum signed values fit in their respective types" {
 
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
-    var problems = problem.Store.initCapacity(gpa, 16);
+    var problems = try problem.Store.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = snapshot.Store.initCapacity(gpa, 16);
+    var snapshots = try snapshot.Store.initCapacity(gpa, 16);
     defer snapshots.deinit();
 
-    var unify_scratch = unifier.Scratch.init(gpa);
+    var unify_scratch = try unifier.Scratch.init(gpa);
     defer unify_scratch.deinit();
 
-    var occurs_scratch = occurs.Scratch.init(gpa);
+    var occurs_scratch = try occurs.Scratch.init(gpa);
     defer occurs_scratch.deinit();
 
     inline for (test_cases) |tc| {
@@ -1335,10 +1334,10 @@ test "minimum signed values fit in their respective types" {
             .bits_needed = @intFromEnum(types_mod.Num.Int.BitsNeeded.fromValue(adjusted_val)),
         };
 
-        const literal_var = module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_unbound = requirements } } });
-        const type_var = module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_compact = .{ .int = tc.type } } } });
+        const literal_var = try module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_unbound = requirements } } });
+        const type_var = try module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_compact = .{ .int = tc.type } } } });
 
-        const result = unifier.unify(
+        const result = try unifier.unify(
             &module_env,
             &module_env.types,
             &problems,
@@ -1463,10 +1462,10 @@ test "lambda with record field access infers correct type" {
     const gpa = std.testing.allocator;
 
     // Create a minimal environment for testing
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env, "Test");
+    var cir = try CIR.init(&module_env, "Test");
     defer cir.deinit();
 
     const empty_modules: []const *CIR = &.{};
@@ -1474,21 +1473,21 @@ test "lambda with record field access infers correct type" {
     defer solver.deinit();
 
     // Create type variables for the lambda parameters
-    const param_x_var = module_env.types.fresh();
-    const param_y_var = module_env.types.fresh();
+    const param_x_var = try module_env.types.fresh();
+    const param_y_var = try module_env.types.fresh();
 
     // Create a record with fields x and y
     var record_fields = std.ArrayList(types_mod.RecordField).init(gpa);
     defer record_fields.deinit();
 
-    const x_ident = module_env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident = module_env.idents.insert(gpa, base.Ident.for_text("y"), base.Region.zero());
+    const x_ident = try module_env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero());
+    const y_ident = try module_env.idents.insert(gpa, base.Ident.for_text("y"), base.Region.zero());
 
     try record_fields.append(.{ .name = x_ident, .var_ = param_x_var });
     try record_fields.append(.{ .name = y_ident, .var_ = param_y_var });
 
-    const fields_range = module_env.types.appendRecordFields(record_fields.items);
-    const ext_var = module_env.types.fresh();
+    const fields_range = try module_env.types.appendRecordFields(record_fields.items);
+    const ext_var = try module_env.types.fresh();
     const record_content = types_mod.Content{
         .structure = .{
             .record = .{
@@ -1497,16 +1496,16 @@ test "lambda with record field access infers correct type" {
             },
         },
     };
-    _ = module_env.types.freshFromContent(record_content);
+    _ = try module_env.types.freshFromContent(record_content);
 
     // Simulate field access: record.x
     // The result type should unify with param_x_var
-    const field_access_var = module_env.types.fresh();
-    _ = solver.unify(field_access_var, param_x_var);
+    const field_access_var = try module_env.types.fresh();
+    _ = try solver.unify(field_access_var, param_x_var);
 
     // Create the lambda type: param_x, param_y -> field_access_result
-    const lambda_content = module_env.types.mkFuncUnbound(&[_]types_mod.Var{ param_x_var, param_y_var }, field_access_var);
-    const lambda_var = module_env.types.freshFromContent(lambda_content);
+    const lambda_content = try module_env.types.mkFuncUnbound(&[_]types_mod.Var{ param_x_var, param_y_var }, field_access_var);
+    const lambda_var = try module_env.types.freshFromContent(lambda_content);
 
     // The lambda should have type a, b -> a (param_x and return type are unified)
     const resolved_lambda = module_env.types.resolveVar(lambda_var);
@@ -1524,15 +1523,15 @@ test "lambda with record field access infers correct type" {
 
     // Now test with annotation: I32, I32 -> I32
     const i32_content = types_mod.Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
-    const i32_var1 = module_env.types.freshFromContent(i32_content);
-    const i32_var2 = module_env.types.freshFromContent(i32_content);
-    const i32_var3 = module_env.types.freshFromContent(i32_content);
+    const i32_var1 = try module_env.types.freshFromContent(i32_content);
+    const i32_var2 = try module_env.types.freshFromContent(i32_content);
+    const i32_var3 = try module_env.types.freshFromContent(i32_content);
 
-    const annotated_func = module_env.types.mkFuncPure(&[_]types_mod.Var{ i32_var1, i32_var2 }, i32_var3);
-    const annotation_var = module_env.types.freshFromContent(annotated_func);
+    const annotated_func = try module_env.types.mkFuncPure(&[_]types_mod.Var{ i32_var1, i32_var2 }, i32_var3);
+    const annotation_var = try module_env.types.freshFromContent(annotated_func);
 
     // Unify the lambda with its annotation
-    const unify_result = solver.unify(lambda_var, annotation_var);
+    const unify_result = try solver.unify(lambda_var, annotation_var);
     try std.testing.expect(unify_result == .ok);
 
     // Verify the lambda now has the concrete type
@@ -1542,15 +1541,15 @@ test "lambda with record field access infers correct type" {
 
     // Test call site: when calling with integer literals
     const num_unbound = types_mod.Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
-    const lit1_var = module_env.types.freshFromContent(num_unbound);
-    const lit2_var = module_env.types.freshFromContent(num_unbound);
-    const call_result_var = module_env.types.fresh();
+    const lit1_var = try module_env.types.freshFromContent(num_unbound);
+    const lit2_var = try module_env.types.freshFromContent(num_unbound);
+    const call_result_var = try module_env.types.fresh();
 
-    const expected_func_content = module_env.types.mkFuncUnbound(&[_]types_mod.Var{ lit1_var, lit2_var }, call_result_var);
-    const expected_func_var = module_env.types.freshFromContent(expected_func_content);
+    const expected_func_content = try module_env.types.mkFuncUnbound(&[_]types_mod.Var{ lit1_var, lit2_var }, call_result_var);
+    const expected_func_var = try module_env.types.freshFromContent(expected_func_content);
 
     // The critical fix: unify expected with actual (not the other way around)
-    const call_unify_result = solver.unify(expected_func_var, lambda_var);
+    const call_unify_result = try solver.unify(expected_func_var, lambda_var);
     try std.testing.expect(call_unify_result == .ok);
 
     // Verify the literals got constrained to I32
@@ -1568,10 +1567,10 @@ test "dot access properly unifies field types with parameters" {
     const gpa = std.testing.allocator;
 
     // Create a minimal environment for testing
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env, "Test");
+    var cir = try CIR.init(&module_env, "Test");
     defer cir.deinit();
 
     const empty_modules: []const *CIR = &.{};
@@ -1579,17 +1578,17 @@ test "dot access properly unifies field types with parameters" {
     defer solver.deinit();
 
     // Create a parameter type variable
-    const param_var = module_env.types.fresh();
+    const param_var = try module_env.types.fresh();
 
     // Create a record with field "x" of the same type as the parameter
     var record_fields = std.ArrayList(types_mod.RecordField).init(gpa);
     defer record_fields.deinit();
 
-    const x_ident = module_env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero());
+    const x_ident = try module_env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero());
     try record_fields.append(.{ .name = x_ident, .var_ = param_var });
 
-    const fields_range = module_env.types.appendRecordFields(record_fields.items);
-    const ext_var = module_env.types.fresh();
+    const fields_range = try module_env.types.appendRecordFields(record_fields.items);
+    const ext_var = try module_env.types.fresh();
     const record_content = types_mod.Content{
         .structure = .{
             .record = .{
@@ -1598,10 +1597,10 @@ test "dot access properly unifies field types with parameters" {
             },
         },
     };
-    const record_var = module_env.types.freshFromContent(record_content);
+    const record_var = try module_env.types.freshFromContent(record_content);
 
     // Create a dot access result variable
-    const dot_access_var = module_env.types.fresh();
+    const dot_access_var = try module_env.types.fresh();
 
     // Simulate the dot access logic from checkExpr
     const resolved_record = module_env.types.resolveVar(record_var);
@@ -1615,7 +1614,7 @@ test "dot access properly unifies field types with parameters" {
     var found_field = false;
     for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
         if (field_name == x_ident) {
-            _ = solver.unify(dot_access_var, field_var);
+            _ = try solver.unify(dot_access_var, field_var);
             found_field = true;
             break;
         }
@@ -1633,8 +1632,8 @@ test "dot access properly unifies field types with parameters" {
             .record_unbound = fields_range,
         },
     };
-    const unbound_record_var = module_env.types.freshFromContent(unbound_record_content);
-    const dot_access_var2 = module_env.types.fresh();
+    const unbound_record_var = try module_env.types.freshFromContent(unbound_record_content);
+    const dot_access_var2 = try module_env.types.fresh();
 
     // Same test with record_unbound
     const resolved_unbound = module_env.types.resolveVar(unbound_record_var);
@@ -1647,7 +1646,7 @@ test "dot access properly unifies field types with parameters" {
     found_field = false;
     for (unbound_fields.items(.name), unbound_fields.items(.var_)) |field_name, field_var| {
         if (field_name == x_ident) {
-            _ = solver.unify(dot_access_var2, field_var);
+            _ = try solver.unify(dot_access_var2, field_var);
             found_field = true;
             break;
         }
@@ -1676,10 +1675,10 @@ test "call site unification order matters for concrete vs flexible types" {
     const gpa = std.testing.allocator;
 
     // Create a minimal environment for testing
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env, "Test");
+    var cir = try CIR.init(&module_env, "Test");
     defer cir.deinit();
 
     const empty_modules: []const *CIR = &.{};
@@ -1688,12 +1687,12 @@ test "call site unification order matters for concrete vs flexible types" {
 
     // First, verify basic number unification works as expected
     const i32_content = types_mod.Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
-    const i32_test = module_env.types.freshFromContent(i32_content);
+    const i32_test = try module_env.types.freshFromContent(i32_content);
     const num_unbound = types_mod.Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
-    const flex_test = module_env.types.freshFromContent(num_unbound);
+    const flex_test = try module_env.types.freshFromContent(num_unbound);
 
     // Flexible number should unify with concrete I32 and become I32
-    const basic_result = solver.unify(flex_test, i32_test);
+    const basic_result = try solver.unify(flex_test, i32_test);
     try std.testing.expect(basic_result == .ok);
 
     // Verify the flexible variable was constrained to I32
@@ -1713,25 +1712,25 @@ test "call site unification order matters for concrete vs flexible types" {
 
     // Now test with function types
     // Create a concrete function type: I32, I32 -> I32
-    const i32_var1 = module_env.types.freshFromContent(i32_content);
-    const i32_var2 = module_env.types.freshFromContent(i32_content);
-    const i32_var3 = module_env.types.freshFromContent(i32_content);
+    const i32_var1 = try module_env.types.freshFromContent(i32_content);
+    const i32_var2 = try module_env.types.freshFromContent(i32_content);
+    const i32_var3 = try module_env.types.freshFromContent(i32_content);
 
-    const concrete_func = module_env.types.mkFuncPure(&[_]types_mod.Var{ i32_var1, i32_var2 }, i32_var3);
-    const concrete_func_var = module_env.types.freshFromContent(concrete_func);
+    const concrete_func = try module_env.types.mkFuncPure(&[_]types_mod.Var{ i32_var1, i32_var2 }, i32_var3);
+    const concrete_func_var = try module_env.types.freshFromContent(concrete_func);
 
     // Create flexible argument types (like integer literals)
-    const arg1_var = module_env.types.freshFromContent(num_unbound);
-    const arg2_var = module_env.types.freshFromContent(num_unbound);
-    const result_var = module_env.types.fresh();
+    const arg1_var = try module_env.types.freshFromContent(num_unbound);
+    const arg2_var = try module_env.types.freshFromContent(num_unbound);
+    const result_var = try module_env.types.fresh();
 
     // Create expected function type from arguments
-    const expected_func = module_env.types.mkFuncUnbound(&[_]types_mod.Var{ arg1_var, arg2_var }, result_var);
-    const expected_func_var = module_env.types.freshFromContent(expected_func);
+    const expected_func = try module_env.types.mkFuncUnbound(&[_]types_mod.Var{ arg1_var, arg2_var }, result_var);
+    const expected_func_var = try module_env.types.freshFromContent(expected_func);
 
     // The wrong order: unify(concrete, expected) would fail
     // because I32 can't unify with Num(*)
-    const wrong_order_result = solver.unify(concrete_func_var, expected_func_var);
+    const wrong_order_result = try solver.unify(concrete_func_var, expected_func_var);
     try std.testing.expect(wrong_order_result == .problem);
 
     // After failed unification, both variables become error types
@@ -1745,15 +1744,15 @@ test "call site unification order matters for concrete vs flexible types" {
     // where myFunc : I32, I32 -> I32
 
     // Step 1: Create the known function type (I32, I32 -> I32)
-    const i32_var4 = module_env.types.freshFromContent(i32_content);
-    const i32_var5 = module_env.types.freshFromContent(i32_content);
-    const i32_var6 = module_env.types.freshFromContent(i32_content);
-    const known_func = module_env.types.mkFuncPure(&[_]types_mod.Var{ i32_var4, i32_var5 }, i32_var6);
-    const known_func_var = module_env.types.freshFromContent(known_func);
+    const i32_var4 = try module_env.types.freshFromContent(i32_content);
+    const i32_var5 = try module_env.types.freshFromContent(i32_content);
+    const i32_var6 = try module_env.types.freshFromContent(i32_content);
+    const known_func = try module_env.types.mkFuncPure(&[_]types_mod.Var{ i32_var4, i32_var5 }, i32_var6);
+    const known_func_var = try module_env.types.freshFromContent(known_func);
 
     // Step 2: Create flexible argument types (representing literals like 1 and 2)
-    const call_arg1 = module_env.types.freshFromContent(num_unbound);
-    const call_arg2 = module_env.types.freshFromContent(num_unbound);
+    const call_arg1 = try module_env.types.freshFromContent(num_unbound);
+    const call_arg2 = try module_env.types.freshFromContent(num_unbound);
 
     // Verify the arguments start as flexible num_unbound types
     const arg1_before = module_env.types.resolveVar(call_arg1);
@@ -1783,13 +1782,13 @@ test "call site unification order matters for concrete vs flexible types" {
 
     // Step 3: Create the expected function type from the call site
     // This represents the type we expect based on the arguments
-    const call_result = module_env.types.fresh();
-    const call_func = module_env.types.mkFuncUnbound(&[_]types_mod.Var{ call_arg1, call_arg2 }, call_result);
-    const call_func_var = module_env.types.freshFromContent(call_func);
+    const call_result = try module_env.types.fresh();
+    const call_func = try module_env.types.mkFuncUnbound(&[_]types_mod.Var{ call_arg1, call_arg2 }, call_result);
+    const call_func_var = try module_env.types.freshFromContent(call_func);
 
     // Step 4: Unify the expected type with the known type
     // This is the key step - unify(expected, known) in the correct order
-    const unify_result = solver.unify(call_func_var, known_func_var);
+    const unify_result = try solver.unify(call_func_var, known_func_var);
     try std.testing.expect(unify_result == .ok);
 
     // Step 5: Verify that the call arguments were constrained to I32

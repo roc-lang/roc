@@ -11,7 +11,6 @@ const Region = @import("Region.zig");
 const serialization = @import("../serialization/mod.zig");
 
 const SmallStringInterner = collections.SmallStringInterner;
-const exitOnOom = collections.utils.exitOnOom;
 
 const Ident = @This();
 
@@ -105,10 +104,10 @@ pub const Store = struct {
     next_unique_name: u32 = 0,
 
     /// Initialize the memory for an `Ident.Store` with a specific capaicty.
-    pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) Store {
+    pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!Store {
         return .{
-            .interner = SmallStringInterner.initCapacity(gpa, capacity),
-            .attributes = std.ArrayListUnmanaged(Attributes).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
+            .interner = try SmallStringInterner.initCapacity(gpa, capacity),
+            .attributes = try std.ArrayListUnmanaged(Attributes).initCapacity(gpa, capacity),
         };
     }
 
@@ -119,9 +118,9 @@ pub const Store = struct {
     }
 
     /// Insert a new identifier into the store.
-    pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident, region: Region) Idx {
-        const idx = self.interner.insert(gpa, ident.raw_text, region);
-        self.attributes.append(gpa, ident.attributes) catch |err| exitOnOom(err);
+    pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident, region: Region) std.mem.Allocator.Error!Idx {
+        const idx = try self.interner.insert(gpa, ident.raw_text, region);
+        try self.attributes.append(gpa, ident.attributes);
 
         return Idx{
             .attributes = ident.attributes,
@@ -135,7 +134,7 @@ pub const Store = struct {
     /// time this method is called. The new ident is named based on said
     /// counter, which cannot overlap with user-defined idents since those
     /// cannot start with a digit.
-    pub fn genUnique(self: *Store, gpa: std.mem.Allocator) Idx {
+    pub fn genUnique(self: *Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!Idx {
         var id = self.next_unique_name;
         self.next_unique_name += 1;
 
@@ -155,7 +154,7 @@ pub const Store = struct {
 
         const name = str_buffer[digit_index + 1 ..];
 
-        const idx = self.interner.insert(gpa, name, Region.zero());
+        const idx = try self.interner.insert(gpa, name, Region.zero());
 
         const attributes = Attributes{
             .effectful = false,
@@ -163,7 +162,7 @@ pub const Store = struct {
             .reassignable = false,
         };
 
-        self.attributes.append(gpa, attributes) catch |err| exitOnOom(err);
+        try self.attributes.append(gpa, attributes);
 
         return Idx{
             .attributes = attributes,
@@ -357,7 +356,7 @@ pub const Store = struct {
         // Re-populate the hash table
         for (outer_indices.items) |string_idx| {
             const string_bytes = std.mem.sliceTo(bytes.items[@intFromEnum(string_idx)..], 0);
-            const entry = strings.getOrPutContextAdapted(gpa, string_bytes, @import("../collections/SmallStringInterner.zig").StringIdx.TableAdapter{ .bytes = &bytes }, @import("../collections/SmallStringInterner.zig").StringIdx.TableContext{ .bytes = &bytes }) catch |err| exitOnOom(err);
+            const entry = try strings.getOrPutContextAdapted(gpa, string_bytes, @import("../collections/SmallStringInterner.zig").StringIdx.TableAdapter{ .bytes = &bytes }, @import("../collections/SmallStringInterner.zig").StringIdx.TableContext{ .bytes = &bytes });
             entry.key_ptr.* = string_idx;
         }
 
@@ -437,16 +436,16 @@ test "Ident.Store serialization round-trip" {
     const gpa = std.testing.allocator;
 
     // Create original store and add some identifiers
-    var original_store = Store.initCapacity(gpa, 16);
+    var original_store = try Store.initCapacity(gpa, 16);
     defer original_store.deinit(gpa);
 
     const ident1 = Ident.for_text("hello");
     const ident2 = Ident.for_text("world!");
     const ident3 = Ident.for_text("_ignored");
 
-    const idx1 = original_store.insert(gpa, ident1, Region.zero());
-    const idx2 = original_store.insert(gpa, ident2, Region.zero());
-    const idx3 = original_store.insert(gpa, ident3, Region.zero());
+    const idx1 = try original_store.insert(gpa, ident1, Region.zero());
+    const idx2 = try original_store.insert(gpa, ident2, Region.zero());
+    const idx3 = try original_store.insert(gpa, ident3, Region.zero());
 
     // Serialize
     const serialized_size = original_store.serializedSize();
@@ -482,7 +481,7 @@ test "Ident.Store serialization round-trip" {
 test "Ident.Store serialization comprehensive" {
     const gpa = std.testing.allocator;
 
-    var store = Store.initCapacity(gpa, 8);
+    var store = try Store.initCapacity(gpa, 8);
     defer store.deinit(gpa);
 
     // Test various identifier types and edge cases
@@ -493,15 +492,15 @@ test "Ident.Store serialization comprehensive" {
     const ident5 = Ident.for_text("very_long_identifier_name_that_might_cause_issues"); // long name
     const region = Region.zero();
 
-    _ = store.insert(gpa, ident1, region);
-    _ = store.insert(gpa, ident2, region);
-    _ = store.insert(gpa, ident3, region);
-    _ = store.insert(gpa, ident4, region);
-    _ = store.insert(gpa, ident5, region);
+    _ = try store.insert(gpa, ident1, region);
+    _ = try store.insert(gpa, ident2, region);
+    _ = try store.insert(gpa, ident3, region);
+    _ = try store.insert(gpa, ident4, region);
+    _ = try store.insert(gpa, ident5, region);
 
     // Add some unique names
-    _ = store.genUnique(gpa);
-    _ = store.genUnique(gpa);
+    _ = try store.genUnique(gpa);
+    _ = try store.genUnique(gpa);
 
     // Test serialization
     try serialization.testing.testSerialization(Store, &store, gpa);
@@ -510,7 +509,7 @@ test "Ident.Store serialization comprehensive" {
 test "Ident.Store empty store serialization" {
     const gpa = std.testing.allocator;
 
-    var empty_store = Store.initCapacity(gpa, 0);
+    var empty_store = try Store.initCapacity(gpa, 0);
     defer empty_store.deinit(gpa);
 
     try serialization.testing.testSerialization(Store, &empty_store, gpa);

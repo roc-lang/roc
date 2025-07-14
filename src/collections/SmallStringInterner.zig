@@ -7,10 +7,7 @@
 //! arrays with values corresponding 1-to-1 to interned values, e.g. regions.
 
 const std = @import("std");
-const utils = @import("./utils.zig");
 const Region = @import("../base/Region.zig");
-
-const exitOnOom = utils.exitOnOom;
 
 const Self = @This();
 
@@ -30,17 +27,23 @@ regions: std.ArrayListUnmanaged(Region) = .{},
 pub const Idx = enum(u32) { _ };
 
 /// Initialize a `SmallStringInterner` with the specified capacity.
-pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) Self {
+pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!Self {
     // TODO: tune this. Rough assumption that average small string is 4 bytes.
     const bytes_per_string = 4;
 
     var self = Self{
-        .bytes = std.ArrayListUnmanaged(u8).initCapacity(gpa, capacity * bytes_per_string) catch |err| exitOnOom(err),
+        .bytes = try std.ArrayListUnmanaged(u8).initCapacity(gpa, capacity * bytes_per_string),
         .strings = .{},
-        .outer_indices = std.ArrayListUnmanaged(StringIdx).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
-        .regions = std.ArrayListUnmanaged(Region).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
+        .outer_indices = try std.ArrayListUnmanaged(StringIdx).initCapacity(gpa, capacity),
+        .regions = try std.ArrayListUnmanaged(Region).initCapacity(gpa, capacity),
     };
-    self.strings.ensureTotalCapacityContext(gpa, @intCast(capacity), StringIdx.TableContext{ .bytes = &self.bytes }) catch |err| exitOnOom(err);
+
+    try self.strings.ensureTotalCapacityContext(
+        gpa,
+        @intCast(capacity),
+        StringIdx.TableContext{ .bytes = &self.bytes },
+    );
+
     return self;
 }
 
@@ -54,16 +57,16 @@ pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
 }
 
 /// Add a string to this interner, returning a unique, serial index.
-pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8, region: Region) Idx {
-    const entry = self.strings.getOrPutContextAdapted(
+pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8, region: Region) std.mem.Allocator.Error!Idx {
+    const entry = try self.strings.getOrPutContextAdapted(
         gpa,
         string,
         StringIdx.TableAdapter{ .bytes = &self.bytes },
         StringIdx.TableContext{ .bytes = &self.bytes },
-    ) catch |err| exitOnOom(err);
+    );
     if (entry.found_existing) return self.addOuterIdForStringIndex(gpa, entry.key_ptr.*, region);
 
-    self.bytes.ensureUnusedCapacity(gpa, string.len + 1) catch |err| exitOnOom(err);
+    try self.bytes.ensureUnusedCapacity(gpa, string.len + 1);
     const string_offset: StringIdx = @enumFromInt(self.bytes.items.len);
 
     self.bytes.appendSliceAssumeCapacity(string);
@@ -73,10 +76,10 @@ pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8, region: R
     return self.addOuterIdForStringIndex(gpa, string_offset, region);
 }
 
-fn addOuterIdForStringIndex(self: *Self, gpa: std.mem.Allocator, string_offset: StringIdx, region: Region) Idx {
+fn addOuterIdForStringIndex(self: *Self, gpa: std.mem.Allocator, string_offset: StringIdx, region: Region) std.mem.Allocator.Error!Idx {
     const len: Idx = @enumFromInt(@as(u32, @truncate(self.outer_indices.items.len)));
-    self.outer_indices.append(gpa, string_offset) catch |err| exitOnOom(err);
-    self.regions.append(gpa, region) catch |err| exitOnOom(err);
+    try self.outer_indices.append(gpa, string_offset);
+    try self.regions.append(gpa, region);
 
     return len;
 }

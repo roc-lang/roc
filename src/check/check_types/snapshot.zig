@@ -9,7 +9,6 @@ const store_mod = @import("../../types/store.zig");
 const TypesStore = store_mod.Store;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
-const exitOnOutOfMemory = collections.utils.exitOnOom;
 
 /// Index enum for SnapshotContentList
 pub const SnapshotContentIdx = SnapshotContentList.Idx;
@@ -54,20 +53,20 @@ pub const Store = struct {
     scratch_tags: base.Scratch(SnapshotTag),
     scratch_record_fields: base.Scratch(SnapshotRecordField),
 
-    pub fn initCapacity(gpa: Allocator, capacity: usize) Self {
+    pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
             .gpa = gpa,
-            .contents = SnapshotContentList.initCapacity(gpa, capacity),
-            .alias_args = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
-            .tuple_elems = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
-            .nominal_type_args = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
-            .func_args = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
-            .record_fields = SnapshotRecordFieldSafeList.initCapacity(gpa, 256),
-            .tags = SnapshotTagSafeList.initCapacity(gpa, 256),
-            .tag_args = SnapshotContentIdxSafeList.initCapacity(gpa, 256),
-            .scratch_content = base.Scratch(SnapshotContentIdx).init(gpa),
-            .scratch_tags = base.Scratch(SnapshotTag).init(gpa),
-            .scratch_record_fields = base.Scratch(SnapshotRecordField).init(gpa),
+            .contents = try SnapshotContentList.initCapacity(gpa, capacity),
+            .alias_args = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
+            .tuple_elems = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
+            .nominal_type_args = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
+            .func_args = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
+            .record_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 256),
+            .tags = try SnapshotTagSafeList.initCapacity(gpa, 256),
+            .tag_args = try SnapshotContentIdxSafeList.initCapacity(gpa, 256),
+            .scratch_content = try base.Scratch(SnapshotContentIdx).init(gpa),
+            .scratch_tags = try base.Scratch(SnapshotTag).init(gpa),
+            .scratch_record_fields = try base.Scratch(SnapshotRecordField).init(gpa),
         };
     }
 
@@ -87,76 +86,76 @@ pub const Store = struct {
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
     /// Deep copy a type variable's content into self-contained snapshot storage
-    pub fn deepCopyVar(self: *Self, store: *const TypesStore, var_: types.Var) SnapshotContentIdx {
+    pub fn deepCopyVar(self: *Self, store: *const TypesStore, var_: types.Var) std.mem.Allocator.Error!SnapshotContentIdx {
         const resolved = store.resolveVar(var_);
-        return self.deepCopyContent(store, resolved.desc.content);
+        return try self.deepCopyContent(store, resolved.desc.content);
     }
 
-    fn deepCopyContent(self: *Self, store: *const TypesStore, content: Content) SnapshotContentIdx {
+    fn deepCopyContent(self: *Self, store: *const TypesStore, content: Content) std.mem.Allocator.Error!SnapshotContentIdx {
         const deep_content = switch (content) {
             .flex_var => |ident| SnapshotContent{ .flex_var = ident },
             .rigid_var => |ident| SnapshotContent{ .rigid_var = ident },
-            .alias => |alias| SnapshotContent{ .alias = self.deepCopyAlias(store, alias) },
-            .structure => |flat_type| SnapshotContent{ .structure = self.deepCopyFlatType(store, flat_type) },
+            .alias => |alias| SnapshotContent{ .alias = try self.deepCopyAlias(store, alias) },
+            .structure => |flat_type| SnapshotContent{ .structure = try self.deepCopyFlatType(store, flat_type) },
             .err => SnapshotContent.err,
         };
 
-        return self.contents.append(self.gpa, deep_content);
+        return try self.contents.append(self.gpa, deep_content);
     }
 
-    fn deepCopyFlatType(self: *Self, store: *const TypesStore, flat_type: types.FlatType) SnapshotFlatType {
+    fn deepCopyFlatType(self: *Self, store: *const TypesStore, flat_type: types.FlatType) std.mem.Allocator.Error!SnapshotFlatType {
         return switch (flat_type) {
             .str => SnapshotFlatType.str,
             .box => |box_var| {
                 const resolved = store.resolveVar(box_var);
-                const deep_content = self.deepCopyContent(store, resolved.desc.content);
+                const deep_content = try self.deepCopyContent(store, resolved.desc.content);
                 return SnapshotFlatType{ .box = deep_content };
             },
             .list => |list_var| {
                 const resolved = store.resolveVar(list_var);
-                const deep_content = self.deepCopyContent(store, resolved.desc.content);
+                const deep_content = try self.deepCopyContent(store, resolved.desc.content);
                 return SnapshotFlatType{ .list = deep_content };
             },
             .list_unbound => {
                 return SnapshotFlatType.list_unbound;
             },
-            .tuple => |tuple| SnapshotFlatType{ .tuple = self.deepCopyTuple(store, tuple) },
-            .num => |num| SnapshotFlatType{ .num = self.deepCopyNum(store, num) },
-            .nominal_type => |nominal_type| SnapshotFlatType{ .nominal_type = self.deepCopyNominalType(store, nominal_type) },
-            .fn_pure => |func| SnapshotFlatType{ .fn_pure = self.deepCopyFunc(store, func) },
-            .fn_effectful => |func| SnapshotFlatType{ .fn_effectful = self.deepCopyFunc(store, func) },
-            .fn_unbound => |func| SnapshotFlatType{ .fn_unbound = self.deepCopyFunc(store, func) },
-            .record => |record| SnapshotFlatType{ .record = self.deepCopyRecord(store, record) },
-            .record_unbound => |fields| SnapshotFlatType{ .record_unbound = self.deepCopyRecordFields(store, fields) },
+            .tuple => |tuple| SnapshotFlatType{ .tuple = try self.deepCopyTuple(store, tuple) },
+            .num => |num| SnapshotFlatType{ .num = try self.deepCopyNum(store, num) },
+            .nominal_type => |nominal_type| SnapshotFlatType{ .nominal_type = try self.deepCopyNominalType(store, nominal_type) },
+            .fn_pure => |func| SnapshotFlatType{ .fn_pure = try self.deepCopyFunc(store, func) },
+            .fn_effectful => |func| SnapshotFlatType{ .fn_effectful = try self.deepCopyFunc(store, func) },
+            .fn_unbound => |func| SnapshotFlatType{ .fn_unbound = try self.deepCopyFunc(store, func) },
+            .record => |record| SnapshotFlatType{ .record = try self.deepCopyRecord(store, record) },
+            .record_unbound => |fields| SnapshotFlatType{ .record_unbound = try self.deepCopyRecordFields(store, fields) },
             .record_poly => |poly| SnapshotFlatType{ .record_poly = .{
-                .record = self.deepCopyRecord(store, poly.record),
-                .var_ = self.deepCopyContent(store, store.resolveVar(poly.var_).desc.content),
+                .record = try self.deepCopyRecord(store, poly.record),
+                .var_ = try self.deepCopyContent(store, store.resolveVar(poly.var_).desc.content),
             } },
             .empty_record => SnapshotFlatType.empty_record,
-            .tag_union => |tag_union| SnapshotFlatType{ .tag_union = self.deepCopyTagUnion(store, tag_union) },
+            .tag_union => |tag_union| SnapshotFlatType{ .tag_union = try self.deepCopyTagUnion(store, tag_union) },
             .empty_tag_union => SnapshotFlatType.empty_tag_union,
         };
     }
 
-    fn deepCopyAlias(self: *Self, store: *const TypesStore, alias: types.Alias) SnapshotAlias {
+    fn deepCopyAlias(self: *Self, store: *const TypesStore, alias: types.Alias) std.mem.Allocator.Error!SnapshotAlias {
         // Mark starting position in the scratch array
         const scratch_top = self.scratch_content.top();
 
         const backing_var = store.getAliasBackingVar(alias);
         const backing_resolved = store.resolveVar(backing_var);
-        const deep_backing = self.deepCopyContent(store, backing_resolved.desc.content);
-        _ = self.scratch_content.append(self.gpa, deep_backing);
+        const deep_backing = try self.deepCopyContent(store, backing_resolved.desc.content);
+        _ = try self.scratch_content.append(self.gpa, deep_backing);
 
         // Iterate and append to scratch array
         var arg_iter = store.iterAliasArgs(alias);
         while (arg_iter.next()) |arg_var| {
             const arg_resolved = store.resolveVar(arg_var);
-            const deep_arg = self.deepCopyContent(store, arg_resolved.desc.content);
-            _ = self.scratch_content.append(self.gpa, deep_arg);
+            const deep_arg = try self.deepCopyContent(store, arg_resolved.desc.content);
+            _ = try self.scratch_content.append(self.gpa, deep_arg);
         }
 
         // Append scratch to backing array, and shrink scratch
-        const args_range = self.alias_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const args_range = try self.alias_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         return SnapshotAlias{
@@ -165,7 +164,7 @@ pub const Store = struct {
         };
     }
 
-    fn deepCopyTuple(self: *Self, store: *const TypesStore, tuple: types.Tuple) SnapshotTuple {
+    fn deepCopyTuple(self: *Self, store: *const TypesStore, tuple: types.Tuple) std.mem.Allocator.Error!SnapshotTuple {
         const elems_slice = store.getTupleElemsSlice(tuple.elems);
 
         // Mark starting position in the scratch array
@@ -174,12 +173,12 @@ pub const Store = struct {
         // Iterate and append to scratch array
         for (elems_slice) |elem_var| {
             const elem_resolved = store.resolveVar(elem_var);
-            const deep_elem = self.deepCopyContent(store, elem_resolved.desc.content);
-            _ = self.scratch_content.append(self.gpa, deep_elem);
+            const deep_elem = try self.deepCopyContent(store, elem_resolved.desc.content);
+            _ = try self.scratch_content.append(self.gpa, deep_elem);
         }
 
         // Append scratch to backing array, and shrink scratch
-        const elems_range = self.tuple_elems.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const elems_range = try self.tuple_elems.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         return SnapshotTuple{
@@ -187,16 +186,16 @@ pub const Store = struct {
         };
     }
 
-    fn deepCopyNum(self: *Self, store: *const TypesStore, num: types.Num) SnapshotNum {
+    fn deepCopyNum(self: *Self, store: *const TypesStore, num: types.Num) std.mem.Allocator.Error!SnapshotNum {
         switch (num) {
             .num_poly => |poly| {
                 const resolved_poly = store.resolveVar(poly.var_);
-                const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content);
+                const deep_poly = try self.deepCopyContent(store, resolved_poly.desc.content);
                 return SnapshotNum{ .num_poly = deep_poly };
             },
             .int_poly => |poly| {
                 const resolved_poly = store.resolveVar(poly.var_);
-                const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content);
+                const deep_poly = try self.deepCopyContent(store, resolved_poly.desc.content);
                 return SnapshotNum{ .int_poly = deep_poly };
             },
             .num_unbound => |requirements| {
@@ -213,7 +212,7 @@ pub const Store = struct {
             },
             .frac_poly => |poly| {
                 const resolved_poly = store.resolveVar(poly.var_);
-                const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content);
+                const deep_poly = try self.deepCopyContent(store, resolved_poly.desc.content);
                 return SnapshotNum{ .frac_poly = deep_poly };
             },
             .int_precision => |prec| {
@@ -228,26 +227,26 @@ pub const Store = struct {
         }
     }
 
-    fn deepCopyNominalType(self: *Self, store: *const TypesStore, nominal_type: types.NominalType) SnapshotNominalType {
+    fn deepCopyNominalType(self: *Self, store: *const TypesStore, nominal_type: types.NominalType) std.mem.Allocator.Error!SnapshotNominalType {
         // Mark starting position in the scratch array
         const scratch_top = self.scratch_content.top();
 
         // Add backing var (must be first)
         const backing_var = store.getNominalBackingVar(nominal_type);
         const backing_resolved = store.resolveVar(backing_var);
-        const deep_var = self.deepCopyContent(store, backing_resolved.desc.content);
-        _ = self.scratch_content.append(self.gpa, deep_var);
+        const deep_var = try self.deepCopyContent(store, backing_resolved.desc.content);
+        _ = try self.scratch_content.append(self.gpa, deep_var);
 
         // Add args after
         var arg_iter = store.iterNominalArgs(nominal_type);
         while (arg_iter.next()) |arg_var| {
             const arg_resolved = store.resolveVar(arg_var);
-            const deep_arg = self.deepCopyContent(store, arg_resolved.desc.content);
-            _ = self.scratch_content.append(self.gpa, deep_arg);
+            const deep_arg = try self.deepCopyContent(store, arg_resolved.desc.content);
+            _ = try self.scratch_content.append(self.gpa, deep_arg);
         }
 
         // Append scratch to backing array, and shrink scratch
-        const args_range = self.nominal_type_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const args_range = try self.nominal_type_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         return SnapshotNominalType{
@@ -257,7 +256,7 @@ pub const Store = struct {
         };
     }
 
-    fn deepCopyFunc(self: *Self, store: *const TypesStore, func: types.Func) SnapshotFunc {
+    fn deepCopyFunc(self: *Self, store: *const TypesStore, func: types.Func) std.mem.Allocator.Error!SnapshotFunc {
         const args_slice = store.getFuncArgsSlice(func.args);
 
         // Mark starting position in the scratch array
@@ -266,17 +265,17 @@ pub const Store = struct {
         // Iterate and append directly
         for (args_slice) |arg_var| {
             const arg_resolved = store.resolveVar(arg_var);
-            const deep_arg = self.deepCopyContent(store, arg_resolved.desc.content);
-            _ = self.scratch_content.append(self.gpa, deep_arg);
+            const deep_arg = try self.deepCopyContent(store, arg_resolved.desc.content);
+            _ = try self.scratch_content.append(self.gpa, deep_arg);
         }
 
         // Append scratch to backing array, and shrink scratch
-        const args_range = self.func_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const args_range = try self.func_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         // Deep copy return type
         const ret_resolved = store.resolveVar(func.ret);
-        const deep_ret = self.deepCopyContent(store, ret_resolved.desc.content);
+        const deep_ret = try self.deepCopyContent(store, ret_resolved.desc.content);
 
         return SnapshotFunc{
             .args = args_range,
@@ -285,31 +284,31 @@ pub const Store = struct {
         };
     }
 
-    fn deepCopyRecordFields(self: *Self, store: *const TypesStore, fields: types.RecordField.SafeMultiList.Range) SnapshotRecordFieldSafeList.Range {
+    fn deepCopyRecordFields(self: *Self, store: *const TypesStore, fields: types.RecordField.SafeMultiList.Range) std.mem.Allocator.Error!SnapshotRecordFieldSafeList.Range {
         // Mark starting position in the scratch array
         const scratch_top = self.scratch_record_fields.top();
 
         const fields_slice = store.getRecordFieldsSlice(fields);
         for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
             const field_resolved = store.resolveVar(var_);
-            const deep_field_content = self.deepCopyContent(store, field_resolved.desc.content);
+            const deep_field_content = try self.deepCopyContent(store, field_resolved.desc.content);
 
             const snapshot_field = SnapshotRecordField{
                 .name = name,
                 .content = deep_field_content,
             };
 
-            _ = self.scratch_record_fields.append(self.gpa, snapshot_field);
+            _ = try self.scratch_record_fields.append(self.gpa, snapshot_field);
         }
 
         // Append scratch to backing array, and shrink scratch
-        const fields_range = self.record_fields.appendSlice(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
+        const fields_range = try self.record_fields.appendSlice(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
         self.scratch_record_fields.clearFrom(scratch_top);
 
         return fields_range;
     }
 
-    fn deepCopyRecord(self: *Self, store: *const TypesStore, record: types.Record) SnapshotRecord {
+    fn deepCopyRecord(self: *Self, store: *const TypesStore, record: types.Record) std.mem.Allocator.Error!SnapshotRecord {
         // Mark starting position in the scratch array
         const scratch_top = self.scratch_record_fields.top();
 
@@ -319,23 +318,23 @@ pub const Store = struct {
             const field = store.record_fields.get(field_idx);
 
             const field_resolved = store.resolveVar(field.var_);
-            const deep_field_content = self.deepCopyContent(store, field_resolved.desc.content);
+            const deep_field_content = try self.deepCopyContent(store, field_resolved.desc.content);
 
             const snapshot_field = SnapshotRecordField{
                 .name = field.name,
                 .content = deep_field_content,
             };
 
-            _ = self.scratch_record_fields.append(self.gpa, snapshot_field);
+            _ = try self.scratch_record_fields.append(self.gpa, snapshot_field);
         }
 
         // Append scratch to backing array, and shrink scratch
-        const fields_range = self.record_fields.appendSlice(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
+        const fields_range = try self.record_fields.appendSlice(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
         self.scratch_record_fields.clearFrom(scratch_top);
 
         // Deep copy extension type
         const ext_resolved = store.resolveVar(record.ext);
-        const deep_ext = self.deepCopyContent(store, ext_resolved.desc.content);
+        const deep_ext = try self.deepCopyContent(store, ext_resolved.desc.content);
 
         return SnapshotRecord{
             .fields = fields_range,
@@ -343,7 +342,7 @@ pub const Store = struct {
         };
     }
 
-    fn deepCopyTagUnion(self: *Self, store: *const TypesStore, tag_union: types.TagUnion) SnapshotTagUnion {
+    fn deepCopyTagUnion(self: *Self, store: *const TypesStore, tag_union: types.TagUnion) std.mem.Allocator.Error!SnapshotTagUnion {
         // Mark starting position in the scratch array for tags
         const tags_scratch_top = self.scratch_tags.top();
 
@@ -360,12 +359,12 @@ pub const Store = struct {
             // Iterate over tag arguments and append to scratch array
             for (tag_args_slice) |tag_arg_var| {
                 const tag_arg_resolved = store.resolveVar(tag_arg_var);
-                const deep_tag_arg = self.deepCopyContent(store, tag_arg_resolved.desc.content);
-                _ = self.scratch_content.append(self.gpa, deep_tag_arg);
+                const deep_tag_arg = try self.deepCopyContent(store, tag_arg_resolved.desc.content);
+                _ = try self.scratch_content.append(self.gpa, deep_tag_arg);
             }
 
             // Append scratch to backing array, and shrink scratch
-            const tag_args_range = self.tag_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(content_scratch_top));
+            const tag_args_range = try self.tag_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(content_scratch_top));
             self.scratch_content.clearFrom(content_scratch_top);
 
             // Create and append the snapshot tag to scratch
@@ -374,16 +373,16 @@ pub const Store = struct {
                 .args = tag_args_range,
             };
 
-            _ = self.scratch_tags.append(self.gpa, snapshot_tag);
+            _ = try self.scratch_tags.append(self.gpa, snapshot_tag);
         }
 
         // Append scratch tags to backing array, and shrink scratch
-        const tags_range = self.tags.appendSlice(self.gpa, self.scratch_tags.sliceFromStart(tags_scratch_top));
+        const tags_range = try self.tags.appendSlice(self.gpa, self.scratch_tags.sliceFromStart(tags_scratch_top));
         self.scratch_tags.clearFrom(tags_scratch_top);
 
         // Deep copy extension type
         const ext_resolved = store.resolveVar(tag_union.ext);
-        const deep_ext = self.deepCopyContent(store, ext_resolved.desc.content);
+        const deep_ext = try self.deepCopyContent(store, ext_resolved.desc.content);
 
         return SnapshotTagUnion{
             .tags = tags_range,

@@ -11,7 +11,6 @@ const collections = @import("../collections.zig");
 const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
 const RegionInfo = @import("RegionInfo.zig");
-const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
 
@@ -36,18 +35,18 @@ line_starts: collections.SafeList(u32),
 source: []const u8,
 
 /// Initialize the module environment.
-pub fn init(gpa: std.mem.Allocator, source: []const u8) Self {
+pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
 
     return Self{
         .gpa = gpa,
-        .idents = Ident.Store.initCapacity(gpa, 1024),
-        .ident_ids_for_slicing = collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
-        .strings = StringLiteral.Store.initCapacityBytes(gpa, 4096),
-        .types = types_mod.Store.initCapacity(gpa, 2048, 512),
-        .exposed_by_str = collections.SafeStringHashMap(void).initCapacity(gpa, 64),
-        .exposed_nodes = collections.SafeStringHashMap(u16).initCapacity(gpa, 64),
-        .line_starts = collections.SafeList(u32).initCapacity(gpa, 256),
+        .idents = try Ident.Store.initCapacity(gpa, 1024),
+        .ident_ids_for_slicing = try collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
+        .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
+        .types = try types_mod.Store.initCapacity(gpa, 2048, 512),
+        .exposed_by_str = try collections.SafeStringHashMap(void).initCapacity(gpa, 64),
+        .exposed_nodes = try collections.SafeStringHashMap(u16).initCapacity(gpa, 64),
+        .line_starts = try collections.SafeList(u32).initCapacity(gpa, 256),
         .source = source,
     };
 }
@@ -69,7 +68,7 @@ pub fn deinit(self: *Self) void {
 pub fn calcLineStarts(self: *Self, source: []const u8) !void {
     // Reset line_starts by creating a new SafeList
     self.line_starts.deinit(self.gpa);
-    self.line_starts = collections.SafeList(u32).initCapacity(self.gpa, 256);
+    self.line_starts = try collections.SafeList(u32).initCapacity(self.gpa, 256);
 
     // if the source is empty, we're done
     if (source.len == 0) {
@@ -77,14 +76,14 @@ pub fn calcLineStarts(self: *Self, source: []const u8) !void {
     }
 
     // the first line starts at offset 0
-    _ = self.line_starts.append(self.gpa, 0);
+    _ = try self.line_starts.append(self.gpa, 0);
 
     // find all newlines in the source, save their offset
     var pos: u32 = 0;
     for (source) |c| {
         if (c == '\n') {
             // next line starts after the newline in the current position
-            _ = self.line_starts.append(self.gpa, pos + 1);
+            _ = try self.line_starts.append(self.gpa, pos + 1);
         }
         pos += 1;
     }

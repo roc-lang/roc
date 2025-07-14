@@ -56,6 +56,7 @@ pub const Error = error{
     ExitedTopScopeLevel,
     TopLevelVarError,
     VarAcrossFunctionBoundary,
+    OutOfMemory,
 };
 
 /// Result of looking up an identifier
@@ -195,8 +196,8 @@ pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, 
     .type_var => CIR.TypeAnno.Idx,
     .module_alias => Ident.Idx,
     .exposed_item => ExposedItemInfo,
-}) void {
-    scope.items(item_kind).put(gpa, name, value) catch |err| collections.utils.exitOnOom(err);
+}) std.mem.Allocator.Error!void {
+    try scope.items(item_kind).put(gpa, name, value);
 }
 
 /// Introduce a type declaration into the scope
@@ -207,7 +208,7 @@ pub fn introduceTypeDecl(
     name: Ident.Idx,
     type_decl: CIR.Statement.Idx,
     parent_lookup_fn: ?fn (Ident.Idx) ?CIR.Statement.Idx,
-) TypeIntroduceResult {
+) std.mem.Allocator.Error!TypeIntroduceResult {
     // Check if already exists in current scope by comparing text content
     var iter = scope.type_decls.iterator();
     while (iter.next()) |entry| {
@@ -223,7 +224,7 @@ pub fn introduceTypeDecl(
         shadowed_stmt = lookup_fn(name);
     }
 
-    scope.put(gpa, .type_decl, name, type_decl);
+    try scope.put(gpa, .type_decl, name, type_decl);
 
     if (shadowed_stmt) |stmt| {
         return TypeIntroduceResult{ .shadowing_warning = stmt };
@@ -256,7 +257,7 @@ pub fn updateTypeDecl(
     ident_store: *const base.Ident.Store,
     name: Ident.Idx,
     new_type_decl: CIR.Statement.Idx,
-) void {
+) std.mem.Allocator.Error!void {
     // Find the existing entry by comparing text content
     var iter = scope.type_decls.iterator();
     while (iter.next()) |entry| {
@@ -267,7 +268,7 @@ pub fn updateTypeDecl(
         }
     }
     // If not found, add it as a new entry
-    scope.put(gpa, .type_decl, name, new_type_decl);
+    try scope.put(gpa, .type_decl, name, new_type_decl);
 }
 
 /// Introduce a type variable into the scope
@@ -278,7 +279,7 @@ pub fn introduceTypeVar(
     name: Ident.Idx,
     type_var_anno: CIR.TypeAnno.Idx,
     parent_lookup_fn: ?fn (Ident.Idx) ?CIR.TypeAnno.Idx,
-) TypeVarIntroduceResult {
+) std.mem.Allocator.Error!TypeVarIntroduceResult {
     // Check if already exists in current scope by comparing text content
     var iter = scope.type_vars.iterator();
     while (iter.next()) |entry| {
@@ -294,7 +295,7 @@ pub fn introduceTypeVar(
         shadowed_type_var = lookup_fn(name);
     }
 
-    scope.put(gpa, .type_var, name, type_var_anno);
+    try scope.put(gpa, .type_var, name, type_var_anno);
 
     if (shadowed_type_var) |anno| {
         return TypeVarIntroduceResult{ .shadowing_warning = anno };
@@ -335,7 +336,7 @@ pub fn introduceModuleAlias(
     alias_name: Ident.Idx,
     module_name: Ident.Idx,
     parent_lookup_fn: ?fn (Ident.Idx) ?Ident.Idx,
-) ModuleAliasIntroduceResult {
+) std.mem.Allocator.Error!ModuleAliasIntroduceResult {
     // Check if already exists in current scope by comparing text content
     var iter = scope.module_aliases.iterator();
     while (iter.next()) |entry| {
@@ -351,7 +352,7 @@ pub fn introduceModuleAlias(
         shadowed_module = lookup_fn(alias_name);
     }
 
-    scope.put(gpa, .module_alias, alias_name, module_name);
+    try scope.put(gpa, .module_alias, alias_name, module_name);
 
     if (shadowed_module) |module| {
         return ModuleAliasIntroduceResult{ .shadowing_warning = module };
@@ -380,7 +381,7 @@ pub fn introduceExposedItem(
     item_name: Ident.Idx,
     item_info: ExposedItemInfo,
     parent_lookup_fn: ?fn (Ident.Idx) ?ExposedItemInfo,
-) ExposedItemIntroduceResult {
+) std.mem.Allocator.Error!ExposedItemIntroduceResult {
     // Check if already exists in current scope by comparing text content
     var iter = scope.exposed_items.iterator();
     while (iter.next()) |entry| {
@@ -396,7 +397,7 @@ pub fn introduceExposedItem(
         shadowed_info = lookup_fn(item_name);
     }
 
-    scope.put(gpa, .exposed_item, item_name, item_info);
+    try scope.put(gpa, .exposed_item, item_name, item_info);
 
     if (shadowed_info) |info| {
         return ExposedItemIntroduceResult{ .shadowing_warning = info };
@@ -419,11 +420,11 @@ pub fn introduceImportedModule(
     gpa: std.mem.Allocator,
     module_name: []const u8,
     import_idx: CIR.Import.Idx,
-) ImportedModuleIntroduceResult {
+) std.mem.Allocator.Error!ImportedModuleIntroduceResult {
     if (scope.imported_modules.contains(module_name)) {
         return ImportedModuleIntroduceResult{ .already_imported = scope.imported_modules.get(module_name).? };
     }
 
-    scope.imported_modules.put(gpa, module_name, import_idx) catch |err| collections.utils.exitOnOom(err);
+    try scope.imported_modules.put(gpa, module_name, import_idx);
     return ImportedModuleIntroduceResult{ .success = {} };
 }

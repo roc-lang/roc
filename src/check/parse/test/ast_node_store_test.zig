@@ -48,7 +48,7 @@ fn rand_span() base.DataSpan {
 
 test "NodeStore round trip - Headers" {
     const gpa = testing.allocator;
-    var store = NodeStore.initCapacity(gpa, NodeStore.AST_HEADER_NODE_COUNT);
+    var store = try NodeStore.initCapacity(gpa, NodeStore.AST_HEADER_NODE_COUNT);
     defer store.deinit();
 
     var headers = std.ArrayList(AST.Header).init(gpa);
@@ -98,7 +98,7 @@ test "NodeStore round trip - Headers" {
     });
 
     for (headers.items) |header| {
-        const idx = store.addHeader(header);
+        const idx = try store.addHeader(header);
         const retrieved = store.getHeader(idx);
 
         testing.expectEqualDeep(header, retrieved) catch |err| {
@@ -120,7 +120,7 @@ test "NodeStore round trip - Headers" {
 
 test "NodeStore round trip - Statement" {
     const gpa = testing.allocator;
-    var store = NodeStore.initCapacity(gpa, NodeStore.AST_STATEMENT_NODE_COUNT);
+    var store = try NodeStore.initCapacity(gpa, NodeStore.AST_STATEMENT_NODE_COUNT);
     defer store.deinit();
 
     var statements = std.ArrayList(AST.Statement).init(gpa);
@@ -237,7 +237,7 @@ test "NodeStore round trip - Statement" {
     });
 
     for (statements.items) |statement| {
-        const idx = store.addStatement(statement);
+        const idx = try store.addStatement(statement);
         const retrieved = store.getStatement(idx);
 
         testing.expectEqualDeep(statement, retrieved) catch |err| {
@@ -259,7 +259,7 @@ test "NodeStore round trip - Statement" {
 
 test "NodeStore round trip - Pattern" {
     const gpa = testing.allocator;
-    var store = NodeStore.initCapacity(gpa, NodeStore.AST_PATTERN_NODE_COUNT);
+    var store = try NodeStore.initCapacity(gpa, NodeStore.AST_PATTERN_NODE_COUNT);
     defer store.deinit();
 
     var expected_test_count: usize = NodeStore.AST_PATTERN_NODE_COUNT;
@@ -348,7 +348,7 @@ test "NodeStore round trip - Pattern" {
     expected_test_count -= 1;
 
     for (patterns.items) |pattern| {
-        const idx = store.addPattern(pattern);
+        const idx = try store.addPattern(pattern);
         const retrieved = store.getPattern(idx);
 
         testing.expectEqualDeep(pattern, retrieved) catch |err| {
@@ -368,7 +368,7 @@ test "NodeStore round trip - Pattern" {
 
 test "NodeStore round trip - TypeAnno" {
     const gpa = testing.allocator;
-    var store = NodeStore.initCapacity(gpa, NodeStore.AST_TYPE_ANNO_NODE_COUNT);
+    var store = try NodeStore.initCapacity(gpa, NodeStore.AST_TYPE_ANNO_NODE_COUNT);
     defer store.deinit();
 
     var expected_test_count: usize = NodeStore.AST_TYPE_ANNO_NODE_COUNT;
@@ -445,7 +445,7 @@ test "NodeStore round trip - TypeAnno" {
     expected_test_count -= 1;
 
     for (ty_annos.items) |anno| {
-        const idx = store.addTypeAnno(anno);
+        const idx = try store.addTypeAnno(anno);
         const retrieved = store.getTypeAnno(idx);
 
         testing.expectEqualDeep(anno, retrieved) catch |err| {
@@ -465,7 +465,7 @@ test "NodeStore round trip - TypeAnno" {
 
 test "NodeStore round trip - Expr" {
     const gpa = testing.allocator;
-    var store = NodeStore.initCapacity(gpa, NodeStore.AST_EXPR_NODE_COUNT);
+    var store = try NodeStore.initCapacity(gpa, NodeStore.AST_EXPR_NODE_COUNT);
     defer store.deinit();
 
     var expected_test_count: usize = NodeStore.AST_EXPR_NODE_COUNT;
@@ -632,7 +632,7 @@ test "NodeStore round trip - Expr" {
     expected_test_count -= 1;
 
     for (expressions.items) |expr| {
-        const idx = store.addExpr(expr);
+        const idx = try store.addExpr(expr);
         const retrieved = store.getExpr(idx);
 
         testing.expectEqualDeep(expr, retrieved) catch |err| {

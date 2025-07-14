@@ -11,20 +11,20 @@ const instantiate = @import("../check/check_types/instantiate.zig");
 const base = @import("../base.zig");
 
 test "rigid variables need instantiation - polymorphic identity function" {
-    var store = Store.init(std.testing.allocator);
+    var store = try Store.init(std.testing.allocator);
     defer store.deinit();
 
-    var regions = base.Region.List.initCapacity(std.testing.allocator, 256);
+    var regions = try base.Region.List.initCapacity(std.testing.allocator, 256);
     defer regions.deinit(std.testing.allocator);
 
     // Create a rigid type variable 'a' (like in `identity : a -> a`)
-    const rigid_var = store.fresh();
+    const rigid_var = try store.fresh();
     const rigid_content = types.Content{ .rigid_var = @bitCast(@as(u32, 1)) }; // arbitrary identifier
     try store.setVarContent(rigid_var, rigid_content);
 
     // Create the polymorphic function type: a -> a
-    const func_content = store.mkFuncPure(&.{rigid_var}, rigid_var);
-    const func_var = store.freshFromContent(func_content);
+    const func_content = try store.mkFuncPure(&.{rigid_var}, rigid_var);
+    const func_var = try store.freshFromContent(func_content);
 
     // Verify the function needs instantiation (because it contains rigid vars)
     try std.testing.expect(store.needsInstantiation(func_var));
@@ -55,35 +55,35 @@ test "rigid variables need instantiation - polymorphic identity function" {
 }
 
 test "rigid variables need instantiation - multiple type parameters" {
-    var store = Store.init(std.testing.allocator);
+    var store = try Store.init(std.testing.allocator);
     defer store.deinit();
 
-    var regions = base.Region.List.initCapacity(std.testing.allocator, 256);
+    var regions = try base.Region.List.initCapacity(std.testing.allocator, 256);
     defer regions.deinit(std.testing.allocator);
 
     // Create rigid type variables 'a' and 'b' (like in `swap : (a, b) -> (b, a)`)
-    const rigid_a = store.fresh();
+    const rigid_a = try store.fresh();
     const rigid_a_content = types.Content{ .rigid_var = @bitCast(@as(u32, 1)) };
     try store.setVarContent(rigid_a, rigid_a_content);
 
-    const rigid_b = store.fresh();
+    const rigid_b = try store.fresh();
     const rigid_b_content = types.Content{ .rigid_var = @bitCast(@as(u32, 2)) };
     try store.setVarContent(rigid_b, rigid_b_content);
 
     // Create tuple types for the argument and return
-    const arg_tuple_var = store.fresh();
-    const arg_elems_range = store.appendTupleElems(&.{ rigid_a, rigid_b });
+    const arg_tuple_var = try store.fresh();
+    const arg_elems_range = try store.appendTupleElems(&.{ rigid_a, rigid_b });
     const arg_tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = arg_elems_range } } };
     try store.setVarContent(arg_tuple_var, arg_tuple_content);
 
-    const ret_tuple_var = store.fresh();
-    const ret_elems_range = store.appendTupleElems(&.{ rigid_b, rigid_a });
+    const ret_tuple_var = try store.fresh();
+    const ret_elems_range = try store.appendTupleElems(&.{ rigid_b, rigid_a });
     const ret_tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = ret_elems_range } } };
     try store.setVarContent(ret_tuple_var, ret_tuple_content);
 
     // Create the polymorphic function type: (a, b) -> (b, a)
-    const func_content = store.mkFuncPure(&.{arg_tuple_var}, ret_tuple_var);
-    const func_var = store.freshFromContent(func_content);
+    const func_content = try store.mkFuncPure(&.{arg_tuple_var}, ret_tuple_var);
+    const func_var = try store.freshFromContent(func_content);
 
     // Verify the function needs instantiation
     try std.testing.expect(store.needsInstantiation(func_var));
@@ -99,24 +99,24 @@ test "rigid variables need instantiation - multiple type parameters" {
 }
 
 test "rigid vs flex variable instantiation behavior" {
-    var store = Store.init(std.testing.allocator);
+    var store = try Store.init(std.testing.allocator);
     defer store.deinit();
 
     // Test that both rigid and flex variables need instantiation
-    const rigid_var = store.fresh();
+    const rigid_var = try store.fresh();
     try store.setVarContent(rigid_var, types.Content{ .rigid_var = @bitCast(@as(u32, 1)) });
     try std.testing.expect(store.needsInstantiation(rigid_var));
 
-    const flex_var = store.fresh();
+    const flex_var = try store.fresh();
     try store.setVarContent(flex_var, types.Content{ .flex_var = null });
     try std.testing.expect(store.needsInstantiation(flex_var));
 
     // Test that concrete types don't need instantiation
-    const str_var = store.fresh();
+    const str_var = try store.fresh();
     try store.setVarContent(str_var, types.Content{ .structure = .str });
     try std.testing.expect(!store.needsInstantiation(str_var));
 
-    const int_var = store.fresh();
+    const int_var = try store.fresh();
     try store.setVarContent(int_var, types.Content{ .structure = .{ .num = .{ .int_precision = .u32 } } });
     try std.testing.expect(!store.needsInstantiation(int_var));
 }

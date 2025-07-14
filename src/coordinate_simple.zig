@@ -13,6 +13,7 @@ const build_options = @import("build_options");
 
 const ModuleEnv = base.ModuleEnv;
 const CIR = canonicalize.CIR;
+const AST = parse.AST;
 const cache_mod = @import("cache/mod.zig");
 const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
@@ -215,13 +216,13 @@ fn processSourceInternal(
     // Always duplicate source since ModuleEnv owns it
     const owned_source_for_env = try gpa.dupe(u8, source);
 
-    module_env.* = ModuleEnv.init(gpa, owned_source_for_env);
+    module_env.* = try ModuleEnv.init(gpa, owned_source_for_env);
 
     // Calculate line starts for region info
     try module_env.*.calcLineStarts(source);
 
     // Parse the source code
-    var parse_ast = parse.parse(module_env, source);
+    var parse_ast: AST = try parse.parse(module_env, source);
     defer parse_ast.deinit(gpa);
 
     // Create an arraylist for capturing diagnostic reports.
@@ -250,7 +251,7 @@ fn processSourceInternal(
         basename[0..dot_idx]
     else
         basename;
-    cir.* = CIR.init(module_env, module_name);
+    cir.* = try CIR.init(module_env, module_name);
 
     // Create scope for semantic analysis
     // Canonicalize the AST
@@ -264,11 +265,11 @@ fn processSourceInternal(
     cir.debugAssertArraysInSync();
 
     // Get diagnostic Reports from CIR
-    const diagnostics = cir.getDiagnostics();
+    const diagnostics = try cir.getDiagnostics();
     defer gpa.free(diagnostics);
     for (diagnostics) |diagnostic| {
-        const report = cir.diagnosticToReport(diagnostic, gpa, source, filename) catch continue;
-        reports.append(report) catch continue;
+        const report = try cir.diagnosticToReport(diagnostic, gpa, source, filename);
+        try reports.append(report);
     }
 
     collectTiming(config, &timer, &timing_info, "canonicalize_diagnostics_ns");

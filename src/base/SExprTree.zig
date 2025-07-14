@@ -165,66 +165,66 @@ pub fn deinit(self: *SExprTree) void {
 }
 
 /// Push a static atom (e.g. node name) onto the stack
-pub fn pushStaticAtom(self: *SExprTree, value: []const u8) void {
-    self.stack.append(self.allocator, Node{ .StaticAtom = value }) catch unreachable;
+pub fn pushStaticAtom(self: *SExprTree, value: []const u8) std.mem.Allocator.Error!void {
+    try self.stack.append(self.allocator, Node{ .StaticAtom = value });
 }
 
 /// Push a string (copied into data buffer) onto the stack
-pub fn pushString(self: *SExprTree, value: []const u8) void {
+pub fn pushString(self: *SExprTree, value: []const u8) std.mem.Allocator.Error!void {
     const begin: u32 = @intCast(self.data.items.len);
-    self.data.appendSlice(self.allocator, value) catch unreachable;
+    try self.data.appendSlice(self.allocator, value);
     const end: u32 = @intCast(self.data.items.len);
-    self.stack.append(self.allocator, Node{ .String = .{ .begin = begin, .end = end } }) catch unreachable;
+    try self.stack.append(self.allocator, Node{ .String = .{ .begin = begin, .end = end } });
 }
 
 /// Push a string key-value pair onto the stack
-pub fn pushStringPair(self: *SExprTree, key: []const u8, value: []const u8) void {
+pub fn pushStringPair(self: *SExprTree, key: []const u8, value: []const u8) std.mem.Allocator.Error!void {
     const begin = self.beginNode();
-    self.pushStaticAtom(key);
-    self.pushString(value);
+    try self.pushStaticAtom(key);
+    try self.pushString(value);
     const attrs = self.beginNode();
-    self.endNode(begin, attrs);
+    try self.endNode(begin, attrs);
 }
 
 /// Push a dynamic atom (copied into data buffer) onto the stack
-pub fn pushDynamicAtom(self: *SExprTree, value: []const u8) void {
+pub fn pushDynamicAtom(self: *SExprTree, value: []const u8) std.mem.Allocator.Error!void {
     const begin: u32 = @intCast(self.data.items.len);
-    self.data.appendSlice(self.allocator, value) catch unreachable;
+    try self.data.appendSlice(self.allocator, value);
     const end: u32 = @intCast(self.data.items.len);
-    self.stack.append(self.allocator, Node{ .DynamicAtom = .{ .begin = begin, .end = end } }) catch unreachable;
+    try self.stack.append(self.allocator, Node{ .DynamicAtom = .{ .begin = begin, .end = end } });
 }
 
 /// Push a dynamic atom key-value pair onto the stack
-pub fn pushDynamicAtomPair(self: *SExprTree, key: []const u8, value: []const u8) void {
+pub fn pushDynamicAtomPair(self: *SExprTree, key: []const u8, value: []const u8) std.mem.Allocator.Error!void {
     const begin = self.beginNode();
-    self.pushStaticAtom(key);
-    self.pushDynamicAtom(value);
+    try self.pushStaticAtom(key);
+    try self.pushDynamicAtom(value);
     const attrs = self.beginNode();
-    self.endNode(begin, attrs);
+    try self.endNode(begin, attrs);
 }
 
 /// Push a boolean node onto the stack
-pub fn pushBool(self: *SExprTree, value: bool) void {
-    self.stack.append(self.allocator, Node{ .Boolean = value }) catch unreachable;
+pub fn pushBool(self: *SExprTree, value: bool) std.mem.Allocator.Error!void {
+    try self.stack.append(self.allocator, Node{ .Boolean = value });
 }
 
 /// Push a boolean key-value pair onto the stack
-pub fn pushBoolPair(self: *SExprTree, key: []const u8, value: bool) void {
+pub fn pushBoolPair(self: *SExprTree, key: []const u8, value: bool) std.mem.Allocator.Error!void {
     const begin = self.beginNode();
-    self.pushStaticAtom(key);
-    self.pushBool(value);
+    try self.pushStaticAtom(key);
+    try self.pushBool(value);
     const attrs = self.beginNode();
-    self.endNode(begin, attrs);
+    try self.endNode(begin, attrs);
 }
 
 /// Push a NodeIdx node onto the stack
-pub fn pushNodeIdx(self: *SExprTree, idx: u32) void {
-    self.stack.append(self.allocator, Node{ .NodeIdx = idx }) catch unreachable;
+pub fn pushNodeIdx(self: *SExprTree, idx: u32) std.mem.Allocator.Error!void {
+    try self.stack.append(self.allocator, Node{ .NodeIdx = idx });
 }
 
 /// Push a BytesRange node onto the stack
-pub fn pushBytesRange(self: *SExprTree, begin: u32, end: u32, region: RegionInfo) void {
-    self.stack.append(self.allocator, Node{ .BytesRange = .{ .begin = begin, .end = end, .region = region } }) catch unreachable;
+pub fn pushBytesRange(self: *SExprTree, begin: u32, end: u32, region: RegionInfo) std.mem.Allocator.Error!void {
+    try self.stack.append(self.allocator, Node{ .BytesRange = .{ .begin = begin, .end = end, .region = region } });
 }
 
 /// Begin a new node, returning a marker for the current stack position
@@ -233,25 +233,25 @@ pub fn beginNode(self: *SExprTree) NodeBegin {
 }
 
 /// End a node by popping all items since the begin marker and creating a List node
-pub fn endNode(self: *SExprTree, begin: NodeBegin, attrsMarker: NodeBegin) void {
+pub fn endNode(self: *SExprTree, begin: NodeBegin, attrsMarker: NodeBegin) std.mem.Allocator.Error!void {
     const total = self.stack.items.len;
     const start_idx = begin.stack_idx;
-    if (start_idx > total) unreachable;
+    std.debug.assert(start_idx <= total);
 
     const attrs_end_idx: u32 = @intCast(attrsMarker.stack_idx);
-    if (attrs_end_idx > total) unreachable;
-    if (start_idx > attrs_end_idx) unreachable;
+    std.debug.assert(attrs_end_idx <= total);
+    std.debug.assert(start_idx <= attrs_end_idx);
 
     const children_begin: u32 = @intCast(self.children.items.len);
     for (self.stack.items[start_idx..total]) |node| {
-        self.children.append(self.allocator, node) catch unreachable;
+        try self.children.append(self.allocator, node);
     }
     const children_end: u32 = @intCast(self.children.items.len);
     const attrs_end = children_begin + (attrs_end_idx - start_idx);
 
     // Remove items from stack
     self.stack.shrinkRetainingCapacity(start_idx);
-    self.stack.append(self.allocator, Node{ .List = .{ .begin = children_begin, .attrs_marker = attrs_end, .end = children_end } }) catch unreachable;
+    try self.stack.append(self.allocator, Node{ .List = .{ .begin = children_begin, .attrs_marker = attrs_end, .end = children_end } });
 }
 
 /// Internal method that writes the node using a writer implementation
@@ -338,22 +338,18 @@ pub fn printTree(self: *const SExprTree, writer: anytype) !void {
 }
 
 /// Render this SExprTree to a writer with pleasing indentation.
-pub fn toStringPretty(self: *const SExprTree, writer: std.io.AnyWriter) void {
+pub fn toStringPretty(self: *const SExprTree, writer: std.io.AnyWriter) !void {
     if (self.stack.items.len == 0) return;
     var plain_writer = PlainTextSExprWriter{ .writer = writer };
-    self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0) catch {
-        @panic("Ran out of memory writing SExprTree to writer");
-    };
+    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0);
 }
 
 /// Render this SExprTree to HTML with syntax highlighting.
-pub fn toHtml(self: *const SExprTree, writer: std.io.AnyWriter) void {
+pub fn toHtml(self: *const SExprTree, writer: std.io.AnyWriter) !void {
     if (self.stack.items.len == 0) return;
     var html_writer = HtmlSExprWriter.init(writer);
-    self.toStringImpl(self.stack.items[self.stack.items.len - 1], &html_writer, 0) catch {
-        @panic("Ran out of memory writing SExprTree to HTML writer");
-    };
+    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &html_writer, 0);
     html_writer.deinit() catch {
-        @panic("Error finalizing HTML writer");
+        return error.ErrFinalizingHTMLWriter;
     };
 }

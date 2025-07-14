@@ -3,8 +3,6 @@
 const std = @import("std");
 const collections = @import("../collections.zig");
 const serialization = @import("../serialization/mod.zig");
-
-const exitOnOom = collections.utils.exitOnOom;
 const testing = std.testing;
 
 /// The index of this string in a `StringLiteral.Store`.
@@ -37,9 +35,9 @@ pub const Store = struct {
     /// Intiizalizes a `StringLiteral.Store` with capacity `bytes` of space.
     /// Note this specifically is the number of bytes for storing strings.
     /// The string `hello, world!` will use 14 bytes including the null terminator.
-    pub fn initCapacityBytes(gpa: std.mem.Allocator, bytes: usize) Store {
+    pub fn initCapacityBytes(gpa: std.mem.Allocator, bytes: usize) std.mem.Allocator.Error!Store {
         return .{
-            .buffer = std.ArrayListUnmanaged(u8).initCapacity(gpa, bytes) catch |err| exitOnOom(err),
+            .buffer = try std.ArrayListUnmanaged(u8).initCapacity(gpa, bytes),
         };
     }
 
@@ -51,14 +49,17 @@ pub const Store = struct {
     /// Insert a new string into a `StringLiteral.Store`.
     ///
     /// Does not deduplicate, as string literals are expected to be large and mostly unique.
-    pub fn insert(self: *Store, gpa: std.mem.Allocator, string: []const u8) Idx {
+    pub fn insert(self: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
         const str_len: u32 = @truncate(string.len);
-        const str_len_bytes = std.mem.asBytes(&str_len);
-        self.buffer.appendSlice(gpa, str_len_bytes) catch |err| exitOnOom(err);
-        const str_start_idx = self.buffer.items.len;
-        self.buffer.appendSlice(gpa, string) catch |err| exitOnOom(err);
 
-        return @enumFromInt(@as(u32, @intCast(str_start_idx)));
+        const str_len_bytes = std.mem.asBytes(&str_len);
+        try self.buffer.appendSlice(gpa, str_len_bytes);
+
+        const string_content_start = self.buffer.items.len;
+
+        try self.buffer.appendSlice(gpa, string);
+
+        return @enumFromInt(@as(u32, @intCast(string_content_start)));
     }
 
     /// Get a string literal's text from this `Store`.
@@ -112,7 +113,7 @@ pub const Store = struct {
         if (buffer.len < expected_size) return error.BufferTooSmall;
 
         // Create store with exact capacity
-        var store = Store.initCapacityBytes(gpa, buffer_len);
+        var store = try Store.initCapacityBytes(gpa, buffer_len);
 
         // Copy buffer data
         if (buffer_len > 0) {
@@ -132,8 +133,8 @@ test "insert" {
 
     const str_1 = "abc".*;
     const str_2 = "defg".*;
-    const idx_1 = interner.insert(gpa, &str_1);
-    const idx_2 = interner.insert(gpa, &str_2);
+    const idx_1 = try interner.insert(gpa, &str_1);
+    const idx_2 = try interner.insert(gpa, &str_2);
 
     try testing.expectEqualStrings("abc", interner.get(idx_1));
     try testing.expectEqualStrings("defg", interner.get(idx_2));
@@ -146,15 +147,15 @@ test "StringLiteral.Store serialization comprehensive" {
     defer store.deinit(gpa);
 
     // Add various test strings including edge cases
-    _ = store.insert(gpa, "hello");
-    _ = store.insert(gpa, "world");
-    _ = store.insert(gpa, "test string with 🦎 unicode");
-    _ = store.insert(gpa, ""); // empty string
-    _ = store.insert(gpa, "\x00\x01\x02"); // binary data
-    _ = store.insert(gpa, "🦎🚀✨"); // emoji
-    _ = store.insert(gpa, "日本語"); // non-latin script
-    _ = store.insert(gpa, "test\n\r\t"); // control characters
-    _ = store.insert(gpa, "very very very very very very long string that exceeds normal buffer sizes and might cause issues with memory management");
+    _ = try store.insert(gpa, "hello");
+    _ = try store.insert(gpa, "world");
+    _ = try store.insert(gpa, "test string with 🦎 unicode");
+    _ = try store.insert(gpa, ""); // empty string
+    _ = try store.insert(gpa, "\x00\x01\x02"); // binary data
+    _ = try store.insert(gpa, "🦎🚀✨"); // emoji
+    _ = try store.insert(gpa, "日本語"); // non-latin script
+    _ = try store.insert(gpa, "test\n\r\t"); // control characters
+    _ = try store.insert(gpa, "very very very very very very long string that exceeds normal buffer sizes and might cause issues with memory management");
 
     // Test serialization
     try serialization.testing.testSerialization(Store, &store, gpa);
