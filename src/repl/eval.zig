@@ -3,6 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+/// Read-Eval-Print Loop implementation for interactive Roc expression evaluation
 pub const Repl = struct {
     allocator: Allocator,
     state: usize,
