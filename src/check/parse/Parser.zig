@@ -507,7 +507,7 @@ pub fn parsePlatformHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx
     ) catch |err| {
         switch (err) {
             error.ExpectedNotFound => {
-                self.store.clearScratchExposedItemsFrom(provides_start);
+                self.store.clearScratchExposedItemsFrom(provides_top);
                 return try self.pushMalformed(
                     AST.Header.Idx,
                     .expected_provides_close_square,
