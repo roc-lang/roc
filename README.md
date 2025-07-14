@@ -21,11 +21,29 @@ You can 💜 **sponsor** 💜 Roc on:
 
 We are very grateful for our corporate sponsors [Lambda Class](https://lambdaclass.com), [ohne-makler](https://www.ohne-makler.net), and [Decem](https://www.decem.com.au):
 
-[<img src="https://github.com/user-attachments/assets/3241c389-8f04-4b45-9dbb-b94a6f7cb85e" height="60" alt="Lambda Class logo"/>](https://lambdaclass.com)
+<a href="https://lambdaclass.com">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="PLACEHOLDER_LAMBDA_CLASS_DARK_MODE_LOGO_URL">
+    <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/3241c389-8f04-4b45-9dbb-b94a6f7cb85e">
+    <img src="https://github.com/user-attachments/assets/3241c389-8f04-4b45-9dbb-b94a6f7cb85e" height="60" alt="Lambda Class logo">
+  </picture>
+</a>
 &nbsp;&nbsp;&nbsp;&nbsp;
-[<img src="https://www.ohne-makler.net/static/img/brand/logo.svg" height="60" alt="ohne-makler logo"/>](https://www.ohne-makler.net)
+<a href="https://www.ohne-makler.net">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="PLACEHOLDER_OHNE_MAKLER_DARK_MODE_LOGO_URL">
+    <source media="(prefers-color-scheme: light)" srcset="https://www.ohne-makler.net/static/img/brand/logo.svg">
+    <img src="https://www.ohne-makler.net/static/img/brand/logo.svg" height="60" alt="ohne-makler logo">
+  </picture>
+</a>
 &nbsp;&nbsp;&nbsp;&nbsp;
-[<img src="https://github.com/roc-lang/roc/assets/1094080/fd2a759c-7f6d-4f57-9eca-9601deba87b6" height="60" alt="Decem logo"/>](https://www.decem.com.au)
+<a href="https://www.decem.com.au">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="PLACEHOLDER_DECEM_DARK_MODE_LOGO_URL">
+    <source media="(prefers-color-scheme: light)" srcset="https://github.com/roc-lang/roc/assets/1094080/fd2a759c-7f6d-4f57-9eca-9601deba87b6">
+    <img src="https://github.com/roc-lang/roc/assets/1094080/fd2a759c-7f6d-4f57-9eca-9601deba87b6" height="60" alt="Decem logo">
+  </picture>
+</a>
 
 If you would like your company to become a corporate sponsor of Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
 
