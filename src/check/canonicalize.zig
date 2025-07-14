@@ -5656,8 +5656,16 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) s
             }
         },
         .underscore => {
-            // Create anonymous flex var
-            return try self.can_ir.addTypeSlotAndTypeVar(type_anno_node_idx, .{ .flex_var = null }, region, TypeVar);
+            // Check if this underscore type annotation has error content
+            const type_var = @as(types.Var, @enumFromInt(@intFromEnum(type_anno_idx)));
+            const resolved = self.can_ir.env.types.resolveVar(type_var);
+            if (resolved.desc.content == .err) {
+                // This underscore was in a type declaration - create error type variable
+                return try self.can_ir.addTypeSlotAndTypeVar(type_anno_node_idx, .err, region, TypeVar);
+            } else {
+                // Create anonymous flex var
+                return try self.can_ir.addTypeSlotAndTypeVar(type_anno_node_idx, .{ .flex_var = null }, region, TypeVar);
+            }
         },
         .ty => |t| {
             // Look up built-in or user-defined type

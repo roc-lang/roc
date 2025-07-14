@@ -29,20 +29,6 @@ Underscores are not allowed in type alias declarations.
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**test_error_propagation.md:7:9:7:18:**
-```roc
-value : GoodAlias
-```
-        ^^^^^^^^^
-
-It is of type:
-    _GoodAlias_
-
-But you are trying to use it as:
-    _Str_
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
@@ -97,12 +83,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.6 (type "Error")))
+		(patt @8.1-8.6 (type "Str")))
 	(type_decls
 		(nominal @3.1-3.13 (type "BadBase")
 			(ty-header @3.1-3.8 (name "BadBase")))
-		(nominal @5.1-5.21 (type "Error")
+		(nominal @5.1-5.21 (type "Str")
 			(ty-header @5.1-5.10 (name "GoodAlias"))))
 	(expressions
-		(expr @8.9-8.15 (type "Error"))))
+		(expr @8.9-8.15 (type "Str"))))
 ~~~

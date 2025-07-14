@@ -23,7 +23,6 @@ goodValue = "test"
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
-TYPE MISMATCH - underscore_error_propagation.md:7:9:7:19
 TYPE MISMATCH - underscore_error_propagation.md:14:13:14:24
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
@@ -36,20 +35,6 @@ Underscores are not allowed in type alias declarations.
 
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_propagation.md:7:9:7:19:**
-```roc
-value : BadDerived
-```
-        ^^^^^^^^^^
-
-It is of type:
-    _BadDerived_
-
-But you are trying to use it as:
-    _Str_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -150,18 +135,18 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.6 (type "Error"))
+		(patt @8.1-8.6 (type "Str"))
 		(patt @15.1-15.10 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.13 (type "BadBase")
 			(ty-header @3.1-3.8 (name "BadBase")))
-		(nominal @5.1-5.22 (type "Error")
+		(nominal @5.1-5.22 (type "Str")
 			(ty-header @5.1-5.11 (name "BadDerived")))
 		(nominal @10.1-10.16 (type "GoodBase")
 			(ty-header @10.1-10.9 (name "GoodBase")))
 		(nominal @12.1-12.24 (type "Error")
 			(ty-header @12.1-12.12 (name "GoodDerived"))))
 	(expressions
-		(expr @8.9-8.15 (type "Error"))
+		(expr @8.9-8.15 (type "Str"))
 		(expr @15.13-15.19 (type "Error"))))
 ~~~
