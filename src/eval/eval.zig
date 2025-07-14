@@ -17,6 +17,11 @@ pub const EvalError = error{
     LayoutError,
     InvalidBranchNode,
     TypeMismatch,
+    ZeroSizedType,
+    TypeContainedMismatch,
+    InvalidRecordExtension,
+    BugUnboxedFlexVar,
+    BugUnboxedRigidVar,
 };
 
 pub const EvalResult = struct {
@@ -32,6 +37,7 @@ pub fn eval(
     expr_idx: CIR.Expr.Idx,
     eval_stack: *stack.Stack,
     layout_cache: *layout_store.Store,
+    type_store: *types.Store,
 ) EvalError!EvalResult {
     const expr = cir.store.getExpr(expr_idx);
 
@@ -42,34 +48,16 @@ pub fn eval(
         else => {},
     }
 
-    // For now, we'll use simple layouts based on the expression type
-    // In a real implementation, this would come from the type checker
-    const expr_layout = switch (expr) {
-        .e_int => layout.Layout.int(.i128), // Default to i128 for now
-        .e_frac_f64 => layout.Layout.frac(.f64),
-        .e_empty_record => layout.Layout.record(std.mem.Alignment.@"1", .{ .int_idx = 0 }),
-        .e_zero_argument_tag => layout.Layout.int(.u16),
-        .e_tag => layout.Layout.int(.u16), // Tags with args not fully supported yet
-        .e_str, .e_str_segment => return error.LayoutError, // Skip strings for now
-        // These will be handled in the main switch below and return early
-        .e_binop => layout.Layout.int(.u16), // Placeholder - actual layout determined during evaluation
-        .e_call => layout.Layout.int(.u8), // Placeholder - actual layout determined during evaluation
-        .e_lookup_local => layout.Layout.int(.u8), // Placeholder - actual layout determined during evaluation
-        else => return error.LayoutError, // Not implemented yet
-    };
+    // Get the type variable for this expression
+    // In CIR, expression indices and type variables are kept in sync
+    const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
 
-    // Calculate size and alignment
-    const size = switch (expr_layout.tag) {
-        .scalar => switch (expr_layout.data.scalar.tag) {
-            .int => expr_layout.data.scalar.data.int.size(),
-            .frac => expr_layout.data.scalar.data.frac.size(),
-            .bool => 1,
-            else => return error.LayoutError,
-        },
-        .record => 0, // Empty record
-        else => return error.LayoutError,
-    };
+    // Get the real layout from the type checker
+    const layout_idx = try layout_cache.addTypeVar(expr_var);
+    const expr_layout = layout_cache.getLayout(layout_idx);
 
+    // Calculate size and alignment using the layout store
+    const size = layout_cache.layoutSize(expr_layout);
     const alignment = expr_layout.alignment(target.TargetUsize.native);
 
     // Allocate space on the stack
@@ -81,16 +69,19 @@ pub fn eval(
     switch (expr) {
         // Numeric literals are primitives
         .e_int => |int_lit| {
-            // Write integer literal to memory
-            writeIntToMemory(ptr, int_lit.value.toI128(), .i128);
+            // Write integer literal to memory based on actual layout precision
+            if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .int) {
+                const precision = expr_layout.data.scalar.data.int;
+                writeIntToMemory(@as([*]u8, @ptrCast(ptr)), int_lit.value.toI128(), precision);
+            } else {
+                return error.LayoutError;
+            }
         },
         .e_frac_f64 => |float_lit| {
             // Write float literal to memory
             const typed_ptr = @as(*f64, @ptrCast(@alignCast(ptr)));
             typed_ptr.* = float_lit.value;
         },
-
-        // String literals - commented out for now as requested
         .e_str, .e_str_segment => {
             // TODO: Handle string allocation on heap
             return error.LayoutError;
@@ -130,18 +121,18 @@ pub fn eval(
 
         // If expressions - evaluate branches based on conditions
         .e_if => |if_expr| {
-            return evalIfExpression(allocator, cir, if_expr, eval_stack, layout_cache);
+            return evalIfExpression(allocator, cir, if_expr, eval_stack, layout_cache, type_store);
         },
 
         // Non-primitive expressions need evaluation
         .e_lookup_local => |lookup| {
-            return evalLookupLocal(allocator, cir, lookup.pattern_idx, eval_stack, layout_cache);
+            return evalLookupLocal(allocator, cir, lookup.pattern_idx, eval_stack, layout_cache, type_store);
         },
         .e_binop => |binop| {
-            return evalBinop(allocator, cir, binop, eval_stack, layout_cache);
+            return evalBinop(allocator, cir, binop, eval_stack, layout_cache, type_store);
         },
         .e_call => |call| {
-            return evalCall(allocator, cir, expr_idx, call.args, eval_stack, layout_cache);
+            return evalCall(allocator, cir, expr_idx, call.args, eval_stack, layout_cache, type_store);
         },
 
         // TODO: implement these
@@ -205,7 +196,7 @@ pub fn eval(
     };
 }
 
-fn writeIntToMemory(ptr: *anyopaque, value: i128, precision: types.Num.Int.Precision) void {
+fn writeIntToMemory(ptr: [*]u8, value: i128, precision: types.Num.Int.Precision) void {
     switch (precision) {
         .u8 => {
             const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
@@ -287,13 +278,9 @@ fn evalIfExpression(
     if_expr: anytype,
     eval_stack: *stack.Stack,
     layout_cache: *layout_store.Store,
+    type_store: *types.Store,
 ) EvalError!EvalResult {
     const branches = cir.store.sliceIfBranches(if_expr.branches);
-
-    // Fast path: no branches, directly evaluate final_else
-    if (branches.len == 0) {
-        return eval(allocator, cir, if_expr.final_else, eval_stack, layout_cache);
-    }
 
     // Evaluate each branch condition in order
     for (branches) |branch_idx| {
@@ -303,7 +290,7 @@ fn evalIfExpression(
         };
 
         // Evaluate the condition
-        const cond_result = try eval(allocator, cir, branch.condition, eval_stack, layout_cache);
+        const cond_result = try eval(allocator, cir, branch.condition, eval_stack, layout_cache, type_store);
 
         // Check if condition is true
         const is_true = evaluateBooleanCondition(cond_result) catch |err| switch (err) {
@@ -313,12 +300,12 @@ fn evalIfExpression(
 
         if (is_true) {
             // Condition is true, evaluate and return the branch body
-            return eval(allocator, cir, branch.body, eval_stack, layout_cache);
+            return eval(allocator, cir, branch.body, eval_stack, layout_cache, type_store);
         }
     }
 
-    // No branch condition was true, evaluate the final_else
-    return eval(allocator, cir, if_expr.final_else, eval_stack, layout_cache);
+    // No branch condition was true, evaluate final_else
+    return eval(allocator, cir, if_expr.final_else, eval_stack, layout_cache, type_store);
 }
 
 /// Represents the extracted data from an if branch node
@@ -393,62 +380,76 @@ fn evaluateBooleanCondition(cond_result: EvalResult) !bool {
     return discriminant == 0;
 }
 
-fn evalLookupLocal(allocator: std.mem.Allocator, cir: *const CIR, pattern_idx: CIR.Pattern.Idx, eval_stack: *stack.Stack, layout_cache: *layout_store.Store) EvalError!EvalResult {
+fn evalLookupLocal(allocator: std.mem.Allocator, cir: *const CIR, pattern_idx: CIR.Pattern.Idx, eval_stack: *stack.Stack, layout_cache: *layout_store.Store, type_store: *types.Store) EvalError!EvalResult {
     // For now, we need to find the definition of this pattern
     // This is a simplified implementation - in a full implementation,
     // we'd need to track the evaluation environment/scope
 
     // Look up the pattern in the definitions
-    const statements = cir.store.sliceStatements(cir.all_statements);
-    for (statements) |stmt_idx| {
-        const statement = cir.store.getStatement(stmt_idx);
-        if (statement == .s_decl) {
-            const decl = statement.s_decl;
-            if (@intFromEnum(decl.pattern) == @intFromEnum(pattern_idx)) {
-                // Found the definition, evaluate its expression
-                return eval(allocator, cir, decl.expr, eval_stack, layout_cache);
-            }
+    const defs = cir.store.sliceDefs(cir.all_defs);
+    for (defs) |def_idx| {
+        const def = cir.store.getDef(def_idx);
+        if (@intFromEnum(def.pattern) == @intFromEnum(pattern_idx)) {
+            // Found the definition, evaluate its expression
+            return eval(allocator, cir, def.expr, eval_stack, layout_cache, type_store);
         }
     }
     return error.LayoutError; // Pattern not found
 }
 
-fn evalBinop(allocator: std.mem.Allocator, cir: *const CIR, binop: CIR.Expr.Binop, eval_stack: *stack.Stack, layout_cache: *layout_store.Store) EvalError!EvalResult {
+fn evalBinop(allocator: std.mem.Allocator, cir: *const CIR, binop: CIR.Expr.Binop, eval_stack: *stack.Stack, layout_cache: *layout_store.Store, type_store: *types.Store) EvalError!EvalResult {
     // Evaluate left and right operands
-    const lhs_result = try eval(allocator, cir, binop.lhs, eval_stack, layout_cache);
-    const rhs_result = try eval(allocator, cir, binop.rhs, eval_stack, layout_cache);
+    const left_result = try eval(allocator, cir, binop.lhs, eval_stack, layout_cache, type_store);
+    const right_result = try eval(allocator, cir, binop.rhs, eval_stack, layout_cache, type_store);
 
     // For now, only support integer operations
-    if (lhs_result.layout.tag != .scalar or rhs_result.layout.tag != .scalar) {
+    if (left_result.layout.tag != .scalar or right_result.layout.tag != .scalar) {
         return error.LayoutError;
     }
 
-    const lhs_scalar = lhs_result.layout.data.scalar;
-    const rhs_scalar = rhs_result.layout.data.scalar;
+    const lhs_scalar = left_result.layout.data.scalar;
+    const rhs_scalar = right_result.layout.data.scalar;
 
     if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
         return error.LayoutError;
     }
 
-    // Read integer values - assuming U8 for simplicity
-    const lhs_ptr = @as(*u8, @ptrCast(@alignCast(lhs_result.ptr)));
-    const rhs_ptr = @as(*u8, @ptrCast(@alignCast(rhs_result.ptr)));
+    // Read integer values based on precision
+    const lhs_precision = lhs_scalar.data.int;
+    const rhs_precision = rhs_scalar.data.int;
+
+    // For now, assume both operands have the same precision (u8)
+    if (lhs_precision != .u8 or rhs_precision != .u8) {
+        return error.LayoutError;
+    }
+
+    const lhs_ptr = @as(*u8, @ptrCast(@alignCast(left_result.ptr)));
+    const rhs_ptr = @as(*u8, @ptrCast(@alignCast(right_result.ptr)));
     const lhs_val = lhs_ptr.*;
     const rhs_val = rhs_ptr.*;
+
+    // For binop results, we need to determine the layout based on the operation
+    // For arithmetic operations, the result has the same type as the operands
+    // For comparison operations, the result is always boolean
+    const result_layout = switch (binop.op) {
+        .add, .sub, .mul, .div, .rem, .pow, .div_trunc => left_result.layout,
+        .eq, .ne => layout.Layout.boolType(),
+        .@"and", .@"or" => layout.Layout.boolType(),
+        else => return error.LayoutError,
+    };
 
     // Perform the operation
     switch (binop.op) {
         .add => {
             // Addition result
             const result_val = lhs_val + rhs_val;
-            const result_layout = layout.Layout.int(.u8);
-            const size = result_layout.data.scalar.data.int.size();
+            const size = layout_cache.layoutSize(result_layout);
             const alignment = result_layout.alignment(target.TargetUsize.native);
             const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
                 error.StackOverflow => return error.StackOverflow,
             };
             const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
+            typed_ptr.* = @as(u8, @intCast(result_val));
             return EvalResult{
                 .layout = result_layout,
                 .ptr = ptr,
@@ -457,8 +458,7 @@ fn evalBinop(allocator: std.mem.Allocator, cir: *const CIR, binop: CIR.Expr.Bino
         .eq => {
             // Equality comparison - return boolean
             const result_val: bool = lhs_val == rhs_val;
-            const result_layout = layout.Layout.boolType();
-            const size = 1; // bool is always 1 byte
+            const size = layout_cache.layoutSize(result_layout);
             const alignment = result_layout.alignment(target.TargetUsize.native);
             const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
                 error.StackOverflow => return error.StackOverflow,
@@ -473,8 +473,7 @@ fn evalBinop(allocator: std.mem.Allocator, cir: *const CIR, binop: CIR.Expr.Bino
         .ne => {
             // Not-equal comparison - return boolean
             const result_val: bool = lhs_val != rhs_val;
-            const result_layout = layout.Layout.boolType();
-            const size = 1; // bool is always 1 byte
+            const size = layout_cache.layoutSize(result_layout);
             const alignment = result_layout.alignment(target.TargetUsize.native);
             const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
                 error.StackOverflow => return error.StackOverflow,
@@ -492,9 +491,9 @@ fn evalBinop(allocator: std.mem.Allocator, cir: *const CIR, binop: CIR.Expr.Bino
     }
 }
 
-fn evalCall(allocator: std.mem.Allocator, cir: *const CIR, call_expr_idx: CIR.Expr.Idx, args_span: CIR.Expr.Span, eval_stack: *stack.Stack, layout_cache: *layout_store.Store) EvalError!EvalResult {
-    // Get the function being called - it should be the first expression in the call
-    const call_expr = cir.store.getExpr(call_expr_idx);
+fn evalCall(allocator: std.mem.Allocator, cir: *const CIR, expr_idx: CIR.Expr.Idx, args: CIR.Expr.Span, eval_stack: *stack.Stack, layout_cache: *layout_store.Store, type_store: *types.Store) EvalError!EvalResult {
+    // Get the function being called
+    const call_expr = cir.store.getExpr(expr_idx);
     if (call_expr != .e_call) {
         return error.LayoutError;
     }
@@ -503,14 +502,14 @@ fn evalCall(allocator: std.mem.Allocator, cir: *const CIR, call_expr_idx: CIR.Ex
     // This is a simplified implementation that assumes the function is directly accessible
 
     // Get the arguments
-    const args = cir.store.sliceExpr(args_span);
+    const args_slice = cir.store.sliceExpr(args);
 
-    if (args.len != 3) { // function + 2 args for addU8
+    if (args_slice.len != 3) { // function + 2 args for addU8
         return error.LayoutError;
     }
 
     // First argument should be the function (e_lookup_local)
-    const func_expr = cir.store.getExpr(args[0]);
+    const func_expr = cir.store.getExpr(args_slice[0]);
     if (func_expr != .e_lookup_local) {
         return error.LayoutError;
     }
@@ -519,8 +518,8 @@ fn evalCall(allocator: std.mem.Allocator, cir: *const CIR, call_expr_idx: CIR.Ex
     // This is a simplified implementation that assumes we're calling addU8
 
     // Evaluate the arguments directly
-    const arg1_result = try eval(allocator, cir, args[1], eval_stack, layout_cache);
-    const arg2_result = try eval(allocator, cir, args[2], eval_stack, layout_cache);
+    const arg1_result = try eval(allocator, cir, args_slice[1], eval_stack, layout_cache, type_store);
+    const arg2_result = try eval(allocator, cir, args_slice[2], eval_stack, layout_cache, type_store);
 
     // For addU8, we know it's just addition of U8 values
     if (arg1_result.layout.tag != .scalar or arg2_result.layout.tag != .scalar) {
@@ -533,8 +532,12 @@ fn evalCall(allocator: std.mem.Allocator, cir: *const CIR, call_expr_idx: CIR.Ex
     const arg2_val = arg2_ptr.*;
     const result_val = arg1_val + arg2_val;
 
-    const result_layout = layout.Layout.int(.u8);
-    const size = result_layout.data.scalar.data.int.size();
+    // Get the real layout for the result from the type checker
+    const result_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
+    const result_layout_idx = try layout_cache.addTypeVar(result_var);
+    const result_layout = layout_cache.getLayout(result_layout_idx);
+
+    const size = layout_cache.layoutSize(result_layout);
     const alignment = result_layout.alignment(target.TargetUsize.native);
     const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
         error.StackOverflow => return error.StackOverflow,
@@ -549,6 +552,7 @@ fn evalCall(allocator: std.mem.Allocator, cir: *const CIR, call_expr_idx: CIR.Ex
 
 test {
     _ = @import("eval_test.zig");
+    _ = @import("eval_layout_test.zig");
 }
 
 test "evaluateBooleanCondition - valid True tag" {

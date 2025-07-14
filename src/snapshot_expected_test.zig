@@ -721,7 +721,7 @@ fn evaluateSnapshotExpects(allocator: std.mem.Allocator, snapshot_path: []const 
             var layout_cache = try layout_store.Store.init(&module_env, &module_env.types);
             defer layout_cache.deinit();
 
-            const result = eval.eval(allocator, &cir, expect_expr_idx, &eval_stack, &layout_cache) catch |err| {
+            const result = eval.eval(allocator, &cir, expect_expr_idx, &eval_stack, &layout_cache, &module_env.types) catch |err| {
                 switch (err) {
                     error.LayoutError => {
                         // Skip unimplemented features for now
