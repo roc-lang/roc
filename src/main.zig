@@ -308,19 +308,19 @@ fn printTimingBreakdown(writer: anytype, timing: ?coordinate_simple.TimingInfo) 
         writer.print("\nTiming breakdown:\n", .{}) catch {};
         writer.print("  tokenize + parse:             ", .{}) catch {};
         formatElapsedTime(writer, t.tokenize_parse_ns) catch {};
-        writer.print("\n", .{}) catch {};
+        writer.print("  ({} ns)\n", .{t.tokenize_parse_ns}) catch {};
         writer.print("  canonicalize:                 ", .{}) catch {};
         formatElapsedTime(writer, t.canonicalize_ns) catch {};
-        writer.print("\n", .{}) catch {};
+        writer.print("  ({} ns)\n", .{t.canonicalize_ns}) catch {};
         writer.print("  can diagnostics:              ", .{}) catch {};
         formatElapsedTime(writer, t.canonicalize_diagnostics_ns) catch {};
-        writer.print("\n", .{}) catch {};
+        writer.print("  ({} ns)\n", .{t.canonicalize_diagnostics_ns}) catch {};
         writer.print("  type checking:                ", .{}) catch {};
         formatElapsedTime(writer, t.type_checking_ns) catch {};
-        writer.print("\n", .{}) catch {};
+        writer.print("  ({} ns)\n", .{t.type_checking_ns}) catch {};
         writer.print("  type checking diagnostics:    ", .{}) catch {};
         formatElapsedTime(writer, t.check_diagnostics_ns) catch {};
-        writer.print("\n", .{}) catch {};
+        writer.print("  ({} ns)\n", .{t.check_diagnostics_ns}) catch {};
     }
 }
 
