@@ -941,7 +941,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
                 qualifier = self.pos;
                 self.advance(); // Advance past LowerIdent
             }
-            if (self.peek() == .UpperIdent or (qualifier != null and (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent))) {
+            if ((qualifier == null and self.peek() == .UpperIdent) or (qualifier != null and (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent))) {
                 var exposes = AST.ExposedItem.Span{ .span = base.DataSpan.empty() };
                 const module_name_tok = self.pos;
                 // Handle 'as' clause if present
