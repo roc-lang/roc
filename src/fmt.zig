@@ -1876,7 +1876,7 @@ const Formatter = struct {
                 if (multiline) {
                     _ = try fmt.flushCommentsAfter(region.start);
                     fmt.curr_indent += 1;
-                    try fmt.newline();
+                    try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
                 const anno_region = try fmt.formatTypeAnno(p.anno);
