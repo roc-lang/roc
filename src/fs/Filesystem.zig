@@ -5,7 +5,6 @@ const std = @import("std");
 const collections = @import("../collections.zig");
 
 const Allocator = std.mem.Allocator;
-const deprecatedExitOnOom = collections.utils.deprecatedExitOnOom;
 
 const Self = @This();
 
@@ -134,14 +133,14 @@ pub const Dir = struct {
             // without following symlinks
             return std.fs.path.resolve(allocator, &.{filename}) catch |err| {
                 switch (err) {
-                    error.OutOfMemory => deprecatedExitOnOom(error.OutOfMemory),
+                    error.OutOfMemory => error.OutOfMemory,
                     else => return err,
                 }
             };
         } else {
             return dir.dir.realpathAlloc(allocator, filename) catch |err| {
                 switch (err) {
-                    error.OutOfMemory => deprecatedExitOnOom(error.OutOfMemory),
+                    error.OutOfMemory => error.OutOfMemory,
                     else => return err,
                 }
             };
@@ -166,14 +165,14 @@ pub const Dir = struct {
         var files = std.ArrayListUnmanaged([]const u8){};
         errdefer files.deinit(gpa);
 
-        var walker = dir.dir.walk(gpa) catch |err| deprecatedExitOnOom(err);
+        var walker = try dir.dir.walk(gpa);
         while (try walker.next()) |entry| {
             switch (entry.kind) {
                 .file => {
                     const path = std.mem.sliceTo(entry.path, 0);
-                    const relative_path = string_arena.allocator().dupe(u8, path) catch |err| deprecatedExitOnOom(err);
+                    const relative_path = try string_arena.allocator().dupe(u8, path);
 
-                    files.append(gpa, relative_path) catch |err| deprecatedExitOnOom(err);
+                    try files.append(gpa, relative_path);
                 },
                 else => {
                     // do nothing

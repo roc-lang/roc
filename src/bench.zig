@@ -4,13 +4,12 @@ const std = @import("std");
 const fmt = @import("fmt.zig");
 const base = @import("base.zig");
 const collections = @import("collections.zig");
+const tracy = @import("tracy.zig");
 
 const tokenize = @import("check/parse/tokenize.zig");
 const parse = @import("check/parse.zig");
 
 const Allocator = std.mem.Allocator;
-const deprecatedExitOnOom = collections.utils.deprecatedExitOnOom;
-const fatal = collections.utils.fatal;
 
 const RocFile = struct {
     path: []const u8,
@@ -269,4 +268,13 @@ fn printBenchmarkResults(benchmark_name: []const u8, results: BenchmarkResults) 
     std.debug.print("  {d:.0} lines/second\n", .{lines_per_second});
     std.debug.print("  {d:.2} MB/second\n", .{bytes_per_second / (1024.0 * 1024.0)});
     std.debug.print("  {d:.2} bytes/token\n", .{@as(f64, @floatFromInt(results.total_bytes)) / @as(f64, @floatFromInt(results.total_tokens))});
+}
+
+/// Log a fatal error and exit the process with a non-zero code.
+pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
+    std.io.getStdErr().writer().print(format, args) catch unreachable;
+    if (tracy.enable) {
+        tracy.waitForShutdown() catch unreachable;
+    }
+    std.process.exit(1);
 }

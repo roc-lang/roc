@@ -7,7 +7,6 @@
 //! arrays with values corresponding 1-to-1 to interned values, e.g. regions.
 
 const std = @import("std");
-const utils = @import("./utils.zig");
 const Region = @import("../base/Region.zig");
 
 const Self = @This();

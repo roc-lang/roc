@@ -9,7 +9,6 @@ const store_mod = @import("../../types/store.zig");
 const TypesStore = store_mod.Store;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
-const exitOnOutOfMemory = collections.utils.deprecatedExitOnOom;
 
 /// Index enum for SnapshotContentList
 pub const SnapshotContentIdx = SnapshotContentList.Idx;

@@ -4,9 +4,6 @@
 //! memory alignment constants used throughout the compiler, particularly
 //! for stack allocations in the interpreter.
 
-/// Utilities for managing collections.
-pub const utils = @import("collections/utils.zig");
-
 const std = @import("std");
 
 /// The highest alignment any Roc type can have.

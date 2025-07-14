@@ -6,7 +6,6 @@
 //! that are called from compiled Roc code to handle string operations efficiently.
 const utils = @import("utils.zig");
 const RocList = @import("list.zig").RocList;
-const UpdateMode = utils.UpdateMode;
 const std = @import("std");
 const ascii = std.ascii;
 const mem = std.mem;
@@ -70,7 +69,7 @@ pub const RocStr = extern struct {
 
     // This requires that the list is non-null.
     // It also requires that start and count define a slice that does not go outside the bounds of the list.
-    pub fn fromSubListUnsafe(list: RocList, start: usize, count: usize, update_mode: UpdateMode) RocStr {
+    pub fn fromSubListUnsafe(list: RocList, start: usize, count: usize, update_mode: utils.UpdateMode) RocStr {
         const start_byte = @as([*]u8, @ptrCast(list.bytes)) + start;
         if (list.isSeamlessSlice()) {
             return RocStr{
@@ -1462,7 +1461,7 @@ const FromUtf8Result = extern struct {
 /// TODO: Document fromUtf8C.
 pub fn fromUtf8C(
     list: RocList,
-    update_mode: UpdateMode,
+    update_mode: utils.UpdateMode,
 ) callconv(.C) FromUtf8Result {
     return fromUtf8(list, update_mode);
 }
@@ -1570,7 +1569,7 @@ pub fn fromUtf8Lossy(
 /// TODO: Document fromUtf8.
 pub fn fromUtf8(
     list: RocList,
-    update_mode: UpdateMode,
+    update_mode: utils.UpdateMode,
 ) FromUtf8Result {
     if (list.len() == 0) {
         list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);

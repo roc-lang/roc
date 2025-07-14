@@ -1,7 +1,6 @@
 //! Lists that make it easier to avoid incorrect indexing.
 
 const std = @import("std");
-const utils = @import("utils.zig");
 const serialization = @import("../serialization/mod.zig");
 
 const testing = std.testing;

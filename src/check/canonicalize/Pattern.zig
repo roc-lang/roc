@@ -19,7 +19,6 @@ const base = @import("../../base.zig");
 const types = @import("../../types.zig");
 const CIR = @import("CIR.zig");
 const collections = @import("../../collections.zig");
-const deprecatedExitOnOom = collections.utils.deprecatedExitOnOom;
 const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
 const Region = base.Region;

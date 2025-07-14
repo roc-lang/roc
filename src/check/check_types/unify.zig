@@ -54,7 +54,6 @@ const snapshot_mod = @import("./snapshot.zig");
 const Region = base.Region;
 const Ident = base.Ident;
 
-const exitOnOutOfMemory = collections.utils.deprecatedExitOnOom;
 const SmallStringInterner = collections.SmallStringInterner;
 
 const Slot = store.Slot;

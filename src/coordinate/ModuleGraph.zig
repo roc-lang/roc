@@ -4,7 +4,6 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("../base.zig");
-const utils = @import("utils.zig");
 const cache = @import("../cache/mod.zig");
 const collections = @import("../collections.zig");
 const Can = @import("../check/canonicalize.zig");

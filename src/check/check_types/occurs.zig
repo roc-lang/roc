@@ -24,7 +24,6 @@ const store = @import("../../types/store.zig");
 const Ident = base.Ident;
 
 const MkSafeList = collections.SafeList;
-const exitOnOutOfMemory = collections.utils.deprecatedExitOnOom;
 
 const Store = store.Store;
 const DescStoreIdx = store.DescStoreIdx;
