@@ -48,5 +48,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.23 (type "List((Frac(size), Str))"))
+(expr @1.1-1.23 (type "List((Frac(_size), Str))"))
 ~~~

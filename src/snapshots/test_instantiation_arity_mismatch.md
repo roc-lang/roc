@@ -24,10 +24,10 @@ This expression is used in an unexpected way:
     ^^^^^^^^
 
 It is of type:
-    _arg -> ret2_
+    __arg -> _ret2_
 
 But you are trying to use it as:
-    _Num(size), Num(size2) -> ret_
+    _Num(_size), Num(_size2) -> _ret_
 
 # TOKENS
 ~~~zig
@@ -44,11 +44,11 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 		(s-type-anno @2.5-2.32 (name "identity")
 			(ty-fn @2.16-2.32
 				(ty-tuple @2.16-2.22
-					(ty-var @2.17-2.17 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @2.17-2.18 (raw "a"))
+					(ty-var @2.20-2.21 (raw "b")))
 				(ty-tuple @2.26-2.32
-					(ty-var @2.27-2.27 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))))
+					(ty-var @2.27-2.28 (raw "a"))
+					(ty-var @2.30-2.31 (raw "b")))))
 		(s-decl @3.5-3.27
 			(p-ident @3.5-3.13 (raw "identity"))
 			(e-lambda @3.16-3.27
@@ -75,11 +75,11 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 	(s-type-anno @2.5-2.32 (name "identity")
 		(ty-fn @2.16-2.32 (effectful false)
 			(ty-tuple @2.16-2.22
-				(ty-var @2.17-2.17 (name "a"))
-				(ty-var @1.1-1.1 (name "b")))
+				(ty-var @2.17-2.18 (name "a"))
+				(ty-var @2.20-2.21 (name "b")))
 			(ty-tuple @2.26-2.32
-				(ty-var @2.27-2.27 (name "a"))
-				(ty-var @1.1-1.1 (name "b")))))
+				(ty-var @2.27-2.28 (name "a"))
+				(ty-var @2.30-2.31 (name "b")))))
 	(s-let @3.5-3.27
 		(p-assign @3.5-3.13 (ident "identity"))
 		(e-lambda @3.16-3.27
@@ -95,5 +95,5 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "c"))
+(expr @1.1-6.2 (type "_c"))
 ~~~

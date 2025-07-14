@@ -22,6 +22,13 @@ pub const Token = struct {
     pub const Extra = union {
         region: base.Region,
         interned: base.Ident.Idx,
+        ident_with_flags: IdentWithFlags,
+    };
+
+    pub const IdentWithFlags = struct {
+        ident: base.Ident.Idx,
+        starts_with_underscore: bool,
+        ends_with_underscore: bool,
     };
 
     pub const List = std.MultiArrayList(@This());
@@ -321,6 +328,17 @@ pub const Token = struct {
                 .MalformedNoSpaceDotUnicodeIdent,
                 .MalformedUnicodeIdent,
                 .MalformedDotUnicodeIdent,
+                .MalformedOpaqueNameUnicode,
+                .OpaqueName,
+                => true,
+                else => false,
+            };
+        }
+
+        pub fn hasUnderscoreFlags(tok: Tag) bool {
+            return switch (tok) {
+                .LowerIdent,
+                .NamedUnderscore,
                 => true,
                 else => false,
             };
@@ -408,7 +426,9 @@ pub const TokenizedBuffer = struct {
     pub fn resolve(self: *const TokenizedBuffer, idx: usize) base.Region {
         const tag = self.tokens.items(.tag)[idx];
         const extra = self.tokens.items(.extra)[idx];
-        if (tag.isInterned()) {
+        if (tag.hasUnderscoreFlags()) {
+            return self.env.idents.getRegion(extra.ident_with_flags.ident);
+        } else if (tag.isInterned()) {
             return self.env.idents.getRegion(extra.interned);
         } else {
             return extra.region;
@@ -419,9 +439,26 @@ pub const TokenizedBuffer = struct {
     /// Otherwise returns null.
     pub fn resolveIdentifier(self: *TokenizedBuffer, token: Token.Idx) ?base.Ident.Idx {
         const tag = self.tokens.items(.tag)[@intCast(token)];
-        if (tag.isInterned()) {
-            const extra = self.tokens.items(.extra)[@intCast(token)];
+        const extra = self.tokens.items(.extra)[@intCast(token)];
+        if (tag.hasUnderscoreFlags()) {
+            return extra.ident_with_flags.ident;
+        } else if (tag.isInterned()) {
             return extra.interned;
+        } else {
+            return null;
+        }
+    }
+
+    /// Gets underscore flags for identifier tokens.
+    /// Returns null if token is not an identifier with underscore flags.
+    pub fn resolveUnderscoreFlags(self: *TokenizedBuffer, token: Token.Idx) ?struct { starts_with_underscore: bool, ends_with_underscore: bool } {
+        const tag = self.tokens.items(.tag)[@intCast(token)];
+        if (tag.hasUnderscoreFlags()) {
+            const extra = self.tokens.items(.extra)[@intCast(token)];
+            return .{
+                .starts_with_underscore = extra.ident_with_flags.starts_with_underscore,
+                .ends_with_underscore = extra.ident_with_flags.ends_with_underscore,
+            };
         } else {
             return null;
         }
@@ -431,8 +468,10 @@ pub const TokenizedBuffer = struct {
     /// Otherwise returns null.
     pub fn resolveIdentifierAndRegion(self: *TokenizedBuffer, token: Token.Idx) ?struct { base.Ident.Idx, base.Region } {
         const tag = self.tokens.items(.tag)[@intCast(token)];
-        if (tag.isInterned()) {
-            const extra = self.tokens.items(.extra)[@intCast(token)];
+        const extra = self.tokens.items(.extra)[@intCast(token)];
+        if (tag.hasUnderscoreFlags()) {
+            return .{ extra.ident_with_flags.ident, self.env.idents.getRegion(extra.ident_with_flags.ident) };
+        } else if (tag.isInterned()) {
             return .{ extra.interned, self.env.idents.getRegion(extra.interned) };
         } else {
             return null;
@@ -998,20 +1037,37 @@ pub const Tokenizer = struct {
     fn pushTokenInternedHere(
         self: *Tokenizer,
         tag: Token.Tag,
-        tok_offset: u32,
-        text_offset: u32,
-    ) std.mem.Allocator.Error!void {
-        std.debug.assert(tag.isInterned());
+        tok_offset: Token.Idx,
+        text_offset: Token.Idx,
+    ) !void {
         const text = self.cursor.buf[text_offset..self.cursor.pos];
         const id = try self.env.idents.insert(
             self.env.gpa,
             base.Ident.for_text(text),
             base.Region.from_raw_offsets(tok_offset, self.cursor.pos),
         );
-        try self.output.tokens.append(self.env.gpa, .{
-            .tag = tag,
-            .extra = .{ .interned = id },
-        });
+
+        // Use underscore flags for type variable identifiers that benefit from fast checking
+        if (tag.hasUnderscoreFlags()) {
+            // Calculate underscore flags for identifier tokens
+            const starts_with_underscore = text.len > 0 and text[0] == '_';
+            const ends_with_underscore = text.len > 1 and text[text.len - 1] == '_';
+
+            try self.output.tokens.append(self.env.gpa, .{
+                .tag = tag,
+                .extra = .{ .ident_with_flags = .{
+                    .ident = id,
+                    .starts_with_underscore = starts_with_underscore,
+                    .ends_with_underscore = ends_with_underscore,
+                } },
+            });
+        } else {
+            std.debug.assert(tag.isInterned());
+            try self.output.tokens.append(self.env.gpa, .{
+                .tag = tag,
+                .extra = .{ .interned = id },
+            });
+        }
     }
 
     fn consumeBraceCloseAndContinueStringInterp(self: *Tokenizer, brace: BraceKind) std.mem.Allocator.Error!void {
@@ -1351,7 +1407,11 @@ pub const Tokenizer = struct {
                         tok = .MalformedOpaqueNameWithoutName;
                         self.cursor.pos += 1;
                     }
-                    try self.pushTokenNormalHere(tok, start);
+                    if (tok.isInterned()) {
+                        try self.pushTokenInternedHere(tok, start, start);
+                    } else {
+                        try self.pushTokenNormalHere(tok, start);
+                    }
                 },
 
                 // Numbers starting with 0-9

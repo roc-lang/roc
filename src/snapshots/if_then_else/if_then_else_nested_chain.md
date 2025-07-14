@@ -43,7 +43,8 @@ CloseCurly(13:1-13:2),EndOfFile(13:2-13:2),
 (file @1.1-13.2
 	(module @1.1-1.21
 		(exposes @1.8-1.21
-			(exposed-lower-ident @1.9-1.20 (text "checkNumber"))))
+			(exposed-lower-ident @1.9-1.20
+				(text "checkNumber"))))
 	(statements
 		(s-decl @3.1-13.2
 			(p-ident @3.1-3.12 (raw "checkNumber"))
@@ -129,7 +130,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.12 (type "arg -> Str")))
+		(patt @3.1-3.12 (type "_arg -> Str")))
 	(expressions
-		(expr @3.15-13.2 (type "arg -> Str"))))
+		(expr @3.15-13.2 (type "_arg -> Str"))))
 ~~~

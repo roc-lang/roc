@@ -66,7 +66,8 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 (file @1.1-7.2
 	(module @1.1-1.21
 		(exposes @1.8-1.21
-			(exposed-lower-ident @1.9-1.20 (text "extract_age"))))
+			(exposed-lower-ident @1.9-1.20
+				(text "extract_age"))))
 	(statements
 		(s-type-anno @3.1-3.35 (name "extract_age")
 			(ty-fn @3.15-3.35

@@ -559,14 +559,38 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
-        .tuple_elem_not_canonicalized = .{
+        .unused_type_var_name = .{
+            .name = @bitCast(@as(u32, 1819)),
+            .suggested_name = @bitCast(@as(u32, 1820)),
             .region = from_raw_offsets(740, 750),
         },
     });
 
     try diagnostics.append(CIR.Diagnostic{
-        .empty_tuple = .{
+        .type_var_marked_unused = .{
+            .name = @bitCast(@as(u32, 1921)),
+            .suggested_name = @bitCast(@as(u32, 1922)),
             .region = from_raw_offsets(750, 760),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .type_var_ending_in_underscore = .{
+            .name = @bitCast(@as(u32, 2023)),
+            .suggested_name = @bitCast(@as(u32, 2024)),
+            .region = from_raw_offsets(760, 770),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .tuple_elem_not_canonicalized = .{
+            .region = from_raw_offsets(770, 780),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .empty_tuple = .{
+            .region = from_raw_offsets(780, 790),
         },
     });
 
@@ -580,15 +604,15 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(CIR.Diagnostic{
         .redundant_exposed = .{
             .ident = @bitCast(@as(u32, 432)),
-            .region = from_raw_offsets(770, 780),
-            .original_region = from_raw_offsets(780, 790),
+            .region = from_raw_offsets(790, 800),
+            .original_region = from_raw_offsets(800, 810),
         },
     });
 
     try diagnostics.append(CIR.Diagnostic{
         .module_not_found = .{
             .module_name = @bitCast(@as(u32, 543)),
-            .region = from_raw_offsets(790, 800),
+            .region = from_raw_offsets(810, 820),
         },
     });
 
@@ -596,7 +620,7 @@ test "NodeStore round trip - Diagnostics" {
         .value_not_exposed = .{
             .module_name = @bitCast(@as(u32, 654)),
             .value_name = @bitCast(@as(u32, 655)),
-            .region = from_raw_offsets(800, 810),
+            .region = from_raw_offsets(820, 830),
         },
     });
 
@@ -604,21 +628,21 @@ test "NodeStore round trip - Diagnostics" {
         .type_not_exposed = .{
             .module_name = @bitCast(@as(u32, 765)),
             .type_name = @bitCast(@as(u32, 766)),
-            .region = from_raw_offsets(810, 820),
+            .region = from_raw_offsets(830, 840),
         },
     });
 
     try diagnostics.append(CIR.Diagnostic{
         .module_not_imported = .{
             .module_name = @bitCast(@as(u32, 876)),
-            .region = from_raw_offsets(820, 830),
+            .region = from_raw_offsets(840, 850),
         },
     });
 
     try diagnostics.append(CIR.Diagnostic{
         .too_many_exports = .{
             .count = 65536,
-            .region = from_raw_offsets(830, 840),
+            .region = from_raw_offsets(850, 860),
         },
     });
 

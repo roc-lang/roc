@@ -19,7 +19,7 @@ The two elements in this list have incompatible types:
   ^  ^^^^^^^
 
 The first element has this type:
-    _Num(size)_
+    _Num(_size)_
 
 However, the second element has this type:
     _Str_

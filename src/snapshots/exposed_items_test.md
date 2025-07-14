@@ -26,12 +26,15 @@ LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Int(5:8-5:10),EndOfFile(5:10-5:10),
 (file @1.1-5.10
 	(module @1.1-1.14
 		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13 (text "main"))))
+			(exposed-lower-ident @1.9-1.13
+				(text "main"))))
 	(statements
 		(s-import @3.1-3.42 (raw "pf.Stdout")
 			(exposing
-				(exposed-lower-ident @3.28-3.33 (text "line!"))
-				(exposed-lower-ident @3.35-3.41 (text "write!"))))
+				(exposed-lower-ident @3.28-3.33
+					(text "line!"))
+				(exposed-lower-ident @3.35-3.41
+					(text "write!"))))
 		(s-decl @5.1-5.10
 			(p-ident @5.1-5.5 (raw "main"))
 			(e-int @5.8-5.10 (raw "42")))))
@@ -55,7 +58,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "Num(size)")))
+		(patt @5.1-5.5 (type "Num(_size)")))
 	(expressions
-		(expr @5.8-5.10 (type "Num(size)"))))
+		(expr @5.8-5.10 (type "Num(_size)"))))
 ~~~

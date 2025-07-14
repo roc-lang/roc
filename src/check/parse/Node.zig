@@ -146,6 +146,11 @@ pub const Tag = enum {
     /// * rhs - RHS DESCRIPTION
     ty_var,
 
+    /// `_a` in `MyType(_a) : List(_a)`
+    /// * lhs - LHS DESCRIPTION
+    /// * rhs - RHS DESCRIPTION
+    ty_underscore_var,
+
     /// `List` in `MyType(a) : List(a)`
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION

@@ -38,7 +38,8 @@ LowerIdent(14:1-14:6),OpAssign(14:7-14:8),LowerIdent(14:9-14:17),NoSpaceOpenRoun
 (file @1.1-14.21
 	(app @1.1-1.57
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.55 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
@@ -138,13 +139,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.9 (type "arg, arg2 -> ret"))
-		(patt @9.1-9.14 (type "arg3 -> ret2"))
-		(patt @12.1-12.9 (type "arg4 -> ret3"))
-		(patt @14.1-14.6 (type "a")))
+		(patt @6.1-6.9 (type "_arg, _arg2 -> _ret"))
+		(patt @9.1-9.14 (type "_arg -> _ret"))
+		(patt @12.1-12.9 (type "_arg -> _ret"))
+		(patt @14.1-14.6 (type "_a")))
 	(expressions
-		(expr @6.12-6.24 (type "arg, arg2 -> ret"))
-		(expr @9.17-9.36 (type "arg3 -> ret2"))
-		(expr @12.12-12.45 (type "arg4 -> ret3"))
-		(expr @14.9-14.21 (type "a"))))
+		(expr @6.12-6.24 (type "_arg, _arg2 -> _ret"))
+		(expr @9.17-9.36 (type "_arg -> _ret"))
+		(expr @12.12-12.45 (type "_arg -> _ret"))
+		(expr @14.9-14.21 (type "_a"))))
 ~~~

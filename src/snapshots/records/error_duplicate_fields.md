@@ -88,5 +88,5 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.77 (type "{ name: Str, age: Num(size), email: Str }"))
+(expr @1.1-1.77 (type "{ name: Str, age: Num(_size), email: Str }"))
 ~~~

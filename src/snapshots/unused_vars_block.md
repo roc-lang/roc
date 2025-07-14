@@ -70,7 +70,8 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 (file @1.1-19.2
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -163,7 +164,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.6 (type "arg -> ret")))
+		(patt @3.1-3.6 (type "_arg -> _ret")))
 	(expressions
-		(expr @3.9-19.2 (type "arg -> ret"))))
+		(expr @3.9-19.2 (type "_arg -> _ret"))))
 ~~~

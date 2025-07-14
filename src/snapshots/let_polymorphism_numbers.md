@@ -62,7 +62,8 @@ CloseCurly(29:1-29:2),EndOfFile(29:2-29:2),
 (file @1.1-29.2
 	(app @1.1-1.56
 		(provides @1.5-1.11
-			(exposed-lower-ident @1.6-1.10 (text "main")))
+			(exposed-lower-ident @1.6-1.10
+				(text "main")))
 		(record-field @1.14-1.54 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
@@ -242,29 +243,29 @@ main = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Num(size)"))
-		(patt @5.1-5.5 (type "Frac(size)"))
-		(patt @8.1-8.8 (type "Num(size)"))
-		(patt @9.1-9.10 (type "Frac(size)"))
-		(patt @12.1-12.8 (type "a"))
-		(patt @13.1-13.13 (type "b"))
-		(patt @16.1-16.10 (type "c"))
-		(patt @17.1-17.15 (type "d"))
-		(patt @20.1-20.7 (type "arg -> ret"))
-		(patt @23.1-23.12 (type "e"))
-		(patt @24.1-24.14 (type "f"))
-		(patt @26.1-26.5 (type "arg2 -> ret2")))
+		(patt @4.1-4.4 (type "Num(_size)"))
+		(patt @5.1-5.5 (type "Frac(_size)"))
+		(patt @8.1-8.8 (type "Num(_size)"))
+		(patt @9.1-9.10 (type "Frac(_size)"))
+		(patt @12.1-12.8 (type "_a"))
+		(patt @13.1-13.13 (type "_a"))
+		(patt @16.1-16.10 (type "_a"))
+		(patt @17.1-17.15 (type "_a"))
+		(patt @20.1-20.7 (type "_arg -> _ret"))
+		(patt @23.1-23.12 (type "_a"))
+		(patt @24.1-24.14 (type "_a"))
+		(patt @26.1-26.5 (type "_arg -> _ret")))
 	(expressions
-		(expr @4.7-4.9 (type "Num(size)"))
-		(expr @5.8-5.11 (type "Frac(size)"))
-		(expr @8.11-8.14 (type "Num(size)"))
-		(expr @9.13-9.17 (type "Frac(size)"))
-		(expr @12.11-12.19 (type "a"))
-		(expr @13.16-13.23 (type "b"))
-		(expr @16.13-16.23 (type "c"))
-		(expr @17.18-17.27 (type "d"))
-		(expr @20.10-20.19 (type "arg -> ret"))
-		(expr @23.15-23.24 (type "e"))
-		(expr @24.17-24.28 (type "f"))
-		(expr @26.8-29.2 (type "arg2 -> ret2"))))
+		(expr @4.7-4.9 (type "Num(_size)"))
+		(expr @5.8-5.11 (type "Frac(_size)"))
+		(expr @8.11-8.14 (type "Num(_size)"))
+		(expr @9.13-9.17 (type "Frac(_size)"))
+		(expr @12.11-12.19 (type "_a"))
+		(expr @13.16-13.23 (type "_a"))
+		(expr @16.13-16.23 (type "_a"))
+		(expr @17.18-17.27 (type "_a"))
+		(expr @20.10-20.19 (type "_arg -> _ret"))
+		(expr @23.15-23.24 (type "_a"))
+		(expr @24.17-24.28 (type "_a"))
+		(expr @26.8-29.2 (type "_arg -> _ret"))))
 ~~~

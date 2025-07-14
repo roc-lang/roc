@@ -33,7 +33,8 @@ CloseCurly(8:2-8:3),EndOfFile(8:3-8:3),
 ~~~clojure
 (app @1.1-8.3
 	(provides @2.2-4.3
-		(exposed-lower-ident @3.3-3.8 (text "main!")))
+		(exposed-lower-ident @3.3-3.8
+			(text "main!")))
 	(record-field @6.3-6.29 (name "pf")
 		(e-string @6.16-6.29
 			(e-string-part @6.17-6.28 (raw "../main.roc"))))

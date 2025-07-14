@@ -464,6 +464,42 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
+        .unused_type_var_name => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const type_var_name = self.env.idents.getText(data.name);
+            const suggested_name = self.env.idents.getText(data.suggested_name);
+            break :blk try Diagnostic.buildUnusedTypeVarNameReport(
+                allocator,
+                type_var_name,
+                suggested_name,
+                region_info,
+                filename,
+            );
+        },
+        .type_var_marked_unused => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const type_var_name = self.env.idents.getText(data.name);
+            const suggested_name = self.env.idents.getText(data.suggested_name);
+            break :blk try Diagnostic.buildTypeVarMarkedUnusedReport(
+                allocator,
+                type_var_name,
+                suggested_name,
+                region_info,
+                filename,
+            );
+        },
+        .type_var_ending_in_underscore => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const type_var_name = self.env.idents.getText(data.name);
+            const suggested_name = self.env.idents.getText(data.suggested_name);
+            break :blk try Diagnostic.buildTypeVarEndingInUnderscoreReport(
+                allocator,
+                type_var_name,
+                suggested_name,
+                region_info,
+                filename,
+            );
+        },
     };
 }
 

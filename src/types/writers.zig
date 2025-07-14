@@ -28,7 +28,7 @@ const Tag = types.Tag;
 /// Helper that to writes variables as s-exprs
 pub const SExprWriter = struct {
     /// Write all variables in the type store into the writer as an s-exprs
-    pub fn allVarsToSExprStr(writer: std.io.AnyWriter, gpa: std.mem.Allocator, env: *ModuleEnv) Allocator.Error!void {
+    pub fn allVarsToSExprStr(writer: std.io.AnyWriter, gpa: std.mem.Allocator, env: *const ModuleEnv) Allocator.Error!void {
         var root_node = SExpr.init(gpa, "types_store");
         defer root_node.deinit(gpa);
 
@@ -87,21 +87,14 @@ const TypeContext = enum {
 pub const TypeWriter = struct {
     const Self = @This();
 
-    env: *ModuleEnv,
+    env: *const ModuleEnv,
     buf: std.ArrayList(u8),
     seen: std.ArrayList(Var),
     next_name_index: u32,
     name_counters: std.EnumMap(TypeContext, u32),
 
-    /// Initialize a TypeWriter with a mutable ModuleEnv reference.
-    ///
-    /// The ModuleEnv must be mutable because when we encounter unnamed type variables
-    /// (flex vars with no name), we generate a name for them and update the type
-    /// variable to have that name. This ensures that the same type variable will
-    /// display with the same generated name throughout the type annotation.
-    /// For example, the identity function `|x| x` will show as type `a -> a`
-    /// instead of `a -> b`.
-    pub fn init(gpa: std.mem.Allocator, env: *ModuleEnv) Allocator.Error!Self {
+    /// Initialize a TypeWriter with an immutable ModuleEnv reference.
+    pub fn init(gpa: std.mem.Allocator, env: *const ModuleEnv) Allocator.Error!Self {
         return .{
             .env = env,
             .buf = try std.ArrayList(u8).initCapacity(gpa, 32),
@@ -124,7 +117,7 @@ pub const TypeWriter = struct {
         self.buf.clearRetainingCapacity();
         self.next_name_index = 0;
         self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
-        try self.writeVar(var_);
+        try self.writeVar(var_, var_);
     }
 
     fn generateNextName(self: *Self) !void {
@@ -288,8 +281,94 @@ pub const TypeWriter = struct {
         return false;
     }
 
+    /// Count how many times a variable appears in a type
+    fn countVarOccurrences(self: *const Self, search_var: types.Var, root_var: types.Var) usize {
+        var count: usize = 0;
+        self.countVar(search_var, root_var, &count);
+        return count;
+    }
+
+    fn countVar(self: *const Self, search_var: types.Var, current_var: types.Var, count: *usize) void {
+        if (current_var == search_var) {
+            count.* += 1;
+        }
+
+        if (@intFromEnum(current_var) >= self.env.types.slots.backing.len()) return;
+
+        const resolved = self.env.types.resolveVar(current_var);
+        switch (resolved.desc.content) {
+            .flex_var, .rigid_var, .err => {},
+            .alias => |alias| {
+                // For aliases, we only count occurrences in the type arguments
+                var args_iter = self.env.types.iterAliasArgs(alias);
+                while (args_iter.next()) |arg_var| {
+                    self.countVar(search_var, arg_var, count);
+                }
+            },
+            .structure => |flat_type| {
+                self.countVarInFlatType(search_var, flat_type, count);
+            },
+        }
+    }
+
+    fn countVarInFlatType(self: *const Self, search_var: types.Var, flat_type: FlatType, count: *usize) void {
+        switch (flat_type) {
+            .str, .empty_record, .empty_tag_union => {},
+            .box => |sub_var| self.countVar(search_var, sub_var, count),
+            .list => |sub_var| self.countVar(search_var, sub_var, count),
+            .list_unbound, .num => {},
+            .tuple => |tuple| {
+                const elems = self.env.types.getTupleElemsSlice(tuple.elems);
+                for (elems) |elem| {
+                    self.countVar(search_var, elem, count);
+                }
+            },
+            .nominal_type => |nominal_type| {
+                var args_iter = self.env.types.iterNominalArgs(nominal_type);
+                while (args_iter.next()) |arg_var| {
+                    self.countVar(search_var, arg_var, count);
+                }
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                const args = self.env.types.getFuncArgsSlice(func.args);
+                for (args) |arg| {
+                    self.countVar(search_var, arg, count);
+                }
+                self.countVar(search_var, func.ret, count);
+            },
+            .record => |record| {
+                const fields = self.env.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.var_)) |field_var| {
+                    self.countVar(search_var, field_var, count);
+                }
+                self.countVar(search_var, record.ext, count);
+            },
+            .record_unbound => |fields| {
+                const fields_slice = self.env.types.getRecordFieldsSlice(fields);
+                for (fields_slice.items(.var_)) |field_var| {
+                    self.countVar(search_var, field_var, count);
+                }
+            },
+            .record_poly => |poly| {
+                self.countVarInFlatType(search_var, FlatType{ .record = poly.record }, count);
+                self.countVar(search_var, poly.var_, count);
+            },
+            .tag_union => |tag_union| {
+                var iter = tag_union.tags.iterIndices();
+                while (iter.next()) |tag_idx| {
+                    const tag = self.env.types.tags.get(tag_idx);
+                    const args = self.env.types.getTagArgsSlice(tag.args);
+                    for (args) |arg_var| {
+                        self.countVar(search_var, arg_var, count);
+                    }
+                }
+                self.countVar(search_var, tag_union.ext, count);
+            },
+        }
+    }
+
     /// Convert a var to a type string
-    fn writeVarWithContext(self: *Self, var_: types.Var, context: TypeContext) Allocator.Error!void {
+    fn writeVarWithContext(self: *Self, var_: types.Var, context: TypeContext, root_var: types.Var) Allocator.Error!void {
         if (@intFromEnum(var_) >= self.env.types.slots.backing.len()) {
             // Debug assert that the variable is in bounds - if not, we have a bug in type checking
             _ = try self.buf.writer().write("invalid_type");
@@ -306,24 +385,22 @@ pub const TypeWriter = struct {
                         if (mb_ident_idx) |ident_idx| {
                             _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
                         } else {
-                            // Generate a name and update the type variable to have this name
-                            const start_pos = self.buf.items.len;
+                            // Check if this variable appears multiple times
+                            const occurrences = self.countVarOccurrences(var_, root_var);
+                            if (occurrences == 1) {
+                                _ = try self.buf.writer().write("_");
+                            }
                             try self.generateContextualName(context);
-                            const generated_name = self.buf.items[start_pos..];
-
-                            // Update the type variable to have this generated name
-                            const new_ident_idx = try self.env.idents.insert(self.buf.allocator, Ident.for_text(generated_name), base.Region.zero());
-                            try self.env.types.setVarContent(var_, Content{ .flex_var = new_ident_idx });
                         }
                     },
                     .rigid_var => |ident_idx| {
                         _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
                     },
                     .alias => |alias| {
-                        try self.writeAlias(alias);
+                        try self.writeAlias(alias, root_var);
                     },
                     .structure => |flat_type| {
-                        try self.writeFlatType(flat_type);
+                        try self.writeFlatType(flat_type, root_var);
                     },
                     .err => {
                         _ = try self.buf.writer().write("Error");
@@ -333,12 +410,12 @@ pub const TypeWriter = struct {
         }
     }
 
-    fn writeVar(self: *Self, var_: types.Var) Allocator.Error!void {
-        try self.writeVarWithContext(var_, .General);
+    fn writeVar(self: *Self, var_: types.Var, root_var: types.Var) Allocator.Error!void {
+        try self.writeVarWithContext(var_, .General, root_var);
     }
 
     /// Write an alias type
-    fn writeAlias(self: *Self, alias: types.Alias) Allocator.Error!void {
+    fn writeAlias(self: *Self, alias: types.Alias, root_var: types.Var) Allocator.Error!void {
         _ = try self.buf.writer().write(self.env.idents.getText(alias.ident.ident_idx));
         var args_iter = self.env.types.iterAliasArgs(alias);
         if (args_iter.count() > 0) {
@@ -346,72 +423,72 @@ pub const TypeWriter = struct {
 
             // Write first arg without comma
             if (args_iter.next()) |arg_var| {
-                try self.writeVar(arg_var);
+                try self.writeVar(arg_var, root_var);
             }
 
             // Write remaining args with comma prefix
             while (args_iter.next()) |arg_var| {
                 _ = try self.buf.writer().write(", ");
-                try self.writeVar(arg_var);
+                try self.writeVar(arg_var, root_var);
             }
             _ = try self.buf.writer().write(")");
         }
     }
 
     /// Convert a flat type to a type string
-    fn writeFlatType(self: *Self, flat_type: FlatType) Allocator.Error!void {
+    fn writeFlatType(self: *Self, flat_type: FlatType, root_var: types.Var) Allocator.Error!void {
         switch (flat_type) {
             .str => {
                 _ = try self.buf.writer().write("Str");
             },
             .box => |sub_var| {
                 _ = try self.buf.writer().write("Box(");
-                try self.writeVar(sub_var);
+                try self.writeVar(sub_var, root_var);
                 _ = try self.buf.writer().write(")");
             },
             .list => |sub_var| {
                 _ = try self.buf.writer().write("List(");
-                try self.writeVarWithContext(sub_var, .ListContent);
+                try self.writeVarWithContext(sub_var, .ListContent, root_var);
                 _ = try self.buf.writer().write(")");
             },
             .list_unbound => {
-                _ = try self.buf.writer().write("List(");
+                _ = try self.buf.writer().write("List(_");
                 try self.generateContextualName(.ListContent);
                 _ = try self.buf.writer().write(")");
             },
             .tuple => |tuple| {
-                try self.writeTuple(tuple);
+                try self.writeTuple(tuple, root_var);
             },
             .num => |num| {
-                try self.writeNum(num);
+                try self.writeNum(num, root_var);
             },
             .nominal_type => |nominal_type| {
-                try self.writeNominalType(nominal_type);
+                try self.writeNominalType(nominal_type, root_var);
             },
             .fn_pure => |func| {
-                try self.writeFuncWithArrow(func, " -> ");
+                try self.writeFuncWithArrow(func, " -> ", root_var);
             },
             .fn_effectful => |func| {
-                try self.writeFuncWithArrow(func, " => ");
+                try self.writeFuncWithArrow(func, " => ", root_var);
             },
             .fn_unbound => |func| {
-                try self.writeFuncWithArrow(func, " -> ");
+                try self.writeFuncWithArrow(func, " -> ", root_var);
             },
             .record => |record| {
-                try self.writeRecord(record);
+                try self.writeRecord(record, root_var);
             },
             .record_unbound => |fields| {
-                try self.writeRecordFields(fields);
+                try self.writeRecordFields(fields, root_var);
             },
             .record_poly => |poly| {
-                try self.writeRecord(poly.record);
-                try self.writeVar(poly.var_);
+                try self.writeRecord(poly.record, root_var);
+                try self.writeVar(poly.var_, root_var);
             },
             .empty_record => {
                 _ = try self.buf.writer().write("{}");
             },
             .tag_union => |tag_union| {
-                try self.writeTagUnion(tag_union);
+                try self.writeTagUnion(tag_union, root_var);
             },
             .empty_tag_union => {
                 _ = try self.buf.writer().write("[]");
@@ -420,18 +497,18 @@ pub const TypeWriter = struct {
     }
 
     /// Write a tuple type
-    fn writeTuple(self: *Self, tuple: types.Tuple) Allocator.Error!void {
+    fn writeTuple(self: *Self, tuple: types.Tuple, root_var: types.Var) Allocator.Error!void {
         const elems = self.env.types.getTupleElemsSlice(tuple.elems);
         _ = try self.buf.writer().write("(");
         for (elems, 0..) |elem, i| {
             if (i > 0) _ = try self.buf.writer().write(", ");
-            try self.writeVarWithContext(elem, .TupleFieldContent);
+            try self.writeVarWithContext(elem, .TupleFieldContent, root_var);
         }
         _ = try self.buf.writer().write(")");
     }
 
     /// Write a nominal type
-    fn writeNominalType(self: *Self, nominal_type: types.NominalType) Allocator.Error!void {
+    fn writeNominalType(self: *Self, nominal_type: types.NominalType, root_var: types.Var) Allocator.Error!void {
         _ = try self.buf.writer().write(self.env.idents.getText(nominal_type.ident.ident_idx));
 
         var args_iter = self.env.types.iterNominalArgs(nominal_type);
@@ -440,19 +517,19 @@ pub const TypeWriter = struct {
 
             // Write first arg without comma
             if (args_iter.next()) |arg_var| {
-                try self.writeVar(arg_var);
+                try self.writeVar(arg_var, root_var);
             }
             // Write remaining args with comma prefix
             while (args_iter.next()) |arg_var| {
                 _ = try self.buf.writer().write(", ");
-                try self.writeVar(arg_var);
+                try self.writeVar(arg_var, root_var);
             }
             _ = try self.buf.writer().write(")");
         }
     }
 
     /// Write record fields without extension
-    fn writeRecordFields(self: *Self, fields: types.RecordField.SafeMultiList.Range) Allocator.Error!void {
+    fn writeRecordFields(self: *Self, fields: types.RecordField.SafeMultiList.Range, root_var: types.Var) Allocator.Error!void {
         if (fields.isEmpty()) {
             _ = try self.buf.writer().write("{}");
             return;
@@ -465,42 +542,42 @@ pub const TypeWriter = struct {
         // Write first field - we already verified that there's at least one field
         _ = try self.buf.writer().write(self.env.idents.getText(fields_slice.items(.name)[0]));
         _ = try self.buf.writer().write(": ");
-        try self.writeVarWithContext(fields_slice.items(.var_)[0], .RecordFieldContent);
+        try self.writeVarWithContext(fields_slice.items(.var_)[0], .RecordFieldContent, root_var);
 
         // Write remaining fields
         for (fields_slice.items(.name)[1..], fields_slice.items(.var_)[1..]) |name, var_| {
             _ = try self.buf.writer().write(", ");
             _ = try self.buf.writer().write(self.env.idents.getText(name));
             _ = try self.buf.writer().write(": ");
-            try self.writeVarWithContext(var_, .RecordFieldContent);
+            try self.writeVarWithContext(var_, .RecordFieldContent, root_var);
         }
 
         _ = try self.buf.writer().write(" }");
     }
 
     /// Write a function type with a specific arrow (`->` or `=>`)
-    fn writeFuncWithArrow(self: *Self, func: types.Func, arrow: []const u8) Allocator.Error!void {
+    fn writeFuncWithArrow(self: *Self, func: types.Func, arrow: []const u8, root_var: types.Var) Allocator.Error!void {
         const args = self.env.types.getFuncArgsSlice(func.args);
 
         // Write arguments
         if (args.len == 0) {
             _ = try self.buf.writer().write("({})");
         } else if (args.len == 1) {
-            try self.writeVarWithContext(args[0], .FunctionArgument);
+            try self.writeVarWithContext(args[0], .FunctionArgument, root_var);
         } else {
             for (args, 0..) |arg, i| {
                 if (i > 0) _ = try self.buf.writer().write(", ");
-                try self.writeVarWithContext(arg, .FunctionArgument);
+                try self.writeVarWithContext(arg, .FunctionArgument, root_var);
             }
         }
 
         _ = try self.buf.writer().write(arrow);
 
-        try self.writeVarWithContext(func.ret, .FunctionReturn);
+        try self.writeVarWithContext(func.ret, .FunctionReturn, root_var);
     }
 
     /// Write a record type
-    fn writeRecord(self: *Self, record: types.Record) Allocator.Error!void {
+    fn writeRecord(self: *Self, record: types.Record, root_var: types.Var) Allocator.Error!void {
         const fields = self.env.types.getRecordFieldsSlice(record.fields);
 
         _ = try self.buf.writer().write("{ ");
@@ -508,7 +585,7 @@ pub const TypeWriter = struct {
             if (i > 0) _ = try self.buf.writer().write(", ");
             _ = try self.buf.writer().write(self.env.idents.getText(field_name));
             _ = try self.buf.writer().write(": ");
-            try self.writeVarWithContext(field_var, .RecordFieldContent);
+            try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
         }
 
         // Show extension variable if it's not empty
@@ -523,21 +600,21 @@ pub const TypeWriter = struct {
                         if (fields.len > 0 or ext_fields.len > 0) _ = try self.buf.writer().write(", ");
                         _ = try self.buf.writer().write(self.env.idents.getText(field_name));
                         _ = try self.buf.writer().write(": ");
-                        try self.writeVarWithContext(field_var, .RecordFieldContent);
+                        try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
                     }
                     // Recursively handle the extension's extension
-                    try self.writeRecordExtension(ext_record.ext, fields.len + ext_fields.len);
+                    try self.writeRecordExtension(ext_record.ext, fields.len + ext_fields.len, root_var);
                 },
                 else => {
                     if (fields.len > 0) _ = try self.buf.writer().write(", ");
-                    try self.writeVarWithContext(record.ext, .RecordExtension);
+                    try self.writeVarWithContext(record.ext, .RecordExtension, root_var);
                 },
             },
             .flex_var => |mb_ident| {
                 // Only show flex vars if they have a name
                 if (mb_ident) |_| {
                     if (fields.len > 0) _ = try self.buf.writer().write(", ");
-                    try self.writeVarWithContext(record.ext, .RecordExtension);
+                    try self.writeVarWithContext(record.ext, .RecordExtension, root_var);
                 }
                 // Otherwise hide unnamed flex vars, so they render as no extension.
             },
@@ -549,7 +626,7 @@ pub const TypeWriter = struct {
             },
             else => {
                 if (fields.len > 0) _ = try self.buf.writer().write(", ");
-                try self.writeVarWithContext(record.ext, .RecordExtension);
+                try self.writeVarWithContext(record.ext, .RecordExtension, root_var);
             },
         }
 
@@ -557,7 +634,7 @@ pub const TypeWriter = struct {
     }
 
     /// Helper to write record extension, handling nested records
-    fn writeRecordExtension(self: *Self, ext_var: types.Var, num_fields: usize) Allocator.Error!void {
+    fn writeRecordExtension(self: *Self, ext_var: types.Var, num_fields: usize, root_var: types.Var) Allocator.Error!void {
         const ext_resolved = self.env.types.resolveVar(ext_var);
         switch (ext_resolved.desc.content) {
             .structure => |flat_type| switch (flat_type) {
@@ -569,21 +646,21 @@ pub const TypeWriter = struct {
                         _ = try self.buf.writer().write(", ");
                         _ = try self.buf.writer().write(self.env.idents.getText(field_name));
                         _ = try self.buf.writer().write(": ");
-                        try self.writeVarWithContext(field_var, .RecordFieldContent);
+                        try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
                     }
                     // Recursively handle the extension's extension
-                    try self.writeRecordExtension(ext_record.ext, num_fields + ext_fields.len);
+                    try self.writeRecordExtension(ext_record.ext, num_fields + ext_fields.len, root_var);
                 },
                 else => {
                     if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                    try self.writeVarWithContext(ext_var, .RecordExtension);
+                    try self.writeVarWithContext(ext_var, .RecordExtension, root_var);
                 },
             },
             .flex_var => |mb_ident| {
                 // Only show flex vars if they have a name
                 if (mb_ident) |_| {
                     if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                    try self.writeVarWithContext(ext_var, .RecordExtension);
+                    try self.writeVarWithContext(ext_var, .RecordExtension, root_var);
                 }
                 // Otherwise hide unnamed flex vars, so they render as no extension.
             },
@@ -596,13 +673,13 @@ pub const TypeWriter = struct {
             else => {
                 // Show other types (aliases, errors, etc)
                 if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                try self.writeVarWithContext(ext_var, .RecordExtension);
+                try self.writeVarWithContext(ext_var, .RecordExtension, root_var);
             },
         }
     }
 
     /// Write a tag union type
-    fn writeTagUnion(self: *Self, tag_union: types.TagUnion) Allocator.Error!void {
+    fn writeTagUnion(self: *Self, tag_union: types.TagUnion, root_var: types.Var) Allocator.Error!void {
         _ = try self.buf.writer().write("[");
         var iter = tag_union.tags.iterIndices();
         while (iter.next()) |tag_idx| {
@@ -611,7 +688,7 @@ pub const TypeWriter = struct {
             }
 
             const tag = self.env.types.tags.get(tag_idx);
-            try self.writeTag(tag);
+            try self.writeTag(tag, root_var);
         }
 
         _ = try self.buf.writer().write("]");
@@ -623,75 +700,73 @@ pub const TypeWriter = struct {
                 if (mb_ident_idx) |ident_idx| {
                     _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
                 } else {
-                    // Generate a name and update the type variable to have this name
-                    const start_pos = self.buf.items.len;
+                    // Check if this variable appears multiple times
+                    const occurrences = self.countVarOccurrences(tag_union.ext, root_var);
+                    if (occurrences == 1) {
+                        _ = try self.buf.writer().write("_");
+                    }
                     try self.generateContextualName(.TagUnionExtension);
-                    const generated_name = self.buf.items[start_pos..];
-
-                    // Update the type variable to have this generated name
-                    const new_ident_idx = try self.env.idents.insert(self.buf.allocator, Ident.for_text(generated_name), base.Region.zero());
-                    try self.env.types.setVarContent(tag_union.ext, Content{ .flex_var = new_ident_idx });
                 }
             },
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
                 else => {
-                    try self.writeVarWithContext(tag_union.ext, .TagUnionExtension);
+                    try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
                 },
             },
             .rigid_var => |ident_idx| {
                 _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
             },
             else => {
-                try self.writeVarWithContext(tag_union.ext, .TagUnionExtension);
+                try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
             },
         }
     }
 
     /// Write a single tag
-    fn writeTag(self: *Self, tag: types.Tag) Allocator.Error!void {
+    fn writeTag(self: *Self, tag: types.Tag, root_var: types.Var) Allocator.Error!void {
         _ = try self.buf.writer().write(self.env.idents.getText(tag.name));
         const args = self.env.types.getTagArgsSlice(tag.args);
         if (args.len > 0) {
             _ = try self.buf.writer().write("(");
             for (args, 0..) |arg, i| {
                 if (i > 0) _ = try self.buf.writer().write(", ");
-                try self.writeVar(arg);
+                try self.writeVar(arg, root_var);
             }
             _ = try self.buf.writer().write(")");
         }
     }
 
     /// Convert a num type to a type string
-    fn writeNum(self: *Self, num: Num) Allocator.Error!void {
+    fn writeNum(self: *Self, num: Num, root_var: types.Var) Allocator.Error!void {
         switch (num) {
             .num_poly => |poly| {
                 _ = try self.buf.writer().write("Num(");
-                try self.writeVarWithContext(poly.var_, .NumContent);
+                try self.writeVarWithContext(poly.var_, .NumContent, root_var);
                 _ = try self.buf.writer().write(")");
             },
             .int_poly => |poly| {
                 _ = try self.buf.writer().write("Int(");
-                try self.writeVarWithContext(poly.var_, .NumContent);
+                try self.writeVarWithContext(poly.var_, .NumContent, root_var);
                 _ = try self.buf.writer().write(")");
             },
             .frac_poly => |poly| {
                 _ = try self.buf.writer().write("Frac(");
-                try self.writeVarWithContext(poly.var_, .NumContent);
+                try self.writeVarWithContext(poly.var_, .NumContent, root_var);
                 _ = try self.buf.writer().write(")");
             },
             .num_unbound => |_| {
-                _ = try self.buf.writer().write("Num(");
+                _ = try self.buf.writer().write("Num(_");
                 try self.generateContextualName(.NumContent);
                 _ = try self.buf.writer().write(")");
             },
             .int_unbound => |_| {
-                _ = try self.buf.writer().write("Int(");
+                _ = try self.buf.writer().write("Int(_");
                 try self.generateContextualName(.NumContent);
                 _ = try self.buf.writer().write(")");
             },
             .frac_unbound => |_| {
-                _ = try self.buf.writer().write("Frac(");
+                _ = try self.buf.writer().write("Frac(_");
                 try self.generateContextualName(.NumContent);
                 _ = try self.buf.writer().write(")");
             },

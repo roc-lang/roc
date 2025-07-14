@@ -96,5 +96,5 @@ CloseRound(13:1-13:2),EndOfFile(13:2-13:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-13.2 (type "(Int(size), Int(size2), Int(size3), Int(size4), Int(size5), Int(size6), Frac(size7), Frac(size8), Int(size9), Int(size10), Int(size11))"))
+(expr @1.1-13.2 (type "(Int(_size), Int(_size2), Int(_size3), Int(_size4), Int(_size5), Int(_size6), Frac(_size7), Frac(_size8), Int(_size9), Int(_size10), Int(_size11))"))
 ~~~

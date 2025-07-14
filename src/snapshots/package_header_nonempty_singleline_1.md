@@ -39,7 +39,8 @@ KwPackage(1:1-1:8),OpenSquare(1:9-1:10),LowerIdent(1:10-1:19),Comma(1:19-1:20),U
 (file @1.1-1.88
 	(package @1.1-1.88
 		(exposes @1.9-1.30
-			(exposed-lower-ident @1.10-1.19 (text "something"))
+			(exposed-lower-ident @1.10-1.19
+				(text "something"))
 			(exposed-upper-ident @1.21-1.29 (text "SomeType")))
 		(packages @1.31-1.88
 			(record-field @1.33-1.55 (name "somePkg")

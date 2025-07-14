@@ -36,12 +36,15 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 (file @1.1-10.2
 	(module @1.1-1.14
 		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13 (text "main"))))
+			(exposed-lower-ident @1.9-1.13
+				(text "main"))))
 	(statements
 		(s-import @3.1-3.43 (raw "json.Json")
 			(exposing
-				(exposed-lower-ident @3.28-3.34 (text "decode"))
-				(exposed-lower-ident @3.36-3.42 (text "encode"))))
+				(exposed-lower-ident @3.28-3.34
+					(text "decode"))
+				(exposed-lower-ident @3.36-3.42
+					(text "encode"))))
 		(s-decl @5.1-10.2
 			(p-ident @5.1-5.5 (raw "main"))
 			(e-block @5.8-10.2
@@ -121,7 +124,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "a")))
+		(patt @5.1-5.5 (type "_a")))
 	(expressions
-		(expr @5.8-10.2 (type "a"))))
+		(expr @5.8-10.2 (type "_a"))))
 ~~~

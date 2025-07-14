@@ -185,7 +185,8 @@ CloseCurly(29:1-29:2),EndOfFile(29:2-29:2),
 (file @1.1-29.2
 	(app @1.1-1.56
 		(provides @1.5-1.11
-			(exposed-lower-ident @1.6-1.10 (text "main")))
+			(exposed-lower-ident @1.6-1.10
+				(text "main")))
 		(record-field @1.14-1.54 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
@@ -416,27 +417,27 @@ main = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.14 (type "List(elem)"))
-		(patt @7.1-7.9 (type "List(Num(size))"))
+		(patt @4.1-4.14 (type "List(_elem)"))
+		(patt @7.1-7.9 (type "List(Num(_size))"))
 		(patt @8.1-8.9 (type "List(Str)"))
-		(patt @9.1-9.11 (type "List(Frac(size))"))
-		(patt @12.1-12.13 (type "a"))
-		(patt @13.1-13.13 (type "b"))
-		(patt @14.1-14.15 (type "c"))
-		(patt @17.1-17.10 (type "arg -> List(elem)"))
-		(patt @20.1-20.15 (type "List(elem)"))
-		(patt @21.1-21.15 (type "List(elem)"))
-		(patt @23.1-23.5 (type "arg2 -> ret")))
+		(patt @9.1-9.11 (type "List(Frac(_size))"))
+		(patt @12.1-12.13 (type "_a"))
+		(patt @13.1-13.13 (type "_a"))
+		(patt @14.1-14.15 (type "_a"))
+		(patt @17.1-17.10 (type "_arg -> List(_elem)"))
+		(patt @20.1-20.15 (type "List(_elem)"))
+		(patt @21.1-21.15 (type "List(_elem)"))
+		(patt @23.1-23.5 (type "_arg -> _ret")))
 	(expressions
-		(expr @4.17-4.19 (type "List(elem)"))
-		(expr @7.12-7.21 (type "List(Num(size))"))
+		(expr @4.17-4.19 (type "List(_elem)"))
+		(expr @7.12-7.21 (type "List(Num(_size))"))
 		(expr @8.12-8.30 (type "List(Str)"))
-		(expr @9.14-9.29 (type "List(Frac(size))"))
-		(expr @12.16-12.27 (type "a"))
-		(expr @13.16-13.27 (type "b"))
-		(expr @14.18-14.31 (type "c"))
-		(expr @17.13-17.19 (type "arg -> List(elem)"))
-		(expr @20.18-20.31 (type "List(elem)"))
-		(expr @21.18-21.35 (type "List(elem)"))
-		(expr @23.8-29.2 (type "arg2 -> ret"))))
+		(expr @9.14-9.29 (type "List(Frac(_size))"))
+		(expr @12.16-12.27 (type "_a"))
+		(expr @13.16-13.27 (type "_a"))
+		(expr @14.18-14.31 (type "_a"))
+		(expr @17.13-17.19 (type "_arg -> List(_elem)"))
+		(expr @20.18-20.31 (type "List(_elem)"))
+		(expr @21.18-21.35 (type "List(_elem)"))
+		(expr @23.8-29.2 (type "_arg -> _ret"))))
 ~~~

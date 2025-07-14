@@ -423,7 +423,7 @@ It is of type:
     _U8_
 
 But you are trying to use it as:
-    _{ to_frac: field }_
+    _{ to_frac: _field }_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -437,7 +437,7 @@ It is of type:
     _Str_
 
 But you are trying to use it as:
-    _{ to_utf8: List(Num(size)) }_
+    _{ to_utf8: List(Num(_size)) }_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -451,7 +451,7 @@ It is of type:
     _Color_
 
 But you are trying to use it as:
-    _[Named(Str), RGB(h, i, j), RGBA(k, l, m, n), Hex(Str)]others_
+    _[Named(Str), RGB(_h, _i, _j), RGBA(_k, _l, _m, _n), Hex(Str)]_others_
 
 # TOKENS
 ~~~zig
@@ -522,11 +522,16 @@ EndOfFile(72:1-72:1),
 	(module @1.1-8.2
 		(exposes @1.8-8.2
 			(exposed-upper-ident @2.5-2.10 (text "Color"))
-			(exposed-lower-ident @3.5-3.11 (text "to_str"))
-			(exposed-lower-ident @4.5-4.8 (text "rgb"))
-			(exposed-lower-ident @5.5-5.9 (text "rgba"))
-			(exposed-lower-ident @6.5-6.8 (text "hex"))
-			(exposed-lower-ident @7.5-7.10 (text "named"))))
+			(exposed-lower-ident @3.5-3.11
+				(text "to_str"))
+			(exposed-lower-ident @4.5-4.8
+				(text "rgb"))
+			(exposed-lower-ident @5.5-5.9
+				(text "rgba"))
+			(exposed-lower-ident @6.5-6.8
+				(text "hex"))
+			(exposed-lower-ident @7.5-7.10
+				(text "named"))))
 	(statements
 		(s-type-decl @10.1-15.2
 			(header @10.1-10.6 (name "Color")
@@ -1371,7 +1376,7 @@ is_named_color = |str| {
 		(patt @27.1-27.4 (type "Error -> Error"))
 		(patt @49.1-49.7 (type "Error -> Error"))
 		(patt @61.1-61.6 (type "Error"))
-		(patt @67.1-67.15 (type "arg -> ret")))
+		(patt @67.1-67.15 (type "_arg -> _ret")))
 	(type_decls
 		(nominal @10.1-15.2 (type "Error")
 			(ty-header @10.1-10.6 (name "Color"))))
@@ -1381,5 +1386,5 @@ is_named_color = |str| {
 		(expr @27.7-46.2 (type "Error -> Error"))
 		(expr @49.10-54.2 (type "Error -> Error"))
 		(expr @61.9-63.29 (type "Error"))
-		(expr @67.18-71.2 (type "arg -> ret"))))
+		(expr @67.18-71.2 (type "_arg -> _ret"))))
 ~~~

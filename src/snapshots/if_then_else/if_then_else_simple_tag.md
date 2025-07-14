@@ -47,5 +47,5 @@ if True Ok(0) else Err(1)
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.31 (type "[Ok(Num(size)), Err(Num(size2))]others"))
+(expr @1.1-1.31 (type "[Ok(Num(_size)), Err(Num(_size2))]_others"))
 ~~~

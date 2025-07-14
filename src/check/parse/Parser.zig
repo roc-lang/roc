@@ -2358,7 +2358,15 @@ fn parseTypeIdent(self: *Parser) std.mem.Allocator.Error!AST.TypeAnno.Idx {
             .tok = tok,
         } });
     }
-    return try self.pushMalformed(AST.TypeAnno.Idx, .invalid_type_arg, self.pos);
+    if (self.peek() == .NamedUnderscore) {
+        const tok = self.pos;
+        self.advance();
+        return self.store.addTypeAnno(.{ .underscore_type_var = .{
+            .region = .{ .start = tok, .end = self.pos },
+            .tok = tok,
+        } });
+    }
+    return self.pushMalformed(AST.TypeAnno.Idx, .invalid_type_arg, self.pos);
 }
 
 const TyFnArgs = enum {
@@ -2411,9 +2419,16 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
         .LowerIdent => {
             anno = try self.store.addTypeAnno(.{ .ty_var = .{
                 .tok = self.pos,
-                .region = .{ .start = start, .end = self.pos },
+                .region = .{ .start = start, .end = self.pos + 1 },
             } });
             self.advance(); // Advance past LowerIdent
+        },
+        .NamedUnderscore => {
+            anno = try self.store.addTypeAnno(.{ .underscore_type_var = .{
+                .tok = self.pos,
+                .region = .{ .start = start, .end = self.pos + 1 },
+            } });
+            self.advance(); // Advance past NamedUnderscore
         },
         .NoSpaceOpenRound, .OpenRound => {
             // Probably a tuple

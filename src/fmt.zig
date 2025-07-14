@@ -1798,6 +1798,10 @@ const Formatter = struct {
                 region = v.region;
                 try fmt.pushTokenText(v.tok);
             },
+            .underscore_type_var => |utv| {
+                region = utv.region;
+                try fmt.pushTokenText(utv.tok);
+            },
             .ty => |t| {
                 const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
 

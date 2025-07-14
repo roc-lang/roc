@@ -26,7 +26,7 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),KwImport(1:9-1:15),Lo
 		(s-import @1.9-1.19 (raw "u.R"))
 		(s-type-anno @1.20-1.30 (name "g")
 			(ty-fn @1.22-1.30
-				(ty-var @1.22-1.22 (raw "r"))
+				(ty-var @1.22-1.23 (raw "r"))
 				(ty @1.25-1.30 (name "R.a.E"))))))
 ~~~
 # FORMATTED

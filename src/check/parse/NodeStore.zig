@@ -849,6 +849,11 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             node.region = v.region;
             node.main_token = v.tok;
         },
+        .underscore_type_var => |utv| {
+            node.tag = .ty_underscore_var;
+            node.region = utv.region;
+            node.main_token = utv.tok;
+        },
         .underscore => |u| {
             node.tag = .ty_underscore;
             node.region = u.region;
@@ -1619,6 +1624,12 @@ pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnn
         },
         .ty_var => {
             return .{ .ty_var = .{
+                .tok = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .ty_underscore_var => {
+            return .{ .underscore_type_var = .{
                 .tok = node.main_token,
                 .region = node.region,
             } };

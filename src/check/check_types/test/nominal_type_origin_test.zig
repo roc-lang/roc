@@ -46,7 +46,7 @@ test "nominal type origin - displays origin in snapshot writer" {
         );
         writer.current_module_name = "CurrentModule";
 
-        try writer.writeNominalType(nominal_type);
+        try writer.writeNominalType(nominal_type, nominal_type_backing_idx);
 
         const result = buf.items;
         // Should show "Person (from Data.Types)"
@@ -73,7 +73,7 @@ test "nominal type origin - displays origin in snapshot writer" {
         );
         writer.current_module_name = "CurrentModule";
 
-        try writer.writeNominalType(same_module_nominal);
+        try writer.writeNominalType(same_module_nominal, nominal_type_backing_idx);
 
         const result = buf.items;
         // Should show just "Person" without origin
@@ -105,7 +105,7 @@ test "nominal type origin - displays origin in snapshot writer" {
         );
         writer.current_module_name = "CurrentModule";
 
-        try writer.writeNominalType(generic_nominal);
+        try writer.writeNominalType(generic_nominal, nominal_type_backing_idx);
 
         const result = buf.items;
         // Should show "Person(Str) (from Data.Types)"
@@ -145,7 +145,7 @@ test "nominal type origin - works with no context" {
         &idents,
     );
 
-    try writer.writeNominalType(nominal_type);
+    try writer.writeNominalType(nominal_type, nominal_type_backing_idx);
 
     const result = buf.items;
     // Should show just "MyType" without origin info

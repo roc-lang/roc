@@ -25,7 +25,7 @@ foo = if 1 A
          ^
 
 Right now, it has the type:
-    _Num(size)_
+    _Num(_size)_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -45,7 +45,7 @@ The `else` branch has the type:
     _Str_
 
 But the `then` branch has the type:
-    _[A]others_
+    _[A]_others_
 
 All branches in an `if` must have compatible types.
 
@@ -65,7 +65,8 @@ CloseCurly(7:5-7:6),EndOfFile(7:6-7:6),
 (file @1.1-7.6
 	(module @1.1-1.13
 		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12 (text "foo"))))
+			(exposed-lower-ident @1.9-1.12
+				(text "foo"))))
 	(statements
 		(s-decl @3.1-7.6
 			(p-ident @3.1-3.4 (raw "foo"))

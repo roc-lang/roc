@@ -792,7 +792,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red][Blue, Green]others_
+    _[Red][Blue, Green]_others_
 
 All patterns in an `match` must have compatible types.
 
@@ -807,10 +807,10 @@ This expression is used in an unexpected way:
  ^^^^^^^^^^
 
 It is of type:
-    _[Red][Blue, Green]others, arg2 -> Error_
+    _[Red][Blue, Green]_others, _arg2 -> Error_
 
 But you are trying to use it as:
-    _arg -> ret_
+    __arg -> _ret_
 
 # TOKENS
 ~~~zig
@@ -1000,7 +1000,8 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 (file @2.1-207.2
 	(app @2.1-2.57
 		(provides @2.5-2.12
-			(exposed-lower-ident @2.6-2.11 (text "main!")))
+			(exposed-lower-ident @2.6-2.11
+				(text "main!")))
 		(record-field @2.15-2.55 (name "pf")
 			(e-string @2.28-2.55
 				(e-string-part @2.29-2.54 (raw "../basic-cli/platform.roc"))))
@@ -1011,15 +1012,21 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 	(statements
 		(s-import @4.1-4.42 (raw "pf.Stdout")
 			(exposing
-				(exposed-lower-ident @4.28-4.33 (text "line!"))
-				(exposed-lower-ident @4.35-4.41 (text "write!"))))
+				(exposed-lower-ident @4.28-4.33
+					(text "line!"))
+				(exposed-lower-ident @4.35-4.41
+					(text "write!"))))
 		(s-import @6.1-12.4 (raw "pf.StdoutMultiline")
 			(exposing
-				(exposed-lower-ident @10.4-10.9 (text "line!"))
-				(exposed-lower-ident @11.4-11.10 (text "write!"))))
+				(exposed-lower-ident @10.4-10.9
+					(text "line!"))
+				(exposed-lower-ident @11.4-11.10
+					(text "write!"))))
 		(s-import @14.1-14.82 (raw "pkg.Something")
 			(exposing
-				(exposed-lower-ident @14.32-14.48 (text "func") (as "function"))
+				(exposed-lower-ident @14.32-14.48
+					(text "func")
+					(as "function"))
 				(exposed-upper-ident @14.50-14.71 (text "Type") (as "ValueCategory"))
 				(exposed-upper-ident-star @14.73-14.81 (text "Custom"))))
 		(s-import @16.1-16.27 (raw "BadName") (alias "GoodName"))
@@ -1032,13 +1039,13 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 			(ty-fn @22.13-22.41
 				(ty-apply @22.13-22.20
 					(ty @22.13-22.17 (name "List"))
-					(ty-var @22.18-22.18 (raw "a")))
+					(ty-var @22.18-22.19 (raw "a")))
 				(ty-fn @22.23-22.29
-					(ty-var @22.23-22.23 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @22.23-22.24 (raw "a"))
+					(ty-var @22.28-22.29 (raw "b")))
 				(ty-apply @22.34-22.41
 					(ty @22.34-22.38 (name "List"))
-					(ty-var @22.39-22.39 (raw "b")))))
+					(ty-var @22.39-22.40 (raw "b")))))
 		(s-type-decl @23.1-34.5
 			(header @23.1-26.2 (name "MapML")
 				(args
@@ -1047,13 +1054,13 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 			(ty-fn @28.3-34.5
 				(ty-apply @28.3-30.4
 					(ty @28.3-28.7 (name "List"))
-					(ty-var @1.1-1.1 (raw "a")))
+					(ty-var @29.4-29.5 (raw "a")))
 				(ty-fn @31.4-31.10
-					(ty-var @31.4-31.4 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @31.4-31.5 (raw "a"))
+					(ty-var @31.9-31.10 (raw "b")))
 				(ty-apply @32.4-34.5
 					(ty @32.4-32.8 (name "List"))
-					(ty-var @1.1-1.1 (raw "b")))))
+					(ty-var @33.5-33.6 (raw "b")))))
 		(s-type-decl @36.1-36.17
 			(header @36.1-36.4 (name "Foo")
 				(args))
@@ -1074,7 +1081,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 				(anno-record-field @43.13-43.24 (name "foo")
 					(ty-apply @43.19-43.24
 						(ty @43.19-43.21 (name "Ok"))
-						(ty-var @43.22-43.22 (raw "a"))))
+						(ty-var @43.22-43.23 (raw "a"))))
 				(anno-record-field @43.26-43.41 (name "bar")
 					(ty @43.32-43.41 (name "Something")))))
 		(s-type-decl @44.1-47.2
@@ -1085,7 +1092,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 				(anno-record-field @45.2-45.13 (name "foo")
 					(ty-apply @45.8-45.13
 						(ty @45.8-45.10 (name "Ok"))
-						(ty-var @45.11-45.11 (raw "a"))))
+						(ty-var @45.11-45.12 (raw "a"))))
 				(anno-record-field @46.2-46.17 (name "bar")
 					(ty @46.8-46.17 (name "Something")))))
 		(s-type-decl @49.1-54.2
@@ -1096,7 +1103,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 				(anno-record-field @50.2-52.9 (name "foo")
 					(ty-apply @52.4-52.9
 						(ty @52.4-52.6 (name "Ok"))
-						(ty-var @52.7-52.7 (raw "a"))))
+						(ty-var @52.7-52.8 (raw "a"))))
 				(anno-record-field @53.2-53.17 (name "bar")
 					(ty @53.8-53.17 (name "Something")))))
 		(s-type-decl @56.1-56.27
@@ -1107,7 +1114,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 				(tags
 					(ty-apply @56.13-56.20
 						(ty @56.13-56.17 (name "Some"))
-						(ty-var @56.18-56.18 (raw "a")))
+						(ty-var @56.18-56.19 (raw "a")))
 					(ty @56.22-56.26 (name "None")))))
 		(s-type-decl @58.1-61.2
 			(header @58.1-58.18 (name "MaybeMultiline")
@@ -1117,7 +1124,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 				(tags
 					(ty-apply @59.2-59.9
 						(ty @59.2-59.6 (name "Some"))
-						(ty-var @59.7-59.7 (raw "a")))
+						(ty-var @59.7-59.8 (raw "a")))
 					(ty @60.2-60.6 (name "None")))))
 		(s-type-decl @63.1-63.38
 			(header @63.1-63.12 (name "SomeFunc")
@@ -1126,11 +1133,11 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 			(ty-fn @63.15-63.38
 				(ty-apply @63.15-63.23
 					(ty @63.15-63.20 (name "Maybe"))
-					(ty-var @63.21-63.21 (raw "a")))
-				(ty-var @1.1-1.1 (raw "a"))
+					(ty-var @63.21-63.22 (raw "a")))
+				(ty-var @63.25-63.26 (raw "a"))
 				(ty-apply @63.30-63.38
 					(ty @63.30-63.35 (name "Maybe"))
-					(ty-var @63.36-63.36 (raw "a")))))
+					(ty-var @63.36-63.37 (raw "a")))))
 		(s-decl @65.1-65.40
 			(p-ident @65.1-65.16 (raw "add_one_oneline"))
 			(e-lambda @65.19-65.40
@@ -1509,9 +1516,9 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 			(ty-apply @201.9-201.25
 				(ty @201.9-201.14 (name "Value"))
 				(ty-tuple @201.15-201.24
-					(ty-var @201.16-201.16 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b"))
-					(ty-var @1.1-1.1 (raw "c")))))
+					(ty-var @201.16-201.17 (raw "a"))
+					(ty-var @201.19-201.20 (raw "b"))
+					(ty-var @201.22-201.23 (raw "c")))))
 		(s-expect @203.1-207.2
 			(e-block @203.8-207.2
 				(statements
@@ -2186,13 +2193,13 @@ expect {
 				(ty-var @22.8-22.9 (name "b"))))
 		(ty-fn @22.13-22.41 (effectful false)
 			(ty-apply @22.13-22.20 (symbol "List")
-				(ty-var @22.18-22.18 (name "a")))
+				(ty-var @22.18-22.19 (name "a")))
 			(ty-parens @22.22-22.30
 				(ty-fn @22.23-22.29 (effectful false)
-					(ty-var @22.23-22.23 (name "a"))
-					(ty-var @1.1-1.1 (name "b"))))
+					(ty-var @22.23-22.24 (name "a"))
+					(ty-var @22.28-22.29 (name "b"))))
 			(ty-apply @22.34-22.41 (symbol "List")
-				(ty-var @22.39-22.39 (name "b")))))
+				(ty-var @22.39-22.40 (name "b")))))
 	(s-alias-decl @23.1-34.5
 		(ty-header @23.1-26.2 (name "MapML")
 			(ty-args
@@ -2200,13 +2207,13 @@ expect {
 				(ty-var @25.2-25.3 (name "b"))))
 		(ty-fn @28.3-34.5 (effectful false)
 			(ty-apply @28.3-30.4 (symbol "List")
-				(ty-var @1.1-1.1 (name "a")))
+				(ty-var @29.4-29.5 (name "a")))
 			(ty-parens @31.3-31.11
 				(ty-fn @31.4-31.10 (effectful false)
-					(ty-var @31.4-31.4 (name "a"))
-					(ty-var @1.1-1.1 (name "b"))))
+					(ty-var @31.4-31.5 (name "a"))
+					(ty-var @31.9-31.10 (name "b"))))
 			(ty-apply @32.4-34.5 (symbol "List")
-				(ty-var @1.1-1.1 (name "b")))))
+				(ty-var @33.5-33.6 (name "b")))))
 	(s-alias-decl @36.1-36.17
 		(ty-header @36.1-36.4 (name "Foo"))
 		(ty-tuple @36.7-36.17
@@ -2224,7 +2231,7 @@ expect {
 		(ty-record @43.11-43.43
 			(field (field "foo")
 				(ty-apply @43.19-43.24 (symbol "Ok")
-					(ty-var @43.22-43.22 (name "a"))))
+					(ty-var @43.22-43.23 (name "a"))))
 			(field (field "bar")
 				(ty @43.32-43.41 (name "Something")))))
 	(s-alias-decl @44.1-47.2
@@ -2234,7 +2241,7 @@ expect {
 		(ty-record @44.13-47.2
 			(field (field "foo")
 				(ty-apply @45.8-45.13 (symbol "Ok")
-					(ty-var @45.11-45.11 (name "a"))))
+					(ty-var @45.11-45.12 (name "a"))))
 			(field (field "bar")
 				(ty @46.8-46.17 (name "Something")))))
 	(s-alias-decl @49.1-54.2
@@ -2244,7 +2251,7 @@ expect {
 		(ty-record @49.20-54.2
 			(field (field "foo")
 				(ty-apply @52.4-52.9 (symbol "Ok")
-					(ty-var @52.7-52.7 (name "a"))))
+					(ty-var @52.7-52.8 (name "a"))))
 			(field (field "bar")
 				(ty @53.8-53.17 (name "Something")))))
 	(s-alias-decl @56.1-56.27
@@ -2253,7 +2260,7 @@ expect {
 				(ty-var @56.7-56.8 (name "a"))))
 		(ty-tag-union @56.12-56.27
 			(ty-apply @56.13-56.20 (symbol "Some")
-				(ty-var @56.18-56.18 (name "a")))
+				(ty-var @56.18-56.19 (name "a")))
 			(ty @56.22-56.26 (name "None"))))
 	(s-alias-decl @58.1-61.2
 		(ty-header @58.1-58.18 (name "MaybeMultiline")
@@ -2261,7 +2268,7 @@ expect {
 				(ty-var @58.16-58.17 (name "a"))))
 		(ty-tag-union @58.21-61.2
 			(ty-apply @59.2-59.9 (symbol "Some")
-				(ty-var @59.7-59.7 (name "a")))
+				(ty-var @59.7-59.8 (name "a")))
 			(ty @60.2-60.6 (name "None"))))
 	(s-alias-decl @63.1-63.38
 		(ty-header @63.1-63.12 (name "SomeFunc")
@@ -2269,10 +2276,10 @@ expect {
 				(ty-var @63.10-63.11 (name "a"))))
 		(ty-fn @63.15-63.38 (effectful false)
 			(ty-apply @63.15-63.23 (symbol "Maybe")
-				(ty-var @63.21-63.21 (name "a")))
-			(ty-var @1.1-1.1 (name "a"))
+				(ty-var @63.21-63.22 (name "a")))
+			(ty-var @63.25-63.26 (name "a"))
 			(ty-apply @63.30-63.38 (symbol "Maybe")
-				(ty-var @63.36-63.36 (name "a")))))
+				(ty-var @63.36-63.37 (name "a")))))
 	(s-import @4.1-4.42 (module "pf.Stdout") (qualifier "pf")
 		(exposes
 			(exposed (name "line!") (wildcard false))
@@ -2312,7 +2319,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @65.1-65.16 (type "Bool -> Num(size)"))
+		(patt @65.1-65.16 (type "Bool -> Num(_size)"))
 		(patt @68.1-68.8 (type "Error -> Error"))
 		(patt @80.1-80.11 (type "Error"))
 		(patt @144.1-144.6 (type "Error -> Error"))
@@ -2357,7 +2364,7 @@ expect {
 				(ty-args
 					(ty-var @63.10-63.11 (name "a"))))))
 	(expressions
-		(expr @65.19-65.40 (type "Bool -> Num(size)"))
+		(expr @65.19-65.40 (type "Bool -> Num(_size)"))
 		(expr @68.11-78.2 (type "Error -> Error"))
 		(expr @80.14-138.3 (type "Error"))
 		(expr @144.9-196.2 (type "Error -> Error"))

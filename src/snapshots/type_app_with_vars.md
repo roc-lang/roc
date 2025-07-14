@@ -27,7 +27,7 @@ It is of type:
     _Error, a -> b -> Error_
 
 But you are trying to use it as:
-    _List(Num(size)) -> ret_
+    _List(Num(_size)) -> _ret_
 
 # TOKENS
 ~~~zig
@@ -41,7 +41,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 (file @1.1-6.33
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -54,13 +55,13 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 			(ty-fn @3.11-3.39
 				(ty-apply @3.11-3.18
 					(ty @3.11-3.15 (name "List"))
-					(ty-var @3.16-3.16 (raw "a")))
+					(ty-var @3.16-3.17 (raw "a")))
 				(ty-fn @3.21-3.27
-					(ty-var @3.21-3.21 (raw "a"))
-					(ty-var @1.1-1.1 (raw "b")))
+					(ty-var @3.21-3.22 (raw "a"))
+					(ty-var @3.26-3.27 (raw "b")))
 				(ty-apply @3.32-3.39
 					(ty @3.32-3.36 (name "List"))
-					(ty-var @3.37-3.37 (raw "b")))))
+					(ty-var @3.37-3.38 (raw "b")))))
 		(s-decl @4.1-4.34
 			(p-ident @4.1-4.8 (raw "mapList"))
 			(e-lambda @4.11-4.34
@@ -115,13 +116,13 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 			(declared-type
 				(ty-fn @3.11-3.39 (effectful false)
 					(ty-apply @3.11-3.18 (symbol "List")
-						(ty-var @3.16-3.16 (name "a")))
+						(ty-var @3.16-3.17 (name "a")))
 					(ty-parens @3.20-3.28
 						(ty-fn @3.21-3.27 (effectful false)
-							(ty-var @3.21-3.21 (name "a"))
-							(ty-var @1.1-1.1 (name "b"))))
+							(ty-var @3.21-3.22 (name "a"))
+							(ty-var @3.26-3.27 (name "b"))))
 					(ty-apply @3.32-3.39 (symbol "List")
-						(ty-var @3.37-3.37 (name "b")))))))
+						(ty-var @3.37-3.38 (name "b")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.33
@@ -143,8 +144,8 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 (inferred-types
 	(defs
 		(patt @4.1-4.8 (type "Error"))
-		(patt @6.1-6.6 (type "arg -> ret")))
+		(patt @6.1-6.6 (type "_arg -> _ret")))
 	(expressions
 		(expr @4.11-4.34 (type "Error"))
-		(expr @6.9-6.33 (type "arg -> ret"))))
+		(expr @6.9-6.33 (type "_arg -> _ret"))))
 ~~~

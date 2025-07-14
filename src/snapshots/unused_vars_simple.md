@@ -75,7 +75,8 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 (file @1.1-21.2
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -246,15 +247,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.15 (type "arg -> Num(size)"))
-		(patt @7.1-7.16 (type "arg2 -> arg2"))
-		(patt @10.1-10.18 (type "arg3 -> Num(size)"))
-		(patt @13.1-13.13 (type "arg4 -> ret"))
-		(patt @15.1-15.6 (type "arg5 -> ret2")))
+		(patt @4.1-4.15 (type "_arg -> Num(_size)"))
+		(patt @7.1-7.16 (type "_arg -> _ret"))
+		(patt @10.1-10.18 (type "_arg -> Num(_size)"))
+		(patt @13.1-13.13 (type "_arg -> _ret"))
+		(patt @15.1-15.6 (type "_arg -> _ret")))
 	(expressions
-		(expr @4.18-4.24 (type "arg -> Num(size)"))
-		(expr @7.19-7.34 (type "arg2 -> arg2"))
-		(expr @10.21-10.35 (type "arg3 -> Num(size)"))
-		(expr @13.16-13.35 (type "arg4 -> ret"))
-		(expr @15.9-21.2 (type "arg5 -> ret2"))))
+		(expr @4.18-4.24 (type "_arg -> Num(_size)"))
+		(expr @7.19-7.34 (type "_arg -> _ret"))
+		(expr @10.21-10.35 (type "_arg -> Num(_size)"))
+		(expr @13.16-13.35 (type "_arg -> _ret"))
+		(expr @15.9-21.2 (type "_arg -> _ret"))))
 ~~~

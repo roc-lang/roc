@@ -97,9 +97,12 @@ LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:14),EndOfFile(12:14
 (file @1.1-12.14
 	(module @1.1-1.26
 		(exposes @1.8-1.26
-			(exposed-lower-ident @1.9-1.12 (text "red"))
-			(exposed-lower-ident @1.14-1.19 (text "green"))
-			(exposed-lower-ident @1.21-1.25 (text "blue"))))
+			(exposed-lower-ident @1.9-1.12
+				(text "red"))
+			(exposed-lower-ident @1.14-1.19
+				(text "green"))
+			(exposed-lower-ident @1.21-1.25
+				(text "blue"))))
 	(statements
 		(s-import @3.1-3.13 (raw "Color"))
 		(e-malformed @3.13-3.15 (reason "expr_unexpected_token"))

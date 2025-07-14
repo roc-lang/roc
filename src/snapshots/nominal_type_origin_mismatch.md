@@ -198,8 +198,8 @@ main =
 (inferred-types
 	(defs
 		(patt @6.1-6.14 (type "Error"))
-		(patt @8.1-8.5 (type "a")))
+		(patt @8.1-8.5 (type "_a")))
 	(expressions
 		(expr @6.17-6.18 (type "Error"))
-		(expr @10.5-10.34 (type "a"))))
+		(expr @10.5-10.34 (type "_a"))))
 ~~~

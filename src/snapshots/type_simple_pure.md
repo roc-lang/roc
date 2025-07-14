@@ -28,7 +28,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 (file @1.1-6.15
 	(app @1.1-1.53
 		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11 (text "main!")))
+			(exposed-lower-ident @1.6-1.11
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -85,8 +86,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @4.1-4.9 (type "Str -> Str"))
-		(patt @6.1-6.6 (type "arg -> {}")))
+		(patt @6.1-6.6 (type "_arg -> {}")))
 	(expressions
 		(expr @4.12-4.17 (type "Str -> Str"))
-		(expr @6.9-6.15 (type "arg -> {}"))))
+		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~
