@@ -3,7 +3,7 @@ const std = @import("std");
 const testing = std.testing;
 const mem = std.mem;
 const collections = @import("collections.zig");
-const exitOnOom = collections.utils.exitOnOom;
+const deprecatedExitOnOom = collections.utils.deprecatedExitOnOom;
 
 /// The core type representing a parsed command
 /// We could use anonymous structs for the argument types instead of defining one for each command to be more concise,
@@ -287,13 +287,13 @@ fn parseFormat(gpa: mem.Allocator, args: []const []const u8) CliArgs {
         } else if (mem.eql(u8, arg, "--check")) {
             check = true;
         } else {
-            paths.append(arg) catch |err| exitOnOom(err);
+            paths.append(arg) catch |err| deprecatedExitOnOom(err);
         }
     }
     if (paths.items.len == 0) {
-        paths.append("main.roc") catch |err| exitOnOom(err);
+        paths.append("main.roc") catch |err| deprecatedExitOnOom(err);
     }
-    return CliArgs{ .format = FormatArgs{ .paths = paths.toOwnedSlice() catch |err| exitOnOom(err), .stdin = stdin, .check = check } };
+    return CliArgs{ .format = FormatArgs{ .paths = paths.toOwnedSlice() catch |err| deprecatedExitOnOom(err), .stdin = stdin, .check = check } };
 }
 
 fn parseTest(args: []const []const u8) CliArgs {
@@ -467,13 +467,13 @@ fn parseRun(gpa: mem.Allocator, args: []const []const u8) CliArgs {
             }
         } else {
             if (path != null) {
-                app_args.append(arg) catch |err| exitOnOom(err);
+                app_args.append(arg) catch |err| deprecatedExitOnOom(err);
             } else {
                 path = arg;
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .app_args = app_args.toOwnedSlice() catch |err| exitOnOom(err) } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .app_args = app_args.toOwnedSlice() catch |err| deprecatedExitOnOom(err) } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {

@@ -9,13 +9,12 @@ const base = @import("base.zig");
 const tracy = @import("tracy.zig");
 const tokenize = @import("check/parse/tokenize.zig");
 
-// const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
 const AST = parse.AST;
 const Node = parse.Node;
 const NodeStore = parse.NodeStore;
 
-const exitOnOom = collections.utils.exitOnOom;
+const deprecatedExitOnOom = collections.utils.deprecatedExitOnOom;
 const fatal = collections.utils.fatal;
 
 const FormatFlags = enum {
@@ -160,10 +159,10 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     };
     defer gpa.free(contents);
 
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
     defer module_env.deinit();
 
-    var parse_ast = parse.parse(&module_env, contents);
+    var parse_ast: AST = try parse.parse(&module_env, contents);
     defer parse_ast.deinit(gpa);
 
     // If there are any parsing problems, print them to stderr
@@ -194,10 +193,10 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
     const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
     defer gpa.free(contents);
 
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
     defer module_env.deinit();
 
-    var parse_ast = parse.parse(&module_env, contents);
+    var parse_ast: AST = try parse.parse(&module_env, contents);
     defer parse_ast.deinit(gpa);
 
     // If there are any parsing problems, print them to stderr
@@ -212,12 +211,12 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
     // compute offsets of each line, looping over bytes of the input
-    var line_offsets = @import("collections.zig").SafeList(u32).initCapacity(gpa, 256);
+    var line_offsets = try @import("collections.zig").SafeList(u32).initCapacity(gpa, 256);
     defer line_offsets.deinit(gpa);
-    _ = line_offsets.append(gpa, 0);
+    _ = try line_offsets.append(gpa, 0);
     for (source, 0..) |c, i| {
         if (c == '\n') {
-            _ = line_offsets.append(gpa, @intCast(i));
+            _ = try line_offsets.append(gpa, @intCast(i));
         }
     }
 
@@ -2014,7 +2013,7 @@ const Formatter = struct {
 fn moduleFmtsSame(source: []const u8) !void {
     const gpa = std.testing.allocator;
 
-    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
     var parse_ast = parse(&env, source);
@@ -2045,7 +2044,7 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
 
     const gpa = std.testing.allocator;
 
-    var env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
     var messages: [1]tokenize.Diagnostic = undefined;
@@ -2060,7 +2059,7 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
 
     const expr = parser.parseExpr();
 
-    const errors = parser.diagnostics.toOwnedSlice(gpa) catch |err| exitOnOom(err);
+    const errors = parser.diagnostics.toOwnedSlice(gpa) catch |err| deprecatedExitOnOom(err);
 
     var parse_ast = AST{
         .source = source,
@@ -2115,10 +2114,10 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, input));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, input));
     defer module_env.deinit();
 
-    var parse_ast = parse.parse(&module_env, input);
+    var parse_ast = try parse.parse(&module_env, input);
     defer parse_ast.deinit(gpa);
 
     // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.
@@ -2141,5 +2140,5 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     if (debug) {
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.items});
     }
-    return result.toOwnedSlice() catch |err| exitOnOom(err);
+    return result.toOwnedSlice() catch |err| deprecatedExitOnOom(err);
 }

@@ -59,7 +59,7 @@ fn copyVar(
     const resolved = source_store.resolveVar(source_var);
 
     // Create a placeholder variable first to break cycles
-    const placeholder_var = dest_store.fresh();
+    const placeholder_var = try dest_store.fresh();
 
     // Record the mapping immediately to handle recursive types
     try var_mapping.put(source_var, placeholder_var);
@@ -103,7 +103,7 @@ fn copyAlias(
 
     // Translate the type name ident
     const type_name_str = source_idents.getText(source_alias.ident.ident_idx);
-    const translated_ident = dest_idents.insert(allocator, base.Ident.for_text(type_name_str), base.Region.zero());
+    const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str), base.Region.zero());
 
     var dest_args = std.ArrayList(Var).init(dest_store.gpa);
     defer dest_args.deinit();
@@ -118,7 +118,7 @@ fn copyAlias(
         try dest_args.append(dest_arg);
     }
 
-    const dest_vars_span = dest_store.appendVars(dest_args.items);
+    const dest_vars_span = try dest_store.appendVars(dest_args.items);
 
     return Alias{
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
@@ -178,7 +178,7 @@ fn copyTuple(
         try dest_elems.append(dest_elem);
     }
 
-    const dest_range = dest_store.appendTupleElems(dest_elems.items);
+    const dest_range = try dest_store.appendTupleElems(dest_elems.items);
     return types_mod.Tuple{ .elems = dest_range };
 }
 
@@ -225,7 +225,7 @@ fn copyFunc(
 
     const dest_ret = try copyVar(source_store, dest_store, func.ret, var_mapping, source_idents, dest_idents, allocator);
 
-    const dest_args_range = dest_store.appendFuncArgs(dest_args.items);
+    const dest_args_range = try dest_store.appendFuncArgs(dest_args.items);
     return Func{
         .args = dest_args_range,
         .ret = dest_ret,
@@ -247,7 +247,7 @@ fn copyRecordFields(
     const fields_start = @as(RecordField.SafeMultiList.Idx, @enumFromInt(dest_store.record_fields.len()));
 
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
-        _ = dest_store.record_fields.append(dest_store.gpa, .{
+        _ = try dest_store.record_fields.append(dest_store.gpa, .{
             .name = name, // Field names are local to the record type
             .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
@@ -273,7 +273,7 @@ fn copyRecord(
     const fields_start = @as(RecordField.SafeMultiList.Idx, @enumFromInt(dest_store.record_fields.len()));
 
     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
-        _ = dest_store.record_fields.append(dest_store.gpa, .{
+        _ = try dest_store.record_fields.append(dest_store.gpa, .{
             .name = name, // Field names are local to the record type
             .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
@@ -314,9 +314,9 @@ fn copyTagUnion(
             try dest_args.append(dest_arg);
         }
 
-        const dest_args_range = dest_store.appendTagArgs(dest_args.items);
+        const dest_args_range = try dest_store.appendTagArgs(dest_args.items);
 
-        _ = dest_store.tags.append(dest_store.gpa, .{
+        _ = try dest_store.tags.append(dest_store.gpa, .{
             .name = name, // Tag names are local to the union type
             .args = dest_args_range,
         });
@@ -345,11 +345,11 @@ fn copyNominalType(
 
     // Translate the type name ident
     const type_name_str = source_idents.getText(source_nominal.ident.ident_idx);
-    const translated_ident = dest_idents.insert(allocator, base.Ident.for_text(type_name_str), base.Region.zero());
+    const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str), base.Region.zero());
 
     // Translate the origin module ident
     const origin_str = source_idents.getText(source_nominal.origin_module);
-    const translated_origin = dest_idents.insert(allocator, base.Ident.for_text(origin_str), base.Region.zero());
+    const translated_origin = try dest_idents.insert(allocator, base.Ident.for_text(origin_str), base.Region.zero());
 
     var dest_args = std.ArrayList(Var).init(dest_store.gpa);
     defer dest_args.deinit();
@@ -364,7 +364,7 @@ fn copyNominalType(
         try dest_args.append(dest_arg);
     }
 
-    const dest_vars_span = dest_store.appendVars(dest_args.items);
+    const dest_vars_span = try dest_store.appendVars(dest_args.items);
 
     return NominalType{
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },

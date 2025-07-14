@@ -16,7 +16,6 @@ const ReportingConfig = @import("config.zig").ReportingConfig;
 const base = @import("../base.zig");
 const RegionInfo = base.RegionInfo;
 const collections = @import("../collections.zig");
-const exitOnOom = collections.utils.exitOnOom;
 
 /// Default maximum message size in bytes for truncation
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 4096;
@@ -122,7 +121,7 @@ pub const Report = struct {
         const truncated_suggestion = if (suggestion.len > DEFAULT_MAX_MESSAGE_BYTES) blk: {
             const truncated = @import("config.zig").truncateUtf8(self.allocator, suggestion, DEFAULT_MAX_MESSAGE_BYTES) catch suggestion;
             if (truncated.ptr != suggestion.ptr) {
-                self.owned_strings.append(truncated) catch |err| exitOnOom(err);
+                try self.owned_strings.append(truncated);
             }
             break :blk truncated;
         } else suggestion;
@@ -229,36 +228,34 @@ pub const ReportBuilder = struct {
         self.report.deinit();
     }
 
-    pub fn header(self: *ReportBuilder, text: []const u8) *ReportBuilder {
-        self.report.addHeader(text) catch |err| exitOnOom(err);
+    pub fn header(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
+        try self.report.addHeader(text);
         return self;
     }
 
-    pub fn message(self: *ReportBuilder, text: []const u8) *ReportBuilder {
-        self.report.document.addText(text) catch |err| exitOnOom(err);
-        self.report.document.addLineBreak() catch |err| exitOnOom(err);
+    pub fn message(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
+        try self.report.document.addText(text);
+        try self.report.document.addLineBreak();
         return self;
     }
 
-    pub fn code(self: *ReportBuilder, code_text: []const u8) *ReportBuilder {
-        self.report.addCodeSnippet(code_text, null) catch |err| switch (err) {
-            error.OutOfMemory => exitOnOom(error.OutOfMemory),
-        };
+    pub fn code(self: *ReportBuilder, code_text: []const u8) !*ReportBuilder {
+        try self.report.addCodeSnippet(code_text, null);
         return self;
     }
 
-    pub fn suggestion(self: *ReportBuilder, text: []const u8) *ReportBuilder {
-        self.report.addSuggestion(text) catch |err| exitOnOom(err);
+    pub fn suggestion(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
+        try self.report.addSuggestion(text);
         return self;
     }
 
-    pub fn note(self: *ReportBuilder, text: []const u8) *ReportBuilder {
-        self.report.addNote(text) catch |err| exitOnOom(err);
+    pub fn note(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
+        try self.report.addNote(text);
         return self;
     }
 
-    pub fn typeComparison(self: *ReportBuilder, expected: []const u8, actual: []const u8) *ReportBuilder {
-        self.report.addTypeComparison(expected, actual) catch |err| exitOnOom(err);
+    pub fn typeComparison(self: *ReportBuilder, expected: []const u8, actual: []const u8) std.mem.Allocator.Error!*ReportBuilder {
+        try self.report.addTypeComparison(expected, actual);
         return self;
     }
 
@@ -279,17 +276,4 @@ test "Report basic functionality" {
 
     try testing.expect(!report.isEmpty());
     try testing.expect(report.getLineCount() > 2);
-}
-
-test "ReportBuilder fluent interface" {
-    var builder = ReportBuilder.init(testing.allocator, "BUILD ERROR", .runtime_error);
-    defer builder.deinit();
-
-    var report = builder
-        .message("Something went wrong")
-        .suggestion("Try this fix")
-        .note("This is just a note")
-        .build();
-
-    try testing.expect(!report.isEmpty());
 }

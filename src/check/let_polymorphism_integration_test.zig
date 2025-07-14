@@ -23,11 +23,11 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    module_env.* = try ModuleEnv.init(allocator, try allocator.dupe(u8, source));
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = parse.parseExpr(module_env, source);
+    parse_ast.* = try parse.parseExpr(module_env, source);
 
     // Check for parse errors
     if (parse_ast.hasErrors()) {
@@ -43,7 +43,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 
     // Canonicalize
     const cir = try allocator.create(CIR);
-    cir.* = CIR.init(module_env, "Test");
+    cir.* = try CIR.init(module_env, "Test");
 
     const can = try allocator.create(canonicalize);
     can.* = try canonicalize.init(cir, parse_ast, null);
@@ -90,7 +90,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    module_env.* = try ModuleEnv.init(allocator, try allocator.dupe(u8, source));
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
@@ -110,7 +110,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
 
     // Canonicalize
     const cir = try allocator.create(CIR);
-    cir.* = CIR.init(module_env);
+    cir.* = try CIR.init(module_env);
 
     const can = try allocator.create(canonicalize);
     can.* = try canonicalize.init(cir, parse_ast, null);
@@ -162,11 +162,11 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    module_env.* = try ModuleEnv.init(allocator, try allocator.dupe(u8, source));
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = parse.parseStatement(module_env, source);
+    parse_ast.* = try parse.parseStatement(module_env, source);
 
     // Check for parse errors
     if (parse_ast.hasErrors()) {
@@ -182,7 +182,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
 
     // Canonicalize
     const cir = try allocator.create(CIR);
-    cir.* = CIR.init(module_env, "Test");
+    cir.* = try CIR.init(module_env, "Test");
 
     const can = try allocator.create(canonicalize);
     can.* = try canonicalize.init(cir, parse_ast, null);

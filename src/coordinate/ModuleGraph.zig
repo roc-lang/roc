@@ -17,7 +17,6 @@ const Package = base.Package;
 const ModuleImport = base.ModuleImport;
 const ModuleWork = base.ModuleWork;
 const ModuleWorkIdx = base.ModuleWorkIdx;
-const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
 
@@ -66,22 +65,22 @@ pub fn fromPackages(
                 fs,
                 gpa,
             ) catch |load_err| {
-                const filepath = std.fs.path.join(gpa, &.{
+                const filepath = try std.fs.path.join(gpa, &.{
                     package.absolute_dirpath,
                     module.filepath_relative_to_package_root,
-                }) catch |err| exitOnOom(err);
+                });
                 return .{ .failed_to_open_module = .{
                     .err = load_err,
                     .filename = filepath,
                 } };
             };
 
-            graph.modules.append(ModuleWork(Can.CIR){
+            try graph.modules.append(ModuleWork(Can.CIR){
                 .package_idx = @enumFromInt(package_idx),
                 .module_idx = @enumFromInt(module_idx),
                 .work = can_ir,
-            }) catch |err| exitOnOom(err);
-            graph.adjacencies.append(std.ArrayList(usize).init(gpa)) catch |err| exitOnOom(err);
+            });
+            try graph.adjacencies.append(std.ArrayList(usize).init(gpa));
         }
     }
 
@@ -95,10 +94,10 @@ fn loadOrCompileCanIr(
     relpath: []const u8,
     fs: Filesystem,
     gpa: std.mem.Allocator,
-) Filesystem.ReadError!Can.CIR {
+) !Can.CIR {
     // TODO: find a way to provide the current Roc compiler version
     const current_roc_version = "";
-    const abs_file_path = std.fs.path.join(gpa, &.{ absdir, relpath }) catch |err| exitOnOom(err);
+    const abs_file_path = try std.fs.path.join(gpa, &.{ absdir, relpath });
     // TODO: this should be an internal error if the file is missing,
     // since we should only be trying to read files that were found during
     // traversing the file system earlier.
@@ -129,7 +128,7 @@ fn loadOrCompileCanIr(
     };
 }
 
-fn collectAdjacencies(graph: *Self, package_store: *const Package.Store) void {
+fn collectAdjacencies(graph: *Self, package_store: *const Package.Store) std.mem.Allocator.Error!void {
     for (graph.modules.items, 0..) |*metadata, metadata_index| {
         const import_store = &metadata.work.imports;
         const package = &package_store.packages.items.items[@intFromEnum(metadata.package_idx)];
@@ -173,7 +172,7 @@ fn collectAdjacencies(graph: *Self, package_store: *const Package.Store) void {
                     if (search_metadata.package_idx != from_package_idx) continue;
                     if (search_metadata.module_idx != from_module_idx) continue;
 
-                    graph.adjacencies.items[metadata_index].append(search_index) catch |err| exitOnOom(err);
+                    try graph.adjacencies.items[metadata_index].append(search_index);
                     break;
                 }
                 break;
@@ -210,7 +209,7 @@ pub fn putModulesInCompilationOrder(
     self: *const Self,
     sccs: *const Sccs,
     gpa: std.mem.Allocator,
-) OrderingResult {
+) std.mem.Allocator.Error!OrderingResult {
     var modules = std.ArrayList(ModuleWork(Can.CIR)).init(gpa);
     errdefer modules.deinit();
 
@@ -223,16 +222,16 @@ pub fn putModulesInCompilationOrder(
 
         if (group.items.len == 1) {
             const module_index = group.items[0];
-            modules.append(self.modules.items[module_index]) catch |err| exitOnOom(err);
+            try modules.append(self.modules.items[module_index]);
         } else {
             var cycle = std.ArrayList(ModuleWork(void)).init(gpa);
             for (group.items) |group_item_index| {
                 const can_ir = &self.modules.items[group_item_index];
-                cycle.append(ModuleWork(void){
+                try cycle.append(ModuleWork(void){
                     .package_idx = can_ir.package_idx,
                     .module_idx = can_ir.module_idx,
                     .work = undefined,
-                }) catch |err| exitOnOom(err);
+                });
             }
 
             return .{ .found_cycle = cycle };
@@ -246,12 +245,12 @@ pub fn putModulesInCompilationOrder(
 /// compilation order.
 ///
 /// Uses Tarjan's algorithm as described in https://www.thealgorists.com/Algo/GraphTheory/Tarjan/SCC
-pub fn findStronglyConnectedComponents(self: *const Self, gpa: std.mem.Allocator) Sccs {
+pub fn findStronglyConnectedComponents(self: *const Self, gpa: std.mem.Allocator) std.mem.Allocator.Error!Sccs {
     var next_unused_index: usize = 0;
     var stack = std.ArrayList(usize).init(self.gpa);
     defer stack.deinit();
 
-    var all_attributes = gpa.alloc(Attributes, self.modules.items.len) catch |err| exitOnOom(err);
+    var all_attributes = try gpa.alloc(Attributes, self.modules.items.len);
     defer gpa.free(all_attributes);
 
     var sccs = Sccs{ .groups = std.ArrayList(std.ArrayList(usize)).init(self.gpa) };
@@ -278,12 +277,12 @@ fn sccRecurseIntoGraph(
     stack: *std.ArrayList(usize),
     all_attributes: []Attributes,
     sccs: *Sccs,
-) void {
+) std.mem.Allocator.Error!void {
     // Set the depth index for "current" to the smallest unused index
     all_attributes[current].index = next_unused_index.*;
     all_attributes[current].low_link = next_unused_index.*;
     next_unused_index.* += 1;
-    stack.append(current) catch |err| exitOnOom(err);
+    try stack.append(current);
     all_attributes[current].on_stack = true;
 
     // TODO: should this be adjacencies for "current" or all nodes?
@@ -315,14 +314,14 @@ fn sccRecurseIntoGraph(
             // We are guaranteed to find it before emptying the stack.
             const scc_item = stack.pop() orelse unreachable;
             all_attributes[scc_item].on_stack = false;
-            scc.append(scc_item) catch |err| exitOnOom(err);
+            try scc.append(scc_item);
 
             if (scc_item == current) {
                 break;
             }
         }
 
-        sccs.groups.append(scc) catch |err| exitOnOom(err);
+        try sccs.groups.append(scc);
     }
 }
 
@@ -342,9 +341,9 @@ fn sccRecurseIntoGraph(
 //     var package_store = base.Package.Store.init(testing.allocator);
 //     defer package_store.deinit();
 
-//     package.modules.append(module) catch Self.exitOnOom();
+//     package.modules.append(module) catch Self.deprecatedExitOnOom();
 
-//     package_store.packages.append(package) catch Self.exitOnOom();
+//     package_store.packages.append(package) catch Self.deprecatedExitOnOom();
 
 //     var graph = Self.fromPackages(package_store, testing.allocator);
 //     defer graph.deinit();

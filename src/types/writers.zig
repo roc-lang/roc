@@ -312,7 +312,7 @@ pub const TypeWriter = struct {
                             const generated_name = self.buf.items[start_pos..];
 
                             // Update the type variable to have this generated name
-                            const new_ident_idx = self.env.idents.insert(self.buf.allocator, Ident.for_text(generated_name), base.Region.zero());
+                            const new_ident_idx = try self.env.idents.insert(self.buf.allocator, Ident.for_text(generated_name), base.Region.zero());
                             try self.env.types.setVarContent(var_, Content{ .flex_var = new_ident_idx });
                         }
                     },
@@ -629,7 +629,7 @@ pub const TypeWriter = struct {
                     const generated_name = self.buf.items[start_pos..];
 
                     // Update the type variable to have this generated name
-                    const new_ident_idx = self.env.idents.insert(self.buf.allocator, Ident.for_text(generated_name), base.Region.zero());
+                    const new_ident_idx = try self.env.idents.insert(self.buf.allocator, Ident.for_text(generated_name), base.Region.zero());
                     try self.env.types.setVarContent(tag_union.ext, Content{ .flex_var = new_ident_idx });
                 }
             },

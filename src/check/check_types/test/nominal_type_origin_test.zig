@@ -11,22 +11,22 @@ const test_allocator = testing.allocator;
 
 test "nominal type origin - displays origin in snapshot writer" {
     // Create a simple test environment
-    var idents = Ident.Store.initCapacity(test_allocator, 16);
+    var idents = try Ident.Store.initCapacity(test_allocator, 16);
     defer idents.deinit(test_allocator);
 
     // Create module name identifiers
-    const current_module_ident = idents.insert(test_allocator, Ident.for_text("CurrentModule"), base.Region.zero());
-    const other_module_ident = idents.insert(test_allocator, Ident.for_text("Data.Types"), base.Region.zero());
-    const type_name_ident = idents.insert(test_allocator, Ident.for_text("Person"), base.Region.zero());
+    const current_module_ident = try idents.insert(test_allocator, Ident.for_text("CurrentModule"), base.Region.zero());
+    const other_module_ident = try idents.insert(test_allocator, Ident.for_text("Data.Types"), base.Region.zero());
+    const type_name_ident = try idents.insert(test_allocator, Ident.for_text("Person"), base.Region.zero());
 
     // Create a snapshot store
-    var snapshots = snapshot.Store.initCapacity(test_allocator, 16);
+    var snapshots = try snapshot.Store.initCapacity(test_allocator, 16);
     defer snapshots.deinit();
 
     // Create a nominal type snapshot with origin from a different module
     const nominal_type_backing = snapshot.SnapshotContent{ .structure = .str };
-    const nominal_type_backing_idx = snapshots.contents.append(test_allocator, nominal_type_backing);
-    const vars_range = snapshots.nominal_type_args.appendSlice(test_allocator, &.{nominal_type_backing_idx});
+    const nominal_type_backing_idx = try snapshots.contents.append(test_allocator, nominal_type_backing);
+    const vars_range = try snapshots.nominal_type_args.appendSlice(test_allocator, &.{nominal_type_backing_idx});
 
     const nominal_type = snapshot.SnapshotNominalType{
         .ident = types_mod.TypeIdent{ .ident_idx = type_name_ident },
@@ -88,8 +88,8 @@ test "nominal type origin - displays origin in snapshot writer" {
 
         // Create type arguments
         const str_content = snapshot.SnapshotContent{ .structure = .{ .str = {} } };
-        const str_idx = snapshots.contents.append(test_allocator, str_content);
-        const args_range = snapshots.nominal_type_args.appendSlice(test_allocator, &.{ nominal_type_backing_idx, str_idx });
+        const str_idx = try snapshots.contents.append(test_allocator, str_content);
+        const args_range = try snapshots.nominal_type_args.appendSlice(test_allocator, &.{ nominal_type_backing_idx, str_idx });
 
         // Create a nominal type with args from a different module
         const generic_nominal = snapshot.SnapshotNominalType{
@@ -116,18 +116,18 @@ test "nominal type origin - displays origin in snapshot writer" {
 
 test "nominal type origin - works with no context" {
     // Test that the code doesn't crash when context is not provided
-    var idents = Ident.Store.initCapacity(test_allocator, 16);
+    var idents = try Ident.Store.initCapacity(test_allocator, 16);
     defer idents.deinit(test_allocator);
 
-    const type_name_ident = idents.insert(test_allocator, Ident.for_text("MyType"), base.Region.zero());
-    const module_ident = idents.insert(test_allocator, Ident.for_text("SomeModule"), base.Region.zero());
+    const type_name_ident = try idents.insert(test_allocator, Ident.for_text("MyType"), base.Region.zero());
+    const module_ident = try idents.insert(test_allocator, Ident.for_text("SomeModule"), base.Region.zero());
 
-    var snapshots = snapshot.Store.initCapacity(test_allocator, 16);
+    var snapshots = try snapshot.Store.initCapacity(test_allocator, 16);
     defer snapshots.deinit();
 
     const nominal_type_backing = snapshot.SnapshotContent{ .structure = .str };
-    const nominal_type_backing_idx = snapshots.contents.append(test_allocator, nominal_type_backing);
-    const vars_range = snapshots.nominal_type_args.appendSlice(test_allocator, &.{nominal_type_backing_idx});
+    const nominal_type_backing_idx = try snapshots.contents.append(test_allocator, nominal_type_backing);
+    const vars_range = try snapshots.nominal_type_args.appendSlice(test_allocator, &.{nominal_type_backing_idx});
 
     const nominal_type = snapshot.SnapshotNominalType{
         .ident = types_mod.TypeIdent{ .ident_idx = type_name_ident },

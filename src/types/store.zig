@@ -7,8 +7,6 @@ const collections = @import("../collections.zig");
 const types = @import("./types.zig");
 const serialization = @import("../serialization/mod.zig");
 
-const exitOnOutOfMemory = collections.utils.exitOnOom;
-
 const Allocator = std.mem.Allocator;
 const Desc = types.Descriptor;
 const Var = types.Var;
@@ -99,27 +97,27 @@ pub const Store = struct {
     tag_args: VarSafeList,
 
     /// Init the unification table
-    pub fn init(gpa: Allocator) Self {
+    pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
         // TODO: eventually use herusitics here to determine sensible defaults
-        return Self.initCapacity(gpa, 1024, 512);
+        return try Self.initCapacity(gpa, 1024, 512);
     }
 
     /// Init the unification table
-    pub fn initCapacity(gpa: Allocator, root_capacity: usize, child_capacity: usize) Self {
+    pub fn initCapacity(gpa: Allocator, root_capacity: usize, child_capacity: usize) std.mem.Allocator.Error!Self {
         return .{
             .gpa = gpa,
 
             // slots & descriptors
-            .descs = DescStore.init(gpa, root_capacity),
-            .slots = SlotStore.init(gpa, root_capacity),
+            .descs = try DescStore.init(gpa, root_capacity),
+            .slots = try SlotStore.init(gpa, root_capacity),
 
             // everything else
-            .vars = VarSafeList.initCapacity(gpa, child_capacity),
-            .tuple_elems = VarSafeList.initCapacity(gpa, child_capacity),
-            .func_args = VarSafeList.initCapacity(gpa, child_capacity),
-            .record_fields = RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
-            .tags = TagSafeMultiList.initCapacity(gpa, child_capacity),
-            .tag_args = VarSafeList.initCapacity(gpa, child_capacity),
+            .vars = try VarSafeList.initCapacity(gpa, child_capacity),
+            .tuple_elems = try VarSafeList.initCapacity(gpa, child_capacity),
+            .func_args = try VarSafeList.initCapacity(gpa, child_capacity),
+            .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
+            .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
+            .tag_args = try VarSafeList.initCapacity(gpa, child_capacity),
         };
     }
 
@@ -153,29 +151,29 @@ pub const Store = struct {
 
     /// Create a new unbound, flexible type variable without a name
     /// Used in canonicalization when creating type slots
-    pub fn fresh(self: *Self) Var {
-        return self.freshFromContent(Content{ .flex_var = null });
+    pub fn fresh(self: *Self) std.mem.Allocator.Error!Var {
+        return try self.freshFromContent(Content{ .flex_var = null });
     }
 
     /// Create a new variable with the provided desc
     /// Used in tests
-    pub fn freshFromContent(self: *Self, content: Content) Var {
-        const desc_idx = self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
-        const slot_idx = self.slots.insert(self.gpa, .{ .root = desc_idx });
+    pub fn freshFromContent(self: *Self, content: Content) std.mem.Allocator.Error!Var {
+        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
+        const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a variable redirecting to the provided var
     /// Used in tests
-    pub fn freshRedirect(self: *Self, var_: Var) Var {
-        const slot_idx = self.slots.insert(self.gpa, .{ .redirect = var_ });
+    pub fn freshRedirect(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
+        const slot_idx = try self.slots.insert(self.gpa, .{ .redirect = var_ });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a new variable with the given descriptor
-    pub fn register(self: *Self, desc: Desc) Var {
-        const desc_idx = self.descs.insert(self.gpa, desc);
-        const slot_idx = self.slots.insert(self.gpa, .{ .root = desc_idx });
+    pub fn register(self: *Self, desc: Desc) std.mem.Allocator.Error!Var {
+        const desc_idx = try self.descs.insert(self.gpa, desc);
+        const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
@@ -200,37 +198,37 @@ pub const Store = struct {
 
     // make builtin types //
 
-    pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: Var) Content {
-        const true_ident = idents.insert(gpa, base.Ident.for_text("True"), base.Region.zero());
-        const false_ident = idents.insert(gpa, base.Ident.for_text("False"), base.Region.zero());
+    pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: Var) std.mem.Allocator.Error!Content {
+        const true_ident = try idents.insert(gpa, base.Ident.for_text("True"), base.Region.zero());
+        const false_ident = try idents.insert(gpa, base.Ident.for_text("False"), base.Region.zero());
 
-        const true_tag = self.mkTag(true_ident, &[_]Var{});
-        const false_tag = self.mkTag(false_ident, &[_]Var{});
-        return self.mkTagUnion(&[_]Tag{ true_tag, false_tag }, ext_var);
+        const true_tag = try self.mkTag(true_ident, &[_]Var{});
+        const false_tag = try self.mkTag(false_ident, &[_]Var{});
+        return try self.mkTagUnion(&[_]Tag{ true_tag, false_tag }, ext_var);
     }
 
     // make content types //
 
     /// Make a tag union data type
     /// Does not insert content into the types store
-    pub fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) Content {
-        const tags_range = self.appendTags(tags);
+    pub fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) std.mem.Allocator.Error!Content {
+        const tags_range = try self.appendTags(tags);
         const tag_union = TagUnion{ .tags = tags_range, .ext = ext_var };
         return Content{ .structure = .{ .tag_union = tag_union } };
     }
 
     /// Make a tag data type
     /// Does not insert content into the types store
-    pub fn mkTag(self: *Self, name: base.Ident.Idx, args: []const Var) Tag {
-        const args_range = self.appendTagArgs(args);
+    pub fn mkTag(self: *Self, name: base.Ident.Idx, args: []const Var) std.mem.Allocator.Error!Tag {
+        const args_range = try self.appendTagArgs(args);
         return Tag{ .name = name, .args = args_range };
     }
 
     /// Make alias data type
     /// Does not insert content into the types store
-    pub fn mkAlias(self: *Self, ident: types.TypeIdent, backing_var: Var, args: []const Var) Content {
-        const backing_idx = self.appendVar(backing_var);
-        var span = self.appendVars(args);
+    pub fn mkAlias(self: *Self, ident: types.TypeIdent, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
+        const backing_idx = try self.appendVar(backing_var);
+        var span = try self.appendVars(args);
 
         // Adjust args span to include backing  var
         span.start = backing_idx;
@@ -252,9 +250,9 @@ pub const Store = struct {
         backing_var: Var,
         args: []const Var,
         origin_module: base.Ident.Idx,
-    ) Content {
-        const backing_idx = self.appendVar(backing_var);
-        var span = self.appendVars(args);
+    ) std.mem.Allocator.Error!Content {
+        const backing_idx = try self.appendVar(backing_var);
+        var span = try self.appendVars(args);
 
         // Adjust args span to include backing  var
         span.start = backing_idx;
@@ -271,8 +269,8 @@ pub const Store = struct {
 
     // Make a function data type with unbound effectfulness
     // Does not insert content into the types store.
-    pub fn mkFuncUnbound(self: *Self, args: []const Var, ret: Var) Content {
-        const args_range = self.appendFuncArgs(args);
+    pub fn mkFuncUnbound(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
+        const args_range = try self.appendFuncArgs(args);
 
         // Check if any arguments need instantiation
         var needs_inst = false;
@@ -297,8 +295,8 @@ pub const Store = struct {
 
     // Make a pure function data type (as opposed to an effectful or unbound function)
     // Does not insert content into the types store.
-    pub fn mkFuncPure(self: *Self, args: []const Var, ret: Var) Content {
-        const args_range = self.appendFuncArgs(args);
+    pub fn mkFuncPure(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
+        const args_range = try self.appendFuncArgs(args);
 
         // Check if any arguments need instantiation
         var needs_inst = false;
@@ -319,8 +317,8 @@ pub const Store = struct {
 
     // Make an effectful function data type (as opposed to a pure or unbound function)
     // Does not insert content into the types store.
-    pub fn mkFuncEffectful(self: *Self, args: []const Var, ret: Var) Content {
-        const args_range = self.appendFuncArgs(args);
+    pub fn mkFuncEffectful(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
+        const args_range = try self.appendFuncArgs(args);
 
         // Check if any arguments need instantiation
         var needs_inst = false;
@@ -417,38 +415,38 @@ pub const Store = struct {
     // sub list setters //
 
     /// Append a var to the backing list, returning the idx
-    pub fn appendVar(self: *Self, v: Var) VarSafeList.Idx {
-        return self.vars.append(self.gpa, v);
+    pub fn appendVar(self: *Self, v: Var) std.mem.Allocator.Error!VarSafeList.Idx {
+        return try self.vars.append(self.gpa, v);
     }
 
     /// Append a var to the backing list, returning the idx
-    pub fn appendVars(self: *Self, s: []const Var) VarSafeList.Span {
-        return self.vars.appendSliceSpan(self.gpa, s);
+    pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Span {
+        return try self.vars.appendSliceSpan(self.gpa, s);
     }
 
     /// Append a tuple elem to the backing list, returning the idx
-    pub fn appendTupleElem(self: *Self, v: Var) VarSafeList.Idx {
-        return self.tuple_elems.append(self.gpa, v);
+    pub fn appendTupleElem(self: *Self, v: Var) std.mem.Allocator.Error!VarSafeList.Idx {
+        return try self.tuple_elems.append(self.gpa, v);
     }
 
     /// Append a slice of tuple elems to the backing list, returning the range
-    pub fn appendTupleElems(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.tuple_elems.appendSlice(self.gpa, slice);
+    pub fn appendTupleElems(self: *Self, slice: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
+        return try self.tuple_elems.appendSlice(self.gpa, slice);
     }
 
     /// Append a slice of func args to the backing list, returning the range
-    pub fn appendFuncArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.func_args.appendSlice(self.gpa, slice);
+    pub fn appendFuncArgs(self: *Self, slice: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
+        return try self.func_args.appendSlice(self.gpa, slice);
     }
 
     /// Append a record field to the backing list, returning the idx
-    pub fn appendRecordField(self: *Self, field: RecordField) RecordFieldSafeMultiList.Idx {
-        return self.record_fields.append(self.gpa, field);
+    pub fn appendRecordField(self: *Self, field: RecordField) std.mem.Allocator.Error!RecordFieldSafeMultiList.Idx {
+        return try self.record_fields.append(self.gpa, field);
     }
 
     /// Append a slice of record fields to the backing list, returning the range
-    pub fn appendRecordFields(self: *Self, slice: []const RecordField) RecordFieldSafeMultiList.Range {
-        return self.record_fields.appendSlice(self.gpa, slice);
+    pub fn appendRecordFields(self: *Self, slice: []const RecordField) std.mem.Allocator.Error!RecordFieldSafeMultiList.Range {
+        return try self.record_fields.appendSlice(self.gpa, slice);
     }
 
     /// Append a tag to the backing list, returning the idx
@@ -457,13 +455,13 @@ pub const Store = struct {
     }
 
     /// Append a slice of tags to the backing list, returning the range
-    pub fn appendTags(self: *Self, slice: []const Tag) TagSafeMultiList.Range {
-        return self.tags.appendSlice(self.gpa, slice);
+    pub fn appendTags(self: *Self, slice: []const Tag) std.mem.Allocator.Error!TagSafeMultiList.Range {
+        return try self.tags.appendSlice(self.gpa, slice);
     }
 
     /// Append a slice of tag args to the backing list, returning the range
-    pub fn appendTagArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.tag_args.appendSlice(self.gpa, slice);
+    pub fn appendTagArgs(self: *Self, slice: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
+        return try self.tag_args.appendSlice(self.gpa, slice);
     }
 
     // sub list getters //
@@ -716,11 +714,11 @@ pub const Store = struct {
         const idx = @intFromEnum(target_var);
 
         while (self.slots.backing.len() <= idx) {
-            const desc_idx = self.descs.insert(
+            const desc_idx = try self.descs.insert(
                 self.gpa,
                 .{ .content = .{ .flex_var = null }, .rank = Rank.top_level, .mark = Mark.none },
             );
-            _ = self.slots.insert(self.gpa, .{ .root = desc_idx });
+            _ = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         }
     }
 
@@ -958,8 +956,8 @@ const SlotStore = struct {
 
     backing: collections.SafeList(Slot),
 
-    fn init(gpa: Allocator, capacity: usize) Self {
-        return .{ .backing = collections.SafeList(Slot).initCapacity(gpa, capacity) };
+    fn init(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
+        return .{ .backing = try collections.SafeList(Slot).initCapacity(gpa, capacity) };
     }
 
     fn deinit(self: *Self, gpa: Allocator) void {
@@ -967,14 +965,14 @@ const SlotStore = struct {
     }
 
     /// Insert a new slot into the store
-    fn insert(self: *Self, gpa: Allocator, typ: Slot) Idx {
-        const safe_idx = self.backing.append(gpa, typ);
+    fn insert(self: *Self, gpa: Allocator, typ: Slot) std.mem.Allocator.Error!Idx {
+        const safe_idx = try self.backing.append(gpa, typ);
         return @enumFromInt(@intFromEnum(safe_idx));
     }
 
     /// Insert a value into the store
-    fn appendAssumeCapacity(self: *Self, gpa: Allocator, typ: Slot) Idx {
-        const safe_idx = self.backing.append(gpa, typ);
+    fn appendAssumeCapacity(self: *Self, gpa: Allocator, typ: Slot) std.mem.Allocator.Error!Idx {
+        const safe_idx = try self.backing.append(gpa, typ);
         return @enumFromInt(@intFromEnum(safe_idx));
     }
 
@@ -1017,9 +1015,9 @@ const DescStore = struct {
     backing: std.MultiArrayList(Desc),
 
     /// Init & allocated memory
-    fn init(gpa: Allocator, capacity: usize) Self {
+    fn init(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         var arr = std.MultiArrayList(Desc){};
-        arr.ensureUnusedCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
+        try arr.ensureUnusedCapacity(gpa, capacity);
         return .{ .backing = arr };
     }
 
@@ -1029,9 +1027,9 @@ const DescStore = struct {
     }
 
     /// Insert a value into the store
-    fn insert(self: *Self, gpa: Allocator, typ: Desc) Idx {
+    fn insert(self: *Self, gpa: Allocator, typ: Desc) std.mem.Allocator.Error!Idx {
         const idx: Idx = @enumFromInt(self.backing.len);
-        self.backing.append(gpa, typ) catch |err| exitOnOutOfMemory(err);
+        try self.backing.append(gpa, typ);
         return idx;
     }
 
@@ -1095,7 +1093,7 @@ const DescStore = struct {
 
         if (buffer.len < expected_size) return error.BufferTooSmall;
 
-        var result = Self.init(allocator, count);
+        var result = try Self.init(allocator, count);
 
         if (count > 0) {
             var offset: usize = @sizeOf(u32);
@@ -1114,7 +1112,7 @@ const DescStore = struct {
                 offset += 4;
 
                 const desc = Desc{ .content = content, .rank = rank, .mark = mark };
-                _ = result.insert(allocator, desc);
+                _ = try result.insert(allocator, desc);
             }
         }
 
@@ -1134,12 +1132,12 @@ pub const DescStoreIdx = DescStore.Idx;
 test "resolveVarAndCompressPath - flattens redirect chain to flex_var" {
     const gpa = std.testing.allocator;
 
-    var store = Store.init(gpa);
+    var store = try Store.init(gpa);
     defer store.deinit();
 
-    const c = store.fresh();
-    const b = store.freshRedirect(c);
-    const a = store.freshRedirect(b);
+    const c = try store.fresh();
+    const b = try store.freshRedirect(c);
+    const a = try store.freshRedirect(b);
 
     const result = store.resolveVarAndCompressPath(a);
     try std.testing.expectEqual(Content{ .flex_var = null }, result.desc.content);
@@ -1151,16 +1149,16 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex_var" {
 test "resolveVarAndCompressPath - no-op on already root" {
     const gpa = std.testing.allocator;
 
-    var store = Store.init(gpa);
+    var store = try Store.init(gpa);
     defer store.deinit();
 
-    const num_flex = store.fresh();
+    const num_flex = try store.fresh();
     const requirements = types.Num.IntRequirements{
         .sign_needed = false,
         .bits_needed = 0,
     };
     const num = types.Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_flex, .requirements = requirements } } } };
-    const num_var = store.freshFromContent(num);
+    const num_var = try store.freshFromContent(num);
 
     const result = store.resolveVarAndCompressPath(num_var);
 
@@ -1172,18 +1170,18 @@ test "resolveVarAndCompressPath - no-op on already root" {
 test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     const gpa = std.testing.allocator;
 
-    var store = Store.init(gpa);
+    var store = try Store.init(gpa);
     defer store.deinit();
 
-    const num_flex = store.fresh();
+    const num_flex = try store.fresh();
     const requirements = types.Num.IntRequirements{
         .sign_needed = false,
         .bits_needed = 0,
     };
     const num = types.Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_flex, .requirements = requirements } } } };
-    const c = store.freshFromContent(num);
-    const b = store.freshRedirect(c);
-    const a = store.freshRedirect(b);
+    const c = try store.freshFromContent(num);
+    const b = try store.freshRedirect(c);
+    const a = try store.freshRedirect(b);
 
     const result = store.resolveVarAndCompressPath(a);
     try std.testing.expectEqual(num, result.desc.content);
@@ -1211,7 +1209,7 @@ test "Slot serialization comprehensive" {
 test "DescStore serialization comprehensive" {
     const gpa = std.testing.allocator;
 
-    var store = DescStore.init(gpa, 8);
+    var store = try DescStore.init(gpa, 8);
     defer store.deinit(gpa);
 
     // Add various descriptor types including edge cases
@@ -1233,9 +1231,9 @@ test "DescStore serialization comprehensive" {
         .mark = types.Mark.visited,
     };
 
-    _ = store.insert(gpa, desc1);
-    _ = store.insert(gpa, desc2);
-    _ = store.insert(gpa, desc3);
+    _ = try store.insert(gpa, desc1);
+    _ = try store.insert(gpa, desc2);
+    _ = try store.insert(gpa, desc3);
 
     // Test serialization
     try serialization.testing.testSerialization(DescStore, &store, gpa);
@@ -1244,7 +1242,7 @@ test "DescStore serialization comprehensive" {
 test "DescStore empty store serialization" {
     const gpa = std.testing.allocator;
 
-    var empty_store = DescStore.init(gpa, 0);
+    var empty_store = try DescStore.init(gpa, 0);
     defer empty_store.deinit(gpa);
 
     try serialization.testing.testSerialization(DescStore, &empty_store, gpa);

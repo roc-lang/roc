@@ -56,6 +56,7 @@ pub const Error = error{
     ExitedTopScopeLevel,
     TopLevelVarError,
     VarAcrossFunctionBoundary,
+    OutOfMemory,
 };
 
 /// Result of looking up an identifier
@@ -196,7 +197,7 @@ pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, 
     .module_alias => Ident.Idx,
     .exposed_item => ExposedItemInfo,
 }) void {
-    scope.items(item_kind).put(gpa, name, value) catch |err| collections.utils.exitOnOom(err);
+    scope.items(item_kind).put(gpa, name, value) catch |err| collections.utils.deprecatedExitOnOom(err);
 }
 
 /// Introduce a type declaration into the scope
@@ -424,6 +425,6 @@ pub fn introduceImportedModule(
         return ImportedModuleIntroduceResult{ .already_imported = scope.imported_modules.get(module_name).? };
     }
 
-    scope.imported_modules.put(gpa, module_name, import_idx) catch |err| collections.utils.exitOnOom(err);
+    scope.imported_modules.put(gpa, module_name, import_idx) catch |err| collections.utils.deprecatedExitOnOom(err);
     return ImportedModuleIntroduceResult{ .success = {} };
 }

@@ -10,6 +10,7 @@
 const std = @import("std");
 const base = @import("base.zig");
 const tokenize = @import("check/parse/tokenize.zig");
+const collections = @import("collections.zig");
 
 /// Hook for AFL++ to initialize the fuzz test environment.
 pub export fn zig_fuzz_init() void {}
@@ -31,5 +32,5 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     const buf_slice = buf[0..@intCast(len)];
 
-    tokenize.checkTokenizerInvariants(gpa, buf_slice, debug);
+    tokenize.checkTokenizerInvariants(gpa, buf_slice, debug) catch |err| collections.utils.deprecatedExitOnOom(err);
 }

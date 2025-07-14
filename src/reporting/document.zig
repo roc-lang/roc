@@ -12,7 +12,6 @@ const RenderTarget = renderer.RenderTarget;
 const ReportingConfig = @import("config.zig").ReportingConfig;
 const RegionInfo = @import("../base.zig").RegionInfo;
 const collections = @import("../collections.zig");
-const exitOnOom = collections.utils.exitOnOom;
 
 /// A source code region with highlighting information.
 pub const SourceRegion = struct {
@@ -258,57 +257,57 @@ pub const Document = struct {
     }
 
     /// Add plain text to the document.
-    pub fn addText(self: *Document, text: []const u8) !void {
+    pub fn addText(self: *Document, text: []const u8) std.mem.Allocator.Error!void {
         if (text.len == 0) return;
         try self.elements.append(.{ .text = text });
     }
 
     /// Add annotated text to the document.
-    pub fn addAnnotated(self: *Document, text: []const u8, annotation: Annotation) !void {
+    pub fn addAnnotated(self: *Document, text: []const u8, annotation: Annotation) std.mem.Allocator.Error!void {
         if (text.len == 0) return;
         try self.elements.append(.{ .annotated = .{ .content = text, .annotation = annotation } });
     }
 
     /// Add a line break to the document.
-    pub fn addLineBreak(self: *Document) !void {
+    pub fn addLineBreak(self: *Document) std.mem.Allocator.Error!void {
         try self.elements.append(.line_break);
     }
 
     /// Add indentation to the document.
-    pub fn addIndent(self: *Document, levels: u32) !void {
+    pub fn addIndent(self: *Document, levels: u32) std.mem.Allocator.Error!void {
         if (levels == 0) return;
         try self.elements.append(.{ .indent = levels });
     }
 
     /// Add horizontal spacing to the document.
-    pub fn addSpace(self: *Document, count: u32) !void {
+    pub fn addSpace(self: *Document, count: u32) std.mem.Allocator.Error!void {
         if (count == 0) return;
         try self.elements.append(.{ .space = count });
     }
 
     /// Add a horizontal rule separator.
-    pub fn addHorizontalRule(self: *Document, width: ?u32) !void {
+    pub fn addHorizontalRule(self: *Document, width: ?u32) std.mem.Allocator.Error!void {
         try self.elements.append(.{ .horizontal_rule = width });
     }
 
     /// Start an annotation region.
-    pub fn startAnnotation(self: *Document, annotation: Annotation) !void {
+    pub fn startAnnotation(self: *Document, annotation: Annotation) std.mem.Allocator.Error!void {
         try self.elements.append(.{ .annotation_start = annotation });
     }
 
     /// End the current annotation region.
-    pub fn endAnnotation(self: *Document) !void {
+    pub fn endAnnotation(self: *Document) std.mem.Allocator.Error!void {
         try self.elements.append(.annotation_end);
     }
 
     /// Add raw content that should not be processed.
-    pub fn addRaw(self: *Document, content: []const u8) !void {
+    pub fn addRaw(self: *Document, content: []const u8) std.mem.Allocator.Error!void {
         if (content.len == 0) return;
         try self.elements.append(.{ .raw = content });
     }
 
     /// Add reflowing text that can wrap automatically.
-    pub fn addReflowingText(self: *Document, text: []const u8) !void {
+    pub fn addReflowingText(self: *Document, text: []const u8) std.mem.Allocator.Error!void {
         if (text.len == 0) return;
         try self.elements.append(.{ .reflowing_text = text });
     }
@@ -318,7 +317,7 @@ pub const Document = struct {
         self: *Document,
         display_region: SourceCodeDisplayRegion,
         underline_regions: []const UnderlineRegion,
-    ) !void {
+    ) std.mem.Allocator.Error!void {
         const owned_regions = try self.allocator.dupe(UnderlineRegion, underline_regions);
         try self.elements.append(.{
             .source_code_with_underlines = .{
@@ -329,35 +328,35 @@ pub const Document = struct {
     }
 
     /// Add a vertical stack of elements.
-    pub fn addVerticalStack(self: *Document, elements: []const DocumentElement) !void {
+    pub fn addVerticalStack(self: *Document, elements: []const DocumentElement) std.mem.Allocator.Error!void {
         if (elements.len == 0) return;
         const owned_elements = try self.allocator.dupe(DocumentElement, elements);
         try self.elements.append(.{ .vertical_stack = owned_elements });
     }
 
     /// Add a horizontal concatenation of elements.
-    pub fn addHorizontalConcat(self: *Document, elements: []const DocumentElement) !void {
+    pub fn addHorizontalConcat(self: *Document, elements: []const DocumentElement) std.mem.Allocator.Error!void {
         if (elements.len == 0) return;
         const owned_elements = try self.allocator.dupe(DocumentElement, elements);
         try self.elements.append(.{ .horizontal_concat = owned_elements });
     }
 
     /// Convenience method to add annotated text with automatic annotation boundaries.
-    pub fn addAnnotatedText(self: *Document, text: []const u8, annotation: Annotation) !void {
+    pub fn addAnnotatedText(self: *Document, text: []const u8, annotation: Annotation) std.mem.Allocator.Error!void {
         try self.startAnnotation(annotation);
         try self.addText(text);
         try self.endAnnotation();
     }
 
     /// Add a formatted string to the document.
-    pub fn addFormattedText(self: *Document, comptime fmt: []const u8, args: anytype) !void {
+    pub fn addFormattedText(self: *Document, comptime fmt: []const u8, args: anytype) std.mem.Allocator.Error!void {
         var buf: [1024]u8 = undefined;
         const text = try std.fmt.bufPrint(&buf, fmt, args);
         try self.addText(text);
     }
 
     /// Add multiple line breaks.
-    pub fn addLineBreaks(self: *Document, count: u32) !void {
+    pub fn addLineBreaks(self: *Document, count: u32) std.mem.Allocator.Error!void {
         var i: u32 = 0;
         while (i < count) : (i += 1) {
             try self.addLineBreak();
@@ -365,7 +364,7 @@ pub const Document = struct {
     }
 
     /// Add a code block with proper formatting.
-    pub fn addCodeBlock(self: *Document, code: []const u8) !void {
+    pub fn addCodeBlock(self: *Document, code: []const u8) std.mem.Allocator.Error!void {
         try self.startAnnotation(.code_block);
 
         // Split code into lines and add each with proper indentation
@@ -387,67 +386,67 @@ pub const Document = struct {
     }
 
     /// Add an inline code element.
-    pub fn addInlineCode(self: *Document, code: []const u8) !void {
+    pub fn addInlineCode(self: *Document, code: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(code, .inline_code);
     }
 
     /// Add a keyword with proper styling.
-    pub fn addKeyword(self: *Document, keyword: []const u8) !void {
+    pub fn addKeyword(self: *Document, keyword: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(keyword, .keyword);
     }
 
     /// Add a type name with proper styling.
-    pub fn addType(self: *Document, type_name: []const u8) !void {
+    pub fn addType(self: *Document, type_name: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(type_name, .type_variable);
     }
 
     /// Add an error message with proper styling.
-    pub fn addError(self: *Document, message: []const u8) !void {
+    pub fn addError(self: *Document, message: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(message, .error_highlight);
     }
 
     /// Add a warning message with proper styling.
-    pub fn addWarning(self: *Document, message: []const u8) !void {
+    pub fn addWarning(self: *Document, message: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(message, .warning_highlight);
     }
 
     /// Add a suggestion with proper styling.
-    pub fn addSuggestion(self: *Document, suggestion: []const u8) !void {
+    pub fn addSuggestion(self: *Document, suggestion: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(suggestion, .suggestion);
     }
 
     /// Add a qualified symbol with proper styling.
-    pub fn addQualifiedSymbol(self: *Document, symbol: []const u8) !void {
+    pub fn addQualifiedSymbol(self: *Document, symbol: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(symbol, .symbol_qualified);
     }
 
     /// Add an unqualified symbol with proper styling.
-    pub fn addUnqualifiedSymbol(self: *Document, symbol: []const u8) !void {
+    pub fn addUnqualifiedSymbol(self: *Document, symbol: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(symbol, .symbol_unqualified);
     }
 
     /// Add a module name with proper styling.
-    pub fn addModuleName(self: *Document, module_name: []const u8) !void {
+    pub fn addModuleName(self: *Document, module_name: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(module_name, .module_name);
     }
 
     /// Add a record field name with proper styling.
-    pub fn addRecordField(self: *Document, field_name: []const u8) !void {
+    pub fn addRecordField(self: *Document, field_name: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(field_name, .record_field);
     }
 
     /// Add a tag name with proper styling.
-    pub fn addTagName(self: *Document, tag_name: []const u8) !void {
+    pub fn addTagName(self: *Document, tag_name: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(tag_name, .tag_name);
     }
 
     /// Add a binary operator with proper styling.
-    pub fn addBinaryOperator(self: *Document, operator: []const u8) !void {
+    pub fn addBinaryOperator(self: *Document, operator: []const u8) std.mem.Allocator.Error!void {
         try self.addAnnotated(operator, .binary_operator);
     }
 
     /// Add a link with proper formatting.
-    pub fn addLink(self: *Document, url: []const u8) !void {
+    pub fn addLink(self: *Document, url: []const u8) std.mem.Allocator.Error!void {
         if (url.len == 0) return;
         try self.elements.append(.{ .link = url });
     }
@@ -459,7 +458,7 @@ pub const Document = struct {
         region_info: RegionInfo,
         annotation: Annotation,
         filename: ?[]const u8,
-    ) !void {
+    ) std.mem.Allocator.Error!void {
         // Validate coordinates to catch programming errors early
         std.debug.assert(region_info.end_line_idx >= region_info.start_line_idx);
         if (region_info.start_line_idx == region_info.end_line_idx) {
@@ -485,7 +484,7 @@ pub const Document = struct {
         source: []const u8,
         regions: []const SourceRegion,
         filename: ?[]const u8,
-    ) !void {
+    ) std.mem.Allocator.Error!void {
         if (regions.len == 0) return;
         const owned_regions = try self.allocator.dupe(SourceRegion, regions);
         try self.elements.append(.{
@@ -519,7 +518,7 @@ pub const Document = struct {
     }
 
     /// Render the document to the specified writer and target format.
-    pub fn render(self: *const Document, writer: anytype, target: RenderTarget, config: ReportingConfig) !void {
+    pub fn render(self: *const Document, writer: anytype, target: RenderTarget, config: ReportingConfig) std.mem.Allocator.Error!void {
         _ = config; // TODO: Pass config to renderer when it supports it
         try renderer.renderDocument(self, writer, target);
     }
@@ -539,108 +538,108 @@ pub const DocumentBuilder = struct {
         self.document.deinit();
     }
 
-    pub fn text(self: *DocumentBuilder, content: []const u8) *DocumentBuilder {
-        self.document.addText(content) catch |err| exitOnOom(err);
+    pub fn text(self: *DocumentBuilder, content: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addText(content);
         return self;
     }
 
-    pub fn annotated(self: *DocumentBuilder, content: []const u8, annotation: Annotation) *DocumentBuilder {
-        self.document.addAnnotated(content, annotation) catch |err| exitOnOom(err);
+    pub fn annotated(self: *DocumentBuilder, content: []const u8, annotation: Annotation) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addAnnotated(content, annotation);
         return self;
     }
 
-    pub fn lineBreak(self: *DocumentBuilder) *DocumentBuilder {
-        self.document.addLineBreak() catch |err| exitOnOom(err);
+    pub fn lineBreak(self: *DocumentBuilder) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addLineBreak();
         return self;
     }
 
-    pub fn indent(self: *DocumentBuilder, levels: u32) *DocumentBuilder {
-        self.document.addIndent(levels) catch |err| exitOnOom(err);
+    pub fn indent(self: *DocumentBuilder, levels: u32) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addIndent(levels);
         return self;
     }
 
-    pub fn space(self: *DocumentBuilder, count: u32) *DocumentBuilder {
-        self.document.addSpace(count) catch |err| exitOnOom(err);
+    pub fn space(self: *DocumentBuilder, count: u32) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addSpace(count);
         return self;
     }
 
-    pub fn rule(self: *DocumentBuilder, width: ?u32) *DocumentBuilder {
-        self.document.addHorizontalRule(width) catch |err| exitOnOom(err);
+    pub fn rule(self: *DocumentBuilder, width: ?u32) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addHorizontalRule(width);
         return self;
     }
 
-    pub fn keyword(self: *DocumentBuilder, kw: []const u8) *DocumentBuilder {
-        self.document.addKeyword(kw) catch |err| exitOnOom(err);
+    pub fn keyword(self: *DocumentBuilder, kw: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addKeyword(kw);
         return self;
     }
 
-    pub fn typeText(self: *DocumentBuilder, type_name: []const u8) *DocumentBuilder {
-        self.document.addType(type_name) catch |err| exitOnOom(err);
+    pub fn typeText(self: *DocumentBuilder, type_name: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addType(type_name);
         return self;
     }
 
-    pub fn errorText(self: *DocumentBuilder, message: []const u8) *DocumentBuilder {
-        self.document.addError(message) catch |err| exitOnOom(err);
+    pub fn errorText(self: *DocumentBuilder, message: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addError(message);
         return self;
     }
 
-    pub fn warning(self: *DocumentBuilder, message: []const u8) *DocumentBuilder {
-        self.document.addWarning(message) catch |err| exitOnOom(err);
+    pub fn warning(self: *DocumentBuilder, message: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addWarning(message);
         return self;
     }
 
-    pub fn suggestion(self: *DocumentBuilder, sug: []const u8) *DocumentBuilder {
-        self.document.addSuggestion(sug) catch |err| exitOnOom(err);
+    pub fn suggestion(self: *DocumentBuilder, sug: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addSuggestion(sug);
         return self;
     }
 
-    pub fn reflow(self: *DocumentBuilder, content: []const u8) *DocumentBuilder {
-        self.document.addReflowingText(content) catch |err| exitOnOom(err);
+    pub fn reflow(self: *DocumentBuilder, content: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addReflowingText(content);
         return self;
     }
 
-    pub fn qualifiedSymbol(self: *DocumentBuilder, symbol: []const u8) *DocumentBuilder {
-        self.document.addQualifiedSymbol(symbol) catch |err| exitOnOom(err);
+    pub fn qualifiedSymbol(self: *DocumentBuilder, symbol: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addQualifiedSymbol(symbol);
         return self;
     }
 
-    pub fn unqualifiedSymbol(self: *DocumentBuilder, symbol: []const u8) *DocumentBuilder {
-        self.document.addUnqualifiedSymbol(symbol) catch |err| exitOnOom(err);
+    pub fn unqualifiedSymbol(self: *DocumentBuilder, symbol: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addUnqualifiedSymbol(symbol);
         return self;
     }
 
-    pub fn moduleName(self: *DocumentBuilder, module_name: []const u8) *DocumentBuilder {
-        self.document.addModuleName(module_name) catch |err| exitOnOom(err);
+    pub fn moduleName(self: *DocumentBuilder, module_name: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addModuleName(module_name);
         return self;
     }
 
-    pub fn recordField(self: *DocumentBuilder, field_name: []const u8) *DocumentBuilder {
-        self.document.addRecordField(field_name) catch |err| exitOnOom(err);
+    pub fn recordField(self: *DocumentBuilder, field_name: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addRecordField(field_name);
         return self;
     }
 
-    pub fn tagName(self: *DocumentBuilder, tag_name: []const u8) *DocumentBuilder {
-        self.document.addTagName(tag_name) catch |err| exitOnOom(err);
+    pub fn tagName(self: *DocumentBuilder, tag_name: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addTagName(tag_name);
         return self;
     }
 
-    pub fn binaryOperator(self: *DocumentBuilder, operator: []const u8) *DocumentBuilder {
-        self.document.addBinaryOperator(operator) catch |err| exitOnOom(err);
+    pub fn binaryOperator(self: *DocumentBuilder, operator: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addBinaryOperator(operator);
         return self;
     }
 
-    pub fn link(self: *DocumentBuilder, url: []const u8) *DocumentBuilder {
-        self.document.addLink(url) catch |err| exitOnOom(err);
+    pub fn link(self: *DocumentBuilder, url: []const u8) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addLink(url);
         return self;
     }
 
-    pub fn verticalStack(self: *DocumentBuilder, elements: []const DocumentElement) *DocumentBuilder {
-        self.document.addVerticalStack(elements) catch |err| exitOnOom(err);
+    pub fn verticalStack(self: *DocumentBuilder, elements: []const DocumentElement) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addVerticalStack(elements);
         return self;
     }
 
-    pub fn horizontalConcat(self: *DocumentBuilder, elements: []const DocumentElement) *DocumentBuilder {
-        self.document.addHorizontalConcat(elements) catch |err| exitOnOom(err);
+    pub fn horizontalConcat(self: *DocumentBuilder, elements: []const DocumentElement) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addHorizontalConcat(elements);
         return self;
     }
 
@@ -649,8 +648,8 @@ pub const DocumentBuilder = struct {
         region_info: RegionInfo,
         annotation: Annotation,
         filename: ?[]const u8,
-    ) *DocumentBuilder {
-        self.document.addSourceRegion(region_info, annotation, filename) catch |err| exitOnOom(err);
+    ) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addSourceRegion(region_info, annotation, filename);
         return self;
     }
 
@@ -659,8 +658,8 @@ pub const DocumentBuilder = struct {
         source: []const u8,
         regions: []const SourceRegion,
         filename: ?[]const u8,
-    ) *DocumentBuilder {
-        self.document.addSourceMultiRegion(source, regions, filename) catch |err| exitOnOom(err);
+    ) std.mem.Allocator.Error!*DocumentBuilder {
+        try self.document.addSourceMultiRegion(source, regions, filename);
         return self;
     }
 

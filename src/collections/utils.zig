@@ -13,7 +13,7 @@ const tracy = @import("../tracy.zig");
 /// Since there's nothing we can do to recover from such an issue,
 /// it's best to always exit the process with a nice message than to
 /// propagate unrecoverable errors all over the compiler.
-pub fn exitOnOom(err: std.mem.Allocator.Error) noreturn {
+pub fn deprecatedExitOnOom(err: std.mem.Allocator.Error) noreturn {
     switch (err) {
         error.OutOfMemory => {
             const oom_message =

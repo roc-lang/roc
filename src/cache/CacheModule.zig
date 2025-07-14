@@ -590,14 +590,14 @@ test "create and restore cache" {
     ;
 
     // Parse the source
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env, "TestModule");
+    var cir = try CIR.init(&module_env, "TestModule");
     defer cir.deinit();
 
     // Parse and canonicalize
-    var ast = parse(&module_env, source);
+    var ast = try parse(&module_env, source);
     defer ast.deinit(gpa);
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -607,11 +607,11 @@ test "create and restore cache" {
     // Generate original S-expression for comparison
     var original_tree = SExprTree.init(gpa);
     defer original_tree.deinit();
-    CIR.pushToSExprTree(&cir, null, &original_tree, source);
+    try CIR.pushToSExprTree(&cir, null, &original_tree, source);
 
     var original_sexpr = std.ArrayList(u8).init(gpa);
     defer original_sexpr.deinit();
-    original_tree.toStringPretty(original_sexpr.writer().any());
+    try original_tree.toStringPretty(original_sexpr.writer().any());
 
     // Create cache from real data
     const cache_data = try CacheModule.create(gpa, &module_env, &cir, 0, 0);
@@ -639,12 +639,12 @@ test "create and restore cache" {
     var restored_tree = SExprTree.init(gpa);
     defer restored_tree.deinit();
 
-    CIR.pushToSExprTree(&restored_cir, null, &restored_tree, source);
+    try CIR.pushToSExprTree(&restored_cir, null, &restored_tree, source);
 
     var restored_sexpr = std.ArrayList(u8).init(gpa);
     defer restored_sexpr.deinit();
 
-    restored_tree.toStringPretty(restored_sexpr.writer().any());
+    try restored_tree.toStringPretty(restored_sexpr.writer().any());
 
     // Verify round-trip integrity
     try std.testing.expect(std.mem.eql(u8, original_sexpr.items, restored_sexpr.items));
@@ -666,14 +666,14 @@ test "cache filesystem roundtrip with in-memory storage" {
     ;
 
     // Parse the source
-    var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env, "TestModule");
+    var cir = try CIR.init(&module_env, "TestModule");
     defer cir.deinit();
 
     // Parse and canonicalize
-    var ast = parse(&module_env, source);
+    var ast = try parse(&module_env, source);
     defer ast.deinit(gpa);
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -683,11 +683,11 @@ test "cache filesystem roundtrip with in-memory storage" {
     // Generate original S-expression for comparison
     var original_tree = SExprTree.init(gpa);
     defer original_tree.deinit();
-    CIR.pushToSExprTree(&cir, null, &original_tree, source);
+    try CIR.pushToSExprTree(&cir, null, &original_tree, source);
 
     var original_sexpr = std.ArrayList(u8).init(gpa);
     defer original_sexpr.deinit();
-    original_tree.toStringPretty(original_sexpr.writer().any());
+    try original_tree.toStringPretty(original_sexpr.writer().any());
 
     // Create cache from real data
     const cache_data = try CacheModule.create(gpa, &module_env, &cir, 0, 0);
@@ -781,12 +781,12 @@ test "cache filesystem roundtrip with in-memory storage" {
     var restored_tree = SExprTree.init(gpa);
     defer restored_tree.deinit();
 
-    CIR.pushToSExprTree(&restored_cir, null, &restored_tree, source);
+    try CIR.pushToSExprTree(&restored_cir, null, &restored_tree, source);
 
     var restored_sexpr = std.ArrayList(u8).init(gpa);
     defer restored_sexpr.deinit();
 
-    restored_tree.toStringPretty(restored_sexpr.writer().any());
+    try restored_tree.toStringPretty(restored_sexpr.writer().any());
 
     // Verify complete roundtrip integrity
     try std.testing.expect(std.mem.eql(u8, original_sexpr.items, restored_sexpr.items));

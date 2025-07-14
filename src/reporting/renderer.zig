@@ -11,7 +11,6 @@ const ColorPalette = @import("style.zig").ColorPalette;
 const ColorUtils = @import("style.zig").ColorUtils;
 pub const ReportingConfig = @import("config.zig").ReportingConfig;
 const collections = @import("../collections.zig");
-const exitOnOom = collections.utils.exitOnOom;
 const source_region = @import("source_region.zig");
 
 /// TODO find a better solution this is temporary to make CI happy
@@ -132,7 +131,7 @@ pub fn renderReportToLsp(report: *const Report, writer: anytype, config: Reporti
 }
 
 /// Render a document to the specified target format.
-pub fn renderDocument(document: *const Document, writer: anytype, target: RenderTarget) !void {
+pub fn renderDocument(document: *const Document, writer: anytype, target: RenderTarget) std.mem.Allocator.Error!void {
     // Create appropriate config based on render target
     const config = switch (target) {
         .color_terminal => ReportingConfig.initColorTerminal(),
@@ -223,7 +222,7 @@ fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: C
             }
         },
         .annotation_start => |annotation| {
-            annotation_stack.append(annotation) catch |err| exitOnOom(err);
+            try annotation_stack.append(annotation);
             const color = getAnnotationColor(annotation, palette);
             try writer.writeAll(color);
         },
@@ -677,7 +676,7 @@ fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_sta
             try writer.print("<hr style=\"width: {d}ch;\">\n", .{rule_width});
         },
         .annotation_start => |annotation| {
-            annotation_stack.append(annotation) catch |err| exitOnOom(err);
+            try annotation_stack.append(annotation);
             const tag = getAnnotationHtmlTag(annotation);
             const class = getAnnotationHtmlClass(annotation);
             try writer.print("<{s} class=\"{s}\">", .{ tag, class });

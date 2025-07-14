@@ -413,18 +413,18 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
 
     // Process the content through the compilation pipeline
     const source_copy = try allocator.dupe(u8, content.source);
-    var module_env = base.ModuleEnv.init(allocator, source_copy);
+    var module_env = try base.ModuleEnv.init(allocator, source_copy);
     defer module_env.deinit();
 
     // Parse the source code based on node type
-    var parse_ast = switch (content.meta.node_type) {
-        .file => parse.parse(&module_env, content.source),
-        .header => parse.parseHeader(&module_env, content.source),
-        .expr => parse.parseExpr(&module_env, content.source),
-        .statement => parse.parseStatement(&module_env, content.source),
-        .package => parse.parse(&module_env, content.source),
-        .platform => parse.parse(&module_env, content.source),
-        .app => parse.parse(&module_env, content.source),
+    var parse_ast: AST = switch (content.meta.node_type) {
+        .file => try parse.parse(&module_env, content.source),
+        .header => try parse.parseHeader(&module_env, content.source),
+        .expr => try parse.parseExpr(&module_env, content.source),
+        .statement => try parse.parseStatement(&module_env, content.source),
+        .package => try parse.parse(&module_env, content.source),
+        .platform => try parse.parse(&module_env, content.source),
+        .app => try parse.parse(&module_env, content.source),
     };
     defer parse_ast.deinit(allocator);
 
@@ -436,7 +436,7 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         basename[0..dot_idx]
     else
         basename;
-    var can_ir = CIR.init(&module_env, module_name);
+    var can_ir = try CIR.init(&module_env, module_name);
     defer can_ir.deinit();
 
     var can = try canonicalize.init(&can_ir, &parse_ast, null);
@@ -458,7 +458,7 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
             const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
             const scratch_statements_start = can_ir.store.scratch_statements.top();
             _ = try can.canonicalizeStatement(stmt_idx);
-            can_ir.all_statements = can_ir.store.statementSpanFrom(scratch_statements_start);
+            can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
         },
         .package => try can.canonicalizeFile(),
         .platform => try can.canonicalizeFile(),
@@ -493,11 +493,11 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         // Generate original S-expression for comparison
         var original_tree = SExprTree.init(allocator);
         defer original_tree.deinit();
-        CIR.pushToSExprTree(&can_ir, null, &original_tree, content.source);
+        try CIR.pushToSExprTree(&can_ir, null, &original_tree, content.source);
 
         var original_sexpr = std.ArrayList(u8).init(allocator);
         defer original_sexpr.deinit();
-        original_tree.toStringPretty(original_sexpr.writer().any());
+        try original_tree.toStringPretty(original_sexpr.writer().any());
 
         // Create and serialize MmapCache
         const cache_data = try cache.CacheModule.create(allocator, &module_env, &can_ir, 0, 0);
@@ -518,11 +518,11 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         // Generate S-expression from restored CIR
         var restored_tree = SExprTree.init(allocator);
         defer restored_tree.deinit();
-        CIR.pushToSExprTree(&restored.cir, null, &restored_tree, content.source);
+        try CIR.pushToSExprTree(&restored.cir, null, &restored_tree, content.source);
 
         var restored_sexpr = std.ArrayList(u8).init(allocator);
         defer restored_sexpr.deinit();
-        restored_tree.toStringPretty(restored_sexpr.writer().any());
+        try restored_tree.toStringPretty(restored_sexpr.writer().any());
 
         // Compare S-expressions - crash if they don't match
         if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
@@ -1224,7 +1224,7 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
     }
 
     // Canonicalization Diagnostics
-    const diagnostics = can_ir.getDiagnostics();
+    const diagnostics = try can_ir.getDiagnostics();
     // Don't free diagnostics here - CIR owns them and will free them in deinit()
     for (diagnostics) |diagnostic| {
         canonicalize_problems += 1;
@@ -1403,31 +1403,31 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
     switch (content.meta.node_type) {
         .file => {
             const file = parse_ast.store.getFile();
-            file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .header => {
             const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
-            header.pushToSExprTree(env, parse_ast, &tree);
+            try header.pushToSExprTree(env, parse_ast, &tree);
         },
         .expr => {
             const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
-            expr.pushToSExprTree(env, parse_ast, &tree);
+            try expr.pushToSExprTree(env, parse_ast, &tree);
         },
         .statement => {
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
-            stmt.pushToSExprTree(env, parse_ast, &tree);
+            try stmt.pushToSExprTree(env, parse_ast, &tree);
         },
         .package => {
             const file = parse_ast.store.getFile();
-            file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .platform => {
             const file = parse_ast.store.getFile();
-            file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .app => {
             const file = parse_ast.store.getFile();
-            file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
     }
 
@@ -1436,7 +1436,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
         try output.begin_section("PARSE");
         try output.begin_code_block("clojure");
 
-        tree.toStringPretty(output.md_writer.any());
+        try tree.toStringPretty(output.md_writer.any());
         try output.md_writer.writeAll("\n");
 
         // Generate HTML output with syntax highlighting
@@ -1445,7 +1445,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
                 \\                <pre class="ast-parse">
             );
 
-            tree.toHtml(writer.any());
+            try tree.toHtml(writer.any());
 
             try writer.writeAll(
                 \\</pre>
@@ -1520,19 +1520,19 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
-    can_ir.pushToSExprTree(maybe_expr_idx, &tree, content.source);
+    try can_ir.pushToSExprTree(maybe_expr_idx, &tree, content.source);
 
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
 
-    tree.toStringPretty(output.md_writer.any());
+    try tree.toStringPretty(output.md_writer.any());
     try output.md_writer.writeAll("\n");
 
     if (output.html_writer) |writer| {
         try writer.writeAll(
             \\                <pre>
         );
-        tree.toHtml(writer.any());
+        try tree.toHtml(writer.any());
         try writer.writeAll(
             \\</pre>
             \\
@@ -1551,7 +1551,7 @@ fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *C
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
-    tree.toStringPretty(output.md_writer.any());
+    try tree.toStringPretty(output.md_writer.any());
     try output.md_writer.writeAll("\n");
 
     // HTML TYPES section
@@ -1559,7 +1559,7 @@ fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *C
         try writer.writeAll(
             \\                <pre>
         );
-        tree.toHtml(writer.any());
+        try tree.toHtml(writer.any());
         try writer.writeAll(
             \\</pre>
             \\

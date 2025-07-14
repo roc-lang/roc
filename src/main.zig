@@ -25,7 +25,7 @@ const benchTokenizer = bench.benchTokenizer;
 const benchParse = bench.benchParse;
 
 const Allocator = std.mem.Allocator;
-const exitOnOom = collections.utils.exitOnOom;
+const deprecatedExitOnOom = collections.utils.deprecatedExitOnOom;
 const fatal = collections.utils.fatal;
 const ColorPalette = reporting.ColorPalette;
 
