@@ -96,7 +96,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 45;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 46;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 28;
 /// Count of the statement nodes in the CIR
@@ -2510,6 +2510,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocato
             node.data_1 = @bitCast(r.name);
             node.data_2 = @bitCast(r.suggested_name);
         },
+        .underscore_in_type_declaration => |r| {
+            node.tag = .diag_underscore_in_type_declaration;
+            region = r.region;
+            node.data_1 = if (r.is_alias) 1 else 0;
+        },
     }
 
     const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
@@ -2760,6 +2765,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_type_var_ending_in_underscore => return CIR.Diagnostic{ .type_var_ending_in_underscore = .{
             .name = @bitCast(node.data_1),
             .suggested_name = @bitCast(node.data_2),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_underscore_in_type_declaration => return CIR.Diagnostic{ .underscore_in_type_declaration = .{
+            .is_alias = node.data_1 != 0,
             .region = store.getRegionAt(node_idx),
         } },
         else => {

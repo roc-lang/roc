@@ -583,6 +583,13 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
+        .underscore_in_type_declaration = .{
+            .is_alias = true,
+            .region = from_raw_offsets(765, 775),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
         .tuple_elem_not_canonicalized = .{
             .region = from_raw_offsets(770, 780),
         },

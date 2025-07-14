@@ -173,6 +173,10 @@ pub const Diagnostic = union(enum) {
     f64_pattern_literal: struct {
         region: Region,
     },
+    underscore_in_type_declaration: struct {
+        is_alias: bool,
+        region: Region,
+    },
     unused_type_var_name: struct {
         name: Ident.Idx,
         suggested_name: Ident.Idx,
@@ -240,6 +244,7 @@ pub const Diagnostic = union(enum) {
             .unused_type_var_name => |d| d.region,
             .type_var_marked_unused => |d| d.region,
             .type_var_ending_in_underscore => |d| d.region,
+            .underscore_in_type_declaration => |d| d.region,
         };
     }
 
@@ -1321,6 +1326,37 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("Type variables should only end with underscores if they were declared with the `var` keyword. Since type variables cannot be declared with `var`, they should never end with an underscore. Try `");
         try report.document.addInlineCode(owned_suggested_name);
         try report.document.addReflowingText("` instead.");
+
+        return report;
+    }
+
+    /// Build a report for "underscore in type declaration" diagnostic
+    pub fn buildUnderscoreInTypeDeclarationReport(
+        allocator: Allocator,
+        is_alias: bool,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        const title = if (is_alias) "UNDERSCORE IN TYPE ALIAS" else "UNDERSCORE IN NOMINAL TYPE";
+        var report = Report.init(allocator, title, .runtime_error);
+
+        const declaration_type = if (is_alias) "type alias" else "nominal type";
+        try report.document.addText("Underscores are not allowed in ");
+        try report.document.addText(declaration_type);
+        try report.document.addText(" declarations.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. ");
+        try report.document.addReflowingText("If you need a placeholder type variable, use a named type variable like `a` instead.");
 
         return report;
     }
