@@ -127,7 +127,7 @@ parseData : Json.InvalidType -> Str
 parseData = |data| Json.stringify(data)
 
 # Test unresolved nested qualification
-processRequest : Http..Server.Request -> Http..Server.Response
+processRequest : Http.Server.Request -> Http.Server.Response
 processRequest = |req| Http.defaultResponse
 
 # Test typo in qualified name

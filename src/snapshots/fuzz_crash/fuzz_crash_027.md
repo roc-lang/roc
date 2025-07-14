@@ -1515,9 +1515,7 @@ add_one = |num| {
 
 match_time = |
 	a, # rg
-# rg
 	b,
-
 | # As
 	match a {		lue | Red => {
 			x

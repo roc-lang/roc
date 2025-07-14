@@ -808,7 +808,7 @@ aliasedQualified : ExtMod.DataType
 aliasedQualified = Default
 
 # Multi-level qualified type
-multiLevelQualified : ModuleA..ModuleB.TypeC
+multiLevelQualified : ModuleA.ModuleB.TypeC
 multiLevelQualified = TypeC.new
 
 # Using qualified type with generics

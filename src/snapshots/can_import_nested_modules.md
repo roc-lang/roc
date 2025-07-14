@@ -434,7 +434,7 @@ authenticate : Str, Str -> HttpAuth.Token
 authenticate = |user, pass| HttpAuth.login(user, pass)
 
 # Test deeply nested qualification
-processData : Config..Parser.Advanced, Str -> Result(Str, Config..Parser.Error)
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 processData = |advancedConfig, input|
 	Config.parseWith(advancedConfig, input)
 

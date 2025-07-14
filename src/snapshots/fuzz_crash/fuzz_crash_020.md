@@ -1229,7 +1229,6 @@ add = |Rum| {
 
 me = |
 	a, # b,
-# b,
 | # As
 	match a {		lue => {
 			x
