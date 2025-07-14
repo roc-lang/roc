@@ -2366,13 +2366,6 @@ fn parseTypeIdent(self: *Parser) std.mem.Allocator.Error!AST.TypeAnno.Idx {
             .tok = tok,
         } });
     }
-    if (self.peek() == .Underscore) {
-        const tok = self.pos;
-        self.advance();
-        return try self.store.addTypeAnno(.{ .underscore = .{
-            .region = .{ .start = tok, .end = self.pos },
-        } });
-    }
     return self.pushMalformed(AST.TypeAnno.Idx, .invalid_type_arg, self.pos);
 }
 

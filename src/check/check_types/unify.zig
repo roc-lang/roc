@@ -402,33 +402,6 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
-            // Check if either side is an invalid alias (contains underscore)
-            switch (vars.a.desc.content) {
-                .alias => |a_alias| {
-                    const backing_var = self.types_store_b.getAliasBackingVar(a_alias);
-                    const backing_resolved = self.types_store_b.resolveVar(backing_var);
-                    if (backing_resolved.desc.content == .err) {
-                        // Invalid alias (contains underscore) - treat as transparent
-                        self.merge(vars, vars.b.desc.content);
-                        return;
-                    }
-                },
-                else => {},
-            }
-
-            switch (vars.b.desc.content) {
-                .alias => |b_alias| {
-                    const backing_var = self.types_store_b.getAliasBackingVar(b_alias);
-                    const backing_resolved = self.types_store_b.resolveVar(backing_var);
-                    if (backing_resolved.desc.content == .err) {
-                        // Invalid alias (contains underscore) - treat as transparent
-                        self.merge(vars, vars.a.desc.content);
-                        return;
-                    }
-                },
-                else => {},
-            }
-
             switch (vars.a.desc.content) {
                 .flex_var => |mb_a_ident| {
                     self.unifyFlex(vars, mb_a_ident, vars.b.desc.content);
@@ -437,6 +410,13 @@ fn Unifier(comptime StoreTypeB: type) type {
                     try self.unifyRigid(vars, vars.b.desc.content);
                 },
                 .alias => |a_alias| {
+                    const backing_var = self.types_store_b.getAliasBackingVar(a_alias);
+                    const backing_resolved = self.types_store_b.resolveVar(backing_var);
+                    if (backing_resolved.desc.content == .err) {
+                        // Invalid alias (contains underscore) - treat as transparent
+                        self.merge(vars, vars.b.desc.content);
+                        return;
+                    }
                     try self.unifyAlias(vars, a_alias, vars.b.desc.content);
                 },
                 .structure => |a_flat_type| {
@@ -532,10 +512,16 @@ fn Unifier(comptime StoreTypeB: type) type {
                     try self.unifyGuarded(backing_var, vars.b.var_);
                 },
                 .alias => |b_alias| {
+                    const b_backing_var = self.types_store_b.getAliasBackingVar(b_alias);
+                    const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
+                    if (b_backing_resolved.desc.content == .err) {
+                        // Invalid alias (contains underscore) - treat as transparent
+                        self.merge(vars, vars.a.desc.content);
+                        return;
+                    }
                     if (TypeIdent.eql(&self.module_env.idents, a_alias.ident, b_alias.ident)) {
                         try self.unifyTwoAliases(vars, a_alias, b_alias);
                     } else {
-                        const b_backing_var = self.types_store_b.getAliasBackingVar(b_alias);
                         try self.unifyGuarded(backing_var, b_backing_var);
                     }
                 },
@@ -623,43 +609,13 @@ fn Unifier(comptime StoreTypeB: type) type {
                     switch (b_flat_type) {
                         .str => self.merge(vars, vars.b.desc.content),
                         .nominal_type => |b_type| {
-                            // Check if the nominal type has an invalid backing variable
                             const b_backing_var = self.types_store_b.getNominalBackingVar(b_type);
-
-                            // Follow the resolution chain to check if it eventually resolves to .err
-                            var current_var = b_backing_var;
-                            var depth: u32 = 0;
-                            const max_depth = 10;
-
-                            while (depth < max_depth) {
-                                const resolved = self.types_store_b.resolveVar(current_var);
-                                if (resolved.desc.content == .err) {
-                                    // Invalid nominal type (contains underscore) - treat as transparent
-                                    self.merge(vars, vars.a.desc.content);
-                                    return;
-                                }
-
-                                // Check if this resolves to another nominal type or alias
-                                switch (resolved.desc.content) {
-                                    .structure => |flat_type| {
-                                        switch (flat_type) {
-                                            .nominal_type => |nested_type| {
-                                                current_var = self.types_store_b.getNominalBackingVar(nested_type);
-                                                depth += 1;
-                                                continue;
-                                            },
-                                            else => break,
-                                        }
-                                    },
-                                    .alias => |alias| {
-                                        current_var = self.types_store_b.getAliasBackingVar(alias);
-                                        depth += 1;
-                                        continue;
-                                    },
-                                    else => break,
-                                }
+                            const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
+                            if (b_backing_resolved.desc.content == .err) {
+                                // Invalid nominal type (contains underscore) - treat as transparent
+                                self.merge(vars, vars.a.desc.content);
+                                return;
                             }
-
                             return error.TypeMismatch;
                         },
                         else => return error.TypeMismatch,
@@ -717,7 +673,6 @@ fn Unifier(comptime StoreTypeB: type) type {
                     }
                 },
                 .nominal_type => |a_type| {
-                    // Check if this nominal type has an invalid backing variable (contains underscore)
                     const a_backing_var = self.types_store_b.getNominalBackingVar(a_type);
                     const a_backing_resolved = self.types_store_b.resolveVar(a_backing_var);
                     if (a_backing_resolved.desc.content == .err) {
@@ -728,41 +683,12 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                     switch (b_flat_type) {
                         .nominal_type => |b_type| {
-                            // Check if this nominal type has an invalid backing variable
-                            const a_backing_var2 = self.types_store_b.getNominalBackingVar(a_type);
-
-                            // Follow the resolution chain to check if it eventually resolves to .err
-                            var current_var2 = a_backing_var2;
-                            var depth2: u32 = 0;
-                            const max_depth2 = 10;
-
-                            while (depth2 < max_depth2) {
-                                const resolved = self.types_store_b.resolveVar(current_var2);
-                                if (resolved.desc.content == .err) {
-                                    // Invalid nominal type (contains underscore) - treat as transparent
-                                    self.merge(vars, vars.b.desc.content);
-                                    return;
-                                }
-
-                                // Check if this resolves to another nominal type or alias
-                                switch (resolved.desc.content) {
-                                    .structure => |flat_type| {
-                                        switch (flat_type) {
-                                            .nominal_type => |nested_type| {
-                                                current_var2 = self.types_store_b.getNominalBackingVar(nested_type);
-                                                depth2 += 1;
-                                                continue;
-                                            },
-                                            else => break,
-                                        }
-                                    },
-                                    .alias => |alias| {
-                                        current_var2 = self.types_store_b.getAliasBackingVar(alias);
-                                        depth2 += 1;
-                                        continue;
-                                    },
-                                    else => break,
-                                }
+                            const b_backing_var = self.types_store_b.getNominalBackingVar(b_type);
+                            const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
+                            if (b_backing_resolved.desc.content == .err) {
+                                // Invalid nominal type (contains underscore) - treat as transparent
+                                self.merge(vars, vars.a.desc.content);
+                                return;
                             }
 
                             try self.unifyNominalType(vars, a_type, b_type);
@@ -1774,76 +1700,19 @@ fn Unifier(comptime StoreTypeB: type) type {
 
             // Check if either nominal type has an invalid backing variable (contains underscore)
             const a_backing_var = self.types_store_b.getNominalBackingVar(a_type);
-
-            // Follow the resolution chain to check if it eventually resolves to .err
-            var current_var = a_backing_var;
-            var depth: u32 = 0;
-            const max_depth = 10;
-
-            while (depth < max_depth) {
-                const resolved = self.types_store_b.resolveVar(current_var);
-                if (resolved.desc.content == .err) {
-                    // Invalid nominal type (contains underscore) - treat as transparent
-                    self.merge(vars, vars.b.desc.content);
-                    return;
-                }
-
-                // Check if this resolves to another nominal type or alias
-                switch (resolved.desc.content) {
-                    .structure => |flat_type| {
-                        switch (flat_type) {
-                            .nominal_type => |nested_type| {
-                                current_var = self.types_store_b.getNominalBackingVar(nested_type);
-                                depth += 1;
-                                continue;
-                            },
-                            else => break,
-                        }
-                    },
-                    .alias => |alias| {
-                        current_var = self.types_store_b.getAliasBackingVar(alias);
-                        depth += 1;
-                        continue;
-                    },
-                    else => break,
-                }
+            const a_backing_resolved = self.types_store_b.resolveVar(a_backing_var);
+            if (a_backing_resolved.desc.content == .err) {
+                // Invalid nominal type (contains underscore) - treat as transparent
+                self.merge(vars, vars.b.desc.content);
+                return;
             }
 
-            // Check if the other nominal type has an invalid backing variable
             const b_backing_var = self.types_store_b.getNominalBackingVar(b_type);
-
-            // Follow the resolution chain to check if it eventually resolves to .err
-            var current_var3 = b_backing_var;
-            var depth3: u32 = 0;
-            const max_depth3 = 10;
-
-            while (depth3 < max_depth3) {
-                const resolved = self.types_store_b.resolveVar(current_var3);
-                if (resolved.desc.content == .err) {
-                    // Invalid nominal type (contains underscore) - treat as transparent
-                    self.merge(vars, vars.a.desc.content);
-                    return;
-                }
-
-                // Check if this resolves to another nominal type or alias
-                switch (resolved.desc.content) {
-                    .structure => |flat_type| {
-                        switch (flat_type) {
-                            .nominal_type => |nested_type| {
-                                current_var3 = self.types_store_b.getNominalBackingVar(nested_type);
-                                depth3 += 1;
-                                continue;
-                            },
-                            else => break,
-                        }
-                    },
-                    .alias => |alias| {
-                        current_var3 = self.types_store_b.getAliasBackingVar(alias);
-                        depth3 += 1;
-                        continue;
-                    },
-                    else => break,
-                }
+            const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
+            if (b_backing_resolved.desc.content == .err) {
+                // Invalid nominal type (contains underscore) - treat as transparent
+                self.merge(vars, vars.a.desc.content);
+                return;
             }
 
             if (!TypeIdent.eql(&self.module_env.idents, a_type.ident, b_type.ident)) {
