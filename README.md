@@ -19,9 +19,9 @@ You can 💜 **sponsor** 💜 Roc on:
 - [GitHub](https://github.com/sponsors/roc-lang)
 - [Liberapay](https://liberapay.com/roc_lang)
 
-We are very grateful for our corporate sponsors [Tweede golf](https://tweedegolf.nl/en), [ohne-makler](https://www.ohne-makler.net), and [Decem](https://www.decem.com.au):
+We are very grateful for our corporate sponsors [Lambda Class](https://lambdaclass.com), [ohne-makler](https://www.ohne-makler.net), and [Decem](https://www.decem.com.au):
 
-[<img src="https://user-images.githubusercontent.com/1094080/183123052-856815b1-8cc9-410a-83b0-589f03613188.svg" height="60" alt="tweede golf logo"/>](https://tweedegolf.nl/en)
+[<img src="https://github.com/user-attachments/assets/3241c389-8f04-4b45-9dbb-b94a6f7cb85e" height="60" alt="Lambda Class logo"/>](https://lambdaclass.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://www.ohne-makler.net/static/img/brand/logo.svg" height="60" alt="ohne-makler logo"/>](https://www.ohne-makler.net)
 &nbsp;&nbsp;&nbsp;&nbsp;
