@@ -7,66 +7,6 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const SERIALIZATION_ALIGNMENT = serialization.SERIALIZATION_ALIGNMENT;
 
-/// Represents a type safe span in a list; [start, end)
-///
-/// This is the conceptual equivalent of slice, but since this is based
-/// on indexes in the list rather than pointers, it is reliable across
-/// (de)serilaization and reallocation of the list.
-///
-/// This range is inclusive on the lower bound, exclusive on the upper bound.
-pub fn SafeSpan(comptime Idx: type) type {
-    return struct {
-        const Self = @This();
-
-        start: Idx,
-        count: u32,
-
-        /// An empty range
-        pub fn empty() Self {
-            return .{ .start = @enumFromInt(0), .count = 0 };
-        }
-
-        /// Return whether the range is empty
-        pub fn isEmpty(self: @This()) bool {
-            return self.count == 0;
-        }
-
-        // Drop first elem from the span, if possible
-        pub fn dropFirstElem(self: *Self) void {
-            if (self.count == 0) return;
-            self.start = @enumFromInt(@intFromEnum(self.start) + 1);
-            self.count -= 1;
-        }
-
-        /// Get the length of a range slice
-        pub fn iterIndices(self: @This()) IndexIterator {
-            return IndexIterator{
-                .len = self.count,
-                .current = @intFromEnum(self.start),
-            };
-        }
-
-        /// An iterator over the indices of all elements in a list.
-        pub const IndexIterator = struct {
-            len: u32,
-            current: u32,
-
-            /// Get the next index from this iterator, or `null` if the iterator is finished.
-            pub fn next(iter: *IndexIterator) ?Idx {
-                if (iter.len == iter.current) {
-                    return null;
-                }
-
-                const curr = iter.current;
-                iter.current += 1;
-
-                const idx: u32 = @truncate(curr);
-                return @enumFromInt(idx);
-            }
-        };
-    };
-}
-
 /// Represents a type safe range in a list; [start, end)
 ///
 /// This is the conceptual equivalent of slice, but since this is based
@@ -79,37 +19,51 @@ pub fn SafeRange(comptime Idx: type) type {
         const Self = @This();
 
         start: Idx,
-        end: Idx,
+        count: u32,
 
         /// An empty range
-        pub const empty: Self = .{ .start = @enumFromInt(0), .end = @enumFromInt(0) };
+        pub fn empty() Self {
+            return .{ .start = @enumFromInt(0), .count = 0 };
+        }
+
+        // Drop first elem from the span, if possible
+        pub fn dropFirstElem(self: *Self) void {
+            if (self.count == 0) return;
+            self.start = @enumFromInt(@intFromEnum(self.start) + 1);
+            self.count -= 1;
+        }
 
         /// Get the length of a range slice
         pub fn len(self: @This()) u32 {
-            return @intFromEnum(self.end) - @intFromEnum(self.start);
+            return self.count;
+        }
+
+        /// Get the last index in the range
+        pub fn end(self: @This()) Idx {
+            return @enumFromInt(@intFromEnum(self.start) + self.count);
         }
 
         /// Return whether the range is empty
         pub fn isEmpty(self: @This()) bool {
-            return self.start == self.end;
+            return self.count == 0;
         }
 
         /// Get the length of a range slice
         pub fn iterIndices(self: @This()) IndexIterator {
             return IndexIterator{
-                .len = @intFromEnum(self.end),
+                .end = @intFromEnum(self.start) + self.count,
                 .current = @intFromEnum(self.start),
             };
         }
 
         /// An iterator over the indices of all elements in a list.
         pub const IndexIterator = struct {
-            len: u32,
+            end: u32,
             current: u32,
 
             /// Get the next index from this iterator, or `null` if the iterator is finished.
             pub fn next(iter: *IndexIterator) ?Idx {
-                if (iter.len == iter.current) {
+                if (iter.end == iter.current) {
                     return null;
                 }
 
@@ -154,15 +108,7 @@ pub fn SafeList(comptime T: type) type {
 
         /// A type-safe range which must have at least one element.
         pub const NonEmptyRange = struct {
-            range: Range,
-        };
-
-        /// A type-safe range of the list.
-        pub const Span = SafeSpan(Idx);
-
-        /// A type-safe span which must have at least one element.
-        pub const NonEmptySpan = struct {
-            nonempty: Span,
+            nonempty: Range,
         };
 
         /// Initialize the `SafeList` with the specified capacity.
@@ -190,20 +136,19 @@ pub fn SafeList(comptime T: type) type {
             return @enumFromInt(@as(u32, @intCast(length)));
         }
 
+        /// Create a range from the provided idx to the end of the list
+        pub fn rangeToEnd(self: *SafeList(T), start_int: u32) Range {
+            const len_int = self.len();
+            std.debug.assert(start_int <= len_int);
+            return Range{ .start = @enumFromInt(start_int), .count = @intCast(len_int - start_int) };
+        }
+
         /// Add all the items in a slice to the end of this list.
         pub fn appendSliceRange(self: *SafeList(T), gpa: Allocator, items: []const T) std.mem.Allocator.Error!Range {
             const start_length = self.len();
             try self.items.appendSlice(gpa, items);
             const end_length = self.len();
-            return Range{ .start = @enumFromInt(start_length), .end = @enumFromInt(end_length) };
-        }
-
-        /// Add all the items in a slice to the end of this list.
-        pub fn appendSliceSpan(self: *SafeList(T), gpa: Allocator, items: []const T) std.mem.Allocator.Error!Span {
-            const start_length = self.len();
-            try self.items.appendSlice(gpa, items);
-            const end_length = self.len();
-            return Span{ .start = @enumFromInt(start_length), .count = @intCast(end_length - start_length) };
+            return Range{ .start = @enumFromInt(start_length), .count = @intCast(end_length - start_length) };
         }
 
         /// Extend this list with all items generated by an iterator.
@@ -213,24 +158,13 @@ pub fn SafeList(comptime T: type) type {
                 try self.items.append(gpa, item);
             }
             const end_length = self.len();
-            return Range{ .start = @enumFromInt(start_length), .end = @enumFromInt(end_length) };
+            return Range{ .start = @enumFromInt(start_length), .count = @intCast(end_length - start_length) };
         }
 
         /// Convert a range to a slice
         pub fn sliceRange(self: *const SafeList(T), range: Range) Slice {
             const start: usize = @intFromEnum(range.start);
-            const end: usize = @intFromEnum(range.end);
-
-            std.debug.assert(start <= end);
-            std.debug.assert(end <= self.items.items.len);
-
-            return self.items.items[start..end];
-        }
-
-        /// Convert a span to a slice
-        pub fn sliceSpan(self: *const SafeList(T), span: Span) Slice {
-            const start: usize = @intFromEnum(span.start);
-            const end: usize = start + span.count;
+            const end: usize = start + range.count;
 
             std.debug.assert(start <= end);
             std.debug.assert(end <= self.items.items.len);
@@ -411,11 +345,11 @@ pub fn SafeList(comptime T: type) type {
         };
 
         /// Iterate over the elements in a span
-        pub fn iterSpan(self: *const SafeList(T), span: Span) Iterator {
+        pub fn iterRange(self: *const SafeList(T), range: Range) Iterator {
             return Iterator{
                 .array = self,
-                .len = @intFromEnum(span.start) + span.count,
-                .current = span.start,
+                .len = @intFromEnum(range.start) + range.count,
+                .current = range.start,
             };
         }
 
@@ -492,6 +426,13 @@ pub fn SafeMultiList(comptime T: type) type {
             return self.items.len;
         }
 
+        /// Create a range from the provided idx to the end of the list
+        pub fn rangeToEnd(self: *SafeMultiList(T), start_int: u32) Range {
+            const len_int = self.len();
+            std.debug.assert(start_int <= len_int);
+            return Range{ .start = @enumFromInt(start_int), .count = @intCast(len_int - start_int) };
+        }
+
         /// Add a new item to the end of this list.
         pub fn append(self: *SafeMultiList(T), gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
             const length = self.len();
@@ -502,7 +443,7 @@ pub fn SafeMultiList(comptime T: type) type {
 
         pub fn appendSliceRange(self: *SafeMultiList(T), gpa: Allocator, elems: []const T) std.mem.Allocator.Error!Range {
             if (elems.len == 0) {
-                return .{ .start = .zero, .end = .zero };
+                return .{ .start = .zero, .count = 0 };
             }
             const start_length = self.len();
             try self.items.ensureUnusedCapacity(gpa, elems.len);
@@ -510,13 +451,13 @@ pub fn SafeMultiList(comptime T: type) type {
                 self.items.appendAssumeCapacity(elem);
             }
             const end_length = self.len();
-            return Range{ .start = @enumFromInt(start_length), .end = @enumFromInt(end_length) };
+            return Range{ .start = @enumFromInt(start_length), .count = @intCast(end_length - start_length) };
         }
 
         /// Convert a range to a slice
         pub fn sliceRange(self: *const SafeMultiList(T), range: Range) Slice {
             const start: usize = @intFromEnum(range.start);
-            const end: usize = @intFromEnum(range.end);
+            const end: usize = start + range.count;
 
             std.debug.assert(start <= end);
             std.debug.assert(end <= self.items.len);
@@ -677,11 +618,11 @@ test "SafeList(u8) appendSlice" {
 
     const rangeA = try list.appendSliceRange(gpa, &[_]u8{ 'a', 'b', 'c', 'd' });
     try testing.expectEqual(0, @intFromEnum(rangeA.start));
-    try testing.expectEqual(4, @intFromEnum(rangeA.end));
+    try testing.expectEqual(4, @intFromEnum(rangeA.end()));
 
     const rangeB = try list.appendSliceRange(gpa, &[_]u8{ 'd', 'e', 'f', 'g' });
     try testing.expectEqual(4, @intFromEnum(rangeB.start));
-    try testing.expectEqual(8, @intFromEnum(rangeB.end));
+    try testing.expectEqual(8, @intFromEnum(rangeB.end()));
 }
 
 test "SafeList(u8) sliceRange" {
@@ -695,7 +636,7 @@ test "SafeList(u8) sliceRange" {
     try testing.expectEqual('a', sliceA[0]);
     try testing.expectEqual('d', sliceA[3]);
 
-    const rangeB = SafeList(u8).Range{ .start = @enumFromInt(2), .end = @enumFromInt(4) };
+    const rangeB = SafeList(u8).Range{ .start = @enumFromInt(2), .count = 2 };
     const sliceB = list.sliceRange(rangeB);
     try testing.expectEqual('c', sliceB[0]);
     try testing.expectEqual('d', sliceB[1]);
@@ -712,11 +653,11 @@ test "SafeMultiList(u8) appendSlice" {
 
     const rangeA = try multilist.appendSliceRange(gpa, &[_]Struct{ .{ .num = 100, .char = 'a' }, .{ .num = 200, .char = 'b' }, .{ .num = 300, .char = 'd' } });
     try testing.expectEqual(0, @intFromEnum(rangeA.start));
-    try testing.expectEqual(3, @intFromEnum(rangeA.end));
+    try testing.expectEqual(3, @intFromEnum(rangeA.end()));
 
     const rangeB = try multilist.appendSliceRange(gpa, &[_]Struct{ .{ .num = 400, .char = 'd' }, .{ .num = 500, .char = 'e' }, .{ .num = 600, .char = 'f' } });
     try testing.expectEqual(3, @intFromEnum(rangeB.start));
-    try testing.expectEqual(6, @intFromEnum(rangeB.end));
+    try testing.expectEqual(6, @intFromEnum(rangeB.end()));
 }
 
 test "SafeMultiList(u8) sliceRange" {
@@ -743,7 +684,7 @@ test "SafeMultiList(u8) sliceRange" {
     try testing.expectEqual('b', char_slice_a[1]);
     try testing.expectEqual('c', char_slice_a[2]);
 
-    const range_b = StructMultiList.Range{ .start = @enumFromInt(1), .end = @enumFromInt(2) };
+    const range_b = StructMultiList.Range{ .start = @enumFromInt(1), .count = 1 };
     const slice_b = multilist.sliceRange(range_b);
 
     const num_slice_b = slice_b.items(.num);
@@ -774,7 +715,7 @@ test "SafeMultiList empty range at end" {
     });
 
     // Create an empty range at the end (start=5, end=5 for a list of length 5)
-    const empty_range = StructMultiList.Range{ .start = @enumFromInt(5), .end = @enumFromInt(5) };
+    const empty_range = StructMultiList.Range{ .start = @enumFromInt(5), .count = 0 };
     const empty_slice = multilist.sliceRange(empty_range);
 
     // The slice should be empty
@@ -906,7 +847,7 @@ test "SafeList(u8) deserialization with data" {
     defer list.deinit(gpa);
 
     try testing.expectEqual(expected_data.len, list.len());
-    const slice = list.sliceRange(SafeList(u8).Range{ .start = @enumFromInt(0), .end = @enumFromInt(expected_data.len) });
+    const slice = list.sliceRange(SafeList(u8).Range{ .start = @enumFromInt(0), .count = expected_data.len });
     try testing.expectEqualSlices(u8, expected_data, slice);
 }
 

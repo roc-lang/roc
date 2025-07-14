@@ -420,8 +420,8 @@ pub const Store = struct {
     }
 
     /// Append a var to the backing list, returning the idx
-    pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Span {
-        return try self.vars.appendSliceSpan(self.gpa, s);
+    pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
+        return try self.vars.appendSliceRange(self.gpa, s);
     }
 
     /// Append a tuple elem to the backing list, returning the idx
@@ -505,7 +505,7 @@ pub const Store = struct {
     /// Get the arg vars for this alias type
     pub fn sliceAliasArgs(self: *const Self, alias: types.Alias) []Var {
         std.debug.assert(alias.vars.nonempty.count > 0);
-        const slice = self.vars.sliceSpan(alias.vars.nonempty);
+        const slice = self.vars.sliceRange(alias.vars.nonempty);
         return slice[1..];
     }
 
@@ -514,7 +514,7 @@ pub const Store = struct {
         std.debug.assert(alias.vars.nonempty.count > 0);
         var span = alias.vars.nonempty;
         span.dropFirstElem();
-        return self.vars.iterSpan(span);
+        return self.vars.iterRange(span);
     }
 
     // helpers - nominal types //
@@ -531,7 +531,7 @@ pub const Store = struct {
     /// Get the arg vars for this nominal type
     pub fn sliceNominalArgs(self: *const Self, nominal: types.NominalType) []Var {
         std.debug.assert(nominal.vars.nonempty.count > 0);
-        const slice = self.vars.sliceSpan(nominal.vars.nonempty);
+        const slice = self.vars.sliceRange(nominal.vars.nonempty);
         return slice[1..];
     }
 
@@ -540,7 +540,7 @@ pub const Store = struct {
         std.debug.assert(nominal.vars.nonempty.count > 0);
         var span = nominal.vars.nonempty;
         span.dropFirstElem();
-        return self.vars.iterSpan(span);
+        return self.vars.iterRange(span);
     }
 
     // mark & rank //

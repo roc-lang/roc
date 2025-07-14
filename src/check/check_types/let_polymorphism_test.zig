@@ -312,7 +312,7 @@ test "let-polymorphism interaction with pattern matching" {
     defer tags.deinit();
 
     try tags.append(.{ .name = just_tag_name, .args = try env.store.appendTagArgs(&.{type_param}) });
-    try tags.append(.{ .name = nothing_tag_name, .args = types.Var.SafeList.Range.empty });
+    try tags.append(.{ .name = nothing_tag_name, .args = types.Var.SafeList.Range.empty() });
 
     const tags_range = try env.store.appendTags(tags.items);
     const maybe_content = types.Content{ .structure = .{ .tag_union = .{ .tags = tags_range, .ext = try env.store.fresh() } } };
@@ -320,8 +320,8 @@ test "let-polymorphism interaction with pattern matching" {
 
     // Create a function that pattern matches on Maybe: forall a. Maybe a -> Bool
     const bool_content = types.Content{ .structure = .{ .tag_union = .{ .tags = try env.store.appendTags(&.{
-        .{ .name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("True"), base.Region.zero()), .args = types.Var.SafeList.Range.empty },
-        .{ .name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("False"), base.Region.zero()), .args = types.Var.SafeList.Range.empty },
+        .{ .name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("True"), base.Region.zero()), .args = types.Var.SafeList.Range.empty() },
+        .{ .name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("False"), base.Region.zero()), .args = types.Var.SafeList.Range.empty() },
     }), .ext = try env.store.fresh() } } };
     const bool_var = try env.store.freshFromContent(bool_content);
 

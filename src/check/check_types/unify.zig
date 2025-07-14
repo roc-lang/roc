@@ -2022,7 +2022,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                                     &self.types_store_b.record_fields,
                                     ext_record.fields,
                                 ) catch return Error.AllocatorError;
-                                range.end = next_range.end;
+                                range.count += next_range.count;
                                 ext_var = ext_record.ext;
                             },
                             .record_unbound => |fields| {
@@ -2030,7 +2030,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                                     &self.types_store_b.record_fields,
                                     fields,
                                 ) catch return Error.AllocatorError;
-                                range.end = next_range.end;
+                                range.count += next_range.count;
                                 // record_unbound has no extension, so we're done
                                 return .{ .ext = ext_var, .range = range };
                             },
@@ -2039,7 +2039,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                                     &self.types_store_b.record_fields,
                                     poly.record.fields,
                                 ) catch return Error.AllocatorError;
-                                range.end = next_range.end;
+                                range.count += next_range.count;
                                 ext_var = poly.record.ext;
                             },
                             .empty_record => {
@@ -2087,9 +2087,9 @@ fn Unifier(comptime StoreTypeB: type) type {
             std.mem.sort(RecordField, b_fields, ident_store, comptime RecordField.sortByNameAsc);
 
             // Get the start of index of the new range
-            const a_fields_start: RecordFieldSafeList.Idx = @enumFromInt(scratch.only_in_a_fields.len());
-            const b_fields_start: RecordFieldSafeList.Idx = @enumFromInt(scratch.only_in_b_fields.len());
-            const both_fields_start: RecordFieldSafeList.Idx = @enumFromInt(scratch.in_both_fields.len());
+            const a_fields_start: u32 = @intCast(scratch.only_in_a_fields.len());
+            const b_fields_start: u32 = @intCast(scratch.only_in_b_fields.len());
+            const both_fields_start: u32 = @intCast(scratch.in_both_fields.len());
 
             // Iterate over the fields in order, grouping them
             var a_i: usize = 0;
@@ -2132,16 +2132,11 @@ fn Unifier(comptime StoreTypeB: type) type {
                 b_i = b_i + 1;
             }
 
-            // Get the end index of the new range
-            const a_fields_end: RecordFieldSafeList.Idx = @enumFromInt(scratch.only_in_a_fields.len());
-            const b_fields_end: RecordFieldSafeList.Idx = @enumFromInt(scratch.only_in_b_fields.len());
-            const both_fields_end: RecordFieldSafeList.Idx = @enumFromInt(scratch.in_both_fields.len());
-
             // Return the ranges
             return .{
-                .only_in_a = .{ .start = a_fields_start, .end = a_fields_end },
-                .only_in_b = .{ .start = b_fields_start, .end = b_fields_end },
-                .in_both = .{ .start = both_fields_start, .end = both_fields_end },
+                .only_in_a = scratch.only_in_a_fields.rangeToEnd(a_fields_start),
+                .only_in_b = scratch.only_in_b_fields.rangeToEnd(b_fields_start),
+                .in_both = scratch.in_both_fields.rangeToEnd(both_fields_start),
             };
         }
 
@@ -2158,7 +2153,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
-            const range_start: RecordFieldSafeMultiList.Idx = @enumFromInt(self.types_store_b.record_fields.len());
+            const range_start: u32 = @intCast(self.types_store_b.record_fields.len());
 
             // Here, iterate over shared fields, sub unifying the field variables.
             // At this point, the fields are know to be identical, so we arbitrary choose b
@@ -2178,11 +2173,9 @@ fn Unifier(comptime StoreTypeB: type) type {
                 _ = self.types_store_b.appendRecordFields(extended_fields) catch return Error.AllocatorError;
             }
 
-            const range_end: RecordFieldSafeMultiList.Idx = @enumFromInt(self.types_store_b.record_fields.len());
-
             // Merge vars
             self.merge(vars, Content{ .structure = FlatType{ .record = .{
-                .fields = .{ .start = range_start, .end = range_end },
+                .fields = self.types_store_b.record_fields.rangeToEnd(range_start),
                 .ext = ext,
             } } });
         }
@@ -2446,7 +2439,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                                     &self.types_store_b.tags,
                                     ext_tag_union.tags,
                                 ) catch return Error.AllocatorError;
-                                range.end = next_range.end;
+                                range.count += next_range.count;
                                 ext_var = ext_tag_union.ext;
                             },
                             .empty_tag_union => {
@@ -2494,9 +2487,9 @@ fn Unifier(comptime StoreTypeB: type) type {
             std.mem.sort(Tag, b_tags, ident_store, comptime Tag.sortByNameAsc);
 
             // Get the start of index of the new range
-            const a_tags_start: TagSafeList.Idx = @enumFromInt(scratch.only_in_a_tags.len());
-            const b_tags_start: TagSafeList.Idx = @enumFromInt(scratch.only_in_b_tags.len());
-            const both_tags_start: TagSafeList.Idx = @enumFromInt(scratch.in_both_tags.len());
+            const a_tags_start: u32 = @intCast(scratch.only_in_a_tags.len());
+            const b_tags_start: u32 = @intCast(scratch.only_in_b_tags.len());
+            const both_tags_start: u32 = @intCast(scratch.in_both_tags.len());
 
             // Iterate over the tags in order, grouping them
             var a_i: usize = 0;
@@ -2536,16 +2529,11 @@ fn Unifier(comptime StoreTypeB: type) type {
                 b_i = b_i + 1;
             }
 
-            // Get the end index of the new range
-            const a_tags_end: TagSafeList.Idx = @enumFromInt(scratch.only_in_a_tags.len());
-            const b_tags_end: TagSafeList.Idx = @enumFromInt(scratch.only_in_b_tags.len());
-            const both_tags_end: TagSafeList.Idx = @enumFromInt(scratch.in_both_tags.len());
-
             // Return the ranges
             return .{
-                .only_in_a = .{ .start = a_tags_start, .end = a_tags_end },
-                .only_in_b = .{ .start = b_tags_start, .end = b_tags_end },
-                .in_both = .{ .start = both_tags_start, .end = both_tags_end },
+                .only_in_a = scratch.only_in_a_tags.rangeToEnd(a_tags_start),
+                .only_in_b = scratch.only_in_b_tags.rangeToEnd(b_tags_start),
+                .in_both = scratch.in_both_tags.rangeToEnd(both_tags_start),
             };
         }
 
@@ -2562,7 +2550,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
-            const range_start: TagSafeMultiList.Idx = @enumFromInt(self.types_store_b.tags.len());
+            const range_start: u32 = @intCast(self.types_store_b.tags.len());
 
             for (shared_tags) |tags| {
                 const tag_a_args = self.types_store_b.getTagArgsSlice(tags.a.args);
@@ -2588,11 +2576,9 @@ fn Unifier(comptime StoreTypeB: type) type {
                 _ = self.types_store_b.appendTags(extended_tags) catch return Error.AllocatorError;
             }
 
-            const range_end: TagSafeMultiList.Idx = @enumFromInt(self.types_store_b.tags.len());
-
             // Merge vars
             self.merge(vars, Content{ .structure = FlatType{ .tag_union = .{
-                .tags = .{ .start = range_start, .end = range_end },
+                .tags = self.types_store_b.tags.rangeToEnd(range_start),
                 .ext = ext,
             } } });
         }
@@ -2749,7 +2735,8 @@ pub const Scratch = struct {
         multi_list: *const RecordFieldSafeMultiList,
         range: RecordFieldSafeMultiList.Range,
     ) std.mem.Allocator.Error!RecordFieldSafeList.Range {
-        const start: RecordFieldSafeList.Idx = @enumFromInt(self.gathered_fields.len());
+        const start_int = self.gathered_fields.len();
+        const start: RecordFieldSafeList.Idx = @enumFromInt(start_int);
         const record_fields_slice = multi_list.sliceRange(range);
         for (record_fields_slice.items(.name), record_fields_slice.items(.var_)) |name, var_| {
             _ = try self.gathered_fields.append(
@@ -2757,9 +2744,9 @@ pub const Scratch = struct {
                 RecordField{ .name = name, .var_ = var_ },
             );
         }
-        const end: RecordFieldSafeList.Idx = @enumFromInt(self.gathered_fields.len());
-        return .{ .start = start, .end = end };
+        return .{ .start = start, .count = @intCast(self.gathered_fields.len() - start_int) };
     }
+
     /// Given a multi list of tag and a range, copy from the multi list
     /// into scratch's gathered fields array
     fn copyGatherTagsFromMultiList(
@@ -2767,7 +2754,8 @@ pub const Scratch = struct {
         multi_list: *const TagSafeMultiList,
         range: TagSafeMultiList.Range,
     ) std.mem.Allocator.Error!TagSafeList.Range {
-        const start: TagSafeList.Idx = @enumFromInt(self.gathered_tags.len());
+        const start_int = self.gathered_tags.len();
+        const start: TagSafeList.Idx = @enumFromInt(start_int);
         const tag_slice = multi_list.sliceRange(range);
         for (tag_slice.items(.name), tag_slice.items(.args)) |ident, args| {
             _ = try self.gathered_tags.append(
@@ -2775,8 +2763,7 @@ pub const Scratch = struct {
                 Tag{ .name = ident, .args = args },
             );
         }
-        const end: TagSafeList.Idx = @enumFromInt(self.gathered_tags.len());
-        return .{ .start = start, .end = end };
+        return .{ .start = start, .count = @intCast(self.gathered_tags.len() - start_int) };
     }
 
     fn appendSliceGatheredFields(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordFieldSafeList.Range {

@@ -769,7 +769,7 @@ test "addTypeVar - simple record" {
     // Both str and u32 have same alignment on 64-bit systems (8 bytes for str pointer, 4 bytes for u32 but u32 comes first due to smaller alignment)
     // Actually str has alignment of usize (8 on 64-bit), u32 has alignment 4
     // So str should come first (higher alignment), then u32
-    const field_slice = layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.sliceRange(layout_store.getRecordData(record_layout.data.record.idx).getFields());
 
     // First field: name (str) - higher alignment (8 bytes on 64-bit)
     const name_field = field_slice.get(0);
@@ -891,7 +891,7 @@ test "addTypeVar - nested record" {
 
     // Verify the outer fields
     const player_record_data = layout_store.getRecordData(player_layout.data.record.idx);
-    const outer_field_slice = layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(player_record_data.fields.start), .end = @enumFromInt(player_record_data.fields.start + player_record_data.fields.count) });
+    const outer_field_slice = layout_store.record_fields.sliceRange(player_record_data.getFields());
 
     // First field: name (str)
     const name_field = outer_field_slice.get(0);
@@ -910,7 +910,7 @@ test "addTypeVar - nested record" {
 
     // Verify the inner record fields
     const position_record_data = layout_store.getRecordData(position_layout.data.record.idx);
-    const inner_field_slice = layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(position_record_data.fields.start), .end = @enumFromInt(position_record_data.fields.start + position_record_data.fields.count) });
+    const inner_field_slice = layout_store.record_fields.sliceRange(position_record_data.getFields());
 
     // Inner field x (i32)
     const x_field = inner_field_slice.get(0);
@@ -975,7 +975,7 @@ test "addTypeVar - list of records" {
     try testing.expect(record_layout.tag == .record);
 
     // Verify the record fields
-    const field_slice = layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.sliceRange(layout_store.getRecordData(record_layout.data.record.idx).getFields());
 
     // First field: id (u64)
     const id_field = field_slice.get(0);
@@ -1043,7 +1043,7 @@ test "addTypeVar - record with extension" {
 
     // Verify we have all 3 fields (x from main, y and z from extension)
     const record_data = layout_store.getRecordData(record_layout.data.record.idx);
-    const field_slice = layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(record_data.fields.start), .end = @enumFromInt(record_data.fields.start + record_data.fields.count) });
+    const field_slice = layout_store.record_fields.sliceRange(record_data.getFields());
     try testing.expectEqual(@as(usize, 3), field_slice.len);
 
     // Fields are sorted by alignment (descending) then by name (ascending)
@@ -1468,7 +1468,7 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
 
     // Verify we have 3 fields (x appears twice - from main and extension, plus y from extension)
     // TODO: Field deduplication should happen at the type-checking level, not in layout generation
-    const field_slice = layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.sliceRange(layout_store.getRecordData(record_layout.data.record.idx).getFields());
 
     // Fields are sorted by alignment (descending) then by name (ascending)
     // All fields here have same type alignment, so sorted by name: x, x, y
@@ -1540,7 +1540,7 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
     try testing.expect(record_layout.tag == .record);
 
     // We get both fields even though they have the same name but different types
-    const field_slice = layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.sliceRange(layout_store.getRecordData(record_layout.data.record.idx).getFields());
 
     // Fields are sorted by alignment (descending) then by name (ascending)
     // str is 8-byte aligned, i32 is 4-byte aligned
@@ -1651,7 +1651,7 @@ test "addTypeVar - record with chained extensions" {
     try testing.expect(record_layout.tag == .record);
 
     // Verify we have all 4 fields from all levels
-    const field_slice = layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.sliceRange(layout_store.getRecordData(record_layout.data.record.idx).getFields());
 
     // Fields are sorted by alignment (descending) then by name (ascending)
     // str and f64 are 8-byte aligned, i32 is 4-byte aligned, u8 is 1-byte aligned
@@ -1730,7 +1730,7 @@ test "addTypeVar - record with zero-sized fields dropped" {
     try testing.expect(record_layout.tag == .record);
 
     // Verify we only have 2 fields (empty field should be dropped)
-    const field_slice = layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.sliceRange(layout_store.getRecordData(record_layout.data.record.idx).getFields());
 
     // Debug: Check the actual field count
     const field_count = field_slice.len;
@@ -1988,7 +1988,7 @@ test "addTypeVar - comprehensive nested record combinations" {
 
                 // Count actual non-zero fields in the result
                 const result_record_data = test_layout_store.getRecordData(result_layout.data.record.idx);
-                const field_slice = test_layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(result_record_data.fields.start), .end = @enumFromInt(result_record_data.fields.start + result_record_data.fields.count) });
+                const field_slice = test_layout_store.record_fields.sliceRange(result_record_data.getFields());
                 const actual_field_count = field_slice.len;
 
                 // Verify each field has a valid layout
@@ -2000,7 +2000,7 @@ test "addTypeVar - comprehensive nested record combinations" {
                         .record => {
                             // Verify nested record has fields
                             const nested_record_data = test_layout_store.getRecordData(field_layout.data.record.idx);
-                            const nested_slice = test_layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(nested_record_data.fields.start), .end = @enumFromInt(nested_record_data.fields.start + nested_record_data.fields.count) });
+                            const nested_slice = test_layout_store.record_fields.sliceRange(nested_record_data.getFields());
                             try testing.expect(nested_slice.len > 0);
                         },
 
@@ -2261,7 +2261,7 @@ test "record fields sorted by alignment then name" {
 
     // Verify fields are sorted by alignment (descending) then by name (ascending)
     // Expected order: b (u64, align 8), d (u64, align 8), a (u32, align 4), c (u8, align 1)
-    const field_slice = layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.sliceRange(layout_store.getRecordData(record_layout.data.record.idx).getFields());
 
     // First field: b (u64, alignment 8)
     const field1 = field_slice.get(0);
@@ -2339,7 +2339,7 @@ test "record fields with same alignment sorted by name" {
 
     // Verify fields are sorted alphabetically since they all have the same alignment
     // Expected order: apple, banana, zebra
-    const field_slice = layout_store.record_fields.sliceRange(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.sliceRange(layout_store.getRecordData(record_layout.data.record.idx).getFields());
 
     // First field: apple
     const field1 = field_slice.get(0);
