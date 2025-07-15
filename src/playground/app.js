@@ -49,7 +49,7 @@ async function initializePlayground() {
     logInfo("WASM module loaded successfully");
 
     logInfo("Sending INIT message to WASM...");
-    const response = await sendMessage({ type: "INIT" });
+    const response = await sendMessageQueued({ type: "INIT" });
     logInfo("INIT response:", response);
 
     if (response.status !== "SUCCESS") {
@@ -66,12 +66,11 @@ async function initializePlayground() {
     lastCompileTime = null;
     setupAutoCompile();
     setupUrlSharing();
-    restoreFromUrl();
+    await restoreFromHash();
     currentState = "READY";
     logInfo("Playground initialization complete!");
   } catch (error) {
     logError("❌ Failed to initialize playground:", error);
-
     showError(`Failed to initialize playground: ${error.message}`);
   }
 }
@@ -227,6 +226,37 @@ async function sendMessage(message) {
   }
 }
 
+// --- BEGIN QUEUED SENDMESSAGE SYSTEM ---
+// Queue for serializing sendMessage calls
+const sendMessageQueue = [];
+let sendMessageInProgress = false;
+
+const sendMessageOriginal = sendMessage;
+
+async function processSendMessageQueue() {
+  if (sendMessageInProgress) return;
+  if (sendMessageQueue.length === 0) return;
+  sendMessageInProgress = true;
+  const { message, resolve, reject } = sendMessageQueue.shift();
+  try {
+    const result = await sendMessageOriginal(message);
+    resolve(result);
+  } catch (err) {
+    reject(err);
+  } finally {
+    sendMessageInProgress = false;
+    processSendMessageQueue();
+  }
+}
+
+function sendMessageQueued(message) {
+  return new Promise((resolve, reject) => {
+    sendMessageQueue.push({ message, resolve, reject });
+    processSendMessageQueue();
+  });
+}
+// --- END QUEUED SENDMESSAGE SYSTEM ---
+
 // Populate examples list
 function populateExamples() {
   const examplesList = document.getElementById("examplesList");
@@ -250,11 +280,16 @@ function populateExamples() {
 // Load an example
 async function loadExample(exampleId) {
   logInfo("Loading example:", exampleId);
+  // Reset the URL hash when loading an example
+  window.location.hash = "";
   const example = examples.find((e) => e.id === exampleId);
   if (!example) {
     logWarn("Example not found:", exampleId);
     return;
   }
+
+  // Update the URL hash to match the loaded example's content
+  await updateUrlWithCompressedContent(example.code);
 
   // Update UI
   logInfo("Updating example selection UI...");
@@ -275,7 +310,7 @@ async function loadExample(exampleId) {
   // Reset if we're in loaded state
   if (currentState === "LOADED") {
     logInfo("Resetting WASM state...");
-    await sendMessage({ type: "RESET" });
+    await sendMessageQueued({ type: "RESET" });
   }
 
   updateUI();
@@ -311,10 +346,10 @@ async function compileCode() {
     // Reset if we're already in LOADED state
     if (currentState === "LOADED") {
       logInfo("Resetting WASM state before recompilation...");
-      await sendMessage({ type: "RESET" });
+      await sendMessageQueued({ type: "RESET" });
     }
 
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "LOAD_SOURCE",
       source: code,
     });
@@ -454,7 +489,7 @@ async function showTokens() {
   }
 
   try {
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "QUERY_TOKENS",
     });
     if (response.status === "SUCCESS") {
@@ -479,7 +514,7 @@ async function showParseAst() {
   }
 
   try {
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "QUERY_AST",
     });
     if (response.status === "SUCCESS") {
@@ -504,7 +539,7 @@ async function showCanCir() {
   }
 
   try {
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "QUERY_CIR",
     });
     if (response.status === "SUCCESS") {
@@ -529,7 +564,7 @@ async function showTypes() {
   }
 
   try {
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "QUERY_TYPES",
     });
     if (response.status === "SUCCESS") {
@@ -695,46 +730,76 @@ function setupAutoCompile() {
   }
 }
 
-// URL sharing functionality
-function hashContent(content) {
-  if (!content || content.length > 10000) return null; // Don't hash very large content
-
-  let hash = 0;
-  for (let i = 0; i < content.length; i++) {
-    const char = content.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash = hash & hash; // Convert to 32-bit integer
-  }
-  return Math.abs(hash).toString(36);
+// URL sharing functionality (gzip + base64 + hash fragment)
+async function compressAndEncode(content) {
+  // Compress using gzip (CompressionStream)
+  const encoder = new TextEncoder();
+  const input = encoder.encode(content);
+  const cs = new CompressionStream("gzip");
+  const compressedStream = new Response(
+    new Blob([input]).stream().pipeThrough(cs)
+  ).arrayBuffer();
+  const compressed = new Uint8Array(await compressedStream);
+  return uint8ToBase64(compressed);
 }
 
-function updateUrl(content) {
-  const hash = hashContent(content);
-  if (hash) {
-    const newUrl = `${window.location.origin}${window.location.pathname}?content=${hash}`;
-    window.history.replaceState({}, "", newUrl);
-
-    // Store content in localStorage with hash as key
-    localStorage.setItem(`roc-content-${hash}`, content);
-  } else {
-    // Clear URL param if content is empty or too large
-    const newUrl = `${window.location.origin}${window.location.pathname}`;
-    window.history.replaceState({}, "", newUrl);
-  }
+async function decodeAndDecompress(b64) {
+  const compressed = base64ToUint8(b64);
+  const ds = new DecompressionStream("gzip");
+  const decompressedStream = new Response(
+    new Blob([compressed]).stream().pipeThrough(ds)
+  ).arrayBuffer();
+  const decompressed = new Uint8Array(await decompressedStream);
+  const decoder = new TextDecoder();
+  return decoder.decode(decompressed);
 }
 
-function restoreFromUrl() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const contentHash = urlParams.get("content");
+function uint8ToBase64(uint8) {
+  // Convert Uint8Array to base64 (browser safe)
+  let binary = "";
+  for (let i = 0; i < uint8.length; i++) {
+    binary += String.fromCharCode(uint8[i]);
+  }
+  return btoa(binary);
+}
 
-  if (contentHash) {
-    const savedContent = localStorage.getItem(`roc-content-${contentHash}`);
-    if (savedContent) {
+function base64ToUint8(b64) {
+  const binary = atob(b64);
+  const uint8 = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    uint8[i] = binary.charCodeAt(i);
+  }
+  return uint8;
+}
+
+async function updateUrlWithCompressedContent(content) {
+  if (!content || content.length > 10000) {
+    // Don't share very large content
+    window.location.hash = "";
+    return;
+  }
+  const b64 = await compressAndEncode(content);
+  window.location.hash = `content=${b64}`;
+}
+
+async function restoreFromHash() {
+  // Expect hash in the form #content=...
+  const hash = window.location.hash.replace(/^#/, "");
+  let b64 = null;
+  if (hash.startsWith("content=")) {
+    b64 = hash.slice("content=".length);
+  }
+  if (b64) {
+    try {
+      const content = await decodeAndDecompress(b64);
       const editor = document.getElementById("editor");
       if (editor) {
-        editor.value = savedContent;
-        logInfo("Restored content from URL hash:", contentHash);
+        editor.value = content;
+        logInfo("Restored content from hash fragment");
+        await compileCode(); // Automatically compile after restoring
       }
+    } catch (e) {
+      logError("Failed to decompress content from hash", e);
     }
   }
 }
@@ -743,62 +808,50 @@ function setupUrlSharing() {
   const editor = document.getElementById("editor");
   if (editor) {
     editor.addEventListener("input", () => {
-      // Debounce URL updates to avoid excessive calls
       clearTimeout(updateUrlTimeout);
       updateUrlTimeout = setTimeout(() => {
-        updateUrl(editor.value);
+        updateUrlWithCompressedContent(editor.value);
       }, 1000); // Update URL after 1 second of no typing
     });
   }
-
-  // Add share button to header
   addShareButton();
 }
 
 function addShareButton() {
   const headerStatus = document.querySelector(".header-status");
   if (headerStatus) {
-    const shareButton = document.createElement("button");
-    shareButton.className = "share-button";
-    shareButton.innerHTML = "share link";
-    shareButton.title = "Copy shareable link to clipboard";
-    shareButton.onclick = copyShareLink;
-
-    // Insert before the theme toggle
-    const themeToggle = headerStatus.querySelector(".theme-toggle");
-    headerStatus.insertBefore(shareButton, themeToggle);
+    let shareButton = headerStatus.querySelector(".share-button");
+    if (!shareButton) {
+      shareButton = document.createElement("button");
+      shareButton.className = "share-button";
+      shareButton.innerHTML = "share link";
+      shareButton.title = "Copy shareable link to clipboard";
+      shareButton.onclick = copyShareLink;
+      const themeToggle = headerStatus.querySelector(".theme-toggle");
+      headerStatus.insertBefore(shareButton, themeToggle);
+    }
   }
 }
 
-function copyShareLink() {
+async function copyShareLink() {
   const editor = document.getElementById("editor");
   if (editor) {
     const content = editor.value.trim();
     if (content) {
-      const hash = hashContent(content);
-      if (hash) {
-        localStorage.setItem(`roc-content-${hash}`, content);
-        const shareUrl = `${window.location.origin}${window.location.pathname}?content=${hash}`;
-
-        navigator.clipboard
-          .writeText(shareUrl)
-          .then(() => {
-            // Show temporary feedback
-            const shareButton = document.querySelector(".share-button");
-            const originalText = shareButton.innerHTML;
-            shareButton.innerHTML = "copied";
-
-            setTimeout(() => {
-              shareButton.innerHTML = originalText;
-            }, 2000);
-          })
-          .catch((err) => {
-            console.error("Failed to copy to clipboard:", err);
-            // Fallback: show the URL in an alert
-            alert(`Share this link: ${shareUrl}`);
-          });
-      } else {
-        alert("Content is too large to share via URL");
+      try {
+        const b64 = await compressAndEncode(content);
+        const shareUrl = `${window.location.origin}${window.location.pathname}#content=${b64}`;
+        await navigator.clipboard.writeText(shareUrl);
+        // Show temporary feedback
+        const shareButton = document.querySelector(".share-button");
+        const originalText = shareButton.innerHTML;
+        shareButton.innerHTML = "copied";
+        setTimeout(() => {
+          shareButton.innerHTML = originalText;
+        }, 2000);
+      } catch (err) {
+        console.error("Failed to copy to clipboard:", err);
+        alert("Failed to copy link");
       }
     } else {
       alert("No content to share");
