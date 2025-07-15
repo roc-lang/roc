@@ -8,7 +8,7 @@ type=expr
 "abc\qdef"
 ~~~
 # EXPECTED
-NIL
+INVALID ESCAPE SEQUENCE - :0:0:0:0
 # PROBLEMS
 **INVALID ESCAPE SEQUENCE**
 This escape sequence is not recognized.

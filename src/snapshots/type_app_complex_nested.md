@@ -32,6 +32,7 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
+INVALID LAMBDA - :0:0:0:0
 INVALID STATEMENT - type_app_complex_nested.md:13:24:13:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -47,7 +48,7 @@ deepNested = |_| crash "not implemented"
 
 
 **UNDECLARED TYPE**
-The type ``Maybe`` is not declared in this scope.
+The type `Maybe` is not declared in this scope.
 
 This type is referenced here:
 **type_app_complex_nested.md:16:33:16:38:**
@@ -58,7 +59,7 @@ ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 
 
 **UNDECLARED TYPE**
-The type ``Error`` is not declared in this scope.
+The type `Error` is not declared in this scope.
 
 This type is referenced here:
 **type_app_complex_nested.md:16:54:16:59:**
@@ -69,7 +70,7 @@ ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 
 
 **UNDECLARED TYPE**
-The type ``Maybe`` is not declared in this scope.
+The type `Maybe` is not declared in this scope.
 
 This type is referenced here:
 **type_app_complex_nested.md:4:30:4:35:**
@@ -80,7 +81,7 @@ processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 
 
 **UNDECLARED TYPE**
-The type ``Error`` is not declared in this scope.
+The type `Error` is not declared in this scope.
 
 This type is referenced here:
 **type_app_complex_nested.md:4:51:4:56:**
@@ -91,9 +92,9 @@ processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 
 
 **UNUSED VARIABLE**
-Variable ``maybeList`` is not used anywhere in your code.
+Variable `maybeList` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_maybeList` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _maybeList to suppress this warning.
 The unused variable is declared here:
 **type_app_complex_nested.md:7:12:7:21:**
 ```roc
@@ -103,7 +104,7 @@ The unused variable is declared here:
 
 
 **UNDECLARED TYPE**
-The type ``Maybe`` is not declared in this scope.
+The type `Maybe` is not declared in this scope.
 
 This type is referenced here:
 **type_app_complex_nested.md:12:14:12:19:**

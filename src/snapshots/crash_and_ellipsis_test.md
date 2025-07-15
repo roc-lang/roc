@@ -29,7 +29,9 @@ main! = |_| {
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:9:17:9:22
 UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:13:23:13:28
+INVALID LAMBDA - :0:0:0:0
 INVALID STATEMENT - crash_and_ellipsis_test.md:9:23:9:48
+INVALID LAMBDA - :0:0:0:0
 INVALID STATEMENT - crash_and_ellipsis_test.md:13:29:13:35
 UNUSED VARIABLE - crash_and_ellipsis_test.md:16:5:16:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:17:5:17:12
@@ -88,9 +90,9 @@ testCrashSimple = |_| crash "oops"
 
 
 **UNUSED VARIABLE**
-Variable ``result1`` is not used anywhere in your code.
+Variable `result1` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_result1` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _result1 to suppress this warning.
 The unused variable is declared here:
 **crash_and_ellipsis_test.md:16:5:16:12:**
 ```roc
@@ -100,9 +102,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``result2`` is not used anywhere in your code.
+Variable `result2` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_result2` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _result2 to suppress this warning.
 The unused variable is declared here:
 **crash_and_ellipsis_test.md:17:5:17:12:**
 ```roc
@@ -112,9 +114,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``result3`` is not used anywhere in your code.
+Variable `result3` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _result3 to suppress this warning.
 The unused variable is declared here:
 **crash_and_ellipsis_test.md:18:5:18:12:**
 ```roc

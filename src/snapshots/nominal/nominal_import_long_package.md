@@ -15,6 +15,7 @@ red = ... # not implemented
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:21:3:27
 UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:28:3:36
+LIST NOT CLOSED - nominal_import_long_package.md:3:51:3:52
 INVALID STATEMENT - nominal_import_long_package.md:3:21:3:27
 INVALID STATEMENT - nominal_import_long_package.md:3:28:3:36
 INVALID STATEMENT - nominal_import_long_package.md:3:37:3:52
@@ -91,7 +92,7 @@ import design.Styles.Color exposing [Encoder as CE]
 
 
 **UNDECLARED TYPE**
-The type ``CE`` is not declared in this scope.
+The type `CE` is not declared in this scope.
 
 This type is referenced here:
 **nominal_import_long_package.md:5:7:5:9:**

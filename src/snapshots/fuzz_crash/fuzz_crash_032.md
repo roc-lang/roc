@@ -20,11 +20,15 @@ Green => LocalStatus-Complete
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_032.md:3:24:3:25
+IMPORT MUST BE TOP LEVEL - fuzz_crash_032.md:6:18:6:24
 UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:17
 UNDECLARED TYPE - fuzz_crash_032.md:3:21:3:24
 INVALID STATEMENT - fuzz_crash_032.md:3:24:3:25
 INVALID STATEMENT - fuzz_crash_032.md:3:26:3:45
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_032.md:6:25:6:30
+EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
+EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=** is not expected in an expression.
@@ -51,7 +55,7 @@ olor = |color| { import Color.RGB
 
 
 **UNDECLARED TYPE VARIABLE**
-The type variable ``lue`` is not declared in this scope.
+The type variable `lue` is not declared in this scope.
 
 Type variables must be introduced in a type annotation before they can be used.
 
@@ -64,7 +68,7 @@ LocalStatus :lue => Loc= [Pending, Complete]
 
 
 **UNDECLARED TYPE**
-The type ``Loc`` is not declared in this scope.
+The type `Loc` is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_032.md:3:21:3:24:**
@@ -112,24 +116,24 @@ olor = |color| { import Color.RGB
 
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that ``r`` is exposed, but it is not defined anywhere in this module.
+The module header says that `r` is exposed, but it is not defined anywhere in this module.
 
 **fuzz_crash_032.md:1:13:1:14:**
 ```roc
 module [tus,r]
 ```
             ^
-You can fix this by either defining ``r`` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `r` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that ``tus`` is exposed, but it is not defined anywhere in this module.
+The module header says that `tus` is exposed, but it is not defined anywhere in this module.
 
 **fuzz_crash_032.md:1:9:1:12:**
 ```roc
 module [tus,r]
 ```
         ^^^
-You can fix this by either defining ``tus`` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `tus` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -201,11 +205,11 @@ LocalStatus : lue => Loc
 olor : _ -> tus
 olor = |color| {
 	
-	RGB
+	Color.RGB
 
-	match color {		RGB => Pending
+	match color {		RGB => LocalStatus.Pending
 		Green => LocalStatus - Complete
-		Blue => Pending
+		Blue => LocalStatus.Pending
 	}
 }
 ~~~

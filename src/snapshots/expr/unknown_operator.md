@@ -9,6 +9,7 @@ type=expr
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:5
+UNKNOWN OPERATOR - :0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+** is not expected in an expression.

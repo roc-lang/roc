@@ -11,6 +11,7 @@ if bool {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - if_then_else_simple_block_formatting.md:1:4:1:8
+INCOMPATIBLE IF BRANCHES - if_then_else_simple_block_formatting.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.

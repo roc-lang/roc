@@ -16,6 +16,7 @@ main! : List(String) -> Result({}, _)
 tag_tuple : Value((a, b, c))
 ~~~
 # EXPECTED
+ASCII CONTROL CHARACTER - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_048.md:4:7:4:12
 UNDECLARED TYPE - fuzz_crash_048.md:8:14:8:20
 UNDECLARED TYPE - fuzz_crash_048.md:9:13:9:18
@@ -24,7 +25,7 @@ UNDECLARED TYPE - fuzz_crash_048.md:9:13:9:18
 ASCII control characters are not allowed in Roc source code.
 
 **UNDECLARED TYPE**
-The type ``Thing`` is not declared in this scope.
+The type `Thing` is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_048.md:4:7:4:12:**
@@ -35,7 +36,7 @@ bar : Thing(a, b, _)
 
 
 **UNDECLARED TYPE**
-The type ``String`` is not declared in this scope.
+The type `String` is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_048.md:8:14:8:20:**
@@ -46,7 +47,7 @@ main! : List(String) -> Result({}, _)
 
 
 **UNDECLARED TYPE**
-The type ``Value`` is not declared in this scope.
+The type `Value` is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_048.md:9:13:9:18:**

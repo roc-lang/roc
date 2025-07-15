@@ -10,6 +10,7 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - error_malformed_syntax_2.md:1:8:1:10
 UNEXPECTED TOKEN IN EXPRESSION - error_malformed_syntax_2.md:1:10:1:11
+MALFORMED TYPE - :0:0:0:0
 UNUSED VARIABLE - error_malformed_syntax_2.md:1:12:1:16
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -40,9 +41,9 @@ Here is the problematic code:
 This type annotation is malformed or contains invalid syntax.
 
 **UNUSED VARIABLE**
-Variable ``name`` is not used anywhere in your code.
+Variable `name` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _name to suppress this warning.
 The unused variable is declared here:
 **error_malformed_syntax_2.md:1:12:1:16:**
 ```roc

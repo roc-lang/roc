@@ -52,9 +52,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
+Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
 The unused variable is declared here:
 **list_patterns.md:3:15:3:15:**
 ```roc
@@ -64,9 +64,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``first`` is not used anywhere in your code.
+Variable `first` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _first to suppress this warning.
 The unused variable is declared here:
 **list_patterns.md:3:6:3:11:**
 ```roc

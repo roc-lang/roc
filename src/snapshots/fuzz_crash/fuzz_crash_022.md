@@ -20,8 +20,10 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:27
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:1:33
 PARSE ERROR - fuzz_crash_022.md:6:27:6:28
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:1:8:2
+MALFORMED TYPE - :0:0:0:0
 INVALID STATEMENT - fuzz_crash_022.md:1:28:1:31
 INVALID STATEMENT - fuzz_crash_022.md:1:32:1:33
+INVALID IF CONDITION - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
 INVALID STATEMENT - fuzz_crash_022.md:8:1:8:2
 # PROBLEMS
@@ -116,9 +118,9 @@ The condition in this `if` expression could not be processed.
 The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
 
 **UNUSED VARIABLE**
-Variable ``id`` is not used anywhere in your code.
+Variable `id` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _id to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_022.md:6:12:6:14:**
 ```roc

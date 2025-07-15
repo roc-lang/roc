@@ -15,6 +15,9 @@ match x {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - pattern_f64_overflow.md:1:7:1:8
+F64 NOT ALLOWED IN PATTERN - :0:0:0:0
+F64 NOT ALLOWED IN PATTERN - :0:0:0:0
+F64 NOT ALLOWED IN PATTERN - :0:0:0:0
 UNUSED VARIABLE - pattern_f64_overflow.md:6:5:6:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
@@ -74,9 +77,9 @@ Use a guard:
 `n if n > 1e99 => ...`
 
 **UNUSED VARIABLE**
-Variable ``value`` is not used anywhere in your code.
+Variable `value` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _value to suppress this warning.
 The unused variable is declared here:
 **pattern_f64_overflow.md:6:5:6:10:**
 ```roc

@@ -24,9 +24,14 @@ broken_fn3 : a -> b
 # EXPECTED
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:11
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:8
+MALFORMED WHERE CLAUSE - :0:0:0:0
 INVALID STATEMENT - where_clauses_error_cases.md:6:25:6:26
+MALFORMED WHERE CLAUSE - :0:0:0:0
 UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:24:15:25
 UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:29:15:30
+EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:9:1:19
+EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:21:1:31
+EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:33:1:43
 # PROBLEMS
 **WHERE CLAUSE ERROR**
 Expected a colon **:** after the method name in this where clause constraint.
@@ -75,7 +80,7 @@ This where clause could not be parsed correctly.
 Please check the syntax of your where clause constraint.
 
 **UNDECLARED TYPE VARIABLE**
-The type variable ``c`` is not declared in this scope.
+The type variable `c` is not declared in this scope.
 
 Type variables must be introduced in a type annotation before they can be used.
 
@@ -88,7 +93,7 @@ This type variable is referenced here:
 
 
 **UNDECLARED TYPE VARIABLE**
-The type variable ``d`` is not declared in this scope.
+The type variable `d` is not declared in this scope.
 
 Type variables must be introduced in a type annotation before they can be used.
 
@@ -101,34 +106,34 @@ This type variable is referenced here:
 
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that ``broken_fn1`` is exposed, but it is not defined anywhere in this module.
+The module header says that `broken_fn1` is exposed, but it is not defined anywhere in this module.
 
 **where_clauses_error_cases.md:1:9:1:19:**
 ```roc
 module [broken_fn1, broken_fn2, broken_fn3]
 ```
         ^^^^^^^^^^
-You can fix this by either defining ``broken_fn1`` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `broken_fn1` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that ``broken_fn2`` is exposed, but it is not defined anywhere in this module.
+The module header says that `broken_fn2` is exposed, but it is not defined anywhere in this module.
 
 **where_clauses_error_cases.md:1:21:1:31:**
 ```roc
 module [broken_fn1, broken_fn2, broken_fn3]
 ```
                     ^^^^^^^^^^
-You can fix this by either defining ``broken_fn2`` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `broken_fn2` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that ``broken_fn3`` is exposed, but it is not defined anywhere in this module.
+The module header says that `broken_fn3` is exposed, but it is not defined anywhere in this module.
 
 **where_clauses_error_cases.md:1:33:1:43:**
 ```roc
 module [broken_fn1, broken_fn2, broken_fn3]
 ```
                                 ^^^^^^^^^^
-You can fix this by either defining ``broken_fn3`` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `broken_fn3` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig

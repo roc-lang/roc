@@ -94,19 +94,7 @@ LowerIdent(13:1-13:6),OpAssign(13:7-13:8),UpperIdent(13:9-13:14),NoSpaceDotUpper
 ~~~
 # FORMATTED
 ~~~roc
-module [Maybe, some1, none1, some2, none2]
-
-Maybe(a) := [Some(a), None]
-
-some1 : a -> Maybe(a)
-some1 = |a| Some(a)
-
-none1 : Maybe(_a)
-none1 = None
-
-some2 = |a| Some(a)
-
-none2 = None
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

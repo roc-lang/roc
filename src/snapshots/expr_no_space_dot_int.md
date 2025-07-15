@@ -11,6 +11,7 @@ foo = asd.0
 ~~~
 # EXPECTED
 PARSE ERROR - expr_no_space_dot_int.md:3:10:3:12
+UNKNOWN OPERATOR - :0:0:0:0
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expr_no_space_dot_int`

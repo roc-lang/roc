@@ -23,6 +23,7 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:25:
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:26:3:27
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:4:11:4:12
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:4:29:4:30
+IMPORT MUST BE TOP LEVEL - record_different_fields_reserved_error.md:5:5:5:11
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:11:5:12
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:26:5:27
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:5:6:8
@@ -31,6 +32,8 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:7
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:8
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:20
+MALFORMED TYPE - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - record_different_fields_reserved_error.md:6:10:6:19
 UNDEFINED VARIABLE - record_different_fields_reserved_error.md:7:9:7:19
 # PROBLEMS

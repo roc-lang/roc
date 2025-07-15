@@ -28,11 +28,25 @@ UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:44:3:45
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:4:5:4:6
 UNEXPECTED TOKEN IN PATTERN - guards_1.md:4:7:4:9
 UNDEFINED VARIABLE - guards_1.md:1:7:1:12
+UNKNOWN OPERATOR - :0:0:0:0
 UNUSED VARIABLE - guards_1.md:2:5:2:6
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - :0:0:0:0
 UNDEFINED VARIABLE - guards_1.md:2:42:2:43
 UNUSED VARIABLE - guards_1.md:2:32:2:41
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - :0:0:0:0
+INVALID PATTERN - :0:0:0:0
 UNDEFINED VARIABLE - guards_1.md:3:5:3:6
+INVALID PATTERN - :0:0:0:0
 UNDEFINED VARIABLE - guards_1.md:3:10:3:11
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - :0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - :0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - :0:0:0:0
+INVALID PATTERN - :0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=>** is not expected in an expression.
@@ -230,9 +244,9 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
+Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
 The unused variable is declared here:
 **guards_1.md:2:5:2:6:**
 ```roc
@@ -260,9 +274,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable ``toStr`` is not used anywhere in your code.
+Variable `toStr` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _toStr to suppress this warning.
 The unused variable is declared here:
 **guards_1.md:2:32:2:41:**
 ```roc

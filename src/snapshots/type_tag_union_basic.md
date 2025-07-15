@@ -28,9 +28,9 @@ main! = |_| {}
 UNUSED VARIABLE - type_tag_union_basic.md:4:12:4:17
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable ``maybe`` is not used anywhere in your code.
+Variable `maybe` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_maybe` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _maybe to suppress this warning.
 The unused variable is declared here:
 **type_tag_union_basic.md:4:12:4:17:**
 ```roc
@@ -163,8 +163,8 @@ is_ok_ret_unqualified_bool = |result| match result {
 
 is_ok_ret_bool : [Ok(_ok2), Err(_err2)] -> Bool
 is_ok_ret_bool = |result| match result {
-	Ok(_) => True
-	Err(_) => False
+	Ok(_) => Bool.True
+	Err(_) => Bool.False
 }
 
 main! = |_| {}

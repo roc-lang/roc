@@ -36,9 +36,9 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
+Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
 The unused variable is declared here:
 **type_var_underscore_conventions.md:5:15:5:16:**
 ```roc
@@ -48,9 +48,9 @@ single_use = |x| "hello"
 
 
 **UNUSED VARIABLE**
-Variable ``list`` is not used anywhere in your code.
+Variable `list` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _list to suppress this warning.
 The unused variable is declared here:
 **type_var_underscore_conventions.md:9:22:9:26:**
 ```roc
@@ -60,9 +60,9 @@ ending_underscore = |list| "default"
 
 
 **UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
+Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
 The unused variable is declared here:
 **type_var_underscore_conventions.md:13:17:13:18:**
 ```roc
@@ -72,9 +72,9 @@ combo_single = |x| "combo"
 
 
 **UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
+Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
 The unused variable is declared here:
 **type_var_underscore_conventions.md:17:17:17:18:**
 ```roc
@@ -84,9 +84,9 @@ valid_single = |x| "valid"
 
 
 **UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
+Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
 The unused variable is declared here:
 **type_var_underscore_conventions.md:22:9:22:10:**
 ```roc

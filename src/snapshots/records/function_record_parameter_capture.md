@@ -11,9 +11,9 @@ type=expr
 UNUSED VARIABLE - function_record_parameter_capture.md:1:15:1:18
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable ``a`` is not used anywhere in your code.
+Variable `a` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _a to suppress this warning.
 The unused variable is declared here:
 **function_record_parameter_capture.md:1:15:1:18:**
 ```roc

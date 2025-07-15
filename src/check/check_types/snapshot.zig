@@ -392,31 +392,31 @@ pub const Store = struct {
 
     // Getter methods (similar to Store)
     pub fn getAliasArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.alias_args.rangeToSlice(range);
+        return self.alias_args.sliceRange(range);
     }
 
     pub fn getTupleElemsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.tuple_elems.rangeToSlice(range);
+        return self.tuple_elems.sliceRange(range);
     }
 
     pub fn getNominalTypeArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.nominal_type_args.rangeToSlice(range);
+        return self.nominal_type_args.sliceRange(range);
     }
 
     pub fn getFuncArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.func_args.rangeToSlice(range);
+        return self.func_args.sliceRange(range);
     }
 
     pub fn getRecordFieldsSlice(self: *const Self, range: SnapshotRecordFieldSafeList.Range) SnapshotRecordFieldSafeList.Slice {
-        return self.record_fields.rangeToSlice(range);
+        return self.record_fields.sliceRange(range);
     }
 
     pub fn getTagsSlice(self: *const Self, range: SnapshotTagSafeList.Range) []const SnapshotTag {
-        return self.tags.rangeToSlice(range);
+        return self.tags.sliceRange(range);
     }
 
     pub fn getTagArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.tag_args.rangeToSlice(range);
+        return self.tag_args.sliceRange(range);
     }
 
     pub fn getContent(self: *const Self, idx: SnapshotContentIdx) SnapshotContent {
@@ -755,14 +755,14 @@ pub const SnapshotWriter = struct {
                 self.countContent(search_idx, func.ret, count);
             },
             .record => |record| {
-                const fields = self.snapshots.record_fields.rangeToSlice(record.fields);
+                const fields = self.snapshots.record_fields.sliceRange(record.fields);
                 for (fields.items(.content)) |field_content| {
                     self.countContent(search_idx, field_content, count);
                 }
                 self.countContent(search_idx, record.ext, count);
             },
             .record_unbound => |fields| {
-                const fields_slice = self.snapshots.record_fields.rangeToSlice(fields);
+                const fields_slice = self.snapshots.record_fields.sliceRange(fields);
                 for (fields_slice.items(.content)) |field_content| {
                     self.countContent(search_idx, field_content, count);
                 }
@@ -973,7 +973,7 @@ pub const SnapshotWriter = struct {
     pub fn writeRecord(self: *Self, record: SnapshotRecord, root_idx: SnapshotContentIdx) Allocator.Error!void {
         _ = try self.writer.write("{ ");
 
-        const fields_slice = self.snapshots.record_fields.rangeToSlice(record.fields);
+        const fields_slice = self.snapshots.record_fields.sliceRange(record.fields);
 
         if (fields_slice.len > 0) {
             // Write first field
@@ -1015,7 +1015,7 @@ pub const SnapshotWriter = struct {
             return;
         }
 
-        const fields_slice = self.snapshots.record_fields.rangeToSlice(fields);
+        const fields_slice = self.snapshots.record_fields.sliceRange(fields);
 
         _ = try self.writer.write("{ ");
 

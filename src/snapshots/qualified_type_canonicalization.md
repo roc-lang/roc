@@ -77,14 +77,17 @@ INVALID STATEMENT - qualified_type_canonicalization.md:15:29:15:51
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:19:26:19:35
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
 INVALID STATEMENT - qualified_type_canonicalization.md:27:24:27:26
+UNKNOWN OPERATOR - :0:0:0:0
 INVALID STATEMENT - qualified_type_canonicalization.md:31:13:31:24
 INVALID STATEMENT - qualified_type_canonicalization.md:31:24:31:28
 INVALID STATEMENT - qualified_type_canonicalization.md:31:29:31:51
+UNKNOWN OPERATOR - :0:0:0:0
 INVALID STATEMENT - qualified_type_canonicalization.md:35:17:36:6
 INVALID STATEMENT - qualified_type_canonicalization.md:36:6:36:21
 INVALID STATEMENT - qualified_type_canonicalization.md:36:21:36:22
 INVALID STATEMENT - qualified_type_canonicalization.md:39:50:39:52
 INVALID STATEMENT - qualified_type_canonicalization.md:39:68:39:74
+UNKNOWN OPERATOR - :0:0:0:0
 INVALID STATEMENT - qualified_type_canonicalization.md:40:14:41:9
 INVALID STATEMENT - qualified_type_canonicalization.md:41:10:41:16
 INVALID STATEMENT - qualified_type_canonicalization.md:41:17:41:19
@@ -800,12 +803,12 @@ import ExternalModule as ExtMod
 
 # Simple qualified type
 simpleQualified : Color.RGB
-simpleQualified = RGB
+simpleQualified = Color.RGB
 {r: 255, g: 0, b: 0}
 
 # Aliased qualified type
 aliasedQualified : ExtMod.DataType
-aliasedQualified = Default
+aliasedQualified = ExtMod.DataType.Default
 
 # Multi-level qualified type
 multiLevelQualified : ModuleA.ModuleB.TypeC
@@ -814,7 +817,7 @@ multiLevelQualified = TypeC.new
 # Using qualified type with generics
 resultType : Result.Result
 
-resultType = Ok
+resultType = Result.Ok
 42
 
 # Function returning qualified type

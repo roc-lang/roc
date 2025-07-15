@@ -149,11 +149,14 @@ UNDECLARED TYPE - fuzz_crash_020.md:74:9:74:15
 UNDEFINED VARIABLE - fuzz_crash_020.md:75:11:75:12
 UNDEFINED VARIABLE - fuzz_crash_020.md:78:9:78:14
 UNDEFINED VARIABLE - fuzz_crash_020.md:80:3:80:6
+CRASH EXPECTS STRING - fuzz_crash_020.md:86:3:86:11
 UNDEFINED VARIABLE - fuzz_crash_020.md:87:11:87:12
 UNDEFINED VARIABLE - fuzz_crash_020.md:89:3:89:6
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:34:96:37
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:47:96:52
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:54:96:57
+DUPLICATE DEFINITION - fuzz_crash_020.md:97:2:97:3
 UNDEFINED VARIABLE - fuzz_crash_020.md:97:21:97:24
 UNDEFINED VARIABLE - fuzz_crash_020.md:97:30:97:32
 UNDEFINED VARIABLE - fuzz_crash_020.md:98:2:98:3
@@ -161,6 +164,7 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:100:11:100:14
 UNDEFINED VARIABLE - fuzz_crash_020.md:102:4:102:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:102:8:102:13
 UNDEFINED VARIABLE - fuzz_crash_020.md:105:2:105:3
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_020.md:108:4:108:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:108:6:108:8
 UNUSED VARIABLE - fuzz_crash_020.md:88:1:88:2
@@ -174,7 +178,7 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
 # PROBLEMS
 **UNDECLARED TYPE**
-The type ``Lis`` is not declared in this scope.
+The type `Lis` is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_020.md:13:13:13:16:**
@@ -185,7 +189,7 @@ Map(a, b) : Lis, (ab) -> List(b)
 
 
 **UNDECLARED TYPE VARIABLE**
-The type variable ``ab`` is not declared in this scope.
+The type variable `ab` is not declared in this scope.
 
 Type variables must be introduced in a type annotation before they can be used.
 
@@ -198,7 +202,7 @@ Map(a, b) : Lis, (ab) -> List(b)
 
 
 **UNDECLARED TYPE VARIABLE**
-The type variable ``ab`` is not declared in this scope.
+The type variable `ab` is not declared in this scope.
 
 Type variables must be introduced in a type annotation before they can be used.
 
@@ -211,7 +215,7 @@ This type variable is referenced here:
 
 
 **UNDECLARED TYPE**
-The type ``O`` is not declared in this scope.
+The type `O` is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_020.md:24:15:24:16:**
@@ -222,7 +226,7 @@ Som : { foo : O, bar : g }
 
 
 **UNDECLARED TYPE VARIABLE**
-The type variable ``g`` is not declared in this scope.
+The type variable `g` is not declared in this scope.
 
 Type variables must be introduced in a type annotation before they can be used.
 
@@ -235,7 +239,7 @@ Som : { foo : O, bar : g }
 
 
 **UNDECLARED TYPE**
-The type ``U6`` is not declared in this scope.
+The type `U6` is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_020.md:37:7:37:9:**
@@ -301,9 +305,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable ``lue`` is not used anywhere in your code.
+Variable `lue` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _lue to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_020.md:52:11:52:14:**
 ```roc
@@ -324,9 +328,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable ``er`` is not used anywhere in your code.
+Variable `er` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_er` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _er to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_020.md:57:2:57:4:**
 ```roc
@@ -347,9 +351,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable ``est`` is not used anywhere in your code.
+Variable `est` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_est` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _est to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_020.md:60:12:60:15:**
 ```roc
@@ -370,7 +374,7 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDECLARED TYPE**
-The type ``Listlt`` is not declared in this scope.
+The type `Listlt` is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_020.md:74:9:74:15:**
@@ -604,9 +608,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable ``t`` is not used anywhere in your code.
+Variable `t` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_t` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _t to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_020.md:88:1:88:2:**
 ```roc
@@ -616,9 +620,9 @@ t = [
 
 
 **UNUSED VARIABLE**
-Variable ``rd`` is not used anywhere in your code.
+Variable `rd` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rd` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rd to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_020.md:96:2:96:4:**
 ```roc
@@ -628,9 +632,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``w`` is not used anywhere in your code.
+Variable `w` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_w` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _w to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_020.md:76:2:76:3:**
 ```roc
@@ -640,9 +644,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``i`` is not used anywhere in your code.
+Variable `i` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_i` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _i to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_020.md:87:2:87:3:**
 ```roc
@@ -652,7 +656,7 @@ The unused variable is declared here:
 
 
 **UNDECLARED TYPE**
-The type ``V`` is not declared in this scope.
+The type `V` is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_020.md:116:5:116:6:**

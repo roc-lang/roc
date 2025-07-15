@@ -15,6 +15,8 @@ match x {
 UNEXPECTED TOKEN IN PATTERN - f64_pattern_literal_error.md:2:5:2:12
 UNEXPECTED TOKEN IN PATTERN - f64_pattern_literal_error.md:3:5:3:11
 UNDEFINED VARIABLE - f64_pattern_literal_error.md:1:7:1:8
+INVALID PATTERN - :0:0:0:0
+INVALID PATTERN - :0:0:0:0
 UNUSED VARIABLE - f64_pattern_literal_error.md:4:5:4:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN PATTERN**
@@ -59,9 +61,9 @@ This pattern contains invalid syntax or uses unsupported features.
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNUSED VARIABLE**
-Variable ``value`` is not used anywhere in your code.
+Variable `value` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _value to suppress this warning.
 The unused variable is declared here:
 **f64_pattern_literal_error.md:4:5:4:10:**
 ```roc

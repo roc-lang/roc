@@ -32,9 +32,9 @@ UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
 UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable ``unused_var`` is not used anywhere in your code.
+Variable `unused_var` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_unused_var` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _unused_var to suppress this warning.
 The unused variable is declared here:
 **unused_vars_block.md:5:5:5:15:**
 ```roc
@@ -44,9 +44,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``another_unused`` is not used anywhere in your code.
+Variable `another_unused` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_another_unused` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _another_unused to suppress this warning.
 The unused variable is declared here:
 **unused_vars_block.md:11:5:11:19:**
 ```roc

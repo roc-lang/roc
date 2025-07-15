@@ -791,7 +791,9 @@ const Formatter = struct {
         switch (expr) {
             .apply => |a| {
                 _ = try fmt.formatExpr(a.@"fn");
-                try fmt.formatCollection(region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(a.args), Formatter.formatExpr);
+                const fn_region = fmt.nodeRegion(@intFromEnum(a.@"fn"));
+                const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = region.end };
+                try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(a.args), Formatter.formatExpr);
             },
             .string_part => |s| {
                 try fmt.pushTokenText(s.token);
@@ -1024,7 +1026,14 @@ const Formatter = struct {
                 try fmt.push('?');
             },
             .tag => |t| {
-                try fmt.pushTokenText(t.token);
+                const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
+
+                for (qualifier_tokens) |tok_idx| {
+                    const tok = @as(Token.Idx, @intCast(tok_idx));
+                    try fmt.pushAll(fmt.ast.resolve(tok));
+                }
+
+                try fmt.pushAll(fmt.ast.resolve(t.token));
             },
             .if_then_else => |i| {
                 try fmt.pushAll("if");
@@ -1813,11 +1822,9 @@ const Formatter = struct {
             .ty => |t| {
                 const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
 
-                if (qualifier_tokens.len > 0) {
-                    for (qualifier_tokens) |tok_idx| {
-                        const tok = @as(Token.Idx, @intCast(tok_idx));
-                        try fmt.pushAll(fmt.ast.resolve(tok));
-                    }
+                for (qualifier_tokens) |tok_idx| {
+                    const tok = @as(Token.Idx, @intCast(tok_idx));
+                    try fmt.pushAll(fmt.ast.resolve(tok));
                 }
 
                 try fmt.pushAll(fmt.ast.resolve(t.token));

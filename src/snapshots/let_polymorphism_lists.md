@@ -39,8 +39,11 @@ main = |_| {
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:12:26:12:27
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:27
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:31
+UNKNOWN OPERATOR - :0:0:0:0
 INVALID STATEMENT - let_polymorphism_lists.md:12:28:12:41
+UNKNOWN OPERATOR - :0:0:0:0
 INVALID STATEMENT - let_polymorphism_lists.md:13:28:13:41
+UNKNOWN OPERATOR - :0:0:0:0
 INVALID STATEMENT - let_polymorphism_lists.md:14:32:14:45
 UNDEFINED VARIABLE - let_polymorphism_lists.md:25:12:25:20
 UNDEFINED VARIABLE - let_polymorphism_lists.md:26:12:26:20
