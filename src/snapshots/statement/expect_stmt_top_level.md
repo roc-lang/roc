@@ -39,11 +39,7 @@ KwExpect(5:1-5:7),LowerIdent(5:8-5:11),OpNotEquals(5:12-5:14),UpperIdent(5:15-5:
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]
-
-foo = True
-
-expect foo != False
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

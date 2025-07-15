@@ -57,7 +57,7 @@ module [foo]
 
 foo : Bool -> Bool
 foo = |a| {
-	expect a == True
+	expect a == Bool.True
 	a
 }
 ~~~

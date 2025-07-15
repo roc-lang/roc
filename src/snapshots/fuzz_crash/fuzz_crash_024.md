@@ -17,6 +17,7 @@ var t= 0
 PARSE ERROR - fuzz_crash_024.md:1:9:1:15
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_024.md:1:24:1:32
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:9
+PARSE ERROR - fuzz_crash_024.md:7:9:7:9
 INVALID STATEMENT - fuzz_crash_024.md:1:18:7:9
 # PROBLEMS
 **UNCLOSED STRING**
@@ -59,6 +60,18 @@ Here is the problematic code:
 var t= ]
 ```
        ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `expected_expr_close_curly_or_comma`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_024.md:7:9:7:9:**
+```roc
+var t= 0
+```
+        
 
 
 **INVALID STATEMENT**

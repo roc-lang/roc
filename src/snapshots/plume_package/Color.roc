@@ -59,7 +59,7 @@ expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
 named : Str -> Result(Color, [UnknownColor(Str)])
 named = |str|
-    if str.is_named_color() then
+    if str.is_named_color()
         Ok(Color.Named(str))
     else
         Err(UnknownColor("Unknown color ${str}"))

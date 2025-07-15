@@ -66,7 +66,7 @@ expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
 named : Str -> Result(Color, [UnknownColor(Str)])
 named = |str|
-    if str.is_named_color() then
+    if str.is_named_color()
         Ok(Color.Named(str))
     else
         Err(UnknownColor("Unknown color ${str}"))
@@ -78,191 +78,12 @@ is_named_color = |str|{
 }
 ~~~
 # EXPECTED
-PARSE ERROR - Color.md:63:9:63:11
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:64:5:64:9
-PARSE ERROR - Color.md:65:13:65:25
-PARSE ERROR - Color.md:65:9:65:12
-PARSE ERROR - Color.md:65:9:65:12
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:27:65:41
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:41:65:43
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:46:65:47
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:47:65:47
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:47:65:48
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:48:65:49
-UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:49:65:50
 UNUSED VARIABLE - Color.md:30:5:30:25
-UNUSED VARIABLE - Color.md:61:10:61:13
-UNDEFINED VARIABLE - Color.md:63:24:63:27
-INVALID STATEMENT - Color.md:64:5:64:9
-INVALID STATEMENT - Color.md:65:27:65:41
-INVALID STATEMENT - Color.md:65:41:65:43
-INVALID STATEMENT - Color.md:65:43:65:46
-INVALID STATEMENT - Color.md:65:46:65:47
-INVALID STATEMENT - Color.md:65:47:65:47
-INVALID STATEMENT - Color.md:65:47:65:48
-INVALID STATEMENT - Color.md:65:48:65:49
-INVALID STATEMENT - Color.md:65:49:65:50
 UNDEFINED VARIABLE - Color.md:68:14:68:27
 TYPE MISMATCH - Color.md:20:20:20:22
 TYPE MISMATCH - Color.md:26:7:26:10
 TYPE MISMATCH - Color.md:48:10:48:15
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `no_else`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**Color.md:63:9:63:11:**
-```roc
-        Ok(Color.Named(str))
-```
-        ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **else** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**Color.md:64:5:64:9:**
-```roc
-    else
-```
-    ^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**Color.md:65:13:65:25:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-            ^^^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_ty_anno_end`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**Color.md:65:9:65:12:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-        ^^^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-Here is the problematic code:
-**Color.md:65:9:65:12:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-        ^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **Unknown color ** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**Color.md:65:27:65:41:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                          ^^^^^^^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **${** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**Color.md:65:41:65:43:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                        ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**Color.md:65:46:65:47:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                             ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**Color.md:65:47:65:47:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                              
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **"** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**Color.md:65:47:65:48:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                              ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **)** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**Color.md:65:48:65:49:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                               ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **)** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**Color.md:65:49:65:50:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                                ^
-
-
 **UNUSED VARIABLE**
 Variable `is_char_in_hex_range` is not used anywhere in your code.
 
@@ -273,131 +94,6 @@ The unused variable is declared here:
     is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
 ```
     ^^^^^^^^^^^^^^^^^^^^
-
-
-**INVALID LAMBDA**
-The body of this lambda expression is not valid.
-
-**UNUSED VARIABLE**
-Variable `str` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like _str to suppress this warning.
-The unused variable is declared here:
-**Color.md:61:10:61:13:**
-```roc
-named = |str|
-```
-         ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `str` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**Color.md:63:24:63:27:**
-```roc
-        Ok(Color.Named(str))
-```
-                       ^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**Color.md:64:5:64:9:**
-```roc
-    else
-```
-    ^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**Color.md:65:27:65:41:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                          ^^^^^^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**Color.md:65:41:65:43:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                        ^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**Color.md:65:43:65:46:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                          ^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**Color.md:65:46:65:47:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                             ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**Color.md:65:47:65:47:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                              
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**Color.md:65:47:65:48:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                              ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**Color.md:65:48:65:49:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                               ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**Color.md:65:49:65:50:**
-```roc
-        Err(UnknownColor("Unknown color ${str}"))
-```
-                                                ^
 
 
 **UNDEFINED VARIABLE**
@@ -506,7 +202,7 @@ KwExpect(57:1-57:7),LowerIdent(57:8-57:12),NoSpaceOpenRound(57:12-57:13),Int(57:
 KwExpect(58:1-58:7),LowerIdent(58:8-58:11),NoSpaceOpenRound(58:11-58:12),StringStart(58:12-58:13),StringPart(58:13-58:20),StringEnd(58:20-58:21),CloseRound(58:21-58:22),NoSpaceDotLowerIdent(58:22-58:29),NoSpaceOpenRound(58:29-58:30),LowerIdent(58:30-58:36),CloseRound(58:36-58:37),OpEquals(58:38-58:40),UpperIdent(58:41-58:43),NoSpaceOpenRound(58:43-58:44),StringStart(58:44-58:45),StringPart(58:45-58:52),StringEnd(58:52-58:53),CloseRound(58:53-58:54),
 LowerIdent(60:1-60:6),OpColon(60:7-60:8),UpperIdent(60:9-60:12),OpArrow(60:13-60:15),UpperIdent(60:16-60:22),NoSpaceOpenRound(60:22-60:23),UpperIdent(60:23-60:28),Comma(60:28-60:29),OpenSquare(60:30-60:31),UpperIdent(60:31-60:43),NoSpaceOpenRound(60:43-60:44),UpperIdent(60:44-60:47),CloseRound(60:47-60:48),CloseSquare(60:48-60:49),CloseRound(60:49-60:50),
 LowerIdent(61:1-61:6),OpAssign(61:7-61:8),OpBar(61:9-61:10),LowerIdent(61:10-61:13),OpBar(61:13-61:14),
-KwIf(62:5-62:7),LowerIdent(62:8-62:11),NoSpaceDotLowerIdent(62:11-62:26),NoSpaceOpenRound(62:26-62:27),CloseRound(62:27-62:28),LowerIdent(62:29-62:33),
+KwIf(62:5-62:7),LowerIdent(62:8-62:11),NoSpaceDotLowerIdent(62:11-62:26),NoSpaceOpenRound(62:26-62:27),CloseRound(62:27-62:28),
 UpperIdent(63:9-63:11),NoSpaceOpenRound(63:11-63:12),UpperIdent(63:12-63:17),NoSpaceDotUpperIdent(63:17-63:23),NoSpaceOpenRound(63:23-63:24),LowerIdent(63:24-63:27),CloseRound(63:27-63:28),CloseRound(63:28-63:29),
 KwElse(64:5-64:9),
 UpperIdent(65:9-65:12),NoSpaceOpenRound(65:12-65:13),UpperIdent(65:13-65:25),NoSpaceOpenRound(65:25-65:26),StringStart(65:26-65:27),StringPart(65:27-65:41),OpenStringInterpolation(65:41-65:43),LowerIdent(65:43-65:46),CloseStringInterpolation(65:46-65:47),StringPart(65:47-65:47),StringEnd(65:47-65:48),CloseRound(65:48-65:49),CloseRound(65:49-65:50),
@@ -842,26 +538,29 @@ EndOfFile(72:1-72:1),
 							(ty-apply @60.31-60.48
 								(ty @60.31-60.43 (name "UnknownColor"))
 								(ty @60.44-60.47 (name "Str"))))))))
-		(s-decl @61.1-63.29
+		(s-decl @61.1-65.50
 			(p-ident @61.1-61.6 (raw "named"))
-			(e-apply @61.9-63.29
-				(e-lambda @61.9-63.11
-					(args
-						(p-ident @61.10-61.13 (raw "str")))
-					(e-malformed @63.9-63.11 (reason "no_else")))
-				(e-apply @63.12-63.28
-					(e-tag @63.12-63.23 (raw "Color.Named"))
-					(e-ident @63.24-63.27 (raw "str")))))
-		(e-malformed @64.5-64.9 (reason "expr_unexpected_token"))
-		(s-malformed @65.9-65.27 (tag "expected_colon_after_type_annotation"))
-		(e-malformed @65.27-65.41 (reason "expr_unexpected_token"))
-		(e-malformed @65.41-65.43 (reason "expr_unexpected_token"))
-		(e-ident @65.43-65.46 (raw "str"))
-		(e-malformed @65.46-65.47 (reason "expr_unexpected_token"))
-		(e-malformed @65.47-65.47 (reason "expr_unexpected_token"))
-		(e-malformed @65.47-65.48 (reason "expr_unexpected_token"))
-		(e-malformed @65.48-65.49 (reason "expr_unexpected_token"))
-		(e-malformed @65.49-65.50 (reason "expr_unexpected_token"))
+			(e-lambda @61.9-65.50
+				(args
+					(p-ident @61.10-61.13 (raw "str")))
+				(e-if-then-else @62.5-65.50
+					(e-field-access @62.8-62.28
+						(e-ident @62.8-62.11 (raw "str"))
+						(e-apply @62.11-62.28
+							(e-ident @62.11-62.26 (raw "is_named_color"))))
+					(e-apply @63.9-63.29
+						(e-tag @63.9-63.11 (raw "Ok"))
+						(e-apply @63.12-63.28
+							(e-tag @63.12-63.23 (raw "Color.Named"))
+							(e-ident @63.24-63.27 (raw "str"))))
+					(e-apply @65.9-65.50
+						(e-tag @65.9-65.12 (raw "Err"))
+						(e-apply @65.13-65.49
+							(e-tag @65.13-65.25 (raw "UnknownColor"))
+							(e-string @65.26-65.48
+								(e-string-part @65.27-65.41 (raw "Unknown color "))
+								(e-ident @65.43-65.46 (raw "str"))
+								(e-string-part @65.47-65.47 (raw ""))))))))
 		(s-decl @67.1-71.2
 			(p-ident @67.1-67.15 (raw "is_named_color"))
 			(e-lambda @67.18-71.2
@@ -905,12 +604,12 @@ Color := [
 ]
 
 rgb : U8, U8, U8 -> Color
-rgb = |r, g, b| RGB(r, g, b)
+rgb = |r, g, b| Color.RGB(r, g, b)
 
 rgba : U8, U8, U8, U8 -> Color
 rgba = |r, g, b, a| {
 	rounded = a.to_frac() / 255.0
-	RGBA(r, g, b, rounded)
+	Color.RGBA(r, g, b, rounded)
 }
 
 hex : Str -> Result(Color, [InvalidHex(Str)])
@@ -929,7 +628,7 @@ hex = |str| {
 					and e.is_char_in_hex_range()
 					and f.is_char_in_hex_range()
 
-			if is_valid Ok(Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
+			if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
 		}
 		_ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
 	}
@@ -949,12 +648,10 @@ expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
 named : Str -> Result(Color, [UnknownColor(Str)])
 named = |str|
-	(
-	Named(str),
-)
-
-str
-
+	if str.is_named_color()
+		Ok(Color.Named(str))
+			else
+				Err(UnknownColor("Unknown color ${str}"))
 
 is_named_color = |str| {
 	colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
@@ -1262,15 +959,34 @@ is_named_color = |str| {
 					(ty @48.19-48.22 (name "Str"))))))
 	(d-let
 		(p-assign @61.1-61.6 (ident "named"))
-		(e-call @61.9-63.29
-			(e-lambda @61.9-63.11
-				(args
-					(p-assign @61.10-61.13 (ident "str")))
-				(e-runtime-error (tag "lambda_body_not_canonicalized")))
-			(e-nominal @63.12-63.17 (nominal "Color")
-				(e-tag @63.12-63.23 (name "Named")
-					(args
-						(e-runtime-error (tag "ident_not_in_scope"))))))
+		(e-lambda @61.9-65.50
+			(args
+				(p-assign @61.10-61.13 (ident "str")))
+			(e-if @62.5-65.50
+				(if-branches
+					(if-branch
+						(e-dot-access @62.8-62.28 (field "is_named_color")
+							(receiver
+								(e-lookup-local @62.8-62.11
+									(p-assign @61.10-61.13 (ident "str"))))
+							(args))
+						(e-tag @63.9-63.11 (name "Ok")
+							(args
+								(e-nominal @63.12-63.17 (nominal "Color")
+									(e-tag @63.12-63.23 (name "Named")
+										(args
+											(e-lookup-local @63.24-63.27
+												(p-assign @61.10-61.13 (ident "str"))))))))))
+				(if-else
+					(e-tag @65.9-65.12 (name "Err")
+						(args
+							(e-tag @65.13-65.25 (name "UnknownColor")
+								(args
+									(e-string @65.26-65.48
+										(e-literal @65.27-65.41 (string "Unknown color "))
+										(e-lookup-local @65.43-65.46
+											(p-assign @61.10-61.13 (ident "str")))
+										(e-literal @65.47-65.47 (string ""))))))))))
 		(annotation @61.1-61.6
 			(declared-type
 				(ty-fn @60.9-60.50 (effectful false)
@@ -1373,7 +1089,7 @@ is_named_color = |str| {
 		(patt @21.1-21.5 (type "Error, Error, Error, Error -> Error"))
 		(patt @27.1-27.4 (type "Error -> Error"))
 		(patt @49.1-49.7 (type "Error -> Error"))
-		(patt @61.1-61.6 (type "Error"))
+		(patt @61.1-61.6 (type "Error -> Error"))
 		(patt @67.1-67.15 (type "_arg -> _ret")))
 	(type_decls
 		(nominal @10.1-15.2 (type "Error")
@@ -1383,6 +1099,6 @@ is_named_color = |str| {
 		(expr @21.8-24.2 (type "Error, Error, Error, Error -> Error"))
 		(expr @27.7-46.2 (type "Error -> Error"))
 		(expr @49.10-54.2 (type "Error -> Error"))
-		(expr @61.9-63.29 (type "Error"))
+		(expr @61.9-65.50 (type "Error -> Error"))
 		(expr @67.18-71.2 (type "_arg -> _ret"))))
 ~~~

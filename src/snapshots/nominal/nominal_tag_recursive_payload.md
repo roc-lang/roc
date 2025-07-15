@@ -54,12 +54,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:17),NoSpaceDotUpperIdent(
 ~~~
 # FORMATTED
 ~~~roc
-module [ConsList, empty]
-
-ConsList(a) := [Nil, Node(ConsList(a))]
-
-empty : ConsList(_a)
-empty = Nil
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
