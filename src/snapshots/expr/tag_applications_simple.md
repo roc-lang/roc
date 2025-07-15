@@ -151,7 +151,8 @@ CloseSquare(12:1-12:2),EndOfFile(12:2-12:2),
 					(args
 						(e-tag @11.15-11.19 (name "Some")
 							(args
-								(e-tag @11.20-11.24 (name "True"))))))))))
+								(e-nominal @11.20-11.24 (nominal "Bool")
+									(e-tag @11.20-11.24 (name "True")))))))))))
 ~~~
 # TYPES
 ~~~clojure

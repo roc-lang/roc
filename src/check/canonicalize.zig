@@ -42,7 +42,7 @@ exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track exposed types by text to handle changing indices
 exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Special scope for unqualified nominal tags (e.g., True, False)
-unqualified_nominal_tags: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx) = .{},
+unqualified_nominal_tags: std.HashMapUnmanaged(Ident.Idx, CIR.Statement.Idx, IdentTextContext, 80) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.ArrayListUnmanaged(Region),
 /// Maps var patterns to the function region they were declared in
@@ -164,7 +164,7 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
         .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
         .exposed_scope = Scope.init(false),
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
-        .unqualified_nominal_tags = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx){},
+        .unqualified_nominal_tags = std.HashMapUnmanaged(Ident.Idx, CIR.Statement.Idx, IdentTextContext, 80){},
     };
 
     // Top-level scope is not a function boundary
@@ -324,11 +324,30 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
     try ir.redirectTypeTo(CIR.Pattern.Idx, BUILTIN_BOOL, CIR.varFrom(type_decl_idx));
 
     // Add True and False to unqualified_nominal_tags
+    // TODO: in the future, we should have hardcoded constants for these.
     const true_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("True"), Region.zero());
     const false_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("False"), Region.zero());
-    try self.unqualified_nominal_tags.put(gpa, true_ident, type_decl_idx);
-    try self.unqualified_nominal_tags.put(gpa, false_ident, type_decl_idx);
+    const ctx = IdentTextContext{ .idents = &ir.env.idents };
+    try self.unqualified_nominal_tags.putContext(gpa, true_ident, type_decl_idx, ctx);
+    try self.unqualified_nominal_tags.putContext(gpa, false_ident, type_decl_idx, ctx);
 }
+
+/// Custom hash map context that compares identifiers by their text content
+/// rather than by their index values
+const IdentTextContext = struct {
+    idents: *const base.Ident.Store,
+
+    pub fn hash(self: @This(), key: Ident.Idx) u64 {
+        // Hash based on the text content
+        const text = self.idents.getText(key);
+        return std.hash_map.hashString(text);
+    }
+
+    pub fn eql(self: @This(), a: Ident.Idx, b: Ident.Idx) bool {
+        // Compare based on text content, not index
+        return self.idents.identsHaveSameText(a, b);
+    }
+};
 
 const Self = @This();
 
@@ -2572,15 +2591,18 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
 
     if (e.qualifiers.span.len == 0) {
         // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
-        if (self.unqualified_nominal_tags.get(tag_name)) |nominal_type_decl| {
-            // Create a nominal expression
+        const ctx = IdentTextContext{ .idents = &self.can_ir.env.idents };
+        if (self.unqualified_nominal_tags.getContext(tag_name, ctx)) |nominal_type_decl| {
+            // Get the type variable for the nominal type declaration (e.g., Bool type)
+            const nominal_type_var = CIR.castIdx(CIR.Statement.Idx, TypeVar, nominal_type_decl);
+            const resolved = self.can_ir.env.types.resolveVar(nominal_type_var);
             const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
                 .e_nominal = .{
                     .nominal_type_decl = nominal_type_decl,
                     .backing_expr = tag_expr_idx,
                     .backing_type = .tag,
                 },
-            }, Content{ .flex_var = null }, region);
+            }, resolved.desc.content, region);
             return expr_idx;
         }
 
@@ -2614,14 +2636,16 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
                 .region = last_tok_region,
             } });
 
-        // Create the expr
+        const nominal_type_var = CIR.castIdx(CIR.Statement.Idx, TypeVar, nominal_type_decl);
+        const resolved = self.can_ir.env.types.resolveVar(nominal_type_var);
+
         const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
             .e_nominal = .{
                 .nominal_type_decl = nominal_type_decl,
                 .backing_expr = tag_expr_idx,
                 .backing_type = .tag,
             },
-        }, Content{ .flex_var = null }, last_tok_region);
+        }, resolved.desc.content, last_tok_region);
 
         return expr_idx;
     }
