@@ -273,12 +273,16 @@ body {
 }
 
 .header-title {
-    font-size: var(--text-lg);
-    font-weight: var(--font-semibold);
-    color: var(--color-primary);
     display: flex;
     align-items: center;
     gap: var(--space-2);
+}
+
+.header-title-text {
+    display: flex;
+    font-size: var(--text-lg);
+    font-weight: var(--font-medium);
+    color: var(--color-primary);
 }
 
 .header-status {
