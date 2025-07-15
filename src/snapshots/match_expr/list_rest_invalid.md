@@ -74,7 +74,7 @@ match items {
 **UNUSED VARIABLE**
 Variable `first` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _first to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
 The unused variable is declared here:
 **list_rest_invalid.md:2:6:2:11:**
 ```roc
@@ -86,7 +86,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
 **list_rest_invalid.md:2:15:2:15:**
 ```roc
@@ -98,7 +98,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
 **list_rest_invalid.md:3:8:3:8:**
 ```roc
@@ -110,7 +110,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `last` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _last to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_last` to suppress this warning.
 The unused variable is declared here:
 **list_rest_invalid.md:3:14:3:18:**
 ```roc
@@ -122,7 +122,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
 **list_rest_invalid.md:4:11:4:11:**
 ```roc
@@ -134,7 +134,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
 The unused variable is declared here:
 **list_rest_invalid.md:4:6:4:7:**
 ```roc
@@ -146,7 +146,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `y` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _y to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
 The unused variable is declared here:
 **list_rest_invalid.md:4:17:4:18:**
 ```roc

@@ -291,7 +291,7 @@ data = json.Core.Utf8.encode "hello"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:3:17:3:22:**
@@ -302,7 +302,7 @@ import json.Core.Utf8 exposing [Encoder]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:3:23:3:31:**
@@ -313,7 +313,7 @@ import json.Core.Utf8 exposing [Encoder]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:3:32:3:41:**
@@ -324,7 +324,7 @@ import json.Core.Utf8 exposing [Encoder]
 
 
 **UNDECLARED TYPE**
-The type `Encoder` is not declared in this scope.
+The type _Encoder_ is not declared in this scope.
 
 This type is referenced here:
 **multi_qualified_import.md:5:16:5:23:**
@@ -346,7 +346,7 @@ json_encoder = Json.Core.Utf8.defaultEncoder
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:9:15:9:20:**
@@ -357,7 +357,7 @@ process : json.Core.Utf8.Encoder -> Str
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:9:20:9:25:**
@@ -368,7 +368,7 @@ process : json.Core.Utf8.Encoder -> Str
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:9:25:9:33:**
@@ -379,7 +379,7 @@ process : json.Core.Utf8.Encoder -> Str
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:9:34:9:36:**
@@ -390,7 +390,7 @@ process : json.Core.Utf8.Encoder -> Str
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:10:9:10:10:**
@@ -401,7 +401,7 @@ process = \encoder -> "processing"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:10:11:10:12:**
@@ -412,7 +412,7 @@ process = \encoder -> "processing"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:10:12:10:24:**
@@ -423,7 +423,7 @@ process = \encoder -> "processing"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:10:24:10:34:**
@@ -434,7 +434,7 @@ process = \encoder -> "processing"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:10:34:10:35:**
@@ -445,7 +445,7 @@ process = \encoder -> "processing"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:13:12:13:17:**
@@ -456,7 +456,7 @@ data : json.Core.Utf8.EncodedData
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:13:17:13:22:**
@@ -467,7 +467,7 @@ data : json.Core.Utf8.EncodedData
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:13:22:13:34:**
@@ -489,7 +489,7 @@ data = json.Core.Utf8.encode "hello"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:14:12:14:17:**
@@ -500,7 +500,7 @@ data = json.Core.Utf8.encode "hello"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:14:17:14:22:**
@@ -511,7 +511,7 @@ data = json.Core.Utf8.encode "hello"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:14:22:14:29:**
@@ -522,7 +522,7 @@ data = json.Core.Utf8.encode "hello"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:14:30:14:37:**

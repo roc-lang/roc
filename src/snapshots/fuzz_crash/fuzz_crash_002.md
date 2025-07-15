@@ -279,7 +279,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:5:1:6:**
@@ -290,7 +290,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:6:1:7:**
@@ -301,7 +301,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:7:1:8:**
@@ -312,7 +312,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:8:1:9:**
@@ -323,7 +323,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:9:1:10:**
@@ -334,7 +334,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:10:1:11:**
@@ -345,7 +345,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:11:1:12:**
@@ -356,7 +356,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:12:1:13:**
@@ -367,7 +367,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:13:1:14:**
@@ -378,7 +378,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:14:1:15:**
@@ -389,7 +389,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:15:1:16:**
@@ -400,7 +400,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:16:1:17:**
@@ -411,7 +411,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:17:1:18:**
@@ -422,7 +422,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:18:1:19:**
@@ -433,7 +433,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:19:1:20:**
@@ -444,7 +444,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:20:1:21:**
@@ -455,7 +455,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:21:1:23:**
@@ -466,7 +466,7 @@ modu:;::::::::::::::le[%
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_002.md:1:23:1:25:**

@@ -405,7 +405,7 @@ Here is the problematic code:
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:10:15:10:23:**
@@ -416,7 +416,7 @@ import ModuleA.ModuleB exposing [TypeC]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:10:24:10:32:**
@@ -427,7 +427,7 @@ import ModuleA.ModuleB exposing [TypeC]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:10:33:10:40:**
@@ -449,7 +449,7 @@ simpleQualified = Color.RGB { r: 255, g: 0, b: 0 }
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:15:29:15:51:**
@@ -482,7 +482,7 @@ multiLevelQualified = TypeC.new
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:27:24:27:26:**
@@ -494,10 +494,17 @@ resultType = Result.Ok 42
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**qualified_type_canonicalization.md:31:12:31:13:**
+```roc
+getColor = \{} -> Color.RGB { r: 0, g: 255, b: 0 }
+```
+           ^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:31:13:31:24:**
@@ -508,7 +515,7 @@ getColor = \{} -> Color.RGB { r: 0, g: 255, b: 0 }
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:31:24:31:28:**
@@ -519,7 +526,7 @@ getColor = \{} -> Color.RGB { r: 0, g: 255, b: 0 }
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:31:29:31:51:**
@@ -531,10 +538,17 @@ getColor = \{} -> Color.RGB { r: 0, g: 255, b: 0 }
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**qualified_type_canonicalization.md:35:16:35:17:**
+```roc
+processColor = \color ->
+```
+               ^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:35:17:36:6:**
@@ -545,7 +559,7 @@ processColor = \color ->
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:36:6:36:21:**
@@ -556,7 +570,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:36:21:36:22:**
@@ -567,7 +581,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:39:50:39:52:**
@@ -578,7 +592,7 @@ transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:39:68:39:74:**
@@ -590,10 +604,17 @@ transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**qualified_type_canonicalization.md:40:13:40:14:**
+```roc
+transform = \result ->
+```
+            ^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:40:14:41:9:**
@@ -604,7 +625,7 @@ transform = \result ->
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:41:10:41:16:**
@@ -615,7 +636,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:41:17:41:19:**
@@ -626,7 +647,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:42:19:42:41:**
@@ -637,7 +658,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:42:42:42:45:**
@@ -648,7 +669,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:43:20:43:40:**

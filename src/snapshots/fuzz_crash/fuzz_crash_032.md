@@ -51,7 +51,7 @@ olor = |color| { import Color.RGB
 
 
 **UNDECLARED TYPE VARIABLE**
-The type variable `lue` is not declared in this scope.
+The type variable _lue_ is not declared in this scope.
 
 Type variables must be introduced in a type annotation before they can be used.
 
@@ -64,7 +64,7 @@ LocalStatus :lue => Loc= [Pending, Complete]
 
 
 **UNDECLARED TYPE**
-The type `Loc` is not declared in this scope.
+The type _Loc_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_032.md:3:21:3:24:**
@@ -75,7 +75,7 @@ LocalStatus :lue => Loc= [Pending, Complete]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_032.md:3:24:3:25:**
@@ -86,7 +86,7 @@ LocalStatus :lue => Loc= [Pending, Complete]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_032.md:3:26:3:45:**
@@ -97,8 +97,9 @@ LocalStatus :lue => Loc= [Pending, Complete]
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+This feature is not yet implemented: statement type in block
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 Nothing is named `Color` in this scope.

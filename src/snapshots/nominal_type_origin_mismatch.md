@@ -75,7 +75,7 @@ expectsPerson = \p -> "Got a person"
 
 
 **UNDECLARED TYPE**
-The type `Person` is not declared in this scope.
+The type _Person_ is not declared in this scope.
 
 This type is referenced here:
 **nominal_type_origin_mismatch.md:5:17:5:23:**
@@ -87,10 +87,17 @@ expectsPerson : Person -> Str
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**nominal_type_origin_mismatch.md:6:17:6:18:**
+```roc
+expectsPerson = \p -> "Got a person"
+```
+                ^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **nominal_type_origin_mismatch.md:6:18:6:24:**
@@ -101,7 +108,7 @@ expectsPerson = \p -> "Got a person"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **nominal_type_origin_mismatch.md:6:24:6:36:**
@@ -112,7 +119,7 @@ expectsPerson = \p -> "Got a person"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **nominal_type_origin_mismatch.md:6:36:6:37:**

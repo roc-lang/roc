@@ -77,7 +77,7 @@ Pair(a, b+ : (
 This type annotation is malformed or contains invalid syntax.
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_021.md:1:4:1:5:**
@@ -88,7 +88,7 @@ Fli/main.roc" }
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_021.md:1:5:1:13:**
@@ -99,7 +99,7 @@ Fli/main.roc" }
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_021.md:1:13:1:16:**

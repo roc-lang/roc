@@ -43,7 +43,7 @@ apply : (_a -> _b) -> _a -> _b
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **type_function_simple.md:3:20:3:22:**
@@ -54,7 +54,7 @@ apply : (_a -> _b) -> _a -> _b
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **type_function_simple.md:3:23:3:31:**

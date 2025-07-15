@@ -30,12 +30,17 @@ UNEXPECTED TOKEN IN PATTERN - guards_2.md:4:7:4:9
 UNDEFINED VARIABLE - guards_2.md:1:7:1:12
 UNUSED VARIABLE - guards_2.md:2:6:2:11
 UNUSED VARIABLE - guards_2.md:1:1:1:1
+INVALID PATTERN - guards_2.md:2:75:2:77
 UNDEFINED VARIABLE - guards_2.md:2:87:2:92
 UNUSED VARIABLE - guards_2.md:2:77:2:86
+INVALID PATTERN - guards_2.md:2:93:2:93
 UNDEFINED VARIABLE - guards_2.md:3:6:3:7
 UNDEFINED VARIABLE - guards_2.md:3:9:3:10
 UNDEFINED VARIABLE - guards_2.md:3:15:3:16
 UNDEFINED VARIABLE - guards_2.md:3:20:3:21
+INVALID PATTERN - guards_2.md:3:25:3:61
+INVALID PATTERN - guards_2.md:3:62:3:62
+INVALID PATTERN - guards_2.md:4:5:4:6
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=>** is not expected in an expression.
@@ -230,12 +235,19 @@ match value {
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**guards_2.md:2:50:2:51:**
+```roc
+    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
+```
+                                                 ^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
 Variable `first` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _first to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
 The unused variable is declared here:
 **guards_2.md:2:6:2:11:**
 ```roc
@@ -247,7 +259,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
 **guards_2.md:1:1:1:1:**
 ```roc
@@ -261,7 +273,14 @@ This pattern contains invalid syntax or uses unsupported features.
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**guards_2.md:2:75:2:77:**
+```roc
+    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
+```
+                                                                          ^^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNDEFINED VARIABLE**
 Nothing is named `first` in this scope.
@@ -277,7 +296,7 @@ Is there an `import` or `exposing` missing up-top?
 **UNUSED VARIABLE**
 Variable `toStr` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _toStr to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
 The unused variable is declared here:
 **guards_2.md:2:77:2:86:**
 ```roc
@@ -291,7 +310,14 @@ This pattern contains invalid syntax or uses unsupported features.
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**guards_2.md:2:93:2:93:**
+```roc
+    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
+```
+                                                                                            
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -348,21 +374,42 @@ This pattern contains invalid syntax or uses unsupported features.
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**guards_2.md:3:25:3:61:**
+```roc
+    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
+```
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**guards_2.md:3:62:3:62:**
+```roc
+    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
+```
+                                                             
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**guards_2.md:4:5:4:6:**
+```roc
+    _ => "other"
+```
+    ^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.

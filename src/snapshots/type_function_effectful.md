@@ -45,7 +45,7 @@ runEffect! : (_a => _b) -> _a => _b
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **type_function_effectful.md:3:25:3:27:**
@@ -56,7 +56,7 @@ runEffect! : (_a => _b) -> _a => _b
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **type_function_effectful.md:3:28:3:30:**
@@ -67,7 +67,7 @@ runEffect! : (_a => _b) -> _a => _b
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **type_function_effectful.md:3:31:3:33:**
@@ -78,7 +78,7 @@ runEffect! : (_a => _b) -> _a => _b
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **type_function_effectful.md:3:34:3:36:**

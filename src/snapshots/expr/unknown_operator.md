@@ -24,7 +24,14 @@ Here is the problematic code:
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**unknown_operator.md:1:1:1:5:**
+```roc
+1 ++ 2
+```
+^^^^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 # TOKENS
 ~~~zig

@@ -41,7 +41,7 @@ Variables declared with `var` can only be reassigned within the same function sc
 **UNUSED VARIABLE**
 Variable `items` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _items to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
 The unused variable is declared here:
 **can_var_scoping_regular_var.md:4:17:4:22:**
 ```roc

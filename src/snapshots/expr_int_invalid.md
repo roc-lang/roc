@@ -8,10 +8,18 @@ type=expr
 99999999999999999999999999999999999999999
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - expr_int_invalid.md:1:1:1:42
 # PROBLEMS
 **INVALID NUMBER**
-This number literal is not valid: 99999999999999999999999999999999999999999
+This number literal is not valid: `99999999999999999999999999999999999999999`
+
+**expr_int_invalid.md:1:1:1:42:**
+```roc
+99999999999999999999999999999999999999999
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
 # TOKENS
 ~~~zig

@@ -15,7 +15,7 @@ INVALID STATEMENT - fuzz_crash_044.md:1:20:2:3
 INVALID STATEMENT - fuzz_crash_044.md:4:1:4:3
 # PROBLEMS
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_044.md:1:20:2:3:**
@@ -26,7 +26,7 @@ app[]{f:platform""}{{0
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_044.md:4:1:4:3:**

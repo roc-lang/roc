@@ -131,7 +131,7 @@ f =8
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_025.md:11:3:11:4:**
@@ -142,7 +142,7 @@ d = 18446744073709551615
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_025.md:11:5:11:25:**
@@ -153,7 +153,7 @@ d = 18446744073709551615
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_025.md:14:48:14:49:**
@@ -164,7 +164,7 @@ e = 3402823669209384634633746074317682114553.14: I8
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_025.md:15:3:15:4:**
@@ -175,7 +175,7 @@ f =8
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_025.md:15:4:15:5:**

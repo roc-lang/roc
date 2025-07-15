@@ -31,7 +31,7 @@ TYPE MISMATCH - type_tag_union_basic.md:6:54:6:58
 **UNUSED VARIABLE**
 Variable `maybe` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _maybe to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_maybe` to suppress this warning.
 The unused variable is declared here:
 **type_tag_union_basic.md:4:12:4:17:**
 ```roc

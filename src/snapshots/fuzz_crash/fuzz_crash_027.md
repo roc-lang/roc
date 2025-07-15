@@ -305,7 +305,7 @@ Here is the problematic code:
 
 
 **UNDECLARED TYPE**
-The type `Bar` is not declared in this scope.
+The type _Bar_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_027.md:26:8:26:11:**
@@ -316,7 +316,7 @@ Foo : (Bar, Baz)
 
 
 **UNDECLARED TYPE**
-The type `Baz` is not declared in this scope.
+The type _Baz_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_027.md:26:13:26:16:**
@@ -327,7 +327,7 @@ Foo : (Bar, Baz)
 
 
 **UNDECLARED TYPE**
-The type `Ok` is not declared in this scope.
+The type _Ok_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_027.md:32:19:32:21:**
@@ -338,7 +338,7 @@ Some(a) : { foo : Ok(a), bar : g }
 
 
 **UNDECLARED TYPE VARIABLE**
-The type variable `g` is not declared in this scope.
+The type variable _g_ is not declared in this scope.
 
 Type variables must be introduced in a type annotation before they can be used.
 
@@ -351,7 +351,7 @@ Some(a) : { foo : Ok(a), bar : g }
 
 
 **UNDECLARED TYPE**
-The type `Som` is not declared in this scope.
+The type _Som_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_027.md:34:8:34:11:**
@@ -362,7 +362,7 @@ This type is referenced here:
 
 
 **UNDECLARED TYPE**
-The type `Som` is not declared in this scope.
+The type _Som_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_027.md:38:8:38:11:**
@@ -373,7 +373,7 @@ This type is referenced here:
 
 
 **UNDECLARED TYPE**
-The type `Maybe` is not declared in this scope.
+The type _Maybe_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_027.md:43:11:43:16:**
@@ -384,7 +384,7 @@ Func(a) : Maybe(a), a -> Maybe(a)
 
 
 **UNDECLARED TYPE**
-The type `Maybe` is not declared in this scope.
+The type _Maybe_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_027.md:43:26:43:31:**
@@ -395,7 +395,7 @@ Func(a) : Maybe(a), a -> Maybe(a)
 
 
 **UNDECLARED TYPE**
-The type `Bar` is not declared in this scope.
+The type _Bar_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_027.md:29:2:29:5:**
@@ -406,7 +406,7 @@ This type is referenced here:
 
 
 **UNDECLARED TYPE**
-The type `Baz` is not declared in this scope.
+The type _Baz_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_027.md:30:2:30:5:**
@@ -451,7 +451,7 @@ Is there an `import` or `exposing` missing up-top?
 **UNUSED VARIABLE**
 Variable `lue` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _lue to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:64:11:64:14:**
 ```roc
@@ -474,7 +474,7 @@ Is there an `import` or `exposing` missing up-top?
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:1:1:1:1:**
 ```roc
@@ -484,13 +484,14 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
-Let us know if you want to help!
+This feature is not yet implemented: alternatives pattern outside match expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:1:1:1:1:**
 ```roc
@@ -502,7 +503,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `ist` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _ist to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_ist` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:76:1:76:4:**
 ```roc
@@ -512,17 +513,19 @@ ist
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
-Let us know if you want to help!
+This feature is not yet implemented: alternatives pattern outside match expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
-Let us know if you want to help!
+This feature is not yet implemented: canonicalize local_dispatch expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:82:21:82:27:**
 ```roc
@@ -532,17 +535,19 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: report an error when unable to resolve field identifier
-Let us know if you want to help!
+This feature is not yet implemented: report an error when unable to resolve field identifier
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
-Let us know if you want to help!
+This feature is not yet implemented: alternatives pattern outside match expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:62:2:62:3:**
 ```roc
@@ -563,7 +568,7 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDECLARED TYPE**
-The type `String` is not declared in this scope.
+The type _String_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_027.md:99:14:99:20:**
@@ -596,8 +601,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+This feature is not yet implemented: statement type in block
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 Nothing is named `punned` in this scope.
@@ -655,8 +661,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
-Let us know if you want to help!
+This feature is not yet implemented: canonicalize suffix_single_question expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
@@ -670,7 +677,7 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDECLARED TYPE**
-The type `Value` is not declared in this scope.
+The type _Value_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_027.md:153:9:153:14:**
@@ -683,7 +690,7 @@ tuple : Value((a, b, c))
 **UNUSED VARIABLE**
 Variable `record` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _record to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:131:2:131:8:**
 ```roc
@@ -695,7 +702,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `list` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _list to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:121:2:121:6:**
 ```roc
@@ -707,7 +714,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `m_tuple` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _m_tuple to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_m_tuple` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:133:2:133:9:**
 ```roc
@@ -719,7 +726,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `stale` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _stale to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_stale` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:142:2:142:7:**
 ```roc
@@ -731,7 +738,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `empty` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _empty to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_empty` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:151:1:151:6:**
 ```roc
@@ -743,7 +750,7 @@ empty = {}
 **UNUSED VARIABLE**
 Variable `tag_with` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _tag_with to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_tag_with` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:119:2:119:10:**
 ```roc
@@ -755,7 +762,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `bsult` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _bsult to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_bsult` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:141:2:141:7:**
 ```roc
@@ -767,7 +774,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `ited` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _ited to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_ited` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_027.md:120:2:120:6:**
 ```roc

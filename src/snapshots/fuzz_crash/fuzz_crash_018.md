@@ -43,7 +43,7 @@ Here is the problematic code:
 
 
 **UNDECLARED TYPE**
-The type `S` is not declared in this scope.
+The type _S_ is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_018.md:1:5:1:6:**
@@ -54,7 +54,7 @@ This type is referenced here:
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_018.md:2:1:2:3:**

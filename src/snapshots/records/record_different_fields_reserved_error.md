@@ -242,8 +242,9 @@ Here is the problematic code:
 This type annotation is malformed or contains invalid syntax.
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+This feature is not yet implemented: statement type in block
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 Nothing is named `true` in this scope.

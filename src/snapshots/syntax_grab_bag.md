@@ -255,7 +255,7 @@ INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 TYPE MISMATCH - syntax_grab_bag.md:155:2:155:12
 # PROBLEMS
 **UNDECLARED TYPE**
-The type `Bar` is not declared in this scope.
+The type _Bar_ is not declared in this scope.
 
 This type is referenced here:
 **syntax_grab_bag.md:36:8:36:11:**
@@ -266,7 +266,7 @@ Foo : (Bar, Baz)
 
 
 **UNDECLARED TYPE**
-The type `Baz` is not declared in this scope.
+The type _Baz_ is not declared in this scope.
 
 This type is referenced here:
 **syntax_grab_bag.md:36:13:36:16:**
@@ -277,7 +277,7 @@ Foo : (Bar, Baz)
 
 
 **UNDECLARED TYPE**
-The type `Bar` is not declared in this scope.
+The type _Bar_ is not declared in this scope.
 
 This type is referenced here:
 **syntax_grab_bag.md:39:2:39:5:**
@@ -288,7 +288,7 @@ This type is referenced here:
 
 
 **UNDECLARED TYPE**
-The type `Baz` is not declared in this scope.
+The type _Baz_ is not declared in this scope.
 
 This type is referenced here:
 **syntax_grab_bag.md:40:2:40:5:**
@@ -299,7 +299,7 @@ This type is referenced here:
 
 
 **UNDECLARED TYPE**
-The type `Ok` is not declared in this scope.
+The type _Ok_ is not declared in this scope.
 
 This type is referenced here:
 **syntax_grab_bag.md:43:19:43:21:**
@@ -310,7 +310,7 @@ Some(a) : { foo : Ok(a), bar : Something }
 
 
 **UNDECLARED TYPE**
-The type `Something` is not declared in this scope.
+The type _Something_ is not declared in this scope.
 
 This type is referenced here:
 **syntax_grab_bag.md:43:32:43:41:**
@@ -321,7 +321,7 @@ Some(a) : { foo : Ok(a), bar : Something }
 
 
 **UNDECLARED TYPE**
-The type `Ok` is not declared in this scope.
+The type _Ok_ is not declared in this scope.
 
 This type is referenced here:
 **syntax_grab_bag.md:45:8:45:10:**
@@ -332,7 +332,7 @@ This type is referenced here:
 
 
 **UNDECLARED TYPE**
-The type `Something` is not declared in this scope.
+The type _Something_ is not declared in this scope.
 
 This type is referenced here:
 **syntax_grab_bag.md:46:8:46:17:**
@@ -343,7 +343,7 @@ This type is referenced here:
 
 
 **UNDECLARED TYPE**
-The type `Ok` is not declared in this scope.
+The type _Ok_ is not declared in this scope.
 
 This type is referenced here:
 **syntax_grab_bag.md:52:4:52:6:**
@@ -354,7 +354,7 @@ This type is referenced here:
 
 
 **UNDECLARED TYPE**
-The type `Something` is not declared in this scope.
+The type _Something_ is not declared in this scope.
 
 This type is referenced here:
 **syntax_grab_bag.md:53:8:53:17:**
@@ -365,16 +365,19 @@ This type is referenced here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: malformed import module name contains invalid control characters
-Let us know if you want to help!
+This feature is not yet implemented: malformed import module name contains invalid control characters
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: Exposed item 'line!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
-Let us know if you want to help!
+This feature is not yet implemented: Exposed item 'line!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
-Let us know if you want to help!
+This feature is not yet implemented: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
@@ -390,7 +393,7 @@ Is there an `import` or `exposing` missing up-top?
 **UNUSED VARIABLE**
 Variable `lower` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _lower to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_lower` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:97:3:97:8:**
 ```roc
@@ -402,7 +405,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:1:1:1:1:**
 ```roc
@@ -412,13 +415,14 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
-Let us know if you want to help!
+This feature is not yet implemented: alternatives pattern outside match expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:1:1:1:1:**
 ```roc
@@ -428,13 +432,14 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
-Let us know if you want to help!
+This feature is not yet implemented: alternatives pattern outside match expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:1:1:1:1:**
 ```roc
@@ -444,17 +449,19 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
-Let us know if you want to help!
+This feature is not yet implemented: alternatives pattern outside match expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
-Let us know if you want to help!
+This feature is not yet implemented: canonicalize local_dispatch expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:121:21:121:27:**
 ```roc
@@ -466,7 +473,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:127:4:128:9:**
 ```roc
@@ -476,17 +483,19 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
-Let us know if you want to help!
+This feature is not yet implemented: alternatives pattern outside match expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
-Let us know if you want to help!
+This feature is not yet implemented: alternatives pattern outside match expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:82:2:82:3:**
 ```roc
@@ -507,7 +516,7 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDECLARED TYPE**
-The type `String` is not declared in this scope.
+The type _String_ is not declared in this scope.
 
 This type is referenced here:
 **syntax_grab_bag.md:143:14:143:20:**
@@ -540,8 +549,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+This feature is not yet implemented: statement type in block
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 Nothing is named `punned` in this scope.
@@ -599,12 +609,14 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
-Let us know if you want to help!
+This feature is not yet implemented: canonicalize suffix_single_question expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
-Let us know if you want to help!
+This feature is not yet implemented: canonicalize suffix_single_question expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
@@ -620,7 +632,7 @@ Is there an `import` or `exposing` missing up-top?
 **UNUSED VARIABLE**
 Variable `multiline_tuple` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _multiline_tuple to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:180:2:180:17:**
 ```roc
@@ -632,7 +644,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `record` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _record to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:178:2:178:8:**
 ```roc
@@ -644,7 +656,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `tag_with_payload` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _tag_with_payload to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_tag_with_payload` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:164:2:164:18:**
 ```roc
@@ -656,7 +668,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `list` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _list to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:166:2:166:6:**
 ```roc
@@ -668,7 +680,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `bin_op_result` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _bin_op_result to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_bin_op_result` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:188:2:188:15:**
 ```roc
@@ -680,7 +692,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `static_dispatch_style` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _static_dispatch_style to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_static_dispatch_style` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:189:2:189:23:**
 ```roc
@@ -692,7 +704,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `interpolated` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _interpolated to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:165:2:165:14:**
 ```roc
@@ -702,7 +714,7 @@ The unused variable is declared here:
 
 
 **UNDECLARED TYPE**
-The type `Value` is not declared in this scope.
+The type _Value_ is not declared in this scope.
 
 This type is referenced here:
 **syntax_grab_bag.md:201:9:201:14:**

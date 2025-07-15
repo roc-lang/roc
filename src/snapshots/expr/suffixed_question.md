@@ -36,7 +36,14 @@ Stdout.line???
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**suffixed_question.md:1:1:1:15:**
+```roc
+Stdout.line???
+```
+^^^^^^^^^^^^^^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 # TOKENS
 ~~~zig

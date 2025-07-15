@@ -28,7 +28,7 @@ UNDECLARED TYPE - type_declarations.md:7:19:7:21
 UNDECLARED TYPE - type_declarations.md:7:32:7:41
 # PROBLEMS
 **UNDECLARED TYPE**
-The type `Bar` is not declared in this scope.
+The type _Bar_ is not declared in this scope.
 
 This type is referenced here:
 **type_declarations.md:5:8:5:11:**
@@ -39,7 +39,7 @@ Foo : (Bar, Baz)
 
 
 **UNDECLARED TYPE**
-The type `Baz` is not declared in this scope.
+The type _Baz_ is not declared in this scope.
 
 This type is referenced here:
 **type_declarations.md:5:13:5:16:**
@@ -50,7 +50,7 @@ Foo : (Bar, Baz)
 
 
 **UNDECLARED TYPE**
-The type `Ok` is not declared in this scope.
+The type _Ok_ is not declared in this scope.
 
 This type is referenced here:
 **type_declarations.md:7:19:7:21:**
@@ -61,7 +61,7 @@ Some(a) : { foo : Ok(a), bar : Something }
 
 
 **UNDECLARED TYPE**
-The type `Something` is not declared in this scope.
+The type _Something_ is not declared in this scope.
 
 This type is referenced here:
 **type_declarations.md:7:32:7:41:**

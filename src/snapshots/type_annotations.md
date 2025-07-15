@@ -20,7 +20,7 @@ UNDECLARED TYPE - type_annotations.md:7:14:7:20
 UNDECLARED TYPE - type_annotations.md:8:13:8:18
 # PROBLEMS
 **UNDECLARED TYPE**
-The type `Thing` is not declared in this scope.
+The type _Thing_ is not declared in this scope.
 
 This type is referenced here:
 **type_annotations.md:4:7:4:12:**
@@ -31,7 +31,7 @@ bar : Thing(_a, _b, _)
 
 
 **UNDECLARED TYPE**
-The type `String` is not declared in this scope.
+The type _String_ is not declared in this scope.
 
 This type is referenced here:
 **type_annotations.md:7:14:7:20:**
@@ -42,7 +42,7 @@ main! : List(String) -> Result({}, _)
 
 
 **UNDECLARED TYPE**
-The type `Value` is not declared in this scope.
+The type _Value_ is not declared in this scope.
 
 This type is referenced here:
 **type_annotations.md:8:13:8:18:**

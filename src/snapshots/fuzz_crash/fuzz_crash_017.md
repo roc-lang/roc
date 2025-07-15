@@ -56,7 +56,7 @@ foo = "hello ${namF
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_017.md:1:4:1:5:**
@@ -67,7 +67,7 @@ me = "luc"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_017.md:1:6:1:11:**
@@ -79,7 +79,14 @@ me = "luc"
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**fuzz_crash_017.md:2:7:2:20:**
+```roc
+foo = "hello ${namF
+```
+      ^^^^^^^^^^^^^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 # TOKENS
 ~~~zig
