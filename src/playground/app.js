@@ -66,7 +66,7 @@ async function initializePlayground() {
     lastCompileTime = null;
     setupAutoCompile();
     setupUrlSharing();
-    await restoreFromHash(); // <-- changed from restoreFromUrl
+    await restoreFromHash();
     currentState = "READY";
     logInfo("Playground initialization complete!");
   } catch (error) {
@@ -280,11 +280,16 @@ function populateExamples() {
 // Load an example
 async function loadExample(exampleId) {
   logInfo("Loading example:", exampleId);
+  // Reset the URL hash when loading an example
+  window.location.hash = "";
   const example = examples.find((e) => e.id === exampleId);
   if (!example) {
     logWarn("Example not found:", exampleId);
     return;
   }
+
+  // Update the URL hash to match the loaded example's content
+  await updateUrlWithCompressedContent(example.code);
 
   // Update UI
   logInfo("Updating example selection UI...");
