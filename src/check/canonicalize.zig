@@ -41,6 +41,8 @@ exposed_scope: Scope = undefined,
 exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track exposed types by text to handle changing indices
 exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
+/// Special scope for unqualified nominal tags (e.g., True, False)
+unqualified_nominal_tags: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.ArrayListUnmanaged(Region),
 /// Maps var patterns to the function region they were declared in
@@ -118,6 +120,7 @@ pub fn deinit(
     self.exposed_scope.deinit(gpa);
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_texts.deinit(gpa);
+    self.unqualified_nominal_tags.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
@@ -161,6 +164,7 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
         .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
         .exposed_scope = Scope.init(false),
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
+        .unqualified_nominal_tags = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx){},
     };
 
     // Top-level scope is not a function boundary
@@ -318,6 +322,12 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
     try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
 
     try ir.redirectTypeTo(CIR.Pattern.Idx, BUILTIN_BOOL, CIR.varFrom(type_decl_idx));
+
+    // Add True and False to unqualified_nominal_tags
+    const true_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("True"), Region.zero());
+    const false_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("False"), Region.zero());
+    try self.unqualified_nominal_tags.put(gpa, true_ident, type_decl_idx);
+    try self.unqualified_nominal_tags.put(gpa, false_ident, type_decl_idx);
 }
 
 const Self = @This();
@@ -2561,8 +2571,21 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
     }, tag_union, region);
 
     if (e.qualifiers.span.len == 0) {
-        // If this is a tag without a prefix, then is it an
-        // anonymous tag and we can just return it
+        // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
+        if (self.unqualified_nominal_tags.get(tag_name)) |nominal_type_decl| {
+            // Create a nominal expression
+            const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
+                .e_nominal = .{
+                    .nominal_type_decl = nominal_type_decl,
+                    .backing_expr = tag_expr_idx,
+                    .backing_type = .tag,
+                },
+            }, Content{ .flex_var = null }, region);
+            return expr_idx;
+        }
+
+        // If this is a tag without a prefix and not in unqualified_nominal_tags,
+        // then it is an anonymous tag and we can just return it
         return tag_expr_idx;
     } else {
         // If this is a tag with a prefix, then is it a nominal tag.
