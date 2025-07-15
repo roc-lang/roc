@@ -760,6 +760,7 @@ async function restoreFromHash() {
       if (editor) {
         editor.value = content;
         logInfo("Restored content from hash fragment");
+        await compileCode(); // Automatically compile after restoring
       }
     } catch (e) {
       logError("Failed to decompress content from hash", e);
