@@ -49,7 +49,7 @@ async function initializePlayground() {
     logInfo("WASM module loaded successfully");
 
     logInfo("Sending INIT message to WASM...");
-    const response = await sendMessage({ type: "INIT" });
+    const response = await sendMessageQueued({ type: "INIT" });
     logInfo("INIT response:", response);
 
     if (response.status !== "SUCCESS") {
@@ -226,6 +226,37 @@ async function sendMessage(message) {
   }
 }
 
+// --- BEGIN QUEUED SENDMESSAGE SYSTEM ---
+// Queue for serializing sendMessage calls
+const sendMessageQueue = [];
+let sendMessageInProgress = false;
+
+const sendMessageOriginal = sendMessage;
+
+async function processSendMessageQueue() {
+  if (sendMessageInProgress) return;
+  if (sendMessageQueue.length === 0) return;
+  sendMessageInProgress = true;
+  const { message, resolve, reject } = sendMessageQueue.shift();
+  try {
+    const result = await sendMessageOriginal(message);
+    resolve(result);
+  } catch (err) {
+    reject(err);
+  } finally {
+    sendMessageInProgress = false;
+    processSendMessageQueue();
+  }
+}
+
+function sendMessageQueued(message) {
+  return new Promise((resolve, reject) => {
+    sendMessageQueue.push({ message, resolve, reject });
+    processSendMessageQueue();
+  });
+}
+// --- END QUEUED SENDMESSAGE SYSTEM ---
+
 // Populate examples list
 function populateExamples() {
   const examplesList = document.getElementById("examplesList");
@@ -274,7 +305,7 @@ async function loadExample(exampleId) {
   // Reset if we're in loaded state
   if (currentState === "LOADED") {
     logInfo("Resetting WASM state...");
-    await sendMessage({ type: "RESET" });
+    await sendMessageQueued({ type: "RESET" });
   }
 
   updateUI();
@@ -310,10 +341,10 @@ async function compileCode() {
     // Reset if we're already in LOADED state
     if (currentState === "LOADED") {
       logInfo("Resetting WASM state before recompilation...");
-      await sendMessage({ type: "RESET" });
+      await sendMessageQueued({ type: "RESET" });
     }
 
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "LOAD_SOURCE",
       source: code,
     });
@@ -453,7 +484,7 @@ async function showTokens() {
   }
 
   try {
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "QUERY_TOKENS",
     });
     if (response.status === "SUCCESS") {
@@ -478,7 +509,7 @@ async function showParseAst() {
   }
 
   try {
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "QUERY_AST",
     });
     if (response.status === "SUCCESS") {
@@ -503,7 +534,7 @@ async function showCanCir() {
   }
 
   try {
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "QUERY_CIR",
     });
     if (response.status === "SUCCESS") {
@@ -528,7 +559,7 @@ async function showTypes() {
   }
 
   try {
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "QUERY_TYPES",
     });
     if (response.status === "SUCCESS") {
