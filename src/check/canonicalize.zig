@@ -3094,18 +3094,20 @@ fn canonicalizePattern(
             // Then append the result to the scratch list
             const patterns_slice = self.parse_ir.store.patternSlice(e.patterns);
 
-            // TODO: A bug exists here: we should use scratch_vars instead of types.tuple_elems here
-            const elems_var_top: u32 = @intCast(self.can_ir.env.types.tuple_elems.len());
             for (patterns_slice) |pattern| {
                 if (try self.canonicalizePattern(pattern)) |canonicalized| {
                     try self.can_ir.store.addScratchPattern(canonicalized);
-                    _ = try self.can_ir.env.types.appendTupleElem(@enumFromInt(@intFromEnum(canonicalized)));
                 }
             }
-            const elems_var_range = self.can_ir.env.types.tuple_elems.rangeToEnd(elems_var_top);
 
             // Create span of the new scratch patterns
             const patterns_span = try self.can_ir.store.patternSpanFrom(scratch_top);
+
+            // Since pattern idx map 1-to-1 to variables, we can get cast the
+            // slice of and cast them to vars
+            const elems_var_range = try self.can_ir.env.types.appendTupleElems(
+                @ptrCast(@alignCast(self.can_ir.store.slicePatterns(patterns_span))),
+            );
 
             const pattern_idx = try self.can_ir.addPatternAndTypeVar(CIR.Pattern{
                 .tuple = .{
