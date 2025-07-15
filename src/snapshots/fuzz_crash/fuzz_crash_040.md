@@ -9,6 +9,7 @@ app[]{f:platform""}{
 o:0)
 ~~~
 # EXPECTED
+MISMATCHED BRACE - :0:0:0:0
 INVALID STATEMENT - fuzz_crash_040.md:1:20:2:5
 # PROBLEMS
 **MISMATCHED BRACE**

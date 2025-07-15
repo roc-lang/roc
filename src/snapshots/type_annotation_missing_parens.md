@@ -11,6 +11,7 @@ nums : List U8
 ~~~
 # EXPECTED
 PARSE ERROR - type_annotation_missing_parens.md:3:15:3:15
+EXPOSED BUT NOT DEFINED - type_annotation_missing_parens.md:1:9:1:13
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.

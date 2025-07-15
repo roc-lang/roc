@@ -14,6 +14,7 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_017.md:1:4:1:5
 PARSE ERROR - fuzz_crash_017.md:2:7:2:8
 INVALID STATEMENT - fuzz_crash_017.md:1:4:1:5
 INVALID STATEMENT - fuzz_crash_017.md:1:6:1:11
+UNKNOWN OPERATOR - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.

@@ -28,6 +28,8 @@ processItems = |items| {
 }
 ~~~
 # EXPECTED
+VAR REASSIGNMENT ERROR - :0:0:0:0
+VAR REASSIGNMENT ERROR - :0:0:0:0
 UNUSED VARIABLE - can_var_scoping_regular_var.md:4:17:4:22
 # PROBLEMS
 **VAR REASSIGNMENT ERROR**

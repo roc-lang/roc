@@ -8,6 +8,7 @@ type=file
 module[]"\
 ~~~
 # EXPECTED
+UNCLOSED STRING - :0:0:0:0
 PARSE ERROR - fuzz_crash_037.md:1:11:1:11
 INVALID STATEMENT - fuzz_crash_037.md:1:9:1:11
 # PROBLEMS

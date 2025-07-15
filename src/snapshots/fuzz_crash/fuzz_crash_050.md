@@ -10,7 +10,7 @@ module[]_0={
  
 ~~~
 # EXPECTED
-NIL
+MISMATCHED BRACE - :0:0:0:0
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.

@@ -424,7 +424,7 @@ function showDiagnostics() {
     // Use the HTML-rendered diagnostics directly
     if (lastDiagnostics.html.trim() === "") {
       outputContent.innerHTML =
-        '<div class="success-message">✓ No issues found!</div>';
+        '<div class="success-message">NIL PROBLEMS</div>';
     } else {
       outputContent.innerHTML = lastDiagnostics.html;
     }
@@ -450,7 +450,7 @@ function showDiagnostics() {
 
     // Show summary
     if (totalErrors === 0 && totalWarnings === 0) {
-      html += '<div class="success-message">✓ No issues found!</div>';
+      html += '<div class="success-message">NIL PROBLEMS</div>';
     } else {
       html += `<div class="diagnostic-summary">
               Found ${totalErrors} error(s) and ${totalWarnings} warning(s)
@@ -717,7 +717,7 @@ function updateDiagnosticSummary() {
       } else {
         timeText = `${(lastCompileTime / 1000).toFixed(1)}s`;
       }
-      summaryText += (summaryText ? " • " : "") + `⚡ ${timeText}`;
+      summaryText += (summaryText ? " " : "") + `⚡ ${timeText}`;
     }
 
     summaryDiv.innerHTML = summaryText;

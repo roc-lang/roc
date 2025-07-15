@@ -422,7 +422,8 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(e-literal @13.33-13.38 (string "Alice")))
 				(e-string @13.41-13.48
 					(e-literal @13.42-13.47 (string "fixed")))
-				(e-tag @13.50-13.54 (name "True")))))
+				(e-nominal @13.50-13.54 (nominal "Bool")
+					(e-tag @13.50-13.54 (name "True"))))))
 	(s-expr @16.5-16.18
 		(e-tuple @16.5-16.18
 			(elems

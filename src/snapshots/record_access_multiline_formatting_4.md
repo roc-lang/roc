@@ -11,7 +11,7 @@ some_fn(arg1)? # Comment 1
 	.record_field?
 ~~~
 # EXPECTED
-NIL
+NOT IMPLEMENTED - :0:0:0:0
 # PROBLEMS
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
