@@ -404,7 +404,7 @@ test "RecordData.getFields()" {
 
     const fields_range = record_data.getFields();
     try testing.expectEqual(@as(u32, 10), @intFromEnum(fields_range.start));
-    try testing.expectEqual(@as(u32, 15), @intFromEnum(fields_range.end));
+    try testing.expectEqual(@as(u32, 15), @intFromEnum(fields_range.start) + fields_range.count);
 }
 
 test "Layout scalar data access" {

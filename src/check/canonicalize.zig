@@ -3069,17 +3069,16 @@ fn canonicalizePattern(
             // Iterate over the tuple patterns, canonicalizing each one
             // Then append the result to the scratch list
             const patterns_slice = self.parse_ir.store.patternSlice(e.patterns);
-            const elems_var_top = self.can_ir.env.types.tuple_elems.len();
+
+            // TODO: A bug exists here: we should use scratch_vars instead of types.tuple_elems here
+            const elems_var_top: u32 = @intCast(self.can_ir.env.types.tuple_elems.len());
             for (patterns_slice) |pattern| {
                 if (try self.canonicalizePattern(pattern)) |canonicalized| {
                     try self.can_ir.store.addScratchPattern(canonicalized);
                     _ = try self.can_ir.env.types.appendTupleElem(@enumFromInt(@intFromEnum(canonicalized)));
                 }
             }
-            const elems_var_range = types.Var.SafeList.Range{
-                .start = @enumFromInt(elems_var_top),
-                .end = @enumFromInt(self.can_ir.env.types.tuple_elems.len()),
-            };
+            const elems_var_range = self.can_ir.env.types.tuple_elems.rangeToEnd(elems_var_top);
 
             // Create span of the new scratch patterns
             const patterns_span = try self.can_ir.store.patternSpanFrom(scratch_top);
@@ -6146,7 +6145,7 @@ fn canonicalizeTagUnionType(self: *Self, tag_union: CIR.TypeAnno.TagUnion, paren
     const tags_slice = self.can_ir.store.sliceTypeAnnos(tag_union.tags);
     const tags_range = blk: {
         if (tags_slice.len == 0) {
-            break :blk types.Tag.SafeMultiList.Range.empty;
+            break :blk types.Tag.SafeMultiList.Range.empty();
         }
 
         // If we got here, then the following should be true:
@@ -6163,7 +6162,7 @@ fn canonicalizeTagUnionType(self: *Self, tag_union: CIR.TypeAnno.TagUnion, paren
                     // For tags without args, just add them
                     _ = try self.scratch_tags.append(self.can_ir.env.gpa, types.Tag{
                         .name = ty.symbol,
-                        .args = TypeVar.SafeList.Range.empty,
+                        .args = TypeVar.SafeList.Range.empty(),
                     });
                 },
                 .apply => |apply| {

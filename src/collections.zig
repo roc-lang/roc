@@ -26,9 +26,10 @@ pub const NonEmptyRange = struct {
 
     /// Convert to a SafeMultiList range
     pub fn toRange(self: NonEmptyRange, comptime Idx: type) @import("collections/safe_list.zig").SafeRange(Idx) {
+        std.debug.assert(self.count > 0);
         return .{
             .start = @enumFromInt(self.start),
-            .end = @enumFromInt(self.start + self.count),
+            .count = self.count,
         };
     }
 };
