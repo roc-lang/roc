@@ -417,7 +417,7 @@ body {
 .example-item {
     padding: var(--space-2) var(--space-3);
     cursor: pointer;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--bg-secondary);
     border-radius: var(--radius-sm);
     transition: all var(--duration-base) var(--ease-out);
     flex-shrink: 0;
@@ -427,6 +427,7 @@ body {
 
 .example-item:hover {
     background-color: var(--state-hover);
+    border: 1px solid var(--border-subtle);
 }
 
 .example-item:active {
