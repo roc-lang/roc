@@ -124,8 +124,8 @@ pub fn SafeList(comptime T: type) type {
         }
 
         /// Get the length of this list.
-        pub fn len(self: *const SafeList(T)) usize {
-            return self.items.items.len;
+        pub fn len(self: *const SafeList(T)) u32 {
+            return @intCast(self.items.items.len);
         }
 
         /// Add an item to the end of this list.
@@ -422,8 +422,8 @@ pub fn SafeMultiList(comptime T: type) type {
         }
 
         /// Get the length of this list.
-        pub fn len(self: *const SafeMultiList(T)) usize {
-            return self.items.len;
+        pub fn len(self: *const SafeMultiList(T)) u32 {
+            return @intCast(self.items.len);
         }
 
         /// Create a range from the provided idx to the end of the list

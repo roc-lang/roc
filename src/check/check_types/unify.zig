@@ -2087,9 +2087,9 @@ fn Unifier(comptime StoreTypeB: type) type {
             std.mem.sort(RecordField, b_fields, ident_store, comptime RecordField.sortByNameAsc);
 
             // Get the start of index of the new range
-            const a_fields_start: u32 = @intCast(scratch.only_in_a_fields.len());
-            const b_fields_start: u32 = @intCast(scratch.only_in_b_fields.len());
-            const both_fields_start: u32 = @intCast(scratch.in_both_fields.len());
+            const a_fields_start: u32 = scratch.only_in_a_fields.len();
+            const b_fields_start: u32 = scratch.only_in_b_fields.len();
+            const both_fields_start: u32 = scratch.in_both_fields.len();
 
             // Iterate over the fields in order, grouping them
             var a_i: usize = 0;
@@ -2153,7 +2153,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
-            const range_start: u32 = @intCast(self.types_store_b.record_fields.len());
+            const range_start: u32 = self.types_store_b.record_fields.len();
 
             // Here, iterate over shared fields, sub unifying the field variables.
             // At this point, the fields are know to be identical, so we arbitrary choose b
@@ -2487,9 +2487,9 @@ fn Unifier(comptime StoreTypeB: type) type {
             std.mem.sort(Tag, b_tags, ident_store, comptime Tag.sortByNameAsc);
 
             // Get the start of index of the new range
-            const a_tags_start: u32 = @intCast(scratch.only_in_a_tags.len());
-            const b_tags_start: u32 = @intCast(scratch.only_in_b_tags.len());
-            const both_tags_start: u32 = @intCast(scratch.in_both_tags.len());
+            const a_tags_start: u32 = scratch.only_in_a_tags.len();
+            const b_tags_start: u32 = scratch.only_in_b_tags.len();
+            const both_tags_start: u32 = scratch.in_both_tags.len();
 
             // Iterate over the tags in order, grouping them
             var a_i: usize = 0;
@@ -2550,7 +2550,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
-            const range_start: u32 = @intCast(self.types_store_b.tags.len());
+            const range_start: u32 = self.types_store_b.tags.len();
 
             for (shared_tags) |tags| {
                 const tag_a_args = self.types_store_b.getTagArgsSlice(tags.a.args);
@@ -2736,7 +2736,6 @@ pub const Scratch = struct {
         range: RecordFieldSafeMultiList.Range,
     ) std.mem.Allocator.Error!RecordFieldSafeList.Range {
         const start_int = self.gathered_fields.len();
-        const start: RecordFieldSafeList.Idx = @enumFromInt(start_int);
         const record_fields_slice = multi_list.sliceRange(range);
         for (record_fields_slice.items(.name), record_fields_slice.items(.var_)) |name, var_| {
             _ = try self.gathered_fields.append(
@@ -2744,7 +2743,7 @@ pub const Scratch = struct {
                 RecordField{ .name = name, .var_ = var_ },
             );
         }
-        return .{ .start = start, .count = @intCast(self.gathered_fields.len() - start_int) };
+        return self.gathered_fields.rangeToEnd(start_int);
     }
 
     /// Given a multi list of tag and a range, copy from the multi list
@@ -2755,7 +2754,6 @@ pub const Scratch = struct {
         range: TagSafeMultiList.Range,
     ) std.mem.Allocator.Error!TagSafeList.Range {
         const start_int = self.gathered_tags.len();
-        const start: TagSafeList.Idx = @enumFromInt(start_int);
         const tag_slice = multi_list.sliceRange(range);
         for (tag_slice.items(.name), tag_slice.items(.args)) |ident, args| {
             _ = try self.gathered_tags.append(
@@ -2763,7 +2761,7 @@ pub const Scratch = struct {
                 Tag{ .name = ident, .args = args },
             );
         }
-        return .{ .start = start, .count = @intCast(self.gathered_tags.len() - start_int) };
+        return self.gathered_tags.rangeToEnd(start_int);
     }
 
     fn appendSliceGatheredFields(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordFieldSafeList.Range {
