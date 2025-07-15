@@ -41,6 +41,8 @@ exposed_scope: Scope = undefined,
 exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track exposed types by text to handle changing indices
 exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
+/// Special scope for unqualified nominal tags (e.g., True, False)
+unqualified_nominal_tags: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.ArrayListUnmanaged(Region),
 /// Maps var patterns to the function region they were declared in
@@ -118,6 +120,7 @@ pub fn deinit(
     self.exposed_scope.deinit(gpa);
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_texts.deinit(gpa);
+    self.unqualified_nominal_tags.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
@@ -161,6 +164,7 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
         .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
         .exposed_scope = Scope.init(false),
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
+        .unqualified_nominal_tags = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx){},
     };
 
     // Top-level scope is not a function boundary
@@ -318,6 +322,12 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
     try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
 
     try ir.redirectTypeTo(CIR.Pattern.Idx, BUILTIN_BOOL, CIR.varFrom(type_decl_idx));
+
+    // Add True and False to unqualified_nominal_tags
+    const true_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("True"), Region.zero());
+    const false_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("False"), Region.zero());
+    try self.unqualified_nominal_tags.put(gpa, true_ident, type_decl_idx);
+    try self.unqualified_nominal_tags.put(gpa, false_ident, type_decl_idx);
 }
 
 const Self = @This();
@@ -421,7 +431,7 @@ pub fn canonicalizeFile(
                     try self.introduceTypeParametersFromHeader(header_idx);
 
                     // Now canonicalize the type annotation with type parameters and type name in scope
-                    break :blk try self.canonicalizeTypeAnno(type_decl.anno, .cannot_introduce_vars);
+                    break :blk try self.canonicalizeTypeAnno(type_decl.anno, .cannot_introduce_vars, true);
                 };
 
                 // Creat type variables to the backing type (rhs)
@@ -432,6 +442,10 @@ pub fn canonicalizeFile(
 
                     break :blk try self.canonicalizeTypeAnnoToTypeVar(anno_idx);
                 };
+
+                // Check if the backing type is already an error type
+                const backing_resolved = self.can_ir.env.types.resolveVar(anno_var);
+                const backing_is_error = backing_resolved.desc.content == .err;
 
                 // Create types for each arg annotation
                 const scratch_anno_start = self.scratch_vars.top();
@@ -461,6 +475,11 @@ pub fn canonicalizeFile(
                 const real_cir_type_decl, const type_decl_content = blk: {
                     switch (type_decl.kind) {
                         .alias => {
+                            const alias_content = if (backing_is_error)
+                                types.Content{ .err = {} }
+                            else
+                                try self.can_ir.env.types.mkAlias(type_ident, anno_var, arg_anno_slice);
+
                             break :blk .{
                                 CIR.Statement{
                                     .s_alias_decl = .{
@@ -470,10 +489,20 @@ pub fn canonicalizeFile(
                                         .where = where_clauses,
                                     },
                                 },
-                                try self.can_ir.env.types.mkAlias(type_ident, anno_var, arg_anno_slice),
+                                alias_content,
                             };
                         },
                         .nominal => {
+                            const nominal_content = if (backing_is_error)
+                                types.Content{ .err = {} }
+                            else
+                                try self.can_ir.env.types.mkNominal(
+                                    type_ident,
+                                    anno_var,
+                                    arg_anno_slice,
+                                    try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.can_ir.module_name), Region.zero()),
+                                );
+
                             break :blk .{
                                 CIR.Statement{
                                     .s_nominal_decl = .{
@@ -483,12 +512,7 @@ pub fn canonicalizeFile(
                                         .where = where_clauses,
                                     },
                                 },
-                                try self.can_ir.env.types.mkNominal(
-                                    type_ident,
-                                    anno_var,
-                                    arg_anno_slice,
-                                    try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.can_ir.module_name), Region.zero()),
-                                ),
+                                nominal_content,
                             };
                         },
                     }
@@ -703,7 +727,7 @@ pub fn canonicalizeFile(
                 }
 
                 // Now canonicalize the annotation with type variables in scope
-                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .cannot_introduce_vars);
+                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .cannot_introduce_vars, false);
 
                 // Canonicalize where clauses if present
                 const where_clauses = if (ta.where) |where_coll| blk: {
@@ -2547,8 +2571,21 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
     }, tag_union, region);
 
     if (e.qualifiers.span.len == 0) {
-        // If this is a tag without a prefix, then is it an
-        // anonymous tag and we can just return it
+        // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
+        if (self.unqualified_nominal_tags.get(tag_name)) |nominal_type_decl| {
+            // Create a nominal expression
+            const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
+                .e_nominal = .{
+                    .nominal_type_decl = nominal_type_decl,
+                    .backing_expr = tag_expr_idx,
+                    .backing_type = .tag,
+                },
+            }, Content{ .flex_var = null }, region);
+            return expr_idx;
+        }
+
+        // If this is a tag without a prefix and not in unqualified_nominal_tags,
+        // then it is an anonymous tag and we can just return it
         return tag_expr_idx;
     } else {
         // If this is a tag with a prefix, then is it a nominal tag.
@@ -3755,7 +3792,7 @@ fn canonicalizeTagVariant(self: *Self, anno_idx: AST.TypeAnno.Idx) std.mem.Alloc
             defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
             for (args_slice[1..]) |arg_idx| {
-                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, .can_introduce_vars);
+                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, .can_introduce_vars, false);
                 try self.can_ir.store.addScratchTypeAnno(canonicalized);
             }
 
@@ -3900,10 +3937,11 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
 }
 
 /// Canonicalize a statement within a block
-fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars: CanIntroduceVars) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
+fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars: CanIntroduceVars, in_type_declaration: bool) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    var found_underscore = false;
     const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
     switch (ast_anno) {
         .apply => |apply| {
@@ -3916,8 +3954,17 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             }
 
             // Canonicalize the base type first
-            const canonicalized_base = try self.canonicalizeTypeAnno(args_slice[0], can_intro_vars);
+            const canonicalized_base = try self.canonicalizeTypeAnno(args_slice[0], can_intro_vars, in_type_declaration);
             const base_cir_type = self.can_ir.store.getTypeAnno(canonicalized_base);
+
+            // Check if base type is invalid
+            if (in_type_declaration) {
+                const base_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized_base)));
+                const base_resolved = self.can_ir.env.types.resolveVar(base_var);
+                if (base_resolved.desc.content == .err) {
+                    found_underscore = true;
+                }
+            }
 
             // Extract the symbol for the type application
             const type_symbol = switch (base_cir_type) {
@@ -3930,15 +3977,30 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                     defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
                     for (args_slice[1..]) |arg_idx| {
-                        const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars);
+                        const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, in_type_declaration);
                         try self.can_ir.store.addScratchTypeAnno(canonicalized);
+
+                        // Check if this argument is invalid
+                        if (in_type_declaration) {
+                            const arg_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
+                            const arg_resolved = self.can_ir.env.types.resolveVar(arg_var);
+                            if (arg_resolved.desc.content == .err) {
+                                found_underscore = true;
+                            }
+                        }
                     }
 
                     const args = try self.can_ir.store.typeAnnoSpanFrom(scratch_top);
+                    // Create type variable with error content if underscore in type declaration
+                    const content = if (found_underscore and in_type_declaration)
+                        types.Content{ .err = {} }
+                    else
+                        types.Content{ .flex_var = null };
+
                     return try self.can_ir.addTypeAnnoAndTypeVar(.{ .apply = .{
                         .symbol = external_decl.qualified_name,
                         .args = args,
-                    } }, Content{ .flex_var = null }, region);
+                    } }, content, region);
                 },
                 else => return try self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{ .region = region } }),
             };
@@ -3948,15 +4010,31 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
             for (args_slice[1..]) |arg_idx| {
-                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars);
+                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, in_type_declaration);
                 try self.can_ir.store.addScratchTypeAnno(canonicalized);
+
+                // Check if this argument is invalid
+                if (in_type_declaration) {
+                    const arg_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
+                    const arg_resolved = self.can_ir.env.types.resolveVar(arg_var);
+                    if (arg_resolved.desc.content == .err) {
+                        found_underscore = true;
+                    }
+                }
             }
 
             const args = try self.can_ir.store.typeAnnoSpanFrom(scratch_top);
+
+            // Create type variable with error content if underscore in type declaration
+            const content = if (found_underscore and in_type_declaration)
+                types.Content{ .err = {} }
+            else
+                types.Content{ .flex_var = null };
+
             return try self.can_ir.addTypeAnnoAndTypeVar(.{ .apply = .{
                 .symbol = type_symbol,
                 .args = args,
-            } }, Content{ .flex_var = null }, region);
+            } }, content, region);
         },
         .ty_var => |ty_var| {
             const region = self.parse_ir.tokenizedRegionToRegion(ty_var.region);
@@ -3979,12 +4057,28 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             // Track this type variable for underscore validation
             try self.scratch_type_var_validation.append(self.can_ir.env.gpa, name_ident);
 
+            // Create type variable with error content if underscore in type declaration
+            const content = if (found_underscore and in_type_declaration)
+                types.Content{ .err = {} }
+            else
+                types.Content{ .flex_var = null };
+
             return try self.can_ir.addTypeAnnoAndTypeVar(.{ .ty_var = .{
                 .name = name_ident,
-            } }, Content{ .flex_var = null }, region);
+            } }, content, region);
         },
         .underscore_type_var => |underscore_ty_var| {
             const region = self.parse_ir.tokenizedRegionToRegion(underscore_ty_var.region);
+
+            // Underscore types aren't allowed in type declarations (aliases or nominal)
+            if (in_type_declaration) {
+                found_underscore = true;
+                try self.can_ir.pushDiagnostic(CIR.Diagnostic{ .underscore_in_type_declaration = .{
+                    .is_alias = true,
+                    .region = region,
+                } });
+            }
+
             const name_ident = self.parse_ir.tokens.resolveIdentifier(underscore_ty_var.tok) orelse {
                 return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{
                     .region = region,
@@ -4004,9 +4098,15 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             // Track this type variable for underscore validation
             try self.scratch_type_var_validation.append(self.can_ir.env.gpa, name_ident);
 
+            // Create type variable with error content if underscore in type declaration
+            const content = if (found_underscore and in_type_declaration)
+                types.Content{ .err = {} }
+            else
+                types.Content{ .flex_var = null };
+
             return try self.can_ir.addTypeAnnoAndTypeVar(.{ .ty_var = .{
                 .name = name_ident,
-            } }, Content{ .flex_var = null }, region);
+            } }, content, region);
         },
         .ty => |ty| {
             const region = self.parse_ir.tokenizedRegionToRegion(ty.region);
@@ -4052,9 +4152,15 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
 
                 const external_idx = try self.can_ir.pushExternalDecl(external_decl);
 
+                // Create type variable with error content if underscore in type declaration
+                const content = if (found_underscore and in_type_declaration)
+                    types.Content{ .err = {} }
+                else
+                    types.Content{ .flex_var = null };
+
                 return try self.can_ir.addTypeAnnoAndTypeVar(.{ .ty_lookup_external = .{
                     .external_decl = external_idx,
-                } }, Content{ .flex_var = null }, region);
+                } }, content, region);
             } else {
                 // Unqualified type - check if this type is declared in scope
                 const ident_idx = if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |ident|
@@ -4071,20 +4177,48 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                     } });
                 }
 
+                // Create type variable with error content if underscore in type declaration
+                const content = if (found_underscore and in_type_declaration)
+                    types.Content{ .err = {} }
+                else
+                    types.Content{ .flex_var = null };
+
                 return try self.can_ir.addTypeAnnoAndTypeVar(.{ .ty = .{
                     .symbol = ident_idx,
-                } }, Content{ .flex_var = null }, region);
+                } }, content, region);
             }
         },
         .mod_ty => |mod_ty| {
             const region = self.parse_ir.tokenizedRegionToRegion(mod_ty.region);
+            // Create type variable with error content if underscore in type declaration
+            const content = if (found_underscore and in_type_declaration)
+                types.Content{ .err = {} }
+            else
+                types.Content{ .flex_var = null };
+
             return try self.can_ir.addTypeAnnoAndTypeVar(.{ .ty = .{
                 .symbol = mod_ty.ty_ident,
-            } }, Content{ .flex_var = null }, region);
+            } }, content, region);
         },
         .underscore => |underscore| {
             const region = self.parse_ir.tokenizedRegionToRegion(underscore.region);
-            return try self.can_ir.addTypeAnnoAndTypeVar(.{ .underscore = {} }, Content{ .flex_var = null }, region);
+
+            // Underscore types aren't allowed in type declarations (aliases or nominal)
+            if (in_type_declaration) {
+                found_underscore = true;
+                try self.can_ir.pushDiagnostic(CIR.Diagnostic{ .underscore_in_type_declaration = .{
+                    .is_alias = true,
+                    .region = region,
+                } });
+            }
+
+            // Create type variable with error content if underscore in type declaration
+            const content = if (found_underscore and in_type_declaration)
+                types.Content{ .err = {} }
+            else
+                types.Content{ .flex_var = null };
+
+            return try self.can_ir.addTypeAnnoAndTypeVar(.{ .underscore = {} }, content, region);
         },
         .tuple => |tuple| {
             const region = self.parse_ir.tokenizedRegionToRegion(tuple.region);
@@ -4093,14 +4227,29 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
             for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
-                const canonicalized = try self.canonicalizeTypeAnno(elem_idx, can_intro_vars);
+                const canonicalized = try self.canonicalizeTypeAnno(elem_idx, can_intro_vars, in_type_declaration);
                 try self.can_ir.store.addScratchTypeAnno(canonicalized);
+
+                // Check if this element is invalid
+                if (in_type_declaration) {
+                    const elem_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
+                    const elem_resolved = self.can_ir.env.types.resolveVar(elem_var);
+                    if (elem_resolved.desc.content == .err) {
+                        found_underscore = true;
+                    }
+                }
             }
 
             const annos = try self.can_ir.store.typeAnnoSpanFrom(scratch_top);
+            // Create type variable with error content if underscore in type declaration
+            const content = if (found_underscore and in_type_declaration)
+                types.Content{ .err = {} }
+            else
+                types.Content{ .flex_var = null };
+
             return try self.can_ir.addTypeAnnoAndTypeVar(.{ .tuple = .{
                 .elems = annos,
-            } }, Content{ .flex_var = null }, region);
+            } }, content, region);
         },
         .record => |record| {
             const region = self.parse_ir.tokenizedRegionToRegion(record.region);
@@ -4122,7 +4271,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                     // Malformed field name - continue with placeholder
                     const malformed_field_ident = Ident.for_text("malformed_field");
                     const malformed_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, malformed_field_ident, Region.zero());
-                    const canonicalized_ty = try self.canonicalizeTypeAnno(ast_field.ty, can_intro_vars);
+                    const canonicalized_ty = try self.canonicalizeTypeAnno(ast_field.ty, can_intro_vars, in_type_declaration);
 
                     const cir_field = CIR.TypeAnno.RecordField{
                         .name = malformed_ident,
@@ -4134,7 +4283,17 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                 };
 
                 // Canonicalize field type
-                const canonicalized_ty = try self.canonicalizeTypeAnno(ast_field.ty, can_intro_vars);
+                const canonicalized_ty = try self.canonicalizeTypeAnno(ast_field.ty, can_intro_vars, in_type_declaration);
+
+                // Check if this field type is invalid
+                if (in_type_declaration) {
+                    const field_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized_ty)));
+                    const field_resolved = self.can_ir.env.types.resolveVar(field_var);
+                    if (field_resolved.desc.content == .err) {
+                        found_underscore = true;
+                    }
+                }
+
                 // Create CIR field
                 const cir_field = CIR.TypeAnno.RecordField{
                     .name = field_name,
@@ -4145,9 +4304,15 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             }
 
             const fields = try self.can_ir.store.annoRecordFieldSpanFrom(scratch_top);
+            // Create type variable with error content if underscore in type declaration
+            const content = if (found_underscore and in_type_declaration)
+                types.Content{ .err = {} }
+            else
+                types.Content{ .flex_var = null };
+
             return try self.can_ir.addTypeAnnoAndTypeVar(.{ .record = .{
                 .fields = fields,
-            } }, Content{ .flex_var = null }, region);
+            } }, content, region);
         },
         .tag_union => |tag_union| {
             const region = self.parse_ir.tokenizedRegionToRegion(tag_union.region);
@@ -4159,20 +4324,45 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
                 const canonicalized = try self.canonicalizeTagVariant(tag_idx);
                 try self.can_ir.store.addScratchTypeAnno(canonicalized);
+
+                // Check if this tag is invalid
+                if (in_type_declaration) {
+                    const tag_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
+                    const tag_resolved = self.can_ir.env.types.resolveVar(tag_var);
+                    if (tag_resolved.desc.content == .err) {
+                        found_underscore = true;
+                    }
+                }
             }
 
             const tags = try self.can_ir.store.typeAnnoSpanFrom(scratch_top);
 
             // Handle optional open annotation (for extensible tag unions)
-            const ext = if (tag_union.open_anno) |open_idx|
-                try self.canonicalizeTypeAnno(open_idx, can_intro_vars)
+            const ext = if (tag_union.open_anno) |open_idx| blk: {
+                const open_canonicalized = try self.canonicalizeTypeAnno(open_idx, can_intro_vars, in_type_declaration);
+
+                // Check if the open annotation is invalid
+                if (in_type_declaration) {
+                    const open_var = @as(types.Var, @enumFromInt(@intFromEnum(open_canonicalized)));
+                    const open_resolved = self.can_ir.env.types.resolveVar(open_var);
+                    if (open_resolved.desc.content == .err) {
+                        found_underscore = true;
+                    }
+                }
+
+                break :blk open_canonicalized;
+            } else null;
+
+            // Create type variable with error content if underscore in type declaration
+            const content = if (found_underscore and in_type_declaration)
+                types.Content{ .err = {} }
             else
-                null;
+                types.Content{ .flex_var = null };
 
             return try self.can_ir.addTypeAnnoAndTypeVar(.{ .tag_union = .{
                 .tags = tags,
                 .ext = ext,
-            } }, Content{ .flex_var = null }, region);
+            } }, content, region);
         },
         .@"fn" => |fn_anno| {
             const region = self.parse_ir.tokenizedRegionToRegion(fn_anno.region);
@@ -4182,26 +4372,67 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
             for (self.parse_ir.store.typeAnnoSlice(fn_anno.args)) |arg_idx| {
-                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars);
+                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, in_type_declaration);
                 try self.can_ir.store.addScratchTypeAnno(canonicalized);
+
+                // Check if this argument is invalid
+                if (in_type_declaration) {
+                    const arg_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
+                    const arg_resolved = self.can_ir.env.types.resolveVar(arg_var);
+                    if (arg_resolved.desc.content == .err) {
+                        found_underscore = true;
+                    }
+                }
             }
 
             const args = try self.can_ir.store.typeAnnoSpanFrom(scratch_top);
 
             // Canonicalize return type
-            const ret = try self.canonicalizeTypeAnno(fn_anno.ret, can_intro_vars);
+            const ret = try self.canonicalizeTypeAnno(fn_anno.ret, can_intro_vars, in_type_declaration);
+
+            // Check if the return type is invalid
+            if (in_type_declaration) {
+                const ret_var = @as(types.Var, @enumFromInt(@intFromEnum(ret)));
+                const ret_resolved = self.can_ir.env.types.resolveVar(ret_var);
+                if (ret_resolved.desc.content == .err) {
+                    found_underscore = true;
+                }
+            }
+
+            // Create type variable with error content if underscore in type declaration
+            const content = if (found_underscore and in_type_declaration)
+                types.Content{ .err = {} }
+            else
+                types.Content{ .flex_var = null };
+
             return try self.can_ir.addTypeAnnoAndTypeVar(.{ .@"fn" = .{
                 .args = args,
                 .ret = ret,
                 .effectful = fn_anno.effectful,
-            } }, Content{ .flex_var = null }, region);
+            } }, content, region);
         },
         .parens => |parens| {
             const region = self.parse_ir.tokenizedRegionToRegion(parens.region);
-            const inner_anno = try self.canonicalizeTypeAnno(parens.anno, can_intro_vars);
+            const inner_anno = try self.canonicalizeTypeAnno(parens.anno, can_intro_vars, in_type_declaration);
+
+            // Check if the inner annotation is invalid
+            if (in_type_declaration) {
+                const inner_var = @as(types.Var, @enumFromInt(@intFromEnum(inner_anno)));
+                const inner_resolved = self.can_ir.env.types.resolveVar(inner_var);
+                if (inner_resolved.desc.content == .err) {
+                    found_underscore = true;
+                }
+            }
+
+            // Create type variable with error content if underscore in type declaration
+            const content = if (found_underscore and in_type_declaration)
+                types.Content{ .err = {} }
+            else
+                types.Content{ .flex_var = null };
+
             return try self.can_ir.addTypeAnnoAndTypeVar(.{ .parens = .{
                 .anno = inner_anno,
-            } }, Content{ .flex_var = null }, region);
+            } }, content, region);
         },
         .malformed => |malformed| {
             const region = self.parse_ir.tokenizedRegionToRegion(malformed.region);
@@ -4261,14 +4492,53 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, can_intro
                 };
 
                 // Create type variable annotation for this parameter
+                // Check for underscore in type parameter
+                const param_name = self.parse_ir.env.idents.getText(param_ident);
+                if (param_name[0] == '_') {
+                    try self.can_ir.pushDiagnostic(CIR.Diagnostic{ .underscore_in_type_declaration = .{
+                        .is_alias = true,
+                        .region = param_region,
+                    } });
+                }
+
                 const param_anno = try self.can_ir.addTypeAnnoAndTypeVar(.{ .ty_var = .{
                     .name = param_ident,
                 } }, Content{ .flex_var = null }, param_region);
                 try self.can_ir.store.addScratchTypeAnno(param_anno);
             },
+            .underscore => |underscore_param| {
+                // Handle underscore type parameters
+                const param_region = self.parse_ir.tokenizedRegionToRegion(underscore_param.region);
+
+                // Push underscore diagnostic for underscore type parameters
+                try self.can_ir.pushDiagnostic(CIR.Diagnostic{ .underscore_in_type_declaration = .{
+                    .is_alias = true,
+                    .region = param_region,
+                } });
+
+                // Create underscore type annotation
+                const underscore_anno = try self.can_ir.addTypeAnnoAndTypeVar(.{ .underscore = {} }, Content{ .err = {} }, param_region);
+                try self.can_ir.store.addScratchTypeAnno(underscore_anno);
+            },
+            .malformed => |malformed_param| {
+                // Handle malformed underscore type parameters
+                const param_region = self.parse_ir.tokenizedRegionToRegion(malformed_param.region);
+
+                // Push underscore diagnostic for malformed underscore type parameters
+                try self.can_ir.pushDiagnostic(CIR.Diagnostic{ .underscore_in_type_declaration = .{
+                    .is_alias = true,
+                    .region = param_region,
+                } });
+
+                // Create malformed type annotation using pushMalformed for consistency
+                const malformed_anno = try self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{
+                    .region = param_region,
+                } });
+                try self.can_ir.store.addScratchTypeAnno(malformed_anno);
+            },
             else => {
                 // Other types in parameter position - canonicalize normally but warn
-                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars);
+                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, false);
                 try self.can_ir.store.addScratchTypeAnno(canonicalized);
             },
         }
@@ -4540,7 +4810,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             }
 
             // Now canonicalize the annotation with type variables in scope
-            const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .cannot_introduce_vars);
+            const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .cannot_introduce_vars, false);
 
             // Canonicalize where clauses if present
             const where_clauses = if (ta.where) |where_coll| blk: {
@@ -4978,8 +5248,13 @@ fn scopeIntroduceInternal(
                     return Scope.IntroduceResult{ .success = {} };
                 }
             }
+
+            // If we get here, the declaration scope was not found
+            // This shouldn't happen in practice, but we need to handle it
+            return Scope.IntroduceResult{ .success = {} };
         }
 
+        // For non-var declarations, we should still report shadowing
         // Regular shadowing case - produce warning but still introduce
         try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
         return Scope.IntroduceResult{ .shadowing_warning = existing_pattern };
@@ -5432,8 +5707,16 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) s
             }
         },
         .underscore => {
-            // Create anonymous flex var
-            return try self.can_ir.addTypeSlotAndTypeVar(type_anno_node_idx, .{ .flex_var = null }, region, TypeVar);
+            // Check if this underscore type annotation has error content
+            const type_var = @as(types.Var, @enumFromInt(@intFromEnum(type_anno_idx)));
+            const resolved = self.can_ir.env.types.resolveVar(type_var);
+            if (resolved.desc.content == .err) {
+                // This underscore was in a type declaration - create error type variable
+                return try self.can_ir.addTypeSlotAndTypeVar(type_anno_node_idx, .err, region, TypeVar);
+            } else {
+                // Create anonymous flex var
+                return try self.can_ir.addTypeSlotAndTypeVar(type_anno_node_idx, .{ .flex_var = null }, region, TypeVar);
+            }
         },
         .ty => |t| {
             // Look up built-in or user-defined type
@@ -5524,13 +5807,13 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, can_
             const args_slice = self.parse_ir.store.typeAnnoSlice(.{ .span = self.parse_ir.store.getCollection(mm.args).span });
             const args_start = self.can_ir.store.scratchTypeAnnoTop();
             for (args_slice) |arg_idx| {
-                const canonicalized_arg = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars);
+                const canonicalized_arg = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, false);
                 try self.can_ir.store.addScratchTypeAnno(canonicalized_arg);
             }
             const args_span = try self.can_ir.store.typeAnnoSpanFrom(args_start);
 
             // Canonicalize return type
-            const ret_anno = try self.canonicalizeTypeAnno(mm.ret_anno, can_intro_vars);
+            const ret_anno = try self.canonicalizeTypeAnno(mm.ret_anno, can_intro_vars, false);
 
             // Create external declaration for where clause method constraint
             // This represents the requirement that type variable must come from a module

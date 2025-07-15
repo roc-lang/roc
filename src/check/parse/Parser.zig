@@ -2349,23 +2349,23 @@ fn parseTypeIdent(self: *Parser) std.mem.Allocator.Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    if (self.peek() == .LowerIdent) {
-        const tok = self.pos;
-        self.advance();
-        return try self.store.addTypeAnno(.{ .ty_var = .{
-            .region = .{ .start = tok, .end = self.pos },
-            .tok = tok,
-        } });
+    switch (self.peek()) {
+        .LowerIdent, .NamedUnderscore, .Underscore => {
+            const tok = self.pos;
+            self.advance();
+            const region = AST.TokenizedRegion{ .start = tok, .end = self.pos };
+
+            return try self.store.addTypeAnno(switch (self.tok_buf.tokens.items(.tag)[tok]) {
+                .LowerIdent => .{ .ty_var = .{ .region = region, .tok = tok } },
+                .NamedUnderscore => .{ .underscore_type_var = .{ .region = region, .tok = tok } },
+                .Underscore => .{ .underscore = .{ .region = region } },
+                else => unreachable,
+            });
+        },
+        else => {
+            return self.pushMalformed(AST.TypeAnno.Idx, .invalid_type_arg, self.pos);
+        },
     }
-    if (self.peek() == .NamedUnderscore) {
-        const tok = self.pos;
-        self.advance();
-        return self.store.addTypeAnno(.{ .underscore_type_var = .{
-            .region = .{ .start = tok, .end = self.pos },
-            .tok = tok,
-        } });
-    }
-    return self.pushMalformed(AST.TypeAnno.Idx, .invalid_type_arg, self.pos);
 }
 
 const TyFnArgs = enum {
