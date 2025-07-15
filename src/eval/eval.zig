@@ -29,6 +29,42 @@ pub const EvalResult = struct {
     ptr: *anyopaque,
 };
 
+// Work item types for the evaluation stack machine
+const WorkKind = enum {
+    eval_expr,
+    complete_binop,
+    complete_if_condition,
+    complete_call,
+};
+
+const WorkItem = struct {
+    kind: WorkKind,
+    expr_idx: CIR.Expr.Idx,
+    result_location: *EvalResult,
+};
+
+// Context structures for different operations
+const BinopContext = struct {
+    op: CIR.Expr.Binop.Op,
+    left_result: *EvalResult,
+    right_result: *EvalResult,
+    result_location: *EvalResult,
+};
+
+const IfContext = struct {
+    expr_idx: CIR.Expr.Idx,
+    branch_index: usize,
+    cond_result: *EvalResult,
+    result_location: *EvalResult,
+};
+
+const CallContext = struct {
+    expr_idx: CIR.Expr.Idx,
+    args: []const CIR.Expr.Idx,
+    arg_results: []*EvalResult,
+    result_location: *EvalResult,
+};
+
 /// Evaluates the canonical IR expression node, allocates memory on the stack for the result,
 /// writes the actual bytes into that memory, and returns both the Layout and a pointer to the memory.
 pub fn eval(
@@ -39,6 +75,101 @@ pub fn eval(
     layout_cache: *layout_store.Store,
     type_store: *types.Store,
 ) EvalError!EvalResult {
+    var final_result: EvalResult = undefined;
+
+    // Initialize work stack
+    var work_stack = std.ArrayList(WorkItem).init(allocator);
+    defer work_stack.deinit();
+
+    // Initialize context stacks for different work types
+    var binop_contexts = std.ArrayList(BinopContext).init(allocator);
+    defer binop_contexts.deinit();
+
+    var if_contexts = std.ArrayList(IfContext).init(allocator);
+    defer if_contexts.deinit();
+
+    var call_contexts = std.ArrayList(CallContext).init(allocator);
+    defer call_contexts.deinit();
+
+    // Push initial work item
+    try work_stack.append(.{
+        .kind = .eval_expr,
+        .expr_idx = expr_idx,
+        .result_location = &final_result,
+    });
+
+    // Main evaluation loop
+    while (work_stack.items.len > 0) {
+        const work = work_stack.pop() orelse unreachable;
+        switch (work.kind) {
+            .eval_expr => try evalExprIterative(
+                allocator,
+                cir,
+                work.expr_idx,
+                work.result_location,
+                eval_stack,
+                layout_cache,
+                type_store,
+                &work_stack,
+                &binop_contexts,
+                &if_contexts,
+                &call_contexts,
+            ),
+            .complete_binop => {
+                const context = binop_contexts.pop() orelse unreachable;
+                try completeBinop(
+                    cir,
+                    context,
+                    eval_stack,
+                    layout_cache,
+                    type_store,
+                );
+            },
+            .complete_if_condition => {
+                const context = if_contexts.pop() orelse unreachable;
+                try completeIfCondition(
+                    allocator,
+                    cir,
+                    context,
+                    eval_stack,
+                    layout_cache,
+                    type_store,
+                    &work_stack,
+                    &if_contexts,
+                );
+            },
+            .complete_call => {
+                const context = call_contexts.pop() orelse unreachable;
+                try completeCall(
+                    allocator,
+                    cir,
+                    context,
+                    eval_stack,
+                    layout_cache,
+                    type_store,
+                );
+            },
+        }
+    }
+
+    return final_result;
+}
+
+fn evalExprIterative(
+    allocator: std.mem.Allocator,
+    cir: *const CIR,
+    expr_idx: CIR.Expr.Idx,
+    result_location: *EvalResult,
+    eval_stack: *stack.Stack,
+    layout_cache: *layout_store.Store,
+    type_store: *types.Store,
+    work_stack: *std.ArrayList(WorkItem),
+    binop_contexts: *std.ArrayList(BinopContext),
+    if_contexts: *std.ArrayList(IfContext),
+    call_contexts: *std.ArrayList(CallContext),
+) EvalError!void {
+    _ = type_store;
+    _ = call_contexts;
     const expr = cir.store.getExpr(expr_idx);
 
     // Check for runtime errors first, before trying to get type info
@@ -157,18 +288,105 @@ pub fn eval(
 
         // If expressions - evaluate branches based on conditions
         .e_if => |if_expr| {
-            return evalIfExpression(allocator, cir, if_expr, eval_stack, layout_cache, type_store);
+            // Start evaluating the first branch condition
+            const branches = cir.store.sliceIfBranches(if_expr.branches);
+            if (branches.len > 0) {
+                const branch = extractBranchData(cir, branches[0]) catch |err| switch (err) {
+                    error.InvalidBranchNode => return error.LayoutError,
+                    else => |e| return e,
+                };
+
+                // Allocate space for condition result
+                const cond_result = try allocator.create(EvalResult);
+
+                // Save context for completing the if expression
+                try if_contexts.append(.{
+                    .expr_idx = expr_idx,
+                    .branch_index = 0,
+                    .cond_result = cond_result,
+                    .result_location = result_location,
+                });
+
+                // Push work to complete the if after condition is evaluated
+                try work_stack.append(.{
+                    .kind = .complete_if_condition,
+                    .expr_idx = expr_idx,
+                    .result_location = result_location,
+                });
+
+                // Push work to evaluate the condition
+                try work_stack.append(.{
+                    .kind = .eval_expr,
+                    .expr_idx = branch.condition,
+                    .result_location = cond_result,
+                });
+            } else {
+                // No branches, evaluate final_else directly
+                try work_stack.append(.{
+                    .kind = .eval_expr,
+                    .expr_idx = if_expr.final_else,
+                    .result_location = result_location,
+                });
+            }
+            return;
         },
 
         // Non-primitive expressions need evaluation
         .e_lookup_local => |lookup| {
-            return evalLookupLocal(allocator, cir, lookup.pattern_idx, eval_stack, layout_cache, type_store);
+            // Look up the pattern in the definitions
+            const defs = cir.store.sliceDefs(cir.all_defs);
+            for (defs) |def_idx| {
+                const def = cir.store.getDef(def_idx);
+                if (@intFromEnum(def.pattern) == @intFromEnum(lookup.pattern_idx)) {
+                    // Found the definition, evaluate its expression
+                    try work_stack.append(.{
+                        .kind = .eval_expr,
+                        .expr_idx = def.expr,
+                        .result_location = result_location,
+                    });
+                    return;
+                }
+            }
+            return error.LayoutError; // Pattern not found
         },
         .e_binop => |binop| {
-            return evalBinop(allocator, cir, binop, eval_stack, layout_cache, type_store);
+            // Allocate space for left and right results
+            const left_result = try allocator.create(EvalResult);
+            const right_result = try allocator.create(EvalResult);
+
+            // Save context for completing the binop
+            try binop_contexts.append(.{
+                .op = binop.op,
+                .left_result = left_result,
+                .right_result = right_result,
+                .result_location = result_location,
+            });
+
+            // Push work items in reverse order (complete, right, left)
+            try work_stack.append(.{
+                .kind = .complete_binop,
+                .expr_idx = expr_idx,
+                .result_location = result_location,
+            });
+
+            try work_stack.append(.{
+                .kind = .eval_expr,
+                .expr_idx = binop.rhs,
+                .result_location = right_result,
+            });
+
+            try work_stack.append(.{
+                .kind = .eval_expr,
+                .expr_idx = binop.lhs,
+                .result_location = left_result,
+            });
+
+            return;
         },
-        .e_call => |call| {
-            return evalCall(allocator, cir, expr_idx, call.args, eval_stack, layout_cache, type_store);
+        .e_call => {
+            // TODO: Implement iterative call evaluation
+            // For now, function calls are not supported in the iterative evaluator
+            return error.LayoutError;
         },
 
         // TODO: implement these
@@ -202,7 +420,12 @@ pub fn eval(
         // Advanced constructs
         .e_nominal => |nominal| {
             // Evaluate the backing expression
-            return eval(allocator, cir, nominal.backing_expr, eval_stack, layout_cache, type_store);
+            try work_stack.append(.{
+                .kind = .eval_expr,
+                .expr_idx = nominal.backing_expr,
+                .result_location = result_location,
+            });
+            return;
         },
         .e_crash => |crash| {
             // Crash expression - should halt execution
@@ -225,10 +448,291 @@ pub fn eval(
         },
     }
 
-    return EvalResult{
+    result_location.* = EvalResult{
         .layout = expr_layout,
         .ptr = ptr,
     };
+}
+
+fn completeBinop(
+    cir: *const CIR,
+    context: BinopContext,
+    eval_stack: *stack.Stack,
+    layout_cache: *layout_store.Store,
+    type_store: *types.Store,
+) EvalError!void {
+    _ = type_store;
+    const left_result = context.left_result.*;
+    const right_result = context.right_result.*;
+
+    // Clean up allocated results
+    defer cir.env.gpa.destroy(context.left_result);
+    defer cir.env.gpa.destroy(context.right_result);
+
+    // For now, only support integer operations
+    if (left_result.layout.tag != .scalar or right_result.layout.tag != .scalar) {
+        return error.LayoutError;
+    }
+
+    const lhs_scalar = left_result.layout.data.scalar;
+    const rhs_scalar = right_result.layout.data.scalar;
+
+    if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
+        return error.LayoutError;
+    }
+
+    // Read integer values based on precision
+    const lhs_precision = lhs_scalar.data.int;
+    const rhs_precision = rhs_scalar.data.int;
+
+    // Read values based on precision
+    const lhs_val: i128 = switch (lhs_precision) {
+        .u8 => @as(*u8, @ptrCast(@alignCast(left_result.ptr))).*,
+        .i8 => @as(*i8, @ptrCast(@alignCast(left_result.ptr))).*,
+        .u16 => @as(*u16, @ptrCast(@alignCast(left_result.ptr))).*,
+        .i16 => @as(*i16, @ptrCast(@alignCast(left_result.ptr))).*,
+        .u32 => @as(*u32, @ptrCast(@alignCast(left_result.ptr))).*,
+        .i32 => @as(*i32, @ptrCast(@alignCast(left_result.ptr))).*,
+        .u64 => @as(*u64, @ptrCast(@alignCast(left_result.ptr))).*,
+        .i64 => @as(*i64, @ptrCast(@alignCast(left_result.ptr))).*,
+        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(left_result.ptr))).*),
+        .i128 => @as(*i128, @ptrCast(@alignCast(left_result.ptr))).*,
+    };
+
+    const rhs_val: i128 = switch (rhs_precision) {
+        .u8 => @as(*u8, @ptrCast(@alignCast(right_result.ptr))).*,
+        .i8 => @as(*i8, @ptrCast(@alignCast(right_result.ptr))).*,
+        .u16 => @as(*u16, @ptrCast(@alignCast(right_result.ptr))).*,
+        .i16 => @as(*i16, @ptrCast(@alignCast(right_result.ptr))).*,
+        .u32 => @as(*u32, @ptrCast(@alignCast(right_result.ptr))).*,
+        .i32 => @as(*i32, @ptrCast(@alignCast(right_result.ptr))).*,
+        .u64 => @as(*u64, @ptrCast(@alignCast(right_result.ptr))).*,
+        .i64 => @as(*i64, @ptrCast(@alignCast(right_result.ptr))).*,
+        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(right_result.ptr))).*),
+        .i128 => @as(*i128, @ptrCast(@alignCast(right_result.ptr))).*,
+    };
+
+    // Determine result layout based on operation
+    const result_layout = switch (context.op) {
+        .add, .sub, .mul, .div, .rem, .pow, .div_trunc => left_result.layout,
+        .eq, .ne, .lt, .gt, .le, .ge => layout.Layout.boolType(),
+        .@"and", .@"or" => layout.Layout.boolType(),
+        else => return error.LayoutError,
+    };
+
+    // Perform the operation
+    switch (context.op) {
+        .add => {
+            const result_val: i128 = lhs_val + rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            writeIntToMemory(@as([*]u8, @ptrCast(ptr)), result_val, lhs_precision);
+            context.result_location.* = EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .eq => {
+            const result_val: bool = lhs_val == rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            context.result_location.* = EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .ne => {
+            const result_val: bool = lhs_val != rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            context.result_location.* = EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .gt => {
+            const result_val: bool = lhs_val > rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            context.result_location.* = EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .lt => {
+            const result_val: bool = lhs_val < rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            context.result_location.* = EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .ge => {
+            const result_val: bool = lhs_val >= rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            context.result_location.* = EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .le => {
+            const result_val: bool = lhs_val <= rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            context.result_location.* = EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        else => {
+            return error.LayoutError;
+        },
+    }
+}
+
+fn completeIfCondition(
+    allocator: std.mem.Allocator,
+    cir: *const CIR,
+    context: IfContext,
+    eval_stack: *stack.Stack,
+    layout_cache: *layout_store.Store,
+    type_store: *types.Store,
+    work_stack: *std.ArrayList(WorkItem),
+    if_contexts: *std.ArrayList(IfContext),
+) EvalError!void {
+    _ = eval_stack;
+    _ = layout_cache;
+    _ = type_store;
+    // Check if condition is true
+    const is_true = evaluateBooleanCondition(context.cond_result.*) catch |err| switch (err) {
+        error.TypeMismatch => return error.LayoutError,
+        else => |e| return e,
+    };
+
+    // Free the condition result
+    defer allocator.destroy(context.cond_result);
+
+    // Get the if expression from the expr_idx
+    const expr = cir.store.getExpr(context.expr_idx);
+    const if_expr = switch (expr) {
+        .e_if => |e| e,
+        else => return error.LayoutError,
+    };
+
+    if (is_true) {
+        // Condition is true, evaluate the branch body
+        const branches = cir.store.sliceIfBranches(if_expr.branches);
+        const branch = extractBranchData(cir, branches[context.branch_index]) catch |err| switch (err) {
+            error.InvalidBranchNode => return error.LayoutError,
+            else => |e| return e,
+        };
+
+        try work_stack.append(.{
+            .kind = .eval_expr,
+            .expr_idx = branch.body,
+            .result_location = context.result_location,
+        });
+    } else {
+        // Try next branch
+        const branches = cir.store.sliceIfBranches(if_expr.branches);
+        const next_branch_index = context.branch_index + 1;
+
+        if (next_branch_index < branches.len) {
+            // Evaluate next branch condition
+            const branch = extractBranchData(cir, branches[next_branch_index]) catch |err| switch (err) {
+                error.InvalidBranchNode => return error.LayoutError,
+                else => |e| return e,
+            };
+
+            // Allocate space for next condition result
+            const cond_result = try allocator.create(EvalResult);
+
+            // Save context for next branch
+            try if_contexts.append(.{
+                .expr_idx = context.expr_idx,
+                .branch_index = next_branch_index,
+                .cond_result = cond_result,
+                .result_location = context.result_location,
+            });
+
+            // Push work to complete the if after condition is evaluated
+            try work_stack.append(.{
+                .kind = .complete_if_condition,
+                .expr_idx = context.expr_idx,
+                .result_location = context.result_location,
+            });
+
+            // Push work to evaluate the condition
+            try work_stack.append(.{
+                .kind = .eval_expr,
+                .expr_idx = branch.condition,
+                .result_location = cond_result,
+            });
+        } else {
+            // No more branches, evaluate final_else
+            try work_stack.append(.{
+                .kind = .eval_expr,
+                .expr_idx = if_expr.final_else,
+                .result_location = context.result_location,
+            });
+        }
+    }
+}
+
+fn completeCall(
+    allocator: std.mem.Allocator,
+    cir: *const CIR,
+    context: CallContext,
+    eval_stack: *stack.Stack,
+    layout_cache: *layout_store.Store,
+    type_store: *types.Store,
+) EvalError!void {
+    _ = eval_stack;
+    _ = layout_cache;
+    _ = type_store;
+    // This is a placeholder - the full implementation would handle function calls
+    _ = allocator;
+    _ = cir;
+    _ = context;
+    _ = eval_stack;
+    _ = layout_cache;
+    _ = type_store;
+    return error.LayoutError;
 }
 
 fn writeIntToMemory(ptr: [*]u8, value: i128, precision: types.Num.Int.Precision) void {
@@ -307,42 +811,6 @@ fn writeIntToMemory(ptr: [*]u8, value: i128, precision: types.Num.Int.Precision)
 /// - Complete canonicalization support for boolean expressions
 /// - Implement `getIfBranch` helper function in NodeStore
 /// - Add support for pattern matching in if expression conditions
-fn evalIfExpression(
-    allocator: std.mem.Allocator,
-    cir: *const CIR,
-    if_expr: anytype,
-    eval_stack: *stack.Stack,
-    layout_cache: *layout_store.Store,
-    type_store: *types.Store,
-) EvalError!EvalResult {
-    const branches = cir.store.sliceIfBranches(if_expr.branches);
-
-    // Evaluate each branch condition in order
-    for (branches) |branch_idx| {
-        const branch = extractBranchData(cir, branch_idx) catch |err| switch (err) {
-            error.InvalidBranchNode => return error.LayoutError,
-            else => |e| return e,
-        };
-
-        // Evaluate the condition
-        const cond_result = try eval(allocator, cir, branch.condition, eval_stack, layout_cache, type_store);
-
-        // Check if condition is true
-        const is_true = evaluateBooleanCondition(cond_result) catch |err| switch (err) {
-            error.TypeMismatch => return error.LayoutError,
-            else => |e| return e,
-        };
-
-        if (is_true) {
-            // Condition is true, evaluate and return the branch body
-            return eval(allocator, cir, branch.body, eval_stack, layout_cache, type_store);
-        }
-    }
-
-    // No branch condition was true, evaluate final_else
-    return eval(allocator, cir, if_expr.final_else, eval_stack, layout_cache, type_store);
-}
-
 /// Represents the extracted data from an if branch node
 const BranchData = struct {
     condition: CIR.Expr.Idx,
@@ -417,255 +885,9 @@ fn evaluateBooleanCondition(cond_result: EvalResult) !bool {
     return discriminant == 0;
 }
 
-fn evalLookupLocal(allocator: std.mem.Allocator, cir: *const CIR, pattern_idx: CIR.Pattern.Idx, eval_stack: *stack.Stack, layout_cache: *layout_store.Store, type_store: *types.Store) EvalError!EvalResult {
-    // For now, we need to find the definition of this pattern
-    // This is a simplified implementation - in a full implementation,
-    // we'd need to track the evaluation environment/scope
-
-    // Look up the pattern in the definitions
-    const defs = cir.store.sliceDefs(cir.all_defs);
-    for (defs) |def_idx| {
-        const def = cir.store.getDef(def_idx);
-        if (@intFromEnum(def.pattern) == @intFromEnum(pattern_idx)) {
-            // Found the definition, evaluate its expression
-            return eval(allocator, cir, def.expr, eval_stack, layout_cache, type_store);
-        }
-    }
-    return error.LayoutError; // Pattern not found
-}
-
-fn evalBinop(allocator: std.mem.Allocator, cir: *const CIR, binop: CIR.Expr.Binop, eval_stack: *stack.Stack, layout_cache: *layout_store.Store, type_store: *types.Store) EvalError!EvalResult {
-    // Evaluate left and right operands
-    const left_result = try eval(allocator, cir, binop.lhs, eval_stack, layout_cache, type_store);
-    const right_result = try eval(allocator, cir, binop.rhs, eval_stack, layout_cache, type_store);
-
-    // For now, only support integer operations
-    if (left_result.layout.tag != .scalar or right_result.layout.tag != .scalar) {
-        return error.LayoutError;
-    }
-
-    const lhs_scalar = left_result.layout.data.scalar;
-    const rhs_scalar = right_result.layout.data.scalar;
-
-    if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
-        return error.LayoutError;
-    }
-
-    // Read integer values based on precision
-    const lhs_precision = lhs_scalar.data.int;
-    const rhs_precision = rhs_scalar.data.int;
-
-    // Read values based on precision - for now support common precisions
-    const lhs_val: i128 = switch (lhs_precision) {
-        .u8 => @as(*u8, @ptrCast(@alignCast(left_result.ptr))).*,
-        .i8 => @as(*i8, @ptrCast(@alignCast(left_result.ptr))).*,
-        .u16 => @as(*u16, @ptrCast(@alignCast(left_result.ptr))).*,
-        .i16 => @as(*i16, @ptrCast(@alignCast(left_result.ptr))).*,
-        .u32 => @as(*u32, @ptrCast(@alignCast(left_result.ptr))).*,
-        .i32 => @as(*i32, @ptrCast(@alignCast(left_result.ptr))).*,
-        .u64 => @as(*u64, @ptrCast(@alignCast(left_result.ptr))).*,
-        .i64 => @as(*i64, @ptrCast(@alignCast(left_result.ptr))).*,
-        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(left_result.ptr))).*),
-        .i128 => @as(*i128, @ptrCast(@alignCast(left_result.ptr))).*,
-    };
-
-    const rhs_val: i128 = switch (rhs_precision) {
-        .u8 => @as(*u8, @ptrCast(@alignCast(right_result.ptr))).*,
-        .i8 => @as(*i8, @ptrCast(@alignCast(right_result.ptr))).*,
-        .u16 => @as(*u16, @ptrCast(@alignCast(right_result.ptr))).*,
-        .i16 => @as(*i16, @ptrCast(@alignCast(right_result.ptr))).*,
-        .u32 => @as(*u32, @ptrCast(@alignCast(right_result.ptr))).*,
-        .i32 => @as(*i32, @ptrCast(@alignCast(right_result.ptr))).*,
-        .u64 => @as(*u64, @ptrCast(@alignCast(right_result.ptr))).*,
-        .i64 => @as(*i64, @ptrCast(@alignCast(right_result.ptr))).*,
-        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(right_result.ptr))).*),
-        .i128 => @as(*i128, @ptrCast(@alignCast(right_result.ptr))).*,
-    };
-
-    // For binop results, we need to determine the layout based on the operation
-    // For arithmetic operations, the result has the same type as the operands
-    // For comparison operations, the result is always boolean
-    const result_layout = switch (binop.op) {
-        .add, .sub, .mul, .div, .rem, .pow, .div_trunc => left_result.layout,
-        .eq, .ne, .lt, .gt, .le, .ge => layout.Layout.boolType(),
-        .@"and", .@"or" => layout.Layout.boolType(),
-        else => return error.LayoutError,
-    };
-
-    // Perform the operation
-    switch (binop.op) {
-        .add => {
-            // Addition result
-            const result_val: i128 = lhs_val + rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            // Write result based on the precision
-            writeIntToMemory(@as([*]u8, @ptrCast(ptr)), result_val, lhs_precision);
-            return EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
-        },
-        .eq => {
-            // Equality comparison - return boolean
-            const result_val: bool = lhs_val == rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
-            return EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
-        },
-        .ne => {
-            // Not-equal comparison - return boolean
-            const result_val: bool = lhs_val != rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
-            return EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
-        },
-        .gt => {
-            // Greater than comparison - return boolean
-            const result_val: bool = lhs_val > rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
-            return EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
-        },
-        .lt => {
-            // Less than comparison - return boolean
-            const result_val: bool = lhs_val < rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
-            return EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
-        },
-        .ge => {
-            // Greater than or equal comparison - return boolean
-            const result_val: bool = lhs_val >= rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
-            return EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
-        },
-        .le => {
-            // Less than or equal comparison - return boolean
-            const result_val: bool = lhs_val <= rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
-            return EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
-        },
-        else => {
-            return error.LayoutError; // Unsupported operation
-        },
-    }
-}
-
-fn evalCall(allocator: std.mem.Allocator, cir: *const CIR, expr_idx: CIR.Expr.Idx, args: CIR.Expr.Span, eval_stack: *stack.Stack, layout_cache: *layout_store.Store, type_store: *types.Store) EvalError!EvalResult {
-    // Get the function being called
-    const call_expr = cir.store.getExpr(expr_idx);
-    if (call_expr != .e_call) {
-        return error.LayoutError;
-    }
-
-    // For function calls like addU8(1, 2), we need to find the function and its arguments
-    // This is a simplified implementation that assumes the function is directly accessible
-
-    // Get the arguments
-    const args_slice = cir.store.sliceExpr(args);
-
-    if (args_slice.len != 3) { // function + 2 args for addU8
-        return error.LayoutError;
-    }
-
-    // First argument should be the function (e_lookup_local)
-    const func_expr = cir.store.getExpr(args_slice[0]);
-    if (func_expr != .e_lookup_local) {
-        return error.LayoutError;
-    }
-
-    // For now, we'll handle function calls by looking up the function and applying it
-    // This is a simplified implementation that assumes we're calling addU8
-
-    // Evaluate the arguments directly
-    const arg1_result = try eval(allocator, cir, args_slice[1], eval_stack, layout_cache, type_store);
-    const arg2_result = try eval(allocator, cir, args_slice[2], eval_stack, layout_cache, type_store);
-
-    // For addU8, we know it's just addition of U8 values
-    if (arg1_result.layout.tag != .scalar or arg2_result.layout.tag != .scalar) {
-        return error.LayoutError;
-    }
-
-    const arg1_ptr = @as(*u8, @ptrCast(@alignCast(arg1_result.ptr)));
-    const arg2_ptr = @as(*u8, @ptrCast(@alignCast(arg2_result.ptr)));
-    const arg1_val = arg1_ptr.*;
-    const arg2_val = arg2_ptr.*;
-    const result_val = arg1_val + arg2_val;
-
-    // Get the real layout for the result from the type checker
-    const result_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
-    const result_layout_idx = try layout_cache.addTypeVar(result_var);
-    const result_layout = layout_cache.getLayout(result_layout_idx);
-
-    const size = layout_cache.layoutSize(result_layout);
-    const alignment = result_layout.alignment(target.TargetUsize.native);
-    const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-        error.StackOverflow => return error.StackOverflow,
-    };
-    const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-    typed_ptr.* = result_val;
-    return EvalResult{
-        .layout = result_layout,
-        .ptr = ptr,
-    };
-}
-
 test {
     _ = @import("eval_test.zig");
+    _ = @import("nested_if_test.zig");
 }
 
 test "evaluateBooleanCondition - valid True tag" {
