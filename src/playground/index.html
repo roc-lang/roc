@@ -27,9 +27,7 @@
                         points="0,0 23.8834,3.21052 37.2438,19.0101 45.9665,16.6324 50.5,22 45,22 44.0315,26.3689 26.4673,39.3424 27.4527,45.2132 17.655,53 23.6751,22.7086"
                     />
                 </svg>
-                <span style="display: flex; padding-left: 10pt"
-                    >Roc Playground</span
-                >
+                <span style="display: flex">Roc Playground</span>
             </div>
             <div class="header-status">
                 <div class="theme-toggle">
@@ -48,13 +46,6 @@
         </div>
 
         <div class="main-container">
-            <div class="examples-panel">
-                <div class="examples-header">Examples</div>
-                <div class="examples-list" id="examplesList">
-                    <!-- Examples will be populated by JavaScript -->
-                </div>
-            </div>
-
             <div class="editor-container">
                 <div class="editor-header">
                     <!-- <div class="editor-title"></div> NOT USED -->
@@ -63,7 +54,7 @@
                 <textarea
                     class="editor"
                     id="editor"
-                    placeholder="# Select an example from the left panel or write your own Roc code here..."
+                    placeholder="# Select an example from the footer or write your own Roc code here..."
                     spellcheck="false"
                 ></textarea>
             </div>
@@ -114,6 +105,13 @@
                 <div class="output-content" id="outputContent">
                     <div class="loading">Initializing WASM module...</div>
                 </div>
+            </div>
+        </div>
+
+        <div class="examples-footer">
+            <div class="examples-header">Examples</div>
+            <div class="examples-list" id="examplesList">
+                <!-- Examples will be populated by JavaScript -->
             </div>
         </div>
 

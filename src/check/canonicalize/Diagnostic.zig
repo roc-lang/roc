@@ -344,13 +344,9 @@ pub const Diagnostic = union(enum) {
             owned_filename,
         );
 
-        try report.document.addReflowingText("It was already exposed here:");
-
-        try report.document.addSourceRegion(
-            original_region_info,
-            .dimmed,
-            owned_filename,
-        );
+        // we don't need to display the original region info
+        // as this header is in a single location
+        _ = original_region_info;
 
         try report.document.addReflowingText("You can remove the duplicate entry to fix this warning.");
 

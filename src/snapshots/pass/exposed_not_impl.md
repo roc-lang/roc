@@ -27,11 +27,6 @@ The identifier `foo` is exposed multiple times in the module header.
 module [foo, bar, MyType, OtherType, foo, MyType]
 ```
                                      ^^^
-It was already exposed here:**exposed_not_impl.md:1:9:1:12:**
-```roc
-module [foo, bar, MyType, OtherType, foo, MyType]
-```
-        ^^^
 You can remove the duplicate entry to fix this warning.
 
 **REDUNDANT EXPOSED**
@@ -42,11 +37,6 @@ The identifier `MyType` is exposed multiple times in the module header.
 module [foo, bar, MyType, OtherType, foo, MyType]
 ```
                                           ^^^^^^
-It was already exposed here:**exposed_not_impl.md:1:19:1:25:**
-```roc
-module [foo, bar, MyType, OtherType, foo, MyType]
-```
-                  ^^^^^^
 You can remove the duplicate entry to fix this warning.
 
 **EXPOSED BUT NOT DEFINED**
