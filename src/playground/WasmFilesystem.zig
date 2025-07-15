@@ -12,8 +12,9 @@ fn handleOom() noreturn {
     @panic("Out of memory");
 }
 
-// Global storage for source code provided from JavaScript
+/// Global storage for source code provided from JavaScript
 pub var global_source: ?[]const u8 = null;
+/// Global allocator provided from JavaScript
 pub var global_allocator: ?Allocator = null;
 
 /// Set the source code that will be returned by readFile.

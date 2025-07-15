@@ -772,6 +772,7 @@ pub fn toSExprStr(ast: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter)
     try tree.toStringPretty(writer);
 }
 
+/// Helper function to convert the AST to a human friendly representation in HTML format
 pub fn toSExprHtml(ast: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
     const file = ast.store.getFile();
 
