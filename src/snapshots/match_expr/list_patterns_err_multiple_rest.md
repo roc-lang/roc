@@ -11,6 +11,7 @@ match numbers {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - list_patterns_err_multiple_rest.md:1:7:1:14
+INVALID PATTERN - :0:0:0:0
 UNUSED VARIABLE - list_patterns_err_multiple_rest.md:2:10:2:16
 # PROBLEMS
 **UNDEFINED VARIABLE**

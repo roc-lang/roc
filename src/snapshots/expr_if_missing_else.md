@@ -11,6 +11,7 @@ foo = if tru then 0
 ~~~
 # EXPECTED
 PARSE ERROR - expr_if_missing_else.md:3:19:3:20
+UNKNOWN OPERATOR - :0:0:0:0
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

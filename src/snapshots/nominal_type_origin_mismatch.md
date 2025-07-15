@@ -22,6 +22,7 @@ PARSE ERROR - nominal_type_origin_mismatch.md:6:23:6:24
 UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:24:6:36
 UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:36:6:37
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
+UNKNOWN OPERATOR - :0:0:0:0
 INVALID STATEMENT - nominal_type_origin_mismatch.md:6:18:6:24
 INVALID STATEMENT - nominal_type_origin_mismatch.md:6:24:6:36
 INVALID STATEMENT - nominal_type_origin_mismatch.md:6:36:6:37

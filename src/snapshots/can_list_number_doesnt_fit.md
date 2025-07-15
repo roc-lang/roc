@@ -8,7 +8,8 @@ type=expr
 [1u8, 2u8, 300]
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - :0:0:0:0
+INVALID NUMBER - :0:0:0:0
 # PROBLEMS
 **INVALID NUMBER**
 This number literal is not valid: 1u8

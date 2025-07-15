@@ -29,7 +29,9 @@ main! = |_| {
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:9:17:9:22
 UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:13:23:13:28
+INVALID LAMBDA - :0:0:0:0
 INVALID STATEMENT - crash_and_ellipsis_test.md:9:23:9:48
+INVALID LAMBDA - :0:0:0:0
 INVALID STATEMENT - crash_and_ellipsis_test.md:13:29:13:35
 UNUSED VARIABLE - crash_and_ellipsis_test.md:16:5:16:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:17:5:17:12

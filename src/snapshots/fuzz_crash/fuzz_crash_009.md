@@ -13,7 +13,9 @@ foo =
     "onmo %
 ~~~
 # EXPECTED
-MISMATCHED BRACE - fuzz_crash_009.md:1:2:1:3
+MISMATCHED BRACE - :0:0:0:0
+UNCLOSED STRING - :0:0:0:0
+MISSING HEADER - fuzz_crash_009.md:1:2:1:3
 PARSE ERROR - fuzz_crash_009.md:6:12:6:12
 INVALID STATEMENT - fuzz_crash_009.md:1:3:2:7
 # PROBLEMS

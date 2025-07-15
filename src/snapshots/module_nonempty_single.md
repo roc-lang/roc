@@ -9,6 +9,7 @@ module [something, SomeType]
 ~~~
 # EXPECTED
 EXPOSED BUT NOT DEFINED - module_nonempty_single.md:1:9:1:18
+EXPOSED BUT NOT DEFINED - module_nonempty_single.md:1:20:1:28
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
 The module header says that ``something`` is exposed, but it is not defined anywhere in this module.

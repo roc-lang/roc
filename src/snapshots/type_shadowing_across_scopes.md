@@ -24,6 +24,7 @@ PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:31
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:11:32
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:12:1:12:2
 TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
+MALFORMED TYPE - :0:0:0:0
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
 INVALID STATEMENT - type_shadowing_across_scopes.md:11:31:11:32
 INVALID STATEMENT - type_shadowing_across_scopes.md:12:1:12:2

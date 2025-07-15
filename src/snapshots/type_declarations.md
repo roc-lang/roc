@@ -26,6 +26,8 @@ UNDECLARED TYPE - type_declarations.md:5:8:5:11
 UNDECLARED TYPE - type_declarations.md:5:13:5:16
 UNDECLARED TYPE - type_declarations.md:7:19:7:21
 UNDECLARED TYPE - type_declarations.md:7:32:7:41
+EXPOSED BUT NOT DEFINED - type_declarations.md:1:51:1:56
+EXPOSED BUT NOT DEFINED - type_declarations.md:1:42:1:49
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``Bar`` is not declared in this scope.

@@ -8,6 +8,7 @@ type=file
 module P]F
 ~~~
 # EXPECTED
+OVER CLOSED BRACE - :0:0:0:0
 PARSE ERROR - fuzz_crash_011.md:1:8:1:9
 PARSE ERROR - fuzz_crash_011.md:1:11:1:11
 # PROBLEMS

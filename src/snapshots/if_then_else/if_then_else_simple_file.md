@@ -15,6 +15,7 @@ foo = if 1 A
 ~~~
 # EXPECTED
 INVALID IF CONDITION - if_then_else_simple_file.md:3:10:3:10
+INCOMPATIBLE IF BRANCHES - if_then_else_simple_file.md:3:7:3:7
 # PROBLEMS
 **INVALID IF CONDITION**
 This `if` condition needs to be a _Bool_:

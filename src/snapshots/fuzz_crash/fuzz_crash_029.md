@@ -24,6 +24,7 @@ ar,
 		]
 ~~~
 # EXPECTED
+MISMATCHED BRACE - :0:0:0:0
 PARSE ERROR - fuzz_crash_029.md:4:4:4:5
 PARSE ERROR - fuzz_crash_029.md:5:14:5:17
 PARSE ERROR - fuzz_crash_029.md:5:9:5:13
@@ -33,6 +34,7 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:7:2:7:9
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:10:2:10:10
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:14:2:14:10
 PARSE ERROR - fuzz_crash_029.md:17:3:17:4
+LIST NOT CLOSED - fuzz_crash_029.md:17:4:17:4
 INVALID STATEMENT - fuzz_crash_029.md:5:22:5:24
 INVALID STATEMENT - fuzz_crash_029.md:5:24:5:25
 INVALID STATEMENT - fuzz_crash_029.md:6:4:6:5

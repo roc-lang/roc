@@ -9,6 +9,7 @@ type=expr
 ~~~
 # EXPECTED
 DUPLICATE RECORD FIELD - error_duplicate_fields.md:1:27:1:31
+DUPLICATE RECORD FIELD - error_duplicate_fields.md:1:68:1:71
 # PROBLEMS
 **DUPLICATE RECORD FIELD**
 The record field ``name`` appears more than once in this record.

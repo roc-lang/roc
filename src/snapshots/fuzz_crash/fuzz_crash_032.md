@@ -20,11 +20,15 @@ Green => LocalStatus-Complete
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_032.md:3:24:3:25
+IMPORT MUST BE TOP LEVEL - fuzz_crash_032.md:6:18:6:24
 UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:17
 UNDECLARED TYPE - fuzz_crash_032.md:3:21:3:24
 INVALID STATEMENT - fuzz_crash_032.md:3:24:3:25
 INVALID STATEMENT - fuzz_crash_032.md:3:26:3:45
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_032.md:6:25:6:30
+EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
+EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=** is not expected in an expression.

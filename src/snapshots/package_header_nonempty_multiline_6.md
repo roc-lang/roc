@@ -17,6 +17,7 @@ package # Comment after keyword
 ~~~
 # EXPECTED
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_6.md:3:3:3:12
+EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_6.md:4:3:4:11
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
 The module header says that ``something`` is exposed, but it is not defined anywhere in this module.

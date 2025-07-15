@@ -10,6 +10,7 @@ process_user! : { name : Str, age : U32, ..a } => Str
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - type_constrained_record.md:1:42:1:44
 PARSE ERROR - type_constrained_record.md:1:37:1:40
+MALFORMED TYPE - :0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **..** is not expected in a type annotation.
