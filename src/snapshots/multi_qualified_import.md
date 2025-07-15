@@ -23,15 +23,6 @@ data = json.Core.Utf8.encode("hello")
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:3:17:3:22
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:3:23:3:31
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:9:15:9:20
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:9:20:9:25
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:9:25:9:33
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:9:34:9:36
-PARSE ERROR - multi_qualified_import.md:10:1:10:8
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:10:9:10:10
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:13:12:13:17
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:13:17:13:22
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:13:22:13:34
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:12:14:17
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:17:14:22
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:22:14:29
@@ -40,15 +31,7 @@ INVALID STATEMENT - multi_qualified_import.md:3:23:3:31
 INVALID STATEMENT - multi_qualified_import.md:3:32:3:41
 UNDECLARED TYPE - multi_qualified_import.md:5:16:5:23
 UNDEFINED VARIABLE - multi_qualified_import.md:6:16:6:45
-INVALID STATEMENT - multi_qualified_import.md:9:15:9:20
-INVALID STATEMENT - multi_qualified_import.md:9:20:9:25
-INVALID STATEMENT - multi_qualified_import.md:9:25:9:33
-INVALID STATEMENT - multi_qualified_import.md:9:34:9:36
-INVALID STATEMENT - multi_qualified_import.md:10:9:10:10
-INVALID STATEMENT - multi_qualified_import.md:10:11:10:33
-INVALID STATEMENT - multi_qualified_import.md:13:12:13:17
-INVALID STATEMENT - multi_qualified_import.md:13:17:13:22
-INVALID STATEMENT - multi_qualified_import.md:13:22:13:34
+UNUSED VARIABLE - multi_qualified_import.md:10:12:10:19
 UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
 INVALID STATEMENT - multi_qualified_import.md:14:12:14:17
 INVALID STATEMENT - multi_qualified_import.md:14:17:14:22
@@ -77,126 +60,6 @@ Here is the problematic code:
 import json.Core.Utf8 exposing [Encoder]
 ```
                       ^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Core** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**multi_qualified_import.md:9:15:9:20:**
-```roc
-process : json.Core.Utf8.Encoder -> Str
-```
-              ^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Utf8** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**multi_qualified_import.md:9:20:9:25:**
-```roc
-process : json.Core.Utf8.Encoder -> Str
-```
-                   ^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Encoder** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**multi_qualified_import.md:9:25:9:33:**
-```roc
-process : json.Core.Utf8.Encoder -> Str
-```
-                        ^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **->** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**multi_qualified_import.md:9:34:9:36:**
-```roc
-process : json.Core.Utf8.Encoder -> Str
-```
-                                 ^^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-Here is the problematic code:
-**multi_qualified_import.md:10:1:10:8:**
-```roc
-process = |encoder| "processing"
-```
-^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**multi_qualified_import.md:10:9:10:10:**
-```roc
-process = |encoder| "processing"
-```
-        ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Core** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**multi_qualified_import.md:13:12:13:17:**
-```roc
-data : json.Core.Utf8.EncodedData
-```
-           ^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Utf8** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**multi_qualified_import.md:13:17:13:22:**
-```roc
-data : json.Core.Utf8.EncodedData
-```
-                ^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.EncodedData** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**multi_qualified_import.md:13:22:13:34:**
-```roc
-data : json.Core.Utf8.EncodedData
-```
-                     ^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -290,103 +153,16 @@ json_encoder = Json.Core.Utf8.defaultEncoder
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**UNUSED VARIABLE**
+Variable `encoder` is not used anywhere in your code.
 
-**multi_qualified_import.md:9:15:9:20:**
-```roc
-process : json.Core.Utf8.Encoder -> Str
-```
-              ^^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:9:20:9:25:**
-```roc
-process : json.Core.Utf8.Encoder -> Str
-```
-                   ^^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:9:25:9:33:**
-```roc
-process : json.Core.Utf8.Encoder -> Str
-```
-                        ^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:9:34:9:36:**
-```roc
-process : json.Core.Utf8.Encoder -> Str
-```
-                                 ^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:10:9:10:10:**
+If you don't need this variable, prefix it with an underscore like _encoder to suppress this warning.
+The unused variable is declared here:
+**multi_qualified_import.md:10:12:10:19:**
 ```roc
 process = |encoder| "processing"
 ```
-        ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:10:11:10:33:**
-```roc
-process = |encoder| "processing"
-```
-          ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:13:12:13:17:**
-```roc
-data : json.Core.Utf8.EncodedData
-```
-           ^^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:13:17:13:22:**
-```roc
-data : json.Core.Utf8.EncodedData
-```
-                ^^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:13:22:13:34:**
-```roc
-data : json.Core.Utf8.EncodedData
-```
-                     ^^^^^^^^^^^^
+           ^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -473,24 +249,19 @@ LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpper
 		(s-decl @6.1-6.45
 			(p-ident @6.1-6.13 (raw "json_encoder"))
 			(e-ident @6.16-6.45 (raw "Json.Core.Utf8.defaultEncoder")))
-		(s-type-anno @9.1-9.15 (name "process")
-			(ty-var @9.11-9.15 (raw "json")))
-		(e-malformed @9.15-9.20 (reason "expr_unexpected_token"))
-		(e-malformed @9.20-9.25 (reason "expr_unexpected_token"))
-		(e-malformed @9.25-9.33 (reason "expr_unexpected_token"))
-		(e-malformed @9.34-9.36 (reason "expr_unexpected_token"))
-		(s-malformed @9.37-10.8 (tag "expected_colon_after_type_annotation"))
-		(e-malformed @10.9-10.10 (reason "expr_unexpected_token"))
-		(e-lambda @10.11-10.33
-			(args
-				(p-ident @10.12-10.19 (raw "encoder")))
-			(e-string @10.21-10.33
-				(e-string-part @10.22-10.32 (raw "processing"))))
-		(s-type-anno @13.1-13.12 (name "data")
-			(ty-var @13.8-13.12 (raw "json")))
-		(e-malformed @13.12-13.17 (reason "expr_unexpected_token"))
-		(e-malformed @13.17-13.22 (reason "expr_unexpected_token"))
-		(e-malformed @13.22-13.34 (reason "expr_unexpected_token"))
+		(s-type-anno @9.1-9.40 (name "process")
+			(ty-fn @9.11-9.40
+				(ty @9.11-9.33 (name "json.Core.Utf8.Encoder"))
+				(ty @9.37-9.40 (name "Str"))))
+		(s-decl @10.1-10.33
+			(p-ident @10.1-10.8 (raw "process"))
+			(e-lambda @10.11-10.33
+				(args
+					(p-ident @10.12-10.19 (raw "encoder")))
+				(e-string @10.21-10.33
+					(e-string-part @10.22-10.32 (raw "processing")))))
+		(s-type-anno @13.1-13.34 (name "data")
+			(ty @13.8-13.34 (name "json.Core.Utf8.EncodedData")))
 		(s-decl @14.1-14.12
 			(p-ident @14.1-14.5 (raw "data"))
 			(e-ident @14.8-14.12 (raw "json")))
@@ -512,12 +283,11 @@ json_encoder : Encoder
 json_encoder = Json.defaultEncoder
 
 # Test with qualified type in annotation
-process : json
-|encoder| "processing"
+process : json.Core.Utf8.Encoder -> Str
+process = |encoder| "processing"
 
 # Test with multiple qualifiers
-data : json
-
+data : json.Core.Utf8.EncodedData
 data = json
 ("hello")
 ~~~
@@ -531,18 +301,39 @@ data = json
 			(declared-type
 				(ty @5.16-5.23 (name "Encoder")))))
 	(d-let
+		(p-assign @10.1-10.8 (ident "process"))
+		(e-lambda @10.11-10.33
+			(args
+				(p-assign @10.12-10.19 (ident "encoder")))
+			(e-string @10.21-10.33
+				(e-literal @10.22-10.32 (string "processing"))))
+		(annotation @10.1-10.8
+			(declared-type
+				(ty-fn @9.11-9.40 (effectful false)
+					(ty-lookup-external @9.11-9.33
+						(ext-decl @9.11-9.33 (ident "json.Core.Utf8.Encoder") (kind "type")))
+					(ty @9.37-9.40 (name "Str"))))))
+	(d-let
 		(p-assign @14.1-14.5 (ident "data"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "ident_not_in_scope"))
+		(annotation @14.1-14.5
+			(declared-type
+				(ty-lookup-external @13.8-13.34
+					(ext-decl @13.8-13.34 (ident "json.Core.Utf8.EncodedData") (kind "type"))))))
 	(s-import @3.1-3.17 (module "json.Core") (qualifier "json")
-		(exposes)))
+		(exposes))
+	(ext-decl @9.11-9.33 (ident "json.Core.Utf8.Encoder") (kind "type"))
+	(ext-decl @13.8-13.34 (ident "json.Core.Utf8.EncodedData") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @6.1-6.13 (type "Error"))
+		(patt @10.1-10.8 (type "json.Core.Utf8.Encoder -> Str"))
 		(patt @14.1-14.5 (type "Error")))
 	(expressions
 		(expr @6.16-6.45 (type "Error"))
+		(expr @10.11-10.33 (type "json.Core.Utf8.Encoder -> Str"))
 		(expr @14.8-14.12 (type "Error"))))
 ~~~

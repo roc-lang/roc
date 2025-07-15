@@ -1624,7 +1624,7 @@ const QualificationResult = struct {
 /// Parses a qualification chain (e.g., "json.Core.Utf8" -> ["json", "Core"])
 /// Returns the qualifiers and the final token
 fn parseQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationResult {
-    std.debug.assert(self.peek() == .UpperIdent);
+    std.debug.assert(self.peek() == .UpperIdent or self.peek() == .LowerIdent);
 
     const scratch_top = self.store.scratchTokenTop();
     var final_token = self.pos;
@@ -2300,11 +2300,20 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
     const start = self.pos;
     var anno: ?AST.TypeAnno.Idx = null;
 
-    switch (self.peek()) {
-        .UpperIdent => {
+    const first_token_tag = self.peek();
+    switch (first_token_tag) {
+        .UpperIdent, .LowerIdent => blk: {
             const qual_result = try self.parseQualificationChain();
             // Use final token as end position to avoid newline tokens
             self.pos = qual_result.final_token + 1;
+
+            if (first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0) {
+                anno = try self.store.addTypeAnno(.{ .ty_var = .{
+                    .tok = qual_result.final_token,
+                    .region = .{ .start = qual_result.final_token, .end = self.pos },
+                } });
+                break :blk;
+            }
 
             anno = try self.store.addTypeAnno(.{ .ty = .{
                 .region = .{ .start = start, .end = self.pos },
@@ -2333,13 +2342,6 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
                     .args = try self.store.typeAnnoSpanFrom(scratch_top),
                 } });
             }
-        },
-        .LowerIdent => {
-            anno = try self.store.addTypeAnno(.{ .ty_var = .{
-                .tok = self.pos,
-                .region = .{ .start = start, .end = self.pos + 1 },
-            } });
-            self.advance(); // Advance past LowerIdent
         },
         .NamedUnderscore => {
             anno = try self.store.addTypeAnno(.{ .underscore_type_var = .{
