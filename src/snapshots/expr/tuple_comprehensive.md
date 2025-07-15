@@ -283,7 +283,8 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 				(e-int @12.12-12.13 (value "1"))
 				(e-string @12.15-12.22
 					(e-literal @12.16-12.21 (string "hello")))
-				(e-tag @12.24-12.28 (name "True")))))
+				(e-nominal @12.24-12.28 (nominal "Bool")
+					(e-tag @12.24-12.28 (name "True"))))))
 	(s-let @13.2-13.27
 		(p-assign @13.2-13.8 (ident "nested"))
 		(e-tuple @13.11-13.27

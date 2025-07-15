@@ -48,9 +48,10 @@ OpenCurly(1:1-1:2),DoubleDot(1:3-1:5),LowerIdent(1:5-1:11),Comma(1:11-1:12),Lowe
 		(field (name "age")
 			(e-int @1.18-1.20 (value "31")))
 		(field (name "active")
-			(e-tag @1.30-1.34 (name "True")))))
+			(e-nominal @1.30-1.34 (nominal "Bool")
+				(e-tag @1.30-1.34 (name "True"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.36 (type "{ age: Num(_size), active: [True]_others }"))
+(expr @1.1-1.36 (type "{ age: Num(_size), active: Bool }"))
 ~~~
