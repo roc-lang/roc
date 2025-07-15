@@ -11,7 +11,8 @@ type=file
 0_
 ~~~
 # EXPECTED
-LEADING ZERO - fuzz_crash_015.md:1:1:1:4
+LEADING ZERO - :0:0:0:0
+MISSING HEADER - fuzz_crash_015.md:1:1:1:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_015.md:1:4:1:6
 PARSE ERROR - fuzz_crash_015.md:3:4:3:6
 INVALID STATEMENT - fuzz_crash_015.md:1:4:1:6

@@ -18,6 +18,9 @@ MyType : [A, B, C]
 ~~~
 # EXPECTED
 REDUNDANT EXPOSED - exposed_not_impl.md:1:38:1:41
+REDUNDANT EXPOSED - exposed_not_impl.md:1:43:1:49
+EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:14:1:17
+EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:27:1:36
 # PROBLEMS
 **REDUNDANT EXPOSED**
 The identifier `foo` is exposed multiple times in the module header.

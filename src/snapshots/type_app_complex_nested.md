@@ -32,6 +32,7 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
+INVALID LAMBDA - :0:0:0:0
 INVALID STATEMENT - type_app_complex_nested.md:13:24:13:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**

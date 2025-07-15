@@ -9,6 +9,7 @@ package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main
 ~~~
 # EXPECTED
 EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
+EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:21:1:29
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
 The module header says that `something` is exposed, but it is not defined anywhere in this module.

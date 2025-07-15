@@ -8,6 +8,7 @@ type=expr
 { i, Complete]
 ~~~
 # EXPECTED
+MISMATCHED BRACE - :0:0:0:0
 PARSE ERROR - fuzz_crash_033.md:1:6:1:14
 UNDEFINED VARIABLE - fuzz_crash_033.md:1:3:1:4
 # PROBLEMS

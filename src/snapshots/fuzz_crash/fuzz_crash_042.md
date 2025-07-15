@@ -8,7 +8,7 @@ type=file
 module[]import u.R}g:r->R.a.E
 ~~~
 # EXPECTED
-NIL
+OVER CLOSED BRACE - :0:0:0:0
 # PROBLEMS
 **OVER CLOSED BRACE**
 There are too many closing braces here.

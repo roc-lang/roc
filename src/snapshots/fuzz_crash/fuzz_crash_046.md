@@ -8,7 +8,7 @@ type=file
 app[]{f:platform""}import fS
 ~~~
 # EXPECTED
-NIL
+ASCII CONTROL CHARACTER - :0:0:0:0
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.

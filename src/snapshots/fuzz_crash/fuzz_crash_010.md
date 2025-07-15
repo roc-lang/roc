@@ -12,7 +12,10 @@ foo =
     "on        (string 'onmo %')))
 ~~~
 # EXPECTED
-ASCII CONTROL CHARACTER - fuzz_crash_010.md:1:1:1:2
+ASCII CONTROL CHARACTER - :0:0:0:0
+MISMATCHED BRACE - :0:0:0:0
+UNCLOSED STRING - :0:0:0:0
+MISSING HEADER - fuzz_crash_010.md:1:1:1:2
 PARSE ERROR - fuzz_crash_010.md:5:35:5:35
 INVALID STATEMENT - fuzz_crash_010.md:1:2:2:7
 # PROBLEMS

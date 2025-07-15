@@ -10,6 +10,7 @@ Stdout.line???
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
 UNDEFINED VARIABLE - suffixed_question.md:1:1:1:12
+UNKNOWN OPERATOR - :0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **?** is not expected in an expression.
