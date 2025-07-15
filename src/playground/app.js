@@ -40,17 +40,17 @@ isActive = Bool.True`,
 
 // Initialize the playground
 async function initializePlayground() {
-  console.log("🚀 Initializing playground...");
+  logInfo("Initializing playground...");
   try {
     setStatus("loading", "Loading WASM module...");
-    console.log("📦 Loading WASM module...");
+    logInfo("Loading WASM module...");
     await loadWasm();
-    console.log("✅ WASM module loaded successfully");
+    logInfo("WASM module loaded successfully");
 
     setStatus("loading", "Initializing compiler...");
-    console.log("🤝 Sending INIT message to WASM...");
+    logInfo("Sending INIT message to WASM...");
     const response = await sendMessage({ type: "INIT" });
-    console.log("📨 INIT response:", response);
+    logInfo("INIT response:", response);
 
     if (response.status !== "SUCCESS") {
       throw new Error(
@@ -59,14 +59,14 @@ async function initializePlayground() {
     }
 
     setStatus("loading", "Setting up examples...");
-    console.log("📋 Populating examples...");
+    logInfo("Populating examples...");
     populateExamples();
-    console.log("🎨 Updating UI...");
+    logInfo("Updating UI...");
     updateUI();
     setStatus("ready", "Ready to compile Roc code!");
-    console.log("🎉 Playground initialization complete!");
+    logInfo("Playground initialization complete!");
   } catch (error) {
-    console.error("❌ Failed to initialize playground:", error);
+    logError("❌ Failed to initialize playground:", error);
     setStatus("error", `Initialization failed: ${error.message}`);
     showError(`Failed to initialize playground: ${error.message}`);
   }
@@ -75,9 +75,9 @@ async function initializePlayground() {
 // Load WASM module
 async function loadWasm() {
   try {
-    console.log("🌐 Fetching WASM file...");
+    logInfo("Fetching WASM file...");
     const response = await fetch("playground.wasm");
-    console.log("📊 WASM fetch response status:", response.status);
+    logInfo("WASM fetch response status:", response.status);
 
     if (!response.ok) {
       throw new Error(
@@ -85,26 +85,26 @@ async function loadWasm() {
       );
     }
 
-    console.log("🔄 Converting to array buffer...");
+    logInfo("Converting to array buffer...");
     const bytes = await response.arrayBuffer();
-    console.log("📏 WASM file size:", bytes.byteLength, "bytes");
+    logInfo("WASM file size:", bytes.byteLength, "bytes");
 
     if (bytes.byteLength === 0) {
       throw new Error("WASM file is empty");
     }
 
-    console.log("⚙️ Instantiating WASM module...");
+    logInfo("Instantiating WASM module...");
     const module = await WebAssembly.instantiate(bytes, {
       env: {
         // Add any required imports here
       },
     });
-    console.log("✅ WASM module instantiated");
+    logInfo("WASM module instantiated");
 
     wasmModule = module.instance.exports;
     wasmMemory = wasmModule.memory;
-    console.log("🧠 WASM memory size:", wasmMemory.buffer.byteLength, "bytes");
-    console.log("🔧 Available WASM exports:", Object.keys(wasmModule));
+    logInfo("WASM memory size:", wasmMemory.buffer.byteLength, "bytes");
+    logInfo("Available WASM exports:", Object.keys(wasmModule));
 
     // Verify required exports are present
     const requiredExports = [
@@ -119,11 +119,15 @@ async function loadWasm() {
       }
     }
 
-    console.log("🎬 Calling WASM init()...");
+    logInfo("Calling WASM init()...");
     wasmModule.init();
-    console.log("✅ WASM init() completed");
+    logInfo("WASM init() completed");
+
+    const outputContent = document.getElementById("outputContent");
+    outputContent.innerHTML = "Ready to compile!";
+    outputContent.classList.add("status-text");
   } catch (error) {
-    console.error("💥 Error loading WASM:", error);
+    logError("Error loading WASM:", error);
     throw new Error(`Failed to load WASM module: ${error.message}`);
   }
 }
@@ -134,7 +138,7 @@ async function sendMessage(message) {
     throw new Error("WASM module not loaded");
   }
 
-  console.log("📤 Sending message to WASM:", message);
+  logInfo("Sending message to WASM:", message);
 
   let messagePtr = null;
   let responsePtr = null;
@@ -143,10 +147,10 @@ async function sendMessage(message) {
   try {
     const messageStr = JSON.stringify(message);
     messageBytes = new TextEncoder().encode(messageStr);
-    console.log("📝 Message size:", messageBytes.length, "bytes");
+    logInfo("Message size:", messageBytes.length, "bytes");
 
     // Allocate memory for message
-    console.log("🔧 Allocating message memory...");
+    logInfo("Allocating message memory...");
     messagePtr = wasmModule.allocate(messageBytes.length);
     if (!messagePtr) {
       throw new Error("Failed to allocate message memory");
@@ -154,26 +158,26 @@ async function sendMessage(message) {
 
     const memory = new Uint8Array(wasmMemory.buffer);
     memory.set(messageBytes, messagePtr);
-    console.log("📍 Message pointer:", messagePtr);
+    logInfo("Message pointer:", messagePtr);
 
     // Allocate memory for response
-    console.log("🔧 Allocating response memory...");
+    logInfo("Allocating response memory...");
     const responseBufferSize = 64 * 1024; // 64KB buffer
     responsePtr = wasmModule.allocate(responseBufferSize);
     if (!responsePtr) {
       throw new Error("Failed to allocate response memory");
     }
-    console.log("📍 Response pointer:", responsePtr);
+    logInfo("Response pointer:", responsePtr);
 
     // Process message
-    console.log("⚡ Processing message in WASM...");
+    logInfo("Processing message in WASM...");
     const responseLen = wasmModule.processMessage(
       messagePtr,
       messageBytes.length,
       responsePtr,
       responseBufferSize,
     );
-    console.log("📏 Response length:", responseLen, "bytes");
+    logInfo("Response length:", responseLen, "bytes");
 
     if (responseLen === 0) {
       throw new Error("WASM returned empty response");
@@ -186,7 +190,7 @@ async function sendMessage(message) {
       responseLen,
     );
     const responseStr = new TextDecoder().decode(responseBytes);
-    console.log("📥 Raw response:", responseStr);
+    logInfo("Raw response:", responseStr);
 
     if (!responseStr.trim()) {
       throw new Error("WASM returned empty response string");
@@ -196,16 +200,16 @@ async function sendMessage(message) {
     try {
       parsedResponse = JSON.parse(responseStr);
     } catch (jsonError) {
-      console.error("❌ JSON parse error:", jsonError);
+      logError("❌ JSON parse error:", jsonError);
       throw new Error(
         `Invalid JSON response from WASM: ${responseStr.substring(0, 100)}...`,
       );
     }
 
-    console.log("✅ Parsed response:", parsedResponse);
+    logInfo("Parsed response:", parsedResponse);
     return parsedResponse;
   } catch (error) {
-    console.error("💥 Error in sendMessage:", error);
+    logError("Error in sendMessage:", error);
     throw error;
   } finally {
     // Clean up memory
@@ -215,7 +219,7 @@ async function sendMessage(message) {
     if (responsePtr && wasmModule.deallocate) {
       wasmModule.deallocate(responsePtr, 64 * 1024);
     }
-    console.log("🧹 Memory cleaned up");
+    logInfo("Memory cleaned up");
   }
 }
 
@@ -241,62 +245,62 @@ function populateExamples() {
 
 // Load an example
 async function loadExample(exampleId) {
-  console.log("📖 Loading example:", exampleId);
+  logInfo("Loading example:", exampleId);
   const example = examples.find((e) => e.id === exampleId);
   if (!example) {
-    console.warn("⚠️ Example not found:", exampleId);
+    logWarn("Example not found:", exampleId);
     return;
   }
 
   // Update UI
-  console.log("🎨 Updating example selection UI...");
+  logInfo("Updating example selection UI...");
   document.querySelectorAll(".example-item").forEach((item) => {
     item.classList.remove("active");
   });
   const activeItem = document.querySelector(`[data-example-id="${exampleId}"]`);
   if (activeItem) {
     activeItem.classList.add("active");
-    console.log("✅ Activated example item");
+    logInfo("Activated example item");
   } else {
-    console.warn("⚠️ Could not find example item in DOM");
+    logWarn("Could not find example item in DOM");
   }
 
   // Load code into editor
-  console.log("📝 Loading code into editor...");
+  logInfo("Loading code into editor...");
   document.getElementById("editor").value = example.code;
   activeExample = exampleId;
 
   // Reset if we're in loaded state
   if (currentState === "LOADED") {
-    console.log("🔄 Resetting WASM state...");
+    logInfo("Resetting WASM state...");
     await sendMessage({ type: "RESET" });
   }
 
   updateUI();
-  console.log("✅ Example loaded successfully");
+  logInfo("Example loaded successfully");
 }
 
 // Compile code
 async function compileCode() {
-  console.log("🔨 Starting compilation...");
+  logInfo("Starting compilation...");
   const editor = document.getElementById("editor");
   const code = editor.value.trim();
-  console.log("📝 Code length:", code.length, "characters");
+  logInfo("Code length:", code.length, "characters");
 
   if (!code) {
-    console.warn("⚠️ No code to compile");
+    logWarn("No code to compile");
     showError("Please enter some code to compile");
     return;
   }
 
   try {
-    console.log("🚀 Beginning compilation process...");
+    logInfo("Beginning compilation process...");
     setStatus("loading", "Compiling...");
     disableButtons();
 
     // Reset if we're already in LOADED state
     if (currentState === "LOADED") {
-      console.log("🔄 Resetting WASM state before recompilation...");
+      logInfo("Resetting WASM state before recompilation...");
       await sendMessage({ type: "RESET" });
     }
 
@@ -306,22 +310,22 @@ async function compileCode() {
     });
 
     if (response.status === "SUCCESS") {
-      console.log("✅ Compilation successful");
+      logInfo("Compilation successful");
       currentState = "LOADED";
       lastDiagnostics = response.diagnostics;
-      console.log("📊 Diagnostics:", lastDiagnostics);
+      logInfo("Diagnostics:", lastDiagnostics);
       setStatus("loaded", "Code compiled");
       showDiagnostics();
     } else {
-      console.error("❌ Compilation failed:", response.message);
+      logError("❌ Compilation failed:", response.message);
       showError(`Compilation failed: ${response.message}`);
     }
   } catch (error) {
-    console.error("💥 Error during compilation:", error);
+    logError("Error during compilation:", error);
     showError(`Error during compilation: ${error.message}`);
   } finally {
     updateUI();
-    console.log("🏁 Compilation process finished");
+    logInfo("Compilation process finished");
   }
 }
 
@@ -476,7 +480,7 @@ function showMessage(message) {
 
 // Update status indicator
 function setStatus(status, text) {
-  console.log("🔄 Status update:", status, "-", text);
+  logInfo("Status update:", status, "-", text);
   const statusDot = document.getElementById("statusDot");
   const statusText = document.getElementById("statusText");
 
@@ -485,10 +489,10 @@ function setStatus(status, text) {
 
   if (status === "ready") {
     currentState = "READY";
-    console.log("🟢 State changed to READY");
+    logInfo("State changed to READY");
   } else if (status === "loaded") {
     currentState = "LOADED";
-    console.log("🔵 State changed to LOADED");
+    logInfo("State changed to LOADED");
   }
 }
 
@@ -501,7 +505,7 @@ function updateUI() {
 
   switch (currentState) {
     case "START":
-      compileBtn.disabled = true;
+      compileBtn.disabled = false;
       stageButtons.forEach((btn) => (btn.disabled = true));
       break;
     case "READY":
@@ -624,6 +628,18 @@ function toggleTheme() {
   themeSwitch.setAttribute("aria-checked", newTheme === "dark");
 }
 
+function logInfo(msg) {
+  console.log("INFO: " + msg);
+}
+
+function logWarn(msg) {
+  console.warn("WARNING: " + msg);
+}
+
+function logError(msg) {
+  console.error("ERROR: " + msg);
+}
+
 // Initialize theme on page load
 initTheme();
 
@@ -637,5 +653,6 @@ document.getElementById("themeSwitch").addEventListener("keydown", (e) => {
 });
 
 // Initialize when page loads
-console.log("🌐 Page loaded, setting up initialization...");
+logInfo("Page loaded, setting up initialization...");
+
 window.addEventListener("load", initializePlayground);

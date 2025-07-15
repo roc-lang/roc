@@ -8,7 +8,29 @@
     </head>
     <body>
         <div class="header">
-            <div class="header-title">🚀 Roc Playground</div>
+            <div class="header-title">
+                <svg
+                    viewBox="0 0 52 53"
+                    xmlns="http://www.w3.org/2000/svg"
+                    style="display: flex; height: 25px"
+                >
+                    <!-- Make this icon look nicer in dark mode. (Only Firefox supports this; others ignore it.) -->
+                    <style>
+                        @media (prefers-color-scheme: dark) {
+                            polygon {
+                                fill: #9c7bea;
+                            }
+                        }
+                    </style>
+                    <polygon
+                        fill="#7d59dd"
+                        points="0,0 23.8834,3.21052 37.2438,19.0101 45.9665,16.6324 50.5,22 45,22 44.0315,26.3689 26.4673,39.3424 27.4527,45.2132 17.655,53 23.6751,22.7086"
+                    />
+                </svg>
+                <span style="display: flex; padding-left: 10pt"
+                    >Roc Playground</span
+                >
+            </div>
             <div class="header-status">
                 <div class="status-dot" id="statusDot"></div>
                 <span class="status-text" id="statusText">Initializing...</span>
@@ -37,7 +59,7 @@
 
             <div class="editor-container">
                 <div class="editor-header">
-                    <div class="editor-title">main.roc</div>
+                    <!-- <div class="editor-title"></div> NOT USED -->
                     <button
                         class="compile-button"
                         onclick="compileCode()"
@@ -58,7 +80,7 @@
 
             <div class="output-container">
                 <div class="output-header">
-                    <div class="output-title">Output</div>
+                    <!-- <div class="output-title">Output</div> -->
                     <div class="stage-buttons">
                         <button
                             class="stage-button active"

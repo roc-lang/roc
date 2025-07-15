@@ -7,7 +7,7 @@
     --text-secondary: #4c4c4c;
     --text-muted: #717171;
     --border-color: #d0d0d0;
-    --header-bg: #1e1e1e;
+    --header-bg: #9b6bf2;
     --header-text: #ffffff;
 
     /* Roc brand colors */
@@ -31,6 +31,7 @@
     --button-bg: #7c38f5;
     --button-hover: #9b6bf2;
     --button-active: #1bd6bd;
+    --button-active-text: #fafafa;
     --success-color: #0b8400;
     --error-color: #d32f2f;
     --warning-color: #bf5000;
@@ -70,6 +71,7 @@
         --button-bg: #9c7cea;
         --button-hover: #b094f5;
         --button-active: #1bd6bd;
+        --button-active-text: #fafafa;
 
         /* Editor colors - dark mode */
         --editor-bg: #1a1a1a;
@@ -87,8 +89,8 @@
     --text-secondary: #4c4c4c;
     --text-muted: #717171;
     --border-color: #d0d0d0;
-    --header-bg: #1e1e1e;
-    --header-text: #ffffff;
+    --header-bg: #fafafa;
+    --header-text: #7c38f5;
     --syntax-keyword: #7c38f5;
     --syntax-string: #0b8400;
     --syntax-number: #bf5000;
@@ -101,6 +103,7 @@
     --button-bg: #7c38f5;
     --button-hover: #9b6bf2;
     --button-active: #1bd6bd;
+    --button-active-text: #fafafa;
     --editor-bg: #fafafa;
     --editor-selection: rgba(124, 56, 245, 0.2);
     --output-bg: #f4f8f9;
@@ -128,6 +131,7 @@
     --button-bg: #9c7cea;
     --button-hover: #b094f5;
     --button-active: #1bd6bd;
+    --button-active-text: #fafafa;
     --editor-bg: #1a1a1a;
     --editor-selection: rgba(156, 124, 234, 0.3);
     --output-bg: #202746;
@@ -167,7 +171,8 @@ body {
 .header-title {
     font-size: 20px;
     font-weight: 600;
-    color: var(--roc-purple-light);
+    color: var(--header-text);
+    display: flex;
 }
 
 .header-status {
@@ -269,7 +274,7 @@ body {
 
 /* Examples panel */
 .examples-panel {
-    width: 200px;
+    width: 100px;
     background-color: var(--bg-secondary);
     border-right: 1px solid var(--border-color);
     display: flex;
@@ -281,6 +286,7 @@ body {
     font-weight: 600;
     background-color: var(--bg-tertiary);
     border-bottom: 1px solid var(--border-color);
+    height: 50px;
 }
 
 .examples-list {
@@ -367,6 +373,7 @@ body {
     justify-content: space-between;
     align-items: center;
     border-bottom: 1px solid var(--border-color);
+    height: 50px;
 }
 
 .editor-title {
@@ -403,6 +410,7 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    height: 50px;
 }
 
 .output-title {
@@ -433,9 +441,15 @@ body {
 }
 
 .stage-button.active {
+    background-color: var(--button-hover);
+    color: var(--button-active-text);
+    border-color: var(--border-color);
+}
+
+.stage-button.active:hover:not(:disabled) {
     background-color: var(--button-bg);
-    color: var(--header-text);
-    border-color: var(--button-bg);
+    color: var(--button-active-text);
+    border-color: var(--button-hover);
 }
 
 .stage-button:disabled {
