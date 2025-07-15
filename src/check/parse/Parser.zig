@@ -1105,12 +1105,12 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
             const start = self.pos;
             if (self.peekNext() == .OpAssign) {
                 self.advance(); // Advance past NamedUnderscore
-                self.advance(); // Advance past OpAssign
-                const idx = try self.parseExpr();
                 const patt_idx = try self.store.addPattern(.{ .ident = .{
                     .ident_tok = start,
                     .region = .{ .start = start, .end = self.pos },
                 } });
+                self.advance(); // Advance past OpAssign
+                const idx = try self.parseExpr();
                 const statement_idx = try self.store.addStatement(.{ .decl = .{
                     .pattern = patt_idx,
                     .body = idx,
