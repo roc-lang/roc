@@ -1624,7 +1624,7 @@ const QualificationResult = struct {
 /// Parses a qualification chain (e.g., "json.Core.Utf8" -> ["json", "Core"])
 /// Returns the qualifiers and the final token
 fn parseQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationResult {
-    std.debug.assert(self.peek() == .UpperIdent);
+    std.debug.assert(self.peek() == .UpperIdent or self.peek() == .LowerIdent);
 
     const scratch_top = self.store.scratchTokenTop();
     var final_token = self.pos;
@@ -1799,22 +1799,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
 
             if (self.peek() == .CloseCurly) {
                 // Empty - treat as empty record
-                const scratch_top = self.store.scratchRecordFieldTop();
-                self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch |err| {
-                    switch (err) {
-                        error.ExpectedNotFound => {
-                            self.store.clearScratchRecordFieldsFrom(scratch_top);
-                            return try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
-                        },
-                        error.OutOfMemory => return error.OutOfMemory,
-                    }
-                };
-                const fields = try self.store.recordFieldSpanFrom(scratch_top);
-                expr = try self.store.addExpr(.{ .record = .{
-                    .fields = fields,
-                    .ext = null,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
+                expr = try self.parseRecord(start);
             } else if (self.peek() == .DoubleDot) {
                 // Record is being extended
 
@@ -1848,22 +1833,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
                 } });
             } else if (self.peek() == .LowerIdent and self.peekNext() == .Comma) {
                 // Definitely a record - has comma-separated fields
-                const scratch_top = self.store.scratchRecordFieldTop();
-                self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch |err| {
-                    switch (err) {
-                        error.ExpectedNotFound => {
-                            self.store.clearScratchRecordFieldsFrom(scratch_top);
-                            return try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
-                        },
-                        error.OutOfMemory => return error.OutOfMemory,
-                    }
-                };
-                const fields = try self.store.recordFieldSpanFrom(scratch_top);
-                expr = try self.store.addExpr(.{ .record = .{
-                    .fields = fields,
-                    .ext = null,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
+                expr = try self.parseRecord(start);
             } else if (self.peek() == .LowerIdent and self.peekNext() == .OpColon) {
                 // Ambiguous case: could be record field or type annotation
                 // Use bounded lookahead to determine the context
@@ -1922,22 +1892,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
                     expr = try self.parseBlock(start);
                 } else {
                     // Parse as record
-                    const scratch_top = self.store.scratchRecordFieldTop();
-                    self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch |err| {
-                        switch (err) {
-                            error.ExpectedNotFound => {
-                                self.store.clearScratchRecordFieldsFrom(scratch_top);
-                                return try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
-                            },
-                            error.OutOfMemory => return error.OutOfMemory,
-                        }
-                    };
-                    const fields = try self.store.recordFieldSpanFrom(scratch_top);
-                    expr = try self.store.addExpr(.{ .record = .{
-                        .fields = fields,
-                        .ext = null,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
+                    expr = try self.parseRecord(start);
                 }
             } else {
                 // Not ambiguous - parse as block
@@ -2345,11 +2300,20 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
     const start = self.pos;
     var anno: ?AST.TypeAnno.Idx = null;
 
-    switch (self.peek()) {
-        .UpperIdent => {
+    const first_token_tag = self.peek();
+    switch (first_token_tag) {
+        .UpperIdent, .LowerIdent => blk: {
             const qual_result = try self.parseQualificationChain();
             // Use final token as end position to avoid newline tokens
             self.pos = qual_result.final_token + 1;
+
+            if (first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0) {
+                anno = try self.store.addTypeAnno(.{ .ty_var = .{
+                    .tok = qual_result.final_token,
+                    .region = .{ .start = qual_result.final_token, .end = self.pos },
+                } });
+                break :blk;
+            }
 
             anno = try self.store.addTypeAnno(.{ .ty = .{
                 .region = .{ .start = start, .end = self.pos },
@@ -2378,13 +2342,6 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
                     .args = try self.store.typeAnnoSpanFrom(scratch_top),
                 } });
             }
-        },
-        .LowerIdent => {
-            anno = try self.store.addTypeAnno(.{ .ty_var = .{
-                .tok = self.pos,
-                .region = .{ .start = start, .end = self.pos + 1 },
-            } });
-            self.advance(); // Advance past LowerIdent
         },
         .NamedUnderscore => {
             anno = try self.store.addTypeAnno(.{ .underscore_type_var = .{
@@ -2721,7 +2678,13 @@ pub fn parseWhereClause(self: *Parser) std.mem.Allocator.Error!AST.WhereClause.I
     }
 }
 
-/// todo
+/// Parse a block of statements.
+/// Check parseStmt to see how statements are parsed.
+/// {
+///     <stmt1>
+///     ...
+///     <stmtN>
+/// }
 pub fn parseBlock(self: *Parser, start: u32) std.mem.Allocator.Error!AST.Expr.Idx {
     const scratch_top = self.store.scratchStatementTop();
 
@@ -2743,6 +2706,33 @@ pub fn parseBlock(self: *Parser, start: u32) std.mem.Allocator.Error!AST.Expr.Id
     const statements = try self.store.statementSpanFrom(scratch_top);
     return try self.store.addExpr(.{ .block = .{
         .statements = statements,
+        .region = .{ .start = start, .end = self.pos },
+    } });
+}
+
+/// Parse a record.
+/// Check parseRecordField to see how record fields are parsed.
+/// {
+///     a,
+///     b: <expr1>,
+///     ...
+///     <recordFieldN>
+/// }
+pub fn parseRecord(self: *Parser, start: u32) std.mem.Allocator.Error!AST.Expr.Idx {
+    const scratch_top = self.store.scratchRecordFieldTop();
+    self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch |err| {
+        switch (err) {
+            error.ExpectedNotFound => {
+                self.store.clearScratchRecordFieldsFrom(scratch_top);
+                return try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+        }
+    };
+    const fields = try self.store.recordFieldSpanFrom(scratch_top);
+    return try self.store.addExpr(.{ .record = .{
+        .fields = fields,
+        .ext = null,
         .region = .{ .start = start, .end = self.pos },
     } });
 }
