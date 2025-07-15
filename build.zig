@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const update_expected_step = b.step("update-expected", "Update EXPECTED sections based on PROBLEMS in snapshots");
+    const playground_step = b.step("playground", "Build the WASM playground");
 
     // general configuration
     const target = b.standardTargetOptions(.{ .default_target = .{
@@ -88,6 +89,37 @@ pub fn build(b: *std.Build) void {
     add_tracy(b, build_options, update_expected_exe, target, false, tracy);
     install_and_run(b, no_bin, update_expected_exe, update_expected_step, update_expected_step);
 
+    // Add playground WASM executable
+    const playground_exe = b.addExecutable(.{
+        .name = "playground",
+        .root_source_file = b.path("src/playground.zig"),
+        .target = b.resolveTargetQuery(.{
+            .cpu_arch = .wasm32,
+            .os_tag = .freestanding,
+        }),
+        .optimize = optimize,
+    });
+    playground_exe.entry = .disabled;
+    playground_exe.rdynamic = true;
+    playground_exe.root_module.addOptions("build_options", build_options);
+    add_tracy(b, build_options, playground_exe, b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+    }), false, null);
+
+    const playground_install = b.addInstallArtifact(playground_exe, .{
+        .dest_dir = .{ .override = .{ .custom = "playground" } },
+    });
+
+    const playground_html_install = b.addInstallFile(b.path("src/playground/index.html"), "playground/index.html");
+    const playground_css_install = b.addInstallFile(b.path("src/playground/styles.css"), "playground/styles.css");
+    const playground_js_install = b.addInstallFile(b.path("src/playground/app.js"), "playground/app.js");
+
+    playground_step.dependOn(&playground_install.step);
+    playground_step.dependOn(&playground_html_install.step);
+    playground_step.dependOn(&playground_css_install.step);
+    playground_step.dependOn(&playground_js_install.step);
+
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
@@ -106,6 +138,7 @@ pub fn build(b: *std.Build) void {
     builtins_tests.root_module.stack_check = false;
 
     b.default_step.dependOn(&all_tests.step);
+    b.default_step.dependOn(playground_step);
     b.default_step.dependOn(&builtins_tests.step);
     if (no_bin) {
         test_step.dependOn(&all_tests.step);

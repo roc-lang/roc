@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Roc Playground</title>
+        <link rel="stylesheet" href="styles.css" />
+    </head>
+    <body>
+        <div class="header">
+            <div class="header-title">
+                <svg
+                    viewBox="0 0 52 53"
+                    xmlns="http://www.w3.org/2000/svg"
+                    style="display: flex; height: 25px"
+                >
+                    <!-- Make this icon look nicer in dark mode. (Only Firefox supports this; others ignore it.) -->
+                    <style>
+                        @media (prefers-color-scheme: dark) {
+                            polygon {
+                                fill: #9c7bea;
+                            }
+                        }
+                    </style>
+                    <polygon
+                        fill="#7d59dd"
+                        points="0,0 23.8834,3.21052 37.2438,19.0101 45.9665,16.6324 50.5,22 45,22 44.0315,26.3689 26.4673,39.3424 27.4527,45.2132 17.655,53 23.6751,22.7086"
+                    />
+                </svg>
+                <span style="display: flex; padding-left: 10pt"
+                    >Roc Playground</span
+                >
+            </div>
+            <div class="header-status">
+                <div class="status-dot" id="statusDot"></div>
+                <span class="status-text" id="statusText">Initializing...</span>
+                <div class="theme-toggle">
+                    <span class="theme-label">Theme</span>
+                    <div
+                        class="theme-switch"
+                        id="themeSwitch"
+                        tabindex="0"
+                        role="switch"
+                        aria-checked="false"
+                    >
+                        <div class="theme-switch-slider"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-container">
+            <div class="examples-panel">
+                <div class="examples-header">Examples</div>
+                <div class="examples-list" id="examplesList">
+                    <!-- Examples will be populated by JavaScript -->
+                </div>
+            </div>
+
+            <div class="editor-container">
+                <div class="editor-header">
+                    <!-- <div class="editor-title"></div> NOT USED -->
+                    <button
+                        class="compile-button"
+                        onclick="compileCode()"
+                        id="compileBtn"
+                        disabled
+                    >
+                        Compile
+                    </button>
+                </div>
+                <textarea
+                    class="editor"
+                    id="editor"
+                    placeholder="# Select an example from the left panel or write your own Roc code here..."
+                ></textarea>
+            </div>
+
+            <div class="resize-handle" id="resizeHandle"></div>
+
+            <div class="output-container">
+                <div class="output-header">
+                    <!-- <div class="output-title">Output</div> -->
+                    <div class="stage-buttons">
+                        <button
+                            class="stage-button active"
+                            onclick="showDiagnostics()"
+                            id="diagnosticsBtn"
+                        >
+                            PROBLEMS
+                        </button>
+                        <button
+                            class="stage-button"
+                            onclick="showTokens()"
+                            id="tokensBtn"
+                            disabled
+                        >
+                            TOKENS
+                        </button>
+                        <button
+                            class="stage-button"
+                            onclick="showParseAst()"
+                            id="parseBtn"
+                            disabled
+                        >
+                            AST
+                        </button>
+                        <button
+                            class="stage-button"
+                            onclick="showCanCir()"
+                            id="canBtn"
+                            disabled
+                        >
+                            CIR
+                        </button>
+                        <button
+                            class="stage-button"
+                            onclick="showTypes()"
+                            id="typesBtn"
+                            disabled
+                        >
+                            TYPES
+                        </button>
+                    </div>
+                </div>
+                <div class="output-content" id="outputContent">
+                    <div class="loading">Initializing WASM module...</div>
+                </div>
+            </div>
+        </div>
+
+        <script src="app.js"></script>
+    </body>
+</html>
