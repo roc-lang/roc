@@ -12,7 +12,7 @@ const layout_store = @import("../layout/store.zig");
 
 test "minimal if expression segfault" {
     const allocator = testing.allocator;
-    const source = "if True then 1 else 0";
+    const source = "if True 1 else 0";
 
     // Initialize ModuleEnv
     const owned_source = try allocator.dupe(u8, source);
