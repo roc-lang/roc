@@ -66,8 +66,8 @@ async function initializePlayground() {
     lastCompileTime = null;
     setupAutoCompile();
     setupUrlSharing();
-    await restoreFromHash();
     currentState = "READY";
+    await restoreFromHash();
     logInfo("Playground initialization complete!");
   } catch (error) {
     logError("❌ Failed to initialize playground:", error);
@@ -616,6 +616,22 @@ function setStatus(status, text) {
 
 // Update UI based on current state
 function updateUI() {
+  updateStageButtons();
+
+  // Update stage buttons based on current state
+  if (currentState !== "LOADED") {
+    // Disable stage buttons when not loaded
+    document.querySelectorAll(".stage-button").forEach((btn) => {
+      if (btn.id !== "diagnosticsBtn") {
+        btn.disabled = true;
+      }
+    });
+  } else {
+    // Enable all stage buttons when loaded
+    document.querySelectorAll(".stage-button").forEach((btn) => {
+      btn.disabled = false;
+    });
+  }
 }
 
 // Update stage buttons
@@ -636,7 +652,6 @@ function updateStageButtons() {
     document.getElementById(activeBtn).classList.add("active");
   }
 }
-
 
 // Clear diagnostic summary from header
 function clearDiagnosticSummary() {
@@ -737,7 +752,7 @@ async function compressAndEncode(content) {
   const input = encoder.encode(content);
   const cs = new CompressionStream("gzip");
   const compressedStream = new Response(
-    new Blob([input]).stream().pipeThrough(cs)
+    new Blob([input]).stream().pipeThrough(cs),
   ).arrayBuffer();
   const compressed = new Uint8Array(await compressedStream);
   return uint8ToBase64(compressed);
@@ -747,7 +762,7 @@ async function decodeAndDecompress(b64) {
   const compressed = base64ToUint8(b64);
   const ds = new DecompressionStream("gzip");
   const decompressedStream = new Response(
-    new Blob([compressed]).stream().pipeThrough(ds)
+    new Blob([compressed]).stream().pipeThrough(ds),
   ).arrayBuffer();
   const decompressed = new Uint8Array(await decompressedStream);
   const decoder = new TextDecoder();
@@ -785,22 +800,38 @@ async function updateUrlWithCompressedContent(content) {
 async function restoreFromHash() {
   // Expect hash in the form #content=...
   const hash = window.location.hash.replace(/^#/, "");
+  logInfo(`Attempting to restore from hash: ${hash.substring(0, 50)}...`);
+
   let b64 = null;
   if (hash.startsWith("content=")) {
     b64 = hash.slice("content=".length);
+    logInfo(`Extracted base64 content: ${b64.substring(0, 50)}...`);
   }
+
   if (b64) {
     try {
       const content = await decodeAndDecompress(b64);
+      logInfo(`Decompressed content: ${content.substring(0, 100)}...`);
+
       const editor = document.getElementById("editor");
       if (editor) {
         editor.value = content;
         logInfo("Restored content from hash fragment");
-        await compileCode(); // Automatically compile after restoring
+
+        // Wait for the playground to be ready before compiling
+        if (currentState === "READY") {
+          await compileCode(); // Automatically compile after restoring
+        } else {
+          logInfo("Playground not ready, skipping auto-compile");
+        }
+      } else {
+        logError("Editor element not found");
       }
     } catch (e) {
       logError("Failed to decompress content from hash", e);
     }
+  } else {
+    logInfo("No content found in hash");
   }
 }
 
@@ -814,6 +845,13 @@ function setupUrlSharing() {
       }, 1000); // Update URL after 1 second of no typing
     });
   }
+
+  // Listen for hash changes (when someone pastes a new URL)
+  window.addEventListener("hashchange", async () => {
+    logInfo("Hash changed, attempting to restore content");
+    await restoreFromHash();
+  });
+
   addShareButton();
 }
 
