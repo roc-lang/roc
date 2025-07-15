@@ -51,7 +51,7 @@ olor = |color| { import Color.RGB
 
 
 **UNDECLARED TYPE VARIABLE**
-The type variable ``lue`` is not declared in this scope.
+The type variable `lue` is not declared in this scope.
 
 Type variables must be introduced in a type annotation before they can be used.
 
@@ -64,7 +64,7 @@ LocalStatus :lue => Loc= [Pending, Complete]
 
 
 **UNDECLARED TYPE**
-The type ``Loc`` is not declared in this scope.
+The type `Loc` is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_032.md:3:21:3:24:**
@@ -112,24 +112,24 @@ olor = |color| { import Color.RGB
 
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that ``r`` is exposed, but it is not defined anywhere in this module.
+The module header says that `r` is exposed, but it is not defined anywhere in this module.
 
 **fuzz_crash_032.md:1:13:1:14:**
 ```roc
 module [tus,r]
 ```
             ^
-You can fix this by either defining ``r`` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `r` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that ``tus`` is exposed, but it is not defined anywhere in this module.
+The module header says that `tus` is exposed, but it is not defined anywhere in this module.
 
 **fuzz_crash_032.md:1:9:1:12:**
 ```roc
 module [tus,r]
 ```
         ^^^
-You can fix this by either defining ``tus`` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `tus` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig

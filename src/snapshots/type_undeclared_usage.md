@@ -22,7 +22,7 @@ UNDECLARED TYPE - type_undeclared_usage.md:5:16:5:32
 UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
 # PROBLEMS
 **UNDECLARED TYPE**
-The type ``UnknownType`` is not declared in this scope.
+The type `UnknownType` is not declared in this scope.
 
 This type is referenced here:
 **type_undeclared_usage.md:3:10:3:21:**
@@ -33,7 +33,7 @@ MyType : UnknownType
 
 
 **UNDECLARED TYPE**
-The type ``UndeclaredResult`` is not declared in this scope.
+The type `UndeclaredResult` is not declared in this scope.
 
 This type is referenced here:
 **type_undeclared_usage.md:5:16:5:32:**
@@ -44,9 +44,9 @@ processValue : UndeclaredResult -> Str
 
 
 **UNUSED VARIABLE**
-Variable ``value`` is not used anywhere in your code.
+Variable `value` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_value to suppress this warning.
 The unused variable is declared here:
 **type_undeclared_usage.md:6:17:6:22:**
 ```roc

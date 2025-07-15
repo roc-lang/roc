@@ -46,9 +46,9 @@ I am part way through parsing this tuple, but it is empty:
 If you want to represent nothing, try using an empty record: `{}`.
 
 **UNUSED VARIABLE**
-Variable ``with_lambda`` is not used anywhere in your code.
+Variable `with_lambda` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_with_lambda` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_with_lambda to suppress this warning.
 The unused variable is declared here:
 **tuple_comprehensive.md:16:2:16:13:**
 ```roc
@@ -58,9 +58,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``single`` is not used anywhere in your code.
+Variable `single` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_single` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_single to suppress this warning.
 The unused variable is declared here:
 **tuple_comprehensive.md:10:2:10:8:**
 ```roc
@@ -70,9 +70,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``pair`` is not used anywhere in your code.
+Variable `pair` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_pair` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_pair to suppress this warning.
 The unused variable is declared here:
 **tuple_comprehensive.md:11:2:11:6:**
 ```roc
@@ -82,9 +82,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``nested`` is not used anywhere in your code.
+Variable `nested` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_nested` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_nested to suppress this warning.
 The unused variable is declared here:
 **tuple_comprehensive.md:13:2:13:8:**
 ```roc
@@ -94,9 +94,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``triple`` is not used anywhere in your code.
+Variable `triple` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_triple` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_triple to suppress this warning.
 The unused variable is declared here:
 **tuple_comprehensive.md:12:2:12:8:**
 ```roc
@@ -106,9 +106,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``mixed`` is not used anywhere in your code.
+Variable `mixed` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_mixed` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_mixed to suppress this warning.
 The unused variable is declared here:
 **tuple_comprehensive.md:14:2:14:7:**
 ```roc
@@ -118,9 +118,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``with_vars`` is not used anywhere in your code.
+Variable `with_vars` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_with_vars` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_with_vars to suppress this warning.
 The unused variable is declared here:
 **tuple_comprehensive.md:15:2:15:11:**
 ```roc

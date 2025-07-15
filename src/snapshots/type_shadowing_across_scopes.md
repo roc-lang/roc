@@ -77,7 +77,7 @@ Here is the problematic code:
 
 
 **TYPE REDECLARED**
-The type ``Result`` is being redeclared.
+The type `Result` is being redeclared.
 
 The redeclaration is here:
 **type_shadowing_across_scopes.md:3:1:3:31:**
@@ -86,7 +86,7 @@ Result(a, b) : [Ok(a), Err(b)]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-But ``Result`` was already declared here:
+But `Result` was already declared here:
 **type_shadowing_across_scopes.md:1:1:1:1:**
 ```roc
 module [Result, processData]
@@ -98,9 +98,9 @@ module [Result, processData]
 This type annotation is malformed or contains invalid syntax.
 
 **UNUSED VARIABLE**
-Variable ``data`` is not used anywhere in your code.
+Variable `data` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_data to suppress this warning.
 The unused variable is declared here:
 **type_shadowing_across_scopes.md:6:16:6:20:**
 ```roc
