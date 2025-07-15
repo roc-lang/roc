@@ -324,7 +324,7 @@ import json.Core.Utf8 exposing [Encoder]
 
 
 **UNDECLARED TYPE**
-The type ``Encoder`` is not declared in this scope.
+The type `Encoder` is not declared in this scope.
 
 This type is referenced here:
 **multi_qualified_import.md:5:16:5:23:**

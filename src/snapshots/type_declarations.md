@@ -28,7 +28,7 @@ UNDECLARED TYPE - type_declarations.md:7:19:7:21
 UNDECLARED TYPE - type_declarations.md:7:32:7:41
 # PROBLEMS
 **UNDECLARED TYPE**
-The type ``Bar`` is not declared in this scope.
+The type `Bar` is not declared in this scope.
 
 This type is referenced here:
 **type_declarations.md:5:8:5:11:**
@@ -39,7 +39,7 @@ Foo : (Bar, Baz)
 
 
 **UNDECLARED TYPE**
-The type ``Baz`` is not declared in this scope.
+The type `Baz` is not declared in this scope.
 
 This type is referenced here:
 **type_declarations.md:5:13:5:16:**
@@ -50,7 +50,7 @@ Foo : (Bar, Baz)
 
 
 **UNDECLARED TYPE**
-The type ``Ok`` is not declared in this scope.
+The type `Ok` is not declared in this scope.
 
 This type is referenced here:
 **type_declarations.md:7:19:7:21:**
@@ -61,7 +61,7 @@ Some(a) : { foo : Ok(a), bar : Something }
 
 
 **UNDECLARED TYPE**
-The type ``Something`` is not declared in this scope.
+The type `Something` is not declared in this scope.
 
 This type is referenced here:
 **type_declarations.md:7:32:7:41:**
@@ -72,24 +72,24 @@ Some(a) : { foo : Ok(a), bar : Something }
 
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that ``main!`` is exposed, but it is not defined anywhere in this module.
+The module header says that `main!` is exposed, but it is not defined anywhere in this module.
 
 **type_declarations.md:1:51:1:56:**
 ```roc
 module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
 ```
                                                   ^^^^^
-You can fix this by either defining ``main!`` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that ``add_one`` is exposed, but it is not defined anywhere in this module.
+The module header says that `add_one` is exposed, but it is not defined anywhere in this module.
 
 **type_declarations.md:1:42:1:49:**
 ```roc
 module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
 ```
                                          ^^^^^^^
-You can fix this by either defining ``add_one`` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `add_one` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig

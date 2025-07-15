@@ -135,9 +135,9 @@ transform : _a -> _b -> _b
 
 
 **UNUSED VARIABLE**
-Variable ``list`` is not used anywhere in your code.
+Variable `list` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _list to suppress this warning.
 The unused variable is declared here:
 **underscore_in_regular_annotations.md:11:12:11:16:**
 ```roc

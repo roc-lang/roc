@@ -302,9 +302,9 @@ pub const Diagnostic = union(enum) {
         var report = Report.init(allocator, "EXPOSED BUT NOT DEFINED", .runtime_error);
         const owned_ident = try report.addOwnedString(ident_name);
 
-        try report.document.addReflowingText("The module header says that `");
+        try report.document.addReflowingText("The module header says that ");
         try report.document.addInlineCode(owned_ident);
-        try report.document.addReflowingText("` is exposed, but it is not defined anywhere in this module.");
+        try report.document.addReflowingText(" is exposed, but it is not defined anywhere in this module.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
@@ -314,9 +314,9 @@ pub const Diagnostic = union(enum) {
             owned_filename,
         );
 
-        try report.document.addReflowingText("You can fix this by either defining `");
+        try report.document.addReflowingText("You can fix this by either defining ");
         try report.document.addInlineCode(owned_ident);
-        try report.document.addReflowingText("` in this module, or by removing it from the list of exposed values.");
+        try report.document.addReflowingText(" in this module, or by removing it from the list of exposed values.");
 
         return report;
     }
@@ -332,9 +332,9 @@ pub const Diagnostic = union(enum) {
         var report = Report.init(allocator, "REDUNDANT EXPOSED", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
 
-        try report.document.addReflowingText("The identifier `");
+        try report.document.addReflowingText("The identifier ");
         try report.document.addInlineCode(owned_ident);
-        try report.document.addReflowingText("` is exposed multiple times in the module header.");
+        try report.document.addReflowingText(" is exposed multiple times in the module header.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
@@ -659,9 +659,9 @@ pub const Diagnostic = union(enum) {
     ) !Report {
         var report = Report.init(allocator, "TYPE REDECLARED", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addText("The type `");
+        try report.document.addText("The type ");
         try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText("` is being redeclared.");
+        try report.document.addText(" is being redeclared.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -675,9 +675,9 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addText("But `");
+        try report.document.addText("But ");
         try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText("` was already declared here:");
+        try report.document.addText(" was already declared here:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -704,9 +704,9 @@ pub const Diagnostic = union(enum) {
     ) !Report {
         var report = Report.init(allocator, "UNDECLARED TYPE", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addText("The type `");
+        try report.document.addText("The type ");
         try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText("` is not declared in this scope.");
+        try report.document.addText(" is not declared in this scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -730,9 +730,9 @@ pub const Diagnostic = union(enum) {
     ) !Report {
         var report = Report.init(allocator, "UNDECLARED TYPE VARIABLE", .runtime_error);
         const owned_type_var_name = try report.addOwnedString(type_var_name);
-        try report.document.addText("The type variable `");
+        try report.document.addText("The type variable ");
         try report.document.addUnqualifiedSymbol(owned_type_var_name);
-        try report.document.addText("` is not declared in this scope.");
+        try report.document.addText(" is not declared in this scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -761,9 +761,9 @@ pub const Diagnostic = union(enum) {
     ) !Report {
         var report = Report.init(allocator, "TYPE ALIAS REDECLARED", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addText("The type alias `");
+        try report.document.addText("The type alias ");
         try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText("` is being redeclared.");
+        try report.document.addText(" is being redeclared.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Type aliases can only be declared once in the same scope.");
         try report.document.addLineBreak();
@@ -779,9 +779,9 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addText("But `");
+        try report.document.addText("But ");
         try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText("` was already declared here:");
+        try report.document.addText(" was already declared here:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -802,9 +802,9 @@ pub const Diagnostic = union(enum) {
     ) !Report {
         var report = Report.init(allocator, "CUSTOM TYPE REDECLARED", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addText("The nominal type `");
+        try report.document.addText("The nominal type ");
         try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText("` is being redeclared.");
+        try report.document.addText(" is being redeclared.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Custom types can only be declared once in the same scope.");
         try report.document.addLineBreak();
@@ -820,9 +820,9 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addText("But `");
+        try report.document.addText("But ");
         try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText("` was already declared here:");
+        try report.document.addText(" was already declared here:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -849,15 +849,15 @@ pub const Diagnostic = union(enum) {
         const owned_type_name = try report.addOwnedString(type_name);
 
         if (cross_scope) {
-            try report.document.addText("The type `");
+            try report.document.addText("The type ");
             try report.document.addUnqualifiedSymbol(owned_type_name);
-            try report.document.addText("` shadows a type from an outer scope.");
+            try report.document.addText(" shadows a type from an outer scope.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("This may make the outer type inaccessible in this scope.");
         } else {
-            try report.document.addText("The type `");
+            try report.document.addText("The type ");
             try report.document.addUnqualifiedSymbol(owned_type_name);
-            try report.document.addText("` is being redeclared in the same scope.");
+            try report.document.addText(" is being redeclared in the same scope.");
         }
 
         try report.document.addLineBreak();
@@ -874,9 +874,9 @@ pub const Diagnostic = union(enum) {
 
         try report.document.addLineBreak();
         const scope_text = if (cross_scope) "outer scope" else "same scope";
-        try report.document.addText("But `");
+        try report.document.addText("But ");
         try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText("` was already declared in the ");
+        try report.document.addText(" was already declared in the ");
         try report.document.addText(scope_text);
         try report.document.addText(" here:");
         try report.document.addLineBreak();
@@ -902,11 +902,11 @@ pub const Diagnostic = union(enum) {
         const owned_type_name = try report.addOwnedString(type_name);
         const owned_parameter_name = try report.addOwnedString(parameter_name);
 
-        try report.document.addText("The type parameter `");
+        try report.document.addText("The type parameter ");
         try report.document.addUnqualifiedSymbol(owned_parameter_name);
-        try report.document.addText("` in type `");
+        try report.document.addText(" in type ");
         try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText("` conflicts with another declaration.");
+        try report.document.addText(" conflicts with another declaration.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Type parameters must have unique names within their scope.");
         try report.document.addLineBreak();
@@ -922,9 +922,9 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addText("But `");
+        try report.document.addText("But ");
         try report.document.addUnqualifiedSymbol(owned_parameter_name);
-        try report.document.addText("` was already declared here:");
+        try report.document.addText(" was already declared here:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -947,15 +947,15 @@ pub const Diagnostic = union(enum) {
         var report = Report.init(gpa, "UNUSED VARIABLE", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
 
-        try report.document.addText("Variable `");
+        try report.document.addText("Variable ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addText("` is not used anywhere in your code.");
+        try report.document.addText(" is not used anywhere in your code.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("If you don't need this variable, prefix it with an underscore like `_");
+        try report.document.addText("If you don't need this variable, prefix it with an underscore like _");
         try report.document.addText(owned_ident);
-        try report.document.addText("` to suppress this warning.");
+        try report.document.addText(" to suppress this warning.");
 
         try report.document.addLineBreak();
         try report.document.addText("The unused variable is declared here:");
@@ -983,17 +983,17 @@ pub const Diagnostic = union(enum) {
         var report = Report.init(gpa, "UNDERSCORE VARIABLE USED", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
 
-        try report.document.addText("Variable `");
+        try report.document.addText("Variable ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addText("` is prefixed with an underscore but is actually used.");
+        try report.document.addText(" is prefixed with an underscore but is actually used.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: `");
+        try report.document.addText("Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: ");
         const name_without_underscore = if (std.mem.startsWith(u8, ident_name, "_")) ident_name[1..] else ident_name;
         const owned_name_without_underscore = try report.addOwnedString(name_without_underscore);
         try report.document.addText(owned_name_without_underscore);
-        try report.document.addText("`.");
+        try report.document.addText(".");
 
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -1018,9 +1018,9 @@ pub const Diagnostic = union(enum) {
         var report = Report.init(allocator, "DUPLICATE RECORD FIELD", .runtime_error);
         const owned_field_name = try report.addOwnedString(field_name);
 
-        try report.document.addText("The record field `");
+        try report.document.addText("The record field ");
         try report.document.addUnqualifiedSymbol(owned_field_name);
-        try report.document.addText("` appears more than once in this record.");
+        try report.document.addText(" appears more than once in this record.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1034,9 +1034,9 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addText("The field `");
+        try report.document.addText("The field ");
         try report.document.addUnqualifiedSymbol(owned_field_name);
-        try report.document.addText("` was first defined here:");
+        try report.document.addText(" was first defined here:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1246,9 +1246,9 @@ pub const Diagnostic = union(enum) {
         const suggested_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{suggested_name});
         const owned_suggested_name = try report.addOwnedString(suggested_with_underscore);
 
-        try report.document.addText("The type variable `");
+        try report.document.addText("The type variable ");
         try report.document.addUnqualifiedSymbol(owned_type_var_name);
-        try report.document.addText("` appears only once in this type annotation.");
+        try report.document.addText(" appears only once in this type annotation.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1259,9 +1259,9 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Since this type variable is only used once, it should start with an underscore to indicate it's unbound. Try `");
+        try report.document.addReflowingText("Since this type variable is only used once, it should start with an underscore to indicate it's unbound. Try ");
         try report.document.addInlineCode(owned_suggested_name);
-        try report.document.addReflowingText("` instead.");
+        try report.document.addReflowingText(" instead.");
 
         return report;
     }
@@ -1278,9 +1278,9 @@ pub const Diagnostic = union(enum) {
         const owned_type_var_name = try report.addOwnedString(type_var_name);
         const owned_suggested_name = try report.addOwnedString(suggested_name);
 
-        try report.document.addText("The type variable `");
+        try report.document.addText("The type variable ");
         try report.document.addUnqualifiedSymbol(owned_type_var_name);
-        try report.document.addText("` starts with an underscore but appears multiple times in this type annotation.");
+        try report.document.addText(" starts with an underscore but appears multiple times in this type annotation.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1291,9 +1291,9 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Since this type variable is used multiple times, it should not start with an underscore. Try `");
+        try report.document.addReflowingText("Since this type variable is used multiple times, it should not start with an underscore. Try ");
         try report.document.addInlineCode(owned_suggested_name);
-        try report.document.addReflowingText("` instead.");
+        try report.document.addReflowingText(" instead.");
 
         return report;
     }
@@ -1310,9 +1310,9 @@ pub const Diagnostic = union(enum) {
         const owned_type_var_name = try report.addOwnedString(type_var_name);
         const owned_suggested_name = try report.addOwnedString(suggested_name);
 
-        try report.document.addText("The type variable `");
+        try report.document.addText("The type variable ");
         try report.document.addUnqualifiedSymbol(owned_type_var_name);
-        try report.document.addText("` ends with an underscore.");
+        try report.document.addText(" ends with an underscore.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1323,9 +1323,13 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Type variables should only end with underscores if they were declared with the `var` keyword. Since type variables cannot be declared with `var`, they should never end with an underscore. Try `");
+        try report.document.addReflowingText("Type variables should only end with underscores if they were declared with the ");
+        try report.document.addKeyword("var");
+        try report.document.addReflowingText(" keyword. Since type variables cannot be declared with ");
+        try report.document.addKeyword("var");
+        try report.document.addReflowingText(", they should never end with an underscore. Try ");
         try report.document.addInlineCode(owned_suggested_name);
-        try report.document.addReflowingText("` instead.");
+        try report.document.addReflowingText(" instead.");
 
         return report;
     }

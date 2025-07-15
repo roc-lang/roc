@@ -18,24 +18,24 @@ package
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_4.md:3:3:3:12
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
-The module header says that ``something`` is exposed, but it is not defined anywhere in this module.
+The module header says that `something` is exposed, but it is not defined anywhere in this module.
 
 **package_header_nonempty_multiline_4.md:3:3:3:12:**
 ```roc
 		something,
 ```
   ^^^^^^^^^
-You can fix this by either defining ``something`` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that ``SomeType`` is exposed, but it is not defined anywhere in this module.
+The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
 
 **package_header_nonempty_multiline_4.md:4:3:4:11:**
 ```roc
 		SomeType,
 ```
   ^^^^^^^^
-You can fix this by either defining ``SomeType`` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig

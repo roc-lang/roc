@@ -5,6 +5,8 @@ let currentState = "START";
 let currentView = "diagnostics";
 let lastDiagnostics = null;
 let activeExample = null;
+let lastCompileTime = null;
+let updateUrlTimeout = null;
 
 // Example modules
 const examples = [
@@ -42,14 +44,12 @@ isActive = Bool.True`,
 async function initializePlayground() {
   logInfo("Initializing playground...");
   try {
-    setStatus("loading", "Loading WASM module...");
     logInfo("Loading WASM module...");
     await loadWasm();
     logInfo("WASM module loaded successfully");
 
-    setStatus("loading", "Initializing compiler...");
     logInfo("Sending INIT message to WASM...");
-    const response = await sendMessage({ type: "INIT" });
+    const response = await sendMessageQueued({ type: "INIT" });
     logInfo("INIT response:", response);
 
     if (response.status !== "SUCCESS") {
@@ -58,16 +58,19 @@ async function initializePlayground() {
       );
     }
 
-    setStatus("loading", "Setting up examples...");
     logInfo("Populating examples...");
     populateExamples();
     logInfo("Updating UI...");
     updateUI();
-    setStatus("ready", "Ready to compile Roc code!");
+    clearDiagnosticSummary();
+    lastCompileTime = null;
+    setupAutoCompile();
+    setupUrlSharing();
+    currentState = "READY";
+    await restoreFromHash();
     logInfo("Playground initialization complete!");
   } catch (error) {
     logError("❌ Failed to initialize playground:", error);
-    setStatus("error", `Initialization failed: ${error.message}`);
     showError(`Failed to initialize playground: ${error.message}`);
   }
 }
@@ -223,6 +226,37 @@ async function sendMessage(message) {
   }
 }
 
+// --- BEGIN QUEUED SENDMESSAGE SYSTEM ---
+// Queue for serializing sendMessage calls
+const sendMessageQueue = [];
+let sendMessageInProgress = false;
+
+const sendMessageOriginal = sendMessage;
+
+async function processSendMessageQueue() {
+  if (sendMessageInProgress) return;
+  if (sendMessageQueue.length === 0) return;
+  sendMessageInProgress = true;
+  const { message, resolve, reject } = sendMessageQueue.shift();
+  try {
+    const result = await sendMessageOriginal(message);
+    resolve(result);
+  } catch (err) {
+    reject(err);
+  } finally {
+    sendMessageInProgress = false;
+    processSendMessageQueue();
+  }
+}
+
+function sendMessageQueued(message) {
+  return new Promise((resolve, reject) => {
+    sendMessageQueue.push({ message, resolve, reject });
+    processSendMessageQueue();
+  });
+}
+// --- END QUEUED SENDMESSAGE SYSTEM ---
+
 // Populate examples list
 function populateExamples() {
   const examplesList = document.getElementById("examplesList");
@@ -246,11 +280,16 @@ function populateExamples() {
 // Load an example
 async function loadExample(exampleId) {
   logInfo("Loading example:", exampleId);
+  // Reset the URL hash when loading an example
+  window.location.hash = "";
   const example = examples.find((e) => e.id === exampleId);
   if (!example) {
     logWarn("Example not found:", exampleId);
     return;
   }
+
+  // Update the URL hash to match the loaded example's content
+  await updateUrlWithCompressedContent(example.code);
 
   // Update UI
   logInfo("Updating example selection UI...");
@@ -259,8 +298,6 @@ async function loadExample(exampleId) {
   });
   const activeItem = document.querySelector(`[data-example-id="${exampleId}"]`);
   if (activeItem) {
-    activeItem.classList.add("active");
-    logInfo("Activated example item");
   } else {
     logWarn("Could not find example item in DOM");
   }
@@ -273,11 +310,14 @@ async function loadExample(exampleId) {
   // Reset if we're in loaded state
   if (currentState === "LOADED") {
     logInfo("Resetting WASM state...");
-    await sendMessage({ type: "RESET" });
+    await sendMessageQueued({ type: "RESET" });
   }
 
   updateUI();
   logInfo("Example loaded successfully");
+
+  // Compile the example immediately
+  await compileCode();
 }
 
 // Compile code
@@ -293,18 +333,23 @@ async function compileCode() {
     return;
   }
 
+  // Start timing if not already set (for manual compile)
+  if (!compileStartTime) {
+    compileStartTime = performance.now();
+  }
+  const startTime = compileStartTime;
+
   try {
     logInfo("Beginning compilation process...");
     setStatus("loading", "Compiling...");
-    disableButtons();
 
     // Reset if we're already in LOADED state
     if (currentState === "LOADED") {
       logInfo("Resetting WASM state before recompilation...");
-      await sendMessage({ type: "RESET" });
+      await sendMessageQueued({ type: "RESET" });
     }
 
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "LOAD_SOURCE",
       source: code,
     });
@@ -314,15 +359,48 @@ async function compileCode() {
       currentState = "LOADED";
       lastDiagnostics = response.diagnostics;
       logInfo("Diagnostics:", lastDiagnostics);
-      setStatus("loaded", "Code compiled");
-      showDiagnostics();
+
+      // Set timing before updating diagnostic summary
+      lastCompileTime = performance.now() - startTime;
+      compileStartTime = null; // Reset for next compilation
+
+      updateDiagnosticSummary();
+
+      // Preserve current view instead of always showing diagnostics
+      switch (currentView) {
+        case "diagnostics":
+          showDiagnostics();
+          break;
+        case "tokens":
+          showTokens();
+          break;
+        case "parse":
+          showParseAst();
+          break;
+        case "can":
+          showCanCir();
+          break;
+        case "types":
+          showTypes();
+          break;
+        default:
+          showDiagnostics();
+      }
     } else {
       logError("❌ Compilation failed:", response.message);
+      lastCompileTime = performance.now() - startTime;
+      compileStartTime = null; // Reset for next compilation
+      setStatus("error", "Compilation failed");
+      clearDiagnosticSummary();
       showError(`Compilation failed: ${response.message}`);
     }
   } catch (error) {
     logError("Error during compilation:", error);
-    showError(`Error during compilation: ${error.message}`);
+    const errorMessage = error.message || error.toString() || "Unknown error";
+    lastCompileTime = performance.now() - startTime;
+    setStatus("error", "Compilation error");
+    clearDiagnosticSummary();
+    showError(`Error during compilation: ${errorMessage}`);
   } finally {
     updateUI();
     logInfo("Compilation process finished");
@@ -335,54 +413,69 @@ function showDiagnostics() {
   updateStageButtons();
 
   if (!lastDiagnostics) {
-    showMessage("No diagnostics available");
+    showMessage("Compile code first to view PROBLEMS");
     return;
   }
 
   const outputContent = document.getElementById("outputContent");
-  let html = "";
 
-  let totalErrors = 0;
-  let totalWarnings = 0;
+  // Check if we have the new HTML format
+  if (lastDiagnostics.html !== undefined) {
+    // Use the HTML-rendered diagnostics directly
+    if (lastDiagnostics.html.trim() === "") {
+      outputContent.innerHTML =
+        '<div class="success-message">✓ No issues found!</div>';
+    } else {
+      outputContent.innerHTML = lastDiagnostics.html;
+    }
+  } else {
+    // Fallback to old format for compatibility
+    let html = "";
+    let totalErrors = 0;
+    let totalWarnings = 0;
 
-  // Count total diagnostics
-  Object.values(lastDiagnostics).forEach((stageDiagnostics) => {
-    stageDiagnostics.forEach((diagnostic) => {
-      if (diagnostic.severity === "error" || diagnostic.severity === "fatal") {
-        totalErrors++;
-      } else if (diagnostic.severity === "warning") {
-        totalWarnings++;
+    // Count total diagnostics
+    Object.values(lastDiagnostics).forEach((stageDiagnostics) => {
+      stageDiagnostics.forEach((diagnostic) => {
+        if (
+          diagnostic.severity === "error" ||
+          diagnostic.severity === "fatal"
+        ) {
+          totalErrors++;
+        } else if (diagnostic.severity === "warning") {
+          totalWarnings++;
+        }
+      });
+    });
+
+    // Show summary
+    if (totalErrors === 0 && totalWarnings === 0) {
+      html += '<div class="success-message">✓ No issues found!</div>';
+    } else {
+      html += `<div class="diagnostic-summary">
+              Found ${totalErrors} error(s) and ${totalWarnings} warning(s)
+          </div>`;
+    }
+
+    // Show diagnostics by stage
+    Object.entries(lastDiagnostics).forEach(([stage, diagnostics]) => {
+      if (diagnostics.length > 0) {
+        html += `<div class="diagnostic-stage">
+                      <div class="diagnostic-stage-title">${stage.toUpperCase()}</div>`;
+
+        diagnostics.forEach((diagnostic) => {
+          html += `<div class="diagnostic ${diagnostic.severity}">
+                          <div class="diagnostic-severity">${diagnostic.severity.toUpperCase()}</div>
+                          <div class="diagnostic-message">${escapeHtml(diagnostic.title)}</div>
+                      </div>`;
+        });
+
+        html += "</div>";
       }
     });
-  });
 
-  // Show summary
-  if (totalErrors === 0 && totalWarnings === 0) {
-    html += '<div class="success-message">✓ No issues found!</div>';
-  } else {
-    html += `<div class="diagnostic-summary">
-            Found ${totalErrors} error(s) and ${totalWarnings} warning(s)
-        </div>`;
+    outputContent.innerHTML = html;
   }
-
-  // Show diagnostics by stage
-  Object.entries(lastDiagnostics).forEach(([stage, diagnostics]) => {
-    if (diagnostics.length > 0) {
-      html += `<div class="diagnostic-stage">
-                    <div class="diagnostic-stage-title">${stage.toUpperCase()}</div>`;
-
-      diagnostics.forEach((diagnostic) => {
-        html += `<div class="diagnostic ${diagnostic.severity}">
-                        <div class="diagnostic-severity">${diagnostic.severity.toUpperCase()}</div>
-                        <div class="diagnostic-message">${escapeHtml(diagnostic.title)}</div>
-                    </div>`;
-      });
-
-      html += "</div>";
-    }
-  });
-
-  outputContent.innerHTML = html;
 }
 
 // Show tokens
@@ -390,8 +483,13 @@ async function showTokens() {
   currentView = "tokens";
   updateStageButtons();
 
+  if (currentState !== "LOADED") {
+    showMessage("Compile code first to view TOKENS");
+    return;
+  }
+
   try {
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "QUERY_TOKENS",
     });
     if (response.status === "SUCCESS") {
@@ -400,7 +498,8 @@ async function showTokens() {
       showError(`Failed to get tokens: ${response.message}`);
     }
   } catch (error) {
-    showError(`Error getting tokens: ${error.message}`);
+    logError("❌ Failed to query tokens:", error);
+    showError(`Failed to query tokens: ${error.message}`);
   }
 }
 
@@ -409,17 +508,23 @@ async function showParseAst() {
   currentView = "parse";
   updateStageButtons();
 
+  if (currentState !== "LOADED") {
+    showMessage("Compile code first to view AST");
+    return;
+  }
+
   try {
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "QUERY_AST",
     });
     if (response.status === "SUCCESS") {
       showSExpression(response.data);
     } else {
-      showError(`Failed to get parse AST: ${response.message}`);
+      showError(`Failed to get AST: ${response.message}`);
     }
   } catch (error) {
-    showError(`Error getting parse AST: ${error.message}`);
+    logError("❌ Failed to query AST:", error);
+    showError(`Failed to query AST: ${error.message}`);
   }
 }
 
@@ -428,8 +533,13 @@ async function showCanCir() {
   currentView = "can";
   updateStageButtons();
 
+  if (currentState !== "LOADED") {
+    showMessage("Compile code first to view CIR");
+    return;
+  }
+
   try {
-    const response = await sendMessage({
+    const response = await sendMessageQueued({
       type: "QUERY_CIR",
     });
     if (response.status === "SUCCESS") {
@@ -438,7 +548,8 @@ async function showCanCir() {
       showError(`Failed to get CIR: ${response.message}`);
     }
   } catch (error) {
-    showError(`Error getting CIR: ${error.message}`);
+    logError("❌ Failed to query CIR:", error);
+    showError(`Failed to query CIR: ${error.message}`);
   }
 }
 
@@ -447,15 +558,23 @@ async function showTypes() {
   currentView = "types";
   updateStageButtons();
 
+  if (currentState !== "LOADED") {
+    showMessage("Compile code first to view TYPES");
+    return;
+  }
+
   try {
-    const response = await sendMessage({ type: "QUERY_TYPES" });
+    const response = await sendMessageQueued({
+      type: "QUERY_TYPES",
+    });
     if (response.status === "SUCCESS") {
       showSExpression(response.data);
     } else {
       showError(`Failed to get types: ${response.message}`);
     }
   } catch (error) {
-    showError(`Error getting types: ${error.message}`);
+    logError("❌ Failed to query types:", error);
+    showError(`Failed to query types: ${error.message}`);
   }
 }
 
@@ -480,42 +599,38 @@ function showMessage(message) {
 
 // Update status indicator
 function setStatus(status, text) {
-  logInfo("Status update:", status, "-", text);
   const statusDot = document.getElementById("statusDot");
   const statusText = document.getElementById("statusText");
 
-  statusDot.className = `status-dot ${status}`;
-  statusText.textContent = text;
+  if (statusDot) {
+    statusDot.className = `status-dot ${status}`;
+  }
+  if (statusText) {
+    statusText.textContent = text;
+  }
 
-  if (status === "ready") {
-    currentState = "READY";
-    logInfo("State changed to READY");
-  } else if (status === "loaded") {
+  if (status === "loaded") {
     currentState = "LOADED";
-    logInfo("State changed to LOADED");
   }
 }
 
 // Update UI based on current state
 function updateUI() {
-  const compileBtn = document.getElementById("compileBtn");
-  const stageButtons = document.querySelectorAll(
-    ".stage-button:not(#diagnosticsBtn)",
-  );
+  updateStageButtons();
 
-  switch (currentState) {
-    case "START":
-      compileBtn.disabled = false;
-      stageButtons.forEach((btn) => (btn.disabled = true));
-      break;
-    case "READY":
-      compileBtn.disabled = false;
-      stageButtons.forEach((btn) => (btn.disabled = true));
-      break;
-    case "LOADED":
-      compileBtn.disabled = false;
-      stageButtons.forEach((btn) => (btn.disabled = false));
-      break;
+  // Update stage buttons based on current state
+  if (currentState !== "LOADED") {
+    // Disable stage buttons when not loaded
+    document.querySelectorAll(".stage-button").forEach((btn) => {
+      if (btn.id !== "diagnosticsBtn") {
+        btn.disabled = true;
+      }
+    });
+  } else {
+    // Enable all stage buttons when loaded
+    document.querySelectorAll(".stage-button").forEach((btn) => {
+      btn.disabled = false;
+    });
   }
 }
 
@@ -538,15 +653,251 @@ function updateStageButtons() {
   }
 }
 
-// Disable buttons during operation
-function disableButtons() {
-  document.getElementById("compileBtn").disabled = true;
-  document.querySelectorAll(".stage-button").forEach((btn) => {
-    btn.disabled = true;
-  });
+// Clear diagnostic summary from header
+function clearDiagnosticSummary() {
+  const editorHeader = document.querySelector(".editor-header");
+  const existingSummary = editorHeader.querySelector(".diagnostic-summary");
+  if (existingSummary) {
+    existingSummary.remove();
+  }
 }
 
-// Escape HTML
+// Update diagnostic summary in header
+function updateDiagnosticSummary() {
+  const editorHeader = document.querySelector(".editor-header");
+
+  // Remove existing diagnostic summary
+  const existingSummary = editorHeader.querySelector(".diagnostic-summary");
+  if (existingSummary) {
+    existingSummary.remove();
+  }
+
+  if (!lastDiagnostics) {
+    return;
+  }
+
+  let totalErrors = 0;
+  let totalWarnings = 0;
+
+  // Check if we have the new format with summary
+  if (lastDiagnostics.summary) {
+    totalErrors = lastDiagnostics.summary.errors;
+    totalWarnings = lastDiagnostics.summary.warnings;
+  } else {
+    // Fallback to old format counting
+    Object.values(lastDiagnostics).forEach((stageDiagnostics) => {
+      if (Array.isArray(stageDiagnostics)) {
+        stageDiagnostics.forEach((diagnostic) => {
+          if (
+            diagnostic.severity === "error" ||
+            diagnostic.severity === "fatal"
+          ) {
+            totalErrors++;
+          } else if (diagnostic.severity === "warning") {
+            totalWarnings++;
+          }
+        });
+      }
+    });
+  }
+
+  // Always show summary after compilation (when timing info is available)
+  if (lastCompileTime !== null) {
+    const summaryDiv = document.createElement("div");
+    summaryDiv.className = "diagnostic-summary";
+
+    let summaryText = "";
+    // Always show error/warning count after compilation
+    summaryText += `Found ${totalErrors} error(s) and ${totalWarnings} warning(s)`;
+
+    if (lastCompileTime !== null) {
+      let timeText;
+      if (lastCompileTime < 1000) {
+        timeText = `${Math.round(lastCompileTime)}ms`;
+      } else {
+        timeText = `${(lastCompileTime / 1000).toFixed(1)}s`;
+      }
+      summaryText += (summaryText ? " • " : "") + `⚡ ${timeText}`;
+    }
+
+    summaryDiv.innerHTML = summaryText;
+    editorHeader.appendChild(summaryDiv);
+  }
+}
+
+// Auto-compile setup
+let compileTimeout;
+let compileStartTime = null;
+
+function setupAutoCompile() {
+  const editor = document.getElementById("editor");
+  if (editor) {
+    editor.addEventListener("input", () => {
+      // Debounce compilation to avoid excessive calls
+      clearTimeout(compileTimeout);
+      compileStartTime = performance.now(); // Start timing when user stops typing
+      compileTimeout = setTimeout(() => {
+        if (currentState === "READY" || currentState === "LOADED") {
+          compileCode();
+        }
+      }, 20); // 20ms delay for better responsiveness
+    });
+  }
+}
+
+// URL sharing functionality (gzip + base64 + hash fragment)
+async function compressAndEncode(content) {
+  // Compress using gzip (CompressionStream)
+  const encoder = new TextEncoder();
+  const input = encoder.encode(content);
+  const cs = new CompressionStream("gzip");
+  const compressedStream = new Response(
+    new Blob([input]).stream().pipeThrough(cs),
+  ).arrayBuffer();
+  const compressed = new Uint8Array(await compressedStream);
+  return uint8ToBase64(compressed);
+}
+
+async function decodeAndDecompress(b64) {
+  const compressed = base64ToUint8(b64);
+  const ds = new DecompressionStream("gzip");
+  const decompressedStream = new Response(
+    new Blob([compressed]).stream().pipeThrough(ds),
+  ).arrayBuffer();
+  const decompressed = new Uint8Array(await decompressedStream);
+  const decoder = new TextDecoder();
+  return decoder.decode(decompressed);
+}
+
+function uint8ToBase64(uint8) {
+  // Convert Uint8Array to base64 (browser safe)
+  let binary = "";
+  for (let i = 0; i < uint8.length; i++) {
+    binary += String.fromCharCode(uint8[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8(b64) {
+  const binary = atob(b64);
+  const uint8 = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    uint8[i] = binary.charCodeAt(i);
+  }
+  return uint8;
+}
+
+async function updateUrlWithCompressedContent(content) {
+  if (!content || content.length > 10000) {
+    // Don't share very large content
+    window.location.hash = "";
+    return;
+  }
+  const b64 = await compressAndEncode(content);
+  window.location.hash = `content=${b64}`;
+}
+
+async function restoreFromHash() {
+  // Expect hash in the form #content=...
+  const hash = window.location.hash.replace(/^#/, "");
+  logInfo(`Attempting to restore from hash: ${hash.substring(0, 50)}...`);
+
+  let b64 = null;
+  if (hash.startsWith("content=")) {
+    b64 = hash.slice("content=".length);
+    logInfo(`Extracted base64 content: ${b64.substring(0, 50)}...`);
+  }
+
+  if (b64) {
+    try {
+      const content = await decodeAndDecompress(b64);
+      logInfo(`Decompressed content: ${content.substring(0, 100)}...`);
+
+      const editor = document.getElementById("editor");
+      if (editor) {
+        editor.value = content;
+        logInfo("Restored content from hash fragment");
+
+        // Wait for the playground to be ready before compiling
+        if (currentState === "READY") {
+          await compileCode(); // Automatically compile after restoring
+        } else {
+          logInfo("Playground not ready, skipping auto-compile");
+        }
+      } else {
+        logError("Editor element not found");
+      }
+    } catch (e) {
+      logError("Failed to decompress content from hash", e);
+    }
+  } else {
+    logInfo("No content found in hash");
+  }
+}
+
+function setupUrlSharing() {
+  const editor = document.getElementById("editor");
+  if (editor) {
+    editor.addEventListener("input", () => {
+      clearTimeout(updateUrlTimeout);
+      updateUrlTimeout = setTimeout(() => {
+        updateUrlWithCompressedContent(editor.value);
+      }, 1000); // Update URL after 1 second of no typing
+    });
+  }
+
+  // Listen for hash changes (when someone pastes a new URL)
+  window.addEventListener("hashchange", async () => {
+    logInfo("Hash changed, attempting to restore content");
+    await restoreFromHash();
+  });
+
+  addShareButton();
+}
+
+function addShareButton() {
+  const headerStatus = document.querySelector(".header-status");
+  if (headerStatus) {
+    let shareButton = headerStatus.querySelector(".share-button");
+    if (!shareButton) {
+      shareButton = document.createElement("button");
+      shareButton.className = "share-button";
+      shareButton.innerHTML = "share link";
+      shareButton.title = "Copy shareable link to clipboard";
+      shareButton.onclick = copyShareLink;
+      const themeToggle = headerStatus.querySelector(".theme-toggle");
+      headerStatus.insertBefore(shareButton, themeToggle);
+    }
+  }
+}
+
+async function copyShareLink() {
+  const editor = document.getElementById("editor");
+  if (editor) {
+    const content = editor.value.trim();
+    if (content) {
+      try {
+        const b64 = await compressAndEncode(content);
+        const shareUrl = `${window.location.origin}${window.location.pathname}#content=${b64}`;
+        await navigator.clipboard.writeText(shareUrl);
+        // Show temporary feedback
+        const shareButton = document.querySelector(".share-button");
+        const originalText = shareButton.innerHTML;
+        shareButton.innerHTML = "copied";
+        setTimeout(() => {
+          shareButton.innerHTML = originalText;
+        }, 2000);
+      } catch (err) {
+        console.error("Failed to copy to clipboard:", err);
+        alert("Failed to copy link");
+      }
+    } else {
+      alert("No content to share");
+    }
+  }
+}
+
+// Utility functions
 function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
@@ -615,6 +966,9 @@ function initTheme() {
   // Update theme switch state
   const themeSwitch = document.getElementById("themeSwitch");
   themeSwitch.setAttribute("aria-checked", theme === "dark");
+
+  // Update theme label text
+  updateThemeLabel(theme);
 }
 
 function toggleTheme() {
@@ -626,18 +980,28 @@ function toggleTheme() {
 
   const themeSwitch = document.getElementById("themeSwitch");
   themeSwitch.setAttribute("aria-checked", newTheme === "dark");
+
+  // Update theme label text
+  updateThemeLabel(newTheme);
 }
 
-function logInfo(msg) {
-  console.log("INFO: " + msg);
+function updateThemeLabel(theme) {
+  const themeLabel = document.querySelector(".theme-label");
+  if (themeLabel) {
+    themeLabel.textContent = theme === "dark" ? "Dark" : "Light";
+  }
 }
 
-function logWarn(msg) {
-  console.warn("WARNING: " + msg);
+function logInfo(...args) {
+  console.log("INFO:", ...args);
 }
 
-function logError(msg) {
-  console.error("ERROR: " + msg);
+function logWarn(...args) {
+  console.warn("WARNING:", ...args);
+}
+
+function logError(...args) {
+  console.error("ERROR:", ...args);
 }
 
 // Initialize theme on page load

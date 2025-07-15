@@ -75,7 +75,7 @@ expectsPerson = \p -> "Got a person"
 
 
 **UNDECLARED TYPE**
-The type ``Person`` is not declared in this scope.
+The type `Person` is not declared in this scope.
 
 This type is referenced here:
 **nominal_type_origin_mismatch.md:5:17:5:23:**

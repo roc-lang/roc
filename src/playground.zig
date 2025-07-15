@@ -113,6 +113,31 @@ const CompilerStageData = struct {
         if (self.solver) |*s| {
             s.deinit();
         }
+
+        // Free diagnostic reports and their ArrayLists
+        for (self.tokenize_reports.items) |*report| {
+            report.deinit();
+        }
+        self.tokenize_reports.deinit();
+
+        for (self.parse_reports.items) |*report| {
+            report.deinit();
+        }
+        self.parse_reports.deinit();
+
+        for (self.can_reports.items) |*report| {
+            report.deinit();
+        }
+        self.can_reports.deinit();
+
+        for (self.type_reports.items) |*report| {
+            report.deinit();
+        }
+        self.type_reports.deinit();
+
+        // Free the ModuleEnv and its source
+        self.module_env.deinit();
+        allocator.destroy(self.module_env);
     }
 };
 
@@ -188,6 +213,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             }
 
             // Compile the source through all stages
+            // Compile and return result
             const result = compileSource(source) catch |err| {
                 return writeErrorResponse(response_buffer, .ERROR, @errorName(err));
             };
@@ -232,6 +258,7 @@ fn handleLoadedState(message_type: MessageType, _: std.json.Value, response_buff
                 compiler_data = null;
             }
             current_state = .READY;
+
             return writeSuccessResponse(response_buffer, "READY TO RECEIVE ROC SOURCE FILE", null);
         },
         else => {
@@ -352,41 +379,61 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) usize {
     var stream = std.io.fixedBufferStream(response_buffer);
     var writer = stream.writer();
 
+    // Count total diagnostics
+    var total_errors: u32 = 0;
+    var total_warnings: u32 = 0;
+
+    const tokenize_counts = countDiagnostics(data.tokenize_reports.items);
+    const parse_counts = countDiagnostics(data.parse_reports.items);
+    const can_counts = countDiagnostics(data.can_reports.items);
+    const type_counts = countDiagnostics(data.type_reports.items);
+
+    total_errors += tokenize_counts.errors + parse_counts.errors + can_counts.errors + type_counts.errors;
+    total_warnings += tokenize_counts.warnings + parse_counts.warnings + can_counts.warnings + type_counts.warnings;
+
     writer.writeAll("{\"status\":\"SUCCESS\",\"message\":\"LOADED\",\"diagnostics\":{") catch return 0;
 
-    // Write tokenize diagnostics
-    writer.writeAll("\"tokenize\":[") catch return 0;
-    for (data.tokenize_reports.items, 0..) |report, i| {
-        if (i > 0) writer.writeAll(",") catch return 0;
-        writeDiagnosticJson(writer, report) catch return 0;
-    }
-    writer.writeAll("],") catch return 0;
+    // Write summary
+    writer.print("\"summary\":{{\"errors\":{},\"warnings\":{}}},", .{ total_errors, total_warnings }) catch return 0;
 
-    // Write parse diagnostics
-    writer.writeAll("\"parse\":[") catch return 0;
-    for (data.parse_reports.items, 0..) |report, i| {
-        if (i > 0) writer.writeAll(",") catch return 0;
-        writeDiagnosticJson(writer, report) catch return 0;
-    }
-    writer.writeAll("],") catch return 0;
+    // Write HTML diagnostics
+    writer.writeAll("\"html\":\"") catch return 0;
 
-    // Write canonicalization diagnostics
-    writer.writeAll("\"canonicalize\":[") catch return 0;
-    for (data.can_reports.items, 0..) |report, i| {
-        if (i > 0) writer.writeAll(",") catch return 0;
-        writeDiagnosticJson(writer, report) catch return 0;
-    }
-    writer.writeAll("],") catch return 0;
+    // Collect HTML in a buffer first, then escape it for JSON
+    var html_buffer: [32768]u8 = undefined;
+    var html_stream = std.io.fixedBufferStream(&html_buffer);
+    const html_writer = html_stream.writer();
 
-    // Write type diagnostics
-    writer.writeAll("\"types\":[") catch return 0;
-    for (data.type_reports.items, 0..) |report, i| {
-        if (i > 0) writer.writeAll(",") catch return 0;
-        writeDiagnosticJson(writer, report) catch return 0;
+    // Write diagnostics by stage if any exist
+    if (data.tokenize_reports.items.len > 0) {
+        for (data.tokenize_reports.items) |report| {
+            writeDiagnosticHtml(html_writer, report) catch return 0;
+        }
     }
-    writer.writeAll("]") catch return 0;
 
-    writer.writeAll("}}") catch return 0;
+    if (data.parse_reports.items.len > 0) {
+        for (data.parse_reports.items) |report| {
+            writeDiagnosticHtml(html_writer, report) catch return 0;
+        }
+    }
+
+    if (data.can_reports.items.len > 0) {
+        for (data.can_reports.items) |report| {
+            writeDiagnosticHtml(html_writer, report) catch return 0;
+        }
+    }
+
+    if (data.type_reports.items.len > 0) {
+        for (data.type_reports.items) |report| {
+            writeDiagnosticHtml(html_writer, report) catch return 0;
+        }
+    }
+
+    // Write the HTML buffer with proper JSON escaping
+    const html_content = html_stream.getWritten();
+    writeJsonString(writer, html_content) catch return 0;
+    writer.writeAll("\"}}") catch return 0;
+
     return stream.getWritten().len;
 }
 
@@ -596,18 +643,23 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) usize {
 }
 
 /// Write a diagnostic as JSON
-fn writeDiagnosticJson(writer: anytype, report: reporting.Report) !void {
-    try writer.writeAll("{\"severity\":\"");
-    const severity_str = switch (report.severity) {
-        .info => "info",
-        .warning => "warning",
-        .runtime_error => "error",
-        .fatal => "fatal",
-    };
-    try writer.writeAll(severity_str);
-    try writer.writeAll("\",\"title\":\"");
-    try writeJsonString(writer, report.title);
-    try writer.writeAll("\"}");
+fn writeDiagnosticHtml(writer: anytype, report: reporting.Report) !void {
+    try reporting.renderReportToHtml(&report, writer, reporting.ReportingConfig.initHtml());
+}
+
+fn countDiagnostics(reports: []reporting.Report) struct { errors: u32, warnings: u32 } {
+    var errors: u32 = 0;
+    var warnings: u32 = 0;
+
+    for (reports) |report| {
+        switch (report.severity) {
+            .info => {},
+            .warning => warnings += 1,
+            .runtime_error, .fatal => errors += 1,
+        }
+    }
+
+    return .{ .errors = errors, .warnings = warnings };
 }
 
 /// Write a string with JSON escaping
@@ -662,6 +714,4 @@ export fn cleanup() void {
         WasmFilesystem.global_source = null;
         WasmFilesystem.global_allocator = null;
     }
-
-    current_state = .START;
 }

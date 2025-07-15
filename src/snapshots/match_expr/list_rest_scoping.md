@@ -68,9 +68,9 @@ match items {
 
 
 **UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
+Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
 The unused variable is declared here:
 **list_rest_scoping.md:2:15:2:15:**
 ```roc
@@ -80,9 +80,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
+Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
 The unused variable is declared here:
 **list_rest_scoping.md:3:8:3:8:**
 ```roc
@@ -92,9 +92,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
+Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
 The unused variable is declared here:
 **list_rest_scoping.md:4:11:4:11:**
 ```roc

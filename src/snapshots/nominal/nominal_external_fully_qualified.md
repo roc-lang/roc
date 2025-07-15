@@ -21,9 +21,9 @@ handleResult = |result| {
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable ``code`` is not used anywhere in your code.
+Variable `code` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_code` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _code to suppress this warning.
 The unused variable is declared here:
 **nominal_external_fully_qualified.md:9:41:9:45:**
 ```roc
