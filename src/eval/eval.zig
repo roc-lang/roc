@@ -233,14 +233,14 @@ fn evalExprIterative(
 
         // Zero-argument tags
         .e_zero_argument_tag => |tag| {
-            // Write the tag discriminant as a u16
-            // For boolean tags: True = 0, False = 1
-            const tag_ptr = @as(*u16, @ptrCast(@alignCast(ptr)));
+            // Write the tag discriminant as a u8
+            // For boolean tags: True = 1, False = 0
+            const tag_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
             const tag_name = cir.env.idents.getText(tag.name);
             if (std.mem.eql(u8, tag_name, "True")) {
-                tag_ptr.* = 0;
-            } else if (std.mem.eql(u8, tag_name, "False")) {
                 tag_ptr.* = 1;
+            } else if (std.mem.eql(u8, tag_name, "False")) {
+                tag_ptr.* = 0;
             } else {
                 // TODO: get actual tag discriminant for other tags
                 tag_ptr.* = 0;
@@ -258,7 +258,15 @@ fn evalExprIterative(
                     .int => switch (tag_layout.data.scalar.data.int) {
                         .u8 => {
                             const tag_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-                            tag_ptr.* = 0; // TODO: get actual tag discriminant
+                            // For boolean tags: True = 1, False = 0
+                            const tag_name = cir.env.idents.getText(tag.name);
+                            if (std.mem.eql(u8, tag_name, "True")) {
+                                tag_ptr.* = 1;
+                            } else if (std.mem.eql(u8, tag_name, "False")) {
+                                tag_ptr.* = 0;
+                            } else {
+                                tag_ptr.* = 0; // TODO: get actual tag discriminant for other tags
+                            }
                         },
                         .u16 => {
                             const tag_ptr = @as(*u16, @ptrCast(@alignCast(ptr)));
@@ -271,11 +279,11 @@ fn evalExprIterative(
                         else => return error.LayoutError,
                     },
                     .bool => {
-                        // Bool tags (True/False)
-                        const bool_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+                        // Bool tags (True/False) as u8
+                        const bool_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
                         // Check the tag name to determine if it's True or False
                         const tag_name = cir.env.idents.getText(tag.name);
-                        bool_ptr.* = std.mem.eql(u8, tag_name, "True");
+                        bool_ptr.* = if (std.mem.eql(u8, tag_name, "True")) 1 else 0;
                     },
                     else => return error.LayoutError,
                 },
@@ -542,8 +550,8 @@ fn completeBinop(
             const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
                 error.StackOverflow => return error.StackOverflow,
             };
-            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
+            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = if (result_val) 1 else 0;
             context.result_location.* = EvalResult{
                 .layout = result_layout,
                 .ptr = ptr,
@@ -556,8 +564,8 @@ fn completeBinop(
             const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
                 error.StackOverflow => return error.StackOverflow,
             };
-            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
+            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = if (result_val) 1 else 0;
             context.result_location.* = EvalResult{
                 .layout = result_layout,
                 .ptr = ptr,
@@ -570,8 +578,8 @@ fn completeBinop(
             const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
                 error.StackOverflow => return error.StackOverflow,
             };
-            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
+            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = if (result_val) 1 else 0;
             context.result_location.* = EvalResult{
                 .layout = result_layout,
                 .ptr = ptr,
@@ -584,8 +592,8 @@ fn completeBinop(
             const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
                 error.StackOverflow => return error.StackOverflow,
             };
-            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
+            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = if (result_val) 1 else 0;
             context.result_location.* = EvalResult{
                 .layout = result_layout,
                 .ptr = ptr,
@@ -598,8 +606,8 @@ fn completeBinop(
             const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
                 error.StackOverflow => return error.StackOverflow,
             };
-            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
+            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = if (result_val) 1 else 0;
             context.result_location.* = EvalResult{
                 .layout = result_layout,
                 .ptr = ptr,
@@ -612,8 +620,8 @@ fn completeBinop(
             const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
                 error.StackOverflow => return error.StackOverflow,
             };
-            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = result_val;
+            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = if (result_val) 1 else 0;
             context.result_location.* = EvalResult{
                 .layout = result_layout,
                 .ptr = ptr,
@@ -791,10 +799,10 @@ fn writeIntToMemory(ptr: [*]u8, value: i128, precision: types.Num.Int.Precision)
 /// 3. If no branch condition is true, evaluate and return final_else
 ///
 /// Type Requirements:
-/// - Only boolean tag union types are allowed as conditions
-/// - A boolean is the tag union [True, False]
+/// - Only boolean types are allowed as conditions (nominal Bool type)
+/// - Booleans are represented as u8 values: True = 1, False = 0
 /// - Type mismatch error if condition evaluates to any non-boolean type
-/// - Tag evaluation: True (discriminant 0) is true, False (discriminant 1) is false
+/// - With nominal booleans, True and False are wrapped in nominal expressions
 ///
 /// Branch Storage:
 /// - Branches are stored as nodes with data in extra_data
@@ -847,42 +855,42 @@ fn extractBranchData(cir: *const CIR, branch_idx: CIR.Expr.IfBranch.Idx) !Branch
 
 /// Evaluates a boolean condition result and returns whether it's true.
 ///
-/// This function enforces strict type checking - only boolean tag union types are allowed.
-/// A boolean in Roc is represented as the tag union `[True, False]`.
+/// This function enforces strict type checking - only boolean types are allowed.
+/// With nominal booleans, Bool is a nominal type wrapping u8 values.
 ///
 /// Returns:
-/// - true if the tag is `True` (discriminant 0)
-/// - false if the tag is `False` (discriminant 1)
-/// - error.TypeMismatch if the condition is not a boolean tag union
+/// - true if the value is 1 (True)
+/// - false if the value is 0 (False)
+/// - error.TypeMismatch if the condition is not a boolean type
 fn evaluateBooleanCondition(cond_result: EvalResult) !bool {
     // Check if this is a boolean scalar layout
     if (cond_result.layout.tag == .scalar and cond_result.layout.data.scalar.tag == .bool) {
-        // Direct boolean value
-        const bool_ptr = @as(*const bool, @ptrCast(@alignCast(cond_result.ptr)));
-        return bool_ptr.*;
+        // Direct boolean value as u8
+        const bool_ptr = @as(*const u8, @ptrCast(@alignCast(cond_result.ptr)));
+        return bool_ptr.* == 1;
     }
 
-    // Boolean values in Roc are represented as tags (zero-argument tag union)
-    // The tag union [True, False] is represented as a u16 discriminant
+    // With nominal booleans, True and False are u8 values
+    // wrapped in nominal expressions (True = 1, False = 0)
     if (cond_result.layout.tag != .scalar or cond_result.layout.data.scalar.tag != .int) {
         // Type mismatch: condition must be a tag (represented as int)
         return error.TypeMismatch;
     }
 
-    // For zero-argument tags, we expect a u16 layout
+    // For zero-argument tags, we expect a u8 layout
     const int_precision = cond_result.layout.data.scalar.data.int;
-    if (int_precision != .u16) {
+    if (int_precision != .u8) {
         return error.TypeMismatch;
     }
 
     // Read the tag discriminant
-    const tag_ptr = @as(*u16, @ptrCast(@alignCast(cond_result.ptr)));
+    const tag_ptr = @as(*u8, @ptrCast(@alignCast(cond_result.ptr)));
     const discriminant = tag_ptr.*;
 
-    // In the tag union [True, False]:
-    // - True has discriminant 0
-    // - False has discriminant 1
-    return discriminant == 0;
+    // In the nominal Bool type:
+    // - True has value 1
+    // - False has value 0
+    return discriminant == 1;
 }
 
 test {
@@ -893,10 +901,10 @@ test {
 test "evaluateBooleanCondition - valid True tag" {
     const testing = std.testing;
 
-    // Create a True tag (discriminant 0)
-    var tag_value: u16 = 0;
+    // Create a True tag (discriminant 1)
+    var tag_value: u8 = 1;
     const result = EvalResult{
-        .layout = layout.Layout.int(.u16),
+        .layout = layout.Layout.int(.u8),
         .ptr = &tag_value,
     };
 
@@ -907,10 +915,10 @@ test "evaluateBooleanCondition - valid True tag" {
 test "evaluateBooleanCondition - valid False tag" {
     const testing = std.testing;
 
-    // Create a False tag (discriminant 1)
-    var tag_value: u16 = 1;
+    // Create a False tag (discriminant 0)
+    var tag_value: u8 = 0;
     const result = EvalResult{
-        .layout = layout.Layout.int(.u16),
+        .layout = layout.Layout.int(.u8),
         .ptr = &tag_value,
     };
 
@@ -921,7 +929,7 @@ test "evaluateBooleanCondition - valid False tag" {
 test "evaluateBooleanCondition - wrong integer precision error" {
     const testing = std.testing;
 
-    // Create an integer value with wrong precision (not u16)
+    // Create an integer value with wrong precision (not u8)
     var int_value: i128 = 42;
     const result = EvalResult{
         .layout = layout.Layout.int(.i128),
