@@ -1,21 +1,20 @@
 #!/bin/bash
 
-# Create the dist directory
-mkdir -p dist
+# https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
+set -euxo pipefail
 
-# Create dist/index.html with Hello World content
-cat > dist/index.html << 'EOF'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hello World</title>
-</head>
-<body>
-    <h1>Hello World!</h1>
-</body>
-</html>
-EOF
+# Download latest Roc nightly release
+curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
 
-echo "Created dist directory and index.html with Hello World content"
+# rename nightly tar
+mv $(ls | grep "roc_nightly.*tar\.gz") roc_nightly.tar.gz
+
+# decompress the tar
+tar -xzf roc_nightly.tar.gz
+
+rm roc_nightly.tar.gz
+
+# simplify nightly folder name
+mv roc_nightly* roc_nightly
+
+./roc_nightly/roc version
