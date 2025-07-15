@@ -2767,11 +2767,11 @@ pub const Scratch = struct {
     }
 
     fn appendSliceGatheredFields(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordFieldSafeList.Range {
-        return try self.gathered_fields.appendSliceRange(self.gpa, fields);
+        return try self.gathered_fields.appendSlice(self.gpa, fields);
     }
 
     fn appendSliceGatheredTags(self: *Self, fields: []const Tag) std.mem.Allocator.Error!TagSafeList.Range {
-        return try self.gathered_tags.appendSliceRange(self.gpa, fields);
+        return try self.gathered_tags.appendSlice(self.gpa, fields);
     }
 
     fn setUnifyErr(self: *Self, err: UnifyErrCtx) void {

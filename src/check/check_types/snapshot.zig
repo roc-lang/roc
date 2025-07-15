@@ -155,7 +155,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const args_range = try self.alias_args.appendSliceRange(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const args_range = try self.alias_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         return SnapshotAlias{
@@ -178,7 +178,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const elems_range = try self.tuple_elems.appendSliceRange(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const elems_range = try self.tuple_elems.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         return SnapshotTuple{
@@ -246,7 +246,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const args_range = try self.nominal_type_args.appendSliceRange(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const args_range = try self.nominal_type_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         return SnapshotNominalType{
@@ -270,7 +270,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const args_range = try self.func_args.appendSliceRange(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const args_range = try self.func_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         // Deep copy return type
@@ -302,7 +302,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const fields_range = try self.record_fields.appendSliceRange(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
+        const fields_range = try self.record_fields.appendSlice(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
         self.scratch_record_fields.clearFrom(scratch_top);
 
         return fields_range;
@@ -329,7 +329,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const fields_range = try self.record_fields.appendSliceRange(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
+        const fields_range = try self.record_fields.appendSlice(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
         self.scratch_record_fields.clearFrom(scratch_top);
 
         // Deep copy extension type
@@ -364,7 +364,7 @@ pub const Store = struct {
             }
 
             // Append scratch to backing array, and shrink scratch
-            const tag_args_range = try self.tag_args.appendSliceRange(self.gpa, self.scratch_content.sliceFromStart(content_scratch_top));
+            const tag_args_range = try self.tag_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(content_scratch_top));
             self.scratch_content.clearFrom(content_scratch_top);
 
             // Create and append the snapshot tag to scratch
@@ -377,7 +377,7 @@ pub const Store = struct {
         }
 
         // Append scratch tags to backing array, and shrink scratch
-        const tags_range = try self.tags.appendSliceRange(self.gpa, self.scratch_tags.sliceFromStart(tags_scratch_top));
+        const tags_range = try self.tags.appendSlice(self.gpa, self.scratch_tags.sliceFromStart(tags_scratch_top));
         self.scratch_tags.clearFrom(tags_scratch_top);
 
         // Deep copy extension type

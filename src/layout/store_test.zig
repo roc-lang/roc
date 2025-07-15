@@ -574,7 +574,7 @@ test "alignment - record alignment is max of field alignments" {
     const u64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
 
     // Create record type { field1: U8, field2: U32, field3: U64 }
-    const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = field1_ident, .var_ = u8_var },
         .{ .name = field2_ident, .var_ = u32_var },
         .{ .name = field3_ident, .var_ = u64_var },
@@ -597,7 +597,7 @@ test "alignment - record alignment is max of field alignments" {
     }
 
     // Test with different field order - alignment should still be the same
-    const fields2 = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const fields2 = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = field3_ident, .var_ = u64_var },
         .{ .name = field1_ident, .var_ = u8_var },
         .{ .name = field2_ident, .var_ = u32_var },
@@ -640,28 +640,28 @@ test "alignment - deeply nested record alignment (non-recursive)" {
     const u64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
 
     // Create innermost record: { data: U64 }
-    const inner_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const inner_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = data_ident, .var_ = u64_var },
     });
     const inner_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const inner_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields, .ext = inner_ext } } });
 
     // Create middle record: { inner: { data: U64 } }
-    const middle_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const middle_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = inner_ident, .var_ = inner_record_var },
     });
     const middle_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const middle_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = middle_fields, .ext = middle_ext } } });
 
     // Create outer record: { middle: { inner: { data: U64 } } }
-    const outer_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const outer_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = middle_ident, .var_ = middle_record_var },
     });
     const outer_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const outer_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields, .ext = outer_ext } } });
 
     // Create outermost record: { outer: { middle: { inner: { data: U64 } } } }
-    const outermost_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const outermost_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = outer_ident, .var_ = outer_record_var },
     });
     const outermost_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
@@ -749,7 +749,7 @@ test "addTypeVar - simple record" {
     const age_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("age"), base.Region.zero());
 
     // Create record type { name: str, age: u32 }
-    const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = name_ident, .var_ = str_var },
         .{ .name = age_ident, .var_ = u32_var },
     });
@@ -814,7 +814,7 @@ test "record size calculation" {
     const c_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("c"), base.Region.zero());
     const d_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("d"), base.Region.zero());
 
-    const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = a_ident, .var_ = u8_var },
         .{ .name = b_ident, .var_ = u32_var },
         .{ .name = c_ident, .var_ = u8_var },
@@ -862,7 +862,7 @@ test "addTypeVar - nested record" {
     const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
     const y_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"), base.Region.zero());
 
-    const point_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const point_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = i32_var },
         .{ .name = y_ident, .var_ = i32_var },
     });
@@ -875,7 +875,7 @@ test "addTypeVar - nested record" {
     const name_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"), base.Region.zero());
     const position_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("position"), base.Region.zero());
 
-    const player_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const player_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = name_ident, .var_ = str_var },
         .{ .name = position_ident, .var_ = point_var },
     });
@@ -952,7 +952,7 @@ test "addTypeVar - list of records" {
     const id_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("id"), base.Region.zero());
     const active_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("active"), base.Region.zero());
 
-    const record_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const record_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = id_ident, .var_ = u64_var },
         .{ .name = active_ident, .var_ = bool_var },
     });
@@ -1016,7 +1016,7 @@ test "addTypeVar - record with extension" {
     const y_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"), base.Region.zero());
     const z_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("z"), base.Region.zero());
 
-    const ext_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const ext_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = y_ident, .var_ = i32_var },
         .{ .name = z_ident, .var_ = u16_var },
     });
@@ -1028,7 +1028,7 @@ test "addTypeVar - record with extension" {
     const str_var = try type_store.freshFromContent(.{ .structure = .str });
     const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
 
-    const main_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const main_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = str_var },
     });
 
@@ -1097,7 +1097,7 @@ test "addTypeVar - record extension with str type fails" {
         .var_ = try type_store.freshFromContent(.{ .structure = .str }),
     });
 
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, fields.items);
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, fields.items);
     const str_ext = try type_store.freshFromContent(.{ .structure = .str });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = str_ext } } });
 
@@ -1128,7 +1128,7 @@ test "addTypeVar - record extension with num type fails" {
         .var_ = try type_store.freshFromContent(.{ .structure = .str }),
     });
 
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, fields.items);
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, fields.items);
     const num_ext = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = num_ext } } });
 
@@ -1199,7 +1199,7 @@ test "addTypeVar - record with single zero-sized field in container" {
         .var_ = try type_store.freshFromContent(.{ .structure = .empty_record }),
     });
 
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, fields.items);
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, fields.items);
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
     const list_var = try type_store.freshFromContent(.{ .structure = .{ .list = record_var } });
@@ -1255,13 +1255,13 @@ test "addTypeVar - record field ordering stability" {
 
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
 
-    const fields1_slice = try type_store.record_fields.appendSliceRange(gpa, fields1.items);
+    const fields1_slice = try type_store.record_fields.appendSlice(gpa, fields1.items);
     const record1_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields1_slice, .ext = empty_ext } } });
 
-    const fields2_slice = try type_store.record_fields.appendSliceRange(gpa, fields2.items);
+    const fields2_slice = try type_store.record_fields.appendSlice(gpa, fields2.items);
     const record2_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields2_slice, .ext = empty_ext } } });
 
-    const fields3_slice = try type_store.record_fields.appendSliceRange(gpa, fields3.items);
+    const fields3_slice = try type_store.record_fields.appendSlice(gpa, fields3.items);
     const record3_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields3_slice, .ext = empty_ext } } });
 
     const result1 = try layout_store.addTypeVar(record1_var);
@@ -1354,7 +1354,7 @@ test "addTypeVar - empty record in different contexts" {
         .name = field_name,
         .var_ = empty_record,
     });
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, fields.items);
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, fields.items);
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_with_empty = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
@@ -1396,7 +1396,7 @@ test "addTypeVar - record alignment edge cases" {
         });
     }
 
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, fields.items);
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, fields.items);
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
@@ -1444,7 +1444,7 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
     const y_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"), base.Region.zero());
 
     // Create extension record { x: str, y: i32 }
-    const ext_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const ext_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = str_var },
         .{ .name = y_ident, .var_ = i32_var },
     });
@@ -1453,7 +1453,7 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
     const ext_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = ext_fields, .ext = empty_ext } } });
 
     // Create main record { x: str } extending the above (x appears in both with same type)
-    const main_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const main_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = str_var },
     });
 
@@ -1517,7 +1517,7 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
     const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
 
     // Create extension record { x: i32 }
-    const ext_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const ext_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = i32_var },
     });
 
@@ -1525,7 +1525,7 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
     const ext_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = ext_fields, .ext = empty_ext } } });
 
     // Create main record { x: str } extending the above (x appears in both with different types)
-    const main_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const main_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = str_var },
     });
 
@@ -1583,7 +1583,7 @@ test "addTypeVar - record with invalid extension type" {
     const x_ident = try module_env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero());
 
     // Create main record { x: str } with str as extension (invalid)
-    const main_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const main_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = str_var },
     });
 
@@ -1621,7 +1621,7 @@ test "addTypeVar - record with chained extensions" {
     const z_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("z"), base.Region.zero());
 
     // Create innermost extension record { z: u8 }
-    const inner_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const inner_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = z_ident, .var_ = u8_var },
     });
 
@@ -1629,14 +1629,14 @@ test "addTypeVar - record with chained extensions" {
     const inner_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields, .ext = empty_ext } } });
 
     // Create middle extension record { y: f64 } extending inner
-    const middle_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const middle_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = y_ident, .var_ = f64_var },
     });
 
     const middle_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = middle_fields, .ext = inner_record_var } } });
 
     // Create outermost record { w: str, x: i32 } extending middle
-    const outer_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const outer_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = w_ident, .var_ = str_var },
         .{ .name = x_ident, .var_ = i32_var },
     });
@@ -1713,7 +1713,7 @@ test "addTypeVar - record with zero-sized fields dropped" {
     const age_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("age"), base.Region.zero());
 
     // Create record { name: str, empty: {}, age: i32 }
-    const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = name_ident, .var_ = str_var },
         .{ .name = empty_ident, .var_ = empty_record_var },
         .{ .name = age_ident, .var_ = i32_var },
@@ -1776,7 +1776,7 @@ test "addTypeVar - record with all zero-sized fields becomes empty" {
     const field2_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field2"), base.Region.zero());
 
     // Create record { field1: {}, field2: [] }
-    const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = field1_ident, .var_ = empty_record_var },
         .{ .name = field2_ident, .var_ = empty_tag_union_var },
     });
@@ -1811,7 +1811,7 @@ test "addTypeVar - box of record with all zero-sized fields" {
     const field2_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field2"), base.Region.zero());
 
     // Create record { field1: {}, field2: {} }
-    const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = field1_ident, .var_ = empty_record_var },
         .{ .name = field2_ident, .var_ = empty_record_var },
     });
@@ -1919,7 +1919,7 @@ test "addTypeVar - comprehensive nested record combinations" {
                         expected_non_zero_fields += 1; // The nested record itself counts as 1
                         expected_total_fields += inner_field_count;
 
-                        const inner_fields_slice = try test_type_store.record_fields.appendSliceRange(module_env.gpa, inner_fields.items);
+                        const inner_fields_slice = try test_type_store.record_fields.appendSlice(module_env.gpa, inner_fields.items);
                         const empty_ext = try test_type_store.freshFromContent(.{ .structure = .empty_record });
                         break :blk try test_type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields_slice, .ext = empty_ext } } });
                     },
@@ -1948,7 +1948,7 @@ test "addTypeVar - comprehensive nested record combinations" {
                         // This nested record will have 1 non-zero field (the str field) after dropping zero-sized ones
                         expected_non_zero_fields += 1;
 
-                        const inner_fields_slice = try test_type_store.record_fields.appendSliceRange(module_env.gpa, inner_fields.items);
+                        const inner_fields_slice = try test_type_store.record_fields.appendSlice(module_env.gpa, inner_fields.items);
                         const empty_ext = try test_type_store.freshFromContent(.{ .structure = .empty_record });
                         break :blk try test_type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields_slice, .ext = empty_ext } } });
                     },
@@ -1962,7 +1962,7 @@ test "addTypeVar - comprehensive nested record combinations" {
             }
 
             // Create outer record
-            const outer_fields_slice = try test_type_store.record_fields.appendSliceRange(module_env.gpa, outer_fields.items);
+            const outer_fields_slice = try test_type_store.record_fields.appendSlice(module_env.gpa, outer_fields.items);
             const empty_ext = try test_type_store.freshFromContent(.{ .structure = .empty_record });
             const outer_record_var = try test_type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields_slice, .ext = empty_ext } } });
 
@@ -2038,7 +2038,7 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
     const b_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("b"), base.Region.zero());
 
     // Create inner record
-    const inner_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const inner_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = a_ident, .var_ = empty_record_var },
         .{ .name = b_ident, .var_ = empty_record_var },
     });
@@ -2051,7 +2051,7 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
     const name_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"), base.Region.zero());
     const data_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("data"), base.Region.zero());
 
-    const outer_fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const outer_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = name_ident, .var_ = str_var },
         .{ .name = data_ident, .var_ = inner_record_var },
     });
@@ -2087,7 +2087,7 @@ test "addTypeVar - list of record with all zero-sized fields" {
     const field_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"), base.Region.zero());
 
     // Create record { field: {} }
-    const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = field_ident, .var_ = empty_record_var },
     });
 
@@ -2123,7 +2123,7 @@ test "alignment - record with log2 alignment representation" {
     {
         const u8_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
         const field_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"), base.Region.zero());
-        const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+        const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
             .{ .name = field_ident, .var_ = u8_var },
         });
         const ext = try type_store.freshFromContent(.{ .structure = .empty_record });
@@ -2146,7 +2146,7 @@ test "alignment - record with log2 alignment representation" {
     {
         const u32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
         const field_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"), base.Region.zero());
-        const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+        const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
             .{ .name = field_ident, .var_ = u32_var },
         });
         const ext = try type_store.freshFromContent(.{ .structure = .empty_record });
@@ -2169,7 +2169,7 @@ test "alignment - record with log2 alignment representation" {
     {
         const u64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
         const field_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"), base.Region.zero());
-        const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+        const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
             .{ .name = field_ident, .var_ = u64_var },
         });
         const ext = try type_store.freshFromContent(.{ .structure = .empty_record });
@@ -2194,7 +2194,7 @@ test "alignment - record with log2 alignment representation" {
         const u64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
         const field1_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("small"), base.Region.zero());
         const field2_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("large"), base.Region.zero());
-        const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+        const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
             .{ .name = field1_ident, .var_ = u8_var },
             .{ .name = field2_ident, .var_ = u64_var },
         });
@@ -2243,7 +2243,7 @@ test "record fields sorted by alignment then name" {
 
     // Create record with fields in a specific order to test sorting
     // { a: u32, b: u64, c: u8, d: u64 }
-    const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = a_ident, .var_ = u32_var }, // alignment 4
         .{ .name = b_ident, .var_ = u64_var }, // alignment 8
         .{ .name = c_ident, .var_ = u8_var }, // alignment 1
@@ -2322,7 +2322,7 @@ test "record fields with same alignment sorted by name" {
 
     // Create record with fields that all have alignment 4
     // { zebra: i32, apple: u32, banana: f32 }
-    const fields = try type_store.record_fields.appendSliceRange(module_env.gpa, &[_]types.RecordField{
+    const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = zebra_ident, .var_ = i32_var },
         .{ .name = apple_ident, .var_ = u32_var },
         .{ .name = banana_ident, .var_ = f32_var },
@@ -2394,7 +2394,7 @@ test "addTypeVar - maximum nesting depth" {
             .var_ = current_var,
         });
 
-        const fields_slice = try type_store.record_fields.appendSliceRange(gpa, fields.items);
+        const fields_slice = try type_store.record_fields.appendSlice(gpa, fields.items);
         const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
         current_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
     }
@@ -2443,7 +2443,7 @@ test "addTypeVar - record with maximum fields" {
         });
     }
 
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, fields.items);
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, fields.items);
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
@@ -2485,7 +2485,7 @@ test "addTypeVar - record field alignments differ between targets" {
     const u32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
     const u8_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
 
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, &[_]types.RecordField{
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, &[_]types.RecordField{
         .{ .name = str_field_name, .var_ = str_var },
         .{ .name = u64_field_name, .var_ = u64_var },
         .{ .name = u32_field_name, .var_ = u32_var },
@@ -2582,7 +2582,7 @@ test "addTypeVar - record field sorting follows alignment then name order" {
     const banana_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
     const carrot_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
 
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, &[_]types.RecordField{
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, &[_]types.RecordField{
         .{ .name = zebra_field_name, .var_ = zebra_var },
         .{ .name = apple_field_name, .var_ = apple_var },
         .{ .name = banana_field_name, .var_ = banana_var },
@@ -2712,7 +2712,7 @@ test "addTypeVar - record with very long field names" {
         .var_ = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } }),
     });
 
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, fields.items);
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, fields.items);
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
@@ -2762,7 +2762,7 @@ test "addTypeVar - alternating zero-sized and non-zero-sized fields" {
         });
     }
 
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, fields.items);
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, fields.items);
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
@@ -2806,7 +2806,7 @@ test "addTypeVar - record field type changes through alias" {
         .var_ = alias_var,
     });
 
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, fields.items);
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, fields.items);
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
@@ -2864,7 +2864,7 @@ test "addTypeVar - mixed container types" {
         .var_ = inner_list_var,
     });
 
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, record_fields.items);
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, record_fields.items);
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
@@ -2949,7 +2949,7 @@ test "addTypeVar - record size calculation with padding" {
         .var_ = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u16 } } } }),
     });
 
-    const fields_slice = try type_store.record_fields.appendSliceRange(gpa, fields.items);
+    const fields_slice = try type_store.record_fields.appendSlice(gpa, fields.items);
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
@@ -3133,7 +3133,7 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
     // Create a record type (non-scalar)
     const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
     const str_var = try type_store.freshFromContent(.{ .structure = .str });
-    const fields = try type_store.record_fields.appendSliceRange(gpa, &[_]types.RecordField{
+    const fields = try type_store.record_fields.appendSlice(gpa, &[_]types.RecordField{
         .{ .name = field_name, .var_ = str_var },
     });
     const ext = try type_store.freshFromContent(.{ .structure = .empty_record });
