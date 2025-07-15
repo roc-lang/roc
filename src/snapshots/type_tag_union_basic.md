@@ -26,7 +26,6 @@ main! = |_| {}
 ~~~
 # EXPECTED
 UNUSED VARIABLE - type_tag_union_basic.md:4:12:4:17
-TYPE MISMATCH - type_tag_union_basic.md:6:54:6:58
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``maybe`` is not used anywhere in your code.
@@ -39,20 +38,6 @@ process = |maybe| "result"
 ```
            ^^^^^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_tag_union_basic.md:6:54:6:58:**
-```roc
-is_ok_ret_unqualified_bool : [Ok(_ok), Err(_err)] -> Bool
-```
-                                                     ^^^^
-
-It is of type:
-    _Bool_
-
-But you are trying to use it as:
-    _[True, False]_others_
 
 # TOKENS
 ~~~zig
@@ -218,13 +203,15 @@ main! = |_| {}
 								(pattern (degenerate false)
 									(p-applied-tag @8.5-8.10)))
 							(value
-								(e-tag @8.14-8.18 (name "True"))))
+								(e-nominal @8.14-8.18 (nominal "Bool")
+									(e-tag @8.14-8.18 (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @9.5-9.11)))
 							(value
-								(e-tag @9.15-9.20 (name "False"))))))))
+								(e-nominal @9.15-9.20 (nominal "Bool")
+									(e-tag @9.15-9.20 (name "False")))))))))
 		(annotation @7.1-7.27
 			(declared-type
 				(ty-fn @6.30-6.58 (effectful false)
@@ -280,12 +267,12 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt @4.1-4.8 (type "[None, Some(Str)] -> Str"))
-		(patt @7.1-7.27 (type "[Err(_err), Ok(_ok)] -> Error"))
-		(patt @13.1-13.15 (type "[Err(_err2), Ok(_ok2)] -> Error"))
+		(patt @7.1-7.27 (type "[Err(_err), Ok(_ok)] -> Bool"))
+		(patt @13.1-13.15 (type "[Err(_err2), Ok(_ok2)] -> Bool"))
 		(patt @18.1-18.6 (type "_arg -> {}")))
 	(expressions
 		(expr @4.11-4.27 (type "[None, Some(Str)] -> Str"))
-		(expr @7.30-10.2 (type "[Err(_err), Ok(_ok)] -> Error"))
-		(expr @13.18-16.2 (type "[Err(_err2), Ok(_ok2)] -> Error"))
+		(expr @7.30-10.2 (type "[Err(_err), Ok(_ok)] -> Bool"))
+		(expr @13.18-16.2 (type "[Err(_err2), Ok(_ok2)] -> Bool"))
 		(expr @18.9-18.15 (type "_arg -> {}"))))
 ~~~
