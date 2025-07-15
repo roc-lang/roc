@@ -439,7 +439,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
-
         .expr_bin_op => {
             return CIR.Expr{
                 .e_binop = CIR.Expr.Binop.init(

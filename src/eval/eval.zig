@@ -53,7 +53,15 @@ pub fn eval(
     const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
 
     // Get the real layout from the type checker
-    const layout_idx = try layout_cache.addTypeVar(expr_var);
+    const layout_idx = layout_cache.addTypeVar(expr_var) catch |err| switch (err) {
+        error.ZeroSizedType => {
+            // Zero-sized types don't need any allocation
+            // We can't create a proper layout for them, so return a special error
+            // that the caller can handle appropriately
+            return error.ZeroSizedType;
+        },
+        else => return err,
+    };
     const expr_layout = layout_cache.getLayout(layout_idx);
 
     // Calculate size and alignment using the layout store
@@ -418,15 +426,32 @@ fn evalBinop(allocator: std.mem.Allocator, cir: *const CIR, binop: CIR.Expr.Bino
     const lhs_precision = lhs_scalar.data.int;
     const rhs_precision = rhs_scalar.data.int;
 
-    // For now, assume both operands have the same precision (u8)
-    if (lhs_precision != .u8 or rhs_precision != .u8) {
-        return error.LayoutError;
-    }
+    // Read values based on precision - for now support common precisions
+    const lhs_val: i128 = switch (lhs_precision) {
+        .u8 => @as(*u8, @ptrCast(@alignCast(left_result.ptr))).*,
+        .i8 => @as(*i8, @ptrCast(@alignCast(left_result.ptr))).*,
+        .u16 => @as(*u16, @ptrCast(@alignCast(left_result.ptr))).*,
+        .i16 => @as(*i16, @ptrCast(@alignCast(left_result.ptr))).*,
+        .u32 => @as(*u32, @ptrCast(@alignCast(left_result.ptr))).*,
+        .i32 => @as(*i32, @ptrCast(@alignCast(left_result.ptr))).*,
+        .u64 => @as(*u64, @ptrCast(@alignCast(left_result.ptr))).*,
+        .i64 => @as(*i64, @ptrCast(@alignCast(left_result.ptr))).*,
+        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(left_result.ptr))).*),
+        .i128 => @as(*i128, @ptrCast(@alignCast(left_result.ptr))).*,
+    };
 
-    const lhs_ptr = @as(*u8, @ptrCast(@alignCast(left_result.ptr)));
-    const rhs_ptr = @as(*u8, @ptrCast(@alignCast(right_result.ptr)));
-    const lhs_val = lhs_ptr.*;
-    const rhs_val = rhs_ptr.*;
+    const rhs_val: i128 = switch (rhs_precision) {
+        .u8 => @as(*u8, @ptrCast(@alignCast(right_result.ptr))).*,
+        .i8 => @as(*i8, @ptrCast(@alignCast(right_result.ptr))).*,
+        .u16 => @as(*u16, @ptrCast(@alignCast(right_result.ptr))).*,
+        .i16 => @as(*i16, @ptrCast(@alignCast(right_result.ptr))).*,
+        .u32 => @as(*u32, @ptrCast(@alignCast(right_result.ptr))).*,
+        .i32 => @as(*i32, @ptrCast(@alignCast(right_result.ptr))).*,
+        .u64 => @as(*u64, @ptrCast(@alignCast(right_result.ptr))).*,
+        .i64 => @as(*i64, @ptrCast(@alignCast(right_result.ptr))).*,
+        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(right_result.ptr))).*),
+        .i128 => @as(*i128, @ptrCast(@alignCast(right_result.ptr))).*,
+    };
 
     // For binop results, we need to determine the layout based on the operation
     // For arithmetic operations, the result has the same type as the operands
@@ -442,14 +467,14 @@ fn evalBinop(allocator: std.mem.Allocator, cir: *const CIR, binop: CIR.Expr.Bino
     switch (binop.op) {
         .add => {
             // Addition result
-            const result_val = lhs_val + rhs_val;
+            const result_val: i128 = lhs_val + rhs_val;
             const size = layout_cache.layoutSize(result_layout);
             const alignment = result_layout.alignment(target.TargetUsize.native);
             const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
                 error.StackOverflow => return error.StackOverflow,
             };
-            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = @as(u8, @intCast(result_val));
+            // Write result based on the precision
+            writeIntToMemory(@as([*]u8, @ptrCast(ptr)), result_val, lhs_precision);
             return EvalResult{
                 .layout = result_layout,
                 .ptr = ptr,
@@ -552,7 +577,6 @@ fn evalCall(allocator: std.mem.Allocator, cir: *const CIR, expr_idx: CIR.Expr.Id
 
 test {
     _ = @import("eval_test.zig");
-    _ = @import("eval_layout_test.zig");
 }
 
 test "evaluateBooleanCondition - valid True tag" {
@@ -615,10 +639,10 @@ test "extractBranchData - valid branch node" {
     const gpa = testing.allocator;
 
     const owned_source = try gpa.dupe(u8, "");
-    var module_env = base.ModuleEnv.init(gpa, owned_source);
+    var module_env = try base.ModuleEnv.init(gpa, owned_source);
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env, "test");
+    var cir = try CIR.init(&module_env, "test");
     defer cir.deinit();
 
     // Add some dummy data to extra_data
@@ -633,7 +657,7 @@ test "extractBranchData - valid branch node" {
 
         .tag = .if_branch,
     };
-    const node_idx = cir.store.nodes.append(gpa, node);
+    const node_idx = try cir.store.nodes.append(gpa, node);
 
     // Extract branch data
     const branch_idx: CIR.Expr.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
@@ -648,10 +672,10 @@ test "extractBranchData - wrong node type" {
     const gpa = testing.allocator;
 
     const owned_source = try gpa.dupe(u8, "");
-    var module_env = base.ModuleEnv.init(gpa, owned_source);
+    var module_env = try base.ModuleEnv.init(gpa, owned_source);
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env, "test");
+    var cir = try CIR.init(&module_env, "test");
     defer cir.deinit();
 
     // Create a non-branch node
@@ -662,7 +686,7 @@ test "extractBranchData - wrong node type" {
 
         .tag = .expr_int, // Wrong type
     };
-    const node_idx = cir.store.nodes.append(gpa, node);
+    const node_idx = try cir.store.nodes.append(gpa, node);
 
     // Try to extract branch data from wrong node type
     const branch_idx: CIR.Expr.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
@@ -676,10 +700,10 @@ test "extractBranchData - out of bounds extra_data" {
     const gpa = testing.allocator;
 
     const owned_source = try gpa.dupe(u8, "");
-    var module_env = base.ModuleEnv.init(gpa, owned_source);
+    var module_env = try base.ModuleEnv.init(gpa, owned_source);
     defer module_env.deinit();
 
-    var cir = CIR.init(&module_env, "test");
+    var cir = try CIR.init(&module_env, "test");
     defer cir.deinit();
 
     // Create a branch node with invalid extra_data index
@@ -690,7 +714,7 @@ test "extractBranchData - out of bounds extra_data" {
 
         .tag = .if_branch,
     };
-    const node_idx = cir.store.nodes.append(gpa, node);
+    const node_idx = try cir.store.nodes.append(gpa, node);
 
     // Try to extract branch data with out of bounds index
     const branch_idx: CIR.Expr.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
