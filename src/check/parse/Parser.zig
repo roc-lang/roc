@@ -1919,22 +1919,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
 
                 if (is_block) {
                     // Parse as block
-                    const scratch_top = self.store.scratchStatementTop();
-
-                    while (self.peek() != .EndOfFile) {
-                        const statement = try self.parseStmt() orelse break;
-                        try self.store.addScratchStatement(statement);
-                        if (self.peek() == .CloseCurly) {
-                            self.advance();
-                            break;
-                        }
-                    }
-
-                    const statements = try self.store.statementSpanFrom(scratch_top);
-                    expr = try self.store.addExpr(.{ .block = .{
-                        .statements = statements,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
+                    expr = try self.parseBlock(start);
                 } else {
                     // Parse as record
                     const scratch_top = self.store.scratchRecordFieldTop();
@@ -1956,28 +1941,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
                 }
             } else {
                 // Not ambiguous - parse as block
-                const scratch_top = self.store.scratchStatementTop();
-
-                while (self.peek() != .EndOfFile) {
-                    const statement = try self.parseStmt() orelse break;
-                    try self.store.addScratchStatement(statement);
-                    if (self.peek() == .CloseCurly) {
-                        break;
-                    }
-                }
-
-                self.expect(.CloseCurly) catch {
-                    try self.pushDiagnostic(.expected_expr_close_curly_or_comma, .{
-                        .start = self.pos,
-                        .end = self.pos,
-                    });
-                };
-
-                const statements = try self.store.statementSpanFrom(scratch_top);
-                expr = try self.store.addExpr(.{ .block = .{
-                    .statements = statements,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
+                expr = try self.parseBlock(start);
             }
         },
         .OpBar => {
@@ -2755,6 +2719,32 @@ pub fn parseWhereClause(self: *Parser) std.mem.Allocator.Error!AST.WhereClause.I
             start,
         );
     }
+}
+
+/// todo
+pub fn parseBlock(self: *Parser, start: u32) std.mem.Allocator.Error!AST.Expr.Idx {
+    const scratch_top = self.store.scratchStatementTop();
+
+    while (self.peek() != .EndOfFile) {
+        const statement = try self.parseStmt() orelse break;
+        try self.store.addScratchStatement(statement);
+        if (self.peek() == .CloseCurly) {
+            break;
+        }
+    }
+
+    self.expect(.CloseCurly) catch {
+        try self.pushDiagnostic(.expected_expr_close_curly_or_comma, .{
+            .start = self.pos,
+            .end = self.pos,
+        });
+    };
+
+    const statements = try self.store.statementSpanFrom(scratch_top);
+    return try self.store.addExpr(.{ .block = .{
+        .statements = statements,
+        .region = .{ .start = start, .end = self.pos },
+    } });
 }
 
 /// todo
