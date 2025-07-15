@@ -201,11 +201,11 @@ LocalStatus : lue => Loc
 olor : _ -> tus
 olor = |color| {
 	
-	RGB
+	Color.RGB
 
-	match color {		RGB => Pending
+	match color {		RGB => LocalStatus.Pending
 		Green => LocalStatus - Complete
-		Blue => Pending
+		Blue => LocalStatus.Pending
 	}
 }
 ~~~

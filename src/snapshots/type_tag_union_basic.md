@@ -178,8 +178,8 @@ is_ok_ret_unqualified_bool = |result| match result {
 
 is_ok_ret_bool : [Ok(_ok2), Err(_err2)] -> Bool
 is_ok_ret_bool = |result| match result {
-	Ok(_) => True
-	Err(_) => False
+	Ok(_) => Bool.True
+	Err(_) => Bool.False
 }
 
 main! = |_| {}

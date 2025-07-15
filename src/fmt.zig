@@ -1026,7 +1026,14 @@ const Formatter = struct {
                 try fmt.push('?');
             },
             .tag => |t| {
-                try fmt.pushTokenText(t.token);
+                const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
+
+                for (qualifier_tokens) |tok_idx| {
+                    const tok = @as(Token.Idx, @intCast(tok_idx));
+                    try fmt.pushAll(fmt.ast.resolve(tok));
+                }
+
+                try fmt.pushAll(fmt.ast.resolve(t.token));
             },
             .if_then_else => |i| {
                 try fmt.pushAll("if");
@@ -1815,11 +1822,9 @@ const Formatter = struct {
             .ty => |t| {
                 const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
 
-                if (qualifier_tokens.len > 0) {
-                    for (qualifier_tokens) |tok_idx| {
-                        const tok = @as(Token.Idx, @intCast(tok_idx));
-                        try fmt.pushAll(fmt.ast.resolve(tok));
-                    }
+                for (qualifier_tokens) |tok_idx| {
+                    const tok = @as(Token.Idx, @intCast(tok_idx));
+                    try fmt.pushAll(fmt.ast.resolve(tok));
                 }
 
                 try fmt.pushAll(fmt.ast.resolve(t.token));

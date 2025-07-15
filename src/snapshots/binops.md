@@ -111,8 +111,8 @@ CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
 	4 == 2,
 	4 != 2,
 	4 // 2,
-	True and False,
-	False or True,
+	Bool.True and Bool.False,
+	Bool.False or Bool.True,
 	None ?? 0,
 )
 ~~~

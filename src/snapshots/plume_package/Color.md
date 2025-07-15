@@ -905,12 +905,12 @@ Color := [
 ]
 
 rgb : U8, U8, U8 -> Color
-rgb = |r, g, b| RGB(r, g, b)
+rgb = |r, g, b| Color.RGB(r, g, b)
 
 rgba : U8, U8, U8, U8 -> Color
 rgba = |r, g, b, a| {
 	rounded = a.to_frac() / 255.0
-	RGBA(r, g, b, rounded)
+	Color.RGBA(r, g, b, rounded)
 }
 
 hex : Str -> Result(Color, [InvalidHex(Str)])
@@ -929,7 +929,7 @@ hex = |str| {
 					and e.is_char_in_hex_range()
 					and f.is_char_in_hex_range()
 
-			if is_valid Ok(Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
+			if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
 		}
 		_ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
 	}
@@ -949,7 +949,7 @@ expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
 named : Str -> Result(Color, [UnknownColor(Str)])
 named = |str|
-	(Named(str))
+	(Color.Named(str))
 
 str
 
