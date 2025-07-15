@@ -1156,6 +1156,11 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
                 return statement_idx;
             }
         },
+        .OpenCurly => {
+            if (statementType == .top_level) {
+                return try self.pushMalformed(AST.Statement.Idx, .unexpected_top_level_open_curly, self.pos);
+            }
+        },
         else => {},
     }
 

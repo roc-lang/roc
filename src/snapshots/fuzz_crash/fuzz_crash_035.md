@@ -9,25 +9,13 @@ module[]{
  
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_035.md:2:2:2:2
-INVALID STATEMENT - fuzz_crash_035.md:1:9:1:10
+PARSE ERROR - fuzz_crash_035.md:1:9:1:10
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
+A parsing error occurred: `unexpected_top_level_open_curly`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_035.md:2:2:2:2:**
-```roc
- 
-```
- 
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **fuzz_crash_035.md:1:9:1:10:**
 ```roc
 module[]{
@@ -46,13 +34,12 @@ EndOfFile(2:2-2:2),
 	(module @1.1-1.9
 		(exposes @1.7-1.9))
 	(statements
-		(e-block @1.9-1.10
-			(statements))))
+		(s-malformed @1.9-1.10 (tag "unexpected_top_level_open_curly"))))
 ~~~
 # FORMATTED
 ~~~roc
 module []
-{}
+
 ~~~
 # CANONICALIZE
 ~~~clojure
