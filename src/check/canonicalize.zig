@@ -325,7 +325,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
 
     // Add True and False to unqualified_nominal_tags
     const true_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("True"), Region.zero());
-    const false_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("False"), Region.zero());
+    const false_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("False"), base.Region.zero());
     try self.unqualified_nominal_tags.put(gpa, true_ident, type_decl_idx);
     try self.unqualified_nominal_tags.put(gpa, false_ident, type_decl_idx);
 }
@@ -2534,7 +2534,9 @@ pub fn canonicalizeExpr(
 fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std.mem.Allocator.Error!?CIR.Expr.Idx {
     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-    const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse return null;
+    const parse_tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse return null;
+    const tag_name_text = self.parse_ir.env.idents.getText(parse_tag_name);
+    const tag_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(tag_name_text), region);
 
     var args_span = CIR.Expr.Span{ .span = base.DataSpan.empty() };
 
@@ -2572,6 +2574,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
 
     if (e.qualifiers.span.len == 0) {
         // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
+        // First try with the tag_name we already have
         if (self.unqualified_nominal_tags.get(tag_name)) |nominal_type_decl| {
             // Create a nominal expression
             const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
@@ -2582,6 +2585,24 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
                 },
             }, Content{ .flex_var = null }, region);
             return expr_idx;
+        }
+
+        // If not found, the tag might have been registered with a different identifier store
+        // Try looking it up by text in the unqualified_nominal_tags
+        var iter = self.unqualified_nominal_tags.iterator();
+        while (iter.next()) |entry| {
+            const entry_text = self.can_ir.env.idents.getText(entry.key_ptr.*);
+            if (std.mem.eql(u8, entry_text, tag_name_text)) {
+                // Found it! Create a nominal expression
+                const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
+                    .e_nominal = .{
+                        .nominal_type_decl = entry.value_ptr.*,
+                        .backing_expr = tag_expr_idx,
+                        .backing_type = .tag,
+                    },
+                }, Content{ .flex_var = null }, region);
+                return expr_idx;
+            }
         }
 
         // If this is a tag without a prefix and not in unqualified_nominal_tags,

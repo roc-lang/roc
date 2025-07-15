@@ -118,10 +118,38 @@ pub fn eval(
 
         // Tags with arguments
         .e_tag => |tag| {
-            // For now, just write 0 as tag discriminant
-            _ = tag;
-            const tag_ptr = @as(*u16, @ptrCast(@alignCast(ptr)));
-            tag_ptr.* = 0; // TODO: get actual tag discriminant and handle payload
+            // Use the layout_idx we already computed at the beginning of the function
+            const tag_layout = layout_cache.getLayout(layout_idx);
+
+            // Write the discriminant based on the layout
+            switch (tag_layout.tag) {
+                .scalar => switch (tag_layout.data.scalar.tag) {
+                    .int => switch (tag_layout.data.scalar.data.int) {
+                        .u8 => {
+                            const tag_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+                            tag_ptr.* = 0; // TODO: get actual tag discriminant
+                        },
+                        .u16 => {
+                            const tag_ptr = @as(*u16, @ptrCast(@alignCast(ptr)));
+                            tag_ptr.* = 0; // TODO: get actual tag discriminant
+                        },
+                        .u32 => {
+                            const tag_ptr = @as(*u32, @ptrCast(@alignCast(ptr)));
+                            tag_ptr.* = 0; // TODO: get actual tag discriminant
+                        },
+                        else => return error.LayoutError,
+                    },
+                    .bool => {
+                        // Bool tags (True/False)
+                        const bool_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+                        // Check the tag name to determine if it's True or False
+                        const tag_name = cir.env.idents.getText(tag.name);
+                        bool_ptr.* = std.mem.eql(u8, tag_name, "True");
+                    },
+                    else => return error.LayoutError,
+                },
+                else => return error.LayoutError,
+            }
         },
 
         // Runtime errors are handled at the beginning of the function
@@ -173,9 +201,8 @@ pub fn eval(
 
         // Advanced constructs
         .e_nominal => |nominal| {
-            // Nominal type evaluation not yet implemented
-            _ = nominal;
-            return error.LayoutError;
+            // Evaluate the backing expression
+            return eval(allocator, cir, nominal.backing_expr, eval_stack, layout_cache, type_store);
         },
         .e_crash => |crash| {
             // Crash expression - should halt execution

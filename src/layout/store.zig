@@ -670,11 +670,12 @@ pub const Store = struct {
                         continue;
                     },
                     .tag_union => |tag_union| {
-                        // For now, handle Bool as a special case
-                        // Bool is a tag union with two tags: True and False, both with no payload
+                        // Handle tag unions by computing the layout based on:
+                        // 1. Discriminant size (based on number of tags)
+                        // 2. Maximum payload size and alignment
                         const tags = self.types_store.getTagsSlice(tag_union.tags);
 
-                        // Check if this is a Bool (2 tags with no payload)
+                        // Check if this is a Bool (2 tags with no payload) as a special case
                         if (tags.len == 2) {
                             var is_bool = true;
                             for (tags.items(.args)) |tag_args| {
@@ -686,8 +687,7 @@ pub const Store = struct {
                             }
 
                             if (is_bool) {
-                                // Bool layout: u8 where 0 = False, 1 = True
-                                // Use the predefined bool layout
+                                // Bool layout: use predefined bool layout
                                 const layout = Layout.boolType();
                                 const bool_layout_idx = try self.insertLayout(layout);
                                 try self.layouts_by_var.put(self.env.gpa, current.var_, bool_layout_idx);
@@ -695,8 +695,39 @@ pub const Store = struct {
                             }
                         }
 
-                        // For other tag unions, not yet implemented
-                        @panic("TODO: non-Bool tag_union layout");
+                        // For general tag unions, we need to compute the layout
+                        // First, determine discriminant size based on number of tags
+                        const discriminant_layout = if (tags.len == 0)
+                            // Empty tag union - should not happen in practice
+                            return LayoutError.ZeroSizedType
+                        else if (tags.len <= 256)
+                            Layout.int(.u8)
+                        else if (tags.len <= 65536)
+                            Layout.int(.u16)
+                        else
+                            Layout.int(.u32);
+
+                        // If all tags have no payload, we just need the discriminant
+                        var has_payload = false;
+                        for (tags.items(.args)) |tag_args| {
+                            const args_slice = self.types_store.getTagArgsSlice(tag_args);
+                            if (args_slice.len > 0) {
+                                has_payload = true;
+                                break;
+                            }
+                        }
+
+                        if (!has_payload) {
+                            // Simple tag union with no payloads - just use discriminant
+                            const tag_layout_idx = try self.insertLayout(discriminant_layout);
+                            try self.layouts_by_var.put(self.env.gpa, current.var_, tag_layout_idx);
+                            return tag_layout_idx;
+                        }
+
+                        // Complex tag union with payloads - need to compute max payload size
+                        // For now, we'll implement a simple version that doesn't handle payloads
+                        // TODO: Implement full tag union layout with payloads
+                        @panic("TODO: tag_union layout with payloads");
                     },
                     .record_unbound => |fields| {
                         // For record_unbound, we need to gather fields directly since it has no Record struct

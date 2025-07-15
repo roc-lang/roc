@@ -8,21 +8,9 @@ type=expr
 if True 1 else 2
 ~~~
 # EXPECTED
-INVALID IF CONDITION - if_true_literal.md:1:4:1:4
+NIL
 # PROBLEMS
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**if_true_literal.md:1:4:**
-```roc
-if True 1 else 2
-```
-   ^^^^
-
-Right now, it has the type:
-    _[True]_others_
-
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
-
+NIL
 # TOKENS
 ~~~zig
 KwIf(1:1-1:3),UpperIdent(1:4-1:8),Int(1:9-1:10),KwElse(1:11-1:15),Int(1:16-1:17),EndOfFile(1:17-1:17),
@@ -43,7 +31,8 @@ NO CHANGE
 (e-if @1.1-1.17
 	(if-branches
 		(if-branch
-			(e-tag @1.4-1.8 (name "True"))
+			(e-nominal @1.4-1.8 (nominal "Bool")
+				(e-tag @1.4-1.8 (name "True")))
 			(e-int @1.9-1.10 (value "1"))))
 	(if-else
 		(e-int @1.16-1.17 (value "2"))))

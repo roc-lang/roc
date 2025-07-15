@@ -18,6 +18,9 @@ test {
     testing.refAllDeclsRecursive(@import("reporting.zig"));
     testing.refAllDeclsRecursive(@import("reporting/test.zig"));
     testing.refAllDeclsRecursive(@import("eval/eval.zig"));
+    testing.refAllDeclsRecursive(@import("eval/tag_eval_test.zig"));
+    testing.refAllDeclsRecursive(@import("eval/tag_union_test.zig"));
+    testing.refAllDeclsRecursive(@import("check/canonicalize_bool_test.zig"));
     // testing.refAllDeclsRecursive(@import("eval/flex_var_test.zig"));
     testing.refAllDeclsRecursive(@import("eval/debug_segfault_test.zig"));
     testing.refAllDeclsRecursive(@import("eval/stack_debug_test.zig"));
