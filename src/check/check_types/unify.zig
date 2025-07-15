@@ -410,6 +410,13 @@ fn Unifier(comptime StoreTypeB: type) type {
                     try self.unifyRigid(vars, vars.b.desc.content);
                 },
                 .alias => |a_alias| {
+                    const backing_var = self.types_store_b.getAliasBackingVar(a_alias);
+                    const backing_resolved = self.types_store_b.resolveVar(backing_var);
+                    if (backing_resolved.desc.content == .err) {
+                        // Invalid alias - treat as transparent
+                        self.merge(vars, vars.b.desc.content);
+                        return;
+                    }
                     try self.unifyAlias(vars, a_alias, vars.b.desc.content);
                 },
                 .structure => |a_flat_type| {
@@ -495,25 +502,30 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
+            const backing_var = self.types_store_b.getAliasBackingVar(a_alias);
+
             switch (b_content) {
                 .flex_var => |_| {
                     self.merge(vars, Content{ .alias = a_alias });
                 },
                 .rigid_var => |_| {
-                    const backing_var = self.types_store_b.getAliasBackingVar(a_alias);
                     try self.unifyGuarded(backing_var, vars.b.var_);
                 },
                 .alias => |b_alias| {
+                    const b_backing_var = self.types_store_b.getAliasBackingVar(b_alias);
+                    const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
+                    if (b_backing_resolved.desc.content == .err) {
+                        // Invalid alias - treat as transparent
+                        self.merge(vars, vars.a.desc.content);
+                        return;
+                    }
                     if (TypeIdent.eql(&self.module_env.idents, a_alias.ident, b_alias.ident)) {
                         try self.unifyTwoAliases(vars, a_alias, b_alias);
                     } else {
-                        const a_backing_var = self.types_store_b.getAliasBackingVar(a_alias);
-                        const b_backing_var = self.types_store_b.getAliasBackingVar(b_alias);
-                        try self.unifyGuarded(a_backing_var, b_backing_var);
+                        try self.unifyGuarded(backing_var, b_backing_var);
                     }
                 },
                 .structure => {
-                    const backing_var = self.types_store_b.getAliasBackingVar(a_alias);
                     try self.unifyGuarded(backing_var, vars.b.var_);
                 },
                 .err => self.merge(vars, .err),
@@ -596,6 +608,16 @@ fn Unifier(comptime StoreTypeB: type) type {
                 .str => {
                     switch (b_flat_type) {
                         .str => self.merge(vars, vars.b.desc.content),
+                        .nominal_type => |b_type| {
+                            const b_backing_var = self.types_store_b.getNominalBackingVar(b_type);
+                            const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
+                            if (b_backing_resolved.desc.content == .err) {
+                                // Invalid nominal type - treat as transparent
+                                self.merge(vars, vars.a.desc.content);
+                                return;
+                            }
+                            return error.TypeMismatch;
+                        },
                         else => return error.TypeMismatch,
                     }
                 },
@@ -651,8 +673,24 @@ fn Unifier(comptime StoreTypeB: type) type {
                     }
                 },
                 .nominal_type => |a_type| {
+                    const a_backing_var = self.types_store_b.getNominalBackingVar(a_type);
+                    const a_backing_resolved = self.types_store_b.resolveVar(a_backing_var);
+                    if (a_backing_resolved.desc.content == .err) {
+                        // Invalid nominal type - treat as transparent
+                        self.merge(vars, vars.b.desc.content);
+                        return;
+                    }
+
                     switch (b_flat_type) {
                         .nominal_type => |b_type| {
+                            const b_backing_var = self.types_store_b.getNominalBackingVar(b_type);
+                            const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
+                            if (b_backing_resolved.desc.content == .err) {
+                                // Invalid nominal type - treat as transparent
+                                self.merge(vars, vars.a.desc.content);
+                                return;
+                            }
+
                             try self.unifyNominalType(vars, a_type, b_type);
                         },
                         else => return error.TypeMismatch,
@@ -1659,6 +1697,23 @@ fn Unifier(comptime StoreTypeB: type) type {
         fn unifyNominalType(self: *Self, vars: *const ResolvedVarDescs, a_type: NominalType, b_type: NominalType) Error!void {
             const trace = tracy.trace(@src());
             defer trace.end();
+
+            // Check if either nominal type has an invalid backing variable
+            const a_backing_var = self.types_store_b.getNominalBackingVar(a_type);
+            const a_backing_resolved = self.types_store_b.resolveVar(a_backing_var);
+            if (a_backing_resolved.desc.content == .err) {
+                // Invalid nominal type - treat as transparent
+                self.merge(vars, vars.b.desc.content);
+                return;
+            }
+
+            const b_backing_var = self.types_store_b.getNominalBackingVar(b_type);
+            const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
+            if (b_backing_resolved.desc.content == .err) {
+                // Invalid nominal type - treat as transparent
+                self.merge(vars, vars.a.desc.content);
+                return;
+            }
 
             if (!TypeIdent.eql(&self.module_env.idents, a_type.ident, b_type.ident)) {
                 return error.TypeMismatch;

@@ -237,7 +237,7 @@ InnerModule :
 				(ty-args
 					(ty-var @3.8-3.9 (name "a"))
 					(ty-var @3.11-3.12 (name "b")))))
-		(alias @10.1-11.31 (type "InnerModule")
+		(alias @10.1-11.31 (type "Error")
 			(ty-header @10.1-10.12 (name "InnerModule"))))
 	(expressions
 		(expr @6.15-7.16 (type "Str -> Str"))))

@@ -114,7 +114,7 @@ NO CHANGE
 			(ty-header @4.1-4.4 (name "Foo")))
 		(alias @7.1-7.10 (type "Foo")
 			(ty-header @7.1-7.4 (name "Foo")))
-		(alias @10.1-10.25 (type "Bar")
+		(alias @10.1-10.25 (type "Error")
 			(ty-header @10.1-10.4 (name "Bar")))
 		(alias @13.1-13.10 (type "Baz")
 			(ty-header @13.1-13.4 (name "Baz"))))
