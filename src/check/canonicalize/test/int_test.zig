@@ -425,10 +425,19 @@ test "invalid number literal - too large for u128" {
                 try testing.expectEqualStrings(source, literal_text);
 
                 // Test that buildInvalidNumLiteralReport extracts the literal correctly
+                const mock_region_info = base.RegionInfo{
+                    .start_line_idx = 0,
+                    .start_col_idx = 0,
+                    .end_line_idx = 0,
+                    .end_col_idx = 0,
+                    .line_text = "",
+                };
                 var report = try CIR.Diagnostic.buildInvalidNumLiteralReport(
                     allocator,
                     data.region,
                     source,
+                    mock_region_info,
+                    "test.roc",
                 );
                 defer report.deinit();
 
@@ -483,10 +492,19 @@ test "invalid number literal - negative too large for i128" {
                 try testing.expectEqualStrings(source, literal_text);
 
                 // Test that buildInvalidNumLiteralReport extracts the literal correctly
+                const mock_region_info = base.RegionInfo{
+                    .start_line_idx = 0,
+                    .start_col_idx = 0,
+                    .end_line_idx = 0,
+                    .end_col_idx = 0,
+                    .line_text = "",
+                };
                 var report = try CIR.Diagnostic.buildInvalidNumLiteralReport(
                     allocator,
                     data.region,
                     source,
+                    mock_region_info,
+                    "test.roc",
                 );
                 defer report.deinit();
 

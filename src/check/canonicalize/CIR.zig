@@ -220,17 +220,23 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             );
         },
         .invalid_num_literal => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
             break :blk Diagnostic.buildInvalidNumLiteralReport(
                 allocator,
                 data.region,
                 source orelse self.env.source,
+                region_info,
+                filename,
             );
         },
         .ident_already_in_scope => |data| blk: {
             const ident_name = self.env.idents.getText(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
             break :blk Diagnostic.buildIdentAlreadyInScopeReport(
                 allocator,
                 ident_name,
+                region_info,
+                filename,
             );
         },
         .ident_not_in_scope => |data| blk: {
@@ -271,7 +277,14 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             const region_info = self.calcRegionInfo(data.region);
             break :blk Diagnostic.buildEmptyTupleReport(allocator, region_info, filename);
         },
-        .expr_not_canonicalized => Diagnostic.buildExprNotCanonicalizedReport(allocator),
+        .expr_not_canonicalized => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildExprNotCanonicalizedReport(
+                allocator,
+                region_info,
+                filename,
+            );
+        },
         .invalid_string_interpolation => Diagnostic.buildInvalidStringInterpolationReport(allocator),
         .pattern_arg_invalid => Diagnostic.buildPatternArgInvalidReport(allocator),
         .pattern_not_canonicalized => Diagnostic.buildPatternNotCanonicalizedReport(allocator),
@@ -282,7 +295,14 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .if_else_not_canonicalized => Diagnostic.buildIfElseNotCanonicalizedReport(allocator),
         .var_across_function_boundary => Diagnostic.buildVarAcrossFunctionBoundaryReport(allocator),
         .malformed_type_annotation => Diagnostic.buildMalformedTypeAnnotationReport(allocator),
-        .malformed_where_clause => Diagnostic.buildMalformedWhereClauseReport(allocator),
+        .malformed_where_clause => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildMalformedWhereClauseReport(
+                allocator,
+                region_info,
+                filename,
+            );
+        },
         .shadowing_warning => |data| blk: {
             const ident_name = self.env.idents.getText(data.ident);
             const new_region_info = self.calcRegionInfo(data.region);
