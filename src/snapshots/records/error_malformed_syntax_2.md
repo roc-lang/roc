@@ -42,7 +42,7 @@ This type annotation is malformed or contains invalid syntax.
 **UNUSED VARIABLE**
 Variable `name` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_name to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _name to suppress this warning.
 The unused variable is declared here:
 **error_malformed_syntax_2.md:1:12:1:16:**
 ```roc

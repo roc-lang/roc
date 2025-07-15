@@ -953,7 +953,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("If you don't need this variable, prefix it with an underscore like `_");
+        try report.document.addText("If you don't need this variable, prefix it with an underscore like _");
         try report.document.addText(owned_ident);
         try report.document.addText(" to suppress this warning.");
 
@@ -1246,9 +1246,9 @@ pub const Diagnostic = union(enum) {
         const suggested_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{suggested_name});
         const owned_suggested_name = try report.addOwnedString(suggested_with_underscore);
 
-        try report.document.addText("The type variable `");
+        try report.document.addText("The type variable ");
         try report.document.addUnqualifiedSymbol(owned_type_var_name);
-        try report.document.addText("` appears only once in this type annotation.");
+        try report.document.addText(" appears only once in this type annotation.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1259,9 +1259,9 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Since this type variable is only used once, it should start with an underscore to indicate it's unbound. Try `");
+        try report.document.addReflowingText("Since this type variable is only used once, it should start with an underscore to indicate it's unbound. Try ");
         try report.document.addInlineCode(owned_suggested_name);
-        try report.document.addReflowingText("` instead.");
+        try report.document.addReflowingText(" instead.");
 
         return report;
     }
@@ -1278,9 +1278,9 @@ pub const Diagnostic = union(enum) {
         const owned_type_var_name = try report.addOwnedString(type_var_name);
         const owned_suggested_name = try report.addOwnedString(suggested_name);
 
-        try report.document.addText("The type variable `");
+        try report.document.addText("The type variable ");
         try report.document.addUnqualifiedSymbol(owned_type_var_name);
-        try report.document.addText("` starts with an underscore but appears multiple times in this type annotation.");
+        try report.document.addText(" starts with an underscore but appears multiple times in this type annotation.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1291,9 +1291,9 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Since this type variable is used multiple times, it should not start with an underscore. Try `");
+        try report.document.addReflowingText("Since this type variable is used multiple times, it should not start with an underscore. Try ");
         try report.document.addInlineCode(owned_suggested_name);
-        try report.document.addReflowingText("` instead.");
+        try report.document.addReflowingText(" instead.");
 
         return report;
     }
@@ -1310,9 +1310,9 @@ pub const Diagnostic = union(enum) {
         const owned_type_var_name = try report.addOwnedString(type_var_name);
         const owned_suggested_name = try report.addOwnedString(suggested_name);
 
-        try report.document.addText("The type variable `");
+        try report.document.addText("The type variable ");
         try report.document.addUnqualifiedSymbol(owned_type_var_name);
-        try report.document.addText("` ends with an underscore.");
+        try report.document.addText(" ends with an underscore.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1323,9 +1323,13 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Type variables should only end with underscores if they were declared with the `var` keyword. Since type variables cannot be declared with `var`, they should never end with an underscore. Try `");
+        try report.document.addReflowingText("Type variables should only end with underscores if they were declared with the ");
+        try report.document.addKeyword("var");
+        try report.document.addReflowingText(" keyword. Since type variables cannot be declared with ");
+        try report.document.addKeyword("var");
+        try report.document.addReflowingText(", they should never end with an underscore. Try ");
         try report.document.addInlineCode(owned_suggested_name);
-        try report.document.addReflowingText("` instead.");
+        try report.document.addReflowingText(" instead.");
 
         return report;
     }

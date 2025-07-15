@@ -292,7 +292,7 @@ Is there an `import` or `exposing` missing up-top?
 **UNUSED VARIABLE**
 Variable `lue` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_lue to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _lue to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_019.md:52:11:52:14:**
 ```roc
@@ -315,7 +315,7 @@ Is there an `import` or `exposing` missing up-top?
 **UNUSED VARIABLE**
 Variable `er` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_er to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _er to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_019.md:57:2:57:4:**
 ```roc
@@ -338,7 +338,7 @@ Is there an `import` or `exposing` missing up-top?
 **UNUSED VARIABLE**
 Variable `est` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_est to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _est to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_019.md:60:12:60:15:**
 ```roc
@@ -595,7 +595,7 @@ Is there an `import` or `exposing` missing up-top?
 **UNUSED VARIABLE**
 Variable `i` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_i to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _i to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_019.md:87:2:87:3:**
 ```roc
@@ -607,7 +607,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `w` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_w to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _w to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_019.md:76:2:76:3:**
 ```roc
@@ -619,7 +619,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `t` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_t to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _t to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_019.md:88:1:88:2:**
 ```roc
@@ -631,7 +631,7 @@ t = [
 **UNUSED VARIABLE**
 Variable `rd` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rd to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rd to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_019.md:96:2:96:4:**
 ```roc

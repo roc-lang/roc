@@ -29,7 +29,7 @@ match value {
 **UNUSED VARIABLE**
 Variable `other` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_other to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _other to suppress this warning.
 The unused variable is declared here:
 **wildcard_patterns.md:4:5:4:10:**
 ```roc

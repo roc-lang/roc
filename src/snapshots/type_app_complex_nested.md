@@ -93,7 +93,7 @@ processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 **UNUSED VARIABLE**
 Variable `maybeList` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_maybeList to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _maybeList to suppress this warning.
 The unused variable is declared here:
 **type_app_complex_nested.md:7:12:7:21:**
 ```roc

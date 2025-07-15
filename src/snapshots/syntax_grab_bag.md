@@ -390,7 +390,7 @@ Is there an `import` or `exposing` missing up-top?
 **UNUSED VARIABLE**
 Variable `lower` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_lower to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _lower to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:97:3:97:8:**
 ```roc
@@ -402,7 +402,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:1:1:1:1:**
 ```roc
@@ -418,7 +418,7 @@ Let us know if you want to help!
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:1:1:1:1:**
 ```roc
@@ -434,7 +434,7 @@ Let us know if you want to help!
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:1:1:1:1:**
 ```roc
@@ -454,7 +454,7 @@ Let us know if you want to help!
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:121:21:121:27:**
 ```roc
@@ -466,7 +466,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:127:4:128:9:**
 ```roc
@@ -486,7 +486,7 @@ Let us know if you want to help!
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_b to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _b to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:82:2:82:3:**
 ```roc
@@ -620,7 +620,7 @@ Is there an `import` or `exposing` missing up-top?
 **UNUSED VARIABLE**
 Variable `multiline_tuple` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_multiline_tuple to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _multiline_tuple to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:180:2:180:17:**
 ```roc
@@ -632,7 +632,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `record` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_record to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _record to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:178:2:178:8:**
 ```roc
@@ -644,7 +644,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `tag_with_payload` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_tag_with_payload to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _tag_with_payload to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:164:2:164:18:**
 ```roc
@@ -656,7 +656,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `list` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_list to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _list to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:166:2:166:6:**
 ```roc
@@ -668,7 +668,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `bin_op_result` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_bin_op_result to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _bin_op_result to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:188:2:188:15:**
 ```roc
@@ -680,7 +680,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `static_dispatch_style` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_static_dispatch_style to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _static_dispatch_style to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:189:2:189:23:**
 ```roc
@@ -692,7 +692,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `interpolated` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_interpolated to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _interpolated to suppress this warning.
 The unused variable is declared here:
 **syntax_grab_bag.md:165:2:165:14:**
 ```roc

@@ -34,7 +34,7 @@ UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
 The unused variable is declared here:
 **unused_vars_simple.md:4:19:4:20:**
 ```roc

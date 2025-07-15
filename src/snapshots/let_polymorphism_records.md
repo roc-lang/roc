@@ -61,7 +61,7 @@ update_data = |container, new_value| { container & data: new_value }
 **UNUSED VARIABLE**
 Variable `new_value` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_new_value to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _new_value to suppress this warning.
 The unused variable is declared here:
 **let_polymorphism_records.md:19:27:19:36:**
 ```roc

@@ -46,7 +46,7 @@ processValue : UndeclaredResult -> Str
 **UNUSED VARIABLE**
 Variable `value` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_value to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _value to suppress this warning.
 The unused variable is declared here:
 **type_undeclared_usage.md:6:17:6:22:**
 ```roc

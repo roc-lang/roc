@@ -39,7 +39,7 @@ UNUSED VARIABLE - type_annotation_basic.md:21:5:21:9
 **UNUSED VARIABLE**
 Variable `pair` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_pair to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _pair to suppress this warning.
 The unused variable is declared here:
 **type_annotation_basic.md:21:5:21:9:**
 ```roc

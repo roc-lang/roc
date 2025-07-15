@@ -42,7 +42,7 @@ But `x_` was already defined here:
 **UNUSED VARIABLE**
 Variable `x_` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x_ to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _x_ to suppress this warning.
 The unused variable is declared here:
 **can_var_scoping_var_redeclaration.md:6:2:6:13:**
 ```roc

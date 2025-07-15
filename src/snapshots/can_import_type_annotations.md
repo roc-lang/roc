@@ -75,7 +75,7 @@ processRequest : Request -> Response
 **UNUSED VARIABLE**
 Variable `req` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_req to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _req to suppress this warning.
 The unused variable is declared here:
 **can_import_type_annotations.md:8:19:8:22:**
 ```roc

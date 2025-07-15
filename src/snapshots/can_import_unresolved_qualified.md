@@ -39,7 +39,7 @@ UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 **UNUSED VARIABLE**
 Variable `req` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_req to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _req to suppress this warning.
 The unused variable is declared here:
 **can_import_unresolved_qualified.md:15:19:15:22:**
 ```roc
