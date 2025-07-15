@@ -846,7 +846,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     });
                     const fields_range = types_mod.RecordField.SafeMultiList.Range{
                         .start = field_idx,
-                        .end = @enumFromInt(@intFromEnum(field_idx) + 1),
+                        .count = 1,
                     };
 
                     // Create an extension variable for other possible fields

@@ -50,12 +50,7 @@ LowerIdent(6:1-6:4),OpAssign(6:5-6:6),UpperIdent(6:7-6:12),NoSpaceDotUpperIdent(
 ~~~
 # FORMATTED
 ~~~roc
-module [red]
-
-import Color
-
-red : Color.RGB
-red = Red
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

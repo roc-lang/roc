@@ -121,12 +121,12 @@ processColor = |color| {
 
 	# bring RGB into scope
 	
-	RGB
+	Color.RGB
 
 	match color {
-		Red => Pending
-		Green => Complete
-		Blue => Pending
+		Red => LocalStatus.Pending
+		Green => LocalStatus.Complete
+		Blue => LocalStatus.Pending
 	}
 }
 ~~~

@@ -117,12 +117,12 @@ module [MyResult, ok, is_ok]
 MyResult(ok, err) := [Ok(ok), Err(err)]
 
 ok : ok -> MyResult(ok, _)
-ok = |a| Ok(a)
+ok = |a| MyResult.Ok(a)
 
 is_ok : MyResult(_ok, _err) -> Bool
 is_ok = |result| match result {
-	Ok(_) => True
-	Err(_) => False
+	Ok(_) => Bool.True
+	Err(_) => Bool.False
 }
 ~~~
 # CANONICALIZE

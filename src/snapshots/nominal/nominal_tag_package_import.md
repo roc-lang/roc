@@ -63,7 +63,7 @@ import styles.Color as CC
 
 # instantiating an RGB nominal tab union from the styles.Color module
 blue : CC.RGB
-blue = RGB(0, 0, 255)
+blue = CC.Color.RGB(0, 0, 255)
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -22,7 +22,7 @@ KwDbg(1:1-1:4),UpperIdent(1:5-1:9),NoSpaceDotUpperIdent(1:9-1:14),EndOfFile(1:14
 ~~~
 # FORMATTED
 ~~~roc
-dbg True
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

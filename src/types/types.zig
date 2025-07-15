@@ -165,7 +165,7 @@ pub const Content = union(enum) {
 /// A named alias to a different type
 pub const Alias = struct {
     ident: TypeIdent,
-    vars: Var.SafeList.NonEmptySpan,
+    vars: Var.SafeList.NonEmptyRange,
 };
 
 /// Represents an ident of a type
@@ -544,7 +544,7 @@ pub const Num = union(enum) {
 /// A nominal user-defined type
 pub const NominalType = struct {
     ident: TypeIdent,
-    vars: Var.SafeList.NonEmptySpan,
+    vars: Var.SafeList.NonEmptyRange,
     /// The full module path where this nominal type was originally defined
     /// (e.g., "Json.Decode" or "mypackage.Data.Person")
     origin_module: Ident.Idx,

@@ -29,9 +29,9 @@ match numbers {
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNUSED VARIABLE**
-Variable ``middle`` is not used anywhere in your code.
+Variable `middle` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_middle` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _middle to suppress this warning.
 The unused variable is declared here:
 **list_patterns_err_multiple_rest.md:2:10:2:16:**
 ```roc

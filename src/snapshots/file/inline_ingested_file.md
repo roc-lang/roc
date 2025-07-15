@@ -16,14 +16,14 @@ foo = Json.parse(data)
 EXPOSED BUT NOT DEFINED - inline_ingested_file.md:1:9:1:12
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
-The module header says that ``foo`` is exposed, but it is not defined anywhere in this module.
+The module header says that `foo` is exposed, but it is not defined anywhere in this module.
 
 **inline_ingested_file.md:1:9:1:12:**
 ```roc
 module [foo]
 ```
         ^^^
-You can fix this by either defining ``foo`` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `foo` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig

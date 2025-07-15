@@ -200,23 +200,20 @@ fn instantiateRecordFields(
     fields: RecordField.SafeMultiList.Range,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
-    const fields_start = store.record_fields.len();
     const fields_slice = store.getRecordFieldsSlice(fields);
+
+    var fresh_fields = std.ArrayList(RecordField).init(store.gpa);
+    defer fresh_fields.deinit();
 
     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
         const fresh_type = try instantiateVar(store, type_var, substitution);
-        _ = try store.record_fields.append(store.gpa, RecordField{
+        _ = try fresh_fields.append(RecordField{
             .name = name,
             .var_ = fresh_type,
         });
     }
 
-    const fields_range = RecordField.SafeMultiList.Range{
-        .start = @enumFromInt(fields_start),
-        .end = @enumFromInt(store.record_fields.len()),
-    };
-
-    return fields_range;
+    return try store.appendRecordFields(fresh_fields.items);
 }
 
 fn instantiateRecord(
@@ -224,22 +221,22 @@ fn instantiateRecord(
     record: Record,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!Record {
-    const fields_start = store.record_fields.len();
     const fields_slice = store.getRecordFieldsSlice(record.fields);
+
+    var fresh_fields = std.ArrayList(RecordField).init(store.gpa);
+    defer fresh_fields.deinit();
 
     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
         const fresh_type = try instantiateVar(store, type_var, substitution);
-        _ = try store.record_fields.append(store.gpa, RecordField{
+        _ = try fresh_fields.append(RecordField{
             .name = name,
             .var_ = fresh_type,
         });
     }
 
+    const fields_range = try store.appendRecordFields(fresh_fields.items);
     return Record{
-        .fields = RecordField.SafeMultiList.Range{
-            .start = @enumFromInt(fields_start),
-            .end = @enumFromInt(store.record_fields.len()),
-        },
+        .fields = fields_range,
         .ext = try instantiateVar(store, record.ext, substitution),
     };
 }
@@ -249,8 +246,10 @@ fn instantiateTagUnion(
     tag_union: TagUnion,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!TagUnion {
-    const tags_start = store.tags.len();
     const tags_slice = store.getTagsSlice(tag_union.tags);
+
+    var fresh_tags = std.ArrayList(Tag).init(store.gpa);
+    defer fresh_tags.deinit();
 
     for (tags_slice.items(.name), tags_slice.items(.args)) |tag_name, tag_args| {
         var fresh_args = std.ArrayList(Var).init(store.gpa);
@@ -264,17 +263,13 @@ fn instantiateTagUnion(
 
         const fresh_args_range = try store.appendTagArgs(fresh_args.items);
 
-        _ = try store.tags.append(store.gpa, Tag{
+        _ = try fresh_tags.append(Tag{
             .name = tag_name,
             .args = fresh_args_range,
         });
     }
 
-    const tags_range = Tag.SafeMultiList.Range{
-        .start = @enumFromInt(tags_start),
-        .end = @enumFromInt(store.tags.len()),
-    };
-
+    const tags_range = try store.appendTags(fresh_tags.items);
     return TagUnion{
         .tags = tags_range,
         .ext = try instantiateVar(store, tag_union.ext, substitution),

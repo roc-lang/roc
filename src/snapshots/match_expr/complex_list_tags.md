@@ -578,9 +578,9 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
-Variable ``y`` is not used anywhere in your code.
+Variable `y` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _y to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:3:15:3:16:**
 ```roc
@@ -590,9 +590,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
+Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:3:12:3:13:**
 ```roc
@@ -627,9 +627,9 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
-Variable ``y`` is not used anywhere in your code.
+Variable `y` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _y to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:3:68:3:69:**
 ```roc
@@ -650,9 +650,9 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
-Variable ``key`` is not used anywhere in your code.
+Variable `key` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_key` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _key to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:4:15:4:18:**
 ```roc
@@ -662,9 +662,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
+Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rest to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:1:1:1:1:**
 ```roc
@@ -685,9 +685,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable ``len`` is not used anywhere in your code.
+Variable `len` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_len` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _len to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:4:70:4:78:**
 ```roc
@@ -715,9 +715,9 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
-Variable ``others`` is not used anywhere in your code.
+Variable `others` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_others` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _others to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:1:1:1:1:**
 ```roc
@@ -727,9 +727,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``dy2`` is not used anywhere in your code.
+Variable `dy2` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dy2` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _dy2 to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:5:30:5:33:**
 ```roc
@@ -739,9 +739,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``dx2`` is not used anywhere in your code.
+Variable `dx2` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dx2` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _dx2 to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:5:25:5:28:**
 ```roc
@@ -751,9 +751,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``dx`` is not used anywhere in your code.
+Variable `dx` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dx` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _dx to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:5:11:5:13:**
 ```roc
@@ -763,9 +763,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``dy`` is not used anywhere in your code.
+Variable `dy` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dy` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _dy to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:5:15:5:17:**
 ```roc
@@ -800,9 +800,9 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
-Variable ``dy`` is not used anywhere in your code.
+Variable `dy` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dy` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _dy to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:5:88:5:90:**
 ```roc
@@ -830,9 +830,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable ``toStr`` is not used anywhere in your code.
+Variable `toStr` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _toStr to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:5:99:5:108:**
 ```roc
@@ -867,9 +867,9 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
-Variable ``dy2`` is not used anywhere in your code.
+Variable `dy2` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dy2` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _dy2 to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:5:126:5:129:**
 ```roc
@@ -890,9 +890,9 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
-Variable ``remaining`` is not used anywhere in your code.
+Variable `remaining` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_remaining` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _remaining to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:1:1:1:1:**
 ```roc
@@ -902,9 +902,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``amount`` is not used anywhere in your code.
+Variable `amount` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_amount` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _amount to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:6:13:6:19:**
 ```roc
@@ -914,9 +914,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``y`` is not used anywhere in your code.
+Variable `y` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _y to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:6:31:6:32:**
 ```roc
@@ -926,9 +926,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
+Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:6:28:6:29:**
 ```roc
@@ -963,9 +963,9 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
+Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:6:109:6:110:**
 ```roc
@@ -993,9 +993,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable ``toStr`` is not used anywhere in your code.
+Variable `toStr` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _toStr to suppress this warning.
 The unused variable is declared here:
 **complex_list_tags.md:6:114:6:123:**
 ```roc

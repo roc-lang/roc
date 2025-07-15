@@ -22,7 +22,7 @@ KwReturn(1:1-1:7),UpperIdent(1:8-1:12),NoSpaceDotUpperIdent(1:12-1:17),EndOfFile
 ~~~
 # FORMATTED
 ~~~roc
-return True
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

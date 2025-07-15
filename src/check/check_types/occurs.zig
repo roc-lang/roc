@@ -563,7 +563,7 @@ test "occurs: recursive tag union (v = [ Cons(elem, v), Nil ]" {
     const cons_tag_args = try types_store.appendTagArgs(&[_]Var{ elem, linked_list });
     const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
 
-    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty };
+    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
 
     const tags = try types_store.appendTags(&[_]Tag{ cons_tag, nil_tag });
 
@@ -601,7 +601,7 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
     const cons_tag_args = try types_store.appendTagArgs(&[_]Var{ elem, boxed_linked_list });
 
     const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
-    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty };
+    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
 
     const tags = try types_store.appendTags(&[_]Tag{ cons_tag, nil_tag });
 
@@ -637,7 +637,7 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
 
     const cons_tag_args = try types_store.appendTagArgs(&[_]Var{ elem, nominal_type });
     const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
-    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty };
+    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
     const backing_var = try types_store.freshFromContent(try types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
     try types_store.setVarContent(nominal_type, try types_store.mkNominal(
         undefined,
@@ -700,7 +700,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     // Create the tag union content that references type_a_nominal
     const cons_tag_args = try types_store.appendTagArgs(&[_]Var{ elem, type_a_nominal });
     const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
-    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty };
+    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
     const type_b_backing = try types_store.freshFromContent(try types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
 
     // Set up TypeB = [ Cons(Elem, TypeA), Nil ]

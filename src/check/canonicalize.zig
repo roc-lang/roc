@@ -41,6 +41,8 @@ exposed_scope: Scope = undefined,
 exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track exposed types by text to handle changing indices
 exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
+/// Special scope for unqualified nominal tags (e.g., True, False)
+unqualified_nominal_tags: std.HashMapUnmanaged(Ident.Idx, CIR.Statement.Idx, IdentTextContext, 80) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.ArrayListUnmanaged(Region),
 /// Maps var patterns to the function region they were declared in
@@ -118,6 +120,7 @@ pub fn deinit(
     self.exposed_scope.deinit(gpa);
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_texts.deinit(gpa);
+    self.unqualified_nominal_tags.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
@@ -161,6 +164,7 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
         .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
         .exposed_scope = Scope.init(false),
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
+        .unqualified_nominal_tags = std.HashMapUnmanaged(Ident.Idx, CIR.Statement.Idx, IdentTextContext, 80){},
     };
 
     // Top-level scope is not a function boundary
@@ -318,7 +322,32 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
     try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
 
     try ir.redirectTypeTo(CIR.Pattern.Idx, BUILTIN_BOOL, CIR.varFrom(type_decl_idx));
+
+    // Add True and False to unqualified_nominal_tags
+    // TODO: in the future, we should have hardcoded constants for these.
+    const true_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("True"), Region.zero());
+    const false_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("False"), Region.zero());
+    const ctx = IdentTextContext{ .idents = &ir.env.idents };
+    try self.unqualified_nominal_tags.putContext(gpa, true_ident, type_decl_idx, ctx);
+    try self.unqualified_nominal_tags.putContext(gpa, false_ident, type_decl_idx, ctx);
 }
+
+/// Custom hash map context that compares identifiers by their text content
+/// rather than by their index values
+const IdentTextContext = struct {
+    idents: *const base.Ident.Store,
+
+    pub fn hash(self: @This(), key: Ident.Idx) u64 {
+        // Hash based on the text content
+        const text = self.idents.getText(key);
+        return std.hash_map.hashString(text);
+    }
+
+    pub fn eql(self: @This(), a: Ident.Idx, b: Ident.Idx) bool {
+        // Compare based on text content, not index
+        return self.idents.identsHaveSameText(a, b);
+    }
+};
 
 const Self = @This();
 
@@ -2561,8 +2590,24 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
     }, tag_union, region);
 
     if (e.qualifiers.span.len == 0) {
-        // If this is a tag without a prefix, then is it an
-        // anonymous tag and we can just return it
+        // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
+        const ctx = IdentTextContext{ .idents = &self.can_ir.env.idents };
+        if (self.unqualified_nominal_tags.getContext(tag_name, ctx)) |nominal_type_decl| {
+            // Get the type variable for the nominal type declaration (e.g., Bool type)
+            const nominal_type_var = CIR.castIdx(CIR.Statement.Idx, TypeVar, nominal_type_decl);
+            const resolved = self.can_ir.env.types.resolveVar(nominal_type_var);
+            const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
+                .e_nominal = .{
+                    .nominal_type_decl = nominal_type_decl,
+                    .backing_expr = tag_expr_idx,
+                    .backing_type = .tag,
+                },
+            }, resolved.desc.content, region);
+            return expr_idx;
+        }
+
+        // If this is a tag without a prefix and not in unqualified_nominal_tags,
+        // then it is an anonymous tag and we can just return it
         return tag_expr_idx;
     } else {
         // If this is a tag with a prefix, then is it a nominal tag.
@@ -2591,14 +2636,16 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
                 .region = last_tok_region,
             } });
 
-        // Create the expr
+        const nominal_type_var = CIR.castIdx(CIR.Statement.Idx, TypeVar, nominal_type_decl);
+        const resolved = self.can_ir.env.types.resolveVar(nominal_type_var);
+
         const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
             .e_nominal = .{
                 .nominal_type_decl = nominal_type_decl,
                 .backing_expr = tag_expr_idx,
                 .backing_type = .tag,
             },
-        }, Content{ .flex_var = null }, last_tok_region);
+        }, resolved.desc.content, last_tok_region);
 
         return expr_idx;
     }
@@ -3046,17 +3093,16 @@ fn canonicalizePattern(
             // Iterate over the tuple patterns, canonicalizing each one
             // Then append the result to the scratch list
             const patterns_slice = self.parse_ir.store.patternSlice(e.patterns);
-            const elems_var_top = self.can_ir.env.types.tuple_elems.len();
+
+            // TODO: A bug exists here: we should use scratch_vars instead of types.tuple_elems here
+            const elems_var_top: u32 = @intCast(self.can_ir.env.types.tuple_elems.len());
             for (patterns_slice) |pattern| {
                 if (try self.canonicalizePattern(pattern)) |canonicalized| {
                     try self.can_ir.store.addScratchPattern(canonicalized);
                     _ = try self.can_ir.env.types.appendTupleElem(@enumFromInt(@intFromEnum(canonicalized)));
                 }
             }
-            const elems_var_range = types.Var.SafeList.Range{
-                .start = @enumFromInt(elems_var_top),
-                .end = @enumFromInt(self.can_ir.env.types.tuple_elems.len()),
-            };
+            const elems_var_range = self.can_ir.env.types.tuple_elems.rangeToEnd(elems_var_top);
 
             // Create span of the new scratch patterns
             const patterns_span = try self.can_ir.store.patternSpanFrom(scratch_top);
@@ -6123,7 +6169,7 @@ fn canonicalizeTagUnionType(self: *Self, tag_union: CIR.TypeAnno.TagUnion, paren
     const tags_slice = self.can_ir.store.sliceTypeAnnos(tag_union.tags);
     const tags_range = blk: {
         if (tags_slice.len == 0) {
-            break :blk types.Tag.SafeMultiList.Range.empty;
+            break :blk types.Tag.SafeMultiList.Range.empty();
         }
 
         // If we got here, then the following should be true:
@@ -6140,7 +6186,7 @@ fn canonicalizeTagUnionType(self: *Self, tag_union: CIR.TypeAnno.TagUnion, paren
                     // For tags without args, just add them
                     _ = try self.scratch_tags.append(self.can_ir.env.gpa, types.Tag{
                         .name = ty.symbol,
-                        .args = TypeVar.SafeList.Range.empty,
+                        .args = TypeVar.SafeList.Range.empty(),
                     });
                 },
                 .apply => |apply| {

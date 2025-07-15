@@ -28,7 +28,7 @@ KwIf(1:1-1:3),UpperIdent(1:4-1:8),NoSpaceDotUpperIdent(1:8-1:13),UpperIdent(1:14
 ~~~
 # FORMATTED
 ~~~roc
-if True Ok(0) else Err(1)
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

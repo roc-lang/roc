@@ -77,9 +77,9 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:60:5:60:12
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable ``result3`` is not used anywhere in your code.
+Variable `result3` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _result3 to suppress this warning.
 The unused variable is declared here:
 **type_var_name_avoids_collision.md:59:5:59:12:**
 ```roc
@@ -89,9 +89,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``result5`` is not used anywhere in your code.
+Variable `result5` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_result5` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _result5 to suppress this warning.
 The unused variable is declared here:
 **type_var_name_avoids_collision.md:61:5:61:12:**
 ```roc
@@ -101,9 +101,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable ``result4`` is not used anywhere in your code.
+Variable `result4` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_result4` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _result4 to suppress this warning.
 The unused variable is declared here:
 **type_var_name_avoids_collision.md:60:5:60:12:**
 ```roc
@@ -418,10 +418,12 @@ main! = |_| {
 		(e-dec-small @11.5-11.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
 	(d-let
 		(p-assign @12.1-12.2 (ident "d"))
-		(e-tag @12.5-12.9 (name "True")))
+		(e-nominal @12.5-12.9 (nominal "Bool")
+			(e-tag @12.5-12.9 (name "True"))))
 	(d-let
 		(p-assign @13.1-13.2 (ident "e"))
-		(e-tag @13.5-13.10 (name "False")))
+		(e-nominal @13.5-13.10 (nominal "Bool")
+			(e-tag @13.5-13.10 (name "False"))))
 	(d-let
 		(p-assign @16.1-16.16 (ident "anotherIdentity"))
 		(e-lambda @16.19-16.24
@@ -557,7 +559,8 @@ main! = |_| {
 					(e-call @60.15-60.39
 						(e-lookup-local @60.15-60.33
 							(p-assign @46.1-46.19 (ident "yetAnotherIdentity")))
-						(e-tag @60.34-60.38 (name "True"))))
+						(e-nominal @60.34-60.38 (nominal "Bool")
+							(e-tag @60.34-60.38 (name "True")))))
 				(s-let @61.5-61.34
 					(p-assign @61.5-61.12 (ident "result5"))
 					(e-call @61.15-61.34
@@ -578,8 +581,8 @@ main! = |_| {
 		(patt @7.1-7.9 (type "_arg2 -> _ret"))
 		(patt @10.1-10.2 (type "Str"))
 		(patt @11.1-11.2 (type "Frac(_size)"))
-		(patt @12.1-12.2 (type "[True]_others"))
-		(patt @13.1-13.2 (type "[False]_others"))
+		(patt @12.1-12.2 (type "Bool"))
+		(patt @13.1-13.2 (type "Bool"))
 		(patt @16.1-16.16 (type "_arg2 -> _ret"))
 		(patt @20.1-20.8 (type "_arg2, _arg3 -> (_field, _field2)"))
 		(patt @23.1-23.2 (type "Num(_size)"))
@@ -613,8 +616,8 @@ main! = |_| {
 		(expr @7.12-7.17 (type "_arg2 -> _ret"))
 		(expr @10.5-10.12 (type "Str"))
 		(expr @11.5-11.9 (type "Frac(_size)"))
-		(expr @12.5-12.9 (type "[True]_others"))
-		(expr @13.5-13.10 (type "[False]_others"))
+		(expr @12.5-12.9 (type "Bool"))
+		(expr @13.5-13.10 (type "Bool"))
 		(expr @16.19-16.24 (type "_arg2 -> _ret"))
 		(expr @20.11-20.42 (type "_arg2, _arg3 -> (_field, _field2)"))
 		(expr @23.5-23.6 (type "Num(_size)"))

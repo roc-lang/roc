@@ -43,7 +43,7 @@ Here is the problematic code:
 
 
 **UNDECLARED TYPE**
-The type ``S`` is not declared in this scope.
+The type `S` is not declared in this scope.
 
 This type is referenced here:
 **fuzz_crash_018.md:1:5:1:6:**

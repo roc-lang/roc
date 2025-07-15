@@ -12,7 +12,7 @@ DUPLICATE RECORD FIELD - error_duplicate_fields.md:1:27:1:31
 DUPLICATE RECORD FIELD - error_duplicate_fields.md:1:68:1:71
 # PROBLEMS
 **DUPLICATE RECORD FIELD**
-The record field ``name`` appears more than once in this record.
+The record field `name` appears more than once in this record.
 
 This field is duplicated here:
 **error_duplicate_fields.md:1:27:1:31:**
@@ -21,7 +21,7 @@ This field is duplicated here:
 ```
                           ^^^^
 
-The field ``name`` was first defined here:
+The field `name` was first defined here:
 **error_duplicate_fields.md:1:3:1:7:**
 ```roc
 { name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
@@ -31,7 +31,7 @@ The field ``name`` was first defined here:
 Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.
 
 **DUPLICATE RECORD FIELD**
-The record field ``age`` appears more than once in this record.
+The record field `age` appears more than once in this record.
 
 This field is duplicated here:
 **error_duplicate_fields.md:1:68:1:71:**
@@ -40,7 +40,7 @@ This field is duplicated here:
 ```
                                                                    ^^^
 
-The field ``age`` was first defined here:
+The field `age` was first defined here:
 **error_duplicate_fields.md:1:18:1:21:**
 ```roc
 { name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }

@@ -803,12 +803,12 @@ import ExternalModule as ExtMod
 
 # Simple qualified type
 simpleQualified : Color.RGB
-simpleQualified = RGB
+simpleQualified = Color.RGB
 {r: 255, g: 0, b: 0}
 
 # Aliased qualified type
 aliasedQualified : ExtMod.DataType
-aliasedQualified = Default
+aliasedQualified = ExtMod.DataType.Default
 
 # Multi-level qualified type
 multiLevelQualified : ModuleA.ModuleB.TypeC
@@ -817,7 +817,7 @@ multiLevelQualified = TypeC.new
 # Using qualified type with generics
 resultType : Result.Result
 
-resultType = Ok
+resultType = Result.Ok
 42
 
 # Function returning qualified type

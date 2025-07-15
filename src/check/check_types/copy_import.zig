@@ -244,19 +244,17 @@ fn copyRecordFields(
 ) std.mem.Allocator.Error!types_mod.RecordField.SafeMultiList.Range {
     const source_fields = source_store.getRecordFieldsSlice(fields_range);
 
-    const fields_start = @as(RecordField.SafeMultiList.Idx, @enumFromInt(dest_store.record_fields.len()));
+    var fresh_fields = std.ArrayList(RecordField).init(allocator);
+    defer fresh_fields.deinit();
 
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
-        _ = try dest_store.record_fields.append(dest_store.gpa, .{
+        _ = try fresh_fields.append(.{
             .name = name, // Field names are local to the record type
             .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
     }
 
-    return .{
-        .start = fields_start,
-        .end = @enumFromInt(dest_store.record_fields.len()),
-    };
+    return try dest_store.appendRecordFields(fresh_fields.items);
 }
 
 fn copyRecord(
@@ -270,20 +268,17 @@ fn copyRecord(
 ) std.mem.Allocator.Error!Record {
     const fields_slice = source_store.getRecordFieldsSlice(record.fields);
 
-    const fields_start = @as(RecordField.SafeMultiList.Idx, @enumFromInt(dest_store.record_fields.len()));
+    var fresh_fields = std.ArrayList(RecordField).init(allocator);
+    defer fresh_fields.deinit();
 
     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
-        _ = try dest_store.record_fields.append(dest_store.gpa, .{
+        _ = try fresh_fields.append(RecordField{
             .name = name, // Field names are local to the record type
             .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
     }
 
-    const fields_range = types_mod.RecordField.SafeMultiList.Range{
-        .start = fields_start,
-        .end = @enumFromInt(dest_store.record_fields.len()),
-    };
-
+    const fields_range = try dest_store.appendRecordFields(fresh_fields.items);
     return Record{
         .fields = fields_range,
         .ext = try copyVar(source_store, dest_store, record.ext, var_mapping, source_idents, dest_idents, allocator),
@@ -301,7 +296,8 @@ fn copyTagUnion(
 ) std.mem.Allocator.Error!TagUnion {
     const tags_slice = source_store.getTagsSlice(tag_union.tags);
 
-    const tags_start = @as(Tag.SafeMultiList.Idx, @enumFromInt(dest_store.tags.len()));
+    var fresh_tags = std.ArrayList(Tag).init(allocator);
+    defer fresh_tags.deinit();
 
     for (tags_slice.items(.name), tags_slice.items(.args)) |name, args_range| {
         const args_slice = source_store.getTagArgsSlice(args_range);
@@ -316,17 +312,13 @@ fn copyTagUnion(
 
         const dest_args_range = try dest_store.appendTagArgs(dest_args.items);
 
-        _ = try dest_store.tags.append(dest_store.gpa, .{
+        _ = try fresh_tags.append(.{
             .name = name, // Tag names are local to the union type
             .args = dest_args_range,
         });
     }
 
-    const tags_range = types_mod.Tag.SafeMultiList.Range{
-        .start = tags_start,
-        .end = @enumFromInt(dest_store.tags.len()),
-    };
-
+    const tags_range = try dest_store.appendTags(fresh_tags.items);
     return TagUnion{
         .tags = tags_range,
         .ext = try copyVar(source_store, dest_store, tag_union.ext, var_mapping, source_idents, dest_idents, allocator),

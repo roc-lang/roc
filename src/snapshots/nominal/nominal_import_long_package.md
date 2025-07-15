@@ -92,7 +92,7 @@ import design.Styles.Color exposing [Encoder as CE]
 
 
 **UNDECLARED TYPE**
-The type ``CE`` is not declared in this scope.
+The type `CE` is not declared in this scope.
 
 This type is referenced here:
 **nominal_import_long_package.md:5:7:5:9:**
