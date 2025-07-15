@@ -5,6 +5,8 @@ let currentState = "START";
 let currentView = "diagnostics";
 let lastDiagnostics = null;
 let activeExample = null;
+let lastCompileTime = null;
+let updateUrlTimeout = null;
 
 // Example modules
 const examples = [
@@ -42,12 +44,10 @@ isActive = Bool.True`,
 async function initializePlayground() {
   logInfo("Initializing playground...");
   try {
-    setStatus("loading", "Loading WASM module...");
     logInfo("Loading WASM module...");
     await loadWasm();
     logInfo("WASM module loaded successfully");
 
-    setStatus("loading", "Initializing compiler...");
     logInfo("Sending INIT message to WASM...");
     const response = await sendMessage({ type: "INIT" });
     logInfo("INIT response:", response);
@@ -58,16 +58,20 @@ async function initializePlayground() {
       );
     }
 
-    setStatus("loading", "Setting up examples...");
     logInfo("Populating examples...");
     populateExamples();
     logInfo("Updating UI...");
     updateUI();
-    setStatus("ready", "Ready to compile Roc code!");
+    clearDiagnosticSummary();
+    lastCompileTime = null;
+    setupAutoCompile();
+    setupUrlSharing();
+    restoreFromUrl();
+    currentState = "READY";
     logInfo("Playground initialization complete!");
   } catch (error) {
     logError("❌ Failed to initialize playground:", error);
-    setStatus("error", `Initialization failed: ${error.message}`);
+
     showError(`Failed to initialize playground: ${error.message}`);
   }
 }
@@ -259,8 +263,6 @@ async function loadExample(exampleId) {
   });
   const activeItem = document.querySelector(`[data-example-id="${exampleId}"]`);
   if (activeItem) {
-    activeItem.classList.add("active");
-    logInfo("Activated example item");
   } else {
     logWarn("Could not find example item in DOM");
   }
@@ -278,6 +280,9 @@ async function loadExample(exampleId) {
 
   updateUI();
   logInfo("Example loaded successfully");
+
+  // Compile the example immediately
+  await compileCode();
 }
 
 // Compile code
@@ -293,10 +298,15 @@ async function compileCode() {
     return;
   }
 
+  // Start timing if not already set (for manual compile)
+  if (!compileStartTime) {
+    compileStartTime = performance.now();
+  }
+  const startTime = compileStartTime;
+
   try {
     logInfo("Beginning compilation process...");
     setStatus("loading", "Compiling...");
-    disableButtons();
 
     // Reset if we're already in LOADED state
     if (currentState === "LOADED") {
@@ -314,15 +324,48 @@ async function compileCode() {
       currentState = "LOADED";
       lastDiagnostics = response.diagnostics;
       logInfo("Diagnostics:", lastDiagnostics);
-      setStatus("loaded", "Code compiled");
-      showDiagnostics();
+
+      // Set timing before updating diagnostic summary
+      lastCompileTime = performance.now() - startTime;
+      compileStartTime = null; // Reset for next compilation
+
+      updateDiagnosticSummary();
+
+      // Preserve current view instead of always showing diagnostics
+      switch (currentView) {
+        case "diagnostics":
+          showDiagnostics();
+          break;
+        case "tokens":
+          showTokens();
+          break;
+        case "parse":
+          showParseAst();
+          break;
+        case "can":
+          showCanCir();
+          break;
+        case "types":
+          showTypes();
+          break;
+        default:
+          showDiagnostics();
+      }
     } else {
       logError("❌ Compilation failed:", response.message);
+      lastCompileTime = performance.now() - startTime;
+      compileStartTime = null; // Reset for next compilation
+      setStatus("error", "Compilation failed");
+      clearDiagnosticSummary();
       showError(`Compilation failed: ${response.message}`);
     }
   } catch (error) {
     logError("Error during compilation:", error);
-    showError(`Error during compilation: ${error.message}`);
+    const errorMessage = error.message || error.toString() || "Unknown error";
+    lastCompileTime = performance.now() - startTime;
+    setStatus("error", "Compilation error");
+    clearDiagnosticSummary();
+    showError(`Error during compilation: ${errorMessage}`);
   } finally {
     updateUI();
     logInfo("Compilation process finished");
@@ -335,60 +378,80 @@ function showDiagnostics() {
   updateStageButtons();
 
   if (!lastDiagnostics) {
-    showMessage("No diagnostics available");
+    showMessage("Compile code first to view PROBLEMS");
     return;
   }
 
   const outputContent = document.getElementById("outputContent");
-  let html = "";
 
-  let totalErrors = 0;
-  let totalWarnings = 0;
+  // Check if we have the new HTML format
+  if (lastDiagnostics.html !== undefined) {
+    // Use the HTML-rendered diagnostics directly
+    if (lastDiagnostics.html.trim() === "") {
+      outputContent.innerHTML =
+        '<div class="success-message">✓ No issues found!</div>';
+    } else {
+      outputContent.innerHTML = lastDiagnostics.html;
+    }
+  } else {
+    // Fallback to old format for compatibility
+    let html = "";
+    let totalErrors = 0;
+    let totalWarnings = 0;
 
-  // Count total diagnostics
-  Object.values(lastDiagnostics).forEach((stageDiagnostics) => {
-    stageDiagnostics.forEach((diagnostic) => {
-      if (diagnostic.severity === "error" || diagnostic.severity === "fatal") {
-        totalErrors++;
-      } else if (diagnostic.severity === "warning") {
-        totalWarnings++;
+    // Count total diagnostics
+    Object.values(lastDiagnostics).forEach((stageDiagnostics) => {
+      stageDiagnostics.forEach((diagnostic) => {
+        if (
+          diagnostic.severity === "error" ||
+          diagnostic.severity === "fatal"
+        ) {
+          totalErrors++;
+        } else if (diagnostic.severity === "warning") {
+          totalWarnings++;
+        }
+      });
+    });
+
+    // Show summary
+    if (totalErrors === 0 && totalWarnings === 0) {
+      html += '<div class="success-message">✓ No issues found!</div>';
+    } else {
+      html += `<div class="diagnostic-summary">
+              Found ${totalErrors} error(s) and ${totalWarnings} warning(s)
+          </div>`;
+    }
+
+    // Show diagnostics by stage
+    Object.entries(lastDiagnostics).forEach(([stage, diagnostics]) => {
+      if (diagnostics.length > 0) {
+        html += `<div class="diagnostic-stage">
+                      <div class="diagnostic-stage-title">${stage.toUpperCase()}</div>`;
+
+        diagnostics.forEach((diagnostic) => {
+          html += `<div class="diagnostic ${diagnostic.severity}">
+                          <div class="diagnostic-severity">${diagnostic.severity.toUpperCase()}</div>
+                          <div class="diagnostic-message">${escapeHtml(diagnostic.title)}</div>
+                      </div>`;
+        });
+
+        html += "</div>";
       }
     });
-  });
 
-  // Show summary
-  if (totalErrors === 0 && totalWarnings === 0) {
-    html += '<div class="success-message">✓ No issues found!</div>';
-  } else {
-    html += `<div class="diagnostic-summary">
-            Found ${totalErrors} error(s) and ${totalWarnings} warning(s)
-        </div>`;
+    outputContent.innerHTML = html;
   }
-
-  // Show diagnostics by stage
-  Object.entries(lastDiagnostics).forEach(([stage, diagnostics]) => {
-    if (diagnostics.length > 0) {
-      html += `<div class="diagnostic-stage">
-                    <div class="diagnostic-stage-title">${stage.toUpperCase()}</div>`;
-
-      diagnostics.forEach((diagnostic) => {
-        html += `<div class="diagnostic ${diagnostic.severity}">
-                        <div class="diagnostic-severity">${diagnostic.severity.toUpperCase()}</div>
-                        <div class="diagnostic-message">${escapeHtml(diagnostic.title)}</div>
-                    </div>`;
-      });
-
-      html += "</div>";
-    }
-  });
-
-  outputContent.innerHTML = html;
 }
 
 // Show tokens
 async function showTokens() {
   currentView = "tokens";
   updateStageButtons();
+
+  if (currentState !== "LOADED") {
+    showMessage("Compile code first to view TOKENS");
+    return;
+  }
 
   try {
     const response = await sendMessage({
@@ -400,7 +463,8 @@ async function showTokens() {
       showError(`Failed to get tokens: ${response.message}`);
     }
   } catch (error) {
-    showError(`Error getting tokens: ${error.message}`);
+    logError("❌ Failed to query tokens:", error);
+    showError(`Failed to query tokens: ${error.message}`);
   }
 }
 
@@ -409,6 +473,11 @@ async function showParseAst() {
   currentView = "parse";
   updateStageButtons();
 
+  if (currentState !== "LOADED") {
+    showMessage("Compile code first to view AST");
+    return;
+  }
+
   try {
     const response = await sendMessage({
       type: "QUERY_AST",
@@ -416,10 +485,11 @@ async function showParseAst() {
     if (response.status === "SUCCESS") {
       showSExpression(response.data);
     } else {
-      showError(`Failed to get parse AST: ${response.message}`);
+      showError(`Failed to get AST: ${response.message}`);
     }
   } catch (error) {
-    showError(`Error getting parse AST: ${error.message}`);
+    logError("❌ Failed to query AST:", error);
+    showError(`Failed to query AST: ${error.message}`);
   }
 }
 
@@ -427,6 +497,11 @@ async function showParseAst() {
 async function showCanCir() {
   currentView = "can";
   updateStageButtons();
+
+  if (currentState !== "LOADED") {
+    showMessage("Compile code first to view CIR");
+    return;
+  }
 
   try {
     const response = await sendMessage({
@@ -438,7 +513,8 @@ async function showCanCir() {
       showError(`Failed to get CIR: ${response.message}`);
     }
   } catch (error) {
-    showError(`Error getting CIR: ${error.message}`);
+    logError("❌ Failed to query CIR:", error);
+    showError(`Failed to query CIR: ${error.message}`);
   }
 }
 
@@ -447,15 +523,23 @@ async function showTypes() {
   currentView = "types";
   updateStageButtons();
 
+  if (currentState !== "LOADED") {
+    showMessage("Compile code first to view TYPES");
+    return;
+  }
+
   try {
-    const response = await sendMessage({ type: "QUERY_TYPES" });
+    const response = await sendMessage({
+      type: "QUERY_TYPES",
+    });
     if (response.status === "SUCCESS") {
       showSExpression(response.data);
     } else {
       showError(`Failed to get types: ${response.message}`);
     }
   } catch (error) {
-    showError(`Error getting types: ${error.message}`);
+    logError("❌ Failed to query types:", error);
+    showError(`Failed to query types: ${error.message}`);
   }
 }
 
@@ -480,43 +564,23 @@ function showMessage(message) {
 
 // Update status indicator
 function setStatus(status, text) {
-  logInfo("Status update:", status, "-", text);
   const statusDot = document.getElementById("statusDot");
   const statusText = document.getElementById("statusText");
 
-  statusDot.className = `status-dot ${status}`;
-  statusText.textContent = text;
+  if (statusDot) {
+    statusDot.className = `status-dot ${status}`;
+  }
+  if (statusText) {
+    statusText.textContent = text;
+  }
 
-  if (status === "ready") {
-    currentState = "READY";
-    logInfo("State changed to READY");
-  } else if (status === "loaded") {
+  if (status === "loaded") {
     currentState = "LOADED";
-    logInfo("State changed to LOADED");
   }
 }
 
 // Update UI based on current state
 function updateUI() {
-  const compileBtn = document.getElementById("compileBtn");
-  const stageButtons = document.querySelectorAll(
-    ".stage-button:not(#diagnosticsBtn)",
-  );
-
-  switch (currentState) {
-    case "START":
-      compileBtn.disabled = false;
-      stageButtons.forEach((btn) => (btn.disabled = true));
-      break;
-    case "READY":
-      compileBtn.disabled = false;
-      stageButtons.forEach((btn) => (btn.disabled = true));
-      break;
-    case "LOADED":
-      compileBtn.disabled = false;
-      stageButtons.forEach((btn) => (btn.disabled = false));
-      break;
-  }
 }
 
 // Update stage buttons
@@ -538,15 +602,211 @@ function updateStageButtons() {
   }
 }
 
-// Disable buttons during operation
-function disableButtons() {
-  document.getElementById("compileBtn").disabled = true;
-  document.querySelectorAll(".stage-button").forEach((btn) => {
-    btn.disabled = true;
-  });
+
+// Clear diagnostic summary from header
+function clearDiagnosticSummary() {
+  const editorHeader = document.querySelector(".editor-header");
+  const existingSummary = editorHeader.querySelector(".diagnostic-summary");
+  if (existingSummary) {
+    existingSummary.remove();
+  }
 }
 
-// Escape HTML
+// Update diagnostic summary in header
+function updateDiagnosticSummary() {
+  const editorHeader = document.querySelector(".editor-header");
+
+  // Remove existing diagnostic summary
+  const existingSummary = editorHeader.querySelector(".diagnostic-summary");
+  if (existingSummary) {
+    existingSummary.remove();
+  }
+
+  if (!lastDiagnostics) {
+    return;
+  }
+
+  let totalErrors = 0;
+  let totalWarnings = 0;
+
+  // Check if we have the new format with summary
+  if (lastDiagnostics.summary) {
+    totalErrors = lastDiagnostics.summary.errors;
+    totalWarnings = lastDiagnostics.summary.warnings;
+  } else {
+    // Fallback to old format counting
+    Object.values(lastDiagnostics).forEach((stageDiagnostics) => {
+      if (Array.isArray(stageDiagnostics)) {
+        stageDiagnostics.forEach((diagnostic) => {
+          if (
+            diagnostic.severity === "error" ||
+            diagnostic.severity === "fatal"
+          ) {
+            totalErrors++;
+          } else if (diagnostic.severity === "warning") {
+            totalWarnings++;
+          }
+        });
+      }
+    });
+  }
+
+  // Always show summary after compilation (when timing info is available)
+  if (lastCompileTime !== null) {
+    const summaryDiv = document.createElement("div");
+    summaryDiv.className = "diagnostic-summary";
+
+    let summaryText = "";
+    // Always show error/warning count after compilation
+    summaryText += `Found ${totalErrors} error(s) and ${totalWarnings} warning(s)`;
+
+    if (lastCompileTime !== null) {
+      let timeText;
+      if (lastCompileTime < 1000) {
+        timeText = `${Math.round(lastCompileTime)}ms`;
+      } else {
+        timeText = `${(lastCompileTime / 1000).toFixed(1)}s`;
+      }
+      summaryText += (summaryText ? " • " : "") + `⚡ ${timeText}`;
+    }
+
+    summaryDiv.innerHTML = summaryText;
+    editorHeader.appendChild(summaryDiv);
+  }
+}
+
+// Auto-compile setup
+let compileTimeout;
+let compileStartTime = null;
+
+function setupAutoCompile() {
+  const editor = document.getElementById("editor");
+  if (editor) {
+    editor.addEventListener("input", () => {
+      // Debounce compilation to avoid excessive calls
+      clearTimeout(compileTimeout);
+      compileStartTime = performance.now(); // Start timing when user stops typing
+      compileTimeout = setTimeout(() => {
+        if (currentState === "READY" || currentState === "LOADED") {
+          compileCode();
+        }
+      }, 20); // 20ms delay for better responsiveness
+    });
+  }
+}
+
+// URL sharing functionality
+function hashContent(content) {
+  if (!content || content.length > 10000) return null; // Don't hash very large content
+
+  let hash = 0;
+  for (let i = 0; i < content.length; i++) {
+    const char = content.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function updateUrl(content) {
+  const hash = hashContent(content);
+  if (hash) {
+    const newUrl = `${window.location.origin}${window.location.pathname}?content=${hash}`;
+    window.history.replaceState({}, "", newUrl);
+
+    // Store content in localStorage with hash as key
+    localStorage.setItem(`roc-content-${hash}`, content);
+  } else {
+    // Clear URL param if content is empty or too large
+    const newUrl = `${window.location.origin}${window.location.pathname}`;
+    window.history.replaceState({}, "", newUrl);
+  }
+}
+
+function restoreFromUrl() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const contentHash = urlParams.get("content");
+
+  if (contentHash) {
+    const savedContent = localStorage.getItem(`roc-content-${contentHash}`);
+    if (savedContent) {
+      const editor = document.getElementById("editor");
+      if (editor) {
+        editor.value = savedContent;
+        logInfo("Restored content from URL hash:", contentHash);
+      }
+    }
+  }
+}
+
+function setupUrlSharing() {
+  const editor = document.getElementById("editor");
+  if (editor) {
+    editor.addEventListener("input", () => {
+      // Debounce URL updates to avoid excessive calls
+      clearTimeout(updateUrlTimeout);
+      updateUrlTimeout = setTimeout(() => {
+        updateUrl(editor.value);
+      }, 1000); // Update URL after 1 second of no typing
+    });
+  }
+
+  // Add share button to header
+  addShareButton();
+}
+
+function addShareButton() {
+  const headerStatus = document.querySelector(".header-status");
+  if (headerStatus) {
+    const shareButton = document.createElement("button");
+    shareButton.className = "share-button";
+    shareButton.innerHTML = "share link";
+    shareButton.title = "Copy shareable link to clipboard";
+    shareButton.onclick = copyShareLink;
+
+    // Insert before the theme toggle
+    const themeToggle = headerStatus.querySelector(".theme-toggle");
+    headerStatus.insertBefore(shareButton, themeToggle);
+  }
+}
+
+function copyShareLink() {
+  const editor = document.getElementById("editor");
+  if (editor) {
+    const content = editor.value.trim();
+    if (content) {
+      const hash = hashContent(content);
+      if (hash) {
+        localStorage.setItem(`roc-content-${hash}`, content);
+        const shareUrl = `${window.location.origin}${window.location.pathname}?content=${hash}`;
+
+        navigator.clipboard
+          .writeText(shareUrl)
+          .then(() => {
+            // Show temporary feedback
+            const shareButton = document.querySelector(".share-button");
+            const originalText = shareButton.innerHTML;
+            shareButton.innerHTML = "copied";
+
+            setTimeout(() => {
+              shareButton.innerHTML = originalText;
+            }, 2000);
+          })
+          .catch((err) => {
+            console.error("Failed to copy to clipboard:", err);
+            // Fallback: show the URL in an alert
+            alert(`Share this link: ${shareUrl}`);
+          });
+      } else {
+        alert("Content is too large to share via URL");
+      }
+    } else {
+      alert("No content to share");
+    }
+  }
+}
+
+// Utility functions
 function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
@@ -615,6 +875,9 @@ function initTheme() {
   // Update theme switch state
   const themeSwitch = document.getElementById("themeSwitch");
   themeSwitch.setAttribute("aria-checked", theme === "dark");
+
+  // Update theme label text
+  updateThemeLabel(theme);
 }
 
 function toggleTheme() {
@@ -626,18 +889,28 @@ function toggleTheme() {
 
   const themeSwitch = document.getElementById("themeSwitch");
   themeSwitch.setAttribute("aria-checked", newTheme === "dark");
+
+  // Update theme label text
+  updateThemeLabel(newTheme);
 }
 
-function logInfo(msg) {
-  console.log("INFO: " + msg);
+function updateThemeLabel(theme) {
+  const themeLabel = document.querySelector(".theme-label");
+  if (themeLabel) {
+    themeLabel.textContent = theme === "dark" ? "Dark" : "Light";
+  }
 }
 
-function logWarn(msg) {
-  console.warn("WARNING: " + msg);
+function logInfo(...args) {
+  console.log("INFO:", ...args);
 }
 
-function logError(msg) {
-  console.error("ERROR: " + msg);
+function logWarn(...args) {
+  console.warn("WARNING:", ...args);
+}
+
+function logError(...args) {
+  console.error("ERROR:", ...args);
 }
 
 // Initialize theme on page load

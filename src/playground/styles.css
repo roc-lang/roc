@@ -181,31 +181,6 @@ body {
     gap: 10px;
 }
 
-.status-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background-color: var(--text-muted);
-    transition: background-color 0.3s ease;
-}
-
-.status-dot.loading {
-    background-color: var(--warning-color);
-    animation: pulse 1.5s infinite;
-}
-
-.status-dot.ready {
-    background-color: var(--button-bg);
-}
-
-.status-dot.loaded {
-    background-color: var(--success-color);
-}
-
-.status-dot.error {
-    background-color: var(--error-color);
-}
-
 @keyframes pulse {
     0%,
     100% {
@@ -225,8 +200,30 @@ body {
 .theme-toggle {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-left: 20px;
+    gap: 8px;
+}
+
+.share-button {
+    background-color: var(--header-bg);
+    border: 1px solid var(--button-bg);
+    color: var(--text-muted);
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    margin-right: 12px;
+    min-width: 70px;
+    text-align: center;
+}
+
+.share-button:hover {
+    background-color: var(--button-bg);
+    color: var(--button-active-text);
+}
+
+.share-button:active {
+    background-color: var(--header-bg);
 }
 
 .theme-switch {
@@ -441,13 +438,13 @@ body {
 }
 
 .stage-button.active {
-    background-color: var(--button-hover);
+    background-color: var(--button-bg);
     color: var(--button-active-text);
     border-color: var(--border-color);
 }
 
 .stage-button.active:hover:not(:disabled) {
-    background-color: var(--button-bg);
+    background-color: var(--button-hover);
     color: var(--button-active-text);
     border-color: var(--button-hover);
 }
@@ -470,12 +467,12 @@ body {
 
 /* Compile button */
 .compile-button {
-    padding: 6px 16px;
+    padding: 5px 12px;
     background-color: var(--button-bg);
     color: white;
     border: none;
     border-radius: 4px;
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 500;
     cursor: pointer;
     transition: background-color 0.2s ease;
@@ -563,11 +560,12 @@ body {
 }
 
 .success-message {
-    color: var(--success-color);
+    color: var(--text-muted);
     padding: 10px;
-    background-color: rgba(11, 132, 0, 0.1);
+    background-color: transparent;
     border-radius: 4px;
-    font-weight: 500;
+    font-weight: 400;
+    opacity: 0.8;
 }
 
 /* Diagnostics */
@@ -638,6 +636,113 @@ body {
     border-radius: 4px;
     margin-bottom: 15px;
     font-weight: 500;
+}
+
+.editor-header .diagnostic-summary {
+    padding: 4px 8px;
+    margin: 0;
+    font-size: 0.8em;
+    background-color: transparent;
+    border: none;
+    border-radius: 3px;
+    color: var(--text-primary);
+    opacity: 0.7;
+}
+
+/* HTML Report Styles */
+.report {
+    margin-bottom: 15px;
+    padding: 10px;
+    border-radius: 4px;
+    border-left: 4px solid var(--border-color);
+}
+
+.report.info {
+    background-color: var(--bg-tertiary);
+    border-left-color: #2196f3;
+}
+
+.report.warning {
+    background-color: var(--bg-tertiary);
+    border-left-color: #ff9800;
+}
+
+.report.error {
+    background-color: var(--bg-tertiary);
+    border-left-color: #f44336;
+}
+
+.report-title {
+    margin: 0 0 10px 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.report-content {
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-top: 8px;
+}
+
+.report-content p {
+    margin: 0 0 10px 0;
+}
+
+.report-content code,
+.report-content code.code {
+    background-color: var(--bg-secondary);
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+}
+
+.report-content br + br {
+    display: none; /* Hide double line breaks */
+}
+
+.report-content > br {
+    display: block;
+    margin: 8px 0;
+    content: "";
+}
+
+.source-region {
+    /* background-color: var(--bg-secondary); */
+    /* border: 1px solid var(--border-color); */
+    /* border-radius: 4px; */
+    margin: 12px 0;
+    padding: 10px;
+    position: relative;
+}
+
+.filename {
+    font-size: 0.8em;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    display: block;
+    margin-bottom: 6px;
+    opacity: 0.8;
+}
+
+.source-region pre {
+    margin: 0;
+    padding: 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-x: auto;
+}
+
+.source-region pre.error {
+    color: var(--error-color);
+    border: none;
+    background: var(--editor-bg);
 }
 
 /* Scrollbar styling */
