@@ -949,9 +949,7 @@ expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
 named : Str -> Result(Color, [UnknownColor(Str)])
 named = |str|
-	(
-	Named(str),
-)
+	(Named(str))
 
 str
 

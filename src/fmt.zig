@@ -791,7 +791,9 @@ const Formatter = struct {
         switch (expr) {
             .apply => |a| {
                 _ = try fmt.formatExpr(a.@"fn");
-                try fmt.formatCollection(region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(a.args), Formatter.formatExpr);
+                const fn_region = fmt.nodeRegion(@intFromEnum(a.@"fn"));
+                const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = region.end };
+                try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(a.args), Formatter.formatExpr);
             },
             .string_part => |s| {
                 try fmt.pushTokenText(s.token);
