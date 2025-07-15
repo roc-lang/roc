@@ -670,9 +670,33 @@ pub const Store = struct {
                         continue;
                     },
                     .tag_union => |tag_union| {
-                        // TODO
-                        _ = tag_union;
-                        @panic("TODO: tag_union layout");
+                        // For now, handle Bool as a special case
+                        // Bool is a tag union with two tags: True and False, both with no payload
+                        const tags = self.types_store.getTagsSlice(tag_union.tags);
+
+                        // Check if this is a Bool (2 tags with no payload)
+                        if (tags.len == 2) {
+                            var is_bool = true;
+                            for (tags.items(.args)) |tag_args| {
+                                const args_slice = self.types_store.getTagArgsSlice(tag_args);
+                                if (args_slice.len != 0) {
+                                    is_bool = false;
+                                    break;
+                                }
+                            }
+
+                            if (is_bool) {
+                                // Bool layout: u8 where 0 = False, 1 = True
+                                // Use the predefined bool layout
+                                const layout = Layout.boolType();
+                                const bool_layout_idx = try self.insertLayout(layout);
+                                try self.layouts_by_var.put(self.env.gpa, current.var_, bool_layout_idx);
+                                return bool_layout_idx;
+                            }
+                        }
+
+                        // For other tag unions, not yet implemented
+                        @panic("TODO: non-Bool tag_union layout");
                     },
                     .record_unbound => |fields| {
                         // For record_unbound, we need to gather fields directly since it has no Record struct

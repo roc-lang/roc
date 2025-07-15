@@ -340,18 +340,13 @@ fn extractBranchData(cir: *const CIR, branch_idx: CIR.Expr.IfBranch.Idx) !Branch
         return error.InvalidBranchNode;
     }
 
-    // Extract indices from extra_data
-    const extra_data_start = branch_node.data_1;
-    const extra_data = cir.store.extra_data.items;
-
-    // Bounds check to ensure we have both condition and body indices
-    if (extra_data_start + 1 >= extra_data.len) {
-        return error.InvalidBranchNode;
-    }
-
+    // Extract indices from node data
+    // Based on getIfBranch in NodeStore.zig:
+    // data_1 contains the condition expression index
+    // data_2 contains the body expression index
     return BranchData{
-        .condition = @enumFromInt(extra_data[extra_data_start]),
-        .body = @enumFromInt(extra_data[extra_data_start + 1]),
+        .condition = @enumFromInt(branch_node.data_1),
+        .body = @enumFromInt(branch_node.data_2),
     };
 }
 
@@ -365,6 +360,13 @@ fn extractBranchData(cir: *const CIR, branch_idx: CIR.Expr.IfBranch.Idx) !Branch
 /// - false if the tag is `False` (discriminant 1)
 /// - error.TypeMismatch if the condition is not a boolean tag union
 fn evaluateBooleanCondition(cond_result: EvalResult) !bool {
+    // Check if this is a boolean scalar layout
+    if (cond_result.layout.tag == .scalar and cond_result.layout.data.scalar.tag == .bool) {
+        // Direct boolean value
+        const bool_ptr = @as(*const bool, @ptrCast(@alignCast(cond_result.ptr)));
+        return bool_ptr.*;
+    }
+
     // Boolean values in Roc are represented as tags (zero-argument tag union)
     // The tag union [True, False] is represented as a u16 discriminant
     if (cond_result.layout.tag != .scalar or cond_result.layout.data.scalar.tag != .int) {
@@ -458,7 +460,7 @@ fn evalBinop(allocator: std.mem.Allocator, cir: *const CIR, binop: CIR.Expr.Bino
     // For comparison operations, the result is always boolean
     const result_layout = switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .pow, .div_trunc => left_result.layout,
-        .eq, .ne => layout.Layout.boolType(),
+        .eq, .ne, .lt, .gt, .le, .ge => layout.Layout.boolType(),
         .@"and", .@"or" => layout.Layout.boolType(),
         else => return error.LayoutError,
     };
@@ -498,6 +500,66 @@ fn evalBinop(allocator: std.mem.Allocator, cir: *const CIR, binop: CIR.Expr.Bino
         .ne => {
             // Not-equal comparison - return boolean
             const result_val: bool = lhs_val != rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            return EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .gt => {
+            // Greater than comparison - return boolean
+            const result_val: bool = lhs_val > rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            return EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .lt => {
+            // Less than comparison - return boolean
+            const result_val: bool = lhs_val < rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            return EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .ge => {
+            // Greater than or equal comparison - return boolean
+            const result_val: bool = lhs_val >= rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            const typed_ptr = @as(*bool, @ptrCast(@alignCast(ptr)));
+            typed_ptr.* = result_val;
+            return EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .le => {
+            // Less than or equal comparison - return boolean
+            const result_val: bool = lhs_val <= rhs_val;
             const size = layout_cache.layoutSize(result_layout);
             const alignment = result_layout.alignment(target.TargetUsize.native);
             const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
@@ -645,14 +707,10 @@ test "extractBranchData - valid branch node" {
     var cir = try CIR.init(&module_env, "test");
     defer cir.deinit();
 
-    // Add some dummy data to extra_data
-    cir.store.extra_data.append(gpa, 123) catch unreachable; // condition idx
-    cir.store.extra_data.append(gpa, 456) catch unreachable; // body idx
-
-    // Create a branch node
+    // Create a branch node with condition and body indices
     const node = Node{
-        .data_1 = 0, // Points to start of extra_data
-        .data_2 = 0,
+        .data_1 = 123, // condition idx
+        .data_2 = 456, // body idx
         .data_3 = 0,
 
         .tag = .if_branch,
@@ -695,7 +753,7 @@ test "extractBranchData - wrong node type" {
     try testing.expectError(error.InvalidBranchNode, err);
 }
 
-test "extractBranchData - out of bounds extra_data" {
+test "extractBranchData - invalid branch node" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -706,17 +764,17 @@ test "extractBranchData - out of bounds extra_data" {
     var cir = try CIR.init(&module_env, "test");
     defer cir.deinit();
 
-    // Create a branch node with invalid extra_data index
+    // Create a node that's not an if_branch
     const node = Node{
-        .data_1 = 999, // Out of bounds
-        .data_2 = 0,
+        .data_1 = 123,
+        .data_2 = 456,
         .data_3 = 0,
 
-        .tag = .if_branch,
+        .tag = .expr_int, // Not an if_branch
     };
     const node_idx = try cir.store.nodes.append(gpa, node);
 
-    // Try to extract branch data with out of bounds index
+    // Extract branch data should fail
     const branch_idx: CIR.Expr.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
     const err = extractBranchData(&cir, branch_idx);
 
