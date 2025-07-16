@@ -11,6 +11,12 @@ type=repl
 » []
 ~~~
 # EXPECTED
-NIL
+2
+---
+0.3
+---
+"Hello, World!"
+---
+[] : List(_size)
 # PROBLEMS
 NIL
