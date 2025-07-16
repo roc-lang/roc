@@ -5,6 +5,7 @@
 const std = @import("std");
 const testing = std.testing;
 const snapshot_mod = @import("snapshot.zig");
+const NodeType = snapshot_mod.NodeType;
 const base = @import("base.zig");
 const RegionInfo = base.RegionInfo;
 const parse = @import("check/parse.zig");
@@ -405,6 +406,39 @@ fn validateSnapshotProblems(allocator: std.mem.Allocator, path: []const u8) !voi
     const content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
     defer allocator.free(content);
 
+    // Extract META section to get the type
+    const meta_section = extractSection(content, "META") orelse {
+        std.debug.print("\n❌ {s}:\n", .{std.fs.path.basename(path)});
+        std.debug.print("  Missing META section\n", .{});
+        return error.MissingMetaSection;
+    };
+
+    // Parse the META section to get the node type
+    const node_type = blk: {
+        var lines = std.mem.tokenizeScalar(u8, meta_section, '\n');
+        while (lines.next()) |line| {
+            const trimmed_line = std.mem.trim(u8, line, " \t\r");
+            if (std.mem.startsWith(u8, trimmed_line, "type=")) {
+                const type_str = trimmed_line["type=".len..];
+                // Parse the type string manually since fromString is not public
+                if (std.mem.eql(u8, type_str, NodeType.HEADER)) break :blk NodeType.header;
+                if (std.mem.eql(u8, type_str, NodeType.EXPR)) break :blk NodeType.expr;
+                if (std.mem.eql(u8, type_str, NodeType.STMT)) break :blk NodeType.statement;
+                if (std.mem.eql(u8, type_str, NodeType.FILE)) break :blk NodeType.file;
+                if (std.mem.eql(u8, type_str, NodeType.PACKAGE)) break :blk NodeType.package;
+                if (std.mem.eql(u8, type_str, NodeType.PLATFORM)) break :blk NodeType.platform;
+                if (std.mem.eql(u8, type_str, NodeType.APP)) break :blk NodeType.app;
+                if (std.mem.eql(u8, type_str, NodeType.REPL)) break :blk NodeType.repl;
+                // Unknown type
+                std.debug.print("\n❌ {s}:\n", .{std.fs.path.basename(path)});
+                std.debug.print("  Error: Unknown type '{s}' in META section\n", .{type_str});
+                std.debug.print("  Valid types are: file, header, expr, statement, package, platform, app, repl\n", .{});
+                return error.InvalidNodeType;
+            }
+        }
+        break :blk NodeType.file; // default to file if type not specified
+    };
+
     const expected_section = extractSection(content, "EXPECTED") orelse {
         // EXPECTED section is required for all snapshots
         std.debug.print("\n❌ {s}:\n", .{std.fs.path.basename(path)});
@@ -418,6 +452,21 @@ fn validateSnapshotProblems(allocator: std.mem.Allocator, path: []const u8) !voi
         std.debug.print("  Missing PROBLEMS section\n", .{});
         return error.MissingProblemsSection;
     };
+
+    // Check if PROBLEMS is exactly NIL
+    const problems_is_nil = std.mem.eql(u8, std.mem.trim(u8, problems_section, " \t\r\n"), "NIL");
+
+    // If PROBLEMS is NIL and type is not repl, EXPECTED must also be NIL
+    if (problems_is_nil and node_type != .repl) {
+        const expected_is_nil = std.mem.eql(u8, std.mem.trim(u8, expected_section, " \t\r\n"), "NIL");
+        if (!expected_is_nil) {
+            std.debug.print("\n❌ {s}:\n", .{std.fs.path.basename(path)});
+            std.debug.print("  Error: EXPECTED must be NIL when PROBLEMS is NIL (for type={s})\n", .{@tagName(node_type)});
+            std.debug.print("  Hint: EXPECTED should show expected problems, not expected output.\n", .{});
+            std.debug.print("  If you want to evaluate the expression, use type=repl instead.\n", .{});
+            return error.SnapshotValidationFailed;
+        }
+    }
 
     var expected = try parseExpectedSection(allocator, expected_section);
     defer {
