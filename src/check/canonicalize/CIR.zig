@@ -1606,36 +1606,6 @@ pub const IntValue = struct {
         };
     }
 
-    pub fn fromI128(value: i128) IntValue {
-        var bytes: [16]u8 = undefined;
-        // Store as little-endian bytes
-        var i: usize = 0;
-        var v = value;
-        while (i < 16) : (i += 1) {
-            bytes[i] = @truncate(@as(u128, @bitCast(v)));
-            v = v >> 8;
-        }
-        return IntValue{
-            .bytes = bytes,
-            .kind = .i128,
-        };
-    }
-
-    pub fn fromU128(value: u128) IntValue {
-        var bytes: [16]u8 = undefined;
-        // Store as little-endian bytes
-        var i: usize = 0;
-        var v = value;
-        while (i < 16) : (i += 1) {
-            bytes[i] = @truncate(v);
-            v = v >> 8;
-        }
-        return IntValue{
-            .bytes = bytes,
-            .kind = .u128,
-        };
-    }
-
     pub fn toI128(self: IntValue) i128 {
         switch (self.kind) {
             .i128 => {
