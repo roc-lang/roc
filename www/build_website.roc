@@ -1,7 +1,6 @@
 app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
 
 import cli.Stdout
-import cli.Stderr
 import cli.Arg exposing [Arg]
 import cli.Dir
 import cli.Cmd
@@ -10,9 +9,9 @@ import cli.File
 main! : List Arg => Result {} _
 main! = |_args|
 
-    pwd_stdout_str = run_cmd_w_output!("pwd", [])?
+    pwd_stdout_str = run_cmd_w_output!("pwd", [])? |> Str.trim()
     if !(Str.ends_with(pwd_stdout_str, "/www")) then
-        Stderr.line!("You must run this script inside the 'www' directory, I am currently in: ${pwd_stdout_str}")?
+        Err(Exit(1, "You must run this script inside the 'www' directory, I am currently in: ${pwd_stdout_str}"))?
     else
         {}
 
@@ -21,7 +20,7 @@ main! = |_args|
     _ = Dir.delete_all!("content/examples")
     _ = Dir.delete_all!("examples-main")
 
-    run_cmd!("cp", ["-r", "content", "build"])?
+    run_cmd!("cp", ["-r", "public", "build"])?
 
     # Download latest examples
     run_cmd!("curl", ["-fL", "-o", "examples-main.zip", "https://github.com/roc-lang/examples/archive/refs/heads/main.zip"])?
@@ -36,7 +35,6 @@ main! = |_args|
 
     Dir.delete_all!("examples-main") ? |err| DeleteExamplesMainDirFailed(err)
     File.delete!("examples-main.zip") ? |err| DeleteExamplesMainZipFailed(err)
-
 
     # download fonts just-in-time so we don't have to bloat the repo with them.
     design_assets_commit = "4d949642ebc56ca455cf270b288382788bce5873"
@@ -56,6 +54,9 @@ main! = |_args|
 
     repl_tarfile = "roc_repl_wasm.tar.gz"
 
+    # Clean up old file
+    _ = File.delete!(repl_tarfile)
+
     # Download the latest stable Web REPL as a zip file.
     run_cmd!("curl", ["-fLJO", "https://github.com/roc-lang/roc/releases/download/alpha3-rolling/${repl_tarfile}"])?
 
@@ -65,26 +66,34 @@ main! = |_args|
 
     File.delete!(repl_tarfile) ? |err| DeleteReplTarFailed(err)
 
-    # TODO generate docs for alpha3 instead of main branch
+    # TODO generate docs for latest alpha instead of main branch
     run_cmd!("roc", ["docs", "--output", "build/builtins", "--root-dir", "builtins"])?
 
-    find_index_stdout = run_cmd_w_output!("find", ["www/build/builtins", "-type", "f", "-name", "index.html"])?
-    clean_paths = Str.split_on(find_index_stdout, "\n")
+    find_index_stdout = run_cmd_w_output!("find", ["build/builtins", "-type", "f", "-name", "index.html"])?
+    index_clean_paths =
+        Str.split_on(find_index_stdout, "\n")
+        |> List.keep_if(|path| !Str.is_empty(path))
+
+    assert(!List.is_empty(index_clean_paths), IndexCleanPathsWasEmpty)?
 
     List.for_each_try!(
-        clean_paths,
-        |path|
-            File.write_utf8!(path, Str.replace_each(File.read_utf8!(path)?, "</nav>", """<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>"""))
-    ) ? |err| WriteBuiltinsDocsReplaceFailed(err)
+        index_clean_paths,
+        |index_path|
+            replace_in_file!(
+                index_path, 
+                "<\nav>", 
+                """<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>"""
+            ) 
+    ) ? |err| BuiltinsDocsReplaceFailed(err)
 
 
-    # Generating site markdown content
-    run_cmd!("roc", ["build", "--linker", "legacy", "www/main.roc"])?
-    run_cmd!("roc", ["www/main.roc", "www/content/", "www/build/"])?
+    # Generate site markdown content
+    run_cmd!("roc", ["build", "--linker", "legacy", "main.roc"])?
+    run_cmd!("./main", ["content", "build"])?
 
 
     # Add github link to examples
-    examples_dir = "www/build/examples"
+    examples_dir = "build/examples"
     examples_repo_link = "https://github.com/roc-lang/examples/tree/main/examples"
 
     github_logo_svg =
@@ -96,20 +105,23 @@ main! = |_args|
 
     find_readme_html_output = run_cmd_w_output!("find", [examples_dir, "-type", "f", "-name", "README.html", "-exec", "realpath", "{}", ";"])?
 
-    clean_readme_paths = Str.split_on(find_readme_html_output, "\n")
-    # TODO check output as expected
+    clean_readme_paths =
+        Str.split_on(find_readme_html_output, "\n")
+        |> List.keep_if(|path| !Str.is_empty(path))
+
+    assert(!List.is_empty(clean_readme_paths), CleanReadmePathsWasEmptyList)?
 
     List.for_each_try!(
         clean_readme_paths,
         |readme_path|
-            readme_html_str = File.read_utf8!(readme_path)?
-
             example_folder_name = Str.split_on(readme_path, "/") |> List.take_last(2) |> List.first()?
             specific_example_link = Str.join_with([examples_repo_link, example_folder_name], "/")
-            readme_str_edited = Str.replace_each(readme_html_str, "</h1>", """</h1><a id="gh-example-link" href="${specific_example_link}" aria-label="view on github">${github_logo_svg}</a>""")
-
-            File.write_utf8!(readme_path, readme_str_edited)
-
+            
+            replace_in_file!(
+                readme_path, 
+                "</h1>", 
+                """</h1><a id="gh-example-link" href="${specific_example_link}" aria-label="view on github">${github_logo_svg}</a>"""
+            )
     ) ? |err| ExamplesReadmeReplaceFailed(err)
 
     Stdout.line!("Website built in dir 'www/build'.")
@@ -136,10 +148,23 @@ run_cmd_w_output! = |cmd_str, args|
             stderr_utf8 = Str.from_utf8_lossy(cmd_out.stderr)
             err_data =
                 """
-                Cmd ${cmd_str} ${Str.join_with(args, " ")} failed:
+                Cmd `${cmd_str} ${Str.join_with(args, " ")}` failed:
                 - status: ${Inspect.to_str(cmd_out.status)}
                 - stdout: ${stdout_utf8}
                 - stderr: ${stderr_utf8}
                 """
 
             Err(BadCmdOutput(err_data))
+
+replace_in_file! = |file_path_str, search_str, replace_str|
+    assert(!Str.is_empty(file_path_str), FilePathWasEmptyStr)?
+
+    file_content = File.read_utf8!(file_path_str)? 
+    content_after_replace = Str.replace_each(file_content, search_str, replace_str) 
+    File.write_utf8!(content_after_replace, file_path_str)
+
+assert = |condition, err|
+    if condition then
+        Ok({})
+    else
+        Err(err)
