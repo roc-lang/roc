@@ -98,12 +98,6 @@ test "check parseAndCanonicalizeExpr cleanup order" {
     const value = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
     try testing.expectEqual(@as(i128, 42), value);
 
-    // Debug: Check if the pointer is within the stack
-    const stack_start = @intFromPtr(eval_stack.start);
-    const stack_end = stack_start + eval_stack.capacity;
-    const result_ptr_addr = @intFromPtr(result.ptr);
-    const is_in_stack = result_ptr_addr >= stack_start and result_ptr_addr < stack_end;
-
     // Clean up in correct order
     layout_cache.deinit();
     eval_stack.deinit();
