@@ -18,3 +18,8 @@ rm roc_nightly.tar.gz
 mv roc_nightly* roc_nightly
 
 ./roc_nightly/roc version
+
+cd www
+../roc_nightly/roc check build_website.roc
+../roc_nightly/roc build build_website.roc
+./build_website
