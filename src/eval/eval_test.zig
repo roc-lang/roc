@@ -1,7 +1,7 @@
 //! Tests for the expression evaluator
 const std = @import("std");
 const testing = std.testing;
-const eval = @import("eval.zig");
+const eval = @import("interpreter.zig");
 const base = @import("../base.zig");
 const parse = @import("../check/parse.zig");
 const canonicalize = @import("../check/canonicalize.zig");
@@ -138,7 +138,9 @@ test "eval runtime error - returns crash error" {
         // Evaluating a runtime error should return an error
         var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
         defer work_stack.deinit();
-        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+        var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
+        defer layout_stack.deinit();
+        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
         try testing.expectError(eval.EvalError.Crash, result);
     } else {
         // If crash syntax is not supported in canonicalization, skip
@@ -168,7 +170,9 @@ test "eval binop - basic implementation" {
     // Evaluate the binop expression
     var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
     defer work_stack.deinit();
-    const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+    var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
+    defer layout_stack.deinit();
+    const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
 
     // Verify we got a scalar layout
     try testing.expect(result.layout.tag == .scalar);
@@ -209,7 +213,9 @@ test "eval if expression with boolean tags" {
 
         var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
         defer work_stack.deinit();
-        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+        var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
+        defer layout_stack.deinit();
+        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
 
         // Verify the result
         try testing.expect(result.layout.tag == .scalar);
@@ -239,7 +245,9 @@ test "eval if expression with comparison condition" {
 
         var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
         defer work_stack.deinit();
-        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+        var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
+        defer layout_stack.deinit();
+        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
 
         // Verify the result
         try testing.expect(result.layout.tag == .scalar);
@@ -270,7 +278,9 @@ test "eval nested if expressions" {
 
         var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
         defer work_stack.deinit();
-        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+        var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
+        defer layout_stack.deinit();
+        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
 
         // Verify the result
         try testing.expect(result.layout.tag == .scalar);
@@ -320,7 +330,9 @@ test "eval if-else if-else chains" {
 
         var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
         defer work_stack.deinit();
-        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+        var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
+        defer layout_stack.deinit();
+        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
 
         // Verify the result
         try testing.expect(result.layout.tag == .scalar);
@@ -350,7 +362,9 @@ test "eval if expression with arithmetic in branches" {
 
         var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
         defer work_stack.deinit();
-        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+        var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
+        defer layout_stack.deinit();
+        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
 
         // Verify the result
         try testing.expect(result.layout.tag == .scalar);

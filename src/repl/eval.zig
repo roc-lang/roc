@@ -9,7 +9,8 @@ const check_types = @import("../check/check_types.zig");
 const types = @import("../types.zig");
 const types_store = @import("../types/store.zig");
 const layout_store = @import("../layout/store.zig");
-const eval = @import("../eval/eval.zig");
+const layout = @import("../layout/layout.zig");
+const eval = @import("../eval/interpreter.zig");
 const stack = @import("../eval/stack.zig");
 const CIR = canonicalize.CIR;
 const target = @import("../base/target.zig");
@@ -21,22 +22,26 @@ pub const Repl = struct {
     state: usize,
     eval_stack: stack.Stack,
     work_stack: std.ArrayList(eval.WorkItem),
+    layout_stack: std.ArrayList(layout.Layout),
 
     pub fn init(allocator: Allocator) Allocator.Error!Repl {
         const eval_stack = try stack.Stack.initCapacity(allocator, 8192);
         const work_stack = try std.ArrayList(eval.WorkItem).initCapacity(allocator, 128);
+        const layout_stack = try std.ArrayList(layout.Layout).initCapacity(allocator, 128);
 
         return Repl{
             .allocator = allocator,
             .state = 0,
             .eval_stack = eval_stack,
             .work_stack = work_stack,
+            .layout_stack = layout_stack,
         };
     }
 
     pub fn deinit(self: *Repl) void {
         self.eval_stack.deinit();
         self.work_stack.deinit();
+        self.layout_stack.deinit();
     }
 
     /// Process a single REPL input and return the output
@@ -91,9 +96,10 @@ pub const Repl = struct {
         defer layout_cache.deinit();
 
         // Evaluate the expression
-        const result = eval.eval(self.allocator, &cir, canonical_expr_idx, &self.eval_stack, &layout_cache, &module_env.types, &self.work_stack) catch |err| {
-            // Clear work_stack in case of evaluation error
+        const result = eval.eval(self.allocator, &cir, canonical_expr_idx, &self.eval_stack, &layout_cache, &module_env.types, &self.work_stack, &self.layout_stack) catch |err| {
+            // Clear work_stack and layout_stack in case of evaluation error
             self.work_stack.clearRetainingCapacity();
+            self.layout_stack.clearRetainingCapacity();
             return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
         };
 

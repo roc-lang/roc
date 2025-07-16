@@ -17,7 +17,7 @@ test {
     // TODO: Remove after hooking up
     testing.refAllDeclsRecursive(@import("reporting.zig"));
     testing.refAllDeclsRecursive(@import("reporting/test.zig"));
-    testing.refAllDeclsRecursive(@import("eval/eval.zig"));
+    testing.refAllDeclsRecursive(@import("eval/interpreter.zig"));
     testing.refAllDeclsRecursive(@import("check/canonicalize_bool_test.zig"));
     testing.refAllDeclsRecursive(@import("check/check_types/unify.zig"));
     testing.refAllDeclsRecursive(@import("check/check_types.zig"));

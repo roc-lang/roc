@@ -73,16 +73,14 @@ pub fn eval(
     type_store: *types_store.Store,
     work_stack: *std.ArrayList(WorkItem),
 ) EvalError!EvalResult {
-    // Ensure work_stack is empty before we start. (stack_memory might not be, and that's fine!)
+    // Ensure work_stack and layout_stack are empty before we start. (stack_memory might not be, and that's fine!)
     std.debug.assert(work_stack.items.len == 0);
+    std.debug.assert(layout_stack.items.len == 0);
     errdefer work_stack.clearRetainingCapacity();
+    errdefer layout_stack.clearRetainingCapacity();
 
     // Save the initial stack pointer so we can find our result
     const initial_stack_ptr = @as([*]u8, @ptrCast(stack_memory.start)) + stack_memory.used;
-
-    // Track layouts of values on the stack
-    var layout_stack = std.ArrayList(layout.Layout).init(allocator);
-    defer layout_stack.deinit();
 
     // Push initial work item
     try work_stack.append(.{
@@ -98,7 +96,7 @@ pub fn eval(
                 cir,
                 work.expr_idx,
                 stack_memory,
-                &layout_stack,
+                layout_stack,
                 layout_cache,
                 type_store,
                 work_stack,
@@ -107,7 +105,7 @@ pub fn eval(
                 try completeBinop(
                     work.kind,
                     stack_memory,
-                    &layout_stack,
+                    layout_stack,
                     layout_cache,
                 );
             },
@@ -123,22 +121,19 @@ pub fn eval(
                     if_expr_idx,
                     branch_index,
                     stack_memory,
-                    &layout_stack,
+                    layout_stack,
                     work_stack,
                 );
             },
         }
     }
 
-    // The final result should be the only thing left on the layout stack
-    if (layout_stack.items.len != 1) {
-        return error.InvalidStackState;
-    }
+    // Pop the final layout - should be the only thing left on the layout stack
+    const final_layout = layout_stack.pop() orelse return error.InvalidStackState;
 
-    const final_layout = layout_stack.items[0];
-
-    // Ensure work stack is empty at the end - if not, it's a bug!
+    // Ensure both stacks are empty at the end - if not, it's a bug!
     std.debug.assert(work_stack.items.len == 0);
+    std.debug.assert(layout_stack.items.len == 0);
 
     // The result is at the beginning of our stack frame
     return EvalResult{
