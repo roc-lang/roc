@@ -85,7 +85,6 @@ pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const 
             .start_col_idx = 0,
             .end_line_idx = 0,
             .end_col_idx = 0,
-            .line_text = "",
         };
     };
 
@@ -101,7 +100,6 @@ pub fn appendRegionInfoToSexprTree(self: *AST, env: *base.ModuleEnv, tree: *SExp
         .start_col_idx = 0,
         .end_line_idx = 0,
         .end_col_idx = 0,
-        .line_text = "",
     };
     try tree.pushBytesRange(start.start.offset, end.end.offset, info);
 }
@@ -560,7 +558,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
 
         // Use the proper addSourceContext method with owned filename
         const owned_filename = try report.addOwnedString(filename);
-        try report.addSourceContext(region_info, owned_filename);
+        try report.addSourceContext(region_info, owned_filename, self.env.source, env.line_starts.items.items);
     }
 
     return report;

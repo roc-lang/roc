@@ -14,8 +14,9 @@ some_fn(arg1)?
 NOT IMPLEMENTED - :0:0:0:0
 # PROBLEMS
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
-Let us know if you want to help!
+This feature is not yet implemented: canonicalize suffix_single_question expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 # TOKENS
 ~~~zig

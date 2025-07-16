@@ -71,6 +71,9 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
                 // Any OOM here is definitely a bug.
                 @panic("OOM");
             },
+            error.NoSpaceLeft => {
+                @panic("No Space Left");
+            },
         }
         return;
     };

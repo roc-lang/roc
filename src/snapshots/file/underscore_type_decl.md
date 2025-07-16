@@ -263,7 +263,7 @@ Pair3(_, _) = Pair(0, 1)
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **underscore_type_decl.md:6:6:6:12:**
@@ -274,7 +274,7 @@ Pair2(_, y) = Pair(0, 1)
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **underscore_type_decl.md:6:13:6:14:**
@@ -285,7 +285,7 @@ Pair2(_, y) = Pair(0, 1)
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **underscore_type_decl.md:7:6:7:12:**
@@ -296,7 +296,7 @@ Pair3(_, _) = Pair(0, 1)
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **underscore_type_decl.md:7:13:7:14:**

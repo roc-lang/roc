@@ -6,16 +6,20 @@
 //! Reports combine a title, severity level, and formatted document content.
 
 const std = @import("std");
+const base = @import("../base.zig");
+const config = @import("config.zig");
+const document = @import("document.zig");
+const renderer = @import("renderer.zig");
+
 const Allocator = std.mem.Allocator;
 const Severity = @import("severity.zig").Severity;
-const Document = @import("document.zig").Document;
-const Annotation = @import("document.zig").Annotation;
-const renderer = @import("renderer.zig");
+const Document = document.Document;
+const Annotation = document.Annotation;
 const RenderTarget = renderer.RenderTarget;
-const ReportingConfig = @import("config.zig").ReportingConfig;
-const base = @import("../base.zig");
+const ReportingConfig = config.ReportingConfig;
 const RegionInfo = base.RegionInfo;
-const collections = @import("../collections.zig");
+
+const validateUtf8 = config.validateUtf8;
 
 /// Default maximum message size in bytes for truncation
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 4096;
@@ -90,8 +94,8 @@ pub const Report = struct {
     }
 
     /// Add source context using RegionInfo for better accuracy and simplicity.
-    pub fn addSourceContext(self: *Report, region: RegionInfo, filename: ?[]const u8) !void {
-        @import("config.zig").validateUtf8(region.line_text) catch |err| switch (err) {
+    pub fn addSourceContext(self: *Report, region: RegionInfo, filename: ?[]const u8, source: []const u8, line_starts: []const u32) !void {
+        validateUtf8(region.calculateLineText(source, line_starts)) catch |err| switch (err) {
             error.InvalidUtf8 => {
                 try self.document.addError("[Invalid UTF-8 in source context]");
                 try self.document.addLineBreak();
@@ -105,6 +109,8 @@ pub const Report = struct {
             region,
             .error_highlight,
             filename,
+            source,
+            line_starts,
         );
     }
 

@@ -137,7 +137,7 @@ transform : _a -> _b -> _b
 **UNUSED VARIABLE**
 Variable `list` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _list to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
 The unused variable is declared here:
 **underscore_in_regular_annotations.md:11:12:11:16:**
 ```roc
@@ -147,7 +147,7 @@ process = |list| "processed"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **underscore_in_regular_annotations.md:26:15:26:16:**
@@ -158,7 +158,7 @@ map : (a -> b), List(a) -> List(b)
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **underscore_in_regular_annotations.md:27:5:27:6:**
@@ -169,7 +169,7 @@ map = |_, _| []
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **underscore_in_regular_annotations.md:27:7:27:16:**
@@ -180,7 +180,7 @@ map = |_, _| []
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **underscore_in_regular_annotations.md:30:22:30:24:**
@@ -191,7 +191,7 @@ transform : _a -> _b -> _b
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **underscore_in_regular_annotations.md:30:25:30:27:**

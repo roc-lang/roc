@@ -16,7 +16,7 @@ UNUSED VARIABLE - pattern_as_basic.md:2:6:2:7
 **UNUSED VARIABLE**
 Variable `y` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _y to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
 The unused variable is declared here:
 **pattern_as_basic.md:2:9:2:10:**
 ```roc
@@ -28,7 +28,7 @@ The unused variable is declared here:
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _x to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
 The unused variable is declared here:
 **pattern_as_basic.md:2:6:2:7:**
 ```roc

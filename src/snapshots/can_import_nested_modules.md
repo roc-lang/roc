@@ -152,7 +152,7 @@ import utils.String.Format exposing [padLeft]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **can_import_nested_modules.md:3:19:3:26:**
@@ -163,7 +163,7 @@ import json.Parser.Config
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **can_import_nested_modules.md:4:19:4:24:**
@@ -174,7 +174,7 @@ import http.Client.Auth as HttpAuth
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **can_import_nested_modules.md:4:25:4:27:**
@@ -185,7 +185,7 @@ import http.Client.Auth as HttpAuth
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **can_import_nested_modules.md:5:8:5:13:**
@@ -196,7 +196,7 @@ import utils.String.Format exposing [padLeft]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **can_import_nested_modules.md:5:13:5:20:**
@@ -207,7 +207,7 @@ import utils.String.Format exposing [padLeft]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **can_import_nested_modules.md:5:20:5:27:**
@@ -218,7 +218,7 @@ import utils.String.Format exposing [padLeft]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **can_import_nested_modules.md:5:28:5:36:**
@@ -229,7 +229,7 @@ import utils.String.Format exposing [padLeft]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **can_import_nested_modules.md:5:37:5:46:**

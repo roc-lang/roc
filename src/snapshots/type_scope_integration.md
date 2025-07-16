@@ -24,7 +24,7 @@ TYPE REDECLARED - type_scope_integration.md:7:1:7:10
 UNDECLARED TYPE - type_scope_integration.md:10:7:10:25
 # PROBLEMS
 **TYPE REDECLARED**
-The type `Foo` is being redeclared.
+The type _Foo_ is being redeclared.
 
 The redeclaration is here:
 **type_scope_integration.md:7:1:7:10:**
@@ -33,7 +33,7 @@ Foo : Str
 ```
 ^^^^^^^^^
 
-But `Foo` was already declared here:
+But _Foo_ was already declared here:
 **type_scope_integration.md:4:1:4:10:**
 ```roc
 Foo : U64
@@ -42,7 +42,7 @@ Foo : U64
 
 
 **UNDECLARED TYPE**
-The type `SomeUndeclaredType` is not declared in this scope.
+The type _SomeUndeclaredType_ is not declared in this scope.
 
 This type is referenced here:
 **type_scope_integration.md:10:7:10:25:**

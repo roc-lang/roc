@@ -38,7 +38,7 @@ import Color.*
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **nominal_import_wildcard.md:3:13:3:15:**
@@ -49,7 +49,7 @@ import Color.*
 
 
 **UNDECLARED TYPE**
-The type `Color` is not declared in this scope.
+The type _Color_ is not declared in this scope.
 
 This type is referenced here:
 **nominal_import_wildcard.md:5:7:5:12:**
@@ -60,7 +60,7 @@ red : Color
 
 
 **UNDECLARED TYPE**
-The type `Color` is not declared in this scope.
+The type _Color_ is not declared in this scope.
 
 This type is referenced here:
 **nominal_import_wildcard.md:8:8:8:13:**
@@ -71,7 +71,7 @@ blue : Color
 
 
 **UNDECLARED TYPE**
-The type `Color` is not declared in this scope.
+The type _Color_ is not declared in this scope.
 
 This type is referenced here:
 **nominal_import_wildcard.md:11:9:11:14:**

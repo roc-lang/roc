@@ -23,7 +23,7 @@ Underscores are not allowed in type alias declarations.
 
 **usage_test.md:1:1:1:1:**
 ```roc
-
+module []
 ```
 
 
@@ -34,7 +34,7 @@ Underscores are not allowed in type alias declarations.
 
 **usage_test.md:1:1:1:1:**
 ```roc
-
+module []
 ```
 
 

@@ -48,7 +48,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_error_type.md:1:1:1:1:**
 ```roc
-
+module []
 ```
 
 
@@ -70,7 +70,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_error_type.md:1:1:1:1:**
 ```roc
-
+module []
 ```
 
 
@@ -81,7 +81,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_error_type.md:1:1:1:1:**
 ```roc
-
+module []
 ```
 
 
@@ -92,7 +92,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_error_type.md:1:1:1:1:**
 ```roc
-
+module []
 ```
 
 

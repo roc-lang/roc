@@ -51,7 +51,7 @@ TYPE REDECLARED - type_comprehensive_scope.md:24:1:24:13
 UNDECLARED TYPE - type_comprehensive_scope.md:27:11:27:29
 # PROBLEMS
 **TYPE REDECLARED**
-The type `Result` is being redeclared.
+The type _Result_ is being redeclared.
 
 The redeclaration is here:
 **type_comprehensive_scope.md:12:1:12:37:**
@@ -60,7 +60,7 @@ Result(ok, err) : [Ok(ok), Err(err)]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-But `Result` was already declared here:
+But _Result_ was already declared here:
 **type_comprehensive_scope.md:1:1:1:1:**
 ```roc
 module [MyU64, Person, Result, Tree, Node]
@@ -69,7 +69,7 @@ module [MyU64, Person, Result, Tree, Node]
 
 
 **UNDECLARED TYPE**
-The type `Node` is not declared in this scope.
+The type _Node_ is not declared in this scope.
 
 This type is referenced here:
 **type_comprehensive_scope.md:15:19:15:23:**
@@ -80,7 +80,7 @@ Tree(a) : [Branch(Node(a)), Leaf(a)]
 
 
 **TYPE REDECLARED**
-The type `Person` is being redeclared.
+The type _Person_ is being redeclared.
 
 The redeclaration is here:
 **type_comprehensive_scope.md:24:1:24:13:**
@@ -89,7 +89,7 @@ Person : U64
 ```
 ^^^^^^^^^^^^
 
-But `Person` was already declared here:
+But _Person_ was already declared here:
 **type_comprehensive_scope.md:9:1:9:33:**
 ```roc
 Person : { name: Str, age: U64 }
@@ -98,7 +98,7 @@ Person : { name: Str, age: U64 }
 
 
 **UNDECLARED TYPE**
-The type `SomeUndeclaredType` is not declared in this scope.
+The type _SomeUndeclaredType_ is not declared in this scope.
 
 This type is referenced here:
 **type_comprehensive_scope.md:27:11:27:29:**

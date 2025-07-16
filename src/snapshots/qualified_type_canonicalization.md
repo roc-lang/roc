@@ -128,7 +128,7 @@ import ModuleA.ModuleB exposing [TypeC]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:10:15:10:23:**
@@ -139,7 +139,7 @@ import ModuleA.ModuleB exposing [TypeC]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:10:24:10:32:**
@@ -150,7 +150,7 @@ import ModuleA.ModuleB exposing [TypeC]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **qualified_type_canonicalization.md:10:33:10:40:**
@@ -207,7 +207,7 @@ getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 **UNUSED VARIABLE**
 Variable `color` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _color to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_color` to suppress this warning.
 The unused variable is declared here:
 **qualified_type_canonicalization.md:35:17:35:22:**
 ```roc
@@ -241,7 +241,7 @@ Is there an `import` or `exposing` missing up-top?
 **UNUSED VARIABLE**
 Variable `err` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _err to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_err` to suppress this warning.
 The unused variable is declared here:
 **qualified_type_canonicalization.md:43:20:43:23:**
 ```roc

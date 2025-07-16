@@ -99,7 +99,7 @@ data = json.Core.Utf8.encode("hello")
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:3:17:3:22:**
@@ -110,7 +110,7 @@ import json.Core.Utf8 exposing [Encoder]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:3:23:3:31:**
@@ -121,7 +121,7 @@ import json.Core.Utf8 exposing [Encoder]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:3:32:3:41:**
@@ -132,7 +132,7 @@ import json.Core.Utf8 exposing [Encoder]
 
 
 **UNDECLARED TYPE**
-The type `Encoder` is not declared in this scope.
+The type _Encoder_ is not declared in this scope.
 
 This type is referenced here:
 **multi_qualified_import.md:5:16:5:23:**
@@ -156,7 +156,7 @@ json_encoder = Json.Core.Utf8.defaultEncoder
 **UNUSED VARIABLE**
 Variable `encoder` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _encoder to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_encoder` to suppress this warning.
 The unused variable is declared here:
 **multi_qualified_import.md:10:12:10:19:**
 ```roc
@@ -177,7 +177,7 @@ data = json.Core.Utf8.encode("hello")
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:14:12:14:17:**
@@ -188,7 +188,7 @@ data = json.Core.Utf8.encode("hello")
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:14:17:14:22:**
@@ -199,7 +199,7 @@ data = json.Core.Utf8.encode("hello")
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:14:22:14:29:**
@@ -210,7 +210,7 @@ data = json.Core.Utf8.encode("hello")
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **multi_qualified_import.md:14:29:14:38:**

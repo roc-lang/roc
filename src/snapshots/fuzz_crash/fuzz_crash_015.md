@@ -64,7 +64,7 @@ Here is the problematic code:
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_015.md:1:4:1:6:**
@@ -75,7 +75,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_015.md:2:1:2:4:**
@@ -86,7 +86,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_015.md:3:1:3:6:**
@@ -97,7 +97,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_015.md:4:1:4:3:**

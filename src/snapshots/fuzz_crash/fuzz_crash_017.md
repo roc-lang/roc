@@ -14,7 +14,7 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_017.md:1:4:1:5
 PARSE ERROR - fuzz_crash_017.md:2:7:2:8
 INVALID STATEMENT - fuzz_crash_017.md:1:4:1:5
 INVALID STATEMENT - fuzz_crash_017.md:1:6:1:11
-UNKNOWN OPERATOR - :0:0:0:0
+UNKNOWN OPERATOR - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -57,7 +57,7 @@ foo = "hello ${namF
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_017.md:1:4:1:5:**
@@ -68,7 +68,7 @@ me = "luc"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_017.md:1:6:1:11:**
@@ -80,7 +80,14 @@ me = "luc"
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**fuzz_crash_017.md:2:7:2:20:**
+```roc
+foo = "hello ${namF
+```
+      ^^^^^^^^^^^^^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 # TOKENS
 ~~~zig

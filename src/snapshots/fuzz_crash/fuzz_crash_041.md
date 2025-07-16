@@ -11,7 +11,7 @@ app[]{f:platform""}|(0,)|||0
 INVALID STATEMENT - fuzz_crash_041.md:1:20:1:29
 # PROBLEMS
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_041.md:1:20:1:29:**

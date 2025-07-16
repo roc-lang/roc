@@ -56,7 +56,7 @@ curry : (_a, _b -> _c) -> (_a -> _b -> _c)
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **type_function_multi_arg.md:3:24:3:26:**
@@ -67,7 +67,7 @@ curry : (_a, _b -> _c) -> (_a -> _b -> _c)
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **type_function_multi_arg.md:3:27:3:43:**

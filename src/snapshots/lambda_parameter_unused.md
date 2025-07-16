@@ -41,7 +41,7 @@ TYPE MISMATCH - lambda_parameter_unused.md:24:5:24:42
 **UNUSED VARIABLE**
 Variable `unused` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _unused to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_unused` to suppress this warning.
 The unused variable is declared here:
 **lambda_parameter_unused.md:5:8:5:14:**
 ```roc
@@ -53,7 +53,7 @@ add = |unused| 42
 **UNDERSCORE VARIABLE USED**
 Variable `_factor` is prefixed with an underscore but is actually used.
 
-Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: factor.
+Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: `factor`.
 
 **lambda_parameter_unused.md:9:22:9:29:**
 ```roc

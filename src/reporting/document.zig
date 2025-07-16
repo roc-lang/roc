@@ -246,10 +246,19 @@ pub const Document = struct {
         // Free any allocated element arrays
         for (self.elements.items) |element| {
             switch (element) {
+                .text => |text| self.allocator.free(text),
+                .annotated => |annotated| self.allocator.free(annotated.content),
+                .raw => |raw| self.allocator.free(raw),
+                .reflowing_text => |text| self.allocator.free(text),
+                .link => |url| self.allocator.free(url),
                 .vertical_stack => |stack| self.allocator.free(stack),
                 .horizontal_concat => |concat| self.allocator.free(concat),
                 .source_code_multi_region => |multi| self.allocator.free(multi.regions),
-                .source_code_with_underlines => |underlines| self.allocator.free(underlines.underline_regions),
+                .source_code_region => |region| self.allocator.free(region.line_text),
+                .source_code_with_underlines => |underlines| {
+                    self.allocator.free(underlines.underline_regions);
+                    self.allocator.free(underlines.display_region.line_text);
+                },
                 else => {},
             }
         }
@@ -259,13 +268,15 @@ pub const Document = struct {
     /// Add plain text to the document.
     pub fn addText(self: *Document, text: []const u8) std.mem.Allocator.Error!void {
         if (text.len == 0) return;
-        try self.elements.append(.{ .text = text });
+        const owned_text = try self.allocator.dupe(u8, text);
+        try self.elements.append(.{ .text = owned_text });
     }
 
     /// Add annotated text to the document.
     pub fn addAnnotated(self: *Document, text: []const u8, annotation: Annotation) std.mem.Allocator.Error!void {
         if (text.len == 0) return;
-        try self.elements.append(.{ .annotated = .{ .content = text, .annotation = annotation } });
+        const owned_text = try self.allocator.dupe(u8, text);
+        try self.elements.append(.{ .annotated = .{ .content = owned_text, .annotation = annotation } });
     }
 
     /// Add a line break to the document.
@@ -303,13 +314,15 @@ pub const Document = struct {
     /// Add raw content that should not be processed.
     pub fn addRaw(self: *Document, content: []const u8) std.mem.Allocator.Error!void {
         if (content.len == 0) return;
-        try self.elements.append(.{ .raw = content });
+        const owned_content = try self.allocator.dupe(u8, content);
+        try self.elements.append(.{ .raw = owned_content });
     }
 
     /// Add reflowing text that can wrap automatically.
     pub fn addReflowingText(self: *Document, text: []const u8) std.mem.Allocator.Error!void {
         if (text.len == 0) return;
-        try self.elements.append(.{ .reflowing_text = text });
+        const owned_text = try self.allocator.dupe(u8, text);
+        try self.elements.append(.{ .reflowing_text = owned_text });
     }
 
     /// Add a source code display with multiple underlines.
@@ -448,7 +461,8 @@ pub const Document = struct {
     /// Add a link with proper formatting.
     pub fn addLink(self: *Document, url: []const u8) std.mem.Allocator.Error!void {
         if (url.len == 0) return;
-        try self.elements.append(.{ .link = url });
+        const owned_url = try self.allocator.dupe(u8, url);
+        try self.elements.append(.{ .link = owned_url });
     }
 
     /// Add a source code region with highlighting.
@@ -458,6 +472,8 @@ pub const Document = struct {
         region_info: RegionInfo,
         annotation: Annotation,
         filename: ?[]const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) std.mem.Allocator.Error!void {
         // Validate coordinates to catch programming errors early
         std.debug.assert(region_info.end_line_idx >= region_info.start_line_idx);
@@ -465,9 +481,13 @@ pub const Document = struct {
             std.debug.assert(region_info.end_col_idx >= region_info.start_col_idx);
         }
 
+        // Copy the line text to avoid memory safety issues
+        const line_text_slice = region_info.calculateLineText(source, line_starts);
+        const owned_line_text = try self.allocator.dupe(u8, line_text_slice);
+
         try self.elements.append(.{
             .source_code_region = .{
-                .line_text = region_info.line_text,
+                .line_text = owned_line_text,
                 .start_line = region_info.start_line_idx + 1,
                 .start_column = region_info.start_col_idx + 1,
                 .end_line = region_info.end_line_idx + 1,
@@ -648,8 +668,10 @@ pub const DocumentBuilder = struct {
         region_info: RegionInfo,
         annotation: Annotation,
         filename: ?[]const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addSourceRegion(region_info, annotation, filename);
+        try self.document.addSourceRegion(region_info, annotation, filename, source, line_starts);
         return self;
     }
 
@@ -667,3 +689,38 @@ pub const DocumentBuilder = struct {
         return self.document;
     }
 };
+
+test "Document string memory safety" {
+    const gpa = std.testing.allocator;
+    var document = Document.init(gpa);
+    defer document.deinit();
+
+    // Create temporary strings that would be freed in real usage
+    var temp_text = std.ArrayList(u8).init(gpa);
+    defer temp_text.deinit();
+    try temp_text.appendSlice("This is test text");
+
+    var temp_annotated = std.ArrayList(u8).init(gpa);
+    defer temp_annotated.deinit();
+    try temp_annotated.appendSlice("This is annotated");
+
+    // Add text and annotated content (should be copied)
+    try document.addText(temp_text.items);
+    try document.addAnnotated(temp_annotated.items, .emphasized);
+
+    // Clear the temporary strings to simulate memory being freed
+    temp_text.clearAndFree();
+    temp_annotated.clearAndFree();
+
+    // Verify we can still access the document content
+    try std.testing.expect(document.elements.items.len == 2);
+
+    const first_element = document.elements.items[0];
+    try std.testing.expect(first_element == .text);
+    try std.testing.expectEqualStrings("This is test text", first_element.text);
+
+    const second_element = document.elements.items[1];
+    try std.testing.expect(second_element == .annotated);
+    try std.testing.expectEqualStrings("This is annotated", second_element.annotated.content);
+    try std.testing.expect(second_element.annotated.annotation == .emphasized);
+}

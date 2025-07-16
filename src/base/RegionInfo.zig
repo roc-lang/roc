@@ -13,7 +13,6 @@ start_line_idx: u32,
 start_col_idx: u32,
 end_line_idx: u32,
 end_col_idx: u32,
-line_text: []const u8,
 
 const RegionInfo = @This();
 
@@ -95,15 +94,18 @@ pub fn position(source: []const u8, line_starts: []const u32, begin: u32, end: u
     const start_col_idx = try columnIdx(line_starts, start_line_idx, begin);
     const end_line_idx = lineIdx(line_starts, end);
     const end_col_idx = try columnIdx(line_starts, end_line_idx, end);
-    const line_text = getLineText(source, line_starts, start_line_idx, end_line_idx);
 
     return .{
         .start_line_idx = start_line_idx,
         .start_col_idx = start_col_idx,
         .end_line_idx = end_line_idx,
         .end_col_idx = end_col_idx,
-        .line_text = line_text,
     };
+}
+
+/// Calculate line text for this region on demand
+pub fn calculateLineText(self: RegionInfo, source: []const u8, line_starts: []const u32) []const u8 {
+    return getLineText(source, line_starts, self.start_line_idx, self.end_line_idx);
 }
 
 test "lineIdx" {
@@ -180,12 +182,12 @@ test "get" {
     try std.testing.expectEqual(2, info1.start_col_idx);
     try std.testing.expectEqual(0, info1.end_line_idx);
     try std.testing.expectEqual(4, info1.end_col_idx);
-    try std.testing.expectEqualStrings("line0", info1.line_text);
+    try std.testing.expectEqualStrings("line0", info1.calculateLineText(source, line_starts.items.items));
 
     const info2 = try position(source, line_starts.items.items, 8, 10);
     try std.testing.expectEqual(1, info2.start_line_idx);
     try std.testing.expectEqual(2, info2.start_col_idx);
     try std.testing.expectEqual(1, info2.end_line_idx);
     try std.testing.expectEqual(4, info2.end_col_idx);
-    try std.testing.expectEqualStrings("line1", info2.line_text);
+    try std.testing.expectEqualStrings("line1", info2.calculateLineText(source, line_starts.items.items));
 }

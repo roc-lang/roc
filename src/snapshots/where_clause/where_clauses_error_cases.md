@@ -24,9 +24,9 @@ broken_fn3 : a -> b
 # EXPECTED
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:11
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:8
-MALFORMED WHERE CLAUSE - :0:0:0:0
+MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:6:5:6:24
 INVALID STATEMENT - where_clauses_error_cases.md:6:25:6:26
-MALFORMED WHERE CLAUSE - :0:0:0:0
+MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:10:3:10:8
 UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:24:15:25
 UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:29:15:30
 EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:9:1:19
@@ -62,10 +62,17 @@ Here is the problematic code:
 
 **MALFORMED WHERE CLAUSE**
 This where clause could not be parsed correctly.
-Please check the syntax of your where clause constraint.
+
+**where_clauses_error_cases.md:6:5:6:24:**
+```roc
+    module(a).method -> b
+```
+    ^^^^^^^^^^^^^^^^^^^
+
+Check the syntax of your where clause.
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **where_clauses_error_cases.md:6:25:6:26:**
@@ -77,10 +84,17 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 **MALFORMED WHERE CLAUSE**
 This where clause could not be parsed correctly.
-Please check the syntax of your where clause constraint.
+
+**where_clauses_error_cases.md:10:3:10:8:**
+```roc
+  where
+```
+  ^^^^^
+
+Check the syntax of your where clause.
 
 **UNDECLARED TYPE VARIABLE**
-The type variable `c` is not declared in this scope.
+The type variable _c_ is not declared in this scope.
 
 Type variables must be introduced in a type annotation before they can be used.
 
@@ -93,7 +107,7 @@ This type variable is referenced here:
 
 
 **UNDECLARED TYPE VARIABLE**
-The type variable `d` is not declared in this scope.
+The type variable _d_ is not declared in this scope.
 
 Type variables must be introduced in a type annotation before they can be used.
 

@@ -10,7 +10,7 @@ Stdout.line???
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
 UNDEFINED VARIABLE - suffixed_question.md:1:1:1:12
-UNKNOWN OPERATOR - :0:0:0:0
+UNKNOWN OPERATOR - suffixed_question.md:1:1:1:15
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **?** is not expected in an expression.
@@ -37,7 +37,14 @@ Stdout.line???
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**suffixed_question.md:1:1:1:15:**
+```roc
+Stdout.line???
+```
+^^^^^^^^^^^^^^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 # TOKENS
 ~~~zig
