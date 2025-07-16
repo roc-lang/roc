@@ -22,6 +22,8 @@ export fn roc_dealloc(ptr: *anyopaque, alignment: u32) callconv(.C) void {
 // External symbol provided by the Roc runtime object file
 extern fn roc_entrypoint(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr;
 
+/// Platform host entrypoint -- this is where the roc application starts and does platform things
+/// before the platform calls into Roc to do application-specific things.
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
 
