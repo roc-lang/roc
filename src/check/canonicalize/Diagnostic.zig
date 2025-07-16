@@ -265,6 +265,8 @@ pub const Diagnostic = union(enum) {
         allocator: Allocator,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "MALFORMED WHERE CLAUSE", .runtime_error);
         try report.document.addReflowingText("This where clause could not be parsed correctly.");
@@ -276,6 +278,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -289,6 +293,8 @@ pub const Diagnostic = union(enum) {
         region_info: base.RegionInfo,
         literal_text: []const u8,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "INVALID NUMBER", .runtime_error);
 
@@ -304,6 +310,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -326,6 +334,8 @@ pub const Diagnostic = union(enum) {
         ident_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
@@ -340,6 +350,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -353,6 +365,8 @@ pub const Diagnostic = union(enum) {
         ident_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "EXPOSED BUT NOT DEFINED", .runtime_error);
         const owned_ident = try report.addOwnedString(ident_name);
@@ -367,6 +381,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addReflowingText("You can fix this by either defining ");
@@ -383,6 +399,8 @@ pub const Diagnostic = union(enum) {
         region_info: base.RegionInfo,
         original_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "REDUNDANT EXPOSED", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
@@ -397,6 +415,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         // we don't need to display the original region info
@@ -414,6 +434,8 @@ pub const Diagnostic = union(enum) {
         ident_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error);
         const owned_ident = try report.addOwnedString(ident_name);
@@ -433,6 +455,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
         return report;
     }
@@ -443,6 +467,8 @@ pub const Diagnostic = union(enum) {
         stmt_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "INVALID STATEMENT", .runtime_error);
         const owned_stmt = try report.addOwnedString(stmt_name);
@@ -453,10 +479,13 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
         return report;
     }
@@ -466,6 +495,8 @@ pub const Diagnostic = union(enum) {
         allocator: Allocator,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "UNKNOWN OPERATOR", .runtime_error);
         try report.document.addReflowingText("This looks like an operator, but it's not one I recognize!");
@@ -477,6 +508,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -643,6 +676,8 @@ pub const Diagnostic = union(enum) {
         allocator: Allocator,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "CRASH EXPECTS STRING", .runtime_error);
         try report.document.addReflowingText("The ");
@@ -656,15 +691,19 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             filename,
+            source,
+            line_starts,
         );
         return report;
     }
 
-    /// Build a report for "empty single quote" diagnostic
+    /// Build a report for "empty tuple" diagnostic
     pub fn buildEmptyTupleReport(
         allocator: Allocator,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "EMPTY TUPLE NOT ALLOWED", .runtime_error);
         try report.document.addReflowingText("I am part way through parsing this tuple, but it is empty:");
@@ -673,6 +712,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             filename,
+            source,
+            line_starts,
         );
         try report.document.addLineBreak();
         try report.document.addReflowingText("If you want to represent nothing, try using an empty record: ");
@@ -688,6 +729,8 @@ pub const Diagnostic = union(enum) {
         new_region_info: base.RegionInfo,
         original_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
@@ -700,10 +743,13 @@ pub const Diagnostic = union(enum) {
         // Show where the new declaration is
         try report.document.addReflowingText("The redeclaration is here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             new_region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -714,7 +760,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -727,6 +775,8 @@ pub const Diagnostic = union(enum) {
         original_region_info: base.RegionInfo,
         redeclared_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TYPE REDECLARED", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
@@ -739,10 +789,13 @@ pub const Diagnostic = union(enum) {
         // Show where the redeclaration is
         try report.document.addReflowingText("The redeclaration is here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             redeclared_region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -753,7 +806,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -772,6 +827,8 @@ pub const Diagnostic = union(enum) {
         type_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "UNDECLARED TYPE", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
@@ -783,10 +840,13 @@ pub const Diagnostic = union(enum) {
 
         try report.document.addReflowingText("This type is referenced here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -798,6 +858,8 @@ pub const Diagnostic = union(enum) {
         type_var_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "UNDECLARED TYPE VARIABLE", .runtime_error);
         const owned_type_var_name = try report.addOwnedString(type_var_name);
@@ -813,10 +875,13 @@ pub const Diagnostic = union(enum) {
 
         try report.document.addReflowingText("This type variable is referenced here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -829,6 +894,8 @@ pub const Diagnostic = union(enum) {
         original_region_info: base.RegionInfo,
         redeclared_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TYPE ALIAS REDECLARED", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
@@ -843,10 +910,13 @@ pub const Diagnostic = union(enum) {
         // Show where the redeclaration is
         try report.document.addReflowingText("The redeclaration is here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             redeclared_region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -857,7 +927,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -870,6 +942,8 @@ pub const Diagnostic = union(enum) {
         original_region_info: base.RegionInfo,
         redeclared_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "CUSTOM TYPE REDECLARED", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
@@ -884,10 +958,13 @@ pub const Diagnostic = union(enum) {
         // Show where the redeclaration is
         try report.document.addReflowingText("The redeclaration is here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             redeclared_region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -898,7 +975,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -912,6 +991,8 @@ pub const Diagnostic = union(enum) {
         original_region_info: base.RegionInfo,
         cross_scope: bool,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         const severity = if (cross_scope) reporting.Severity.warning else reporting.Severity.runtime_error;
         const title = if (cross_scope) "TYPE SHADOWED" else "TYPE DUPLICATE";
@@ -937,10 +1018,13 @@ pub const Diagnostic = union(enum) {
         // Show where the new declaration is
         try report.document.addText("The new declaration is here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             new_region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -954,7 +1038,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -968,6 +1054,8 @@ pub const Diagnostic = union(enum) {
         region_info: base.RegionInfo,
         original_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TYPE PARAMETER CONFLICT", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
@@ -986,10 +1074,13 @@ pub const Diagnostic = union(enum) {
         // Show where the conflict is
         try report.document.addText("The conflicting parameter is here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -1000,7 +1091,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1012,6 +1105,8 @@ pub const Diagnostic = union(enum) {
         region_info: base.RegionInfo,
         diagnostic: @TypeOf(@as(Diagnostic, undefined).unused_variable),
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         const ident_name = ident_store.getText(diagnostic.ident);
 
@@ -1046,6 +1141,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1057,6 +1154,8 @@ pub const Diagnostic = union(enum) {
         region_info: base.RegionInfo,
         diagnostic: @TypeOf(@as(Diagnostic, undefined).used_underscore_variable),
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         const ident_name = ident_store.getText(diagnostic.ident);
 
@@ -1085,6 +1184,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1096,6 +1197,8 @@ pub const Diagnostic = union(enum) {
         duplicate_region_info: base.RegionInfo,
         original_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "DUPLICATE RECORD FIELD", .runtime_error);
         const owned_field_name = try report.addOwnedString(field_name);
@@ -1109,10 +1212,13 @@ pub const Diagnostic = union(enum) {
         // Show where the duplicate field is
         try report.document.addReflowingText("This field is duplicated here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             duplicate_region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -1123,7 +1229,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -1174,6 +1282,8 @@ pub const Diagnostic = union(enum) {
         module_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
 
@@ -1184,10 +1294,13 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("Make sure this module is imported and available in your project.");
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1200,6 +1313,8 @@ pub const Diagnostic = union(enum) {
         value_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "VALUE NOT EXPOSED", .runtime_error);
 
@@ -1218,6 +1333,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1230,6 +1347,8 @@ pub const Diagnostic = union(enum) {
         type_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TYPE NOT EXPOSED", .runtime_error);
 
@@ -1248,6 +1367,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1259,6 +1380,8 @@ pub const Diagnostic = union(enum) {
         module_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "MODULE NOT IMPORTED", .runtime_error);
 
@@ -1277,6 +1400,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1288,6 +1413,8 @@ pub const Diagnostic = union(enum) {
         count: u32,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TOO MANY EXPORTS", .runtime_error);
 
@@ -1310,6 +1437,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1322,6 +1451,8 @@ pub const Diagnostic = union(enum) {
         suggested_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "UNUSED TYPE VARIABLE NAME", .warning);
         const owned_type_var_name = try report.addOwnedString(type_var_name);
@@ -1334,10 +1465,13 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -1355,6 +1489,8 @@ pub const Diagnostic = union(enum) {
         suggested_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TYPE VARIABLE MARKED UNUSED", .warning);
         const owned_type_var_name = try report.addOwnedString(type_var_name);
@@ -1366,10 +1502,13 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -1387,6 +1526,8 @@ pub const Diagnostic = union(enum) {
         suggested_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TYPE VARIABLE ENDING IN UNDERSCORE", .warning);
         const owned_type_var_name = try report.addOwnedString(type_var_name);
@@ -1398,10 +1539,13 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -1422,6 +1566,8 @@ pub const Diagnostic = union(enum) {
         is_alias: bool,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         const title = if (is_alias) "UNDERSCORE IN TYPE ALIAS" else "UNDERSCORE IN NOMINAL TYPE";
         var report = Report.init(allocator, title, .runtime_error);
@@ -1438,6 +1584,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();

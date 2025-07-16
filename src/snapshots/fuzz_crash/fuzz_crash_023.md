@@ -235,41 +235,6 @@ NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_023.md:72:4:72:13
 UNUSED VARIABLE - fuzz_crash_023.md:97:3:97:8
 UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - fuzz_crash_023.md:121:21:121:27
-UNUSED VARIABLE - fuzz_crash_023.md:127:4:128:9
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - fuzz_crash_023.md:82:2:82:3
-UNDEFINED VARIABLE - fuzz_crash_023.md:141:2:141:6
-UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
-UNDEFINED VARIABLE - fuzz_crash_023.md:147:9:147:13
-UNDEFINED VARIABLE - fuzz_crash_023.md:158:2:158:11
-NOT IMPLEMENTED - :0:0:0:0
-MALFORMED TYPE - :0:0:0:0
-UNDEFINED VARIABLE - fuzz_crash_023.md:179:42:179:48
-UNDEFINED VARIABLE - fuzz_crash_023.md:183:3:183:7
-UNDEFINED VARIABLE - fuzz_crash_023.md:185:4:185:10
-UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-UNDEFINED VARIABLE - fuzz_crash_023.md:193:4:193:13
-UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
-UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
-UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
-UNUSED VARIABLE - fuzz_crash_023.md:166:2:166:6
-UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
-UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
-UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
-UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
-TYPE MISMATCH - fuzz_crash_023.md:67:11:67:14
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
-TYPE MISMATCH - fuzz_crash_023.md:155:2:155:12
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_record_field_name`
@@ -486,7 +451,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 The unused variable is declared here:
 **fuzz_crash_023.md:1:1:1:1:**
 ```roc
-
+# This is a module comment!
 ```
 
 
@@ -503,7 +468,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 The unused variable is declared here:
 **fuzz_crash_023.md:1:1:1:1:**
 ```roc
-
+# This is a module comment!
 ```
 
 
@@ -520,7 +485,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 The unused variable is declared here:
 **fuzz_crash_023.md:1:1:1:1:**
 ```roc
-
+# This is a module comment!
 ```
 
 

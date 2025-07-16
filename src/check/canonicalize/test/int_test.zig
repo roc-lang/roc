@@ -430,13 +430,14 @@ test "invalid number literal - too large for u128" {
                     .start_col_idx = 0,
                     .end_line_idx = 0,
                     .end_col_idx = 0,
-                    .line_text = "",
                 };
                 var report = try CIR.Diagnostic.buildInvalidNumLiteralReport(
                     allocator,
                     mock_region_info,
                     source,
                     "test.roc",
+                    source,
+                    &[_]u32{0},
                 );
                 defer report.deinit();
 
@@ -496,13 +497,14 @@ test "invalid number literal - negative too large for i128" {
                     .start_col_idx = 0,
                     .end_line_idx = 0,
                     .end_col_idx = 0,
-                    .line_text = "",
                 };
                 var report = try CIR.Diagnostic.buildInvalidNumLiteralReport(
                     allocator,
                     mock_region_info,
                     source,
                     "test.roc",
+                    source,
+                    &[_]u32{0},
                 );
                 defer report.deinit();
 

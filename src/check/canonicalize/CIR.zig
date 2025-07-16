@@ -217,6 +217,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 ident_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .redundant_exposed => |data| blk: {
@@ -229,6 +231,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 region_info,
                 original_region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .invalid_num_literal => |data| blk: {
@@ -239,6 +243,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 region_info,
                 literal_text,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .ident_already_in_scope => |data| blk: {
@@ -249,6 +255,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 ident_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .ident_not_in_scope => |data| blk: {
@@ -259,6 +267,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 ident_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .invalid_top_level_statement => |data| blk: {
@@ -269,6 +279,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 stmt_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .f64_pattern_literal => |data| blk: {
@@ -283,11 +295,11 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .empty_single_quote => Diagnostic.buildEmptySingleQuoteReport(allocator),
         .crash_expects_string => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            break :blk Diagnostic.buildCrashExpectsStringReport(allocator, region_info, filename);
+            break :blk Diagnostic.buildCrashExpectsStringReport(allocator, region_info, filename, self.temp_source_for_sexpr.?, self.env.line_starts.items.items);
         },
         .empty_tuple => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            break :blk Diagnostic.buildEmptyTupleReport(allocator, region_info, filename);
+            break :blk Diagnostic.buildEmptyTupleReport(allocator, region_info, filename, self.temp_source_for_sexpr.?, self.env.line_starts.items.items);
         },
         .expr_not_canonicalized => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
@@ -295,6 +307,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 allocator,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .invalid_string_interpolation => Diagnostic.buildInvalidStringInterpolationReport(allocator),
@@ -313,6 +327,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 allocator,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .shadowing_warning => |data| blk: {
@@ -325,6 +341,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 new_region_info,
                 original_region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .type_redeclared => |data| blk: {
@@ -337,6 +355,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 original_region_info,
                 redeclared_region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .tuple_elem_not_canonicalized => Diagnostic.buildTupleElemNotCanonicalizedReport(allocator),
@@ -348,6 +368,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 module_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .value_not_exposed => |data| blk: {
@@ -360,6 +382,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 value_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .type_not_exposed => |data| blk: {
@@ -372,6 +396,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 type_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .module_not_imported => |data| blk: {
@@ -382,6 +408,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 module_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .too_many_exports => |data| blk: {
@@ -391,6 +419,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 data.count,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .undeclared_type => |data| blk: {
@@ -401,6 +431,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 type_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .undeclared_type_var => |data| blk: {
@@ -411,6 +443,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 type_var_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .type_alias_redeclared => |data| blk: {
@@ -423,6 +457,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 original_region_info,
                 redeclared_region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .nominal_type_redeclared => |data| blk: {
@@ -435,6 +471,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 original_region_info,
                 redeclared_region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .type_shadowed_warning => |data| blk: {
@@ -448,6 +486,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 original_region_info,
                 data.cross_scope,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .type_parameter_conflict => |data| blk: {
@@ -462,16 +502,20 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 region_info,
                 original_region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .unused_variable => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            break :blk try Diagnostic.buildUnusedVariableReport(
+            break :blk Diagnostic.buildUnusedVariableReport(
                 allocator,
                 &self.env.idents,
                 region_info,
                 data,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .used_underscore_variable => |data| blk: {
@@ -482,6 +526,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 region_info,
                 data,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .duplicate_record_field => |data| blk: {
@@ -494,6 +540,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 duplicate_region_info,
                 original_region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .unused_type_var_name => |data| blk: {
@@ -506,6 +554,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 suggested_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .type_var_marked_unused => |data| blk: {
@@ -518,6 +568,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 suggested_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .type_var_ending_in_underscore => |data| blk: {
@@ -530,6 +582,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 suggested_name,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
         .underscore_in_type_declaration => |data| blk: {
@@ -539,6 +593,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 data.is_alias,
                 region_info,
                 filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
             );
         },
     };
@@ -1696,7 +1752,6 @@ pub fn calcRegionInfo(self: *const CIR, region: Region) base.RegionInfo {
         .start_col_idx = 0,
         .end_line_idx = 0,
         .end_col_idx = 0,
-        .line_text = "",
     };
 
     // In the Can IR, regions store byte offsets directly, not token indices.

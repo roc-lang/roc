@@ -38,7 +38,7 @@ If you don't need this variable, prefix it with an underscore like `_tail` to su
 The unused variable is declared here:
 **list_destructure_variations.md:1:1:1:1:**
 ```roc
-
+match list {
 ```
 
 
@@ -50,7 +50,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 The unused variable is declared here:
 **list_destructure_variations.md:1:1:1:1:**
 ```roc
-
+match list {
 ```
 
 
@@ -62,7 +62,7 @@ If you don't need this variable, prefix it with an underscore like `_more` to su
 The unused variable is declared here:
 **list_destructure_variations.md:1:1:1:1:**
 ```roc
-
+match list {
 ```
 
 

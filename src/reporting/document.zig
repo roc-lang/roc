@@ -458,6 +458,8 @@ pub const Document = struct {
         region_info: RegionInfo,
         annotation: Annotation,
         filename: ?[]const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) std.mem.Allocator.Error!void {
         // Validate coordinates to catch programming errors early
         std.debug.assert(region_info.end_line_idx >= region_info.start_line_idx);
@@ -467,7 +469,7 @@ pub const Document = struct {
 
         try self.elements.append(.{
             .source_code_region = .{
-                .line_text = region_info.line_text,
+                .line_text = region_info.calculateLineText(source, line_starts),
                 .start_line = region_info.start_line_idx + 1,
                 .start_column = region_info.start_col_idx + 1,
                 .end_line = region_info.end_line_idx + 1,
@@ -648,8 +650,10 @@ pub const DocumentBuilder = struct {
         region_info: RegionInfo,
         annotation: Annotation,
         filename: ?[]const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) std.mem.Allocator.Error!*DocumentBuilder {
-        try self.document.addSourceRegion(region_info, annotation, filename);
+        try self.document.addSourceRegion(region_info, annotation, filename, source, line_starts);
         return self;
     }
 

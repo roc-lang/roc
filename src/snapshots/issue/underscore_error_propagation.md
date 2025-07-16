@@ -30,7 +30,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_error_propagation.md:1:1:1:1:**
 ```roc
-
+module []
 ```
 
 

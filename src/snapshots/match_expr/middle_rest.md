@@ -34,7 +34,7 @@ If you don't need this variable, prefix it with an underscore like `_middle` to 
 The unused variable is declared here:
 **middle_rest.md:1:1:1:1:**
 ```roc
-
+match items {
 ```
 
 

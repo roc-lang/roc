@@ -194,39 +194,6 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
 UNUSED VARIABLE - fuzz_crash_027.md:64:11:64:14
 UNDEFINED VARIABLE - fuzz_crash_027.md:71:7:71:11
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
-UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - fuzz_crash_027.md:82:21:82:27
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
-UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
-UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
-UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
-UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
-NOT IMPLEMENTED - :0:0:0:0
-UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
-UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
-UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
-UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
-UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
-NOT IMPLEMENTED - :0:0:0:0
-UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
-UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
-UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
-UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
-UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
-UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
-UNUSED VARIABLE - fuzz_crash_027.md:151:1:151:6
-UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
-UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
-UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
-TYPE MISMATCH - fuzz_crash_027.md:47:11:47:14
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
-TYPE MISMATCH - fuzz_crash_027.md:111:2:111:12
 # PROBLEMS
 **OVER CLOSED BRACE**
 There are too many closing braces here.
@@ -492,7 +459,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 The unused variable is declared here:
 **fuzz_crash_027.md:1:1:1:1:**
 ```roc
-
+# Thnt!
 ```
 
 
@@ -509,7 +476,7 @@ If you don't need this variable, prefix it with an underscore like `_rest` to su
 The unused variable is declared here:
 **fuzz_crash_027.md:1:1:1:1:**
 ```roc
-
+# Thnt!
 ```
 
 
