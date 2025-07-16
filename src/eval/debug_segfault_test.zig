@@ -1,3 +1,4 @@
+//! Tests for debugging segmentation faults in expression evaluation
 const std = @import("std");
 const testing = std.testing;
 const base = @import("../base.zig");
@@ -49,17 +50,8 @@ test "minimal segfault reproduction - integer literal" {
     defer layout_cache.deinit();
 
     // Check the type before eval
-    const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx)));
-    const resolved = module_env.types.resolveVar(expr_var);
-    std.debug.print("\n=== Before eval ===\n", .{});
-    std.debug.print("expr_idx: {}, var_content: {}\n", .{ @intFromEnum(canonical_expr_idx), resolved.desc.content });
-
     // Try to evaluate
     const result = try eval.eval(allocator, &cir, canonical_expr_idx, &eval_stack, &layout_cache, &module_env.types);
-
-    std.debug.print("=== After eval ===\n", .{});
-    std.debug.print("result.layout: {}\n", .{result.layout});
-    std.debug.print("result.ptr: {*}\n", .{result.ptr});
 
     // Try to read the value
     const value: i128 = switch (result.layout.data.scalar.data.int) {
@@ -67,7 +59,6 @@ test "minimal segfault reproduction - integer literal" {
         else => unreachable,
     };
 
-    std.debug.print("value: {}\n", .{value});
     try testing.expectEqual(@as(i128, 42), value);
 }
 
@@ -127,34 +118,19 @@ test "minimal segfault reproduction - if expression" {
     defer layout_cache.deinit();
 
     // Check the type before eval
-    const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx)));
-    const resolved = module_env.types.resolveVar(expr_var);
-    std.debug.print("\n=== Before eval if ===\n", .{});
-    std.debug.print("expr_idx: {}, var_content: {}\n", .{ @intFromEnum(canonical_expr_idx), resolved.desc.content });
-
     // Check if expression structure
     const expr = cir.store.getExpr(canonical_expr_idx);
     if (expr == .e_if) {
-        std.debug.print("If expression branches: {}\n", .{expr.e_if});
-
         // Check each branch
         const branches_span = expr.e_if.branches;
-        const branches = cir.store.sliceIfBranches(branches_span);
-        for (branches, 0..) |branch_idx, i| {
-            std.debug.print("Branch {}: idx={}\n", .{ i, branch_idx });
-        }
+        _ = cir.store.sliceIfBranches(branches_span);
     }
 
     // Try to evaluate
     const result = try eval.eval(allocator, &cir, canonical_expr_idx, &eval_stack, &layout_cache, &module_env.types);
 
-    std.debug.print("=== After eval if ===\n", .{});
-    std.debug.print("result.layout: {}\n", .{result.layout});
-    std.debug.print("result.ptr: {*}\n", .{result.ptr});
-
     // Read the result
     const value = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
-    std.debug.print("Result value: {}\n", .{value});
     try testing.expectEqual(@as(i128, 1), value);
 }
 
@@ -214,17 +190,10 @@ test "if expression with True literal" {
     defer layout_cache.deinit();
 
     // Try to evaluate
-    std.debug.print("\n=== Evaluating if True 42 else 5 ===\n", .{});
-    std.debug.print("Canonical expr idx: {}\n", .{@intFromEnum(canonical_expr_idx)});
-
     const result = try eval.eval(allocator, &cir, canonical_expr_idx, &eval_stack, &layout_cache, &module_env.types);
-
-    std.debug.print("Result layout: {}\n", .{result.layout});
-    std.debug.print("Result ptr: {*}\n", .{result.ptr});
 
     // Read the result
     const value = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
-    std.debug.print("Final value: {} (expected: 42)\n", .{value});
     try testing.expectEqual(@as(i128, 42), value);
 }
 
@@ -235,20 +204,14 @@ test "debug stack allocation" {
     var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
     defer eval_stack.deinit();
 
-    std.debug.print("\n=== Stack test ===\n", .{});
-    std.debug.print("Stack initial state: start={*}, capacity={}\n", .{ eval_stack.start, eval_stack.capacity });
-
     // Try allocating some memory
     const ptr1 = try eval_stack.alloca(16, .@"8");
-    std.debug.print("Allocated 16 bytes: {*}\n", .{ptr1});
 
-    const ptr2 = try eval_stack.alloca(32, .@"16");
-    std.debug.print("Allocated 32 bytes: {*}\n", .{ptr2});
+    _ = try eval_stack.alloca(32, .@"16");
 
     // Write and read back
     const test_ptr = @as(*i128, @ptrCast(@alignCast(ptr1)));
     test_ptr.* = 42;
     const read_value = test_ptr.*;
-    std.debug.print("Write/read test: wrote 42, read {}\n", .{read_value});
     try testing.expectEqual(@as(i128, 42), read_value);
 }

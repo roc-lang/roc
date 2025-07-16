@@ -1,3 +1,4 @@
+//! Tests for evaluating nested if expressions using the iterative stack-based evaluator
 const std = @import("std");
 const testing = std.testing;
 const eval = @import("eval.zig");
@@ -13,9 +14,6 @@ const check_types = @import("../check/check_types.zig");
 test "eval nested if expression - iterative" {
     const allocator = testing.allocator;
     const source = "if 5 > 3 (if 1 > 2 3 else 4) else 5";
-
-    std.debug.print("\n=== Testing nested if expression ===\n", .{});
-    std.debug.print("Source: {s}\n", .{source});
 
     // Initialize ModuleEnv
     const owned_source = try allocator.dupe(u8, source);
@@ -56,9 +54,7 @@ test "eval nested if expression - iterative" {
     defer layout_cache.deinit();
 
     // Evaluate the expression
-    std.debug.print("About to evaluate expression idx: {}\n", .{@intFromEnum(canonical_expr_idx)});
     const result = try eval.eval(allocator, &cir, canonical_expr_idx, &eval_stack, &layout_cache, &module_env.types);
-    std.debug.print("Evaluation completed successfully\n", .{});
 
     // The result should be 4
     // Outer if: 5 > 3 is true, so evaluate then branch
@@ -87,9 +83,6 @@ test "eval 3-level deep nested if expression - iterative" {
     const allocator = testing.allocator;
     const source = "if 10 > 5 (if 4 < 8 (if 2 == 2 100 else 200) else 300) else 400";
 
-    std.debug.print("\n=== Testing 3-level deep nested if expression ===\n", .{});
-    std.debug.print("Source: {s}\n", .{source});
-
     // Initialize ModuleEnv
     const owned_source = try allocator.dupe(u8, source);
     var module_env = try base.ModuleEnv.init(allocator, owned_source);
@@ -129,9 +122,7 @@ test "eval 3-level deep nested if expression - iterative" {
     defer layout_cache.deinit();
 
     // Evaluate the expression
-    std.debug.print("About to evaluate expression idx: {}\n", .{@intFromEnum(canonical_expr_idx)});
     const result = try eval.eval(allocator, &cir, canonical_expr_idx, &eval_stack, &layout_cache, &module_env.types);
-    std.debug.print("Evaluation completed successfully\n", .{});
 
     // The result should be 100
     // Outer if: 10 > 5 is true, so evaluate then branch
@@ -154,7 +145,6 @@ test "eval 3-level deep nested if expression - iterative" {
         .i128 => @as(i64, @intCast(@as(*i128, @ptrCast(@alignCast(result.ptr))).*)),
     };
 
-    std.debug.print("Result value: {}\n", .{int_val});
     try testing.expectEqual(@as(i64, 100), int_val);
 }
 
@@ -194,9 +184,6 @@ test "eval complex nested if with different paths" {
     };
 
     for (test_cases) |test_case| {
-        std.debug.print("\n=== Testing: {s} ===\n", .{test_case.description});
-        std.debug.print("Source: {s}\n", .{test_case.source});
-
         // Initialize ModuleEnv
         const owned_source = try allocator.dupe(u8, test_case.source);
         var module_env = try base.ModuleEnv.init(allocator, owned_source);
@@ -256,14 +243,12 @@ test "eval complex nested if with different paths" {
             .i128 => @as(i64, @intCast(@as(*i128, @ptrCast(@alignCast(result.ptr))).*)),
         };
 
-        std.debug.print("Result: {} (expected: {})\n", .{ int_val, test_case.expected });
         try testing.expectEqual(test_case.expected, int_val);
     }
 }
 
 test "eval comparison operations" {
     const allocator = testing.allocator;
-    std.debug.print("\n=== Testing comparison operations ===\n", .{});
 
     const test_cases = [_]struct {
         source: []const u8,
@@ -278,8 +263,6 @@ test "eval comparison operations" {
     };
 
     for (test_cases) |test_case| {
-        std.debug.print("\nTesting: {s}\n", .{test_case.source});
-
         // Initialize ModuleEnv
         const owned_source = try allocator.dupe(u8, test_case.source);
         var module_env = try base.ModuleEnv.init(allocator, owned_source);

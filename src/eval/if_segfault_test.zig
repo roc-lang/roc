@@ -1,3 +1,4 @@
+//! Tests for if expression evaluation to ensure no segmentation faults occur
 const std = @import("std");
 const testing = std.testing;
 const base = @import("../base.zig");
@@ -34,7 +35,6 @@ test "minimal if expression segfault" {
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-        std.debug.print("Failed to canonicalize expression\n", .{});
         return error.CanonicalizeError;
     };
 
@@ -43,22 +43,9 @@ test "minimal if expression segfault" {
     defer checker.deinit();
     _ = try checker.checkExpr(canonical_expr_idx);
 
-    // WORKAROUND: Set the type of the if expression manually since type checker doesn't set it
+    // Verify the if expression has a proper type after type checking
     const if_expr_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx)));
-    const if_expr = cir.store.getExpr(canonical_expr_idx);
-    if (if_expr == .e_if) {
-        // For if expressions, use the type of the then branch
-        const branches = cir.store.sliceIfBranches(if_expr.e_if.branches);
-        if (branches.len > 0) {
-            const branch_node_idx = CIR.nodeIdxFrom(branches[0]);
-            const first_branch = cir.store.nodes.get(branch_node_idx);
-            const then_body_idx = cir.store.extra_data.items[first_branch.data_1 + 1];
-            const then_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(then_body_idx));
-            const then_var = @as(types.Var, @enumFromInt(@intFromEnum(then_expr_idx)));
-            const then_resolved = module_env.types.resolveVar(then_var);
-            try module_env.types.setVarContent(if_expr_var, then_resolved.desc.content);
-        }
-    }
+    _ = module_env.types.resolveVar(if_expr_var);
 
     // Create stack
     var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
@@ -69,14 +56,10 @@ test "minimal if expression segfault" {
     defer layout_cache.deinit();
 
     // Try to evaluate
-    std.debug.print("\n=== Before eval if ===\n", .{});
     const result = try eval.eval(allocator, &cir, canonical_expr_idx, &eval_stack, &layout_cache, &module_env.types);
-    std.debug.print("=== After eval if ===\n", .{});
-    std.debug.print("result.ptr: {*}\n", .{result.ptr});
 
     // Read the result
     const value = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
-    std.debug.print("Result value: {}\n", .{value});
     try testing.expectEqual(@as(i128, 1), value);
 }
 

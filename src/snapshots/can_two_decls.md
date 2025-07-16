@@ -66,8 +66,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @3.1-3.2 (type "Num(_size)"))
-		(patt @4.1-4.2 (type "_c")))
+		(patt @4.1-4.2 (type "Num(_size)")))
 	(expressions
 		(expr @3.5-3.6 (type "Num(_size)"))
-		(expr @4.5-4.10 (type "_c"))))
+		(expr @4.5-4.10 (type "Num(_size)"))))
 ~~~

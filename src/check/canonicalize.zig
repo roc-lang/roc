@@ -2598,7 +2598,6 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
             // Get the type variable for the nominal type declaration (e.g., Bool type)
             const nominal_type_var = CIR.castIdx(CIR.Statement.Idx, TypeVar, nominal_type_decl);
             const resolved = self.can_ir.env.types.resolveVar(nominal_type_var);
-            // Create a nominal expression
             const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
                 .e_nominal = .{
                     .nominal_type_decl = nominal_type_decl,

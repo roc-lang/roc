@@ -1,3 +1,4 @@
+//! Tests for the expression evaluator
 const std = @import("std");
 const testing = std.testing;
 const eval = @import("eval.zig");
@@ -13,7 +14,7 @@ const layout_store = @import("../layout/store.zig");
 
 const test_allocator = testing.allocator;
 
-fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
+fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
     module_env: *base.ModuleEnv,
     parse_ast: *parse.AST,
     cir: *CIR,
@@ -117,129 +118,74 @@ fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype) vo
     allocator.destroy(resources.module_env);
 }
 
-// Commented out string tests as requested (no heap allocation yet)
-// test "eval string segment - already primitive" {
-//     const source = "\"Hello, World!\"";
-//
-//     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-//     defer cleanupParseAndCanonical(test_allocator, resources);
-//     ...
-// }
+test "eval runtime error - returns crash error" {
+    const source = "crash \"test feature\"";
 
-// test "eval string literal - already primitive" {
-//     const source = "\"Hello\"";
-//
-//     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-//     defer cleanupParseAndCanonical(test_allocator, resources);
-//     ...
-// }
+    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
+    defer cleanupParseAndCanonical(test_allocator, resources);
 
-// test "eval runtime error - returns crash error" {
-//     const source = "crash \"test feature\"";
-//
-//     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-//     defer cleanupParseAndCanonical(test_allocator, resources);
-//
-//     // Create a stack for evaluation
-//     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-//     defer eval_stack.deinit();
-//
-//     // Create layout store
-//     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-//     defer layout_cache.deinit();
-//
-//     // Evaluating a runtime error should return an error
-//     const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
-//     try testing.expectError(eval.EvalError.Crash, result);
-// }
+    // Check if the expression is a runtime error
+    const expr = resources.cir.store.getExpr(resources.expr_idx);
+    if (expr == .e_runtime_error) {
+        // Create a stack for evaluation
+        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+        defer eval_stack.deinit();
+
+        // Create layout store
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+        defer layout_cache.deinit();
+
+        // Evaluating a runtime error should return an error
+        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
+        try testing.expectError(eval.EvalError.Crash, result);
+    } else {
+        // If crash syntax is not supported in canonicalization, skip
+        return error.SkipZigTest;
+    }
+}
 
 test "eval tag - already primitive" {
     // Skip this test for now as tag_union layout is not yet implemented
     return error.SkipZigTest;
 }
 
-// test "eval binop - basic implementation" {
-//     const source = "5 + 3";
-//
-//     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-//     defer cleanupParseAndCanonical(test_allocator, resources);
-//
-//     // Create a stack for evaluation
-//     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-//     defer eval_stack.deinit();
-//
-//     // Create layout store
-//     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-//     defer layout_cache.deinit();
-//
-//     // Debug: Check the type of the expression before eval
-//     const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(resources.expr_idx)));
-//     const resolved = resources.module_env.types.resolveVar(expr_var);
-//     std.debug.print("\n=== DEBUG eval binop test ===\n", .{});
-//     std.debug.print("expr_idx: {}, expr_var: {}\n", .{ @intFromEnum(resources.expr_idx), @intFromEnum(expr_var) });
-//     std.debug.print("var_content: {}\n", .{resolved.desc.content});
-//
-//     // Check if type checking was actually run
-//     std.debug.print("Type store len: {}\n", .{resources.module_env.types.len()});
-//
-//     // Check the binop expression details
-//     const binop_expr = resources.cir.store.getExpr(resources.expr_idx);
-//     if (binop_expr == .e_binop) {
-//         const left_var = @as(types.Var, @enumFromInt(@intFromEnum(binop_expr.e_binop.lhs)));
-//         const right_var = @as(types.Var, @enumFromInt(@intFromEnum(binop_expr.e_binop.rhs)));
-//         const left_resolved = resources.module_env.types.resolveVar(left_var);
-//         const right_resolved = resources.module_env.types.resolveVar(right_var);
-//         std.debug.print("Left operand: var={}, content={}\n", .{ @intFromEnum(left_var), left_resolved.desc.content });
-//         std.debug.print("Right operand: var={}, content={}\n", .{ @intFromEnum(right_var), right_resolved.desc.content });
-//     }
-//
-//     // Basic binop evaluation is now implemented
-//     const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types) catch |err| {
-//         std.debug.print("eval error: {}\n", .{err});
-//         switch (err) {
-//             error.BugUnboxedFlexVar, error.BugUnboxedRigidVar => {
-//                 // Skip if we hit unresolved type variables
-//                 return error.SkipZigTest;
-//             },
-//             else => return err,
-//         }
-//     };
-//     // Should succeed for basic operations like add, eq, ne
-//     _ = result;
-// }
+test "eval binop - basic implementation" {
+    const source = "5 + 3";
 
-// test "eval call - not yet implemented" {
-//     const source = "List.len []";
-//
-//     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-//     defer cleanupParseAndCanonical(test_allocator, resources);
-//
-//     // Check if this resulted in a runtime error due to failed canonicalization
-//     const expr = resources.cir.store.getExpr(resources.expr_idx);
-//     if (expr == .e_runtime_error) {
-//         // Expected - canonicalization of calls may not be fully implemented
-//         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-//         defer eval_stack.deinit();
-//         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-//         defer layout_cache.deinit();
-//         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
-//         try testing.expectError(eval.EvalError.Crash, result);
-//     } else {
-//         // For now, call evaluation is not implemented
-//         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-//         defer eval_stack.deinit();
-//         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-//         defer layout_cache.deinit();
-//         const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
-//         try testing.expectError(eval.EvalError.LayoutError, result);
-//     }
-// }
+    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
+    defer cleanupParseAndCanonical(test_allocator, resources);
 
-// Commented out string concatenation test
-// test "eval multiple string segments" {
-//     const source = "\"Hello, \" ++ \"World!\"";
-//     ...
-// }
+    // Create a stack for evaluation
+    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+    defer eval_stack.deinit();
+
+    // Create layout store
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
+
+    // Evaluate the binop expression
+    const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
+
+    // Verify we got a scalar layout
+    try testing.expect(result.layout.tag == .scalar);
+    try testing.expect(result.layout.data.scalar.tag == .int);
+
+    // Read the result
+    const int_val = switch (result.layout.data.scalar.data.int) {
+        .i64 => @as(i64, @as(*i64, @ptrCast(@alignCast(result.ptr))).*),
+        .i32 => @as(i64, @as(*i32, @ptrCast(@alignCast(result.ptr))).*),
+        .i16 => @as(i64, @as(*i16, @ptrCast(@alignCast(result.ptr))).*),
+        .i8 => @as(i64, @as(*i8, @ptrCast(@alignCast(result.ptr))).*),
+        .u64 => @as(i64, @intCast(@as(*u64, @ptrCast(@alignCast(result.ptr))).*)),
+        .u32 => @as(i64, @intCast(@as(*u32, @ptrCast(@alignCast(result.ptr))).*)),
+        .u16 => @as(i64, @intCast(@as(*u16, @ptrCast(@alignCast(result.ptr))).*)),
+        .u8 => @as(i64, @intCast(@as(*u8, @ptrCast(@alignCast(result.ptr))).*)),
+        .u128 => @as(i64, @intCast(@as(*u128, @ptrCast(@alignCast(result.ptr))).*)),
+        .i128 => @as(i64, @intCast(@as(*i128, @ptrCast(@alignCast(result.ptr))).*)),
+    };
+
+    try testing.expectEqual(@as(i64, 8), int_val);
+}
 
 test "eval if expression with boolean tags" {
     // Test that True and False tags are properly canonicalized and evaluated
@@ -669,32 +615,6 @@ test "eval empty record" {
         try testing.expectEqual(stack_before, stack_after);
     }
 }
-
-// TODO: Uncomment when single_quote storage is implemented in NodeStore
-// test "eval character literal" {
-//     const source = "'a'";
-//
-//     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-//     defer cleanupParseAndCanonical(test_allocator, resources);
-//
-//     // Create a stack for evaluation
-//     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-//     defer eval_stack.deinit();
-//
-//     // Create layout store
-//     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
-//     defer layout_cache.deinit();
-//
-//     // Evaluate the character
-//     const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
-//
-//     // Verify we got a scalar layout
-//     try testing.expect(result.layout.tag == .scalar);
-//
-//     // Read the character value back (stored as u32)
-//     const char_value = @as(*u32, @ptrCast(@alignCast(result.ptr))).*;
-//     try testing.expectEqual(@as(u32, 'a'), char_value);
-// }
 
 test "eval integer literal directly from CIR node" {
     // This test creates expressions without proper canonicalization/type checking,

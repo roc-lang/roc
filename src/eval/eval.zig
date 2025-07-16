@@ -10,6 +10,7 @@ const target = @import("../base/target.zig");
 const Node = @import("../check/canonicalize/Node.zig");
 const CalledVia = base.CalledVia;
 
+/// Errors that can occur during expression evaluation
 pub const EvalError = error{
     Crash,
     OutOfMemory,
@@ -21,9 +22,11 @@ pub const EvalError = error{
     TypeContainedMismatch,
     InvalidRecordExtension,
     BugUnboxedFlexVar,
+    DivisionByZero,
     BugUnboxedRigidVar,
 };
 
+/// Result of evaluating an expression, containing the memory layout and pointer to the value
 pub const EvalResult = struct {
     layout: layout.Layout,
     ptr: *anyopaque,
@@ -306,6 +309,7 @@ fn evalExprIterative(
 
                 // Allocate space for condition result
                 const cond_result = try allocator.create(EvalResult);
+                errdefer allocator.destroy(cond_result);
 
                 // Save context for completing the if expression
                 try if_contexts.append(.{
@@ -543,6 +547,48 @@ fn completeBinop(
                 .ptr = ptr,
             };
         },
+        .sub => {
+            const result_val: i128 = lhs_val - rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            writeIntToMemory(@as([*]u8, @ptrCast(ptr)), result_val, lhs_precision);
+            context.result_location.* = EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .mul => {
+            const result_val: i128 = lhs_val * rhs_val;
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            writeIntToMemory(@as([*]u8, @ptrCast(ptr)), result_val, lhs_precision);
+            context.result_location.* = EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
+        .div => {
+            if (rhs_val == 0) {
+                return error.DivisionByZero;
+            }
+            const result_val: i128 = @divTrunc(lhs_val, rhs_val);
+            const size = layout_cache.layoutSize(result_layout);
+            const alignment = result_layout.alignment(target.TargetUsize.native);
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+            writeIntToMemory(@as([*]u8, @ptrCast(ptr)), result_val, lhs_precision);
+            context.result_location.* = EvalResult{
+                .layout = result_layout,
+                .ptr = ptr,
+            };
+        },
         .eq => {
             const result_val: bool = lhs_val == rhs_val;
             const size = layout_cache.layoutSize(result_layout);
@@ -646,14 +692,15 @@ fn completeIfCondition(
     _ = eval_stack;
     _ = layout_cache;
     _ = type_store;
+
+    // Free the condition result (do this before any error-returning calls)
+    defer allocator.destroy(context.cond_result);
+
     // Check if condition is true
     const is_true = evaluateBooleanCondition(context.cond_result.*) catch |err| switch (err) {
         error.TypeMismatch => return error.LayoutError,
         else => |e| return e,
     };
-
-    // Free the condition result
-    defer allocator.destroy(context.cond_result);
 
     // Get the if expression from the expr_idx
     const expr = cir.store.getExpr(context.expr_idx);
@@ -833,7 +880,7 @@ const BranchData = struct {
 /// Returns:
 /// - BranchData with condition and body indices on success
 /// - error.InvalidBranchNode if the node type is wrong or data is out of bounds
-fn extractBranchData(cir: *const CIR, branch_idx: CIR.Expr.IfBranch.Idx) !BranchData {
+fn extractBranchData(cir: *const CIR, branch_idx: CIR.Expr.IfBranch.Idx) error{InvalidBranchNode}!BranchData {
     // Convert branch index to node index
     const branch_node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch_idx));
     const branch_node = cir.store.nodes.get(branch_node_idx);
@@ -862,7 +909,7 @@ fn extractBranchData(cir: *const CIR, branch_idx: CIR.Expr.IfBranch.Idx) !Branch
 /// - true if the value is 1 (True)
 /// - false if the value is 0 (False)
 /// - error.TypeMismatch if the condition is not a boolean type
-fn evaluateBooleanCondition(cond_result: EvalResult) !bool {
+fn evaluateBooleanCondition(cond_result: EvalResult) error{TypeMismatch}!bool {
     // Check if this is a boolean scalar layout
     if (cond_result.layout.tag == .scalar and cond_result.layout.data.scalar.tag == .bool) {
         // Direct boolean value as u8

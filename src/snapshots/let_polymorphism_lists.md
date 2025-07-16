@@ -48,6 +48,9 @@ INVALID STATEMENT - let_polymorphism_lists.md:14:32:14:45
 UNDEFINED VARIABLE - let_polymorphism_lists.md:25:12:25:20
 UNDEFINED VARIABLE - let_polymorphism_lists.md:26:12:26:20
 UNDEFINED VARIABLE - let_polymorphism_lists.md:27:12:27:20
+TYPE MISMATCH - let_polymorphism_lists.md:12:16:12:27
+TYPE MISMATCH - let_polymorphism_lists.md:13:16:13:27
+TYPE MISMATCH - let_polymorphism_lists.md:14:18:14:31
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+** is not expected in an expression.
@@ -162,6 +165,48 @@ Is there an `import` or `exposing` missing up-top?
 ```
            ^^^^^^^^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**let_polymorphism_lists.md:12:16:12:27:**
+```roc
+all_int_list = int_list ++ my_empty_list
+```
+               ^^^^^^^^^^^
+
+It is of type:
+    _Num(_size2)_
+
+But you are trying to use it as:
+    _List(Num(_size))_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**let_polymorphism_lists.md:13:16:13:27:**
+```roc
+all_str_list = str_list ++ my_empty_list
+```
+               ^^^^^^^^^^^
+
+It is of type:
+    _Num(_size)_
+
+But you are trying to use it as:
+    _List(Str)_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**let_polymorphism_lists.md:14:18:14:31:**
+```roc
+all_float_list = float_list ++ my_empty_list
+```
+                 ^^^^^^^^^^^^^
+
+It is of type:
+    _Num(_size2)_
+
+But you are trying to use it as:
+    _List(Frac(_size))_
 
 # TOKENS
 ~~~zig
@@ -424,23 +469,23 @@ main = |_| {
 		(patt @7.1-7.9 (type "List(Num(_size))"))
 		(patt @8.1-8.9 (type "List(Str)"))
 		(patt @9.1-9.11 (type "List(Frac(_size))"))
-		(patt @12.1-12.13 (type "_a"))
-		(patt @13.1-13.13 (type "_a"))
-		(patt @14.1-14.15 (type "_a"))
+		(patt @12.1-12.13 (type "Error"))
+		(patt @13.1-13.13 (type "Error"))
+		(patt @14.1-14.15 (type "Error"))
 		(patt @17.1-17.10 (type "_arg -> List(_elem)"))
 		(patt @20.1-20.15 (type "List(_elem)"))
 		(patt @21.1-21.15 (type "List(_elem)"))
-		(patt @23.1-23.5 (type "_arg -> _ret")))
+		(patt @23.1-23.5 (type "_arg -> Num(_size)")))
 	(expressions
 		(expr @4.17-4.19 (type "List(_elem)"))
 		(expr @7.12-7.21 (type "List(Num(_size))"))
 		(expr @8.12-8.30 (type "List(Str)"))
 		(expr @9.14-9.29 (type "List(Frac(_size))"))
-		(expr @12.16-12.27 (type "_a"))
-		(expr @13.16-13.27 (type "_a"))
-		(expr @14.18-14.31 (type "_a"))
+		(expr @12.16-12.27 (type "Error"))
+		(expr @13.16-13.27 (type "Error"))
+		(expr @14.18-14.31 (type "Error"))
 		(expr @17.13-17.19 (type "_arg -> List(_elem)"))
 		(expr @20.18-20.31 (type "List(_elem)"))
 		(expr @21.18-21.35 (type "List(_elem)"))
-		(expr @23.8-29.2 (type "_arg -> _ret"))))
+		(expr @23.8-29.2 (type "_arg -> Num(_size)"))))
 ~~~

@@ -184,7 +184,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.13 (type "_arg -> _ret")))
+		(patt @4.1-4.13 (type "_arg -> Num(_size)")))
 	(expressions
-		(expr @4.16-21.2 (type "_arg -> _ret"))))
+		(expr @4.16-21.2 (type "_arg -> Num(_size)"))))
 ~~~

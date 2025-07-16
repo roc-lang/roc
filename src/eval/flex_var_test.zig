@@ -1,3 +1,4 @@
+//! Tests for handling flex variables in expression evaluation
 const std = @import("std");
 const testing = std.testing;
 const base = @import("../base.zig");
@@ -39,10 +40,6 @@ test "flex variable issue - numeric literal before type checking" {
     const resolved_before = module_env.types.resolveVar(expr_var);
     const var_content_before = resolved_before.desc.content;
 
-    std.debug.print("\n=== BEFORE TYPE CHECKING ===\n", .{});
-    std.debug.print("expr_var: {}\n", .{@intFromEnum(expr_var)});
-    std.debug.print("var_content: {}\n", .{var_content_before});
-
     // Now run type checking
     var checker = try check_types.init(allocator, &module_env.types, &cir, &.{}, &cir.store.regions);
     defer checker.deinit();
@@ -51,9 +48,6 @@ test "flex variable issue - numeric literal before type checking" {
     // Check the type variable AFTER type checking
     const resolved_after = module_env.types.resolveVar(expr_var);
     const var_content_after = resolved_after.desc.content;
-    std.debug.print("\n=== AFTER TYPE CHECKING ===\n", .{});
-    std.debug.print("expr_var: {}\n", .{@intFromEnum(expr_var)});
-    std.debug.print("var_content: {}\n", .{var_content_after});
 
     // Try to create layout store AFTER type checking
     var layout_cache = try layout_store.Store.init(&module_env, &module_env.types);
@@ -62,9 +56,6 @@ test "flex variable issue - numeric literal before type checking" {
     // This should work now
     const layout_idx = try layout_cache.addTypeVar(expr_var);
     const expr_layout = layout_cache.getLayout(layout_idx);
-
-    std.debug.print("\n=== LAYOUT ===\n", .{});
-    std.debug.print("layout: {}\n", .{expr_layout});
 
     // Verify we got a numeric layout
     try testing.expect(expr_layout.tag == .scalar);
@@ -102,21 +93,9 @@ test "flex variable issue - arithmetic expression" {
     const resolved_before = module_env.types.resolveVar(expr_var);
     const var_content_before = resolved_before.desc.content;
 
-    std.debug.print("\n=== ARITHMETIC BEFORE TYPE CHECKING ===\n", .{});
-    std.debug.print("expr_var: {}\n", .{@intFromEnum(expr_var)});
-    std.debug.print("var_content: {}\n", .{var_content_before});
-
-    // Also check the operands
+    // Verify the expression is a binop
     const binop_expr = cir.store.getExpr(canonical_expr_idx);
-    if (binop_expr == .e_binop) {
-        const left_var = @as(types.Var, @enumFromInt(@intFromEnum(binop_expr.e_binop.lhs)));
-        const right_var = @as(types.Var, @enumFromInt(@intFromEnum(binop_expr.e_binop.rhs)));
-
-        const left_resolved = module_env.types.resolveVar(left_var);
-        const right_resolved = module_env.types.resolveVar(right_var);
-        std.debug.print("left_var: {}, content: {}\n", .{ @intFromEnum(left_var), left_resolved.desc.content });
-        std.debug.print("right_var: {}, content: {}\n", .{ @intFromEnum(right_var), right_resolved.desc.content });
-    }
+    try testing.expect(binop_expr == .e_binop);
 
     // Now run type checking
     var checker = try check_types.init(allocator, &module_env.types, &cir, &.{}, &cir.store.regions);
@@ -126,9 +105,6 @@ test "flex variable issue - arithmetic expression" {
     // Check the type variable AFTER type checking
     const resolved_after = module_env.types.resolveVar(expr_var);
     const var_content_after = resolved_after.desc.content;
-    std.debug.print("\n=== ARITHMETIC AFTER TYPE CHECKING ===\n", .{});
-    std.debug.print("expr_var: {}\n", .{@intFromEnum(expr_var)});
-    std.debug.print("var_content: {}\n", .{var_content_after});
 
     // Try to create layout store AFTER type checking
     var layout_cache = try layout_store.Store.init(&module_env, &module_env.types);
@@ -137,9 +113,6 @@ test "flex variable issue - arithmetic expression" {
     // This should work now
     const layout_idx = try layout_cache.addTypeVar(expr_var);
     const expr_layout = layout_cache.getLayout(layout_idx);
-
-    std.debug.print("\n=== LAYOUT ===\n", .{});
-    std.debug.print("layout: {}\n", .{expr_layout});
 
     // Verify we got a numeric layout
     try testing.expect(expr_layout.tag == .scalar);

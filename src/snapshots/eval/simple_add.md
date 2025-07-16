@@ -30,7 +30,8 @@ KwExpect(7:1-7:7),LowerIdent(7:8-7:13),NoSpaceOpenRound(7:13-7:14),Int(7:14-7:15
 (file @1.1-7.26
 	(module @1.1-1.15
 		(exposes @1.8-1.15
-			(exposed-lower-ident @1.9-1.14 (text "addU8"))))
+			(exposed-lower-ident @1.9-1.14
+				(text "addU8"))))
 	(statements
 		(s-type-anno @3.1-3.21 (name "addU8")
 			(ty-fn @3.9-3.21
