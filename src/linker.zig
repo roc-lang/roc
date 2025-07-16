@@ -4,11 +4,10 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_config = @import("config");
 const Allocator = std.mem.Allocator;
 
 /// External C functions from zig_llvm.cpp - only available when LLVM is enabled
-const llvm_available = build_config.llvm;
+const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
 
 // External C functions from zig_llvm.cpp - only available when LLVM is enabled
 const llvm_externs = if (llvm_available) struct {
