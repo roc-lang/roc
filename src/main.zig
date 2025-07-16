@@ -151,7 +151,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     if (!exe_exists) {
 
         // TODO replace this with the platform/host.a library in future, we are using a simple
-        // test platform host here to demonstrate the process. Before we can use a real plaform
+        // test platform host here to demonstrate the process. Before we can use a real platform
         // we will need to parse the app.roc header to get the platform package (via URL etc).
         //
         // Using our pre-built `host.a` from the install directory
