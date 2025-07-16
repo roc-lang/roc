@@ -20,6 +20,7 @@ const CacheConfig = cache_mod.CacheConfig;
 const tokenize = @import("check/parse/tokenize.zig");
 const parse = @import("check/parse.zig");
 const bench = @import("bench.zig");
+const linker = @import("linker.zig");
 
 const benchTokenizer = bench.benchTokenizer;
 const benchParse = bench.benchParse;
@@ -66,6 +67,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         .build => |build_args| rocBuild(gpa, build_args),
         .format => |format_args| rocFormat(gpa, arena, format_args),
         .test_cmd => |test_args| rocTest(gpa, test_args),
+        .link => |link_args| rocLink(gpa, link_args),
         .repl => rocRepl(gpa),
         .version => try stdout.print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(gpa, docs_args),
@@ -108,6 +110,48 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     _ = gpa;
     _ = args;
     fatal("test not implemented", .{});
+}
+
+fn rocLink(gpa: Allocator, args: cli_args.LinkArgs) !void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const stdout = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
+
+    var timer = try std.time.Timer.start();
+
+    const config = linker.LinkConfig{
+        .output_path = args.output,
+        .object_files = args.object_files,
+        .extra_args = args.extra_args,
+    };
+
+    linker.link(gpa, config) catch |err| {
+        switch (err) {
+            linker.LinkError.LinkFailed => {
+                stderr.print("Error: Failed to link object files\n", .{}) catch {};
+                std.process.exit(1);
+            },
+            linker.LinkError.OutOfMemory => {
+                stderr.print("Error: Out of memory during linking\n", .{}) catch {};
+                std.process.exit(1);
+            },
+            linker.LinkError.InvalidArguments => {
+                stderr.print("Error: Invalid arguments provided to linker\n", .{}) catch {};
+                std.process.exit(1);
+            },
+            linker.LinkError.LLVMNotAvailable => {
+                stderr.print("Error: Linking requires LLVM support. Please rebuild with -Dllvm=true\n", .{}) catch {};
+                std.process.exit(1);
+            },
+        }
+    };
+
+    const elapsed = timer.read();
+    stdout.print("Successfully linked {d} object files to {s} in ", .{ args.object_files.len, args.output }) catch {};
+    formatElapsedTime(stdout, elapsed) catch {};
+    stdout.print("\n", .{}) catch {};
 }
 
 fn rocRepl(gpa: Allocator) !void {
