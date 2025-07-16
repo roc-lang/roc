@@ -188,23 +188,15 @@ test "eval binop - basic implementation" {
 }
 
 test "eval if expression with boolean tags" {
-    // Test that True and False tags are properly canonicalized and evaluated
+    // Test that if expressions with boolean tag conditions evaluate correctly
     const sources = [_]struct { src: []const u8, expected: i128 }{
-        .{ .src = "if True then 1 else 0", .expected = 1 },
-        .{ .src = "if False then 1 else 0", .expected = 0 },
+        .{ .src = "if True 1 else 0", .expected = 1 },
+        .{ .src = "if False 1 else 0", .expected = 0 },
     };
 
     for (sources) |test_case| {
         const resources = try parseAndCanonicalizeExpr(test_allocator, test_case.src);
         defer cleanupParseAndCanonical(test_allocator, resources);
-
-        const expr = resources.cir.store.getExpr(resources.expr_idx);
-
-        // Check if canonicalization succeeded
-        if (expr == .e_runtime_error) {
-            // If it failed, skip this test case - boolean canonicalization may not be complete
-            continue;
-        }
 
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
@@ -221,76 +213,146 @@ test "eval if expression with boolean tags" {
     }
 }
 
-test "eval if expression - demonstrate evaluation logic" {
-    // This test demonstrates that our if expression evaluation logic is implemented
-    // and ready to work once canonicalization supports if expressions with conditions.
+test "eval if expression with comparison condition" {
+    // Test if expressions with comparison conditions that evaluate to boolean tags
+    const sources = [_]struct { src: []const u8, expected: i128 }{
+        .{ .src = "if (1 == 1) 42 else 99", .expected = 42 },
+        .{ .src = "if (1 == 2) 42 else 99", .expected = 99 },
+        .{ .src = "if (5 > 3) 100 else 200", .expected = 100 },
+        .{ .src = "if (3 > 5) 100 else 200", .expected = 200 },
+    };
 
-    // Currently, if expressions with comparisons result in runtime errors during
-    // canonicalization. Once that's fixed, these tests will validate that:
-    // 1. Conditions are properly evaluated as boolean tags [True, False]
-    // 2. The correct branch is taken based on the condition
-    // 3. The branch body is evaluated and returned
+    for (sources) |test_case| {
+        const resources = try parseAndCanonicalizeExpr(test_allocator, test_case.src);
+        defer cleanupParseAndCanonical(test_allocator, resources);
 
-    const source = "if 1 == 1 then 42 else 99";
-
-    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    // Check if this resulted in a runtime error due to failed canonicalization
-    const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .e_runtime_error) {
-        // Expected - canonicalization of if expressions with comparisons is not yet implemented
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
-        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
-        try testing.expectError(eval.EvalError.Crash, result);
-        return;
+
+        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
+
+        // Verify the result
+        try testing.expect(result.layout.tag == .scalar);
+        try testing.expect(result.layout.data.scalar.tag == .int);
+        const value = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
+        try testing.expectEqual(test_case.expected, value);
     }
+}
 
-    // Once canonicalization is implemented, this code will run:
-    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-    defer eval_stack.deinit();
-    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
+test "eval nested if expressions" {
+    // Test that nested if expressions evaluate correctly
+    const sources = [_]struct { src: []const u8, expected: i128 }{
+        .{ .src = "if True (if True 10 else 20) else 30", .expected = 10 },
+        .{ .src = "if True (if False 10 else 20) else 30", .expected = 20 },
+        .{ .src = "if False (if True 10 else 20) else 30", .expected = 30 },
+        .{ .src = "if False 99 else (if True 40 else 50)", .expected = 40 },
+        .{ .src = "if False 99 else (if False 40 else 50)", .expected = 50 },
+    };
 
-    const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
+    for (sources) |test_case| {
+        const resources = try parseAndCanonicalizeExpr(test_allocator, test_case.src);
+        defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Should evaluate to 42 (true branch)
-    try testing.expect(result.layout.tag == .scalar);
-    try testing.expect(result.layout.data.scalar.tag == .int);
-    const value = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
-    try testing.expectEqual(@as(i128, 42), value);
+        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+        defer eval_stack.deinit();
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+        defer layout_cache.deinit();
+
+        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
+
+        // Verify the result
+        try testing.expect(result.layout.tag == .scalar);
+        try testing.expect(result.layout.data.scalar.tag == .int);
+        const value = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
+        try testing.expectEqual(test_case.expected, value);
+    }
+}
+
+test "eval if-else if-else chains" {
+    // Test that if-else if-else chains evaluate correctly, taking the first true branch
+    const sources = [_]struct { src: []const u8, expected: i128 }{
+        .{ .src = 
+        \\if True
+        \\    10
+        \\else if True
+        \\    20
+        \\else
+        \\    30
+        , .expected = 10 }, // First branch is true
+        .{ .src = 
+        \\if False
+        \\    10
+        \\else if True
+        \\    20
+        \\else
+        \\    30
+        , .expected = 20 }, // Second branch is true
+        .{ .src = 
+        \\if False
+        \\    10
+        \\else if False
+        \\    20
+        \\else
+        \\    30
+        , .expected = 30 }, // All conditions false, use else
+    };
+
+    for (sources) |test_case| {
+        const resources = try parseAndCanonicalizeExpr(test_allocator, test_case.src);
+        defer cleanupParseAndCanonical(test_allocator, resources);
+
+        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+        defer eval_stack.deinit();
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+        defer layout_cache.deinit();
+
+        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
+
+        // Verify the result
+        try testing.expect(result.layout.tag == .scalar);
+        try testing.expect(result.layout.data.scalar.tag == .int);
+        const value = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
+        try testing.expectEqual(test_case.expected, value);
+    }
+}
+
+test "eval if expression with arithmetic in branches" {
+    // Test that expressions in branches are evaluated correctly
+    const sources = [_]struct { src: []const u8, expected: i128 }{
+        .{ .src = "if True (1 + 2) else (3 + 4)", .expected = 3 },
+        .{ .src = "if False (1 + 2) else (3 + 4)", .expected = 7 },
+        .{ .src = "if True (10 * 5) else (20 / 4)", .expected = 50 },
+        .{ .src = "if (2 > 1) (100 - 50) else (200 - 100)", .expected = 50 },
+    };
+
+    for (sources) |test_case| {
+        const resources = try parseAndCanonicalizeExpr(test_allocator, test_case.src);
+        defer cleanupParseAndCanonical(test_allocator, resources);
+
+        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+        defer eval_stack.deinit();
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+        defer layout_cache.deinit();
+
+        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
+
+        // Verify the result
+        try testing.expect(result.layout.tag == .scalar);
+        try testing.expect(result.layout.data.scalar.tag == .int);
+        const value = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
+        try testing.expectEqual(test_case.expected, value);
+    }
 }
 
 test "eval if expression with non-boolean condition" {
-    // This test verifies that if expressions require boolean tag union conditions
-    // and will return a type error for non-boolean conditions like integers
-
-    // Create a simple if expression with an integer condition
-    // Since we can't easily create a complex if expression due to NodeStore limitations,
-    // we'll test this through the parsing path once canonicalization supports it
-
-    const source = "if 42 then 1 else 0"; // Integer condition (should be type error)
+    // Test that if expressions with non-boolean conditions result in type errors
+    const source = "if 42 1 else 0"; // Integer condition (should be type error)
 
     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Check if this resulted in a runtime error due to failed canonicalization
-    const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .e_runtime_error) {
-        // Expected - canonicalization should catch this type error
-        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-        defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
-        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
-        try testing.expectError(eval.EvalError.Crash, result);
-        return;
-    }
-
-    // If canonicalization doesn't catch it (once implemented), eval should
     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
     defer eval_stack.deinit();
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
@@ -298,160 +360,8 @@ test "eval if expression with non-boolean condition" {
 
     const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
 
-    // Should result in a LayoutError due to non-boolean condition
-    try testing.expectError(eval.EvalError.LayoutError, result);
-}
-
-test "eval if expression - multiple branch conditions" {
-    // Test demonstrates that if expression evaluation can handle multiple branches
-    // Each branch condition is evaluated in order until one is true
-
-    // This test is a placeholder for when full if expression support is added
-    // It documents the expected behavior:
-    // 1. First false condition is skipped
-    // 2. Second true condition causes its body to be evaluated
-    // 3. Remaining branches are not evaluated
-
-    const source =
-        \\if false then
-        \\    1
-        \\else if true then
-        \\    2
-        \\else if true then
-        \\    3
-        \\else
-        \\    4
-    ;
-
-    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    // Currently results in runtime error due to canonicalization limitations
-    const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .e_runtime_error) {
-        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-        defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
-        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
-        try testing.expectError(eval.EvalError.Crash, result);
-        return;
-    }
-
-    // Once implemented, should evaluate to 2 (first true branch)
-}
-
-test "eval if expression - nested if expressions" {
-    // Test nested if expressions to ensure recursive evaluation works correctly
-    const source =
-        \\if true then
-        \\    if false then
-        \\        1
-        \\    else
-        \\        2
-        \\else
-        \\    3
-    ;
-
-    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .e_runtime_error) {
-        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-        defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
-        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
-        try testing.expectError(eval.EvalError.Crash, result);
-        return;
-    }
-
-    // Once implemented, should evaluate to 2 (inner else branch)
-}
-
-test "eval if expression - all conditions false falls to final else" {
-    // Test that when all branch conditions are false, final_else is evaluated
-    const source =
-        \\if false then
-        \\    1
-        \\else if false then
-        \\    2
-        \\else if false then
-        \\    3
-        \\else
-        \\    42
-    ;
-
-    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .e_runtime_error) {
-        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-        defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
-        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
-        try testing.expectError(eval.EvalError.Crash, result);
-        return;
-    }
-
-    // Once implemented, should evaluate to 42 (final else)
-}
-
-test "eval if expression - type mismatch in different branches" {
-    // Test that type checking is enforced across branches
-    const source =
-        \\if true then
-        \\    42  # integer
-        \\else
-        \\    "string"  # string - type mismatch
-    ;
-
-    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    // This should be caught during canonicalization/type checking
-    const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .e_runtime_error) {
-        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-        defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
-        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types);
-        try testing.expectError(eval.EvalError.Crash, result);
-        return;
-    }
-}
-
-test "eval if expression - condition has side effects" {
-    // Test that conditions with side effects are evaluated in order
-    // This is important for ensuring evaluation order is predictable
-
-    // Once function calls are supported, this test would verify:
-    // 1. Conditions are evaluated left to right
-    // 2. Only conditions up to the first true one are evaluated
-    // 3. Side effects from unevaluated conditions don't occur
-
-    // Placeholder for future implementation
-}
-
-test "eval if expression - implementation ready" {
-    // Our if expression evaluation implementation is complete and ready to work:
-    //
-    // 1. Empty branches: Falls through to final_else
-    // 2. Branch evaluation: Evaluates conditions in order until one is true
-    // 3. Type checking: Only boolean tag union [True, False] conditions are allowed
-    // 4. Error handling: Proper error propagation for type mismatches
-    //
-    // The implementation includes:
-    // - evalIfExpression: Main evaluation logic
-    // - extractBranchData: Safe extraction of branch condition/body indices
-    // - evaluateBooleanCondition: Strict boolean type checking
-    //
-    // Once canonicalization of if expressions is complete, all the test
-    // cases above will validate the full functionality.
+    // Should result in a TypeContainedMismatch error because condition must be a boolean tag union
+    try testing.expectError(eval.EvalError.TypeContainedMismatch, result);
 }
 
 test "eval simple number" {

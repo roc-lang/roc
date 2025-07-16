@@ -89,7 +89,13 @@ pub fn eval(
     defer binop_contexts.deinit();
 
     var if_contexts = std.ArrayList(IfContext).init(allocator);
-    defer if_contexts.deinit();
+    defer {
+        // Clean up any allocated cond_result pointers
+        for (if_contexts.items) |ctx| {
+            allocator.destroy(ctx.cond_result);
+        }
+        if_contexts.deinit();
+    }
 
     var call_contexts = std.ArrayList(CallContext).init(allocator);
     defer call_contexts.deinit();
@@ -942,7 +948,6 @@ fn evaluateBooleanCondition(cond_result: EvalResult) error{TypeMismatch}!bool {
 
 test {
     _ = @import("eval_test.zig");
-    _ = @import("nested_if_test.zig");
 }
 
 test "evaluateBooleanCondition - valid True tag" {
