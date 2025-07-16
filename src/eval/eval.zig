@@ -52,7 +52,7 @@ const WorkKind = enum {
     if_check_condition,
 };
 
-const WorkItem = struct {
+pub const WorkItem = struct {
     kind: WorkKind,
     expr_idx: CIR.Expr.Idx,
 };
@@ -71,17 +71,17 @@ pub fn eval(
     eval_stack: *stack.Stack,
     layout_cache: *layout_store.Store,
     type_store: *types_store.Store,
+    work_stack: *std.ArrayList(WorkItem),
 ) EvalError!EvalResult {
+    // Ensure work stack is empty before we start
+    std.debug.assert(work_stack.items.len == 0);
+
     // Save the initial stack pointer so we can find our result
     const initial_stack_ptr = @as([*]u8, @ptrCast(eval_stack.start)) + eval_stack.used;
 
     // Track layouts of values on the stack
     var layout_stack = std.ArrayList(layout.Layout).init(allocator);
     defer layout_stack.deinit();
-
-    // Initialize work stack
-    var work_stack = std.ArrayList(WorkItem).init(allocator);
-    defer work_stack.deinit();
 
     // Push initial work item
     try work_stack.append(.{
@@ -102,7 +102,7 @@ pub fn eval(
                 &layout_stack,
                 layout_cache,
                 type_store,
-                &work_stack,
+                work_stack,
             ),
             .binop_add, .binop_sub, .binop_mul, .binop_div, .binop_eq, .binop_ne, .binop_gt, .binop_lt, .binop_ge, .binop_le => {
                 try completeBinop(
@@ -125,7 +125,7 @@ pub fn eval(
                     branch_index,
                     eval_stack,
                     &layout_stack,
-                    &work_stack,
+                    work_stack,
                 );
             },
         }
@@ -137,6 +137,9 @@ pub fn eval(
     }
 
     const final_layout = layout_stack.items[0];
+
+    // Ensure work stack is empty at the end - if not, it's a bug!
+    std.debug.assert(work_stack.items.len == 0);
 
     // The result is at the beginning of our stack frame
     return EvalResult{

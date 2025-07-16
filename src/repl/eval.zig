@@ -20,19 +20,23 @@ pub const Repl = struct {
     allocator: Allocator,
     state: usize,
     eval_stack: stack.Stack,
+    work_stack: std.ArrayList(eval.WorkItem),
 
     pub fn init(allocator: Allocator) Allocator.Error!Repl {
         const eval_stack = try stack.Stack.initCapacity(allocator, 8192);
+        const work_stack = try std.ArrayList(eval.WorkItem).initCapacity(allocator, 128);
 
         return Repl{
             .allocator = allocator,
             .state = 0,
             .eval_stack = eval_stack,
+            .work_stack = work_stack,
         };
     }
 
     pub fn deinit(self: *Repl) void {
         self.eval_stack.deinit();
+        self.work_stack.deinit();
     }
 
     /// Process a single REPL input and return the output
@@ -87,7 +91,7 @@ pub const Repl = struct {
         defer layout_cache.deinit();
 
         // Evaluate the expression
-        const result = eval.eval(self.allocator, &cir, canonical_expr_idx, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
+        const result = eval.eval(self.allocator, &cir, canonical_expr_idx, &self.eval_stack, &layout_cache, &module_env.types, &self.work_stack) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
         };
 
