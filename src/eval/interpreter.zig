@@ -554,37 +554,6 @@ test {
     _ = @import("eval_test.zig");
 }
 
-// Keep the original eval function for backward compatibility during migration
-pub fn eval(
-    allocator: std.mem.Allocator,
-    cir: *const CIR,
-    expr_idx: CIR.Expr.Idx,
-    stack_memory: *stack.Stack,
-    layout_cache: *layout_store.Store,
-    type_store: *types_store.Store,
-    work_stack: *std.ArrayList(WorkItem),
-    layout_stack: *std.ArrayList(layout.Layout),
-) EvalError!EvalResult {
-    var interpreter = try Interpreter.init(allocator, cir, stack_memory, layout_cache, type_store);
-    defer interpreter.deinit();
-
-    // Transfer ownership of the stacks temporarily
-    interpreter.work_stack.deinit();
-    interpreter.layout_stack.deinit();
-    interpreter.work_stack = work_stack.*;
-    interpreter.layout_stack = layout_stack.*;
-
-    const result = try interpreter.eval(expr_idx);
-
-    // Transfer ownership back
-    work_stack.* = interpreter.work_stack;
-    layout_stack.* = interpreter.layout_stack;
-    interpreter.work_stack = std.ArrayList(WorkItem).init(allocator);
-    interpreter.layout_stack = std.ArrayList(layout.Layout).init(allocator);
-
-    return result;
-}
-
 test "stack-based binary operations" {
     // Test that the stack-based interpreter correctly evaluates binary operations
     const allocator = std.testing.allocator;
