@@ -108,14 +108,14 @@ pub const Repl = struct {
         const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
         const resolved = module_env.types.resolveVar(expr_var);
 
-        // Check if this is a primitive type that shouldn't show type annotation
-        const is_primitive = isPrimitiveType(resolved, module_env);
+        // Check if we should display the type annotation
+        const should_display = shouldDisplayType(resolved, module_env);
 
-        // Format the value
-        const value_str = try formatValue(allocator, result);
+        // Format the value using type information
+        const value_str = try formatValue(allocator, result, resolved, module_env);
 
-        // Add type annotation for non-primitive types
-        if (!is_primitive) {
+        // Add type annotation if we should display it
+        if (should_display) {
             var type_writer = try writers.TypeWriter.init(allocator, module_env);
             defer type_writer.deinit();
 
@@ -128,22 +128,43 @@ pub const Repl = struct {
         }
     }
 
-    fn isPrimitiveType(resolved: types_store.ResolvedVarDesc, module_env: *const base.ModuleEnv) bool {
+    fn shouldDisplayType(resolved: types_store.ResolvedVarDesc, module_env: *const base.ModuleEnv) bool {
         switch (resolved.desc.content) {
             .structure => |structure| switch (structure) {
-                .num => return true,
-                .str => return true,
-                .nominal_type => |nominal| {
-                    const name = module_env.idents.getText(nominal.ident.ident_idx);
-                    return std.mem.eql(u8, name, "Bool");
+                .num => |num| {
+                    // Hide type for unbound number types (Num, Int, Frac)
+                    // Show type for concrete number types (I32, F64, Dec, etc.)
+                    return switch (num) {
+                        .num_unbound, .int_unbound, .frac_unbound => false,
+                        else => true,
+                    };
                 },
-                else => return false,
+                .str => return false,
+                .nominal_type => |nominal| {
+                    // Check if this is the Bool type
+                    const type_name = module_env.idents.getText(nominal.ident.ident_idx);
+                    return !std.mem.eql(u8, type_name, "Bool");
+                },
+                .tag_union => |tag_union| {
+                    // Check if this is Bool (tag union with True and False)
+                    const tags = module_env.types.getTagsSlice(tag_union.tags);
+                    if (tags.len != 2) return true;
+
+                    const tag1_name = module_env.idents.getText(tags.get(0).name);
+                    const tag2_name = module_env.idents.getText(tags.get(1).name);
+
+                    const is_bool = (std.mem.eql(u8, tag1_name, "True") and std.mem.eql(u8, tag2_name, "False")) or
+                        (std.mem.eql(u8, tag1_name, "False") and std.mem.eql(u8, tag2_name, "True"));
+
+                    return !is_bool;
+                },
+                else => return true,
             },
-            else => return false,
+            else => return true,
         }
     }
 
-    fn formatValue(allocator: Allocator, result: eval.EvalResult) Allocator.Error![]const u8 {
+    fn formatValue(allocator: Allocator, result: eval.EvalResult, resolved: types_store.ResolvedVarDesc, module_env: *const base.ModuleEnv) Allocator.Error![]const u8 {
         switch (result.layout.tag) {
             .scalar => {
                 const scalar = result.layout.data.scalar;
@@ -161,11 +182,16 @@ pub const Repl = struct {
                             .u128 => @as(i64, @intCast(@as(*u128, @ptrCast(@alignCast(result.ptr))).*)),
                             .i128 => @as(i64, @intCast(@as(*i128, @ptrCast(@alignCast(result.ptr))).*)),
                         };
+                        // Check if this integer represents a Bool type
+                        if (isBoolType(resolved, module_env)) {
+                            const bool_val = @as(*u8, @ptrCast(@alignCast(result.ptr))).* == 1;
+                            return try std.fmt.allocPrint(allocator, "{s}", .{if (bool_val) "True" else "False"});
+                        }
                         return try std.fmt.allocPrint(allocator, "{d}", .{int_val});
                     },
                     .bool => {
                         const bool_val = @as(*u8, @ptrCast(@alignCast(result.ptr))).* == 1;
-                        return try std.fmt.allocPrint(allocator, "{}", .{bool_val});
+                        return try std.fmt.allocPrint(allocator, "{s}", .{if (bool_val) "True" else "False"});
                     },
                     .frac => {
                         const float_val = @as(*f64, @ptrCast(@alignCast(result.ptr))).*;
@@ -192,6 +218,29 @@ pub const Repl = struct {
                 // For now, return a default string for string literals
                 return try allocator.dupe(u8, "\"Hello, World!\"");
             },
+        }
+    }
+
+    fn isBoolType(resolved: types_store.ResolvedVarDesc, module_env: *const base.ModuleEnv) bool {
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .nominal_type => |nominal| {
+                    const type_name = module_env.idents.getText(nominal.ident.ident_idx);
+                    return std.mem.eql(u8, type_name, "Bool");
+                },
+                .tag_union => |tag_union| {
+                    const tags = module_env.types.getTagsSlice(tag_union.tags);
+                    if (tags.len != 2) return false;
+
+                    const tag1_name = module_env.idents.getText(tags.get(0).name);
+                    const tag2_name = module_env.idents.getText(tags.get(1).name);
+
+                    return (std.mem.eql(u8, tag1_name, "True") and std.mem.eql(u8, tag2_name, "False")) or
+                        (std.mem.eql(u8, tag1_name, "False") and std.mem.eql(u8, tag2_name, "True"));
+                },
+                else => return false,
+            },
+            else => return false,
         }
     }
 };
