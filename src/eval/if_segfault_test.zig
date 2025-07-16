@@ -102,38 +102,16 @@ test "check parseAndCanonicalizeExpr cleanup order" {
     const stack_start = @intFromPtr(eval_stack.start);
     const stack_end = stack_start + eval_stack.capacity;
     const result_ptr_addr = @intFromPtr(result.ptr);
-    std.debug.print("Stack range: 0x{x} - 0x{x}\n", .{ stack_start, stack_end });
-    std.debug.print("Result ptr: 0x{x}\n", .{result_ptr_addr});
     const is_in_stack = result_ptr_addr >= stack_start and result_ptr_addr < stack_end;
-    std.debug.print("Result pointer is in stack: {}\n", .{is_in_stack});
 
     // Clean up in correct order
-    std.debug.print("Starting cleanup...\n", .{});
-
-    std.debug.print("Cleaning up layout_cache...\n", .{});
     layout_cache.deinit();
-
-    std.debug.print("Cleaning up eval_stack...\n", .{});
     eval_stack.deinit();
-
-    std.debug.print("Cleaning up checker...\n", .{});
     checker.deinit();
-
-    std.debug.print("Cleaning up can...\n", .{});
     can.deinit();
-
-    std.debug.print("Cleaning up cir...\n", .{});
     cir.deinit();
-
-    std.debug.print("Cleaning up parse_ast...\n", .{});
     parse_ast.deinit(allocator);
-
-    std.debug.print("Freeing owned_source...\n", .{});
     // NOTE: owned_source is owned by module_env and will be freed when module_env.deinit() is called
     // allocator.free(owned_source);
-
-    std.debug.print("Cleaning up module_env...\n", .{});
     module_env.deinit();
-
-    std.debug.print("Cleanup completed successfully\n", .{});
 }
