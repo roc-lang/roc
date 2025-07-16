@@ -34,7 +34,7 @@ main! = |_| {}
 TYPE REDECLARED - type_tag_union_complex.md:7:1:7:55
 # PROBLEMS
 **TYPE REDECLARED**
-The type `Result` is being redeclared.
+The type _Result_ is being redeclared.
 
 The redeclaration is here:
 **type_tag_union_complex.md:7:1:7:55:**
@@ -43,7 +43,7 @@ Result : [Success(Str), Error(Str), Warning(Str, I32)]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-But `Result` was already declared here:
+But _Result_ was already declared here:
 **type_tag_union_complex.md:1:1:1:1:**
 ```roc
 app [main!] { pf: platform "../basic-cli/main.roc" }

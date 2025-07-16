@@ -114,12 +114,11 @@ fn buildSyntaxProblemReport(allocator: Allocator) !Document {
     try doc.addReflowingText(" like this requires parentheses, to clarify how things should be grouped.");
     try doc.addLineBreak();
     try doc.addSourceRegion(.{
-        .line_text = "example.roc",
         .start_line_idx = 0,
         .start_col_idx = 9,
         .end_line_idx = 0,
         .end_col_idx = 19,
-    }, .error_highlight, "example.roc");
+    }, .error_highlight, "example.roc", "example.roc", &[_]u32{0});
     return doc;
 }
 // Test Helpers

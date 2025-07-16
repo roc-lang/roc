@@ -51,7 +51,7 @@ UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
 UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
 # PROBLEMS
 **UNDECLARED TYPE**
-The type `Request` is not declared in this scope.
+The type _Request_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_type_annotations.md:7:18:7:25:**
@@ -62,7 +62,7 @@ processRequest : Request -> Response
 
 
 **UNDECLARED TYPE**
-The type `Response` is not declared in this scope.
+The type _Response_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_type_annotations.md:7:29:7:37:**
@@ -75,7 +75,7 @@ processRequest : Request -> Response
 **UNUSED VARIABLE**
 Variable `req` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _req to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
 The unused variable is declared here:
 **can_import_type_annotations.md:8:19:8:22:**
 ```roc

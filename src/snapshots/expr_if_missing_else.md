@@ -11,7 +11,7 @@ foo = if tru 0
 ~~~
 # EXPECTED
 PARSE ERROR - expr_if_missing_else.md:3:15:3:15
-UNKNOWN OPERATOR - :0:0:0:0
+UNKNOWN OPERATOR - expr_if_missing_else.md:3:15:3:15
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`
@@ -27,7 +27,14 @@ foo = if tru 0
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**expr_if_missing_else.md:3:15:3:15:**
+```roc
+foo = if tru 0
+```
+              
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 # TOKENS
 ~~~zig

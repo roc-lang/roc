@@ -91,7 +91,7 @@ Here is the problematic code:
 This type annotation is malformed or contains invalid syntax.
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_022.md:1:28:1:31:**
@@ -102,7 +102,7 @@ app [main!] { |f: platform "c" }
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_022.md:1:32:1:33:**
@@ -120,7 +120,7 @@ The condition must be a valid expression that evaluates to a `Bool` value (`Bool
 **UNUSED VARIABLE**
 Variable `id` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _id to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
 The unused variable is declared here:
 **fuzz_crash_022.md:6:12:6:14:**
 ```roc
@@ -130,7 +130,7 @@ getUser = |id| if (id > 1!) "big" else "l"
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_022.md:8:1:8:2:**

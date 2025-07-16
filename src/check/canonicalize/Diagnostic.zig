@@ -252,41 +252,108 @@ pub const Diagnostic = union(enum) {
     pub fn buildNotImplementedReport(allocator: Allocator, feature: []const u8) !Report {
         var report = Report.init(allocator, "NOT IMPLEMENTED", .fatal);
         const owned_feature = try report.addOwnedString(feature);
-        try report.document.addReflowingText("This feature is not yet implemented or doesn't have a proper error report yet: ");
-        try report.document.addText(owned_feature);
+        try report.document.addReflowingText("This feature is not yet implemented: ");
+        try report.document.addAnnotatedText(owned_feature, reporting.Annotation.emphasized);
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Let us know if you want to help!");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!");
         return report;
     }
 
     /// Build a report for "malformed where clause" diagnostic
-    pub fn buildMalformedWhereClauseReport(allocator: Allocator) !Report {
+    pub fn buildMalformedWhereClauseReport(
+        allocator: Allocator,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
         var report = Report.init(allocator, "MALFORMED WHERE CLAUSE", .runtime_error);
         try report.document.addReflowingText("This where clause could not be parsed correctly.");
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Please check the syntax of your where clause constraint.");
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Check the syntax of your where clause.");
         return report;
     }
 
     /// Build a report for "invalid number literal" diagnostic
-    pub fn buildInvalidNumLiteralReport(allocator: Allocator, region: Region, source: []const u8) !Report {
+    pub fn buildInvalidNumLiteralReport(
+        allocator: Allocator,
+        region_info: base.RegionInfo,
+        literal_text: []const u8,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
         var report = Report.init(allocator, "INVALID NUMBER", .runtime_error);
 
-        // Extract the literal's text from the source using its region
-        // const literal_text = source[region.start.offset..region.end.offset];
+        const owned_literal = try report.addOwnedString(literal_text);
 
-        try report.document.addText("This number literal is not valid: ");
-        try report.document.addText(source[region.start.offset..region.end.offset]);
+        try report.document.addReflowingText("This number literal is not valid: ");
+        try report.document.addInlineCode(owned_literal);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Check that the number is correctly formatted. Valid examples include: ");
+        try report.document.addInlineCode("42");
+        try report.document.addReflowingText(", ");
+        try report.document.addInlineCode("3.14");
+        try report.document.addReflowingText(", ");
+        try report.document.addInlineCode("0x1A");
+        try report.document.addReflowingText(", or ");
+        try report.document.addInlineCode("1_000_000");
+        try report.document.addReflowingText(".");
+
         return report;
     }
 
     /// Build a report for "identifier already in scope" diagnostic
-    pub fn buildIdentAlreadyInScopeReport(allocator: Allocator, ident_name: []const u8) !Report {
+    pub fn buildIdentAlreadyInScopeReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
         var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
-        try report.document.addText("The name ");
+        try report.document.addReflowingText("The name ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addText(" is already defined in this scope.");
+        try report.document.addReflowingText(" is already defined in this scope.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
         try report.document.addLineBreak();
         try report.document.addReflowingText("Choose a different name for this identifier, or remove the duplicate definition.");
         return report;
@@ -298,12 +365,14 @@ pub const Diagnostic = union(enum) {
         ident_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "EXPOSED BUT NOT DEFINED", .runtime_error);
         const owned_ident = try report.addOwnedString(ident_name);
 
         try report.document.addReflowingText("The module header says that ");
-        try report.document.addInlineCode(owned_ident);
+        try report.document.addUnqualifiedSymbol(owned_ident);
         try report.document.addReflowingText(" is exposed, but it is not defined anywhere in this module.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -312,10 +381,12 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addReflowingText("You can fix this by either defining ");
-        try report.document.addInlineCode(owned_ident);
+        try report.document.addUnqualifiedSymbol(owned_ident);
         try report.document.addReflowingText(" in this module, or by removing it from the list of exposed values.");
 
         return report;
@@ -328,12 +399,14 @@ pub const Diagnostic = union(enum) {
         region_info: base.RegionInfo,
         original_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "REDUNDANT EXPOSED", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
 
         try report.document.addReflowingText("The identifier ");
-        try report.document.addInlineCode(owned_ident);
+        try report.document.addUnqualifiedSymbol(owned_ident);
         try report.document.addReflowingText(" is exposed multiple times in the module header.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -342,6 +415,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         // we don't need to display the original region info
@@ -359,16 +434,18 @@ pub const Diagnostic = union(enum) {
         ident_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error);
         const owned_ident = try report.addOwnedString(ident_name);
-        try report.document.addText("Nothing is named ");
+        try report.document.addReflowingText("Nothing is named ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addText(" in this scope.");
+        try report.document.addReflowingText(" in this scope.");
         try report.document.addLineBreak();
-        try report.document.addText("Is there an ");
+        try report.document.addReflowingText("Is there an ");
         try report.document.addKeyword("import");
-        try report.document.addText(" or ");
+        try report.document.addReflowingText(" or ");
         try report.document.addKeyword("exposing");
         try report.document.addReflowingText(" missing up-top?");
         try report.document.addLineBreak();
@@ -378,6 +455,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
         return report;
     }
@@ -388,30 +467,59 @@ pub const Diagnostic = union(enum) {
         stmt_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "INVALID STATEMENT", .runtime_error);
         const owned_stmt = try report.addOwnedString(stmt_name);
-        try report.document.addText("The statement ");
-        try report.document.addAnnotated(owned_stmt, .emphasized);
-        try report.document.addText(" is not allowed at the top level.");
+        try report.document.addReflowingText("The statement ");
+        try report.document.addInlineCode(owned_stmt);
+        try report.document.addReflowingText(" is not allowed at the top level.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
         return report;
     }
 
     /// Build a report for "expression not canonicalized" diagnostic
-    pub fn buildExprNotCanonicalizedReport(allocator: Allocator) !Report {
+    pub fn buildExprNotCanonicalizedReport(
+        allocator: Allocator,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
         var report = Report.init(allocator, "UNKNOWN OPERATOR", .runtime_error);
         try report.document.addReflowingText("This looks like an operator, but it's not one I recognize!");
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Check the spelling and make sure you're using a valid Roc operator.");
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Check the spelling and make sure you're using a valid Roc operator like ");
+        try report.document.addBinaryOperator("+");
+        try report.document.addReflowingText(", ");
+        try report.document.addBinaryOperator("-");
+        try report.document.addReflowingText(", ");
+        try report.document.addBinaryOperator("==");
+        try report.document.addReflowingText(".");
         return report;
     }
 
@@ -568,6 +676,8 @@ pub const Diagnostic = union(enum) {
         allocator: Allocator,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "CRASH EXPECTS STRING", .runtime_error);
         try report.document.addReflowingText("The ");
@@ -581,15 +691,19 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             filename,
+            source,
+            line_starts,
         );
         return report;
     }
 
-    /// Build a report for "empty single quote" diagnostic
+    /// Build a report for "empty tuple" diagnostic
     pub fn buildEmptyTupleReport(
         allocator: Allocator,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "EMPTY TUPLE NOT ALLOWED", .runtime_error);
         try report.document.addReflowingText("I am part way through parsing this tuple, but it is empty:");
@@ -598,6 +712,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             filename,
+            source,
+            line_starts,
         );
         try report.document.addLineBreak();
         try report.document.addReflowingText("If you want to represent nothing, try using an empty record: ");
@@ -613,33 +729,40 @@ pub const Diagnostic = union(enum) {
         new_region_info: base.RegionInfo,
         original_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
-        try report.document.addText("The name ");
+        try report.document.addReflowingText("The name ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addText(" is being redeclared in this scope.");
+        try report.document.addReflowingText(" is being redeclared in this scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
         // Show where the new declaration is
-        try report.document.addText("The redeclaration is here:");
+        try report.document.addReflowingText("The redeclaration is here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             new_region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
-        try report.document.addText("But ");
+        try report.document.addReflowingText("But ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addText(" was already defined here:");
+        try report.document.addReflowingText(" was already defined here:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -652,33 +775,40 @@ pub const Diagnostic = union(enum) {
         original_region_info: base.RegionInfo,
         redeclared_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TYPE REDECLARED", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addText("The type ");
-        try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText(" is being redeclared.");
+        try report.document.addReflowingText("The type ");
+        try report.document.addType(owned_type_name);
+        try report.document.addReflowingText(" is being redeclared.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
         // Show where the redeclaration is
-        try report.document.addText("The redeclaration is here:");
+        try report.document.addReflowingText("The redeclaration is here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             redeclared_region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
-        try report.document.addText("But ");
-        try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText(" was already declared here:");
+        try report.document.addReflowingText("But ");
+        try report.document.addType(owned_type_name);
+        try report.document.addReflowingText(" was already declared here:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -697,21 +827,26 @@ pub const Diagnostic = union(enum) {
         type_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "UNDECLARED TYPE", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addText("The type ");
-        try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText(" is not declared in this scope.");
+        try report.document.addReflowingText("The type ");
+        try report.document.addType(owned_type_name);
+        try report.document.addReflowingText(" is not declared in this scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("This type is referenced here:");
+        try report.document.addReflowingText("This type is referenced here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -723,25 +858,30 @@ pub const Diagnostic = union(enum) {
         type_var_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "UNDECLARED TYPE VARIABLE", .runtime_error);
         const owned_type_var_name = try report.addOwnedString(type_var_name);
-        try report.document.addText("The type variable ");
-        try report.document.addUnqualifiedSymbol(owned_type_var_name);
-        try report.document.addText(" is not declared in this scope.");
+        try report.document.addReflowingText("The type variable ");
+        try report.document.addType(owned_type_var_name);
+        try report.document.addReflowingText(" is not declared in this scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("Type variables must be introduced in a type annotation before they can be used.");
+        try report.document.addReflowingText("Type variables must be introduced in a type annotation before they can be used.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("This type variable is referenced here:");
+        try report.document.addReflowingText("This type variable is referenced here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -754,35 +894,42 @@ pub const Diagnostic = union(enum) {
         original_region_info: base.RegionInfo,
         redeclared_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TYPE ALIAS REDECLARED", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addText("The type alias ");
-        try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText(" is being redeclared.");
+        try report.document.addReflowingText("The type alias ");
+        try report.document.addType(owned_type_name);
+        try report.document.addReflowingText(" is being redeclared.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Type aliases can only be declared once in the same scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
         // Show where the redeclaration is
-        try report.document.addText("The redeclaration is here:");
+        try report.document.addReflowingText("The redeclaration is here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             redeclared_region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
-        try report.document.addText("But ");
-        try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText(" was already declared here:");
+        try report.document.addReflowingText("But ");
+        try report.document.addType(owned_type_name);
+        try report.document.addReflowingText(" was already declared here:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -795,35 +942,42 @@ pub const Diagnostic = union(enum) {
         original_region_info: base.RegionInfo,
         redeclared_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "CUSTOM TYPE REDECLARED", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addText("The nominal type ");
-        try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText(" is being redeclared.");
+        try report.document.addReflowingText("The nominal type ");
+        try report.document.addType(owned_type_name);
+        try report.document.addReflowingText(" is being redeclared.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Custom types can only be declared once in the same scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
         // Show where the redeclaration is
-        try report.document.addText("The redeclaration is here:");
+        try report.document.addReflowingText("The redeclaration is here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             redeclared_region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
-        try report.document.addText("But ");
-        try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText(" was already declared here:");
+        try report.document.addReflowingText("But ");
+        try report.document.addType(owned_type_name);
+        try report.document.addReflowingText(" was already declared here:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -837,6 +991,8 @@ pub const Diagnostic = union(enum) {
         original_region_info: base.RegionInfo,
         cross_scope: bool,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         const severity = if (cross_scope) reporting.Severity.warning else reporting.Severity.runtime_error;
         const title = if (cross_scope) "TYPE SHADOWED" else "TYPE DUPLICATE";
@@ -862,10 +1018,13 @@ pub const Diagnostic = union(enum) {
         // Show where the new declaration is
         try report.document.addText("The new declaration is here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             new_region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -879,7 +1038,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -893,6 +1054,8 @@ pub const Diagnostic = union(enum) {
         region_info: base.RegionInfo,
         original_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TYPE PARAMETER CONFLICT", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
@@ -911,10 +1074,13 @@ pub const Diagnostic = union(enum) {
         // Show where the conflict is
         try report.document.addText("The conflicting parameter is here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -925,7 +1091,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -937,24 +1105,35 @@ pub const Diagnostic = union(enum) {
         region_info: base.RegionInfo,
         diagnostic: @TypeOf(@as(Diagnostic, undefined).unused_variable),
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         const ident_name = ident_store.getText(diagnostic.ident);
 
         var report = Report.init(gpa, "UNUSED VARIABLE", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
 
-        try report.document.addText("Variable ");
+        try report.document.addReflowingText("Variable ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addText(" is not used anywhere in your code.");
+        try report.document.addReflowingText(" is not used anywhere in your code.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("If you don't need this variable, prefix it with an underscore like _");
-        try report.document.addText(owned_ident);
-        try report.document.addText(" to suppress this warning.");
+        const MAX_IDENT_FIXED_BUFFER = 100;
+        if (owned_ident.len > MAX_IDENT_FIXED_BUFFER - 1) {
+            try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore to suppress this warning.");
+        } else {
+            // format the identifier with an underscore
+            try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
+            var buf: [MAX_IDENT_FIXED_BUFFER]u8 = undefined;
+            const owned_ident_with_underscore = try std.fmt.bufPrint(&buf, "_{s}", .{owned_ident});
+
+            try report.document.addUnqualifiedSymbol(owned_ident_with_underscore);
+            try report.document.addReflowingText(" to suppress this warning.");
+        }
 
         try report.document.addLineBreak();
-        try report.document.addText("The unused variable is declared here:");
+        try report.document.addReflowingText("The unused variable is declared here:");
         try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);
@@ -962,6 +1141,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -973,23 +1154,27 @@ pub const Diagnostic = union(enum) {
         region_info: base.RegionInfo,
         diagnostic: @TypeOf(@as(Diagnostic, undefined).used_underscore_variable),
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         const ident_name = ident_store.getText(diagnostic.ident);
 
         var report = Report.init(gpa, "UNDERSCORE VARIABLE USED", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
 
-        try report.document.addText("Variable ");
+        try report.document.addReflowingText("Variable ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addText(" is prefixed with an underscore but is actually used.");
+        try report.document.addReflowingText(" is prefixed with an underscore but is actually used.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: ");
+        try report.document.addReflowingText("Variables prefixed with ");
+        try report.document.addInlineCode("_");
+        try report.document.addReflowingText(" are intended to be unused. Remove the underscore prefix: ");
         const name_without_underscore = if (std.mem.startsWith(u8, ident_name, "_")) ident_name[1..] else ident_name;
         const owned_name_without_underscore = try report.addOwnedString(name_without_underscore);
-        try report.document.addText(owned_name_without_underscore);
-        try report.document.addText(".");
+        try report.document.addUnqualifiedSymbol(owned_name_without_underscore);
+        try report.document.addReflowingText(".");
 
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -999,6 +1184,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1010,38 +1197,45 @@ pub const Diagnostic = union(enum) {
         duplicate_region_info: base.RegionInfo,
         original_region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "DUPLICATE RECORD FIELD", .runtime_error);
         const owned_field_name = try report.addOwnedString(field_name);
 
-        try report.document.addText("The record field ");
-        try report.document.addUnqualifiedSymbol(owned_field_name);
-        try report.document.addText(" appears more than once in this record.");
+        try report.document.addReflowingText("The record field ");
+        try report.document.addRecordField(owned_field_name);
+        try report.document.addReflowingText(" appears more than once in this record.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
         // Show where the duplicate field is
-        try report.document.addText("This field is duplicated here:");
+        try report.document.addReflowingText("This field is duplicated here:");
         try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             duplicate_region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
-        try report.document.addText("The field ");
-        try report.document.addUnqualifiedSymbol(owned_field_name);
-        try report.document.addText(" was first defined here:");
+        try report.document.addReflowingText("The field ");
+        try report.document.addRecordField(owned_field_name);
+        try report.document.addReflowingText(" was first defined here:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
             .dimmed,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
-        try report.document.addText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
+        try report.document.addReflowingText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
 
         return report;
     }
@@ -1088,20 +1282,25 @@ pub const Diagnostic = union(enum) {
         module_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
 
         const owned_module = try report.addOwnedString(module_name);
-        try report.document.addText("The module ");
-        try report.document.addAnnotated(owned_module, .module_name);
-        try report.document.addText(" was not found.");
+        try report.document.addReflowingText("The module ");
+        try report.document.addModuleName(owned_module);
+        try report.document.addReflowingText(" was not found.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Make sure this module is imported and available in your project.");
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1114,16 +1313,18 @@ pub const Diagnostic = union(enum) {
         value_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "VALUE NOT EXPOSED", .runtime_error);
 
         const owned_module = try report.addOwnedString(module_name);
         const owned_value = try report.addOwnedString(value_name);
-        try report.document.addText("The ");
-        try report.document.addAnnotated(owned_module, .module_name);
-        try report.document.addText(" module does not expose anything named ");
+        try report.document.addReflowingText("The ");
+        try report.document.addModuleName(owned_module);
+        try report.document.addReflowingText(" module does not expose anything named ");
         try report.document.addUnqualifiedSymbol(owned_value);
-        try report.document.addText(".");
+        try report.document.addReflowingText(".");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Split this out into multiple modules, or remove some of the exports.");
 
@@ -1132,6 +1333,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1144,16 +1347,18 @@ pub const Diagnostic = union(enum) {
         type_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TYPE NOT EXPOSED", .runtime_error);
 
         const owned_module = try report.addOwnedString(module_name);
         const owned_type = try report.addOwnedString(type_name);
-        try report.document.addText("The ");
-        try report.document.addAnnotated(owned_module, .module_name);
-        try report.document.addText(" module does not expose anything named ");
-        try report.document.addAnnotated(owned_type, .emphasized);
-        try report.document.addText(".");
+        try report.document.addReflowingText("The ");
+        try report.document.addModuleName(owned_module);
+        try report.document.addReflowingText(" module does not expose anything named ");
+        try report.document.addType(owned_type);
+        try report.document.addReflowingText(".");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Make sure the module exports this type, or use a type that is exposed.");
 
@@ -1162,6 +1367,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1173,13 +1380,15 @@ pub const Diagnostic = union(enum) {
         module_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "MODULE NOT IMPORTED", .runtime_error);
 
         const owned_module = try report.addOwnedString(module_name);
-        try report.document.addText("The module ");
-        try report.document.addAnnotated(owned_module, .module_name);
-        try report.document.addText(" is not imported in the current scope.");
+        try report.document.addReflowingText("The module ");
+        try report.document.addModuleName(owned_module);
+        try report.document.addReflowingText(" is not imported in the current scope.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Try adding an import statement like: ");
         try report.document.addKeyword("import");
@@ -1191,6 +1400,8 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1202,28 +1413,32 @@ pub const Diagnostic = union(enum) {
         count: u32,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TOO MANY EXPORTS", .runtime_error);
 
         const max_exports = std.math.maxInt(u16);
 
-        try report.document.addText("This module has ");
+        try report.document.addReflowingText("This module has ");
         const count_str = try std.fmt.allocPrint(allocator, "{}", .{count});
         defer allocator.free(count_str);
-        try report.document.addAnnotated(count_str, .emphasized);
-        try report.document.addText(" exports, but the maximum allowed is ");
+        try report.document.addInlineCode(count_str);
+        try report.document.addReflowingText(" exports, but the maximum allowed is ");
         const max_str = try std.fmt.allocPrint(allocator, "{}", .{max_exports});
         defer allocator.free(max_str);
-        try report.document.addAnnotated(max_str, .emphasized);
-        try report.document.addText(".");
+        try report.document.addInlineCode(max_str);
+        try report.document.addReflowingText(".");
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Import it to use its types and values.");
+        try report.document.addReflowingText("Split this out into multiple modules, or remove some of the exports.");
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         return report;
@@ -1236,22 +1451,27 @@ pub const Diagnostic = union(enum) {
         suggested_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "UNUSED TYPE VARIABLE NAME", .warning);
         const owned_type_var_name = try report.addOwnedString(type_var_name);
         const suggested_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{suggested_name});
         const owned_suggested_name = try report.addOwnedString(suggested_with_underscore);
 
-        try report.document.addText("The type variable ");
-        try report.document.addUnqualifiedSymbol(owned_type_var_name);
-        try report.document.addText(" appears only once in this type annotation.");
+        try report.document.addReflowingText("The type variable ");
+        try report.document.addType(owned_type_var_name);
+        try report.document.addReflowingText(" appears only once in this type annotation.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -1269,21 +1489,26 @@ pub const Diagnostic = union(enum) {
         suggested_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TYPE VARIABLE MARKED UNUSED", .warning);
         const owned_type_var_name = try report.addOwnedString(type_var_name);
         const owned_suggested_name = try report.addOwnedString(suggested_name);
 
-        try report.document.addText("The type variable ");
-        try report.document.addUnqualifiedSymbol(owned_type_var_name);
-        try report.document.addText(" starts with an underscore but appears multiple times in this type annotation.");
+        try report.document.addReflowingText("The type variable ");
+        try report.document.addType(owned_type_var_name);
+        try report.document.addReflowingText(" starts with an underscore but appears multiple times in this type annotation.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -1301,21 +1526,26 @@ pub const Diagnostic = union(enum) {
         suggested_name: []const u8,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         var report = Report.init(allocator, "TYPE VARIABLE ENDING IN UNDERSCORE", .warning);
         const owned_type_var_name = try report.addOwnedString(type_var_name);
         const owned_suggested_name = try report.addOwnedString(suggested_name);
 
-        try report.document.addText("The type variable ");
-        try report.document.addUnqualifiedSymbol(owned_type_var_name);
-        try report.document.addText(" ends with an underscore.");
+        try report.document.addReflowingText("The type variable ");
+        try report.document.addType(owned_type_var_name);
+        try report.document.addReflowingText(" ends with an underscore.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            filename,
+            owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
@@ -1336,14 +1566,16 @@ pub const Diagnostic = union(enum) {
         is_alias: bool,
         region_info: base.RegionInfo,
         filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
     ) !Report {
         const title = if (is_alias) "UNDERSCORE IN TYPE ALIAS" else "UNDERSCORE IN NOMINAL TYPE";
         var report = Report.init(allocator, title, .runtime_error);
 
         const declaration_type = if (is_alias) "type alias" else "nominal type";
-        try report.document.addText("Underscores are not allowed in ");
-        try report.document.addText(declaration_type);
-        try report.document.addText(" declarations.");
+        try report.document.addReflowingText("Underscores are not allowed in ");
+        try report.document.addReflowingText(declaration_type);
+        try report.document.addReflowingText(" declarations.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1352,11 +1584,15 @@ pub const Diagnostic = union(enum) {
             region_info,
             .error_highlight,
             owned_filename,
+            source,
+            line_starts,
         );
 
         try report.document.addLineBreak();
         try report.document.addReflowingText("Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. ");
-        try report.document.addReflowingText("If you need a placeholder type variable, use a named type variable like `a` instead.");
+        try report.document.addReflowingText("If you need a placeholder type variable, use a named type variable like ");
+        try report.document.addInlineCode("a");
+        try report.document.addReflowingText(" instead.");
 
         return report;
     }

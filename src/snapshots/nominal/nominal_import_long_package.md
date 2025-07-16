@@ -59,7 +59,7 @@ import design.Styles.Color exposing [Encoder as CE]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **nominal_import_long_package.md:3:21:3:27:**
@@ -70,7 +70,7 @@ import design.Styles.Color exposing [Encoder as CE]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **nominal_import_long_package.md:3:28:3:36:**
@@ -81,7 +81,7 @@ import design.Styles.Color exposing [Encoder as CE]
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **nominal_import_long_package.md:3:37:3:52:**
@@ -92,7 +92,7 @@ import design.Styles.Color exposing [Encoder as CE]
 
 
 **UNDECLARED TYPE**
-The type `CE` is not declared in this scope.
+The type _CE_ is not declared in this scope.
 
 This type is referenced here:
 **nominal_import_long_package.md:5:7:5:9:**

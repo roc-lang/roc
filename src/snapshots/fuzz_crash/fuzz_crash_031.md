@@ -16,7 +16,7 @@ MISSING HEADER - fuzz_crash_031.md:1:1:1:5
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
 INVALID STATEMENT - fuzz_crash_031.md:1:6:1:8
 INVALID STATEMENT - fuzz_crash_031.md:4:1:4:6
-UNKNOWN OPERATOR - :0:0:0:0
+UNKNOWN OPERATOR - fuzz_crash_031.md:4:10:4:11
 # PROBLEMS
 **UNCLOSED SINGLE QUOTE**
 This character literal is missing a closing single quote.
@@ -50,7 +50,7 @@ vavar t= '
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_031.md:1:6:1:8:**
@@ -61,7 +61,7 @@ mule []
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_031.md:4:1:4:6:**
@@ -73,7 +73,14 @@ vavar t= '
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**fuzz_crash_031.md:4:10:4:11:**
+```roc
+vavar t= '
+```
+         ^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 # TOKENS
 ~~~zig

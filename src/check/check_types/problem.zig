@@ -282,7 +282,6 @@ pub const ReportBuilder = struct {
                 .start_col_idx = 0,
                 .end_line_idx = 0,
                 .end_col_idx = 0,
-                .line_text = "",
             },
         };
 
@@ -293,6 +292,8 @@ pub const ReportBuilder = struct {
             region_info,
             .error_highlight,
             self.filename,
+            self.source,
+            self.module_env.line_starts.items.items,
         );
         try report.document.addLineBreak();
 
@@ -406,7 +407,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = overall_region_info.line_text,
+            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -501,7 +502,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = actual_region_info.line_text,
+            .line_text = self.gpa.dupe(u8, actual_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
             .start_line = actual_region_info.start_line_idx + 1,
             .start_column = actual_region_info.start_col_idx + 1,
             .end_line = actual_region_info.end_line_idx + 1,
@@ -621,7 +622,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = overall_region_info.line_text,
+            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -757,7 +758,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = overall_region_info.line_text,
+            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -870,7 +871,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = overall_region_info.line_text,
+            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -972,7 +973,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = overall_region_info.line_text,
+            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -1070,7 +1071,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = overall_region_info.line_text,
+            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -1139,7 +1140,6 @@ pub const ReportBuilder = struct {
                 .start_col_idx = 0,
                 .end_line_idx = 0,
                 .end_col_idx = 0,
-                .line_text = "",
             },
         };
         const literal_text = self.source[region.start.offset..region.end.offset];
@@ -1153,6 +1153,8 @@ pub const ReportBuilder = struct {
             region_info,
             .error_highlight,
             self.filename,
+            self.source,
+            self.module_env.line_starts.items.items,
         );
         try report.document.addLineBreak();
 
@@ -1185,7 +1187,6 @@ pub const ReportBuilder = struct {
                 .start_col_idx = 0,
                 .end_line_idx = 0,
                 .end_col_idx = 0,
-                .line_text = "",
             },
         };
         const literal_text = self.source[region.start.offset..region.end.offset];
@@ -1201,6 +1202,8 @@ pub const ReportBuilder = struct {
             region_info,
             .error_highlight,
             self.filename,
+            self.source,
+            self.module_env.line_starts.items.items,
         );
         try report.document.addLineBreak();
 
@@ -1243,7 +1246,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = import_region_info.line_text,
+            .line_text = self.gpa.dupe(u8, import_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
             .start_line = import_region_info.start_line_idx + 1,
             .start_column = import_region_info.start_col_idx + 1,
             .end_line = import_region_info.end_line_idx + 1,

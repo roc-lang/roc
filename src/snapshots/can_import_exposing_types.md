@@ -83,7 +83,7 @@ UNDECLARED TYPE - can_import_exposing_types.md:49:57:49:65
 UNDECLARED TYPE - can_import_exposing_types.md:49:67:49:72
 # PROBLEMS
 **UNDECLARED TYPE**
-The type `Config` is not declared in this scope.
+The type _Config_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:31:18:31:24:**
@@ -94,7 +94,7 @@ This type is referenced here:
 
 
 **UNDECLARED TYPE**
-The type `Status` is not declared in this scope.
+The type _Status_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:32:18:32:24:**
@@ -105,7 +105,7 @@ This type is referenced here:
 
 
 **UNDECLARED TYPE**
-The type `Response` is not declared in this scope.
+The type _Response_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:33:23:33:31:**
@@ -116,7 +116,7 @@ This type is referenced here:
 
 
 **UNDECLARED TYPE**
-The type `Value` is not declared in this scope.
+The type _Value_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:8:27:8:32:**
@@ -127,7 +127,7 @@ parseJson : Str -> Result(Value, Error)
 
 
 **UNDECLARED TYPE**
-The type `Error` is not declared in this scope.
+The type _Error_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:8:34:8:39:**
@@ -138,7 +138,7 @@ parseJson : Str -> Result(Value, Error)
 
 
 **UNDECLARED TYPE**
-The type `Request` is not declared in this scope.
+The type _Request_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:12:17:12:24:**
@@ -149,7 +149,7 @@ handleRequest : Request -> Response
 
 
 **UNDECLARED TYPE**
-The type `Response` is not declared in this scope.
+The type _Response_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:12:28:12:36:**
@@ -160,7 +160,7 @@ handleRequest : Request -> Response
 
 
 **UNDECLARED TYPE**
-The type `Config` is not declared in this scope.
+The type _Config_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:22:15:22:21:**
@@ -171,7 +171,7 @@ processData : Config, List(Value) -> Result(List(Value), Error)
 
 
 **UNDECLARED TYPE**
-The type `Value` is not declared in this scope.
+The type _Value_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:22:28:22:33:**
@@ -182,7 +182,7 @@ processData : Config, List(Value) -> Result(List(Value), Error)
 
 
 **UNDECLARED TYPE**
-The type `Value` is not declared in this scope.
+The type _Value_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:22:50:22:55:**
@@ -193,7 +193,7 @@ processData : Config, List(Value) -> Result(List(Value), Error)
 
 
 **UNDECLARED TYPE**
-The type `Error` is not declared in this scope.
+The type _Error_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:22:58:22:63:**
@@ -215,7 +215,7 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDECLARED TYPE**
-The type `Config` is not declared in this scope.
+The type _Config_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:37:16:37:22:**
@@ -226,7 +226,7 @@ createClient : Config -> Http.Client
 
 
 **UNDECLARED TYPE**
-The type `Response` is not declared in this scope.
+The type _Response_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:41:18:41:26:**
@@ -248,7 +248,7 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDECLARED TYPE**
-The type `Value` is not declared in this scope.
+The type _Value_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:49:25:49:30:**
@@ -259,7 +259,7 @@ combineResults : Result(Value, Error), Status -> Result(Response, Error)
 
 
 **UNDECLARED TYPE**
-The type `Error` is not declared in this scope.
+The type _Error_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:49:32:49:37:**
@@ -270,7 +270,7 @@ combineResults : Result(Value, Error), Status -> Result(Response, Error)
 
 
 **UNDECLARED TYPE**
-The type `Status` is not declared in this scope.
+The type _Status_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:49:40:49:46:**
@@ -281,7 +281,7 @@ combineResults : Result(Value, Error), Status -> Result(Response, Error)
 
 
 **UNDECLARED TYPE**
-The type `Response` is not declared in this scope.
+The type _Response_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:49:57:49:65:**
@@ -292,7 +292,7 @@ combineResults : Result(Value, Error), Status -> Result(Response, Error)
 
 
 **UNDECLARED TYPE**
-The type `Error` is not declared in this scope.
+The type _Error_ is not declared in this scope.
 
 This type is referenced here:
 **can_import_exposing_types.md:49:67:49:72:**

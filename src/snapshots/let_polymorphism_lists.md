@@ -39,11 +39,11 @@ main = |_| {
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:12:26:12:27
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:27
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:31
-UNKNOWN OPERATOR - :0:0:0:0
+UNKNOWN OPERATOR - let_polymorphism_lists.md:12:16:12:27
 INVALID STATEMENT - let_polymorphism_lists.md:12:28:12:41
-UNKNOWN OPERATOR - :0:0:0:0
+UNKNOWN OPERATOR - let_polymorphism_lists.md:13:16:13:27
 INVALID STATEMENT - let_polymorphism_lists.md:13:28:13:41
-UNKNOWN OPERATOR - :0:0:0:0
+UNKNOWN OPERATOR - let_polymorphism_lists.md:14:18:14:31
 INVALID STATEMENT - let_polymorphism_lists.md:14:32:14:45
 UNDEFINED VARIABLE - let_polymorphism_lists.md:25:12:25:20
 UNDEFINED VARIABLE - let_polymorphism_lists.md:26:12:26:20
@@ -87,10 +87,17 @@ all_float_list = float_list ++ my_empty_list
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**let_polymorphism_lists.md:12:16:12:27:**
+```roc
+all_int_list = int_list ++ my_empty_list
+```
+               ^^^^^^^^^^^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **let_polymorphism_lists.md:12:28:12:41:**
@@ -102,10 +109,17 @@ all_int_list = int_list ++ my_empty_list
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**let_polymorphism_lists.md:13:16:13:27:**
+```roc
+all_str_list = str_list ++ my_empty_list
+```
+               ^^^^^^^^^^^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **let_polymorphism_lists.md:13:28:13:41:**
@@ -117,10 +131,17 @@ all_str_list = str_list ++ my_empty_list
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+
+**let_polymorphism_lists.md:14:18:14:31:**
+```roc
+all_float_list = float_list ++ my_empty_list
+```
+                 ^^^^^^^^^^^^^
+
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **let_polymorphism_lists.md:14:32:14:45:**

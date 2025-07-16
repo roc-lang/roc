@@ -84,7 +84,7 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **type_higher_order_multiple_vars.md:3:22:3:24:**
@@ -95,7 +95,7 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **type_higher_order_multiple_vars.md:3:25:3:40:**
@@ -106,7 +106,7 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **type_higher_order_multiple_vars.md:3:40:3:48:**
@@ -117,7 +117,7 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **type_higher_order_multiple_vars.md:3:48:3:49:**

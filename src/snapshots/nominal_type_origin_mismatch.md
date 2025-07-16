@@ -21,7 +21,7 @@ UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:6:18:6:19
 # PROBLEMS
 **UNDECLARED TYPE**
-The type `Person` is not declared in this scope.
+The type _Person_ is not declared in this scope.
 
 This type is referenced here:
 **nominal_type_origin_mismatch.md:5:17:5:23:**
@@ -34,7 +34,7 @@ expectsPerson : Person -> Str
 **UNUSED VARIABLE**
 Variable `p` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like _p to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_p` to suppress this warning.
 The unused variable is declared here:
 **nominal_type_origin_mismatch.md:6:18:6:19:**
 ```roc

@@ -123,7 +123,7 @@ Here is the problematic code:
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_030.md:12:9:12:12:**
@@ -134,7 +134,7 @@ pkg: 77"..c", mm} #
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_030.md:12:12:12:13:**
@@ -145,7 +145,7 @@ pkg: 77"..c", mm} #
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_030.md:12:13:12:14:**
@@ -156,7 +156,7 @@ pkg: 77"..c", mm} #
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_030.md:12:15:12:17:**
@@ -167,7 +167,7 @@ pkg: 77"..c", mm} #
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_030.md:12:17:12:18:**
@@ -178,7 +178,7 @@ pkg: 77"..c", mm} #
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_030.md:13:2:13:10:**
@@ -189,7 +189,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_030.md:14:3:16:4:**

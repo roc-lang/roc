@@ -183,7 +183,7 @@ Here is the problematic code:
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_029.md:5:22:5:24:**
@@ -194,7 +194,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_029.md:5:24:5:25:**
@@ -205,7 +205,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_029.md:6:4:6:5:**
@@ -216,7 +216,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_029.md:7:2:7:9:**
@@ -227,7 +227,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_029.md:8:3:9:4:**
@@ -238,7 +238,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_029.md:10:2:10:10:**
@@ -249,7 +249,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_029.md:11:3:11:8:**
@@ -260,7 +260,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_029.md:12:3:13:20:**
@@ -271,7 +271,7 @@ pkg: "..l", mmen		} # Cose
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_029.md:14:2:14:10:**
@@ -282,7 +282,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_029.md:15:3:17:4:**

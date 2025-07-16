@@ -12,7 +12,7 @@ INVALID STATEMENT - fuzz_crash_034.md:1:9:1:10
 INVALID STATEMENT - fuzz_crash_034.md:1:11:1:12
 # PROBLEMS
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_034.md:1:9:1:10:**
@@ -23,7 +23,7 @@ module[]0 f
 
 
 **INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
+The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **fuzz_crash_034.md:1:11:1:12:**
