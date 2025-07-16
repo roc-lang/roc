@@ -2,25 +2,27 @@
 
 ## Overview
 
-The `roc run` command implements a system for executing Roc programs by linking a host static library with a Roc runtime object file. This design enables fast execution by caching linked executables and using inter-process communication for data exchange.
+The `roc` command (without sub-command) implements a system for executing Roc programs by linking a host static library with a Roc runtime object file. This design enables fast execution by caching linked executables and using inter-process communication for data exchange.
 
 ## Architecture
 
 ### Build-Time Components
 
-1. **Host Static Library (`host.a`)**
+1. **Example Host Static Library (`libplatform_host_str_simple.a`)**
    - Created at build time using `zig build-lib`
    - Contains the main executable logic that calls into Roc
-   - Expects an external symbol `_roc_entrypoint` to be linked in
-   - Source: `src/host.c`
-   - Installed to `zig-out/lib/libhost.a`
+   - Expects an external symbol `roc_entrypoint` to be linked in
+   - Source: `src/platform_host_str_simple.zig`
+   - Installed to `zig-out/lib/libplatform_host_str_simple.a`
+   - Placeholder, will be replaced in future with platform specific implementations, used for testing purposes.
 
-2. **Roc Runtime Object File (`shared_memory.o`)**
+2. **Roc Runtime Object File (`read_roc_file_path_shim.o`)**
    - Created at runtime using `zig build-obj`
-   - Contains the `_roc_entrypoint` symbol implementation
-   - Reads string data from POSIX shared memory
-   - Source: `src/shared_memory.zig` (embedded as source in binary)
+   - Contains the `roc_entrypoint` symbol implementation
+   - Reads string data from POSIX shared memory (which is provided by the parent process)
+   - Source: `src/read_roc_file_path_shim.zig` (embedded as source in binary)
    - Compiled to object file on first run
+   - FUTURE WORK this should be pre-compiled and then embedded as a resource in the binary (so it can be cached and end-users don't need a compiler toolchain)
 
 ### Runtime Components
 
@@ -28,6 +30,7 @@ The `roc run` command implements a system for executing Roc programs by linking 
    - Uses compiler cache system to store linked executables
    - Cache key based on Roc file path hash
    - Cache location: `~/.cache/roc/[version]/entries/executables/`
+   - Can be bypassed with `--no-cache` flag
 
 2. **Inter-Process Communication**
    - Uses POSIX shared memory (`shm_open`, `mmap`)
@@ -37,7 +40,7 @@ The `roc run` command implements a system for executing Roc programs by linking 
    - Important: Must unlink existing shared memory before creating new
 
 3. **Dynamic Linking**
-   - Uses LLD (LLVM Linker) to combine `host.a` + `shared_memory.o`
+   - Uses LLD (LLVM Linker) to combine `libplatform_host_str_simple.a` + `read_roc_file_path_shim.o`
    - Creates platform-specific executable
    - Links at runtime only if not cached
 
@@ -54,10 +57,10 @@ roc run example.roc
 
 ### 2. Runtime Linking (Cache Miss)
 ```
-├── Copy pre-built host.a from zig-out/lib/libhost.a to cache
-├── Compile shared_memory.zig to object file in cache
+├── Copy pre-built libplatform_host_str_simple.a from zig-out/lib/libplatform_host_str_simple.a to cache
+├── Compile read_roc_file_path_shim.zig to object file in cache
 │   └── Uses: zig build-obj with embedded source
-├── Use LLD to link: host.a + shared_memory.o → executable
+├── Use LLD to link: libplatform_host_str_simple.a + read_roc_file_path_shim.o → executable
 └── Executable stored at cache path for future runs
 ```
 
@@ -88,38 +91,90 @@ roc run example.roc
 └── Cached executable remains for future runs
 ```
 
-## Key Benefits
+## Command Line Options
 
-1. **Performance**: Cached executables avoid re-linking on subsequent runs
-2. **Portability**: Uses Zig's cross-compilation for consistent builds
-3. **Separation**: Clear boundary between host (C) and runtime (Zig) code
-4. **Extensibility**: Host library can be replaced by third parties
+### Basic Usage
+```
+roc [OPTIONS] <file.roc> [-- <args>...]
+```
+
+### Options
+
+- `--no-cache`: Bypass the executable cache and force recompilation
+  - Useful during development when the shim or host library changes
+  - Forces extraction and recompilation of embedded sources
+  - Executable is still saved to cache for future use
+
+### Examples
+```bash
+# Run with default settings (uses cache if available)
+roc app.roc
+
+# Force recompilation, bypassing cache
+roc --no-cache app.roc
+
+# Run with arguments passed to the Roc application
+roc app.roc -- arg1 arg2 arg3
+```
 
 ## File Structure
 
 ```
 roc/
 ├── src/
-│   ├── host.c                 # Host static library source
-│   ├── shared_memory.zig      # Roc runtime object source
-│   └── main.zig              # CLI implementation
-├── build.zig                 # Build configuration
-└── ROC_RUN_DESIGN.md         # This document
+│   ├── platform_host_str_simple.zig  # Host static library source
+│   ├── read_roc_file_path_shim.zig   # Roc runtime object source
+│   └── main.zig                      # CLI implementation
+├── build.zig                         # Build configuration
+└── ROC_RUN_DESIGN.md                 # This document
 ```
 
 ## Symbol Interface
 
-### Host Library (`host.a`)
-- **Expects**: `extern char* _roc_entrypoint(void)`
-- **Provides**: `main()` function that calls `_roc_entrypoint` and prints result
+### Host Library (`libplatform_host_str_simple.a`)
+- **Expects**: `extern fn roc_entrypoint(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr`
+- **Provides**: `main()` function that calls `roc_entrypoint` and prints result using RocStr
 
-### Roc Runtime (`shared_memory.o`)
-- **Exports**: `_roc_entrypoint() -> ?[*:0]u8`
-- **Functionality**: Reads string from shared memory, returns null-terminated C string
+### Roc Runtime (`read_roc_file_path_shim.o`)
+- **Exports**: `roc_entrypoint(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr`
+- **Functionality**: Reads string from shared memory, returns a RocStr (supports both small and large strings)
+
+## RocStr Implementation Details
+
+The `RocStr` type is a key data structure used for string handling between the host and runtime:
+
+```zig
+const RocStr = extern struct {
+    bytes: ?[*]u8,
+    length: usize,
+    capacity_or_alloc_ptr: usize,
+};
+```
+
+### Small String Optimization
+
+- **Small strings** (≤ 23 bytes): Data stored directly in the struct
+  - String bytes stored from the beginning of the struct
+  - Length stored in the last byte (byte 23) XORed with 0x80
+  - Identified by high bit set in `capacity_or_alloc_ptr`
+  - No heap allocation required
+
+- **Large strings** (> 23 bytes): Data stored on heap
+  - `bytes` points to heap-allocated memory
+  - `length` contains the actual string length
+  - `capacity_or_alloc_ptr` contains the allocation capacity
+  - Memory allocated using provided `roc_alloc` function
+
+### Key Methods
+
+- `isSmallStr()`: Checks if high bit of `capacity_or_alloc_ptr` is set
+- `asU8ptr()`: Returns pointer to string data (struct itself for small, heap for large)
+- `setLen()`: Sets length appropriately based on string type
+- `asSlice()`: Returns a slice view of the string data
 
 ## Future Enhancements
 
-1. **Host Library Replacement**: Third parties can provide their own `host.a`
+1. **Host Library Replacement**: Third parties can provide their own host library
 2. **Multiple Communication Channels**: Support for complex data types beyond strings
 3. **Cache Invalidation**: Automatic cache cleanup based on age/size
 4. **Performance Monitoring**: Metrics for cache hits/misses and execution times
