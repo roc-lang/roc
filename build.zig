@@ -282,14 +282,11 @@ fn addMainExe(
 
     // Create host.a static library at build time
     const host_lib = b.addStaticLibrary(.{
-        .name = "host",
+        .name = "platform_host_str_simple",
+        .root_source_file = b.path("src/platform_host_str_simple.zig"),
         .target = target,
         .optimize = optimize,
         .strip = strip,
-    });
-    host_lib.addCSourceFile(.{
-        .file = b.path("src/host.c"),
-        .flags = &.{},
     });
     host_lib.linkLibC();
 

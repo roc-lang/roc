@@ -23,7 +23,7 @@ const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 
 const builtin = @import("builtin");
-const shared_memory_source = @embedFile("shared_memory.zig");
+const read_roc_file_path_shim_source = @embedFile("read_roc_file_path_shim.zig");
 const c = std.c;
 
 // External C functions for POSIX shared memory
@@ -105,7 +105,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     // Initialize cache
     const cache_config = CacheConfig{
-        .enabled = true,
+        .enabled = !args.no_cache,
         .verbose = false,
     };
     var cache_manager = CacheManager.init(gpa, cache_config, Filesystem.default());
@@ -143,8 +143,8 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     };
     defer gpa.free(exe_path);
 
-    // Check if executable already exists in cache
-    const exe_exists = blk: {
+    // Check if the executable already exists (cached)
+    const exe_exists = if (args.no_cache) false else blk: {
         std.fs.accessAbsolute(exe_path, .{}) catch {
             break :blk false;
         };
@@ -153,37 +153,37 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     if (!exe_exists) {
         // Use pre-built host.a from the install directory
-        const installed_host_lib = std.fs.cwd().realpathAlloc(gpa, "zig-out/lib/libhost.a") catch |err| {
+        const installed_host_lib = std.fs.cwd().realpathAlloc(gpa, "zig-out/lib/libplatform_host_str_simple.a") catch |err| {
             stderr.print("Failed to get absolute path for host library: {}\n", .{err}) catch {};
             std.process.exit(1);
         };
         defer gpa.free(installed_host_lib);
 
-        const host_lib_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "host.a" }) catch |err| {
+        const host_lib_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "platform_host_str_simple.a" }) catch |err| {
             stderr.print("Failed to create host library path: {}\n", .{err}) catch {};
             std.process.exit(1);
         };
         defer gpa.free(host_lib_path);
 
-        // Copy host.a to cache directory
+        // Copy platform_host_str_simple.a to cache directory
         std.fs.copyFileAbsolute(installed_host_lib, host_lib_path, .{}) catch |err| {
             stderr.print("Failed to copy host library from {s} to {s}: {}\n", .{ installed_host_lib, host_lib_path, err }) catch {};
             std.process.exit(1);
         };
 
         // Extract embedded object file to cache
-        const obj_file_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "shared_memory.o" }) catch |err| {
+        const obj_file_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "read_roc_file_path_shim.o" }) catch |err| {
             stderr.print("Failed to create object file path: {}\n", .{err}) catch {};
             std.process.exit(1);
         };
         defer gpa.free(obj_file_path);
 
-        createSharedMemoryObject(gpa, obj_file_path) catch |err| {
-            stderr.print("Failed to create shared memory object: {}\n", .{err}) catch {};
+        createReadRocFilePathShimObject(gpa, obj_file_path) catch |err| {
+            stderr.print("Failed to create read roc file path shim object: {}\n", .{err}) catch {};
             std.process.exit(1);
         };
 
-        // Link the host.a with our object file to create the executable
+        // Link the platform_host_str_simple.a with our object file to create the executable
         const link_config = linker.LinkConfig{
             .output_path = exe_path,
             .object_files = &.{ host_lib_path, obj_file_path },
@@ -196,7 +196,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     }
 
     // Set up shared memory with the placeholder string
-    const test_string = "Testing Roc shared memory communication!";
+    const test_string = "/path/to/main.roc (from shared memory)";
     const shm_handle = writeToSharedMemory(test_string) catch |err| {
         stderr.print("Failed to write to shared memory: {}\n", .{err}) catch {};
         std.process.exit(1);
@@ -263,7 +263,8 @@ fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
     // Create shared memory object
     const shm_fd = shm_open(shm_name, 0x0002 | 0x0200, 0o666); // O_RDWR | O_CREAT
     if (shm_fd < 0) {
-        std.debug.print("Failed to create shared memory\n", .{});
+        const errno = std.c._errno().*;
+        std.debug.print("Failed to create shared memory: {s}, fd = {}, errno = {}\n", .{ shm_name, shm_fd, errno });
         return error.SharedMemoryCreateFailed;
     }
 
@@ -311,7 +312,7 @@ fn cleanupSharedMemory() void {
     }
 }
 
-fn createSharedMemoryObject(gpa: Allocator, output_path: []const u8) !void {
+fn createReadRocFilePathShimObject(gpa: Allocator, output_path: []const u8) !void {
     // Create temporary Zig source file
     const zig_source_path = try std.fmt.allocPrint(gpa, "{s}.zig", .{output_path});
     defer gpa.free(zig_source_path);
@@ -319,8 +320,8 @@ fn createSharedMemoryObject(gpa: Allocator, output_path: []const u8) !void {
     const zig_file = try std.fs.cwd().createFile(zig_source_path, .{});
     defer zig_file.close();
 
-    // Write the shared memory Zig source
-    try zig_file.writeAll(shared_memory_source);
+    // Write the read roc file path shim source
+    try zig_file.writeAll(read_roc_file_path_shim_source);
 
     // Compile to object file using zig build-obj with explicit output path
     const emit_bin_arg = try std.fmt.allocPrint(gpa, "-femit-bin={s}", .{output_path});
