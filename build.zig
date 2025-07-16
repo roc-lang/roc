@@ -280,6 +280,23 @@ fn addMainExe(
         .link_libc = true,
     });
 
+    // Create host.a static library at build time
+    const host_lib = b.addStaticLibrary(.{
+        .name = "host",
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+    });
+    host_lib.addCSourceFile(.{
+        .file = b.path("src/host.c"),
+        .flags = &.{},
+    });
+    host_lib.linkLibC();
+
+    // Install host.a to the output directory
+    const install_host = b.addInstallArtifact(host_lib, .{});
+    b.getInstallStep().dependOn(&install_host.step);
+
     const config = b.addOptions();
     config.addOption(bool, "llvm", enable_llvm);
     exe.root_module.addOptions("config", config);

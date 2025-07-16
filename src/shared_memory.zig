@@ -1,72 +1,78 @@
 //! Shared memory reading functionality for the Roc runtime.
-//! This module provides the exported symbol that host applications can call
-//! to read string data from shared memory.
+//! This module provides the _roc_entrypoint symbol that host applications can call
+//! to get string data from POSIX shared memory.
 
 const std = @import("std");
+const c = std.c;
 
-/// Exported symbol that reads a string from temporary file ROC_FILE_TO_INTERPRET
-/// Returns the string data to the caller
-/// Expected format in temp file: [usize length][u8... data]
-export fn rocReadFromSharedMemory(output_ptr: *?[*]u8, output_len: *usize) void {
-    const temp_file_path = "/tmp/ROC_FILE_TO_INTERPRET";
+// External C functions for POSIX shared memory
+extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: c.mode_t) c_int;
+extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
+extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: c.off_t) ?*anyopaque;
+extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
+extern "c" fn __error() *c_int; // macOS way to get errno
 
-    // Try to open the temporary file
-    const file = std.fs.openFileAbsolute(temp_file_path, .{}) catch |err| {
-        // If we can't open the file, return empty string
-        std.debug.print("Failed to open temp file: {}\n", .{err});
-        output_ptr.* = null;
-        output_len.* = 0;
-        return;
-    };
-    defer file.close();
+/// Exported symbol that reads a string from shared memory ROC_FILE_TO_INTERPRET
+/// Returns a null-terminated C string to the caller
+/// Expected format in shared memory: [usize length][u8... data]
+export fn _roc_entrypoint() ?[*:0]u8 {
+    const shm_name = "/ROC_FILE_TO_INTERPRET";
 
-    // Get the size of the file
-    const stat = file.stat() catch |err| {
-        std.debug.print("Failed to get file stats: {}\n", .{err});
-        output_ptr.* = null;
-        output_len.* = 0;
-        return;
-    };
+    // Open the shared memory object
+    const shm_fd = shm_open(shm_name, 0, 0); // O_RDONLY = 0
+    if (shm_fd < 0) {
+        const errno = __error().*;
+        std.debug.print("Failed to open shared memory: {s}, fd = {}, errno = {}\n", .{ shm_name, shm_fd, errno });
+        return null;
+    }
+    defer _ = c.close(shm_fd);
 
-    if (stat.size < @sizeOf(usize)) {
-        std.debug.print("File too small for length header\n", .{});
-        output_ptr.* = null;
-        output_len.* = 0;
-        return;
+    // Get the size of the shared memory object
+    var stat_buf: c.Stat = undefined;
+    if (c.fstat(shm_fd, &stat_buf) != 0) {
+        std.debug.print("Failed to stat shared memory\n", .{});
+        return null;
     }
 
-    // Allocate memory for the file content
-    const allocator = std.heap.c_allocator;
-    const file_content = allocator.alloc(u8, @intCast(stat.size)) catch |err| {
-        std.debug.print("Failed to allocate memory: {}\n", .{err});
-        output_ptr.* = null;
-        output_len.* = 0;
-        return;
-    };
+    if (stat_buf.size < @sizeOf(usize)) {
+        std.debug.print("Shared memory too small for length header\n", .{});
+        return null;
+    }
 
-    // Read the file content
-    _ = file.readAll(file_content) catch |err| {
-        std.debug.print("Failed to read file: {}\n", .{err});
-        allocator.free(file_content);
-        output_ptr.* = null;
-        output_len.* = 0;
-        return;
+    // Map the shared memory
+    const mapped_ptr = mmap(
+        null,
+        @intCast(stat_buf.size),
+        0x01, // PROT_READ
+        0x0001, // MAP_SHARED
+        shm_fd,
+        0,
+    ) orelse {
+        std.debug.print("Failed to map shared memory\n", .{});
+        return null;
     };
+    const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..@intCast(stat_buf.size)];
+    defer _ = munmap(mapped_ptr, @intCast(stat_buf.size));
 
-    // Read the length from the beginning of the file
-    const length_ptr: *align(1) usize = @ptrCast(file_content.ptr);
+    // Read the length from the beginning of shared memory
+    const length_ptr: *align(1) const usize = @ptrCast(mapped_memory.ptr);
     const string_length = length_ptr.*;
 
     // Check if we have enough data
-    if (stat.size < @sizeOf(usize) + string_length) {
-        std.debug.print("File too small for string data\n", .{});
-        allocator.free(file_content);
-        output_ptr.* = null;
-        output_len.* = 0;
-        return;
+    if (stat_buf.size < @sizeOf(usize) + string_length) {
+        std.debug.print("Shared memory too small for string data\n", .{});
+        return null;
     }
 
-    // Return pointer to the string data and its length
-    output_ptr.* = file_content.ptr + @sizeOf(usize);
-    output_len.* = string_length;
+    // Create a null-terminated string from the data
+    const allocator = std.heap.c_allocator;
+    const string_data = mapped_memory.ptr + @sizeOf(usize);
+    const result = allocator.allocSentinel(u8, string_length, 0) catch |err| {
+        std.debug.print("Failed to allocate result string: {}\n", .{err});
+        return null;
+    };
+
+    @memcpy(result, string_data[0..string_length]);
+
+    return result.ptr;
 }

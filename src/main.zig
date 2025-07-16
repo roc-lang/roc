@@ -23,6 +23,14 @@ const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 
 const builtin = @import("builtin");
+const shared_memory_source = @embedFile("shared_memory.zig");
+const c = std.c;
+
+// External C functions for POSIX shared memory
+extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: c.mode_t) c_int;
+extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
+extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: c.off_t) ?*anyopaque;
+extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
 
 const benchTokenizer = bench.benchTokenizer;
 const benchParse = bench.benchParse;
@@ -135,65 +143,172 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     };
     defer gpa.free(exe_path);
 
-    // Create a placeholder host.a library for now
-    const host_lib_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "host.a" }) catch |err| {
-        stderr.print("Failed to create host library path: {}\n", .{err}) catch {};
-        std.process.exit(1);
-    };
-    defer gpa.free(host_lib_path);
-
-    createHostLibrary(gpa, host_lib_path) catch |err| {
-        stderr.print("Failed to create host library: {}\n", .{err}) catch {};
-        std.process.exit(1);
+    // Check if executable already exists in cache
+    const exe_exists = blk: {
+        std.fs.accessAbsolute(exe_path, .{}) catch {
+            break :blk false;
+        };
+        break :blk true;
     };
 
-    // Create object file from source at runtime
-    const obj_file_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "shared_memory.o" }) catch |err| {
-        stderr.print("Failed to create object file path: {}\n", .{err}) catch {};
-        std.process.exit(1);
-    };
-    defer gpa.free(obj_file_path);
+    if (!exe_exists) {
+        // Use pre-built host.a from the install directory
+        const installed_host_lib = std.fs.cwd().realpathAlloc(gpa, "zig-out/lib/libhost.a") catch |err| {
+            stderr.print("Failed to get absolute path for host library: {}\n", .{err}) catch {};
+            std.process.exit(1);
+        };
+        defer gpa.free(installed_host_lib);
 
-    createSharedMemoryObject(gpa, obj_file_path) catch |err| {
-        stderr.print("Failed to create shared memory object: {}\n", .{err}) catch {};
-        std.process.exit(1);
-    };
+        const host_lib_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "host.a" }) catch |err| {
+            stderr.print("Failed to create host library path: {}\n", .{err}) catch {};
+            std.process.exit(1);
+        };
+        defer gpa.free(host_lib_path);
 
-    // Link the host.a with our object file to create the executable
-    const link_config = linker.LinkConfig{
-        .output_path = exe_path,
-        .object_files = &.{ host_lib_path, obj_file_path },
-    };
+        // Copy host.a to cache directory
+        std.fs.copyFileAbsolute(installed_host_lib, host_lib_path, .{}) catch |err| {
+            stderr.print("Failed to copy host library from {s} to {s}: {}\n", .{ installed_host_lib, host_lib_path, err }) catch {};
+            std.process.exit(1);
+        };
 
-    linker.link(gpa, link_config) catch |err| {
-        stderr.print("Failed to link executable: {}\n", .{err}) catch {};
-        std.process.exit(1);
-    };
+        // Extract embedded object file to cache
+        const obj_file_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "shared_memory.o" }) catch |err| {
+            stderr.print("Failed to create object file path: {}\n", .{err}) catch {};
+            std.process.exit(1);
+        };
+        defer gpa.free(obj_file_path);
 
-    // Set up temporary file with the placeholder string
+        createSharedMemoryObject(gpa, obj_file_path) catch |err| {
+            stderr.print("Failed to create shared memory object: {}\n", .{err}) catch {};
+            std.process.exit(1);
+        };
+
+        // Link the host.a with our object file to create the executable
+        const link_config = linker.LinkConfig{
+            .output_path = exe_path,
+            .object_files = &.{ host_lib_path, obj_file_path },
+        };
+
+        linker.link(gpa, link_config) catch |err| {
+            stderr.print("Failed to link executable: {}\n", .{err}) catch {};
+            std.process.exit(1);
+        };
+    }
+
+    // Set up shared memory with the placeholder string
     const test_string = "Testing Roc shared memory communication!";
-    writeToTempFile(test_string) catch |err| {
-        stderr.print("Failed to write to temp file: {}\n", .{err}) catch {};
+    const shm_handle = writeToSharedMemory(test_string) catch |err| {
+        stderr.print("Failed to write to shared memory: {}\n", .{err}) catch {};
+        std.process.exit(1);
+    };
+    // Ensure we clean up shared memory resources on all exit paths
+    defer {
+        _ = munmap(shm_handle.ptr, shm_handle.size);
+        _ = c.close(shm_handle.fd);
+        cleanupSharedMemory();
+    }
+
+    // Execute the created executable using spawn for better control
+    var child = std.process.Child.init(&.{exe_path}, gpa);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    child.spawn() catch |err| {
+        stderr.print("Failed to spawn {s}: {}\n", .{ exe_path, err }) catch {};
+        cleanupSharedMemory();
         std.process.exit(1);
     };
 
-    // Execute the created executable
-    const result = std.process.Child.run(.{
-        .allocator = gpa,
-        .argv = &.{exe_path},
-    }) catch |err| {
-        stderr.print("Failed to execute {s}: {}\n", .{ exe_path, err }) catch {};
+    // Read output while child is running
+    var stdout_buf = std.ArrayList(u8).init(gpa);
+    defer stdout_buf.deinit();
+    var stderr_buf = std.ArrayList(u8).init(gpa);
+    defer stderr_buf.deinit();
+
+    if (child.stdout) |child_stdout| {
+        child_stdout.reader().readAllArrayList(&stdout_buf, 1024 * 1024) catch {};
+    }
+    if (child.stderr) |child_stderr| {
+        child_stderr.reader().readAllArrayList(&stderr_buf, 1024 * 1024) catch {};
+    }
+
+    // Wait for child to complete
+    _ = child.wait() catch |err| {
+        stderr.print("Failed waiting for child process: {}\n", .{err}) catch {};
         std.process.exit(1);
     };
 
     // Print the output
-    stdout.print("{s}", .{result.stdout}) catch {};
-    if (result.stderr.len > 0) {
-        stderr.print("{s}", .{result.stderr}) catch {};
+    stdout.print("{s}", .{stdout_buf.items}) catch {};
+    if (stderr_buf.items.len > 0) {
+        stderr.print("{s}", .{stderr_buf.items}) catch {};
+    }
+}
+
+const SharedMemoryHandle = struct {
+    fd: c_int,
+    ptr: *anyopaque,
+    size: usize,
+};
+
+fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
+    const shm_name = "/ROC_FILE_TO_INTERPRET";
+
+    // Calculate total size needed: length + data
+    const total_size = @sizeOf(usize) + data.len;
+
+    // Unlink any existing shared memory object first
+    _ = shm_unlink(shm_name);
+
+    // Create shared memory object
+    const shm_fd = shm_open(shm_name, 0x0002 | 0x0200, 0o666); // O_RDWR | O_CREAT
+    if (shm_fd < 0) {
+        std.debug.print("Failed to create shared memory\n", .{});
+        return error.SharedMemoryCreateFailed;
     }
 
-    // Clean up temporary file
-    cleanupTempFile();
+    // Set the size of the shared memory object
+    if (c.ftruncate(shm_fd, @intCast(total_size)) != 0) {
+        _ = c.close(shm_fd);
+        std.debug.print("Failed to set shared memory size\n", .{});
+        return error.SharedMemoryTruncateFailed;
+    }
+
+    // Map the shared memory
+    const mapped_ptr = mmap(
+        null,
+        total_size,
+        0x01 | 0x02, // PROT_READ | PROT_WRITE
+        0x0001, // MAP_SHARED
+        shm_fd,
+        0,
+    ) orelse {
+        _ = c.close(shm_fd);
+        std.debug.print("Failed to map shared memory\n", .{});
+        return error.SharedMemoryMapFailed;
+    };
+    const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..total_size];
+
+    // Write length at the beginning
+    const length_ptr: *align(1) usize = @ptrCast(mapped_memory.ptr);
+    length_ptr.* = data.len;
+
+    // Write data after the length
+    const data_ptr = mapped_memory.ptr + @sizeOf(usize);
+    @memcpy(data_ptr[0..data.len], data);
+
+    return SharedMemoryHandle{
+        .fd = shm_fd,
+        .ptr = mapped_ptr,
+        .size = total_size,
+    };
+}
+
+fn cleanupSharedMemory() void {
+    const shm_name = "/ROC_FILE_TO_INTERPRET";
+    if (shm_unlink(shm_name) != 0) {
+        std.debug.print("Failed to unlink shared memory\n", .{});
+    }
 }
 
 fn createSharedMemoryObject(gpa: Allocator, output_path: []const u8) !void {
@@ -205,8 +320,7 @@ fn createSharedMemoryObject(gpa: Allocator, output_path: []const u8) !void {
     defer zig_file.close();
 
     // Write the shared memory Zig source
-    const zig_source = @embedFile("shared_memory.zig");
-    try zig_file.writeAll(zig_source);
+    try zig_file.writeAll(shared_memory_source);
 
     // Compile to object file using zig build-obj with explicit output path
     const emit_bin_arg = try std.fmt.allocPrint(gpa, "-femit-bin={s}", .{output_path});
@@ -214,7 +328,7 @@ fn createSharedMemoryObject(gpa: Allocator, output_path: []const u8) !void {
 
     const compile_result = std.process.Child.run(.{
         .allocator = gpa,
-        .argv = &.{ "zig", "build-obj", zig_source_path, "-fno-emit-asm", "-fno-emit-llvm-ir", emit_bin_arg },
+        .argv = &.{ "zig", "build-obj", zig_source_path, "-fno-emit-asm", "-fno-emit-llvm-ir", emit_bin_arg, "-lc" },
     }) catch |err| {
         std.debug.print("Failed to compile object file: {}\n", .{err});
         return err;
@@ -227,119 +341,6 @@ fn createSharedMemoryObject(gpa: Allocator, output_path: []const u8) !void {
 
     // Clean up temporary files
     std.fs.cwd().deleteFile(zig_source_path) catch {};
-}
-
-fn createHostLibrary(gpa: Allocator, output_path: []const u8) !void {
-    // Create a simple C source file that calls the memory reading function
-    const c_source =
-        \\#include <stdio.h>
-        \\#include <stddef.h>
-        \\
-        \\// Declare the memory reading function from our object file
-        \\extern void rocReadFromSharedMemory(char** output_ptr, size_t* output_len);
-        \\
-        \\int main() {
-        \\    char* data = NULL;
-        \\    size_t len = 0;
-        \\
-        \\    rocReadFromSharedMemory(&data, &len);
-        \\
-        \\    if (data != NULL && len > 0) {
-        \\        printf("%.*s\n", (int)len, data);
-        \\    } else {
-        \\        printf("No data received from shared memory\n");
-        \\    }
-        \\
-        \\    return 0;
-        \\}
-        \\
-    ;
-
-    // Write the C source to a temporary file
-    const tmp_dir = std.fs.cwd();
-    const c_file_path = try std.fmt.allocPrint(gpa, "{s}.c", .{output_path});
-    defer gpa.free(c_file_path);
-
-    const c_file = try tmp_dir.createFile(c_file_path, .{});
-    defer c_file.close();
-    try c_file.writeAll(c_source);
-
-    // Compile the C source to an object file
-    const obj_file_path = try std.fmt.allocPrint(gpa, "{s}.o", .{output_path});
-    defer gpa.free(obj_file_path);
-
-    const compile_result = std.process.Child.run(.{
-        .allocator = gpa,
-        .argv = &.{ "cc", "-c", c_file_path, "-o", obj_file_path },
-    }) catch |err| {
-        std.debug.print("Failed to compile host library: {}\n", .{err});
-        return err;
-    };
-
-    if (compile_result.term.Exited != 0) {
-        std.debug.print("Host library compilation failed: {s}\n", .{compile_result.stderr});
-        return error.CompilationFailed;
-    }
-
-    // Create static library from object file
-    const ar_result = std.process.Child.run(.{
-        .allocator = gpa,
-        .argv = &.{ "ar", "rcs", output_path, obj_file_path },
-    }) catch |err| {
-        std.debug.print("Failed to create static library: {}\n", .{err});
-        return err;
-    };
-
-    if (ar_result.term.Exited != 0) {
-        std.debug.print("Static library creation failed: {s}\n", .{ar_result.stderr});
-        return error.LibraryCreationFailed;
-    }
-
-    // Clean up temporary files
-    tmp_dir.deleteFile(c_file_path) catch {};
-    tmp_dir.deleteFile(obj_file_path) catch {};
-}
-
-fn writeToTempFile(data: []const u8) !void {
-    const temp_file_path = "/tmp/ROC_FILE_TO_INTERPRET";
-
-    // Calculate total size needed: length + data
-    const total_size = @sizeOf(usize) + data.len;
-
-    // Create temporary file
-    const file = std.fs.createFileAbsolute(temp_file_path, .{}) catch |err| {
-        std.debug.print("Failed to create temp file: {}\n", .{err});
-        return err;
-    };
-    defer file.close();
-
-    // Allocate buffer for length + data
-    const allocator = std.heap.c_allocator;
-    const buffer = allocator.alloc(u8, total_size) catch |err| {
-        std.debug.print("Failed to allocate buffer: {}\n", .{err});
-        return err;
-    };
-    defer allocator.free(buffer);
-
-    // Write length at the beginning
-    const length_ptr: *align(1) usize = @ptrCast(buffer.ptr);
-    length_ptr.* = data.len;
-
-    // Write data after the length
-    @memcpy(buffer[@sizeOf(usize)..], data);
-
-    // Write buffer to file
-    file.writeAll(buffer) catch |err| {
-        std.debug.print("Failed to write to temp file: {}\n", .{err});
-        return err;
-    };
-}
-
-fn cleanupTempFile() void {
-    const temp_file_path = "/tmp/ROC_FILE_TO_INTERPRET";
-    std.fs.deleteFileAbsolute(temp_file_path) catch |err| {
-        std.debug.print("Failed to delete temp file: {}\n", .{err});
-    };
 }
 
 fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
