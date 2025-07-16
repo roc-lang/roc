@@ -630,8 +630,6 @@ test "snapshot evaluate top-level `expect` statements" {
     var failed_files = std.ArrayList([]const u8).init(allocator);
     defer failed_files.deinit();
 
-    const start_time = std.time.milliTimestamp();
-
     // Evaluate expects in each snapshot
     for (snapshot_files.items) |snapshot_path| {
         const result = evaluateSnapshotExpects(allocator, snapshot_path) catch |err| {
@@ -645,15 +643,6 @@ test "snapshot evaluate top-level `expect` statements" {
         };
         total_expects += result.expect_count;
         total_skipped += result.skipped_count;
-    }
-
-    const end_time = std.time.milliTimestamp();
-    const duration_ms = end_time - start_time;
-
-    if (total_skipped > 0) {
-        std.debug.print("info: evaluated {} top-level `expect` statements (skipped {} not-implemented) from {} snapshot files in {} ms.\n", .{ total_expects, total_skipped, snapshot_files.items.len, duration_ms });
-    } else {
-        std.debug.print("info: evaluated {} top-level `expect` statements from {} snapshot files in {} ms.\n", .{ total_expects, snapshot_files.items.len, duration_ms });
     }
 
     if (total_failures > 0) {
