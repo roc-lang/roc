@@ -39,14 +39,10 @@ pub const Store = struct {
     // Content storage
     contents: SnapshotContentList,
 
-    // Backing arrays for ranges (like Store)
-    alias_args: SnapshotContentIdxSafeList,
-    tuple_elems: SnapshotContentIdxSafeList,
-    nominal_type_args: SnapshotContentIdxSafeList,
-    func_args: SnapshotContentIdxSafeList,
+    /// Storage for compound type parts
+    content_indexes: SnapshotContentIdxSafeList,
     record_fields: SnapshotRecordFieldSafeList,
     tags: SnapshotTagSafeList,
-    tag_args: SnapshotContentIdxSafeList,
 
     // Scratch
     scratch_content: base.Scratch(SnapshotContentIdx),
@@ -57,13 +53,9 @@ pub const Store = struct {
         return .{
             .gpa = gpa,
             .contents = try SnapshotContentList.initCapacity(gpa, capacity),
-            .alias_args = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
-            .tuple_elems = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
-            .nominal_type_args = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
-            .func_args = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
+            .content_indexes = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
             .record_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 256),
             .tags = try SnapshotTagSafeList.initCapacity(gpa, 256),
-            .tag_args = try SnapshotContentIdxSafeList.initCapacity(gpa, 256),
             .scratch_content = try base.Scratch(SnapshotContentIdx).init(gpa),
             .scratch_tags = try base.Scratch(SnapshotTag).init(gpa),
             .scratch_record_fields = try base.Scratch(SnapshotRecordField).init(gpa),
@@ -72,13 +64,9 @@ pub const Store = struct {
 
     pub fn deinit(self: *Self) void {
         self.contents.deinit(self.gpa);
-        self.alias_args.deinit(self.gpa);
-        self.tuple_elems.deinit(self.gpa);
-        self.nominal_type_args.deinit(self.gpa);
-        self.func_args.deinit(self.gpa);
+        self.content_indexes.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
-        self.tag_args.deinit(self.gpa);
         self.scratch_content.deinit(self.gpa);
         self.scratch_tags.deinit(self.gpa);
         self.scratch_record_fields.deinit(self.gpa);
@@ -155,7 +143,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const args_range = try self.alias_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const args_range = try self.content_indexes.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         return SnapshotAlias{
@@ -165,7 +153,7 @@ pub const Store = struct {
     }
 
     fn deepCopyTuple(self: *Self, store: *const TypesStore, tuple: types.Tuple) std.mem.Allocator.Error!SnapshotTuple {
-        const elems_slice = store.getTupleElemsSlice(tuple.elems);
+        const elems_slice = store.sliceVars(tuple.elems);
 
         // Mark starting position in the scratch array
         const scratch_top = self.scratch_content.top();
@@ -178,7 +166,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const elems_range = try self.tuple_elems.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const elems_range = try self.content_indexes.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         return SnapshotTuple{
@@ -246,7 +234,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const args_range = try self.nominal_type_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const args_range = try self.content_indexes.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         return SnapshotNominalType{
@@ -257,7 +245,7 @@ pub const Store = struct {
     }
 
     fn deepCopyFunc(self: *Self, store: *const TypesStore, func: types.Func) std.mem.Allocator.Error!SnapshotFunc {
-        const args_slice = store.getFuncArgsSlice(func.args);
+        const args_slice = store.sliceVars(func.args);
 
         // Mark starting position in the scratch array
         const scratch_top = self.scratch_content.top();
@@ -270,7 +258,7 @@ pub const Store = struct {
         }
 
         // Append scratch to backing array, and shrink scratch
-        const args_range = try self.func_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
+        const args_range = try self.content_indexes.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
         self.scratch_content.clearFrom(scratch_top);
 
         // Deep copy return type
@@ -351,7 +339,7 @@ pub const Store = struct {
         while (tags_iter.next()) |tag_idx| {
             const tag = store.tags.get(tag_idx);
 
-            const tag_args_slice = store.getTagArgsSlice(tag.args);
+            const tag_args_slice = store.sliceVars(tag.args);
 
             // Mark starting position in the scratch array for this tag's arguments
             const content_scratch_top = self.scratch_content.top();
@@ -364,7 +352,7 @@ pub const Store = struct {
             }
 
             // Append scratch to backing array, and shrink scratch
-            const tag_args_range = try self.tag_args.appendSlice(self.gpa, self.scratch_content.sliceFromStart(content_scratch_top));
+            const tag_args_range = try self.content_indexes.appendSlice(self.gpa, self.scratch_content.sliceFromStart(content_scratch_top));
             self.scratch_content.clearFrom(content_scratch_top);
 
             // Create and append the snapshot tag to scratch
@@ -391,20 +379,8 @@ pub const Store = struct {
     }
 
     // Getter methods (similar to Store)
-    pub fn getAliasArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.alias_args.sliceRange(range);
-    }
-
-    pub fn getTupleElemsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.tuple_elems.sliceRange(range);
-    }
-
-    pub fn getNominalTypeArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.nominal_type_args.sliceRange(range);
-    }
-
-    pub fn getFuncArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.func_args.sliceRange(range);
+    pub fn sliceVars(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
+        return self.content_indexes.sliceRange(range);
     }
 
     pub fn getRecordFieldsSlice(self: *const Self, range: SnapshotRecordFieldSafeList.Range) SnapshotRecordFieldSafeList.Slice {
@@ -413,10 +389,6 @@ pub const Store = struct {
 
     pub fn getTagsSlice(self: *const Self, range: SnapshotTagSafeList.Range) []const SnapshotTag {
         return self.tags.sliceRange(range);
-    }
-
-    pub fn getTagArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.tag_args.sliceRange(range);
     }
 
     pub fn getContent(self: *const Self, idx: SnapshotContentIdx) SnapshotContent {
@@ -461,7 +433,7 @@ pub const SnapshotFlatType = union(enum) {
 
 /// TODO
 pub const SnapshotTuple = struct {
-    elems: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.tuple_elems
+    elems: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.vars
 };
 
 /// TODO
@@ -717,7 +689,7 @@ pub const SnapshotWriter = struct {
         switch (content.*) {
             .flex_var, .rigid_var, .err => {},
             .alias => |alias| {
-                const args = self.snapshots.getAliasArgsSlice(alias.vars);
+                const args = self.snapshots.sliceVars(alias.vars);
                 for (args) |arg_idx| {
                     self.countContent(search_idx, arg_idx, count);
                 }
@@ -735,20 +707,20 @@ pub const SnapshotWriter = struct {
             .list => |sub_idx| self.countContent(search_idx, sub_idx, count),
             .list_unbound, .num => {},
             .tuple => |tuple| {
-                const elems = self.snapshots.getTupleElemsSlice(tuple.elems);
+                const elems = self.snapshots.sliceVars(tuple.elems);
                 for (elems) |elem| {
                     self.countContent(search_idx, elem, count);
                 }
             },
             .nominal_type => |nominal_type| {
-                const args = self.snapshots.getNominalTypeArgsSlice(nominal_type.vars);
+                const args = self.snapshots.sliceVars(nominal_type.vars);
                 // Skip the first var which is the nominal type's backing var
                 for (args[1..]) |arg_idx| {
                     self.countContent(search_idx, arg_idx, count);
                 }
             },
             .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                const args = self.snapshots.getFuncArgsSlice(func.args);
+                const args = self.snapshots.sliceVars(func.args);
                 for (args) |arg| {
                     self.countContent(search_idx, arg, count);
                 }
@@ -775,7 +747,7 @@ pub const SnapshotWriter = struct {
                 var iter = tag_union.tags.iterIndices();
                 while (iter.next()) |tag_idx| {
                     const tag = self.snapshots.tags.get(tag_idx);
-                    const args = self.snapshots.getTagArgsSlice(tag.args);
+                    const args = self.snapshots.sliceVars(tag.args);
                     for (args) |arg_idx| {
                         self.countContent(search_idx, arg_idx, count);
                     }
@@ -826,7 +798,7 @@ pub const SnapshotWriter = struct {
         _ = try self.writer.write(self.idents.getText(alias.ident.ident_idx));
 
         // The 1st var is the alias type's backing var, so we skip it
-        var vars = self.snapshots.getAliasArgsSlice(alias.vars);
+        var vars = self.snapshots.sliceVars(alias.vars);
         std.debug.assert(vars.len > 0);
         vars = vars[1..];
 
@@ -903,7 +875,7 @@ pub const SnapshotWriter = struct {
 
     /// Write a tuple type
     pub fn writeTuple(self: *Self, tuple: SnapshotTuple, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const elems = self.snapshots.getTupleElemsSlice(tuple.elems);
+        const elems = self.snapshots.sliceVars(tuple.elems);
         _ = try self.writer.write("(");
         for (elems, 0..) |elem, i| {
             if (i > 0) _ = try self.writer.write(", ");
@@ -917,7 +889,7 @@ pub const SnapshotWriter = struct {
         _ = try self.writer.write(self.idents.getText(nominal_type.ident.ident_idx));
 
         // The 1st var is the nominal type's backing var, so we skip it
-        var vars = self.snapshots.getNominalTypeArgsSlice(nominal_type.vars);
+        var vars = self.snapshots.sliceVars(nominal_type.vars);
         std.debug.assert(vars.len > 0);
         vars = vars[1..];
 
@@ -950,7 +922,7 @@ pub const SnapshotWriter = struct {
 
     /// Write a function type with a specific arrow
     pub fn writeFuncWithArrow(self: *Self, func: SnapshotFunc, arrow: []const u8, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        const args = self.snapshots.getFuncArgsSlice(func.args);
+        const args = self.snapshots.sliceVars(func.args);
 
         // Write arguments
         if (args.len == 0) {
@@ -1082,7 +1054,7 @@ pub const SnapshotWriter = struct {
     /// Write a single tag
     pub fn writeTag(self: *Self, tag: SnapshotTag, root_idx: SnapshotContentIdx) Allocator.Error!void {
         _ = try self.writer.write(self.idents.getText(tag.name));
-        const args = self.snapshots.getTagArgsSlice(tag.args);
+        const args = self.snapshots.sliceVars(tag.args);
         if (args.len > 0) {
             _ = try self.writer.write("(");
             for (args, 0..) |arg, i| {

@@ -140,7 +140,7 @@ fn instantiateTuple(
     tuple: types_mod.Tuple,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!types_mod.Tuple {
-    const elems_slice = store.getTupleElemsSlice(tuple.elems);
+    const elems_slice = store.sliceVars(tuple.elems);
     var fresh_elems = std.ArrayList(Var).init(store.gpa);
     defer fresh_elems.deinit();
 
@@ -149,7 +149,7 @@ fn instantiateTuple(
         try fresh_elems.append(fresh_elem);
     }
 
-    const fresh_elems_range = try store.appendTupleElems(fresh_elems.items);
+    const fresh_elems_range = try store.appendVars(fresh_elems.items);
     return types_mod.Tuple{ .elems = fresh_elems_range };
 }
 
@@ -177,7 +177,7 @@ fn instantiateFunc(
     func: Func,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!Func {
-    const args_slice = store.getFuncArgsSlice(func.args);
+    const args_slice = store.sliceVars(func.args);
     var fresh_args = std.ArrayList(Var).init(store.gpa);
     defer fresh_args.deinit();
 
@@ -187,7 +187,7 @@ fn instantiateFunc(
     }
 
     const fresh_ret = try instantiateVar(store, func.ret, substitution);
-    const fresh_args_range = try store.appendFuncArgs(fresh_args.items);
+    const fresh_args_range = try store.appendVars(fresh_args.items);
     return Func{
         .args = fresh_args_range,
         .ret = fresh_ret,
@@ -255,13 +255,13 @@ fn instantiateTagUnion(
         var fresh_args = std.ArrayList(Var).init(store.gpa);
         defer fresh_args.deinit();
 
-        const args_slice = store.getTagArgsSlice(tag_args);
+        const args_slice = store.sliceVars(tag_args);
         for (args_slice) |arg_var| {
             const fresh_arg = try instantiateVar(store, arg_var, substitution);
             try fresh_args.append(fresh_arg);
         }
 
-        const fresh_args_range = try store.appendTagArgs(fresh_args.items);
+        const fresh_args_range = try store.appendVars(fresh_args.items);
 
         _ = try fresh_tags.append(Tag{
             .name = tag_name,

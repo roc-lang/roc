@@ -890,7 +890,7 @@ fn unifyCallWithFunc(
     region: Region,
 ) std.mem.Allocator.Error!void {
     // Unify instantiated argument types with actual arguments
-    const inst_args = self.types.getFuncArgsSlice(func.args);
+    const inst_args = self.types.sliceVars(func.args);
     const arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
 
     // Only unify arguments if counts match - otherwise let the normal
@@ -956,7 +956,7 @@ fn checkLambdaWithExpected(
         if (instantiated_content == .structure) {
             switch (instantiated_content.structure) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    const expected_args = self.types.getFuncArgsSlice(func.args);
+                    const expected_args = self.types.sliceVars(func.args);
                     // Unify each pattern with its expected type before checking body
                     if (expected_args.len == arg_patterns.len) {
                         for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
@@ -1513,7 +1513,7 @@ test "lambda with record field access infers correct type" {
     try std.testing.expect(resolved_lambda.desc.content.structure == .fn_unbound);
 
     const func = resolved_lambda.desc.content.structure.fn_unbound;
-    const args = module_env.types.getFuncArgsSlice(func.args);
+    const args = module_env.types.sliceVars(func.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
 
     // Verify that first parameter and return type resolve to the same variable

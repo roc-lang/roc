@@ -87,7 +87,7 @@ test "cross-module type checking - monomorphic function" {
     try testing.expect(resolved.desc.content.structure == .fn_pure);
 
     const func = resolved.desc.content.structure.fn_pure;
-    const args = module_b_env.types.getFuncArgsSlice(func.args);
+    const args = module_b_env.types.sliceVars(func.args);
     try testing.expectEqual(@as(usize, 2), args.len);
 
     // Check that all arguments and return are I32
@@ -173,7 +173,7 @@ test "cross-module type checking - polymorphic function" {
     try testing.expect(resolved.desc.content.structure == .fn_pure);
 
     const func = resolved.desc.content.structure.fn_pure;
-    const args = module_b_env.types.getFuncArgsSlice(func.args);
+    const args = module_b_env.types.sliceVars(func.args);
     try testing.expectEqual(@as(usize, 1), args.len);
 
     // The function should still be polymorphic (flex var)
@@ -455,7 +455,7 @@ test "cross-module type checking - polymorphic instantiation" {
 
     // The function should accept any list type
     const func = resolved.desc.content.structure.fn_pure;
-    const args = module_b_env.types.getFuncArgsSlice(func.args);
+    const args = module_b_env.types.sliceVars(func.args);
     try testing.expectEqual(@as(usize, 1), args.len);
 
     // The argument should be a list with a flex var
@@ -639,7 +639,7 @@ test "cross-module type checking - three module chain monomorphic" {
     try testing.expect(c_resolved.desc.content.structure == .fn_pure);
 
     const func = c_resolved.desc.content.structure.fn_pure;
-    const args = module_c_env.types.getFuncArgsSlice(func.args);
+    const args = module_c_env.types.sliceVars(func.args);
     try testing.expectEqual(@as(usize, 2), args.len);
 
     // Check that all arguments and return are I32
@@ -743,7 +743,7 @@ test "cross-module type checking - three module chain polymorphic" {
     try testing.expect(c_resolved.desc.content.structure == .fn_pure);
 
     const func = c_resolved.desc.content.structure.fn_pure;
-    const args = module_c_env.types.getFuncArgsSlice(func.args);
+    const args = module_c_env.types.sliceVars(func.args);
     try testing.expectEqual(@as(usize, 1), args.len);
 
     // The function should still be polymorphic
@@ -888,7 +888,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     try testing.expect(c_resolved.desc.content.structure == .fn_pure);
 
     const func = c_resolved.desc.content.structure.fn_pure;
-    const args = module_c_env.types.getFuncArgsSlice(func.args);
+    const args = module_c_env.types.sliceVars(func.args);
     try testing.expectEqual(@as(usize, 2), args.len);
 
     // First argument should be (I32 -> b)
@@ -897,7 +897,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     try testing.expect(mapper_resolved.desc.content.structure == .fn_pure);
 
     const mapper_func = mapper_resolved.desc.content.structure.fn_pure;
-    const mapper_args = module_c_env.types.getFuncArgsSlice(mapper_func.args);
+    const mapper_args = module_c_env.types.sliceVars(mapper_func.args);
     try testing.expectEqual(@as(usize, 1), mapper_args.len);
 
     // The mapper input should be I32
@@ -1390,7 +1390,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     try testing.expect(c_resolved.desc.content.structure == .fn_pure);
 
     const func = c_resolved.desc.content.structure.fn_pure;
-    const args = module_c_env.types.getFuncArgsSlice(func.args);
+    const args = module_c_env.types.sliceVars(func.args);
     try testing.expectEqual(@as(usize, 2), args.len);
 
     // First argument should be (Str -> I32)
@@ -1399,7 +1399,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     try testing.expect(first_arg_resolved.desc.content.structure == .fn_pure);
 
     const first_func = first_arg_resolved.desc.content.structure.fn_pure;
-    const first_func_args = module_c_env.types.getFuncArgsSlice(first_func.args);
+    const first_func_args = module_c_env.types.sliceVars(first_func.args);
     try testing.expectEqual(@as(usize, 1), first_func_args.len);
 
     const first_func_arg_resolved = module_c_env.types.resolveVar(first_func_args[0]);
@@ -1418,7 +1418,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     try testing.expect(second_arg_resolved.desc.content.structure == .fn_pure);
 
     const second_func = second_arg_resolved.desc.content.structure.fn_pure;
-    const second_func_args = module_c_env.types.getFuncArgsSlice(second_func.args);
+    const second_func_args = module_c_env.types.sliceVars(second_func.args);
     try testing.expectEqual(@as(usize, 1), second_func_args.len);
 
     const second_func_arg_resolved = module_c_env.types.resolveVar(second_func_args[0]);
@@ -1434,7 +1434,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     try testing.expect(ret_resolved.desc.content.structure == .fn_pure);
 
     const ret_func = ret_resolved.desc.content.structure.fn_pure;
-    const ret_func_args = module_c_env.types.getFuncArgsSlice(ret_func.args);
+    const ret_func_args = module_c_env.types.sliceVars(ret_func.args);
     try testing.expectEqual(@as(usize, 1), ret_func_args.len);
 
     const ret_func_arg_resolved = module_c_env.types.resolveVar(ret_func_args[0]);
