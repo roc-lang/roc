@@ -72,12 +72,12 @@ test "rigid variables need instantiation - multiple type parameters" {
 
     // Create tuple types for the argument and return
     const arg_tuple_var = try store.fresh();
-    const arg_elems_range = try store.appendTupleElems(&.{ rigid_a, rigid_b });
+    const arg_elems_range = try store.appendVars(&.{ rigid_a, rigid_b });
     const arg_tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = arg_elems_range } } };
     try store.setVarContent(arg_tuple_var, arg_tuple_content);
 
     const ret_tuple_var = try store.fresh();
-    const ret_elems_range = try store.appendTupleElems(&.{ rigid_b, rigid_a });
+    const ret_elems_range = try store.appendVars(&.{ rigid_b, rigid_a });
     const ret_tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = ret_elems_range } } };
     try store.setVarContent(ret_tuple_var, ret_tuple_content);
 

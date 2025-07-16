@@ -176,7 +176,7 @@ const CheckOccurs = struct {
                             // list_unbound has no sub-variables to check
                         },
                         .tuple => |tuple| {
-                            const elems = self.types_store.getTupleElemsSlice(tuple.elems);
+                            const elems = self.types_store.sliceVars(tuple.elems);
                             try self.occursSubVars(root, elems, ctx);
                         },
                         .num => {},
@@ -191,17 +191,17 @@ const CheckOccurs = struct {
                             try self.occursSubVar(root, backing_var, ctx.markNominal());
                         },
                         .fn_pure => |func| {
-                            const args = self.types_store.getFuncArgsSlice(func.args);
+                            const args = self.types_store.sliceVars(func.args);
                             try self.occursSubVars(root, args, ctx);
                             try self.occursSubVar(root, func.ret, ctx);
                         },
                         .fn_effectful => |func| {
-                            const args = self.types_store.getFuncArgsSlice(func.args);
+                            const args = self.types_store.sliceVars(func.args);
                             try self.occursSubVars(root, args, ctx);
                             try self.occursSubVar(root, func.ret, ctx);
                         },
                         .fn_unbound => |func| {
-                            const args = self.types_store.getFuncArgsSlice(func.args);
+                            const args = self.types_store.sliceVars(func.args);
                             try self.occursSubVars(root, args, ctx);
                             try self.occursSubVar(root, func.ret, ctx);
                         },
@@ -223,7 +223,7 @@ const CheckOccurs = struct {
                         .tag_union => |tag_union| {
                             const tags = self.types_store.getTagsSlice(tag_union.tags);
                             for (tags.items(.args)) |tag_args| {
-                                const args = self.types_store.getTagArgsSlice(tag_args);
+                                const args = self.types_store.sliceVars(tag_args);
                                 try self.occursSubVars(root, args, ctx.allowRecursion());
                             }
                             try self.occursSubVar(root, tag_union.ext, ctx);
@@ -466,7 +466,7 @@ test "occurs: tuple recursion (v = Tuple(v, Str))" {
     const v = try types_store.fresh();
     const str_var = try types_store.freshFromContent(Content{ .structure = .str });
 
-    const elems_range = try types_store.appendTupleElems(&[_]Var{ v, str_var });
+    const elems_range = try types_store.appendVars(&[_]Var{ v, str_var });
     const tuple = types.Tuple{ .elems = elems_range };
 
     try types_store.setRootVarContent(v, Content{ .structure = .{ .tuple = tuple } });
@@ -489,7 +489,7 @@ test "occurs: tuple not recursive (v = Tuple(Str, Str))" {
 
     const str_var = try types_store.freshFromContent(Content{ .structure = .str });
 
-    const elems_range = try types_store.appendTupleElems(&[_]Var{ str_var, str_var });
+    const elems_range = try types_store.appendVars(&[_]Var{ str_var, str_var });
     const tuple = types.Tuple{ .elems = elems_range };
 
     const v = try types_store.freshFromContent(Content{ .structure = .{ .tuple = tuple } });
@@ -560,7 +560,7 @@ test "occurs: recursive tag union (v = [ Cons(elem, v), Nil ]" {
     const elem = try types_store.fresh();
     const ext = try types_store.fresh();
 
-    const cons_tag_args = try types_store.appendTagArgs(&[_]Var{ elem, linked_list });
+    const cons_tag_args = try types_store.appendVars(&[_]Var{ elem, linked_list });
     const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
 
     const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
@@ -598,7 +598,7 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
     try types_store.setRootVarContent(boxed_linked_list, .{ .structure = .{ .box = linked_list } });
 
     // Build tag args: (elem, Box(linked_list))
-    const cons_tag_args = try types_store.appendTagArgs(&[_]Var{ elem, boxed_linked_list });
+    const cons_tag_args = try types_store.appendVars(&[_]Var{ elem, boxed_linked_list });
 
     const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
     const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
@@ -635,7 +635,7 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     const elem = try types_store.fresh();
     const ext = try types_store.fresh();
 
-    const cons_tag_args = try types_store.appendTagArgs(&[_]Var{ elem, nominal_type });
+    const cons_tag_args = try types_store.appendVars(&[_]Var{ elem, nominal_type });
     const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
     const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
     const backing_var = try types_store.freshFromContent(try types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
@@ -698,7 +698,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     const ext = try types_store.fresh();
 
     // Create the tag union content that references type_a_nominal
-    const cons_tag_args = try types_store.appendTagArgs(&[_]Var{ elem, type_a_nominal });
+    const cons_tag_args = try types_store.appendVars(&[_]Var{ elem, type_a_nominal });
     const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
     const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
     const type_b_backing = try types_store.freshFromContent(try types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));

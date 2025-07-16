@@ -1072,8 +1072,8 @@ fn Unifier(comptime StoreTypeB: type) type {
                 return error.TypeMismatch;
             }
 
-            const a_elems = self.types_store_b.getTupleElemsSlice(a_tuple.elems);
-            const b_elems = self.types_store_b.getTupleElemsSlice(b_tuple.elems);
+            const a_elems = self.types_store_b.sliceVars(a_tuple.elems);
+            const b_elems = self.types_store_b.sliceVars(b_tuple.elems);
             for (a_elems, b_elems) |a_elem, b_elem| {
                 try self.unifyGuarded(a_elem, b_elem);
             }
@@ -1754,8 +1754,8 @@ fn Unifier(comptime StoreTypeB: type) type {
                 return error.TypeMismatch;
             }
 
-            const a_args = self.types_store_b.getFuncArgsSlice(a_func.args);
-            const b_args = self.types_store_b.getFuncArgsSlice(b_func.args);
+            const a_args = self.types_store_b.sliceVars(a_func.args);
+            const b_args = self.types_store_b.sliceVars(b_func.args);
             for (a_args, b_args) |a_arg, b_arg| {
                 try self.unifyGuarded(a_arg, b_arg);
             }
@@ -2553,8 +2553,8 @@ fn Unifier(comptime StoreTypeB: type) type {
             const range_start: u32 = self.types_store_b.tags.len();
 
             for (shared_tags) |tags| {
-                const tag_a_args = self.types_store_b.getTagArgsSlice(tags.a.args);
-                const tag_b_args = self.types_store_b.getTagArgsSlice(tags.b.args);
+                const tag_a_args = self.types_store_b.sliceVars(tags.a.args);
+                const tag_b_args = self.types_store_b.sliceVars(tags.b.args);
 
                 if (tag_a_args.len != tag_b_args.len) return error.TypeMismatch;
 
@@ -2982,7 +2982,7 @@ const TestEnv = struct {
     // helpers - structure - tuple
 
     fn mkTuple(self: *Self, slice: []const Var) std.mem.Allocator.Error!Content {
-        const elems_range = try self.module_env.types.appendTupleElems(slice);
+        const elems_range = try self.module_env.types.appendVars(slice);
         return Content{ .structure = .{ .tuple = .{ .elems = elems_range } } };
     }
 
@@ -3050,12 +3050,12 @@ const TestEnv = struct {
     const TagUnionInfo = struct { tag_union: TagUnion, content: Content };
 
     fn mkTagArgs(self: *Self, args: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.module_env.types.appendTagArgs(args);
+        return try self.module_env.types.appendVars(args);
     }
 
     fn mkTag(self: *Self, name: []const u8, args: []const Var) std.mem.Allocator.Error!Tag {
         const ident_idx = try self.module_env.idents.insert(self.module_env.gpa, Ident.for_text(name), Region.zero());
-        return Tag{ .name = ident_idx, .args = try self.module_env.types.appendTagArgs(args) };
+        return Tag{ .name = ident_idx, .args = try self.module_env.types.appendVars(args) };
     }
 
     fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) std.mem.Allocator.Error!TagUnionInfo {
@@ -4928,7 +4928,7 @@ test "unify - identical closed tag_unions" {
 
     try std.testing.expectEqual(1, b_tags.len);
 
-    const b_tag_args = env.module_env.types.tag_args.sliceRange(b_tags_args[0]);
+    const b_tag_args = env.module_env.types.vars.sliceRange(b_tags_args[0]);
     try std.testing.expectEqual(1, b_tag_args.len);
     try std.testing.expectEqual(str, b_tag_args[0]);
 }
@@ -5320,12 +5320,12 @@ test "unify - fails on infinite type" {
     const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
 
     const a = try env.module_env.types.fresh();
-    const a_elems_range = try env.module_env.types.appendTupleElems(&[_]Var{ a, str_var });
+    const a_elems_range = try env.module_env.types.appendVars(&[_]Var{ a, str_var });
     const a_tuple = types_mod.Tuple{ .elems = a_elems_range };
     try env.module_env.types.setRootVarContent(a, Content{ .structure = .{ .tuple = a_tuple } });
 
     const b = try env.module_env.types.fresh();
-    const b_elems_range = try env.module_env.types.appendTupleElems(&[_]Var{ b, str_var });
+    const b_elems_range = try env.module_env.types.appendVars(&[_]Var{ b, str_var });
     const b_tuple = types_mod.Tuple{ .elems = b_elems_range };
     try env.module_env.types.setRootVarContent(b, Content{ .structure = .{ .tuple = b_tuple } });
 
