@@ -92,6 +92,8 @@ pub const Repl = struct {
 
         // Evaluate the expression
         const result = eval.eval(self.allocator, &cir, canonical_expr_idx, &self.eval_stack, &layout_cache, &module_env.types, &self.work_stack) catch |err| {
+            // Clear work_stack in case of evaluation error
+            self.work_stack.clearRetainingCapacity();
             return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
         };
 
