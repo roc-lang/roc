@@ -106,6 +106,18 @@ pub fn fromCache(env: *ModuleEnv, cached_store: NodeStore, all_defs: Def.Span, a
     };
 }
 
+fn literal_from_source(self: *CIR, start_offset: u32, end_offset: u32) []const u8 {
+    if (self.temp_source_for_sexpr) |actual_source| {
+        if (actual_source.len > 0 and end_offset <= actual_source.len and start_offset <= end_offset) {
+            return actual_source[start_offset..end_offset];
+        } else {
+            return "";
+        }
+    } else {
+        return "";
+    }
+}
+
 /// Deinit the IR's memory.
 pub fn deinit(self: *CIR) void {
     self.store.deinit();
@@ -221,11 +233,11 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         },
         .invalid_num_literal => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
+            const literal_text = self.literal_from_source(data.region.start.offset, data.region.end.offset);
             break :blk Diagnostic.buildInvalidNumLiteralReport(
                 allocator,
-                data.region,
-                source orelse self.env.source,
                 region_info,
+                literal_text,
                 filename,
             );
         },

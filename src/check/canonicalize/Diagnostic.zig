@@ -286,14 +286,12 @@ pub const Diagnostic = union(enum) {
     /// Build a report for "invalid number literal" diagnostic
     pub fn buildInvalidNumLiteralReport(
         allocator: Allocator,
-        region: Region,
-        source: []const u8,
         region_info: base.RegionInfo,
+        literal_text: []const u8,
         filename: []const u8,
     ) !Report {
         var report = Report.init(allocator, "INVALID NUMBER", .runtime_error);
 
-        const literal_text = source[region.start.offset..region.end.offset];
         const owned_literal = try report.addOwnedString(literal_text);
 
         try report.document.addReflowingText("This number literal is not valid: ");
