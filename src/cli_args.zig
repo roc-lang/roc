@@ -129,7 +129,6 @@ const main_help =
     \\
     \\Commands:
     \\  build            Build a binary from the given .roc file, but don't run it
-    \\  link             Link object files into an executable using LLD
     \\  test             Run all top-level `expect`s in a main module and any modules it imports
     \\  repl             Launch the interactive Read Eval Print Loop (REPL)
     \\  format           Format a .roc file or the .roc files contained in a directory using standard Roc formatting

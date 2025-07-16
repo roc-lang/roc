@@ -3,7 +3,7 @@
 const std = @import("std");
 const RocStr = @import("builtins/str.zig").RocStr;
 
-// Roc memory allocation function
+// Allocator to give to Roc
 fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     const log2_align = std.math.log2_int(u32, alignment);
     const align_enum: std.mem.Alignment = @enumFromInt(log2_align);

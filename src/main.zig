@@ -99,24 +99,21 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
-
-    // Initialize cache
+    // Initialize cache - used to store our shim, and linked interpreter executables in cache
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
         .verbose = false,
     };
     var cache_manager = CacheManager.init(gpa, cache_config, Filesystem.default());
 
-    // Create cache directory for executables
+    // Create cache directory for linked interpreter executables
     const cache_dir = cache_manager.config.getCacheEntriesDir(gpa) catch |err| {
-        stderr.print("Failed to get cache directory: {}\n", .{err}) catch {};
+        std.log.err("Failed to get cache directory: {}\n", .{err});
         std.process.exit(1);
     };
     defer gpa.free(cache_dir);
     const exe_cache_dir = std.fs.path.join(gpa, &.{ cache_dir, "executables" }) catch |err| {
-        stderr.print("Failed to create executable cache path: {}\n", .{err}) catch {};
+        std.log.err("Failed to create executable cache path: {}\n", .{err});
         std.process.exit(1);
     };
     defer gpa.free(exe_cache_dir);
@@ -124,25 +121,26 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     std.fs.cwd().makePath(exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => {
-            stderr.print("Failed to create cache directory: {}\n", .{err}) catch {};
+            std.log.err("Failed to create cache directory: {}\n", .{err});
             std.process.exit(1);
         },
     };
 
     // Generate executable name based on the roc file path
+    // TODO use something more interesting like a hash from the platform.main or platform/host.a etc
     const exe_name = std.fmt.allocPrint(gpa, "roc_run_{}", .{std.hash.crc.Crc32.hash(args.path)}) catch |err| {
-        stderr.print("Failed to generate executable name: {}\n", .{err}) catch {};
+        std.log.err("Failed to generate executable name: {}\n", .{err});
         std.process.exit(1);
     };
     defer gpa.free(exe_name);
 
     const exe_path = std.fs.path.join(gpa, &.{ exe_cache_dir, exe_name }) catch |err| {
-        stderr.print("Failed to create executable path: {}\n", .{err}) catch {};
+        std.log.err("Failed to create executable path: {}\n", .{err});
         std.process.exit(1);
     };
     defer gpa.free(exe_path);
 
-    // Check if the executable already exists (cached)
+    // Check if the interpreter executable already exists (cached)
     const exe_exists = if (args.no_cache) false else blk: {
         std.fs.accessAbsolute(exe_path, .{}) catch {
             break :blk false;
@@ -151,55 +149,51 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     };
 
     if (!exe_exists) {
-        // Use pre-built host.a from the install directory
-        const installed_host_lib = std.fs.cwd().realpathAlloc(gpa, "zig-out/lib/libplatform_host_str_simple.a") catch |err| {
-            stderr.print("Failed to get absolute path for host library: {}\n", .{err}) catch {};
-            std.process.exit(1);
-        };
-        defer gpa.free(installed_host_lib);
 
-        const host_lib_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "platform_host_str_simple.a" }) catch |err| {
-            stderr.print("Failed to create host library path: {}\n", .{err}) catch {};
+        // TODO replace this with the platform/host.a library in future, we are using a simple
+        // test platform host here to demonstrate the process. Before we can use a real plaform
+        // we will need to parse the app.roc header to get the platform package (via URL etc).
+        //
+        // Using our pre-built `host.a` from the install directory
+        const example_host_path = std.fs.cwd().realpathAlloc(gpa, "zig-out/lib/libplatform_host_str_simple.a") catch |err| {
+            std.log.err("Failed to get absolute path for host library: {}\n", .{err});
             std.process.exit(1);
         };
-        defer gpa.free(host_lib_path);
-
-        // Copy platform_host_str_simple.a to cache directory
-        std.fs.copyFileAbsolute(installed_host_lib, host_lib_path, .{}) catch |err| {
-            stderr.print("Failed to copy host library from {s} to {s}: {}\n", .{ installed_host_lib, host_lib_path, err }) catch {};
-            std.process.exit(1);
-        };
+        defer gpa.free(example_host_path);
 
         // Extract embedded shim library to cache
-        const shim_lib_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "libread_roc_file_path_shim.a" }) catch |err| {
-            stderr.print("Failed to create shim library path: {}\n", .{err}) catch {};
+        // TODO check for a cached copy first...
+        const shim_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "libread_roc_file_path_shim.a" }) catch |err| {
+            std.log.err("Failed to create shim library path: {}\n", .{err});
             std.process.exit(1);
         };
-        defer gpa.free(shim_lib_path);
+        defer gpa.free(shim_path);
 
-        extractReadRocFilePathShimLibrary(gpa, shim_lib_path) catch |err| {
-            stderr.print("Failed to extract read roc file path shim library: {}\n", .{err}) catch {};
+        extractReadRocFilePathShimLibrary(gpa, shim_path) catch |err| {
+            std.log.err("Failed to extract read roc file path shim library: {}\n", .{err});
             std.process.exit(1);
         };
 
-        // Link the platform_host_str_simple.a with our shim library to create the executable
+        // Link the host.a with our shim to create the interpreter executable
         const link_config = linker.LinkConfig{
             .output_path = exe_path,
-            .object_files = &.{ host_lib_path, shim_lib_path },
+            .object_files = &.{ example_host_path, shim_path },
         };
 
         linker.link(gpa, link_config) catch |err| {
-            stderr.print("Failed to link executable: {}\n", .{err}) catch {};
+            std.log.err("Failed to link executable: {}\n", .{err});
             std.process.exit(1);
         };
     }
 
-    // Set up shared memory with the placeholder string
+    // Set up shared memory, and insert the location of the `/path/to/app.roc`
+    // for now we use a hardcoded path to illustrate the concept
     const test_string = "/path/to/main.roc (from shared memory)";
     const shm_handle = writeToSharedMemory(test_string) catch |err| {
-        stderr.print("Failed to write to shared memory: {}\n", .{err}) catch {};
+        std.log.err("Failed to write to shared memory: {}\n", .{err});
         std.process.exit(1);
     };
+
     // Ensure we clean up shared memory resources on all exit paths
     defer {
         _ = munmap(shm_handle.ptr, shm_handle.size);
@@ -207,41 +201,19 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         cleanupSharedMemory();
     }
 
-    // Execute the created executable using spawn for better control
+    // Run the interpreter as a child process
     var child = std.process.Child.init(&.{exe_path}, gpa);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-
     child.spawn() catch |err| {
-        stderr.print("Failed to spawn {s}: {}\n", .{ exe_path, err }) catch {};
+        std.log.err("Failed to spawn {s}: {}\n", .{ exe_path, err });
         cleanupSharedMemory();
         std.process.exit(1);
     };
 
-    // Read output while child is running
-    var stdout_buf = std.ArrayList(u8).init(gpa);
-    defer stdout_buf.deinit();
-    var stderr_buf = std.ArrayList(u8).init(gpa);
-    defer stderr_buf.deinit();
-
-    if (child.stdout) |child_stdout| {
-        child_stdout.reader().readAllArrayList(&stdout_buf, 1024 * 1024) catch {};
-    }
-    if (child.stderr) |child_stderr| {
-        child_stderr.reader().readAllArrayList(&stderr_buf, 1024 * 1024) catch {};
-    }
-
     // Wait for child to complete
     _ = child.wait() catch |err| {
-        stderr.print("Failed waiting for child process: {}\n", .{err}) catch {};
+        std.log.err("Failed waiting for child process: {}\n", .{err});
         std.process.exit(1);
     };
-
-    // Print the output
-    stdout.print("{s}", .{stdout_buf.items}) catch {};
-    if (stderr_buf.items.len > 0) {
-        stderr.print("{s}", .{stderr_buf.items}) catch {};
-    }
 }
 
 const SharedMemoryHandle = struct {
