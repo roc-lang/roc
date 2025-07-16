@@ -9,8 +9,8 @@ const check_types = @import("../check/check_types.zig");
 const CIR = canonicalize.CIR;
 const types = @import("../types.zig");
 const stack = @import("stack.zig");
-const layout = @import("../layout/layout.zig");
 const layout_store = @import("../layout/store.zig");
+const layout = @import("../layout/layout.zig");
 
 const test_allocator = testing.allocator;
 
@@ -136,11 +136,9 @@ test "eval runtime error - returns crash error" {
         defer layout_cache.deinit();
 
         // Evaluating a runtime error should return an error
-        var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-        defer work_stack.deinit();
-        var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
-        defer layout_stack.deinit();
-        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
+        const result = interpreter.eval(resources.expr_idx);
         try testing.expectError(eval.EvalError.Crash, result);
     } else {
         // If crash syntax is not supported in canonicalization, skip
@@ -168,11 +166,9 @@ test "eval binop - basic implementation" {
     defer layout_cache.deinit();
 
     // Evaluate the binop expression
-    var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-    defer work_stack.deinit();
-    var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
-    defer layout_stack.deinit();
-    const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
+    var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+    defer interpreter.deinit();
+    const result = try interpreter.eval(resources.expr_idx);
 
     // Verify we got a scalar layout
     try testing.expect(result.layout.tag == .scalar);
@@ -211,11 +207,9 @@ test "eval if expression with boolean tags" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-        defer work_stack.deinit();
-        var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
-        defer layout_stack.deinit();
-        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
+        const result = try interpreter.eval(resources.expr_idx);
 
         // Verify the result
         try testing.expect(result.layout.tag == .scalar);
@@ -243,11 +237,9 @@ test "eval if expression with comparison condition" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-        defer work_stack.deinit();
-        var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
-        defer layout_stack.deinit();
-        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
+        const result = try interpreter.eval(resources.expr_idx);
 
         // Verify the result
         try testing.expect(result.layout.tag == .scalar);
@@ -276,11 +268,9 @@ test "eval nested if expressions" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-        defer work_stack.deinit();
-        var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
-        defer layout_stack.deinit();
-        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
+        const result = try interpreter.eval(resources.expr_idx);
 
         // Verify the result
         try testing.expect(result.layout.tag == .scalar);
@@ -328,11 +318,9 @@ test "eval if-else if-else chains" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-        defer work_stack.deinit();
-        var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
-        defer layout_stack.deinit();
-        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
+        const result = try interpreter.eval(resources.expr_idx);
 
         // Verify the result
         try testing.expect(result.layout.tag == .scalar);
@@ -360,11 +348,9 @@ test "eval if expression with arithmetic in branches" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-        defer work_stack.deinit();
-        var layout_stack = std.ArrayList(layout.Layout).init(test_allocator);
-        defer layout_stack.deinit();
-        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack, &layout_stack);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
+        const result = try interpreter.eval(resources.expr_idx);
 
         // Verify the result
         try testing.expect(result.layout.tag == .scalar);
@@ -386,9 +372,9 @@ test "eval if expression with non-boolean condition" {
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
-    var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-    defer work_stack.deinit();
-    const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+    var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+    defer interpreter.deinit();
+    const result = interpreter.eval(resources.expr_idx);
 
     // Should result in a TypeContainedMismatch error because condition must be a boolean tag union
     try testing.expectError(eval.EvalError.TypeContainedMismatch, result);
@@ -409,9 +395,9 @@ test "eval simple number" {
     defer layout_cache.deinit();
 
     // Evaluate the number
-    var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-    defer work_stack.deinit();
-    const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+    var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+    defer interpreter.deinit();
+    const result = try interpreter.eval(resources.expr_idx);
 
     // Verify we got an integer layout
     try testing.expect(result.layout.tag == .scalar);
@@ -450,9 +436,9 @@ test "eval negative number" {
     defer layout_cache.deinit();
 
     // Evaluate the number
-    var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-    defer work_stack.deinit();
-    const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+    var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+    defer interpreter.deinit();
+    const result = try interpreter.eval(resources.expr_idx);
 
     // Verify we got an integer layout
     try testing.expect(result.layout.tag == .scalar);
@@ -491,9 +477,9 @@ test "eval list literal" {
     defer layout_cache.deinit();
 
     // List literals are not yet implemented
-    var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-    defer work_stack.deinit();
-    const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+    var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+    defer interpreter.deinit();
+    const result = interpreter.eval(resources.expr_idx);
     try testing.expectError(eval.EvalError.LayoutError, result);
 }
 
@@ -511,9 +497,9 @@ test "eval record literal" {
         defer eval_stack.deinit();
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
-        var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-        defer work_stack.deinit();
-        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
+        const result = interpreter.eval(resources.expr_idx);
         try testing.expectError(eval.EvalError.Crash, result);
     } else {
         // Record literals are not yet implemented
@@ -521,9 +507,9 @@ test "eval record literal" {
         defer eval_stack.deinit();
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
-        var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-        defer work_stack.deinit();
-        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
+        const result = interpreter.eval(resources.expr_idx);
         try testing.expectError(eval.EvalError.LayoutError, result);
     }
 }
@@ -542,9 +528,9 @@ test "eval empty record" {
         defer eval_stack.deinit();
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
-        var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-        defer work_stack.deinit();
-        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
+        const result = interpreter.eval(resources.expr_idx);
         try testing.expectError(eval.EvalError.Crash, result);
     } else {
         // Create a stack for evaluation
@@ -559,9 +545,9 @@ test "eval empty record" {
         defer layout_cache.deinit();
 
         // Empty records are zero-sized types, which should return an error
-        var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-        defer work_stack.deinit();
-        const result = eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
+        const result = interpreter.eval(resources.expr_idx);
         try testing.expectError(eval.EvalError.ZeroSizedType, result);
 
         // Verify the stack didn't grow
@@ -579,13 +565,9 @@ test "eval integer literal directly from CIR node" {
     return error.SkipZigTest;
 }
 
-test "work stack reuse across multiple evaluations" {
-    // This test demonstrates that the work stack can be reused across multiple
+test "interpreter reuse across multiple evaluations" {
+    // This test demonstrates that the interpreter can be reused across multiple
     // eval() calls, avoiding repeated allocations in scenarios like the REPL
-
-    // Create a reusable work stack
-    var work_stack = std.ArrayList(eval.WorkItem).init(test_allocator);
-    defer work_stack.deinit();
 
     // Test multiple evaluations with the same work stack
     const sources = [_][]const u8{ "42", "100 + 200", "if True 1 else 2" };
@@ -600,13 +582,17 @@ test "work stack reuse across multiple evaluations" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        // Verify work stack is empty before eval
-        try testing.expectEqual(@as(usize, 0), work_stack.items.len);
+        // Create interpreter for this evaluation
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
 
-        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache, &resources.module_env.types, &work_stack);
+        // Verify work stack is empty before eval
+        try testing.expectEqual(@as(usize, 0), interpreter.work_stack.items.len);
+
+        const result = try interpreter.eval(resources.expr_idx);
 
         // Verify work stack is empty after eval (should be naturally empty, not cleared)
-        try testing.expectEqual(@as(usize, 0), work_stack.items.len);
+        try testing.expectEqual(@as(usize, 0), interpreter.work_stack.items.len);
 
         // Verify the result
         try testing.expect(result.layout.tag == .scalar);
@@ -614,8 +600,4 @@ test "work stack reuse across multiple evaluations" {
         const value = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
         try testing.expectEqual(expected_value, value);
     }
-
-    // The work stack has been reused 3 times without reallocation
-    // Its capacity should still be available for the next use
-    try testing.expect(work_stack.capacity > 0);
 }

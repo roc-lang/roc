@@ -21,27 +21,19 @@ pub const Repl = struct {
     allocator: Allocator,
     state: usize,
     eval_stack: stack.Stack,
-    work_stack: std.ArrayList(eval.WorkItem),
-    layout_stack: std.ArrayList(layout.Layout),
 
     pub fn init(allocator: Allocator) Allocator.Error!Repl {
         const eval_stack = try stack.Stack.initCapacity(allocator, 8192);
-        const work_stack = try std.ArrayList(eval.WorkItem).initCapacity(allocator, 128);
-        const layout_stack = try std.ArrayList(layout.Layout).initCapacity(allocator, 128);
 
         return Repl{
             .allocator = allocator,
             .state = 0,
             .eval_stack = eval_stack,
-            .work_stack = work_stack,
-            .layout_stack = layout_stack,
         };
     }
 
     pub fn deinit(self: *Repl) void {
         self.eval_stack.deinit();
-        self.work_stack.deinit();
-        self.layout_stack.deinit();
     }
 
     /// Process a single REPL input and return the output
@@ -95,11 +87,12 @@ pub const Repl = struct {
         };
         defer layout_cache.deinit();
 
+        // Create interpreter
+        var interpreter = try eval.Interpreter.init(self.allocator, &cir, &self.eval_stack, &layout_cache, &module_env.types);
+        defer interpreter.deinit();
+
         // Evaluate the expression
-        const result = eval.eval(self.allocator, &cir, canonical_expr_idx, &self.eval_stack, &layout_cache, &module_env.types, &self.work_stack, &self.layout_stack) catch |err| {
-            // Clear work_stack and layout_stack in case of evaluation error
-            self.work_stack.clearRetainingCapacity();
-            self.layout_stack.clearRetainingCapacity();
+        const result = interpreter.eval(canonical_expr_idx) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
         };
 
