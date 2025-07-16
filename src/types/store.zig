@@ -104,20 +104,25 @@ pub const Store = struct {
 
     /// Init the unification table
     pub fn initCapacity(gpa: Allocator, root_capacity: usize, child_capacity: usize) std.mem.Allocator.Error!Self {
+        return try Self.initCapacityWithAllocator(gpa, root_capacity, child_capacity);
+    }
+
+    /// Init the unification table with a specific allocator
+    pub fn initCapacityWithAllocator(allocator: Allocator, root_capacity: usize, child_capacity: usize) std.mem.Allocator.Error!Self {
         return .{
-            .gpa = gpa,
+            .gpa = allocator,
 
             // slots & descriptors
-            .descs = try DescStore.init(gpa, root_capacity),
-            .slots = try SlotStore.init(gpa, root_capacity),
+            .descs = try DescStore.init(allocator, root_capacity),
+            .slots = try SlotStore.init(allocator, root_capacity),
 
             // everything else
-            .vars = try VarSafeList.initCapacity(gpa, child_capacity),
-            .tuple_elems = try VarSafeList.initCapacity(gpa, child_capacity),
-            .func_args = try VarSafeList.initCapacity(gpa, child_capacity),
-            .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
-            .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
-            .tag_args = try VarSafeList.initCapacity(gpa, child_capacity),
+            .vars = try VarSafeList.initCapacity(allocator, child_capacity),
+            .tuple_elems = try VarSafeList.initCapacity(allocator, child_capacity),
+            .func_args = try VarSafeList.initCapacity(allocator, child_capacity),
+            .record_fields = try RecordFieldSafeMultiList.initCapacity(allocator, child_capacity),
+            .tags = try TagSafeMultiList.initCapacity(allocator, child_capacity),
+            .tag_args = try VarSafeList.initCapacity(allocator, child_capacity),
         };
     }
 

@@ -70,6 +70,7 @@ pub const CheckArgs = struct {
     time: bool = false, // whether to print timing information
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
+    shm: bool = false, // use shared memory allocator for CIR and type stores
 };
 
 /// Arguments for `roc build`
@@ -152,6 +153,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
     var time: bool = false;
     var no_cache: bool = false;
     var verbose: bool = false;
+    var shm: bool = false;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -168,6 +170,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
             \\      --time         Print timing information for each compilation phase. Will not print anything if everything is cached.
             \\      --no-cache     Disable caching
             \\      --verbose      Enable verbose output including cache statistics
+            \\      --shm          Use shared memory allocator for CIR and type stores
             \\  -h, --help         Print help
             \\
         };
@@ -183,6 +186,8 @@ fn parseCheck(args: []const []const u8) CliArgs {
             no_cache = true;
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
+        } else if (mem.eql(u8, arg, "--shm")) {
+            shm = true;
         } else {
             if (path != null) {
                 return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "check", .arg = arg } } };
@@ -191,7 +196,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
         }
     }
 
-    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .no_cache = no_cache, .verbose = verbose } };
+    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .no_cache = no_cache, .verbose = verbose, .shm = shm } };
 }
 
 fn parseBuild(args: []const []const u8) CliArgs {
@@ -784,6 +789,19 @@ test "roc check" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.check.path);
         try testing.expectEqualStrings("bar.roc", result.check.main.?);
+        try testing.expectEqual(true, result.check.time);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "--shm" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("main.roc", result.check.path);
+        try testing.expectEqual(true, result.check.shm);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "foo.roc", "--shm", "--time" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.check.path);
+        try testing.expectEqual(true, result.check.shm);
         try testing.expectEqual(true, result.check.time);
     }
 }

@@ -10,6 +10,7 @@ const reporting = @import("reporting.zig");
 const build_options = @import("build_options");
 // const coordinate = @import("coordinate.zig");
 const coordinate_simple = @import("coordinate_simple.zig");
+const SharedMemoryAllocator = @import("base/SharedMemoryAllocator.zig");
 
 const tracy = @import("tracy.zig");
 const Filesystem = @import("fs/Filesystem.zig");
@@ -221,9 +222,80 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     } else null;
 
     // Process the file and get Reports
-    var process_result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path, if (cache_manager) |*cm| cm else null, args.time) catch |err| handleProcessFileError(err, stderr, args.path);
+    // Shared memory allocator needs to outlive process_result
+    var shm_opt: ?SharedMemoryAllocator = null;
+    defer if (shm_opt) |*shm| shm.deinit(gpa);
+
+    var process_result = blk: {
+        if (args.shm) {
+            // Create shared memory allocator
+            const shm_name = try std.fmt.allocPrint(gpa, "roc_shm_{}", .{std.Thread.getCurrentId()});
+            defer gpa.free(shm_name);
+
+            shm_opt = try SharedMemoryAllocator.create(gpa, shm_name, SharedMemoryAllocator.DEFAULT_SIZE);
+            const shm_allocator = shm_opt.?.allocator();
+
+            // Process with shared memory
+            const result = coordinate_simple.processFileWithAllocators(
+                gpa,
+                shm_allocator,
+                Filesystem.default(),
+                args.path,
+                if (cache_manager) |*cm| cm else null,
+                args.time,
+            ) catch |err| handleProcessFileError(err, stderr, args.path);
+
+            // Print shared memory usage info before shrinking
+            if (args.verbose) {
+                const used_mb = @as(f64, @floatFromInt(shm_opt.?.getUsedSize())) / (1024.0 * 1024.0);
+                const total_mb = @as(f64, @floatFromInt(shm_opt.?.total_size)) / (1024.0 * 1024.0);
+                stdout.print("Shared memory usage: {d:.2} MB / {d:.2} MB\n", .{ used_mb, total_mb }) catch {};
+            }
+
+            // Update the header with the actual used size before child process opens it
+            shm_opt.?.updateHeader();
+
+            // Child process will use SharedMemoryAllocator.openWithHeader() to read
+            // the header and map only the used portion of memory
+
+            break :blk result;
+        } else {
+            // Regular processing without shared memory
+            break :blk coordinate_simple.processFile(
+                gpa,
+                Filesystem.default(),
+                args.path,
+                if (cache_manager) |*cm| cm else null,
+                args.time,
+            ) catch |err| handleProcessFileError(err, stderr, args.path);
+        }
+    };
 
     defer process_result.deinit(gpa);
+
+    // Update header and try to shrink shared memory after we're done using it (only if using --shm)
+    defer if (shm_opt) |*shm| {
+        // Update header one more time before cleanup
+        shm.updateHeader();
+
+        const initial_size = shm.total_size;
+        const final_size = shm.shrinkToFit() catch |err| blk: {
+            if (args.verbose) {
+                stdout.print("Shared memory shrink failed: {}\n", .{err}) catch {};
+            }
+            break :blk shm.total_size;
+        };
+        if (args.verbose) {
+            const initial_mb = @as(f64, @floatFromInt(initial_size)) / (1024.0 * 1024.0);
+            const final_mb = @as(f64, @floatFromInt(final_size)) / (1024.0 * 1024.0);
+            const used_mb = @as(f64, @floatFromInt(shm.getUsedSize())) / (1024.0 * 1024.0);
+            if (final_size < initial_size) {
+                stdout.print("Shared memory shrunk from {d:.2} MB to {d:.2} MB\n", .{ initial_mb, final_mb }) catch {};
+            } else {
+                stdout.print("Shared memory remained at {d:.2} MB (used: {d:.2} MB, header updated)\n", .{ initial_mb, used_mb }) catch {};
+            }
+        }
+    };
 
     const elapsed = timer.read();
 

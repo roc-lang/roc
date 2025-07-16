@@ -66,6 +66,9 @@ imports: Import.Store,
 /// The module's name as a string
 /// This is needed for import resolution to match import names to modules
 module_name: []const u8,
+/// The allocator used for shared data (nodes, external_decls, etc)
+/// This is needed for proper cleanup
+shm: std.mem.Allocator,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -79,15 +82,36 @@ module_name: []const u8,
 /// Since the can IR holds indices into the `ModuleEnv`, we need
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
 pub fn init(env: *ModuleEnv, module_name: []const u8) std.mem.Allocator.Error!CIR {
+    return initWithAllocator(env, module_name, env.gpa, env.gpa);
+}
+
+/// Initialize the IR with separate allocators for shared and scratch data.
+///
+/// Parameters:
+/// - env: The module environment
+/// - module_name: Name of the module
+/// - shm: Allocator for persistent data (nodes, regions, extra_data)
+/// - scratch_allocator: Allocator for temporary scratch arrays
+pub fn initWithAllocator(
+    env: *ModuleEnv,
+    module_name: []const u8,
+    shm: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!CIR {
     return CIR{
         .env = env,
-        .store = try NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
+        .store = try NodeStore.initCapacityWithAllocators(
+            shm,
+            scratch_allocator,
+            NODE_STORE_CAPACITY,
+        ),
         .diagnostics = null,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
-        .external_decls = try ExternalDecl.SafeList.initCapacity(env.gpa, 16),
+        .external_decls = try ExternalDecl.SafeList.initCapacity(shm, 16),
         .imports = Import.Store.init(),
         .module_name = module_name,
+        .shm = shm,
     };
 }
 
@@ -103,6 +127,7 @@ pub fn fromCache(env: *ModuleEnv, cached_store: NodeStore, all_defs: Def.Span, a
         .external_decls = try ExternalDecl.SafeList.initCapacity(env.gpa, 16),
         .imports = Import.Store.init(),
         .module_name = module_name,
+        .shm = env.gpa,
     };
 }
 
@@ -121,7 +146,7 @@ fn literal_from_source(self: *CIR, start_offset: u32, end_offset: u32) []const u
 /// Deinit the IR's memory.
 pub fn deinit(self: *CIR) void {
     self.store.deinit();
-    self.external_decls.deinit(self.env.gpa);
+    self.external_decls.deinit(self.shm);
     self.imports.deinit(self.env.gpa);
     if (self.diagnostics) |diags| {
         self.env.gpa.free(diags);

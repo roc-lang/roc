@@ -15,6 +15,7 @@ const RegionInfo = @import("RegionInfo.zig");
 const Self = @This();
 
 gpa: std.mem.Allocator,
+shm: std.mem.Allocator,
 idents: Ident.Store = .{},
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
@@ -36,14 +37,25 @@ source: []const u8,
 
 /// Initialize the module environment.
 pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
+    return initWithAllocators(gpa, gpa, source);
+}
+
+/// Initialize the module environment with separate allocators.
+///
+/// Parameters:
+/// - gpa: General purpose allocator for temporary/scratch data
+/// - shm: Allocator for data that needs to be shared (types)
+/// - source: The source code for this module
+pub fn initWithAllocators(gpa: std.mem.Allocator, shm: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
 
     return Self{
         .gpa = gpa,
-        .idents = try Ident.Store.initCapacity(gpa, 1024),
+        .shm = shm,
+        .idents = try Ident.Store.initCapacity(shm, 1024),
         .ident_ids_for_slicing = try collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
-        .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
-        .types = try types_mod.Store.initCapacity(gpa, 2048, 512),
+        .strings = try StringLiteral.Store.initCapacityBytes(shm, 4096),
+        .types = try types_mod.Store.initCapacityWithAllocator(shm, 2048, 512),
         .exposed_by_str = try collections.SafeStringHashMap(void).initCapacity(gpa, 64),
         .exposed_nodes = try collections.SafeStringHashMap(u16).initCapacity(gpa, 64),
         .line_starts = try collections.SafeList(u32).initCapacity(gpa, 256),
@@ -53,9 +65,9 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
 
 /// Deinitialize the module environment.
 pub fn deinit(self: *Self) void {
-    self.idents.deinit(self.gpa);
+    self.idents.deinit(self.shm);
     self.ident_ids_for_slicing.deinit(self.gpa);
-    self.strings.deinit(self.gpa);
+    self.strings.deinit(self.shm);
     self.types.deinit();
     self.line_starts.deinit(self.gpa);
     self.exposed_by_str.deinit(self.gpa);

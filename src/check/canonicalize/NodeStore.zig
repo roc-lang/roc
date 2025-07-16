@@ -19,6 +19,7 @@ const Ident = base.Ident;
 const NodeStore = @This();
 
 gpa: std.mem.Allocator,
+scratch_allocator: std.mem.Allocator,
 nodes: Node.List,
 regions: Region.List,
 extra_data: std.ArrayListUnmanaged(u32),
@@ -42,31 +43,46 @@ scratch_diagnostics: base.Scratch(CIR.Diagnostic.Idx),
 pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!NodeStore {
     // TODO determine what capacity to use
     // maybe these should be moved to build/compile flags?
-    return try NodeStore.initCapacity(gpa, 128);
+    return try NodeStore.initCapacityWithAllocators(gpa, gpa, 128);
 }
 
 /// Initializes the NodeStore with a specified capacity.
 pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!NodeStore {
+    return initCapacityWithAllocators(gpa, gpa, capacity);
+}
+
+/// Initializes the NodeStore with separate allocators for persistent and scratch data.
+///
+/// Parameters:
+/// - shared_allocator: Allocator for persistent data (nodes, regions, extra_data)
+/// - scratch_allocator: Allocator for temporary scratch arrays
+/// - capacity: Initial capacity for the node store
+pub fn initCapacityWithAllocators(
+    shared_allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
+    capacity: usize,
+) std.mem.Allocator.Error!NodeStore {
     return .{
-        .gpa = gpa,
-        .nodes = try Node.List.initCapacity(gpa, capacity),
-        .regions = try Region.List.initCapacity(gpa, capacity),
-        .extra_data = try std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2),
-        .scratch_statements = try base.Scratch(CIR.Statement.Idx).init(gpa),
-        .scratch_exprs = try base.Scratch(CIR.Expr.Idx).init(gpa),
-        .scratch_patterns = try base.Scratch(CIR.Pattern.Idx).init(gpa),
-        .scratch_record_fields = try base.Scratch(CIR.RecordField.Idx).init(gpa),
-        .scratch_pattern_record_fields = try base.Scratch(CIR.PatternRecordField.Idx).init(gpa),
-        .scratch_record_destructs = try base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(gpa),
-        .scratch_match_branches = try base.Scratch(CIR.Expr.Match.Branch.Idx).init(gpa),
-        .scratch_match_branch_patterns = try base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(gpa),
-        .scratch_if_branches = try base.Scratch(CIR.Expr.IfBranch.Idx).init(gpa),
-        .scratch_type_annos = try base.Scratch(CIR.TypeAnno.Idx).init(gpa),
-        .scratch_anno_record_fields = try base.Scratch(CIR.TypeAnno.RecordField.Idx).init(gpa),
-        .scratch_exposed_items = try base.Scratch(CIR.ExposedItem.Idx).init(gpa),
-        .scratch_defs = try base.Scratch(CIR.Def.Idx).init(gpa),
-        .scratch_where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(gpa),
-        .scratch_diagnostics = try base.Scratch(CIR.Diagnostic.Idx).init(gpa),
+        .gpa = shared_allocator,
+        .scratch_allocator = scratch_allocator,
+        .nodes = try Node.List.initCapacity(shared_allocator, capacity),
+        .regions = try Region.List.initCapacity(shared_allocator, capacity),
+        .extra_data = try std.ArrayListUnmanaged(u32).initCapacity(shared_allocator, capacity / 2),
+        .scratch_statements = try base.Scratch(CIR.Statement.Idx).init(scratch_allocator),
+        .scratch_exprs = try base.Scratch(CIR.Expr.Idx).init(scratch_allocator),
+        .scratch_patterns = try base.Scratch(CIR.Pattern.Idx).init(scratch_allocator),
+        .scratch_record_fields = try base.Scratch(CIR.RecordField.Idx).init(scratch_allocator),
+        .scratch_pattern_record_fields = try base.Scratch(CIR.PatternRecordField.Idx).init(scratch_allocator),
+        .scratch_record_destructs = try base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(scratch_allocator),
+        .scratch_match_branches = try base.Scratch(CIR.Expr.Match.Branch.Idx).init(scratch_allocator),
+        .scratch_match_branch_patterns = try base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(scratch_allocator),
+        .scratch_if_branches = try base.Scratch(CIR.Expr.IfBranch.Idx).init(scratch_allocator),
+        .scratch_type_annos = try base.Scratch(CIR.TypeAnno.Idx).init(scratch_allocator),
+        .scratch_anno_record_fields = try base.Scratch(CIR.TypeAnno.RecordField.Idx).init(scratch_allocator),
+        .scratch_exposed_items = try base.Scratch(CIR.ExposedItem.Idx).init(scratch_allocator),
+        .scratch_defs = try base.Scratch(CIR.Def.Idx).init(scratch_allocator),
+        .scratch_where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(scratch_allocator),
+        .scratch_diagnostics = try base.Scratch(CIR.Diagnostic.Idx).init(scratch_allocator),
     };
 }
 
@@ -75,21 +91,21 @@ pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
     store.extra_data.deinit(store.gpa);
-    store.scratch_statements.items.deinit(store.gpa);
-    store.scratch_exprs.items.deinit(store.gpa);
-    store.scratch_patterns.items.deinit(store.gpa);
-    store.scratch_record_fields.items.deinit(store.gpa);
-    store.scratch_pattern_record_fields.items.deinit(store.gpa);
-    store.scratch_record_destructs.items.deinit(store.gpa);
-    store.scratch_match_branches.items.deinit(store.gpa);
-    store.scratch_match_branch_patterns.items.deinit(store.gpa);
-    store.scratch_if_branches.items.deinit(store.gpa);
-    store.scratch_type_annos.items.deinit(store.gpa);
-    store.scratch_anno_record_fields.items.deinit(store.gpa);
-    store.scratch_exposed_items.items.deinit(store.gpa);
-    store.scratch_defs.items.deinit(store.gpa);
-    store.scratch_where_clauses.items.deinit(store.gpa);
-    store.scratch_diagnostics.items.deinit(store.gpa);
+    store.scratch_statements.items.deinit(store.scratch_allocator);
+    store.scratch_exprs.items.deinit(store.scratch_allocator);
+    store.scratch_patterns.items.deinit(store.scratch_allocator);
+    store.scratch_record_fields.items.deinit(store.scratch_allocator);
+    store.scratch_pattern_record_fields.items.deinit(store.scratch_allocator);
+    store.scratch_record_destructs.items.deinit(store.scratch_allocator);
+    store.scratch_match_branches.items.deinit(store.scratch_allocator);
+    store.scratch_match_branch_patterns.items.deinit(store.scratch_allocator);
+    store.scratch_if_branches.items.deinit(store.scratch_allocator);
+    store.scratch_type_annos.items.deinit(store.scratch_allocator);
+    store.scratch_anno_record_fields.items.deinit(store.scratch_allocator);
+    store.scratch_exposed_items.items.deinit(store.scratch_allocator);
+    store.scratch_defs.items.deinit(store.scratch_allocator);
+    store.scratch_where_clauses.items.deinit(store.scratch_allocator);
+    store.scratch_diagnostics.items.deinit(store.scratch_allocator);
 }
 
 /// Compile-time constants for union variant counts to ensure we don't miss cases
@@ -2933,6 +2949,7 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
     // Create NodeStore with empty scratch arrays
     return NodeStore{
         .gpa = allocator,
+        .scratch_allocator = allocator,
         .nodes = nodes,
         .regions = regions,
         .extra_data = extra_data,
