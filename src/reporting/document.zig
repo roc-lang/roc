@@ -249,7 +249,11 @@ pub const Document = struct {
                 .vertical_stack => |stack| self.allocator.free(stack),
                 .horizontal_concat => |concat| self.allocator.free(concat),
                 .source_code_multi_region => |multi| self.allocator.free(multi.regions),
-                .source_code_with_underlines => |underlines| self.allocator.free(underlines.underline_regions),
+                .source_code_region => |region| self.allocator.free(region.line_text),
+                .source_code_with_underlines => |underlines| {
+                    self.allocator.free(underlines.underline_regions);
+                    self.allocator.free(underlines.display_region.line_text);
+                },
                 else => {},
             }
         }
@@ -467,9 +471,13 @@ pub const Document = struct {
             std.debug.assert(region_info.end_col_idx >= region_info.start_col_idx);
         }
 
+        // Copy the line text to avoid memory safety issues
+        const line_text_slice = region_info.calculateLineText(source, line_starts);
+        const owned_line_text = try self.allocator.dupe(u8, line_text_slice);
+
         try self.elements.append(.{
             .source_code_region = .{
-                .line_text = region_info.calculateLineText(source, line_starts),
+                .line_text = owned_line_text,
                 .start_line = region_info.start_line_idx + 1,
                 .start_column = region_info.start_col_idx + 1,
                 .end_line = region_info.end_line_idx + 1,
