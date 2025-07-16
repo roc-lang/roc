@@ -68,16 +68,17 @@ pub fn eval(
     allocator: std.mem.Allocator,
     cir: *const CIR,
     expr_idx: CIR.Expr.Idx,
-    eval_stack: *stack.Stack,
+    stack_memory: *stack.Stack,
     layout_cache: *layout_store.Store,
     type_store: *types_store.Store,
     work_stack: *std.ArrayList(WorkItem),
 ) EvalError!EvalResult {
-    // Ensure work stack is empty before we start
+    // Ensure work_stack is empty before we start. (stack_memory might not be, and that's fine!)
     std.debug.assert(work_stack.items.len == 0);
+    errdefer work_stack.clearRetainingCapacity();
 
     // Save the initial stack pointer so we can find our result
-    const initial_stack_ptr = @as([*]u8, @ptrCast(eval_stack.start)) + eval_stack.used;
+    const initial_stack_ptr = @as([*]u8, @ptrCast(stack_memory.start)) + stack_memory.used;
 
     // Track layouts of values on the stack
     var layout_stack = std.ArrayList(layout.Layout).init(allocator);
@@ -90,15 +91,13 @@ pub fn eval(
     });
 
     // Main evaluation loop
-    while (work_stack.items.len > 0) {
-        const work = work_stack.pop() orelse unreachable;
-
+    while (work_stack.pop()) |work| {
         switch (work.kind) {
             .eval_expr => try evalExpr(
                 allocator,
                 cir,
                 work.expr_idx,
-                eval_stack,
+                stack_memory,
                 &layout_stack,
                 layout_cache,
                 type_store,
@@ -107,7 +106,7 @@ pub fn eval(
             .binop_add, .binop_sub, .binop_mul, .binop_div, .binop_eq, .binop_ne, .binop_gt, .binop_lt, .binop_ge, .binop_le => {
                 try completeBinop(
                     work.kind,
-                    eval_stack,
+                    stack_memory,
                     &layout_stack,
                     layout_cache,
                 );
@@ -123,7 +122,7 @@ pub fn eval(
                     cir,
                     if_expr_idx,
                     branch_index,
-                    eval_stack,
+                    stack_memory,
                     &layout_stack,
                     work_stack,
                 );
