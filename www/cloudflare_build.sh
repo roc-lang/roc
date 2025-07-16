@@ -19,7 +19,9 @@ mv roc_nightly* roc_nightly
 
 ./roc_nightly/roc version
 
+export PATH=$PATH:$(pwd)/roc_nightly
+
 cd www
-../roc_nightly/roc check build_website.roc
-../roc_nightly/roc build build_website.roc
+roc check build_website.roc
+roc build build_website.roc
 ./build_website
