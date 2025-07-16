@@ -1,16 +1,20 @@
-//! Given canonical IR and type info, evaluate it until it is a primitive canonical IR node.
+//! Evaluates canonicalized Roc expressions
+//!
+//! This module implements a stack-based interpreter for evaluating Roc expressions.
+//! Values are pushed directly onto a stack, and operations pop their operands and
+//! push results. No heap allocations are used for intermediate results.
+
 const std = @import("std");
 const CIR = @import("../check/canonicalize/CIR.zig");
-const stack = @import("stack.zig");
+const types = @import("../types/types.zig");
+const types_store = @import("../types/store.zig");
 const layout = @import("../layout/layout.zig");
 const layout_store = @import("../layout/store.zig");
-const types = @import("../types.zig");
-const base = @import("../base.zig");
+const stack = @import("stack.zig");
 const target = @import("../base/target.zig");
-const Node = @import("../check/canonicalize/Node.zig");
-const CalledVia = base.CalledVia;
+const base = @import("../base.zig");
+const collections = @import("../collections.zig");
 
-/// Errors that can occur during expression evaluation
 pub const EvalError = error{
     Crash,
     OutOfMemory,
@@ -23,227 +27,198 @@ pub const EvalError = error{
     InvalidRecordExtension,
     BugUnboxedFlexVar,
     DivisionByZero,
-    BugUnboxedRigidVar,
+    InvalidStackState,
 };
 
-/// Result of evaluating an expression, containing the memory layout and pointer to the value
+/// Result of evaluating an expression
 pub const EvalResult = struct {
     layout: layout.Layout,
     ptr: *anyopaque,
 };
 
-// Work item types for the evaluation stack machine
+// Work item for the iterative evaluation stack
 const WorkKind = enum {
     eval_expr,
-    complete_binop,
-    complete_if_condition,
-    complete_call,
+    binop_add,
+    binop_sub,
+    binop_mul,
+    binop_div,
+    binop_eq,
+    binop_ne,
+    binop_gt,
+    binop_lt,
+    binop_ge,
+    binop_le,
+    if_check_condition,
 };
 
 const WorkItem = struct {
     kind: WorkKind,
     expr_idx: CIR.Expr.Idx,
-    result_location: *EvalResult,
 };
 
-// Context structures for different operations
-const BinopContext = struct {
-    op: CIR.Expr.Binop.Op,
-    left_result: *EvalResult,
-    right_result: *EvalResult,
-    result_location: *EvalResult,
+// Represents a branch with condition and body
+const BranchData = struct {
+    cond: CIR.Expr.Idx,
+    body: CIR.Expr.Idx,
 };
 
-const IfContext = struct {
-    expr_idx: CIR.Expr.Idx,
-    branch_index: usize,
-    cond_result: *EvalResult,
-    result_location: *EvalResult,
-};
-
-const CallContext = struct {
-    expr_idx: CIR.Expr.Idx,
-    args: []const CIR.Expr.Idx,
-    arg_results: []*EvalResult,
-    result_location: *EvalResult,
-};
-
-/// Evaluates the canonical IR expression node, allocates memory on the stack for the result,
-/// writes the actual bytes into that memory, and returns both the Layout and a pointer to the memory.
+/// Evaluates a CIR expression and returns the result
 pub fn eval(
     allocator: std.mem.Allocator,
     cir: *const CIR,
     expr_idx: CIR.Expr.Idx,
     eval_stack: *stack.Stack,
     layout_cache: *layout_store.Store,
-    type_store: *types.Store,
+    type_store: *types_store.Store,
 ) EvalError!EvalResult {
-    var final_result: EvalResult = undefined;
+    // Save the initial stack pointer so we can find our result
+    const initial_stack_ptr = @as([*]u8, @ptrCast(eval_stack.start)) + eval_stack.used;
+
+    // Track layouts of values on the stack
+    var layout_stack = std.ArrayList(layout.Layout).init(allocator);
+    defer layout_stack.deinit();
 
     // Initialize work stack
     var work_stack = std.ArrayList(WorkItem).init(allocator);
     defer work_stack.deinit();
 
-    // Initialize context stacks for different work types
-    var binop_contexts = std.ArrayList(BinopContext).init(allocator);
-    defer binop_contexts.deinit();
-
-    var if_contexts = std.ArrayList(IfContext).init(allocator);
-    defer {
-        // Clean up any allocated cond_result pointers
-        for (if_contexts.items) |ctx| {
-            allocator.destroy(ctx.cond_result);
-        }
-        if_contexts.deinit();
-    }
-
-    var call_contexts = std.ArrayList(CallContext).init(allocator);
-    defer call_contexts.deinit();
-
     // Push initial work item
     try work_stack.append(.{
         .kind = .eval_expr,
         .expr_idx = expr_idx,
-        .result_location = &final_result,
     });
 
     // Main evaluation loop
     while (work_stack.items.len > 0) {
         const work = work_stack.pop() orelse unreachable;
+
         switch (work.kind) {
-            .eval_expr => try evalExprIterative(
+            .eval_expr => try evalExpr(
                 allocator,
                 cir,
                 work.expr_idx,
-                work.result_location,
                 eval_stack,
+                &layout_stack,
                 layout_cache,
                 type_store,
                 &work_stack,
-                &binop_contexts,
-                &if_contexts,
-                &call_contexts,
             ),
-            .complete_binop => {
-                const context = binop_contexts.pop() orelse unreachable;
+            .binop_add, .binop_sub, .binop_mul, .binop_div, .binop_eq, .binop_ne, .binop_gt, .binop_lt, .binop_ge, .binop_le => {
                 try completeBinop(
-                    cir,
-                    context,
+                    work.kind,
                     eval_stack,
+                    &layout_stack,
                     layout_cache,
-                    type_store,
                 );
             },
-            .complete_if_condition => {
-                const context = if_contexts.pop() orelse unreachable;
-                try completeIfCondition(
+            .if_check_condition => {
+                // The expr_idx encodes both the if expression and the branch index
+                // Lower 16 bits: if expression index
+                // Upper 16 bits: branch index
+                const if_expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(work.expr_idx) & 0xFFFF);
+                const branch_index: u16 = @intCast((@intFromEnum(work.expr_idx) >> 16) & 0xFFFF);
+                try checkIfCondition(
                     allocator,
                     cir,
-                    context,
+                    if_expr_idx,
+                    branch_index,
                     eval_stack,
-                    layout_cache,
-                    type_store,
+                    &layout_stack,
                     &work_stack,
-                    &if_contexts,
-                );
-            },
-            .complete_call => {
-                const context = call_contexts.pop() orelse unreachable;
-                try completeCall(
-                    allocator,
-                    cir,
-                    context,
-                    eval_stack,
-                    layout_cache,
-                    type_store,
                 );
             },
         }
     }
 
-    return final_result;
+    // The final result should be the only thing left on the layout stack
+    if (layout_stack.items.len != 1) {
+        return error.InvalidStackState;
+    }
+
+    const final_layout = layout_stack.items[0];
+
+    // The result is at the beginning of our stack frame
+    return EvalResult{
+        .layout = final_layout,
+        .ptr = @as(*anyopaque, @ptrCast(initial_stack_ptr)),
+    };
 }
 
-fn evalExprIterative(
+fn evalExpr(
     allocator: std.mem.Allocator,
     cir: *const CIR,
     expr_idx: CIR.Expr.Idx,
-    result_location: *EvalResult,
     eval_stack: *stack.Stack,
+    layout_stack: *std.ArrayList(layout.Layout),
     layout_cache: *layout_store.Store,
-    type_store: *types.Store,
+    type_store: *types_store.Store,
     work_stack: *std.ArrayList(WorkItem),
-    binop_contexts: *std.ArrayList(BinopContext),
-    if_contexts: *std.ArrayList(IfContext),
-    call_contexts: *std.ArrayList(CallContext),
 ) EvalError!void {
+    _ = allocator;
     _ = type_store;
-    _ = call_contexts;
+
     const expr = cir.store.getExpr(expr_idx);
 
-    // Check for runtime errors first, before trying to get type info
+    // Check for runtime errors first
     switch (expr) {
-        // Runtime errors should return an error immediately
         .e_runtime_error => return error.Crash,
         else => {},
     }
 
     // Get the type variable for this expression
-    // In CIR, expression indices and type variables are kept in sync
     const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
 
     // Get the real layout from the type checker
     const layout_idx = layout_cache.addTypeVar(expr_var) catch |err| switch (err) {
-        error.ZeroSizedType => {
-            // Zero-sized types don't need any allocation
-            // We can't create a proper layout for them, so return a special error
-            // that the caller can handle appropriately
-            return error.ZeroSizedType;
-        },
-        else => return err,
+        error.ZeroSizedType => return error.ZeroSizedType,
+        error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
+        else => |e| return e,
     };
     const expr_layout = layout_cache.getLayout(layout_idx);
 
-    // Calculate size and alignment using the layout store
+    // Calculate size and alignment
     const size = layout_cache.layoutSize(expr_layout);
     const alignment = expr_layout.alignment(target.TargetUsize.native);
 
-    // Allocate space on the stack
-    const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-        error.StackOverflow => return error.StackOverflow,
-    };
-
-    // Check if the expression is already a primitive and write its bytes
+    // Handle different expression types
     switch (expr) {
-        // Numeric literals are primitives
+        // Runtime errors are handled at the beginning
+        .e_runtime_error => unreachable,
+
+        // Numeric literals - push directly to stack
         .e_int => |int_lit| {
-            // Write integer literal to memory based on actual layout precision
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+
             if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .int) {
                 const precision = expr_layout.data.scalar.data.int;
                 writeIntToMemory(@as([*]u8, @ptrCast(ptr)), int_lit.value.toI128(), precision);
             } else {
                 return error.LayoutError;
             }
+
+            try layout_stack.append(expr_layout);
         },
+
         .e_frac_f64 => |float_lit| {
-            // Write float literal to memory
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+
             const typed_ptr = @as(*f64, @ptrCast(@alignCast(ptr)));
             typed_ptr.* = float_lit.value;
-        },
-        .e_str, .e_str_segment => {
-            // TODO: Handle string allocation on heap
-            return error.LayoutError;
+
+            try layout_stack.append(expr_layout);
         },
 
-        // Empty record
-        .e_empty_record => {
-            // Empty record has no bytes to write
-        },
-
-        // Zero-argument tags
+        // Zero-argument tags (e.g., True, False)
         .e_zero_argument_tag => |tag| {
-            // Write the tag discriminant as a u8
-            // For boolean tags: True = 1, False = 0
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+
             const tag_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
             const tag_name = cir.env.idents.getText(tag.name);
             if (std.mem.eql(u8, tag_name, "True")) {
@@ -251,107 +226,88 @@ fn evalExprIterative(
             } else if (std.mem.eql(u8, tag_name, "False")) {
                 tag_ptr.* = 0;
             } else {
-                // TODO: get actual tag discriminant for other tags
-                tag_ptr.* = 0;
+                tag_ptr.* = 0; // TODO: get actual tag discriminant
             }
+
+            try layout_stack.append(expr_layout);
         },
 
-        // Tags with arguments
-        .e_tag => |tag| {
-            // Use the layout_idx we already computed at the beginning of the function
-            const tag_layout = layout_cache.getLayout(layout_idx);
-
-            // Write the discriminant based on the layout
-            switch (tag_layout.tag) {
-                .scalar => switch (tag_layout.data.scalar.tag) {
-                    .int => switch (tag_layout.data.scalar.data.int) {
-                        .u8 => {
-                            const tag_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-                            // For boolean tags: True = 1, False = 0
-                            const tag_name = cir.env.idents.getText(tag.name);
-                            if (std.mem.eql(u8, tag_name, "True")) {
-                                tag_ptr.* = 1;
-                            } else if (std.mem.eql(u8, tag_name, "False")) {
-                                tag_ptr.* = 0;
-                            } else {
-                                tag_ptr.* = 0; // TODO: get actual tag discriminant for other tags
-                            }
-                        },
-                        .u16 => {
-                            const tag_ptr = @as(*u16, @ptrCast(@alignCast(ptr)));
-                            tag_ptr.* = 0; // TODO: get actual tag discriminant
-                        },
-                        .u32 => {
-                            const tag_ptr = @as(*u32, @ptrCast(@alignCast(ptr)));
-                            tag_ptr.* = 0; // TODO: get actual tag discriminant
-                        },
-                        else => return error.LayoutError,
-                    },
-                    .bool => {
-                        // Bool tags (True/False) as u8
-                        const bool_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-                        // Check the tag name to determine if it's True or False
-                        const tag_name = cir.env.idents.getText(tag.name);
-                        bool_ptr.* = if (std.mem.eql(u8, tag_name, "True")) 1 else 0;
-                    },
-                    else => return error.LayoutError,
-                },
-                else => return error.LayoutError,
-            }
+        // Empty record
+        .e_empty_record => {
+            // Empty record has no bytes
+            try layout_stack.append(expr_layout);
         },
 
-        // Runtime errors are handled at the beginning of the function
-        .e_runtime_error => unreachable,
+        // Empty list
+        .e_empty_list => {
+            // Empty list has no bytes
+            try layout_stack.append(expr_layout);
+        },
 
-        // If expressions - evaluate branches based on conditions
+        // Binary operations
+        .e_binop => |binop| {
+            // Push work to complete the binop after operands are evaluated
+            const binop_kind: WorkKind = switch (binop.op) {
+                .add => .binop_add,
+                .sub => .binop_sub,
+                .mul => .binop_mul,
+                .div => .binop_div,
+                .eq => .binop_eq,
+                .ne => .binop_ne,
+                .gt => .binop_gt,
+                .lt => .binop_lt,
+                .ge => .binop_ge,
+                .le => .binop_le,
+                else => return error.Crash,
+            };
+
+            try work_stack.append(.{
+                .kind = binop_kind,
+                .expr_idx = expr_idx,
+            });
+
+            // Push operands in reverse order (right, then left)
+            try work_stack.append(.{
+                .kind = .eval_expr,
+                .expr_idx = binop.rhs,
+            });
+
+            try work_stack.append(.{
+                .kind = .eval_expr,
+                .expr_idx = binop.lhs,
+            });
+        },
+
+        // If expressions
         .e_if => |if_expr| {
-            // Start evaluating the first branch condition
-            const branches = cir.store.sliceIfBranches(if_expr.branches);
-            if (branches.len > 0) {
-                const branch = extractBranchData(cir, branches[0]) catch |err| switch (err) {
-                    error.InvalidBranchNode => return error.LayoutError,
-                    else => |e| return e,
-                };
-
-                // Allocate space for condition result
-                const cond_result = try allocator.create(EvalResult);
-                errdefer allocator.destroy(cond_result);
-
-                // Save context for completing the if expression
-                try if_contexts.append(.{
-                    .expr_idx = expr_idx,
-                    .branch_index = 0,
-                    .cond_result = cond_result,
-                    .result_location = result_location,
-                });
-
-                // Push work to complete the if after condition is evaluated
+            if (if_expr.branches.span.len > 0) {
+                // Push work to check condition after it's evaluated
+                // Encode branch index (0) in upper 16 bits
+                const encoded_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx));
                 try work_stack.append(.{
-                    .kind = .complete_if_condition,
-                    .expr_idx = expr_idx,
-                    .result_location = result_location,
+                    .kind = .if_check_condition,
+                    .expr_idx = encoded_idx,
                 });
 
-                // Push work to evaluate the condition
+                // Push work to evaluate the first condition
+                const branches = cir.store.sliceIfBranches(if_expr.branches);
+                const branch = cir.store.getIfBranch(branches[0]);
+
                 try work_stack.append(.{
                     .kind = .eval_expr,
-                    .expr_idx = branch.condition,
-                    .result_location = cond_result,
+                    .expr_idx = branch.cond,
                 });
             } else {
                 // No branches, evaluate final_else directly
                 try work_stack.append(.{
                     .kind = .eval_expr,
                     .expr_idx = if_expr.final_else,
-                    .result_location = result_location,
                 });
             }
-            return;
         },
 
-        // Non-primitive expressions need evaluation
+        // Pattern lookup
         .e_lookup_local => |lookup| {
-            // Look up the pattern in the definitions
             const defs = cir.store.sliceDefs(cir.all_defs);
             for (defs) |def_idx| {
                 const def = cir.store.getDef(def_idx);
@@ -360,732 +316,362 @@ fn evalExprIterative(
                     try work_stack.append(.{
                         .kind = .eval_expr,
                         .expr_idx = def.expr,
-                        .result_location = result_location,
                     });
                     return;
                 }
             }
             return error.LayoutError; // Pattern not found
         },
-        .e_binop => |binop| {
-            // Allocate space for left and right results
-            const left_result = try allocator.create(EvalResult);
-            const right_result = try allocator.create(EvalResult);
 
-            // Save context for completing the binop
-            try binop_contexts.append(.{
-                .op = binop.op,
-                .left_result = left_result,
-                .right_result = right_result,
-                .result_location = result_location,
-            });
-
-            // Push work items in reverse order (complete, right, left)
-            try work_stack.append(.{
-                .kind = .complete_binop,
-                .expr_idx = expr_idx,
-                .result_location = result_location,
-            });
-
-            try work_stack.append(.{
-                .kind = .eval_expr,
-                .expr_idx = binop.rhs,
-                .result_location = right_result,
-            });
-
-            try work_stack.append(.{
-                .kind = .eval_expr,
-                .expr_idx = binop.lhs,
-                .result_location = left_result,
-            });
-
-            return;
-        },
-        .e_call => {
-            // TODO: Implement iterative call evaluation
-            // For now, function calls are not supported in the iterative evaluator
-            return error.LayoutError;
-        },
-
-        // TODO: implement these
-        .e_lookup_external, .e_list, .e_match, .e_record, .e_dot_access, .e_block, .e_lambda => {
-            // For now, these are not implemented
-            return error.LayoutError;
-        },
-
-        // Additional numeric types
-        .e_frac_dec => |dec_lit| {
-            // High-precision decimal - not yet implemented
-            _ = dec_lit;
-            return error.LayoutError;
-        },
-        .e_dec_small => |small_dec| {
-            // Small decimal representation - not yet implemented
-            _ = small_dec;
-            return error.LayoutError;
-        },
-
-        // Collection types
-        .e_empty_list => {
-            // Empty list has no bytes to write
-        },
-        .e_tuple => |tuple| {
-            // Tuple evaluation not yet implemented
-            _ = tuple;
-            return error.LayoutError;
-        },
-
-        // Advanced constructs
+        // Nominal expressions
         .e_nominal => |nominal| {
             // Evaluate the backing expression
             try work_stack.append(.{
                 .kind = .eval_expr,
                 .expr_idx = nominal.backing_expr,
-                .result_location = result_location,
             });
-            return;
         },
-        .e_crash => |crash| {
-            // Crash expression - should halt execution
-            _ = crash;
-            return error.Crash;
+
+        // Tags with arguments
+        .e_tag => |tag| {
+            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
+                error.StackOverflow => return error.StackOverflow,
+            };
+
+            // For now, handle boolean tags (True/False) as u8
+            const tag_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+            const tag_name = cir.env.idents.getText(tag.name);
+            if (std.mem.eql(u8, tag_name, "True")) {
+                tag_ptr.* = 1;
+            } else if (std.mem.eql(u8, tag_name, "False")) {
+                tag_ptr.* = 0;
+            } else {
+                tag_ptr.* = 0; // TODO: get actual tag discriminant
+            }
+
+            try layout_stack.append(expr_layout);
         },
-        .e_dbg => |dbg| {
-            // Debug expression not yet implemented
-            _ = dbg;
-            return error.LayoutError;
-        },
-        .e_expect => |expect| {
-            // Expect expression not yet implemented
-            _ = expect;
-            return error.LayoutError;
-        },
-        .e_ellipsis => {
-            // Ellipsis placeholder - not implemented
+
+        // Not yet implemented
+        .e_str, .e_str_segment, .e_list, .e_tuple, .e_record, .e_dot_access, .e_block, .e_lambda, .e_call, .e_lookup_external, .e_match, .e_frac_dec, .e_dec_small, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
             return error.LayoutError;
         },
     }
-
-    result_location.* = EvalResult{
-        .layout = expr_layout,
-        .ptr = ptr,
-    };
 }
 
 fn completeBinop(
-    cir: *const CIR,
-    context: BinopContext,
+    kind: WorkKind,
     eval_stack: *stack.Stack,
+    layout_stack: *std.ArrayList(layout.Layout),
     layout_cache: *layout_store.Store,
-    type_store: *types.Store,
 ) EvalError!void {
-    _ = type_store;
-    const left_result = context.left_result.*;
-    const right_result = context.right_result.*;
-
-    // Clean up allocated results
-    defer cir.env.gpa.destroy(context.left_result);
-    defer cir.env.gpa.destroy(context.right_result);
+    // Pop two layouts (right, then left)
+    const right_layout = layout_stack.pop() orelse return error.InvalidStackState;
+    const left_layout = layout_stack.pop() orelse return error.InvalidStackState;
 
     // For now, only support integer operations
-    if (left_result.layout.tag != .scalar or right_result.layout.tag != .scalar) {
+    if (left_layout.tag != .scalar or right_layout.tag != .scalar) {
         return error.LayoutError;
     }
 
-    const lhs_scalar = left_result.layout.data.scalar;
-    const rhs_scalar = right_result.layout.data.scalar;
+    const lhs_scalar = left_layout.data.scalar;
+    const rhs_scalar = right_layout.data.scalar;
 
     if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
         return error.LayoutError;
     }
 
-    // Read integer values based on precision
-    const lhs_precision = lhs_scalar.data.int;
-    const rhs_precision = rhs_scalar.data.int;
+    // The values are on the stack in order: left, then right
+    // We need to calculate where they are based on their layouts
+    const right_size = layout_cache.layoutSize(right_layout);
+    const left_size = layout_cache.layoutSize(left_layout);
 
-    // Read values based on precision
-    const lhs_val: i128 = switch (lhs_precision) {
-        .u8 => @as(*u8, @ptrCast(@alignCast(left_result.ptr))).*,
-        .i8 => @as(*i8, @ptrCast(@alignCast(left_result.ptr))).*,
-        .u16 => @as(*u16, @ptrCast(@alignCast(left_result.ptr))).*,
-        .i16 => @as(*i16, @ptrCast(@alignCast(left_result.ptr))).*,
-        .u32 => @as(*u32, @ptrCast(@alignCast(left_result.ptr))).*,
-        .i32 => @as(*i32, @ptrCast(@alignCast(left_result.ptr))).*,
-        .u64 => @as(*u64, @ptrCast(@alignCast(left_result.ptr))).*,
-        .i64 => @as(*i64, @ptrCast(@alignCast(left_result.ptr))).*,
-        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(left_result.ptr))).*),
-        .i128 => @as(*i128, @ptrCast(@alignCast(left_result.ptr))).*,
+    // Get pointers to the values
+    const right_ptr = @as([*]u8, @ptrCast(eval_stack.start)) + eval_stack.used - right_size;
+    const left_ptr = right_ptr - left_size;
+
+    // Read the values
+    const lhs_val = readIntFromMemory(@as([*]u8, @ptrCast(left_ptr)), lhs_scalar.data.int);
+    const rhs_val = readIntFromMemory(@as([*]u8, @ptrCast(right_ptr)), rhs_scalar.data.int);
+
+    // Pop the operands from the stack
+    eval_stack.used -= @as(u32, @intCast(left_size + right_size));
+
+    // Determine result layout
+    const result_layout = switch (kind) {
+        .binop_add, .binop_sub, .binop_mul, .binop_div => left_layout, // Numeric result
+        .binop_eq, .binop_ne, .binop_gt, .binop_lt, .binop_ge, .binop_le => blk: {
+            // Boolean result
+            const bool_layout = layout.Layout{
+                .tag = .scalar,
+                .data = .{ .scalar = .{
+                    .tag = .int,
+                    .data = .{ .int = .u8 },
+                } },
+            };
+            break :blk bool_layout;
+        },
+        else => unreachable,
     };
 
-    const rhs_val: i128 = switch (rhs_precision) {
-        .u8 => @as(*u8, @ptrCast(@alignCast(right_result.ptr))).*,
-        .i8 => @as(*i8, @ptrCast(@alignCast(right_result.ptr))).*,
-        .u16 => @as(*u16, @ptrCast(@alignCast(right_result.ptr))).*,
-        .i16 => @as(*i16, @ptrCast(@alignCast(right_result.ptr))).*,
-        .u32 => @as(*u32, @ptrCast(@alignCast(right_result.ptr))).*,
-        .i32 => @as(*i32, @ptrCast(@alignCast(right_result.ptr))).*,
-        .u64 => @as(*u64, @ptrCast(@alignCast(right_result.ptr))).*,
-        .i64 => @as(*i64, @ptrCast(@alignCast(right_result.ptr))).*,
-        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(right_result.ptr))).*),
-        .i128 => @as(*i128, @ptrCast(@alignCast(right_result.ptr))).*,
-    };
-
-    // Determine result layout based on operation
-    const result_layout = switch (context.op) {
-        .add, .sub, .mul, .div, .rem, .pow, .div_trunc => left_result.layout,
-        .eq, .ne, .lt, .gt, .le, .ge => layout.Layout.boolType(),
-        .@"and", .@"or" => layout.Layout.boolType(),
-        else => return error.LayoutError,
+    // Allocate space for result
+    const result_size = layout_cache.layoutSize(result_layout);
+    const result_alignment = result_layout.alignment(target.TargetUsize.native);
+    const result_ptr = eval_stack.alloca(result_size, result_alignment) catch |err| switch (err) {
+        error.StackOverflow => return error.StackOverflow,
     };
 
     // Perform the operation
-    switch (context.op) {
-        .add => {
+    switch (kind) {
+        .binop_add => {
             const result_val: i128 = lhs_val + rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            writeIntToMemory(@as([*]u8, @ptrCast(ptr)), result_val, lhs_precision);
-            context.result_location.* = EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
+            writeIntToMemory(@as([*]u8, @ptrCast(result_ptr)), result_val, lhs_scalar.data.int);
         },
-        .sub => {
+        .binop_sub => {
             const result_val: i128 = lhs_val - rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            writeIntToMemory(@as([*]u8, @ptrCast(ptr)), result_val, lhs_precision);
-            context.result_location.* = EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
+            writeIntToMemory(@as([*]u8, @ptrCast(result_ptr)), result_val, lhs_scalar.data.int);
         },
-        .mul => {
+        .binop_mul => {
             const result_val: i128 = lhs_val * rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            writeIntToMemory(@as([*]u8, @ptrCast(ptr)), result_val, lhs_precision);
-            context.result_location.* = EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
+            writeIntToMemory(@as([*]u8, @ptrCast(result_ptr)), result_val, lhs_scalar.data.int);
         },
-        .div => {
+        .binop_div => {
             if (rhs_val == 0) {
                 return error.DivisionByZero;
             }
             const result_val: i128 = @divTrunc(lhs_val, rhs_val);
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            writeIntToMemory(@as([*]u8, @ptrCast(ptr)), result_val, lhs_precision);
-            context.result_location.* = EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
+            writeIntToMemory(@as([*]u8, @ptrCast(result_ptr)), result_val, lhs_scalar.data.int);
         },
-        .eq => {
-            const result_val: bool = lhs_val == rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = if (result_val) 1 else 0;
-            context.result_location.* = EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
+        .binop_eq => {
+            const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
+            bool_ptr.* = if (lhs_val == rhs_val) 1 else 0;
         },
-        .ne => {
-            const result_val: bool = lhs_val != rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = if (result_val) 1 else 0;
-            context.result_location.* = EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
+        .binop_ne => {
+            const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
+            bool_ptr.* = if (lhs_val != rhs_val) 1 else 0;
         },
-        .gt => {
-            const result_val: bool = lhs_val > rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = if (result_val) 1 else 0;
-            context.result_location.* = EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
+        .binop_gt => {
+            const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
+            bool_ptr.* = if (lhs_val > rhs_val) 1 else 0;
         },
-        .lt => {
-            const result_val: bool = lhs_val < rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = if (result_val) 1 else 0;
-            context.result_location.* = EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
+        .binop_lt => {
+            const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
+            bool_ptr.* = if (lhs_val < rhs_val) 1 else 0;
         },
-        .ge => {
-            const result_val: bool = lhs_val >= rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = if (result_val) 1 else 0;
-            context.result_location.* = EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
+        .binop_ge => {
+            const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
+            bool_ptr.* = if (lhs_val >= rhs_val) 1 else 0;
         },
-        .le => {
-            const result_val: bool = lhs_val <= rhs_val;
-            const size = layout_cache.layoutSize(result_layout);
-            const alignment = result_layout.alignment(target.TargetUsize.native);
-            const ptr = eval_stack.alloca(size, alignment) catch |err| switch (err) {
-                error.StackOverflow => return error.StackOverflow,
-            };
-            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = if (result_val) 1 else 0;
-            context.result_location.* = EvalResult{
-                .layout = result_layout,
-                .ptr = ptr,
-            };
+        .binop_le => {
+            const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
+            bool_ptr.* = if (lhs_val <= rhs_val) 1 else 0;
         },
-        else => {
-            return error.LayoutError;
-        },
+        else => unreachable,
     }
+
+    // Push result layout
+    try layout_stack.append(result_layout);
 }
 
-fn completeIfCondition(
+fn checkIfCondition(
     allocator: std.mem.Allocator,
     cir: *const CIR,
-    context: IfContext,
+    expr_idx: CIR.Expr.Idx,
+    branch_index: u16,
     eval_stack: *stack.Stack,
-    layout_cache: *layout_store.Store,
-    type_store: *types.Store,
+    layout_stack: *std.ArrayList(layout.Layout),
     work_stack: *std.ArrayList(WorkItem),
-    if_contexts: *std.ArrayList(IfContext),
 ) EvalError!void {
-    _ = eval_stack;
-    _ = layout_cache;
-    _ = type_store;
+    _ = allocator;
 
-    // Free the condition result (do this before any error-returning calls)
-    defer allocator.destroy(context.cond_result);
+    // Pop the condition layout
+    _ = layout_stack.pop() orelse return error.InvalidStackState; // Remove condition layout
 
-    // Check if condition is true
-    const is_true = evaluateBooleanCondition(context.cond_result.*) catch |err| switch (err) {
-        error.TypeMismatch => return error.LayoutError,
-        else => |e| return e,
-    };
+    // Read the condition value
+    const cond_size = 1; // Boolean is u8
+    const cond_ptr = @as([*]u8, @ptrCast(eval_stack.start)) + eval_stack.used - cond_size;
+    const cond_val = @as(*u8, @ptrCast(@alignCast(cond_ptr))).*;
 
-    // Get the if expression from the expr_idx
-    const expr = cir.store.getExpr(context.expr_idx);
-    const if_expr = switch (expr) {
+    // Pop the condition from the stack
+    eval_stack.used -= cond_size;
+
+    // Get the if expression
+    const if_expr = switch (cir.store.getExpr(expr_idx)) {
         .e_if => |e| e,
-        else => return error.LayoutError,
+        else => return error.InvalidBranchNode,
     };
 
-    if (is_true) {
-        // Condition is true, evaluate the branch body
-        const branches = cir.store.sliceIfBranches(if_expr.branches);
-        const branch = extractBranchData(cir, branches[context.branch_index]) catch |err| switch (err) {
-            error.InvalidBranchNode => return error.LayoutError,
-            else => |e| return e,
-        };
+    const branches = cir.store.sliceIfBranches(if_expr.branches);
 
+    if (branch_index >= branches.len) {
+        return error.InvalidBranchNode;
+    }
+
+    const current_branch = cir.store.getIfBranch(branches[branch_index]);
+
+    if (cond_val == 1) {
+        // Condition is true, evaluate this branch's body
         try work_stack.append(.{
             .kind = .eval_expr,
-            .expr_idx = branch.body,
-            .result_location = context.result_location,
+            .expr_idx = current_branch.body,
         });
     } else {
-        // Try next branch
-        const branches = cir.store.sliceIfBranches(if_expr.branches);
-        const next_branch_index = context.branch_index + 1;
+        // Condition is false, check if there's another branch
+        if (branch_index + 1 < branches.len) {
+            // Evaluate the next branch
+            const next_branch = cir.store.getIfBranch(branches[branch_index + 1]);
 
-        if (next_branch_index < branches.len) {
-            // Evaluate next branch condition
-            const branch = extractBranchData(cir, branches[next_branch_index]) catch |err| switch (err) {
-                error.InvalidBranchNode => return error.LayoutError,
-                else => |e| return e,
-            };
-
-            // Allocate space for next condition result
-            const cond_result = try allocator.create(EvalResult);
-
-            // Save context for next branch
-            try if_contexts.append(.{
-                .expr_idx = context.expr_idx,
-                .branch_index = next_branch_index,
-                .cond_result = cond_result,
-                .result_location = context.result_location,
-            });
-
-            // Push work to complete the if after condition is evaluated
+            // Push work to check next condition after it's evaluated
+            // Encode branch index in upper 16 bits
+            const next_branch_idx = branch_index + 1;
+            const encoded_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx) | (@as(u32, next_branch_idx) << 16));
             try work_stack.append(.{
-                .kind = .complete_if_condition,
-                .expr_idx = context.expr_idx,
-                .result_location = context.result_location,
+                .kind = .if_check_condition,
+                .expr_idx = encoded_idx,
             });
 
-            // Push work to evaluate the condition
+            // Push work to evaluate the next condition
             try work_stack.append(.{
                 .kind = .eval_expr,
-                .expr_idx = branch.condition,
-                .result_location = cond_result,
+                .expr_idx = next_branch.cond,
             });
         } else {
             // No more branches, evaluate final_else
             try work_stack.append(.{
                 .kind = .eval_expr,
                 .expr_idx = if_expr.final_else,
-                .result_location = context.result_location,
             });
         }
     }
 }
 
-fn completeCall(
-    allocator: std.mem.Allocator,
-    cir: *const CIR,
-    context: CallContext,
-    eval_stack: *stack.Stack,
-    layout_cache: *layout_store.Store,
-    type_store: *types.Store,
-) EvalError!void {
-    _ = eval_stack;
-    _ = layout_cache;
-    _ = type_store;
-    // This is a placeholder - the full implementation would handle function calls
-    _ = allocator;
-    _ = cir;
-    _ = context;
-    _ = eval_stack;
-    _ = layout_cache;
-    _ = type_store;
-    return error.LayoutError;
-}
-
+// Helper function to write an integer to memory with the correct precision
 fn writeIntToMemory(ptr: [*]u8, value: i128, precision: types.Num.Int.Precision) void {
     switch (precision) {
-        .u8 => {
-            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = @intCast(value);
-        },
-        .i8 => {
-            const typed_ptr = @as(*i8, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = @intCast(value);
-        },
-        .u16 => {
-            const typed_ptr = @as(*u16, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = @intCast(value);
-        },
-        .i16 => {
-            const typed_ptr = @as(*i16, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = @intCast(value);
-        },
-        .u32 => {
-            const typed_ptr = @as(*u32, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = @intCast(value);
-        },
-        .i32 => {
-            const typed_ptr = @as(*i32, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = @intCast(value);
-        },
-        .u64 => {
-            const typed_ptr = @as(*u64, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = @intCast(value);
-        },
-        .i64 => {
-            const typed_ptr = @as(*i64, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = @intCast(value);
-        },
-        .u128 => {
-            const typed_ptr = @as(*u128, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = @intCast(value);
-        },
-        .i128 => {
-            const typed_ptr = @as(*i128, @ptrCast(@alignCast(ptr)));
-            typed_ptr.* = value;
-        },
+        .u8 => @as(*u8, @ptrCast(@alignCast(ptr))).* = @as(u8, @intCast(value)),
+        .u16 => @as(*u16, @ptrCast(@alignCast(ptr))).* = @as(u16, @intCast(value)),
+        .u32 => @as(*u32, @ptrCast(@alignCast(ptr))).* = @as(u32, @intCast(value)),
+        .u64 => @as(*u64, @ptrCast(@alignCast(ptr))).* = @as(u64, @intCast(value)),
+        .u128 => @as(*u128, @ptrCast(@alignCast(ptr))).* = @as(u128, @intCast(value)),
+        .i8 => @as(*i8, @ptrCast(@alignCast(ptr))).* = @as(i8, @intCast(value)),
+        .i16 => @as(*i16, @ptrCast(@alignCast(ptr))).* = @as(i16, @intCast(value)),
+        .i32 => @as(*i32, @ptrCast(@alignCast(ptr))).* = @as(i32, @intCast(value)),
+        .i64 => @as(*i64, @ptrCast(@alignCast(ptr))).* = @as(i64, @intCast(value)),
+        .i128 => @as(*i128, @ptrCast(@alignCast(ptr))).* = value,
     }
 }
 
-/// Evaluates an if expression by checking conditions and executing the appropriate branch.
-///
-/// The evaluation strategy:
-/// 1. If there are no branches (empty branches list), evaluate final_else directly
-/// 2. Otherwise, evaluate each branch condition in order:
-///    - The condition must evaluate to a boolean type
-///    - If the condition evaluates to true, evaluate and return that branch's body
-///    - If the condition is false, continue to the next branch
-/// 3. If no branch condition is true, evaluate and return final_else
-///
-/// Type Requirements:
-/// - Only boolean types are allowed as conditions (nominal Bool type)
-/// - Booleans are represented as u8 values: True = 1, False = 0
-/// - Type mismatch error if condition evaluates to any non-boolean type
-/// - With nominal booleans, True and False are wrapped in nominal expressions
-///
-/// Branch Storage:
-/// - Branches are stored as nodes with data in extra_data
-/// - data_1: Index into extra_data where branch data starts
-/// - extra_data[data_1]: Condition expression index
-/// - extra_data[data_1 + 1]: Body expression index
-///
-/// Current Limitations:
-/// - Complex boolean expressions (like `1 == 1`) not fully canonicalized yet
-/// - Boolean tags (`True`, `False`) as part of the `[True, False]` tag union
-/// - The `getIfBranch` helper function is not yet implemented in NodeStore
-///
-/// Future Work:
-/// - Complete canonicalization support for boolean expressions
-/// - Implement `getIfBranch` helper function in NodeStore
-/// - Add support for pattern matching in if expression conditions
-/// Represents the extracted data from an if branch node
-const BranchData = struct {
-    condition: CIR.Expr.Idx,
-    body: CIR.Expr.Idx,
-};
-
-/// Extracts condition and body indices from a branch node.
-///
-/// Each branch is stored as a node with condition and body indices in extra_data.
-/// Layout: [condition_idx, body_idx] starting at data_1
-///
-/// Returns:
-/// - BranchData with condition and body indices on success
-/// - error.InvalidBranchNode if the node type is wrong or data is out of bounds
-fn extractBranchData(cir: *const CIR, branch_idx: CIR.Expr.IfBranch.Idx) error{InvalidBranchNode}!BranchData {
-    // Convert branch index to node index
-    const branch_node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch_idx));
-    const branch_node = cir.store.nodes.get(branch_node_idx);
-
-    // Validate node type
-    if (branch_node.tag != .if_branch) {
-        return error.InvalidBranchNode;
-    }
-
-    // Extract indices from node data
-    // Based on getIfBranch in NodeStore.zig:
-    // data_1 contains the condition expression index
-    // data_2 contains the body expression index
-    return BranchData{
-        .condition = @enumFromInt(branch_node.data_1),
-        .body = @enumFromInt(branch_node.data_2),
+// Helper function to read an integer from memory with the correct precision
+fn readIntFromMemory(ptr: [*]u8, precision: types.Num.Int.Precision) i128 {
+    return switch (precision) {
+        .u8 => @as(i128, @as(*u8, @ptrCast(@alignCast(ptr))).*),
+        .u16 => @as(i128, @as(*u16, @ptrCast(@alignCast(ptr))).*),
+        .u32 => @as(i128, @as(*u32, @ptrCast(@alignCast(ptr))).*),
+        .u64 => @as(i128, @as(*u64, @ptrCast(@alignCast(ptr))).*),
+        .u128 => @as(i128, @intCast(@as(*u128, @ptrCast(@alignCast(ptr))).*)),
+        .i8 => @as(i128, @as(*i8, @ptrCast(@alignCast(ptr))).*),
+        .i16 => @as(i128, @as(*i16, @ptrCast(@alignCast(ptr))).*),
+        .i32 => @as(i128, @as(*i32, @ptrCast(@alignCast(ptr))).*),
+        .i64 => @as(i128, @as(*i64, @ptrCast(@alignCast(ptr))).*),
+        .i128 => @as(*i128, @ptrCast(@alignCast(ptr))).*,
     };
-}
-
-/// Evaluates a boolean condition result and returns whether it's true.
-///
-/// This function enforces strict type checking - only boolean types are allowed.
-/// With nominal booleans, Bool is a nominal type wrapping u8 values.
-///
-/// Returns:
-/// - true if the value is 1 (True)
-/// - false if the value is 0 (False)
-/// - error.TypeMismatch if the condition is not a boolean type
-fn evaluateBooleanCondition(cond_result: EvalResult) error{TypeMismatch}!bool {
-    // Check if this is a boolean scalar layout
-    if (cond_result.layout.tag == .scalar and cond_result.layout.data.scalar.tag == .bool) {
-        // Direct boolean value as u8
-        const bool_ptr = @as(*const u8, @ptrCast(@alignCast(cond_result.ptr)));
-        return bool_ptr.* == 1;
-    }
-
-    // With nominal booleans, True and False are u8 values
-    // wrapped in nominal expressions (True = 1, False = 0)
-    if (cond_result.layout.tag != .scalar or cond_result.layout.data.scalar.tag != .int) {
-        // Type mismatch: condition must be a tag (represented as int)
-        return error.TypeMismatch;
-    }
-
-    // For zero-argument tags, we expect a u8 layout
-    const int_precision = cond_result.layout.data.scalar.data.int;
-    if (int_precision != .u8) {
-        return error.TypeMismatch;
-    }
-
-    // Read the tag discriminant
-    const tag_ptr = @as(*u8, @ptrCast(@alignCast(cond_result.ptr)));
-    const discriminant = tag_ptr.*;
-
-    // In the nominal Bool type:
-    // - True has value 1
-    // - False has value 0
-    return discriminant == 1;
 }
 
 test {
     _ = @import("eval_test.zig");
 }
 
-test "evaluateBooleanCondition - valid True tag" {
-    const testing = std.testing;
+test "stack-based binary operations" {
+    // Test that the stack-based interpreter correctly evaluates binary operations
+    const allocator = std.testing.allocator;
 
-    // Create a True tag (discriminant 1)
-    var tag_value: u8 = 1;
-    const result = EvalResult{
-        .layout = layout.Layout.int(.u8),
-        .ptr = &tag_value,
-    };
+    // Create a simple stack for testing
+    var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
+    defer eval_stack.deinit();
 
-    const is_true = try evaluateBooleanCondition(result);
-    try testing.expect(is_true);
+    // Track layouts
+    var layout_stack = std.ArrayList(layout.Layout).init(allocator);
+    defer layout_stack.deinit();
+
+    // Test addition: 2 + 3 = 5
+    {
+        // Push 2
+        const int_layout = layout.Layout{
+            .tag = .scalar,
+            .data = .{ .scalar = .{
+                .tag = .int,
+                .data = .{ .int = .i64 },
+            } },
+        };
+        const size = @sizeOf(i64);
+        const alignment: std.mem.Alignment = .@"8";
+
+        const ptr1 = eval_stack.alloca(size, alignment) catch unreachable;
+        @as(*i64, @ptrCast(@alignCast(ptr1))).* = 2;
+        try layout_stack.append(int_layout);
+
+        // Push 3
+        const ptr2 = eval_stack.alloca(size, alignment) catch unreachable;
+        @as(*i64, @ptrCast(@alignCast(ptr2))).* = 3;
+        try layout_stack.append(int_layout);
+
+        // Perform addition
+        try completeBinop(.binop_add, &eval_stack, &layout_stack, undefined);
+
+        // Check result
+        try std.testing.expectEqual(@as(usize, 1), layout_stack.items.len);
+        const result_ptr = @as([*]u8, @ptrCast(eval_stack.start)) + eval_stack.used - size;
+        const result = @as(*i64, @ptrCast(@alignCast(result_ptr))).*;
+        try std.testing.expectEqual(@as(i64, 5), result);
+    }
 }
 
-test "evaluateBooleanCondition - valid False tag" {
-    const testing = std.testing;
+test "stack-based comparisons" {
+    // Test that comparisons produce boolean results
+    const allocator = std.testing.allocator;
 
-    // Create a False tag (discriminant 0)
-    var tag_value: u8 = 0;
-    const result = EvalResult{
-        .layout = layout.Layout.int(.u8),
-        .ptr = &tag_value,
-    };
+    // Create a simple stack for testing
+    var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
+    defer eval_stack.deinit();
 
-    const is_false = try evaluateBooleanCondition(result);
-    try testing.expect(!is_false);
-}
+    // Track layouts
+    var layout_stack = std.ArrayList(layout.Layout).init(allocator);
+    defer layout_stack.deinit();
 
-test "evaluateBooleanCondition - wrong integer precision error" {
-    const testing = std.testing;
+    // Test 5 > 3 = True (1)
+    {
+        // Push 5
+        const int_layout = layout.Layout{
+            .tag = .scalar,
+            .data = .{ .scalar = .{
+                .tag = .int,
+                .data = .{ .int = .i64 },
+            } },
+        };
+        const size = @sizeOf(i64);
+        const alignment: std.mem.Alignment = .@"8";
 
-    // Create an integer value with wrong precision (not u8)
-    var int_value: i128 = 42;
-    const result = EvalResult{
-        .layout = layout.Layout.int(.i128),
-        .ptr = &int_value,
-    };
+        const ptr1 = eval_stack.alloca(size, alignment) catch unreachable;
+        @as(*i64, @ptrCast(@alignCast(ptr1))).* = 5;
+        try layout_stack.append(int_layout);
 
-    const err = evaluateBooleanCondition(result);
-    try testing.expectError(error.TypeMismatch, err);
-}
+        // Push 3
+        const ptr2 = eval_stack.alloca(size, alignment) catch unreachable;
+        @as(*i64, @ptrCast(@alignCast(ptr2))).* = 3;
+        try layout_stack.append(int_layout);
 
-test "evaluateBooleanCondition - string type error" {
-    const testing = std.testing;
+        // Perform comparison
+        try completeBinop(.binop_gt, &eval_stack, &layout_stack, undefined);
 
-    // Create a string layout
-    const result = EvalResult{
-        .layout = layout.Layout.str(),
-        .ptr = undefined, // Doesn't matter for this test
-    };
+        // Check result - should be a u8 with value 1 (true)
+        try std.testing.expectEqual(@as(usize, 1), layout_stack.items.len);
+        const bool_layout = layout_stack.items[0];
+        try std.testing.expect(bool_layout.tag == .scalar);
+        try std.testing.expect(bool_layout.data.scalar.tag == .int);
+        try std.testing.expect(bool_layout.data.scalar.data.int == .u8);
 
-    const err = evaluateBooleanCondition(result);
-    try testing.expectError(error.TypeMismatch, err);
-}
-
-test "extractBranchData - valid branch node" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    const owned_source = try gpa.dupe(u8, "");
-    var module_env = try base.ModuleEnv.init(gpa, owned_source);
-    defer module_env.deinit();
-
-    var cir = try CIR.init(&module_env, "test");
-    defer cir.deinit();
-
-    // Create a branch node with condition and body indices
-    const node = Node{
-        .data_1 = 123, // condition idx
-        .data_2 = 456, // body idx
-        .data_3 = 0,
-
-        .tag = .if_branch,
-    };
-    const node_idx = try cir.store.nodes.append(gpa, node);
-
-    // Extract branch data
-    const branch_idx: CIR.Expr.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
-    const branch_data = try extractBranchData(&cir, branch_idx);
-
-    try testing.expectEqual(@as(u32, 123), @intFromEnum(branch_data.condition));
-    try testing.expectEqual(@as(u32, 456), @intFromEnum(branch_data.body));
-}
-
-test "extractBranchData - wrong node type" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    const owned_source = try gpa.dupe(u8, "");
-    var module_env = try base.ModuleEnv.init(gpa, owned_source);
-    defer module_env.deinit();
-
-    var cir = try CIR.init(&module_env, "test");
-    defer cir.deinit();
-
-    // Create a non-branch node
-    const node = Node{
-        .data_1 = 0,
-        .data_2 = 0,
-        .data_3 = 0,
-
-        .tag = .expr_int, // Wrong type
-    };
-    const node_idx = try cir.store.nodes.append(gpa, node);
-
-    // Try to extract branch data from wrong node type
-    const branch_idx: CIR.Expr.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
-    const err = extractBranchData(&cir, branch_idx);
-
-    try testing.expectError(error.InvalidBranchNode, err);
-}
-
-test "extractBranchData - invalid branch node" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    const owned_source = try gpa.dupe(u8, "");
-    var module_env = try base.ModuleEnv.init(gpa, owned_source);
-    defer module_env.deinit();
-
-    var cir = try CIR.init(&module_env, "test");
-    defer cir.deinit();
-
-    // Create a node that's not an if_branch
-    const node = Node{
-        .data_1 = 123,
-        .data_2 = 456,
-        .data_3 = 0,
-
-        .tag = .expr_int, // Not an if_branch
-    };
-    const node_idx = try cir.store.nodes.append(gpa, node);
-
-    // Extract branch data should fail
-    const branch_idx: CIR.Expr.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
-    const err = extractBranchData(&cir, branch_idx);
-
-    try testing.expectError(error.InvalidBranchNode, err);
+        const result_ptr = @as([*]u8, @ptrCast(eval_stack.start)) + eval_stack.used - 1;
+        const result = result_ptr[0];
+        try std.testing.expectEqual(@as(u8, 1), result);
+    }
 }
