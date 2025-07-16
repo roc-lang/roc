@@ -23,7 +23,7 @@ const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 
 const builtin = @import("builtin");
-const read_roc_file_path_shim_lib = @embedFile("libread_roc_file_path_shim.a");
+const read_roc_file_path_shim_lib = if (builtin.is_test) &[_]u8{} else @embedFile("libread_roc_file_path_shim.a");
 const c = std.c;
 
 // External C functions for POSIX shared memory
@@ -285,6 +285,14 @@ fn cleanupSharedMemory() void {
 
 fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8) !void {
     _ = gpa; // unused but kept for consistency
+
+    if (builtin.is_test) {
+        // In test mode, create an empty file to avoid embedding issues
+        const shim_file = try std.fs.cwd().createFile(output_path, .{});
+        defer shim_file.close();
+        return;
+    }
+
     // Write the embedded shim library to the output path
     const shim_file = try std.fs.cwd().createFile(output_path, .{});
     defer shim_file.close();
