@@ -13,7 +13,6 @@ pub const CliArgs = union(enum) {
     build: BuildArgs,
     format: FormatArgs,
     test_cmd: TestArgs,
-    link: LinkArgs,
     repl,
     version,
     docs: DocsArgs,
@@ -25,10 +24,6 @@ pub const CliArgs = union(enum) {
         switch (self) {
             .format => |fmt| gpa.free(fmt.paths),
             .run => |run| gpa.free(run.app_args),
-            .link => |link| {
-                gpa.free(link.object_files);
-                gpa.free(link.extra_args);
-            },
             else => return,
         }
     }
@@ -101,13 +96,6 @@ pub const FormatArgs = struct {
     check: bool = false, // if the command should only check formatting rather than applying it
 };
 
-/// Arguments for `roc link`
-pub const LinkArgs = struct {
-    object_files: []const []const u8, // the object files to link together
-    output: []const u8, // the path where the output executable should be created
-    extra_args: []const []const u8 = &[_][]const u8{}, // additional linker arguments
-};
-
 /// Arguments for `roc docs`
 pub const DocsArgs = struct {
     path: []const u8, // the main.roc file to base the generation on
@@ -123,7 +111,6 @@ pub fn parse(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Err
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
     if (mem.eql(u8, args[0], "format")) return try parseFormat(gpa, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
-    if (mem.eql(u8, args[0], "link")) return try parseLink(gpa, args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
     if (mem.eql(u8, args[0], "docs")) return parseDocs(args[1..]);
@@ -354,64 +341,6 @@ fn parseTest(args: []const []const u8) CliArgs {
         }
     }
     return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main } };
-}
-
-fn parseLink(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
-    var object_files = std.ArrayList([]const u8).init(gpa);
-    var output: ?[]const u8 = null;
-    var extra_args = std.ArrayList([]const u8).init(gpa);
-    var i: usize = 0;
-
-    while (i < args.len) : (i += 1) {
-        const arg = args[i];
-        if (isHelpFlag(arg)) {
-            object_files.deinit();
-            extra_args.deinit();
-            return CliArgs{ .help = 
-            \\Link object files into an executable using LLD
-            \\
-            \\Usage: roc link [OPTIONS] <OBJECT_FILES>... -o <OUTPUT>
-            \\
-            \\Arguments:
-            \\  <OBJECT_FILES>...  Object files to link together
-            \\
-            \\Options:
-            \\  -o <OUTPUT>         Output executable path
-            \\  -h, --help          Print help
-            \\
-        };
-        } else if (mem.eql(u8, arg, "-o")) {
-            if (i + 1 >= args.len) {
-                object_files.deinit();
-                extra_args.deinit();
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "-o" } } };
-            }
-            i += 1;
-            output = args[i];
-        } else if (mem.startsWith(u8, arg, "-")) {
-            try extra_args.append(arg);
-        } else {
-            try object_files.append(arg);
-        }
-    }
-
-    if (output == null) {
-        object_files.deinit();
-        extra_args.deinit();
-        return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "-o" } } };
-    }
-
-    if (object_files.items.len == 0) {
-        object_files.deinit();
-        extra_args.deinit();
-        return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "link", .arg = "no object files provided" } } };
-    }
-
-    return CliArgs{ .link = LinkArgs{
-        .object_files = try object_files.toOwnedSlice(),
-        .output = output.?,
-        .extra_args = try extra_args.toOwnedSlice(),
-    } };
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
