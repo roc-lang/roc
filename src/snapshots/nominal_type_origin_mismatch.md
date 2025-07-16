@@ -10,71 +10,16 @@ module []
 import Data exposing [Person]
 
 expectsPerson : Person -> Str
-expectsPerson = \p -> "Got a person"
+expectsPerson = |p| "Got a person"
 
 main =
     # This will cause a type mismatch
     expectsPerson("not a person")
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:17:6:18
-PARSE ERROR - nominal_type_origin_mismatch.md:6:23:6:24
-UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:24:6:36
-UNEXPECTED TOKEN IN EXPRESSION - nominal_type_origin_mismatch.md:6:36:6:37
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
-UNKNOWN OPERATOR - :0:0:0:0
-INVALID STATEMENT - nominal_type_origin_mismatch.md:6:18:6:24
-INVALID STATEMENT - nominal_type_origin_mismatch.md:6:24:6:36
-INVALID STATEMENT - nominal_type_origin_mismatch.md:6:36:6:37
+UNUSED VARIABLE - nominal_type_origin_mismatch.md:6:18:6:19
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **\** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_type_origin_mismatch.md:6:17:6:18:**
-```roc
-expectsPerson = \p -> "Got a person"
-```
-                ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expr_arrow_expects_ident`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**nominal_type_origin_mismatch.md:6:23:6:24:**
-```roc
-expectsPerson = \p -> "Got a person"
-```
-                      ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **Got a person** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_type_origin_mismatch.md:6:24:6:36:**
-```roc
-expectsPerson = \p -> "Got a person"
-```
-                       ^^^^^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **"** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_type_origin_mismatch.md:6:36:6:37:**
-```roc
-expectsPerson = \p -> "Got a person"
-```
-                                   ^
-
-
 **UNDECLARED TYPE**
 The type `Person` is not declared in this scope.
 
@@ -86,41 +31,16 @@ expectsPerson : Person -> Str
                 ^^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+**UNUSED VARIABLE**
+Variable `p` is not used anywhere in your code.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**nominal_type_origin_mismatch.md:6:18:6:24:**
+If you don't need this variable, prefix it with an underscore like _p to suppress this warning.
+The unused variable is declared here:
+**nominal_type_origin_mismatch.md:6:18:6:19:**
 ```roc
-expectsPerson = \p -> "Got a person"
+expectsPerson = |p| "Got a person"
 ```
-                 ^^^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**nominal_type_origin_mismatch.md:6:24:6:36:**
-```roc
-expectsPerson = \p -> "Got a person"
-```
-                       ^^^^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**nominal_type_origin_mismatch.md:6:36:6:37:**
-```roc
-expectsPerson = \p -> "Got a person"
-```
-                                   ^
+                 ^
 
 
 # TOKENS
@@ -128,7 +48,7 @@ expectsPerson = \p -> "Got a person"
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
 KwImport(3:1-3:7),UpperIdent(3:8-3:12),KwExposing(3:13-3:21),OpenSquare(3:22-3:23),UpperIdent(3:23-3:29),CloseSquare(3:29-3:30),
 LowerIdent(5:1-5:14),OpColon(5:15-5:16),UpperIdent(5:17-5:23),OpArrow(5:24-5:26),UpperIdent(5:27-5:30),
-LowerIdent(6:1-6:14),OpAssign(6:15-6:16),OpBackslash(6:17-6:18),LowerIdent(6:18-6:19),OpArrow(6:20-6:22),StringStart(6:23-6:24),StringPart(6:24-6:36),StringEnd(6:36-6:37),
+LowerIdent(6:1-6:14),OpAssign(6:15-6:16),OpBar(6:17-6:18),LowerIdent(6:18-6:19),OpBar(6:19-6:20),StringStart(6:21-6:22),StringPart(6:22-6:34),StringEnd(6:34-6:35),
 LowerIdent(8:1-8:5),OpAssign(8:6-8:7),
 LowerIdent(10:5-10:18),NoSpaceOpenRound(10:18-10:19),StringStart(10:19-10:20),StringPart(10:20-10:32),StringEnd(10:32-10:33),CloseRound(10:33-10:34),EndOfFile(10:34-10:34),
 ~~~
@@ -145,12 +65,13 @@ LowerIdent(10:5-10:18),NoSpaceOpenRound(10:18-10:19),StringStart(10:19-10:20),St
 			(ty-fn @5.17-5.30
 				(ty @5.17-5.23 (name "Person"))
 				(ty @5.27-5.30 (name "Str"))))
-		(s-decl @6.1-6.18
+		(s-decl @6.1-6.35
 			(p-ident @6.1-6.14 (raw "expectsPerson"))
-			(e-malformed @6.17-6.18 (reason "expr_unexpected_token")))
-		(e-malformed @6.23-6.24 (reason "expr_arrow_expects_ident"))
-		(e-malformed @6.24-6.36 (reason "expr_unexpected_token"))
-		(e-malformed @6.36-6.37 (reason "expr_unexpected_token"))
+			(e-lambda @6.17-6.35
+				(args
+					(p-ident @6.18-6.19 (raw "p")))
+				(e-string @6.21-6.35
+					(e-string-part @6.22-6.34 (raw "Got a person")))))
 		(s-decl @8.1-10.34
 			(p-ident @8.1-8.5 (raw "main"))
 			(e-apply @10.5-10.34
@@ -165,8 +86,7 @@ module []
 import Data exposing [Person]
 
 expectsPerson : Person -> Str
-expectsPerson = 
-
+expectsPerson = |p| "Got a person"
 
 main = 
 # This will cause a type mismatch
@@ -177,7 +97,11 @@ main =
 (can-ir
 	(d-let
 		(p-assign @6.1-6.14 (ident "expectsPerson"))
-		(e-runtime-error (tag "expr_not_canonicalized"))
+		(e-lambda @6.17-6.35
+			(args
+				(p-assign @6.18-6.19 (ident "p")))
+			(e-string @6.21-6.35
+				(e-literal @6.22-6.34 (string "Got a person"))))
 		(annotation @6.1-6.14
 			(declared-type
 				(ty-fn @5.17-5.30 (effectful false)
@@ -198,9 +122,9 @@ main =
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.14 (type "Error"))
-		(patt @8.1-8.5 (type "_a")))
+		(patt @6.1-6.14 (type "Error -> Str"))
+		(patt @8.1-8.5 (type "Str")))
 	(expressions
-		(expr @6.17-6.18 (type "Error"))
-		(expr @10.5-10.34 (type "_a"))))
+		(expr @6.17-6.35 (type "Error -> Str"))
+		(expr @10.5-10.34 (type "Str"))))
 ~~~
