@@ -26,11 +26,35 @@ const builtin = @import("builtin");
 const read_roc_file_path_shim_lib = if (builtin.is_test) &[_]u8{} else @embedFile("libread_roc_file_path_shim.a");
 const c = std.c;
 
-// External C functions for POSIX shared memory
-extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: c.mode_t) c_int;
-extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: c.off_t) ?*anyopaque;
-extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
+// Platform-specific shared memory implementation
+const is_windows = builtin.target.os.tag == .windows;
+
+// POSIX shared memory functions
+const posix = if (!is_windows) struct {
+    extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: c.mode_t) c_int;
+    extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
+    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: c.off_t) ?*anyopaque;
+    extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
+} else struct {};
+
+// Windows shared memory functions
+const windows = if (is_windows) struct {
+    const HANDLE = *anyopaque;
+    const DWORD = u32;
+    const BOOL = c_int;
+    const LPVOID = ?*anyopaque;
+    const LPCWSTR = [*:0]const u16;
+    const SIZE_T = usize;
+
+    extern "kernel32" fn CreateFileMappingW(hFile: HANDLE, lpFileMappingAttributes: ?*anyopaque, flProtect: DWORD, dwMaximumSizeHigh: DWORD, dwMaximumSizeLow: DWORD, lpName: LPCWSTR) ?HANDLE;
+    extern "kernel32" fn MapViewOfFile(hFileMappingObject: HANDLE, dwDesiredAccess: DWORD, dwFileOffsetHigh: DWORD, dwFileOffsetLow: DWORD, dwNumberOfBytesToMap: SIZE_T) LPVOID;
+    extern "kernel32" fn UnmapViewOfFile(lpBaseAddress: LPVOID) BOOL;
+    extern "kernel32" fn CloseHandle(hObject: HANDLE) BOOL;
+
+    const PAGE_READWRITE = 0x04;
+    const FILE_MAP_ALL_ACCESS = 0x001f;
+    const INVALID_HANDLE_VALUE = @as(HANDLE, @ptrFromInt(std.math.maxInt(usize)));
+} else struct {};
 
 const benchTokenizer = bench.benchTokenizer;
 const benchParse = bench.benchParse;
@@ -196,8 +220,13 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     // Ensure we clean up shared memory resources on all exit paths
     defer {
-        _ = munmap(shm_handle.ptr, shm_handle.size);
-        _ = c.close(shm_handle.fd);
+        if (comptime is_windows) {
+            _ = windows.UnmapViewOfFile(shm_handle.ptr);
+            _ = windows.CloseHandle(@ptrCast(shm_handle.fd));
+        } else {
+            _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+            _ = c.close(shm_handle.fd);
+        }
         cleanupSharedMemory();
     }
 
@@ -217,22 +246,73 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 }
 
 const SharedMemoryHandle = struct {
-    fd: c_int,
+    fd: if (is_windows) *anyopaque else c_int,
     ptr: *anyopaque,
     size: usize,
 };
 
 fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
-    const shm_name = "/ROC_FILE_TO_INTERPRET";
-
     // Calculate total size needed: length + data
     const total_size = @sizeOf(usize) + data.len;
 
-    // Unlink any existing shared memory object first
-    _ = shm_unlink(shm_name);
+    if (comptime is_windows) {
+        return writeToWindowsSharedMemory(data, total_size);
+    } else {
+        return writeToPosixSharedMemory(data, total_size);
+    }
+}
+
+fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
+    const shm_name_wide = std.unicode.utf8ToUtf16LeStringLiteral("ROC_FILE_TO_INTERPRET");
 
     // Create shared memory object
-    const shm_fd = shm_open(shm_name, 0x0002 | 0x0200, 0o666); // O_RDWR | O_CREAT
+    const shm_handle = windows.CreateFileMappingW(
+        windows.INVALID_HANDLE_VALUE,
+        null,
+        windows.PAGE_READWRITE,
+        0,
+        @intCast(total_size),
+        shm_name_wide,
+    ) orelse {
+        std.debug.print("Failed to create shared memory mapping\n", .{});
+        return error.SharedMemoryCreateFailed;
+    };
+
+    // Map the shared memory
+    const mapped_ptr = windows.MapViewOfFile(
+        shm_handle,
+        windows.FILE_MAP_ALL_ACCESS,
+        0,
+        0,
+        0,
+    ) orelse {
+        _ = windows.CloseHandle(shm_handle);
+        std.debug.print("Failed to map shared memory\n", .{});
+        return error.SharedMemoryMapFailed;
+    };
+
+    // Write length and data
+    const length_ptr: *usize = @ptrCast(@alignCast(mapped_ptr));
+    length_ptr.* = data.len;
+
+    const data_ptr = @as([*]u8, @ptrCast(mapped_ptr)) + @sizeOf(usize);
+    @memcpy(data_ptr[0..data.len], data);
+
+    return SharedMemoryHandle{
+        .fd = shm_handle,
+        .ptr = mapped_ptr,
+        .size = total_size,
+    };
+}
+
+fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
+    const shm_name = "/ROC_FILE_TO_INTERPRET";
+
+    // Unlink any existing shared memory object first
+    _ = posix.shm_unlink(shm_name);
+
+    // Create shared memory object
+    const shm_fd = posix.shm_open(shm_name, 0x0002 | 0x0200, 0o666); // O_RDWR | O_CREAT
     if (shm_fd < 0) {
         const errno = std.c._errno().*;
         std.debug.print("Failed to create shared memory: {s}, fd = {}, errno = {}\n", .{ shm_name, shm_fd, errno });
@@ -247,7 +327,7 @@ fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
     }
 
     // Map the shared memory
-    const mapped_ptr = mmap(
+    const mapped_ptr = posix.mmap(
         null,
         total_size,
         0x01 | 0x02, // PROT_READ | PROT_WRITE
@@ -277,9 +357,14 @@ fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
 }
 
 fn cleanupSharedMemory() void {
-    const shm_name = "/ROC_FILE_TO_INTERPRET";
-    if (shm_unlink(shm_name) != 0) {
-        std.debug.print("Failed to unlink shared memory\n", .{});
+    if (comptime is_windows) {
+        // On Windows, shared memory is automatically cleaned up when all handles are closed
+        return;
+    } else {
+        const shm_name = "/ROC_FILE_TO_INTERPRET";
+        if (posix.shm_unlink(shm_name) != 0) {
+            std.debug.print("Failed to unlink shared memory\n", .{});
+        }
     }
 }
 

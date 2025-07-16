@@ -1,6 +1,7 @@
 //! A shim to read the filepath for our app.roc from shared memory for the interpreter
 
 const std = @import("std");
+const builtin = @import("builtin");
 const c = std.c;
 // Minimal RocStr implementation matching the main str.zig
 const RocStr = extern struct {
@@ -47,39 +48,96 @@ const RocStr = extern struct {
     }
 };
 
-// External C functions for POSIX shared memory
-extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: c.mode_t) c_int;
-extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: c.off_t) ?*anyopaque;
-extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-extern "c" fn __error() *c_int; // macOS way to get errno
+// Platform-specific shared memory implementation
+const is_windows = builtin.target.os.tag == .windows;
+
+// POSIX shared memory functions
+const posix = if (!is_windows) struct {
+    extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: c.mode_t) c_int;
+    extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
+    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: c.off_t) ?*anyopaque;
+    extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
+    extern "c" fn fstat(fd: c_int, buf: *c.Stat) c_int;
+    extern "c" fn close(fd: c_int) c_int;
+} else struct {};
+
+// Windows shared memory functions
+const windows = if (is_windows) struct {
+    const HANDLE = *anyopaque;
+    const DWORD = u32;
+    const BOOL = c_int;
+    const LPVOID = ?*anyopaque;
+    const LPCWSTR = [*:0]const u16;
+    const SIZE_T = usize;
+
+    extern "kernel32" fn OpenFileMappingW(dwDesiredAccess: DWORD, bInheritHandle: BOOL, lpName: LPCWSTR) ?HANDLE;
+    extern "kernel32" fn MapViewOfFile(hFileMappingObject: HANDLE, dwDesiredAccess: DWORD, dwFileOffsetHigh: DWORD, dwFileOffsetLow: DWORD, dwNumberOfBytesToMap: SIZE_T) LPVOID;
+    extern "kernel32" fn UnmapViewOfFile(lpBaseAddress: LPVOID) BOOL;
+    extern "kernel32" fn CloseHandle(hObject: HANDLE) BOOL;
+    extern "kernel32" fn GetFileSizeEx(hFile: HANDLE, lpFileSize: *i64) BOOL;
+
+    const FILE_MAP_READ = 0x0004;
+} else struct {};
 
 /// Exported symbol that reads a string from shared memory ROC_FILE_TO_INTERPRET
 /// Returns a RocStr to the caller
 /// Expected format in shared memory: [usize length][u8... data]
 export fn roc_entrypoint(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr {
+    if (comptime is_windows) {
+        return readFromWindowsSharedMemory(roc_alloc);
+    } else {
+        return readFromPosixSharedMemory(roc_alloc);
+    }
+}
+
+fn readFromWindowsSharedMemory(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr {
+    // Convert to wide string for Windows API
+    const shm_name_wide = std.unicode.utf8ToUtf16LeStringLiteral("ROC_FILE_TO_INTERPRET");
+
+    // Open the shared memory object
+    const shm_handle = windows.OpenFileMappingW(windows.FILE_MAP_READ, 0, shm_name_wide) orelse {
+        return RocStr.empty();
+    };
+    defer _ = windows.CloseHandle(shm_handle);
+
+    // Map the shared memory
+    const mapped_ptr = windows.MapViewOfFile(shm_handle, windows.FILE_MAP_READ, 0, 0, 0) orelse {
+        return RocStr.empty();
+    };
+    defer _ = windows.UnmapViewOfFile(mapped_ptr);
+
+    // Read the length from the beginning of shared memory
+    const length_ptr: *align(1) const usize = @ptrCast(mapped_ptr);
+    const string_length = length_ptr.*;
+
+    // Get pointer to string data
+    const string_data = @as([*]u8, @ptrCast(mapped_ptr)) + @sizeOf(usize);
+
+    return createRocStrFromData(roc_alloc, string_data, string_length);
+}
+
+fn readFromPosixSharedMemory(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr {
     const shm_name = "/ROC_FILE_TO_INTERPRET";
 
     // Open the shared memory object
-    const shm_fd = shm_open(shm_name, 0, 0); // O_RDONLY = 0
+    const shm_fd = posix.shm_open(shm_name, 0, 0); // O_RDONLY = 0
     if (shm_fd < 0) {
         return RocStr.empty();
     }
-    defer _ = c.close(shm_fd);
+    defer _ = posix.close(shm_fd);
 
     // Get shared memory size
     var stat_buf: c.Stat = undefined;
-    if (c.fstat(shm_fd, &stat_buf) != 0) {
+    if (posix.fstat(shm_fd, &stat_buf) != 0) {
         return RocStr.empty();
     }
 
     if (stat_buf.size < @sizeOf(usize)) {
-        std.debug.print("Shared memory too small for length header\n", .{});
         return RocStr.empty();
     }
 
     // Map the shared memory
-    const mapped_ptr = mmap(
+    const mapped_ptr = posix.mmap(
         null,
         @intCast(stat_buf.size),
         0x01, // PROT_READ
@@ -90,7 +148,7 @@ export fn roc_entrypoint(roc_alloc: *const fn (size: usize, alignment: u32) call
         return RocStr.empty();
     };
     const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..@intCast(stat_buf.size)];
-    defer _ = munmap(mapped_ptr, @intCast(stat_buf.size));
+    defer _ = posix.munmap(mapped_ptr, @intCast(stat_buf.size));
 
     // Read the length from the beginning of shared memory
     const length_ptr: *align(1) const usize = @ptrCast(mapped_memory.ptr);
@@ -101,9 +159,13 @@ export fn roc_entrypoint(roc_alloc: *const fn (size: usize, alignment: u32) call
         return RocStr.empty();
     }
 
-    // Create a RocStr from the data
+    // Get pointer to string data
     const string_data = mapped_memory.ptr + @sizeOf(usize);
 
+    return createRocStrFromData(roc_alloc, string_data, string_length);
+}
+
+fn createRocStrFromData(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque, string_data: [*]u8, string_length: usize) RocStr {
     // For small strings, we can create them directly
     if (string_length <= @sizeOf(RocStr) - 1) {
         var result = RocStr.empty();
