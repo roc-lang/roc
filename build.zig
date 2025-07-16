@@ -308,6 +308,11 @@ fn addMainExe(
     const install_shim = b.addInstallArtifact(shim_lib, .{});
     b.getInstallStep().dependOn(&install_shim.step);
 
+    // Copy shim library to source directory for embedding
+    const copy_shim = b.addUpdateSourceFiles();
+    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), "src/libread_roc_file_path_shim.a");
+    exe.step.dependOn(&copy_shim.step);
+
     const config = b.addOptions();
     config.addOption(bool, "llvm", enable_llvm);
     exe.root_module.addOptions("config", config);
