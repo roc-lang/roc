@@ -16,13 +16,13 @@ The `roc` command (without sub-command) implements a system for executing Roc pr
    - Installed to `zig-out/lib/libplatform_host_str_simple.a`
    - Placeholder, will be replaced in future with platform specific implementations, used for testing purposes.
 
-2. **Roc Runtime Object File (`read_roc_file_path_shim.o`)**
-   - Created at runtime using `zig build-obj`
+2. **Roc Runtime Static Library (`libread_roc_file_path_shim.a`)**
+   - Created at build time using `zig build-lib`
    - Contains the `roc_entrypoint` symbol implementation
    - Reads string data from POSIX shared memory (which is provided by the parent process)
-   - Source: `src/read_roc_file_path_shim.zig` (embedded as source in binary)
-   - Compiled to object file on first run
-   - FUTURE WORK this should be pre-compiled and then embedded as a resource in the binary (so it can be cached and end-users don't need a compiler toolchain)
+   - Source: `src/read_roc_file_path_shim.zig`
+   - Compiled to static library at build time and embedded as resource in binary
+   - Extracted to cache directory when needed for linking
 
 ### Runtime Components
 
@@ -58,9 +58,9 @@ roc run example.roc
 ### 2. Runtime Linking (Cache Miss)
 ```
 ├── Copy pre-built libplatform_host_str_simple.a from zig-out/lib/libplatform_host_str_simple.a to cache
-├── Compile read_roc_file_path_shim.zig to object file in cache
-│   └── Uses: zig build-obj with embedded source
-├── Use LLD to link: libplatform_host_str_simple.a + read_roc_file_path_shim.o → executable
+├── Extract embedded libread_roc_file_path_shim.a to cache directory
+│   └── Uses: embedded static library resource
+├── Use LLD to link: libplatform_host_str_simple.a + libread_roc_file_path_shim.a → executable
 └── Executable stored at cache path for future runs
 ```
 
@@ -135,7 +135,7 @@ roc/
 - **Expects**: `extern fn roc_entrypoint(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr`
 - **Provides**: `main()` function that calls `roc_entrypoint` and prints result using RocStr
 
-### Roc Runtime (`read_roc_file_path_shim.o`)
+### Roc Runtime (`libread_roc_file_path_shim.a`)
 - **Exports**: `roc_entrypoint(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr`
 - **Functionality**: Reads string from shared memory, returns a RocStr (supports both small and large strings)
 
@@ -172,19 +172,13 @@ const RocStr = extern struct {
 - `setLen()`: Sets length appropriately based on string type
 - `asSlice()`: Returns a slice view of the string data
 
-## Future Enhancements
-
-1. **Host Library Replacement**: Third parties can provide their own host library
-2. **Multiple Communication Channels**: Support for complex data types beyond strings
-3. **Cache Invalidation**: Automatic cache cleanup based on age/size
-4. **Performance Monitoring**: Metrics for cache hits/misses and execution times
-
 ## Error Handling
 
 - **Link Failures**: Graceful error reporting if LLD fails
 - **Memory Allocation**: Proper cleanup on allocation failures
 - **Shared Memory**: Handle permission errors (errno 13 on macOS)
 - **Child Process**: Proper handling of child process failures
+- **Library Extraction**: Handle file system errors when extracting embedded libraries
 - **macOS Specifics**: Must unlink shared memory before creation
 
 ## Platform Support

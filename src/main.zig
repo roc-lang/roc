@@ -23,7 +23,7 @@ const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 
 const builtin = @import("builtin");
-const read_roc_file_path_shim_source = @embedFile("read_roc_file_path_shim.zig");
+const read_roc_file_path_shim_lib = @embedFile("libread_roc_file_path_shim.a");
 const c = std.c;
 
 // External C functions for POSIX shared memory
@@ -171,22 +171,22 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             std.process.exit(1);
         };
 
-        // Extract embedded object file to cache
-        const obj_file_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "read_roc_file_path_shim.o" }) catch |err| {
-            stderr.print("Failed to create object file path: {}\n", .{err}) catch {};
+        // Extract embedded shim library to cache
+        const shim_lib_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "libread_roc_file_path_shim.a" }) catch |err| {
+            stderr.print("Failed to create shim library path: {}\n", .{err}) catch {};
             std.process.exit(1);
         };
-        defer gpa.free(obj_file_path);
+        defer gpa.free(shim_lib_path);
 
-        createReadRocFilePathShimObject(gpa, obj_file_path) catch |err| {
-            stderr.print("Failed to create read roc file path shim object: {}\n", .{err}) catch {};
+        extractReadRocFilePathShimLibrary(gpa, shim_lib_path) catch |err| {
+            stderr.print("Failed to extract read roc file path shim library: {}\n", .{err}) catch {};
             std.process.exit(1);
         };
 
-        // Link the platform_host_str_simple.a with our object file to create the executable
+        // Link the platform_host_str_simple.a with our shim library to create the executable
         const link_config = linker.LinkConfig{
             .output_path = exe_path,
-            .object_files = &.{ host_lib_path, obj_file_path },
+            .object_files = &.{ host_lib_path, shim_lib_path },
         };
 
         linker.link(gpa, link_config) catch |err| {
@@ -312,36 +312,13 @@ fn cleanupSharedMemory() void {
     }
 }
 
-fn createReadRocFilePathShimObject(gpa: Allocator, output_path: []const u8) !void {
-    // Create temporary Zig source file
-    const zig_source_path = try std.fmt.allocPrint(gpa, "{s}.zig", .{output_path});
-    defer gpa.free(zig_source_path);
+fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8) !void {
+    _ = gpa; // unused but kept for consistency
+    // Write the embedded shim library to the output path
+    const shim_file = try std.fs.cwd().createFile(output_path, .{});
+    defer shim_file.close();
 
-    const zig_file = try std.fs.cwd().createFile(zig_source_path, .{});
-    defer zig_file.close();
-
-    // Write the read roc file path shim source
-    try zig_file.writeAll(read_roc_file_path_shim_source);
-
-    // Compile to object file using zig build-obj with explicit output path
-    const emit_bin_arg = try std.fmt.allocPrint(gpa, "-femit-bin={s}", .{output_path});
-    defer gpa.free(emit_bin_arg);
-
-    const compile_result = std.process.Child.run(.{
-        .allocator = gpa,
-        .argv = &.{ "zig", "build-obj", zig_source_path, "-fno-emit-asm", "-fno-emit-llvm-ir", emit_bin_arg, "-lc" },
-    }) catch |err| {
-        std.debug.print("Failed to compile object file: {}\n", .{err});
-        return err;
-    };
-
-    if (compile_result.term.Exited != 0) {
-        std.debug.print("Object compilation failed: {s}\n", .{compile_result.stderr});
-        return error.CompilationFailed;
-    }
-
-    // Clean up temporary files
-    std.fs.cwd().deleteFile(zig_source_path) catch {};
+    try shim_file.writeAll(read_roc_file_path_shim_lib);
 }
 
 fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
