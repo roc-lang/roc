@@ -16,6 +16,7 @@ const collections = @import("../../collections.zig");
 const SmallStringInterner = collections.SmallStringInterner;
 const SafeList = collections.SafeList;
 const SafeStringHashMap = collections.SafeStringHashMap;
+const writeAlignedData = @import("../../base/write_aligned.zig").writeAlignedData;
 
 /// Test structure containing the three main collection types
 const TestStruct = struct {
@@ -26,108 +27,10 @@ const TestStruct = struct {
 
 /// Relocate all pointers in a TestStruct by the given offset
 fn relocateTestStruct(s: *TestStruct, offset: isize) void {
-    // Relocate SafeList
-    relocateSafeList(u32, &s.list, offset);
-
-    // Relocate SmallStringInterner
-    relocateSmallStringInterner(&s.interner, offset);
-
-    // Relocate SafeStringHashMap
-    relocateSafeStringHashMap(u16, &s.map, offset);
-}
-
-/// Relocate pointers in a SafeList
-fn relocateSafeList(comptime T: type, list: *SafeList(T), offset: isize) void {
-    if (list.items.items.len > 0) {
-        const old_ptr = @intFromPtr(list.items.items.ptr);
-        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-        list.items.items.ptr = @ptrFromInt(new_ptr);
-    }
-}
-
-/// Relocate pointers in a SmallStringInterner
-fn relocateSmallStringInterner(interner: *SmallStringInterner, offset: isize) void {
-    // Relocate bytes buffer
-    if (interner.bytes.items.len > 0) {
-        const old_ptr = @intFromPtr(interner.bytes.items.ptr);
-        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-        interner.bytes.items.ptr = @ptrFromInt(new_ptr);
-    }
-
-    // Relocate outer_indices
-    if (interner.outer_indices.items.len > 0) {
-        const old_ptr = @intFromPtr(interner.outer_indices.items.ptr);
-        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-        interner.outer_indices.items.ptr = @ptrFromInt(new_ptr);
-    }
-
-    // Relocate regions
-    if (interner.regions.items.len > 0) {
-        const old_ptr = @intFromPtr(interner.regions.items.ptr);
-        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-        interner.regions.items.ptr = @ptrFromInt(new_ptr);
-    }
-
-    // Relocate the strings hash map
-    relocateStringIdxTable(&interner.strings, offset);
-}
-
-/// Relocate pointers in the StringIdx.Table
-fn relocateStringIdxTable(table: *SmallStringInterner.StringIdx.Table, offset: isize) void {
-    // The table is a HashMapUnmanaged, which has metadata pointer
-    if (table.unmanaged.metadata) |metadata| {
-        const old_ptr = @intFromPtr(metadata);
-        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-        table.unmanaged.metadata = @ptrFromInt(new_ptr);
-    }
-}
-
-/// Relocate pointers in a SafeStringHashMap
-fn relocateSafeStringHashMap(comptime V: type, map: *SafeStringHashMap(V), offset: isize) void {
-    // Relocate metadata pointer
-    if (map.map.metadata) |metadata| {
-        const old_ptr = @intFromPtr(metadata);
-        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-        map.map.metadata = @ptrFromInt(new_ptr);
-    }
-
-    // If we have metadata, we need to relocate the string pointers
-    if (map.map.metadata != null and map.map.capacity() > 0) {
-        const keys_ptr = map.map.keys();
-        const capacity = map.map.capacity();
-
-        // Update each string pointer in the keys array
-        var i: usize = 0;
-        while (i < capacity) : (i += 1) {
-            // Check if this slot is occupied
-            const metadata_byte = map.map.metadata.?[i];
-            if (metadata_byte != 0xFF) { // 0xFF means empty slot
-                if (keys_ptr[i].len > 0) {
-                    const old_str_ptr = @intFromPtr(keys_ptr[i].ptr);
-                    const new_str_ptr = @as(usize, @intCast(@as(isize, @intCast(old_str_ptr)) + offset));
-                    keys_ptr[i].ptr = @ptrFromInt(new_str_ptr);
-                }
-            }
-        }
-    }
-}
-
-/// Write data to buffer with proper alignment, zeroing padding bytes for deterministic output
-fn writeAlignedData(buffer: []u8, write_offset: *usize, data: []const u8, alignment: usize) usize {
-    // Align the write offset
-    const aligned_offset = std.mem.alignForward(usize, write_offset.*, alignment);
-
-    // Zero out padding bytes for deterministic output
-    if (aligned_offset > write_offset.*) {
-        @memset(buffer[write_offset.*..aligned_offset], 0);
-    }
-
-    write_offset.* = aligned_offset;
-
-    const data_offset = write_offset.*;
-    @memcpy(buffer[data_offset .. data_offset + data.len], data);
-    write_offset.* += data.len;
-    return data_offset;
+    // Use the relocate methods on each data structure
+    s.list.relocate(offset);
+    s.interner.relocate(offset);
+    s.map.relocate(offset);
 }
 
 test "FixupCache proof of concept with real data structures" {
@@ -594,7 +497,7 @@ test "FixupCache hash map stress test with many entries" {
 
     const loaded_map = @as(*SafeStringHashMap(u32), @ptrCast(@alignCast(read_buffer.ptr)));
     const base_offset = @as(isize, @intCast(@intFromPtr(read_buffer.ptr)));
-    relocateSafeStringHashMap(u32, loaded_map, base_offset);
+    loaded_map.relocate(base_offset);
 
     // Verify all lookups work correctly
     for (0..num_entries) |i| {

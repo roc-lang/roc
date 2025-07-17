@@ -361,6 +361,16 @@ pub fn SafeList(comptime T: type) type {
                 .current = 0,
             };
         }
+
+        /// Relocate all pointers in this SafeList by the given offset
+        /// Used for FixupCache deserialization
+        pub fn relocate(self: *SafeList(T), offset: isize) void {
+            if (self.items.items.len > 0) {
+                const old_ptr = @intFromPtr(self.items.items.ptr);
+                const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+                self.items.items.ptr = @ptrFromInt(new_ptr);
+            }
+        }
     };
 }
 
@@ -589,6 +599,16 @@ pub fn SafeMultiList(comptime T: type) type {
             }
 
             return list;
+        }
+
+        /// Relocate all pointers in this SafeMultiList by the given offset
+        /// Used for FixupCache deserialization
+        pub fn relocate(self: *SafeMultiList(T), offset: isize) void {
+            // TODO: Implement SafeMultiList relocation
+            // The MultiArrayList internal structure varies between Zig versions
+            // For now, this is not used in the proof of concept
+            _ = self;
+            _ = offset;
         }
     };
 }

@@ -107,6 +107,38 @@ pub fn getRegion(self: *const Self, idx: Idx) Region {
     return self.regions.items[@as(usize, @intFromEnum(idx))];
 }
 
+/// Relocate all pointers in this SmallStringInterner by the given offset
+/// Used for FixupCache deserialization
+pub fn relocate(self: *Self, offset: isize) void {
+    // Relocate bytes buffer
+    if (self.bytes.items.len > 0) {
+        const old_ptr = @intFromPtr(self.bytes.items.ptr);
+        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+        self.bytes.items.ptr = @ptrFromInt(new_ptr);
+    }
+
+    // Relocate outer_indices
+    if (self.outer_indices.items.len > 0) {
+        const old_ptr = @intFromPtr(self.outer_indices.items.ptr);
+        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+        self.outer_indices.items.ptr = @ptrFromInt(new_ptr);
+    }
+
+    // Relocate regions
+    if (self.regions.items.len > 0) {
+        const old_ptr = @intFromPtr(self.regions.items.ptr);
+        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+        self.regions.items.ptr = @ptrFromInt(new_ptr);
+    }
+
+    // Relocate the strings hash map metadata
+    if (self.strings.unmanaged.metadata) |metadata| {
+        const old_ptr = @intFromPtr(metadata);
+        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+        self.strings.unmanaged.metadata = @ptrFromInt(new_ptr);
+    }
+}
+
 /// TODO
 pub const StringIdx = enum(u32) {
     _,

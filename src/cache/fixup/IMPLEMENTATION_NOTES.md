@@ -19,7 +19,7 @@ The test successfully:
 - Properly serializes StringHashMapUnmanaged with its metadata and key/value arrays
 - Writes the buffer to simulate disk storage
 - Reads it back and casts to the original structure type
-- Relocates all pointers by adding the base address
+- Relocates all pointers by adding the base address using the new `relocate` methods
 - Verifies all data is correctly accessible, including:
   - String deduplication in the interner
   - Region information preservation
@@ -33,9 +33,22 @@ The production implementation provides:
 - **Alignment Handling**: Ensures all data is properly aligned for direct casting
 - **Error Handling**: Comprehensive error checking for corrupted or incompatible cache files
 
-### 3. Relocation Support (`relocate.zig`)
+### 3. First-Class Relocation Support
 
-The existing `relocate.zig` already provides the necessary infrastructure to traverse and update all pointers in a ModuleEnv. This is the key component that makes FixupCache practical.
+Relocation is now a first-class feature of the collection types:
+- **SafeList**: Has a `relocate(offset: isize)` method that adjusts its internal pointer
+- **SmallStringInterner**: Has a `relocate(offset: isize)` method that adjusts all internal pointers (bytes, indices, regions, hash table)
+- **SafeStringHashMap**: Has a `relocate(offset: isize)` method that adjusts metadata and all string key pointers
+- **SafeMultiList**: Has a `relocate(offset: isize)` method stub (implementation pending due to MultiArrayList internals)
+
+The `relocate.zig` module now uses these methods directly, making the code cleaner and more maintainable.
+
+### 4. Shared Utilities (`write_aligned.zig`)
+
+The `writeAlignedData` function is now a shared utility in `src/base/write_aligned.zig` that:
+- Aligns write offsets to specified boundaries
+- Zeros out padding bytes for deterministic output
+- Returns the offset where data was written
 
 ## Implementation Strategy
 
@@ -102,4 +115,10 @@ The existing `relocate.zig` already provides the necessary infrastructure to tra
 
 ## Conclusion
 
-FixupCache provides a robust foundation for extremely fast module caching in the Roc compiler. The proof of concept demonstrates the technique works correctly with the actual production data structures used in the compiler (SafeList, SmallStringInterner, and SafeStringHashMap), handling their complex internal layouts including hash tables and string deduplication. The production framework provides the infrastructure needed for real-world use. The main remaining work is implementing the serialization logic for ModuleEnv and CIR data structures, which will follow the same patterns demonstrated in the proof of concept.
+FixupCache provides a robust foundation for extremely fast module caching in the Roc compiler. The proof of concept demonstrates the technique works correctly with the actual production data structures used in the compiler (SafeList, SmallStringInterner, and SafeStringHashMap), handling their complex internal layouts including hash tables and string deduplication. 
+
+With relocation now implemented as first-class methods on the collection types, the implementation is cleaner and more maintainable. The production framework provides the infrastructure needed for real-world use. The main remaining work is:
+
+1. Implementing the full SafeMultiList relocation (currently stubbed due to MultiArrayList internal structure variations)
+2. Implementing the serialization logic for ModuleEnv and CIR data structures, which will follow the same patterns demonstrated in the proof of concept
+3. Adding relocation methods to any other pointer-containing types used by ModuleEnv

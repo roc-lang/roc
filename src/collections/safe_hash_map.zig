@@ -162,6 +162,37 @@ pub fn SafeStringHashMap(comptime V: type) type {
         pub fn iterator(self: *const Self) std.StringHashMapUnmanaged(V).Iterator {
             return self.map.iterator();
         }
+
+        /// Relocate all pointers in this SafeStringHashMap by the given offset
+        /// Used for FixupCache deserialization
+        pub fn relocate(self: *Self, offset: isize) void {
+            // Relocate metadata pointer
+            if (self.map.metadata) |metadata| {
+                const old_ptr = @intFromPtr(metadata);
+                const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+                self.map.metadata = @ptrFromInt(new_ptr);
+            }
+
+            // If we have metadata, we need to relocate the string pointers
+            if (self.map.metadata != null and self.map.capacity() > 0) {
+                const keys_ptr = self.map.keys();
+                const capacity = self.map.capacity();
+
+                // Update each string pointer in the keys array
+                var i: usize = 0;
+                while (i < capacity) : (i += 1) {
+                    // Check if this slot is occupied
+                    const metadata_byte = self.map.metadata.?[i];
+                    if (metadata_byte != 0xFF) { // 0xFF means empty slot
+                        if (keys_ptr[i].len > 0) {
+                            const old_str_ptr = @intFromPtr(keys_ptr[i].ptr);
+                            const new_str_ptr = @as(usize, @intCast(@as(isize, @intCast(old_str_ptr)) + offset));
+                            keys_ptr[i].ptr = @ptrFromInt(new_str_ptr);
+                        }
+                    }
+                }
+            }
+        }
     };
 }
 
