@@ -276,6 +276,7 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(AST.Pattern{
         .tag = .{
             .args = AST.Pattern.Span{ .span = rand_span() },
+            .qualifiers = AST.Token.Span{ .span = rand_span() },
             .region = rand_region(),
             .tag_tok = rand_token_idx(),
         },

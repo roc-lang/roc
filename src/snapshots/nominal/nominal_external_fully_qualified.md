@@ -18,8 +18,32 @@ handleResult = |result| {
 }
 ~~~
 # EXPECTED
+UNDEFINED VARIABLE - nominal_external_fully_qualified.md:8:23:8:36
+UNDEFINED VARIABLE - nominal_external_fully_qualified.md:9:23:9:36
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `MyResultType` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**nominal_external_fully_qualified.md:8:23:8:36:**
+```roc
+        MyResultModule.MyResultType.Ok(value) => value
+```
+                      ^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `MyResultType` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**nominal_external_fully_qualified.md:9:23:9:36:**
+```roc
+        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
+```
+                      ^^^^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable `code` is not used anywhere in your code.
 
@@ -112,14 +136,14 @@ handleResult = |result| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @8.9-8.46)))
+										(p-runtime-error @8.23-8.36 (tag "ident_not_in_scope"))))
 								(value
 									(e-lookup-local @8.50-8.55
 										(p-assign @8.40-8.45 (ident "value")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @9.9-9.46)))
+										(p-runtime-error @9.23-9.36 (tag "ident_not_in_scope"))))
 								(value
 									(e-string @9.50-9.74
 										(e-literal @9.51-9.73 (string "Error: $(code.toStr())"))))))))))

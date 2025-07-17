@@ -27,6 +27,7 @@ INVALID STATEMENT - fuzz_crash_032.md:3:24:3:25
 INVALID STATEMENT - fuzz_crash_032.md:3:26:3:45
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_032.md:6:25:6:30
+UNDEFINED VARIABLE - fuzz_crash_032.md:10:3:10:4
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
 TYPE MISMATCH - fuzz_crash_032.md:9:10:9:30
@@ -115,6 +116,17 @@ Is there an `import` or `exposing` missing up-top?
 olor = |color| { import Color.RGB
 ```
                         ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `B` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_032.md:10:3:10:4:**
+```roc
+  B.Blue => LocalStatus.Pending
+```
+  ^
 
 
 **EXPOSED BUT NOT DEFINED**
@@ -264,7 +276,7 @@ olor = |color| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @10.3-10.9)))
+										(p-runtime-error @10.3-10.4 (tag "ident_not_in_scope"))))
 								(value
 									(e-nominal @10.13-10.24 (nominal "<malformed>")
 										(e-tag @10.13-10.32 (name "Pending"))))))))))
@@ -283,10 +295,10 @@ olor = |color| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "[Green, RGB, Blue]_others -> Error")))
+		(patt @6.1-6.5 (type "Error -> Error")))
 	(type_decls
 		(alias @3.1-3.24 (type "LocalStatus")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
-		(expr @6.8-12.2 (type "[Green, RGB, Blue]_others -> Error"))))
+		(expr @6.8-12.2 (type "Error -> Error"))))
 ~~~

@@ -500,7 +500,8 @@ transform = |result|
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @42.9-42.23)))
+									(p-nominal @42.9-42.15
+										(p-applied-tag @42.9-42.23))))
 							(value
 								(e-call @42.27-42.47
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -509,7 +510,8 @@ transform = |result|
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @43.9-43.24)))
+									(p-nominal @43.9-43.15
+										(p-applied-tag @43.9-43.24))))
 							(value
 								(e-runtime-error (tag "ident_not_in_scope"))))))))
 		(annotation @40.1-40.10

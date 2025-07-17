@@ -26,6 +26,9 @@ processColor = |color| {
 IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:9:5:9:11
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - nominal_mixed_scope.md:9:12:9:17
+UNDEFINED VARIABLE - nominal_mixed_scope.md:12:9:12:12
+UNDEFINED VARIABLE - nominal_mixed_scope.md:13:9:13:12
+UNDEFINED VARIABLE - nominal_mixed_scope.md:14:9:14:12
 # PROBLEMS
 **IMPORT MUST BE TOP LEVEL**
 Import statements must appear at the top level of a module.
@@ -53,6 +56,39 @@ Is there an `import` or `exposing` missing up-top?
     import Color.RGB
 ```
            ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `RGB` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**nominal_mixed_scope.md:12:9:12:12:**
+```roc
+        RGB.Red => LocalStatus.Pending
+```
+        ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `RGB` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**nominal_mixed_scope.md:13:9:13:12:**
+```roc
+        RGB.Green => LocalStatus.Complete
+```
+        ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `RGB` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**nominal_mixed_scope.md:14:9:14:12:**
+```roc
+        RGB.Blue => LocalStatus.Pending
+```
+        ^^^
 
 
 # TOKENS
@@ -151,21 +187,21 @@ processColor = |color| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @12.9-12.16)))
+										(p-runtime-error @12.9-12.12 (tag "ident_not_in_scope"))))
 								(value
 									(e-nominal @12.20-12.31 (nominal "LocalStatus")
 										(e-tag @12.20-12.39 (name "Pending")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @13.9-13.18)))
+										(p-runtime-error @13.9-13.12 (tag "ident_not_in_scope"))))
 								(value
 									(e-nominal @13.22-13.33 (nominal "LocalStatus")
 										(e-tag @13.22-13.42 (name "Complete")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @14.9-14.17)))
+										(p-runtime-error @14.9-14.12 (tag "ident_not_in_scope"))))
 								(value
 									(e-nominal @14.21-14.32 (nominal "LocalStatus")
 										(e-tag @14.21-14.40 (name "Pending"))))))))))
@@ -184,10 +220,10 @@ processColor = |color| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.13 (type "[Green, Red, Blue]_others -> LocalStatus")))
+		(patt @6.1-6.13 (type "Error -> LocalStatus")))
 	(type_decls
 		(nominal @3.1-3.35 (type "LocalStatus")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
-		(expr @6.16-16.2 (type "[Green, Red, Blue]_others -> LocalStatus"))))
+		(expr @6.16-16.2 (type "Error -> LocalStatus"))))
 ~~~

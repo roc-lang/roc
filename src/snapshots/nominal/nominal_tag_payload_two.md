@@ -19,22 +19,9 @@ is_ok = |result| match result {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_tag_payload_two.md:8:9:8:28
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_tag_payload_two.md:8:9:8:28:**
-```roc
-is_ok : MyResult(_ok, _err) -> Bool
-```
-        ^^^^^^^^^^^^^^^^^^^
-
-It is of type:
-    _MyResult(_ok, _err)_
-
-But you are trying to use it as:
-    _[Ok(_b), Err(_c)]_others_
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),CloseSquare(1:28-1:29),
@@ -159,14 +146,16 @@ is_ok = |result| match result {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @10.5-10.19)))
+									(p-nominal @10.5-10.13
+										(p-applied-tag @10.5-10.19))))
 							(value
 								(e-nominal @10.23-10.27 (nominal "Bool")
 									(e-tag @10.23-10.32 (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @11.5-11.20)))
+									(p-nominal @11.5-11.13
+										(p-applied-tag @11.5-11.20))))
 							(value
 								(e-nominal @11.24-11.28 (nominal "Bool")
 									(e-tag @11.24-11.34 (name "False")))))))))
@@ -193,7 +182,7 @@ is_ok = |result| match result {
 (inferred-types
 	(defs
 		(patt @6.1-6.3 (type "ok -> MyResult(ok, err)"))
-		(patt @9.1-9.6 (type "Error -> Bool")))
+		(patt @9.1-9.6 (type "MyResult(ok, err) -> Bool")))
 	(type_decls
 		(nominal @3.1-3.40 (type "MyResult(ok, err)")
 			(ty-header @3.1-3.18 (name "MyResult")
@@ -202,5 +191,5 @@ is_ok = |result| match result {
 					(ty-var @3.14-3.17 (name "err"))))))
 	(expressions
 		(expr @6.6-6.24 (type "ok -> MyResult(ok, err)"))
-		(expr @9.9-12.2 (type "Error -> Bool"))))
+		(expr @9.9-12.2 (type "MyResult(ok, err) -> Bool"))))
 ~~~

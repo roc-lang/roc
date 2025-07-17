@@ -104,7 +104,7 @@ pub const CIR_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the CIR
 pub const CIR_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the pattern nodes in the CIR
-pub const CIR_PATTERN_NODE_COUNT = 12;
+pub const CIR_PATTERN_NODE_COUNT = 13;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
@@ -750,6 +750,18 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .applied_tag = .{
                     .args = DataSpan.init(arguments_start, arguments_len).as(CIR.Pattern.Span),
                     .name = tag_name,
+                },
+            };
+        },
+        .pattern_nominal => {
+            const nominal_type_decl: CIR.Statement.Idx = @enumFromInt(node.data_1);
+            const backing_pattern: CIR.Pattern.Idx = @enumFromInt(node.data_2);
+            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(node.data_3);
+            return CIR.Pattern{
+                .nominal = .{
+                    .nominal_type_decl = nominal_type_decl,
+                    .backing_pattern = backing_pattern,
+                    .backing_type = backing_type,
                 },
             };
         },
@@ -1580,6 +1592,12 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.data_1 = p.args.span.start;
             node.data_2 = p.args.span.len;
             node.data_3 = @bitCast(p.name);
+        },
+        .nominal => |n| {
+            node.tag = .pattern_nominal;
+            node.data_1 = @intFromEnum(n.nominal_type_decl);
+            node.data_2 = @intFromEnum(n.backing_pattern);
+            node.data_3 = @intFromEnum(n.backing_type);
         },
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;
