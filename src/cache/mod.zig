@@ -10,6 +10,9 @@ pub const CacheModule = @import("CacheModule.zig").CacheModule;
 pub const Header = @import("CacheModule.zig").Header;
 pub const Diagnostics = @import("CacheModule.zig").Diagnostics;
 
+// Re-export the direct memory cache
+pub const DirectMemoryCache = @import("DirectMemoryCache.zig");
+
 // Re-export new cache management components
 pub const CacheManager = @import("CacheManager.zig").CacheManager;
 pub const CacheResult = @import("CacheManager.zig").CacheResult;
@@ -100,6 +103,7 @@ test "cache module" {
     _ = CacheResult;
     _ = CacheConfig;
     _ = CacheStats;
+    _ = DirectMemoryCache;
 
     // Test stats functionality
     var stats = Stats{};
