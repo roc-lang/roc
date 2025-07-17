@@ -386,7 +386,7 @@ const Formatter = struct {
                     try fmt.pushIndent();
                 }
                 try fmt.formatIdent(i.module_name_tok, i.qualifier_tok);
-                if (multiline) {
+                if (multiline and (i.alias_tok != null or i.exposes.span.len > 0)) {
                     flushed = try fmt.flushCommentsAfter(i.module_name_tok);
                 }
 
