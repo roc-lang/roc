@@ -123,9 +123,11 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .InvalidEscapeSequence => "INVALID ESCAPE SEQUENCE",
         .UnclosedString => "UNCLOSED STRING",
         .UnclosedSingleQuote => "UNCLOSED SINGLE QUOTE",
+        .TooLongSingleQuote => "TOO LONG CHARACTER LITERAL",
+        .EmptySingleQuote => "EMPTY CHARACTER LITERAL",
         .OverClosedBrace => "OVER CLOSED BRACE",
         .MismatchedBrace => "MISMATCHED BRACE",
-        .NonPrintableUnicodeInStrLiteral => "NON-PRINTABLE UNICODE IN STRING LITERAL",
+        .NonPrintableUnicodeInStrLiteral => "NON-PRINTABLE UNICODE IN STRING-LIKE LITERAL",
         .InvalidUtf8InSource => "INVALID UTF-8",
     };
 
@@ -138,9 +140,11 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .InvalidEscapeSequence => "This escape sequence is not recognized.",
         .UnclosedString => "This string is missing a closing quote.",
         .UnclosedSingleQuote => "This character literal is missing a closing single quote.",
+        .TooLongSingleQuote => "This character literal is too long.",
+        .EmptySingleQuote => "This character literal is empty.",
         .OverClosedBrace => "There are too many closing braces here.",
         .MismatchedBrace => "This brace does not match the corresponding opening brace.",
-        .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string literals.",
+        .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string-like literals.",
         .InvalidUtf8InSource => "Invalid UTF-8 encoding found in source code. Roc source files must be valid UTF-8.",
     };
 

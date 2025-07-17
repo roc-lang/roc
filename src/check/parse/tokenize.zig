@@ -494,6 +494,8 @@ pub const Diagnostic = struct {
         InvalidEscapeSequence,
         UnclosedString,
         UnclosedSingleQuote,
+        EmptySingleQuote,
+        TooLongSingleQuote,
         OverClosedBrace,
         MismatchedBrace,
         NonPrintableUnicodeInStrLiteral,
@@ -864,9 +866,8 @@ pub const Cursor = struct {
         }
     }
 
-    pub fn chompEscapeSequence(self: *Cursor, ch: u8) void {
-        std.debug.assert(self.peek() == ch);
-        switch (ch) {
+    pub fn chompEscapeSequence(self: *Cursor) void {
+        switch (self.peek() orelse 0) {
             '\\', '"', '\'', 'n', 'r', 't', '$' => {
                 self.pos += 1;
             },
@@ -901,32 +902,113 @@ pub const Cursor = struct {
     }
 
     pub fn chompSingleQuoteLiteral(self: *Cursor) Token.Tag {
+        const State = union(enum) {
+            Empty,
+            Enough,
+            TooLong,
+        };
         std.debug.assert(self.peek() == '\'');
         const start = self.pos;
         // Skip the initial quote.
         self.pos += 1;
-        var escape: bool = false;
+        var state: State = .Empty;
+
         while (self.pos < self.buf.len) {
             const c = self.buf[self.pos];
-            if (escape) {
-                escape = false;
-                self.chompEscapeSequence(c);
-            } else {
-                if (c == '\\') {
-                    escape = true;
-                    self.pos += 1;
-                } else if (c == '\n') {
-                    break;
-                } else if (c == '\'') {
-                    self.pos += 1;
-                    return .SingleQuote;
-                } else {
-                    self.pos += 1;
-                }
+
+            if (c == '\n') {
+                break;
+            }
+
+            self.pos += 1;
+
+            switch (state) {
+                .Empty => switch (c) {
+                    '\'' => {
+                        self.pushMessage(.EmptySingleQuote, start, self.pos);
+                        return .MalformedSingleQuote;
+                    },
+                    '\\' => {
+                        self.chompEscapeSequence();
+                        state = .Enough;
+                    },
+                    else => {
+                        self.pos -= 1;
+                        _ = self.chompUTF8CodepointWithValidation();
+                        state = .Enough;
+                    },
+                },
+                .Enough => switch (c) {
+                    '\'' => {
+                        return .SingleQuote;
+                    },
+                    else => {
+                        state = .TooLong;
+                    },
+                },
+                .TooLong => switch (c) {
+                    '\'' => {
+                        self.pushMessage(.TooLongSingleQuote, start, self.pos);
+                        return .MalformedSingleQuote;
+                    },
+                    else => {},
+                },
             }
         }
+
         self.pushMessage(.UnclosedSingleQuote, start, self.pos);
         return .MalformedSingleQuote;
+    }
+
+    /// Chomps a UTF-8 codepoint and advances the cursor position.
+    /// Reports InvalidUtf8InSource diagnostic if the sequence is invalid or incomplete.
+    /// Reports NonPrintableUnicodeInStrLiteral for non-printable characters.
+    /// Returns the decoded codepoint if valid, null if invalid.
+    fn chompUTF8CodepointWithValidation(self: *Cursor) ?u21 {
+        std.debug.assert(self.pos < self.buf.len);
+        const c = self.buf[self.pos];
+
+        if (c < 0x80) {
+            // Single-byte UTF-8 (ASCII)
+            // Allow tab (0x09) in addition to standard printable ASCII
+            if (!std.ascii.isPrint(c) and c != '\t') {
+                self.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
+            }
+            self.pos += 1;
+            return c;
+        }
+
+        const utf8_len = std.unicode.utf8ByteSequenceLength(c) catch {
+            self.pushMessageHere(.InvalidUtf8InSource);
+            self.pos += 1;
+            return null;
+        };
+        if (self.pos + utf8_len > self.buf.len) {
+            // Incomplete UTF-8 sequence at end of input
+            self.pushMessageHere(.InvalidUtf8InSource);
+            self.pos += 1;
+            return null;
+        }
+        const utf8_bytes = self.buf[self.pos .. self.pos + utf8_len];
+        const codepoint = std.unicode.utf8Decode(utf8_bytes) catch {
+            self.pushMessageHere(.InvalidUtf8InSource);
+            self.pos += 1;
+            return null;
+        };
+
+        // Check if the Unicode codepoint is printable
+        // Unicode categories: Cc (control), Cn (unassigned), Co (private use), Cs (surrogate)
+        if (codepoint < 0x20 or // C0 control characters
+            (codepoint >= 0x7F and codepoint <= 0x9F) or // C1 control characters
+            (codepoint >= 0xD800 and codepoint <= 0xDFFF) or // Surrogate pairs (invalid in UTF-8)
+            codepoint == 0xFFFE or codepoint == 0xFFFF) // Non-characters
+        {
+            self.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
+        }
+
+        // Valid UTF-8 sequence - advance by the full sequence length
+        self.pos += utf8_len;
+        return codepoint;
     }
 };
 
@@ -1458,7 +1540,7 @@ pub const Tokenizer = struct {
             const c = self.cursor.buf[self.cursor.pos];
             if (escape) {
                 escape = false;
-                self.cursor.chompEscapeSequence(c);
+                self.cursor.chompEscapeSequence();
             } else {
                 if (c == '$' and self.cursor.peekAt(1) == open_curly) {
                     try self.pushTokenNormalHere(.StringPart, start);
@@ -1489,51 +1571,8 @@ pub const Tokenizer = struct {
                 } else {
                     escape = c == '\\';
 
-                    // Check if this is the start of a UTF-8 sequence
-                    const utf8_len = std.unicode.utf8ByteSequenceLength(c) catch {
-                        // Invalid UTF-8 start byte
-                        self.cursor.pushMessageHere(.InvalidUtf8InSource);
-                        self.cursor.pos += 1;
-                        continue;
-                    };
-
-                    // For single-byte UTF-8 (ASCII), check if it's printable
-                    if (utf8_len == 1) {
-                        // Allow tab (0x09) in addition to standard printable ASCII
-                        if (!std.ascii.isPrint(c) and c != '\t') {
-                            self.cursor.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
-                        }
-                        self.cursor.pos += 1;
-                    } else {
-                        // Multi-byte UTF-8 sequence - validate it
-                        if (self.cursor.pos + utf8_len > self.cursor.buf.len) {
-                            // Incomplete UTF-8 sequence at end of input
-                            self.cursor.pushMessageHere(.InvalidUtf8InSource);
-                            self.cursor.pos += 1;
-                            continue;
-                        }
-
-                        const utf8_bytes = self.cursor.buf[self.cursor.pos .. self.cursor.pos + utf8_len];
-                        const codepoint = std.unicode.utf8Decode(utf8_bytes) catch {
-                            // Invalid UTF-8 sequence
-                            self.cursor.pushMessageHere(.InvalidUtf8InSource);
-                            self.cursor.pos += 1;
-                            continue;
-                        };
-
-                        // Check if the Unicode codepoint is printable
-                        // Unicode categories: Cc (control), Cn (unassigned), Co (private use), Cs (surrogate)
-                        if (codepoint < 0x20 or // C0 control characters
-                            (codepoint >= 0x7F and codepoint <= 0x9F) or // C1 control characters
-                            (codepoint >= 0xD800 and codepoint <= 0xDFFF) or // Surrogate pairs (invalid in UTF-8)
-                            codepoint == 0xFFFE or codepoint == 0xFFFF) // Non-characters
-                        {
-                            self.cursor.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
-                        }
-
-                        // Valid UTF-8 sequence - advance by the full sequence length
-                        self.cursor.pos += utf8_len;
-                    }
+                    // Handle UTF-8 sequences with printable character validation
+                    _ = self.cursor.chompUTF8CodepointWithValidation();
                 }
             }
         }
