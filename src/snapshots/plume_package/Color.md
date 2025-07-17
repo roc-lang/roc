@@ -119,7 +119,7 @@ It is of type:
     _U8_
 
 But you are trying to use it as:
-    _{ to_frac: _field }_
+    _{ to_frac: Frac(_size) }_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

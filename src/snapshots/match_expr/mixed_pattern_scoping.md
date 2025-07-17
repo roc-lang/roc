@@ -124,5 +124,5 @@ match data {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "_a"))
+(expr @1.1-6.2 (type "Num(_size)"))
 ~~~

@@ -1,22 +1,19 @@
 # META
 ~~~ini
-description=two strings
+description=String values should not display type annotations in REPL
 type=repl
 ~~~
 # SOURCE
 ~~~roc
-» 1 + 1
-» 0.1 + 0.2
+» "hello"
+» "world"
 » "Hello, World!"
-» []
 ~~~
 # EXPECTED
-2
----
 Evaluation error: error.LayoutError
 ---
 Evaluation error: error.LayoutError
 ---
-[] : List(_elem)
+Evaluation error: error.LayoutError
 # PROBLEMS
 NIL

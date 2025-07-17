@@ -29,6 +29,7 @@ NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_032.md:6:25:6:30
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
+TYPE MISMATCH - fuzz_crash_032.md:9:10:9:30
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=** is not expected in an expression.
@@ -135,6 +136,20 @@ module [tus,r]
 ```
         ^^^
 You can fix this by either defining `tus` in this module, or by removing it from the list of exposed values.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_032.md:9:10:9:30:**
+```roc
+Green => LocalStatus-Complete
+```
+         ^^^^^^^^^^^^^^^^^^^^
+
+It is of type:
+    _Num(_size)_
+
+But you are trying to use it as:
+    _[LocalStatus]_others_
 
 # TOKENS
 ~~~zig

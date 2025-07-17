@@ -1819,7 +1819,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 }
 
 /// Extracts the sections from a snapshot file
-fn extractSections(gpa: Allocator, content: []const u8) !Content {
+pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
     var ranges = std.AutoHashMap(Section, Section.Range).init(gpa);
     defer ranges.deinit();
 

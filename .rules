@@ -30,10 +30,35 @@ Roc uses two different test strategies to Verify Correctness, and Validate Behav
 
 Each snapshot is a markdown file with the following key sections:
 
-- **META**: Contains `description` and `type`. The `type` can be `file`, `expr`, `statement`, or `header`, depending on the scope of the test.
+- **META**: Contains `description` and `type`. The `type` can be `file`, `expr`, `statement`, `header`, or `repl`, depending on the scope of the test.
 - **SOURCE**: The Roc code being tested.
 - **EXPECTED**: Defines the expected outcome, which can be `NIL`, an error name, or specific output. This can be populated automatically using `zig build update-expected`.
 - **Generated Sections**: The tool automatically generates sections like `TOKENS`, `PARSE`, `CANONICALIZE`, `TYPES`, and `PROBLEMS`.
+
+### REPL Snapshots
+
+The `type=repl` snapshots are special tests for the Read-Eval-Print Loop functionality. They simulate interactive REPL sessions:
+
+- **SOURCE**: Contains REPL commands prefixed with `»`, one per line
+- **EXPECTED**: Contains the expected output for each command, separated by `---`
+- The REPL maintains state between commands within a single snapshot
+- Used to test type annotation display, expression evaluation, and error handling
+
+Example:
+```
+# SOURCE
+~~~roc
+» 42
+» "hello"
+» [1, 2, 3]
+~~~
+# EXPECTED
+42
+---
+"hello"
+---
+[1, 2, 3] : List(Num *)
+```
 
 ### Best Practices for Creating Snapshots
 
@@ -47,3 +72,22 @@ Snapshots are powerful for debugging as they show the compiler's output at every
 `SOURCE` -> `TOKENS` -> `PARSE` -> `CANONICALIZE` -> `TYPES`.
 
 The `PROBLEMS` section provides human-readable diagnostics. When you modify the compiler, run `zig build snapshot` and review the diffs to ensure any changes are intentional before they are committed to the repository.
+
+## Roc Language Syntax
+
+When writing Roc code in tests or examples, remember these syntax rules:
+
+- **Naming Convention**: Roc uses `snake_case` for identifiers, not `camelCase`
+- **Boolean Operators**: Use `and` and `or` keywords, not `&&` or `||`
+- **Lambda Syntax**: Anonymous functions use bars: `my_fn = |arg1, arg2| other_fn(arg1, arg2)`
+- **If Expressions**: The syntax is `if condition then_branch else else_branch` with no `then` keyword
+- **Blocks**: Use curly braces to define inline variables. The last expression in the block is its return value:
+  ```
+  my_fn = |arg1, arg2| {
+      inline = arg1
+      inline2 = other_fn(inline, arg2)
+      answer = inline + inline2
+
+      answer
+  }
+  ```

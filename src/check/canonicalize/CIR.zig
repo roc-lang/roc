@@ -1693,6 +1693,29 @@ pub const IntValue = struct {
             .kind = .i128,
         };
     }
+
+    pub fn toI128(self: IntValue) i128 {
+        switch (self.kind) {
+            .i128 => {
+                // Convert little-endian bytes to i128
+                var result: i128 = 0;
+                var i: usize = 0;
+                while (i < 16) : (i += 1) {
+                    result |= @as(i128, self.bytes[i]) << @intCast(i * 8);
+                }
+                return result;
+            },
+            .u128 => {
+                // Convert little-endian bytes to u128, then cast to i128
+                var result: u128 = 0;
+                var i: usize = 0;
+                while (i < 16) : (i += 1) {
+                    result |= @as(u128, self.bytes[i]) << @intCast(i * 8);
+                }
+                return @intCast(result);
+            },
+        }
+    }
 };
 
 /// Helper function to generate the S-expression node for the entire Canonical IR.

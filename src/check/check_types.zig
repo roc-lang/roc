@@ -991,8 +991,27 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
     does_fx = try self.checkExpr(binop.rhs) or does_fx;
 
     switch (binop.op) {
-        .add, .sub, .mul, .div, .rem, .lt, .gt, .le, .ge, .eq, .ne, .pow, .div_trunc => {
-            // TODO: These will use static dispact of the lhs, passing in rhs
+        .add, .sub, .mul, .div, .rem, .pow, .div_trunc => {
+            // For now, we'll constrain both operands to be numbers
+            // In the future, this will use static dispatch based on the lhs type
+            const lhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.lhs)));
+            const rhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.rhs)));
+            const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+            // Create a fresh number variable for the operation
+            const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
+            const num_var = try self.freshFromContent(num_content, expr_region);
+
+            // Unify lhs, rhs, and result with the number type
+            _ = try self.unify(lhs_var, num_var);
+            _ = try self.unify(rhs_var, num_var);
+            _ = try self.unify(result_var, num_var);
+        },
+        .lt, .gt, .le, .ge, .eq, .ne => {
+            // Comparison operators always return Bool
+            const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+            const fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+            _ = try self.unify(expr_var, fresh_bool);
         },
         .@"and" => {
             const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
@@ -1131,6 +1150,10 @@ fn checkIfElseExpr(
         .num_branches = num_branches,
         .problem_branch_index = num_branches - 1,
     } });
+
+    // Unify the if expression's type variable with the branch type
+    const if_expr_var: Var = @enumFromInt(@intFromEnum(if_expr_idx));
+    _ = try self.unify(if_expr_var, branch_var);
 
     return does_fx;
 }

@@ -115,5 +115,5 @@ match shape {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "_a"))
+(expr @1.1-5.2 (type "Frac(_size)"))
 ~~~
