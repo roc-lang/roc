@@ -85,7 +85,7 @@ Check the spelling and make sure you're using a valid Roc operator like `+`, `-`
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),OpenSquare(1:6-1:7),CloseSquare(1:7-1:8),
-LowerIdent(4:1-4:6),LowerIdent(4:7-4:8),OpAssign(4:8-4:9),MalformedSingleQuoteUnclosed(4:10-4:11),EndOfFile(4:11-4:11),
+LowerIdent(4:1-4:6),LowerIdent(4:7-4:8),OpAssign(4:8-4:9),MalformedSingleQuote(4:10-4:11),EndOfFile(4:11-4:11),
 ~~~
 # PARSE
 ~~~clojure

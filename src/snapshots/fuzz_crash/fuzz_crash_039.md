@@ -45,7 +45,7 @@ module[}('
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),NoSpaceOpenRound(1:9-1:10),MalformedSingleQuoteUnclosed(1:10-1:11),
+KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),NoSpaceOpenRound(1:9-1:10),MalformedSingleQuote(1:10-1:11),
 CloseRound(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # PARSE
