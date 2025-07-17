@@ -48,6 +48,42 @@ const builtin = @import("builtin");
 
 const SharedMemoryAllocator = @This();
 
+// Windows API declarations
+const windows = if (builtin.os.tag == .windows) struct {
+    const HANDLE = *anyopaque;
+    const DWORD = u32;
+    const BOOL = c_int;
+    const LPVOID = ?*anyopaque;
+    const LPCWSTR = [*:0]const u16;
+    const SIZE_T = usize;
+
+    extern "kernel32" fn CreateFileMappingW(hFile: HANDLE, lpFileMappingAttributes: ?*anyopaque, flProtect: DWORD, dwMaximumSizeHigh: DWORD, dwMaximumSizeLow: DWORD, lpName: LPCWSTR) ?HANDLE;
+    extern "kernel32" fn MapViewOfFile(hFileMappingObject: HANDLE, dwDesiredAccess: DWORD, dwFileOffsetHigh: DWORD, dwFileOffsetLow: DWORD, dwNumberOfBytesToMap: SIZE_T) LPVOID;
+    extern "kernel32" fn UnmapViewOfFile(lpBaseAddress: LPVOID) BOOL;
+    extern "kernel32" fn CloseHandle(hObject: HANDLE) BOOL;
+    extern "kernel32" fn OpenFileMappingW(dwDesiredAccess: DWORD, bInheritHandle: BOOL, lpName: LPCWSTR) ?HANDLE;
+    extern "kernel32" fn GetSystemInfo(lpSystemInfo: *SYSTEM_INFO) void;
+
+    const PAGE_READWRITE = 0x04;
+    const FILE_MAP_ALL_ACCESS = 0x001f;
+    const INVALID_HANDLE_VALUE = @as(HANDLE, @ptrFromInt(std.math.maxInt(usize)));
+    const FALSE = 0;
+
+    const SYSTEM_INFO = extern struct {
+        wProcessorArchitecture: u16,
+        wReserved: u16,
+        dwPageSize: DWORD,
+        lpMinimumApplicationAddress: LPVOID,
+        lpMaximumApplicationAddress: LPVOID,
+        dwActiveProcessorMask: *align(1) DWORD,
+        dwNumberOfProcessors: DWORD,
+        dwProcessorType: DWORD,
+        dwAllocationGranularity: DWORD,
+        wProcessorLevel: u16,
+        wProcessorRevision: u16,
+    };
+} else struct {};
+
 /// Header stored at the beginning of shared memory to communicate metadata
 pub const Header = extern struct {
     magic: u32 = 0x524F4353, // "ROCS"
@@ -89,8 +125,8 @@ pub const PageSizeError = error{UnsupportedOperatingSystem};
 pub fn getSystemPageSize() PageSizeError!usize {
     const page_size: usize = switch (builtin.os.tag) {
         .windows => blk: {
-            var system_info: std.os.windows.SYSTEM_INFO = undefined;
-            std.os.windows.kernel32.GetSystemInfo(&system_info);
+            var system_info: windows.SYSTEM_INFO = undefined;
+            windows.GetSystemInfo(&system_info);
             break :blk @intCast(system_info.dwPageSize);
         },
         .linux => blk: {
@@ -128,10 +164,10 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: 
             const wide_name = try std.unicode.utf8ToUtf16LeAllocZ(gpa, name);
             defer gpa.free(wide_name);
 
-            const handle = std.os.windows.kernel32.CreateFileMappingW(
-                std.os.windows.INVALID_HANDLE_VALUE,
+            const handle = windows.CreateFileMappingW(
+                windows.INVALID_HANDLE_VALUE,
                 null, // default security
-                std.os.windows.PAGE_READWRITE,
+                windows.PAGE_READWRITE,
                 @intCast(aligned_size >> 32), // high 32 bits
                 @intCast(aligned_size & 0xFFFFFFFF), // low 32 bits
                 wide_name,
@@ -141,16 +177,16 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: 
                 return error.CreateFileMappingFailed;
             }
 
-            const base_ptr = std.os.windows.kernel32.MapViewOfFile(
+            const base_ptr = windows.MapViewOfFile(
                 handle.?,
-                std.os.windows.FILE_MAP_ALL_ACCESS,
+                windows.FILE_MAP_ALL_ACCESS,
                 0, // offset high
                 0, // offset low
                 aligned_size,
             );
 
             if (base_ptr == null) {
-                _ = std.os.windows.kernel32.CloseHandle(handle.?);
+                _ = windows.CloseHandle(handle.?);
                 return error.MapViewOfFileFailed;
             }
 
@@ -161,6 +197,7 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: 
                 .offset = std.atomic.Value(usize).init(@sizeOf(Header)), // Start after header
                 .name = try gpa.dupe(u8, name),
                 .is_owner = true,
+                .page_size = page_size,
             };
 
             // Initialize header
@@ -243,9 +280,9 @@ pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize
             const wide_name = try std.unicode.utf8ToUtf16LeAllocZ(gpa, name);
             defer gpa.free(wide_name);
 
-            const handle = std.os.windows.kernel32.OpenFileMappingW(
-                std.os.windows.FILE_MAP_ALL_ACCESS,
-                std.os.windows.FALSE,
+            const handle = windows.OpenFileMappingW(
+                windows.FILE_MAP_ALL_ACCESS,
+                windows.FALSE,
                 wide_name,
             );
 
@@ -254,49 +291,51 @@ pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize
             }
 
             // First map just the header
-            const header_ptr = std.os.windows.kernel32.MapViewOfFile(
+            const header_ptr = windows.MapViewOfFile(
                 handle.?,
-                std.os.windows.FILE_MAP_ALL_ACCESS,
+                windows.FILE_MAP_ALL_ACCESS,
                 0,
                 0,
                 @sizeOf(Header),
             );
 
             if (header_ptr == null) {
-                _ = std.os.windows.kernel32.CloseHandle(handle.?);
+                _ = windows.CloseHandle(handle.?);
                 return error.MapViewOfFileFailed;
             }
 
             const header = @as(*const Header, @ptrCast(@alignCast(header_ptr))).*;
-            _ = std.os.windows.kernel32.UnmapViewOfFile(header_ptr);
+            _ = windows.UnmapViewOfFile(header_ptr);
 
             if (header.magic != 0x524F4353) {
-                _ = std.os.windows.kernel32.CloseHandle(handle.?);
+                _ = windows.CloseHandle(handle.?);
                 return error.InvalidSharedMemory;
             }
 
             // Now map the actual size
             const actual_size = @as(usize, @intCast(header.used_size));
-            const base_ptr = std.os.windows.kernel32.MapViewOfFile(
+            // Map the actual size based on header
+            const base_ptr = windows.MapViewOfFile(
                 handle.?,
-                std.os.windows.FILE_MAP_ALL_ACCESS,
+                windows.FILE_MAP_ALL_ACCESS,
                 0,
                 0,
                 actual_size,
             );
 
             if (base_ptr == null) {
-                _ = std.os.windows.kernel32.CloseHandle(handle.?);
+                _ = windows.CloseHandle(handle.?);
                 return error.MapViewOfFileFailed;
             }
 
             return SharedMemoryAllocator{
                 .handle = handle.?,
                 .base_ptr = @ptrCast(@alignCast(base_ptr)),
-                .total_size = actual_size,
+                .total_size = @as(usize, @intCast(header.used_size)),
                 .offset = std.atomic.Value(usize).init(@as(usize, @intCast(header.data_offset))),
                 .name = try gpa.dupe(u8, name),
                 .is_owner = false,
+                .page_size = page_size,
             };
         },
         .linux, .macos, .freebsd, .openbsd, .netbsd => {
@@ -378,9 +417,9 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: us
             const wide_name = try std.unicode.utf8ToUtf16LeAllocZ(gpa, name);
             defer gpa.free(wide_name);
 
-            const handle = std.os.windows.kernel32.OpenFileMappingW(
-                std.os.windows.FILE_MAP_ALL_ACCESS,
-                std.os.windows.FALSE, // don't inherit
+            const handle = windows.OpenFileMappingW(
+                windows.FILE_MAP_ALL_ACCESS,
+                windows.FALSE, // don't inherit
                 wide_name,
             );
 
@@ -388,16 +427,16 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: us
                 return error.OpenFileMappingFailed;
             }
 
-            const base_ptr = std.os.windows.kernel32.MapViewOfFile(
+            const base_ptr = windows.MapViewOfFile(
                 handle.?,
-                std.os.windows.FILE_MAP_ALL_ACCESS,
+                windows.FILE_MAP_ALL_ACCESS,
                 0, // offset high
                 0, // offset low
-                aligned_size,
+                @sizeOf(Header), // Map just the header first
             );
 
             if (base_ptr == null) {
-                _ = std.os.windows.kernel32.CloseHandle(handle.?);
+                _ = windows.CloseHandle(handle.?);
                 return error.MapViewOfFileFailed;
             }
 
@@ -408,6 +447,7 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: us
                 .offset = std.atomic.Value(usize).init(0),
                 .name = try gpa.dupe(u8, name),
                 .is_owner = false,
+                .page_size = page_size,
             };
         },
         .linux, .macos, .freebsd, .openbsd, .netbsd => {
@@ -468,8 +508,8 @@ pub fn deinit(self: *SharedMemoryAllocator, gpa: std.mem.Allocator) void {
     }
     switch (builtin.os.tag) {
         .windows => {
-            _ = std.os.windows.kernel32.UnmapViewOfFile(self.base_ptr);
-            _ = std.os.windows.kernel32.CloseHandle(self.handle);
+            _ = windows.UnmapViewOfFile(self.base_ptr);
+            _ = windows.CloseHandle(self.handle);
         },
         .linux, .macos, .freebsd, .openbsd, .netbsd => {
             std.posix.munmap(@alignCast(self.base_ptr[0..self.total_size]));
