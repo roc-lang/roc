@@ -243,21 +243,21 @@ pub fn serializeInto(self: *const Self, buffer: []u8) !usize {
         .gpa = undefined, // Will be set by deserializer
         .idents = .{
             .interner = .{
-                .bytes = .{ .items = .{ .ptr = @ptrFromInt(idents_result.bytes_offset), .len = self.idents.interner.bytes.items.len }, .capacity = self.idents.interner.bytes.capacity },
+                .bytes = .{ .items = .{ .ptr = if (self.idents.interner.bytes.items.len > 0) @ptrFromInt(idents_result.bytes_offset) else @as([*]u8, @ptrFromInt(@alignOf(u8))), .len = self.idents.interner.bytes.items.len }, .capacity = self.idents.interner.bytes.capacity },
                 .strings = .{ .unmanaged = .{ .metadata = if (idents_result.strings_metadata_offset > 0) @ptrFromInt(idents_result.strings_metadata_offset) else null, .size = self.idents.interner.strings.size(), .available = self.idents.interner.strings.available(), .header = self.idents.interner.strings.unmanaged.header } },
-                .outer_indices = .{ .items = .{ .ptr = @ptrFromInt(idents_result.indices_offset), .len = self.idents.interner.outer_indices.items.len }, .capacity = self.idents.interner.outer_indices.capacity },
-                .regions = .{ .items = .{ .ptr = @ptrFromInt(idents_result.regions_offset), .len = self.idents.interner.regions.items.len }, .capacity = self.idents.interner.regions.capacity },
+                .outer_indices = .{ .items = .{ .ptr = if (self.idents.interner.outer_indices.items.len > 0) @ptrFromInt(idents_result.indices_offset) else @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(@alignOf(collections.SmallStringInterner.StringIdx))), .len = self.idents.interner.outer_indices.items.len }, .capacity = self.idents.interner.outer_indices.capacity },
+                .regions = .{ .items = .{ .ptr = if (self.idents.interner.regions.items.len > 0) @ptrFromInt(idents_result.regions_offset) else @as([*]base.Region, @ptrFromInt(@alignOf(base.Region))), .len = self.idents.interner.regions.items.len }, .capacity = self.idents.interner.regions.capacity },
             },
-            .attributes = .{ .items = .{ .ptr = @ptrFromInt(idents_result.attributes_offset), .len = self.idents.attributes.items.len }, .capacity = self.idents.attributes.capacity },
+            .attributes = .{ .items = .{ .ptr = if (self.idents.attributes.items.len > 0) @ptrFromInt(idents_result.attributes_offset) else @as([*]base.Ident.Attributes, @ptrFromInt(@alignOf(base.Ident.Attributes))), .len = self.idents.attributes.items.len }, .capacity = self.idents.attributes.capacity },
             .next_unique_name = self.idents.next_unique_name,
         },
-        .ident_ids_for_slicing = .{ .items = .{ .items = .{ .ptr = if (ident_ids_offset > 0) @ptrFromInt(ident_ids_offset) else undefined, .len = self.ident_ids_for_slicing.items.items.len }, .capacity = self.ident_ids_for_slicing.items.capacity } },
-        .strings = .{ .buffer = .{ .items = .{ .ptr = if (strings_buffer_offset > 0) @ptrFromInt(strings_buffer_offset) else undefined, .len = self.strings.buffer.items.len }, .capacity = self.strings.buffer.capacity } },
+        .ident_ids_for_slicing = .{ .items = .{ .items = .{ .ptr = if (self.ident_ids_for_slicing.items.items.len > 0) @ptrFromInt(ident_ids_offset) else @as([*]base.Ident.Idx, @ptrFromInt(@alignOf(base.Ident.Idx))), .len = self.ident_ids_for_slicing.items.items.len }, .capacity = self.ident_ids_for_slicing.items.capacity } },
+        .strings = .{ .buffer = .{ .items = .{ .ptr = if (self.strings.buffer.items.len > 0) @ptrFromInt(strings_buffer_offset) else @as([*]u8, @ptrFromInt(@alignOf(u8))), .len = self.strings.buffer.items.len }, .capacity = self.strings.buffer.capacity } },
         .types = undefined, // Complex structure, will be set up by types.serializeInto
         .exposed_by_str = undefined, // Will be set up by hash map serialization
         .exposed_nodes = undefined, // Will be set up by hash map serialization
-        .line_starts = .{ .items = .{ .items = .{ .ptr = if (line_starts_offset > 0) @ptrFromInt(line_starts_offset) else undefined, .len = self.line_starts.items.items.len }, .capacity = self.line_starts.items.capacity } },
-        .source = if (source_offset > 0) .{ .ptr = @ptrFromInt(source_offset), .len = self.source.len } else .{ .ptr = undefined, .len = 0 },
+        .line_starts = .{ .items = .{ .items = .{ .ptr = if (self.line_starts.items.items.len > 0) @ptrFromInt(line_starts_offset) else @as([*]u32, @ptrFromInt(@alignOf(u32))), .len = self.line_starts.items.items.len }, .capacity = self.line_starts.items.capacity } },
+        .source = if (self.source.len > 0) .{ .ptr = @ptrFromInt(source_offset), .len = self.source.len } else .{ .ptr = @as([*]const u8, @ptrFromInt(1)), .len = 0 },
     };
 
     return write_offset;
