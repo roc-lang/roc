@@ -190,6 +190,19 @@ pub const Store = struct {
         return self.interner.getText(@enumFromInt(@as(u32, idx.idx)));
     }
 
+    /// Get the attributes for an identifier.
+    pub fn getAttributes(self: *const Store, idx: Idx) Attributes {
+        return self.attributes.items[@as(u32, idx.idx)];
+    }
+
+    /// Get an ident
+    pub fn get(self: *const Store, idx: Idx) Ident {
+        return .{
+            .raw_text = self.getText(idx),
+            .attributes = self.getAttributes(idx),
+        };
+    }
+
     /// Calculate the size needed to serialize this Ident.Store
     pub fn serializedSize(self: *const Store) usize {
         var size: usize = 0;
