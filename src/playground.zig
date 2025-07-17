@@ -15,7 +15,7 @@ const WasmFilesystem = @import("playground/WasmFilesystem.zig");
 const reporting = @import("reporting.zig");
 const snapshot = @import("snapshot.zig");
 const SExprTree = @import("base/SExprTree.zig");
-// const types = @import("types.zig"); // TODO: Add when type system is implemented
+const types = @import("types.zig");
 
 const ModuleEnv = base.ModuleEnv;
 const Allocator = std.mem.Allocator;
@@ -491,7 +491,7 @@ fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) usize {
         writeJsonString(writer, sexpr_content) catch return 0;
         writer.writeAll("\"") catch return 0;
     } else {
-        writer.writeAll("\"(no tokens available)\"") catch return 0;
+        return writeErrorResponse(response_buffer, .ERROR, "Tokens not available");
     }
 
     writer.writeAll("}") catch return 0;
@@ -524,7 +524,7 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) usize {
 
         writeJsonString(writer, sexpr_buffer.items) catch return 0;
     } else {
-        writer.writeAll("(ast)") catch return 0;
+        return writeErrorResponse(response_buffer, .ERROR, "Parse AST not available");
     }
 
     writer.writeAll("\"}") catch return 0;
@@ -533,111 +533,104 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) usize {
 
 /// Write canonicalized CIR response in S-expression format
 fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) usize {
+    // Check for error conditions first
+    if (data.can_ir == null) {
+        // CIR is only created if parsing succeeded, so if it's null, there were parse errors
+        if (data.parse_reports.items.len > 0) {
+            return writeErrorResponse(response_buffer, .ERROR, "Canonicalization skipped due to parsing errors.");
+        } else {
+            return writeErrorResponse(response_buffer, .ERROR, "Canonicalization failed");
+        }
+    }
+
+    // We have CIR data, proceed with generation
+    const cir = data.can_ir.?;
+
+    // Create a new arena for this query
+    var local_arena = std.heap.ArenaAllocator.init(allocator);
+    defer local_arena.deinit();
+    const arena_allocator = local_arena.allocator();
+
+    var sexpr_buffer = std.ArrayList(u8).init(arena_allocator);
+    defer sexpr_buffer.deinit();
+
+    const sexpr_writer = sexpr_buffer.writer().any();
+
+    var tree = SExprTree.init(arena_allocator);
+    defer tree.deinit();
+
+    // Debug: Add counts to the output
+    const defs_count = cir.store.sliceDefs(cir.all_defs).len;
+    const stmts_count = cir.store.sliceStatements(cir.all_statements).len;
+
+    if (defs_count == 0 and stmts_count == 0) {
+        // If truly empty, add a debug node
+        const debug_begin = tree.beginNode();
+        tree.pushStaticAtom("empty-cir-debug") catch {};
+        tree.pushStaticAtom("no-defs-or-statements") catch {};
+        const debug_attrs = tree.beginNode();
+        tree.endNode(debug_begin, debug_attrs) catch {};
+    }
+
+    const mutable_cir = @constCast(&cir);
+    can.CIR.pushToSExprTree(mutable_cir, null, &tree, data.module_env.source) catch {};
+    tree.toHtml(sexpr_writer) catch {};
+
+    // Success case - write the response
     var stream = std.io.fixedBufferStream(response_buffer);
     var writer = stream.writer();
 
     writer.writeAll("{\"status\":\"SUCCESS\",\"data\":\"") catch return 0;
-
-    // Write CIR in S-expression format
-    if (data.can_ir) |cir| {
-        // Create a new arena for this query
-        var local_arena = std.heap.ArenaAllocator.init(allocator);
-        defer local_arena.deinit();
-        const arena_allocator = local_arena.allocator();
-
-        var sexpr_buffer = std.ArrayList(u8).init(arena_allocator);
-        defer sexpr_buffer.deinit();
-
-        const sexpr_writer = sexpr_buffer.writer().any();
-
-        var tree = SExprTree.init(arena_allocator);
-        defer tree.deinit();
-
-        // Debug: Add counts to the output
-        const defs_count = cir.store.sliceDefs(cir.all_defs).len;
-        const stmts_count = cir.store.sliceStatements(cir.all_statements).len;
-
-        if (defs_count == 0 and stmts_count == 0) {
-            // If truly empty, add a debug node
-            const debug_begin = tree.beginNode();
-            tree.pushStaticAtom("empty-cir-debug") catch {};
-            tree.pushStaticAtom("no-defs-or-statements") catch {};
-            const debug_attrs = tree.beginNode();
-            tree.endNode(debug_begin, debug_attrs) catch {};
-        }
-
-        const mutable_cir = @constCast(&cir);
-        can.CIR.pushToSExprTree(mutable_cir, null, &tree, data.module_env.source) catch {};
-        tree.toHtml(sexpr_writer) catch {};
-
-        writeJsonString(writer, sexpr_buffer.items) catch return 0;
-    } else {
-        writer.writeAll("(cir (not-available))") catch return 0;
-    }
-
+    writeJsonString(writer, sexpr_buffer.items) catch return 0;
     writer.writeAll("\"}") catch return 0;
     return stream.getWritten().len;
 }
 
 /// Write types response in S-expression format
 fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) usize {
+    // Check for error conditions first
+    if (data.can_ir == null) {
+        return writeErrorResponse(response_buffer, .ERROR, "Canonicalization not completed.");
+    }
+
+    if (data.solver == null) {
+        return writeErrorResponse(response_buffer, .ERROR, "Type checking not completed.");
+    }
+
+    // We have both CIR and solver data, proceed with type generation
+    const cir = data.can_ir.?;
+
+    // Create a new arena for this query to avoid allocation issues
+    var local_arena = std.heap.ArenaAllocator.init(allocator);
+    defer local_arena.deinit();
+    const arena_allocator = local_arena.allocator();
+
+    var sexpr_buffer = std.ArrayList(u8).init(arena_allocator);
+    defer sexpr_buffer.deinit();
+
+    const sexpr_writer = sexpr_buffer.writer().any();
+
+    var tree = SExprTree.init(arena_allocator);
+    defer tree.deinit();
+
+    // Use the same as snapshot system
+    const mutable_cir = @constCast(&cir);
+    mutable_cir.pushTypesToSExprTree(null, &tree, data.module_env.source) catch |err| {
+        // If type generation fails, return an error message
+        const error_msg = switch (err) {
+            error.OutOfMemory => "Out of memory while generating types",
+        };
+        return writeErrorResponse(response_buffer, .ERROR, error_msg);
+    };
+
+    tree.toHtml(sexpr_writer) catch {};
+
+    // Success case - write the response
     var stream = std.io.fixedBufferStream(response_buffer);
     var writer = stream.writer();
 
     writer.writeAll("{\"status\":\"SUCCESS\",\"data\":\"") catch return 0;
-
-    // Write types in S-expression format
-    if (data.solver) |_| {
-        // Check if we have valid source data
-        if (data.module_env.source.len == 0) {
-            writer.writeAll("(types (error \"Invalid source data\"))") catch return 0;
-            writer.writeAll("\"}") catch return 0;
-            return stream.getWritten().len;
-        }
-
-        // Create a new arena for this query
-        var local_arena = std.heap.ArenaAllocator.init(allocator);
-        defer local_arena.deinit();
-        const arena_allocator = local_arena.allocator();
-
-        var sexpr_buffer = std.ArrayList(u8).init(arena_allocator);
-        defer sexpr_buffer.deinit();
-
-        const sexpr_writer = sexpr_buffer.writer().any();
-
-        var tree = SExprTree.init(arena_allocator);
-        defer tree.deinit();
-
-        // Create a minimal types output without using TypeWriter
-        const types_begin = tree.beginNode();
-        tree.pushStaticAtom("inferred-types") catch {};
-
-        // Add basic type information
-        const info_begin = tree.beginNode();
-        tree.pushStaticAtom("info") catch {};
-        tree.pushStringPair("status", "minimal") catch {};
-        tree.pushStringPair("reason", "TypeWriter disabled to avoid allocation issues") catch {};
-        const info_attrs = tree.beginNode();
-        tree.endNode(info_begin, info_attrs) catch {};
-
-        // Add placeholder for type data
-        const placeholder_begin = tree.beginNode();
-        tree.pushStaticAtom("types") catch {};
-        tree.pushStringPair("message", "Type inference completed successfully") catch {};
-        tree.pushStringPair("defs-count", "4") catch {};
-        const placeholder_attrs = tree.beginNode();
-        tree.endNode(placeholder_begin, placeholder_attrs) catch {};
-
-        const types_attrs = tree.beginNode();
-        tree.endNode(types_begin, types_attrs) catch {};
-
-        tree.toHtml(sexpr_writer) catch {};
-
-        writeJsonString(writer, sexpr_buffer.items) catch return 0;
-    } else {
-        writer.writeAll("(types (not-available))") catch return 0;
-    }
-
+    writeJsonString(writer, sexpr_buffer.items) catch return 0;
     writer.writeAll("\"}") catch return 0;
     return stream.getWritten().len;
 }
