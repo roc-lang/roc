@@ -1405,35 +1405,48 @@ fn canonicalizeSingleQuote(
         } });
     }
 
-    var int_val: ?CIR.IntValue = null;
+    var int_val: ?u21 = null;
 
-    const inner_text = token_text[1 .. token_text.len - 1];
+    var inner_text = token_text[1 .. token_text.len - 1];
 
     const escaped = inner_text[0] == '\\';
 
     if (escaped) {
-        if (inner_text[1] == 'u') {
-            const hex_code = inner_text[3 .. inner_text.len - 1];
-            const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch {
+        const c = inner_text[1];
+        switch (c) {
+            'u' => {
+                const hex_code = inner_text[3 .. inner_text.len - 1];
+                const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch {
+                    return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+                        .region = region,
+                    } });
+                };
+
+                if (!std.unicode.utf8ValidCodepoint(codepoint)) {
+                    return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+                        .region = region,
+                    } });
+                }
+
+                int_val = codepoint;
+            },
+            '\\', '"', '\'', '$' => {
+                int_val = c;
+            },
+            'n' => {
+                int_val = '\n';
+            },
+            'r' => {
+                int_val = '\r';
+            },
+            't' => {
+                int_val = '\t';
+            },
+            else => {
                 return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
                     .region = region,
                 } });
-            };
-
-            if (!std.unicode.utf8ValidCodepoint(codepoint)) {
-                return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-                    .region = region,
-                } });
-            }
-
-            int_val = CIR.IntValue{
-                .bytes = @bitCast(@as(u128, @intCast(codepoint))),
-                .kind = .u128,
-            };
-        } else {
-            return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-                .region = region,
-            } });
+            },
         }
     } else {
         const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
@@ -1447,10 +1460,7 @@ fn canonicalizeSingleQuote(
         var iterator = view.iterator();
 
         if (iterator.nextCodepoint()) |codepoint| {
-            int_val = CIR.IntValue{
-                .bytes = @bitCast(@as(u128, @intCast(codepoint))),
-                .kind = .u128,
-            };
+            int_val = codepoint;
             std.debug.assert(iterator.nextCodepoint() == null);
         } else {
             // only single valid utf8 codepoint can be here after tokenization
@@ -1458,23 +1468,26 @@ fn canonicalizeSingleQuote(
         }
     }
 
-    if (int_val) |value| {
+    if (int_val) |codepoint| {
         const type_content = Content{ .structure = .{ .num = .{ .num_unbound = types.Num.IntRequirements{
             .sign_needed = false,
             .bits_needed = @intCast(@sizeOf(u21)),
         } } } };
-
+        const value_content = CIR.IntValue{
+            .bytes = @bitCast(@as(u128, @intCast(codepoint))),
+            .kind = .u128,
+        };
         if (Idx == CIR.Expr.Idx) {
             const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
                 .e_int = .{
-                    .value = value,
+                    .value = value_content,
                 },
             }, type_content, region);
             return expr_idx;
         } else if (Idx == CIR.Pattern.Idx) {
             const pat_idx = try self.can_ir.addPatternAndTypeVar(CIR.Pattern{
                 .int_literal = .{
-                    .value = value,
+                    .value = value_content,
                 },
             }, type_content, region);
             return pat_idx;
