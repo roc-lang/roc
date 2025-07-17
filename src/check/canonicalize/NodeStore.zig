@@ -96,7 +96,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 46;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 44;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 28;
 /// Count of the statement nodes in the CIR
@@ -2310,14 +2310,6 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocato
             node.tag = .diag_invalid_single_quote;
             region = r.region;
         },
-        .too_long_single_quote => |r| {
-            node.tag = .diag_too_long_single_quote;
-            region = r.region;
-        },
-        .empty_single_quote => |r| {
-            node.tag = .diag_empty_single_quote;
-            region = r.region;
-        },
         .empty_tuple => |r| {
             node.tag = .diag_empty_tuple;
             region = r.region;
@@ -2588,12 +2580,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_single_quote => return CIR.Diagnostic{ .invalid_single_quote = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_too_long_single_quote => return CIR.Diagnostic{ .too_long_single_quote = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_empty_single_quote => return CIR.Diagnostic{ .empty_single_quote = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_empty_tuple => return CIR.Diagnostic{ .empty_tuple = .{

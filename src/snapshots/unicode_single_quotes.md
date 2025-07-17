@@ -15,7 +15,13 @@ type=expr
 )
 ~~~
 # EXPECTED
-NIL
+EMPTY CHARACTER LITERAL - :0:0:0:0
+TOO LONG CHARACTER LITERAL - :0:0:0:0
+UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:6:5:6:7
+UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:7:5:7:12
+INVALID SCALAR - :0:0:0:0
+INVALID TUPLE ELEMENT - :0:0:0:0
+INVALID TUPLE ELEMENT - :0:0:0:0
 # PROBLEMS
 **EMPTY CHARACTER LITERAL**
 This character literal is empty.
@@ -48,8 +54,7 @@ Here is the problematic code:
 
 
 **INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it contains more than one character.
-A single-quoted literal must contain exactly one character, e.g. 'a'.
+I am part way through parsing this scalar literal (character literal), but it appears to be invalid.
 
 **INVALID TUPLE ELEMENT**
 This tuple element is malformed or contains invalid syntax.
@@ -96,7 +101,7 @@ CloseRound(8:1-8:2),EndOfFile(8:2-8:2),
 		(e-int @2.5-2.8 (value "97"))
 		(e-int @3.5-3.9 (value "233"))
 		(e-int @4.5-4.11 (value "128640"))
-		(e-runtime-error (tag "too_long_single_quote"))
+		(e-runtime-error (tag "invalid_single_quote"))
 		(e-runtime-error (tag "tuple_elem_not_canonicalized"))
 		(e-runtime-error (tag "tuple_elem_not_canonicalized"))))
 ~~~

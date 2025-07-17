@@ -1421,7 +1421,7 @@ fn canonicalizeSingleQuote(
 
     if (secondEndpoint != null) {
         // TODO: Handle escape sequences
-        return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .too_long_single_quote = .{
+        return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
             .region = region,
         } });
     }
@@ -1457,7 +1457,7 @@ fn canonicalizeSingleQuote(
             @compileError("Unsupported Idx type");
         }
     } else {
-        return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .empty_single_quote = .{
+        return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
             .region = region,
         } });
     }
