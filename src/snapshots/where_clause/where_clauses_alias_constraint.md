@@ -8,7 +8,7 @@ type=file
 module [Sort, sort]
 
 Sort(a) : a
- where module(a).order : (a, a) -> [LT, EQ, GT]
+	where module(a).order : (a, a) -> [LT, EQ, GT]
 
 sort : List(elem) -> List(elem) where module(elem).Sort
 sort = ...
