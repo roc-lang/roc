@@ -278,8 +278,8 @@ pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
 
     // Set up the CIR struct with file offsets as pointers
     cir_ptr.* = CIR{
-        .env = undefined, // Will be set by deserializer
-        .store = undefined, // Complex structure, set up below
+        .env = @ptrFromInt(0), // Will be set by deserializer
+        .store = std.mem.zeroes(@TypeOf(self.store)), // Complex structure, set up below
         .temp_source_for_sexpr = null,
         .diagnostics = if (diagnostics_offset > 0 and self.diagnostics.?.len > 0)
             @as(?[]CIR.Diagnostic, @ptrFromInt(diagnostics_offset))[0..self.diagnostics.?.len]
@@ -287,7 +287,7 @@ pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
             null,
         .all_defs = self.all_defs,
         .all_statements = self.all_statements,
-        .external_decls = .{ .items = .{ .items = .{ .ptr = if (external_decls_offset > 0) @ptrFromInt(external_decls_offset) else undefined, .len = self.external_decls.items.items.len }, .capacity = self.external_decls.items.capacity } },
+        .external_decls = .{ .items = .{ .items = .{ .ptr = if (external_decls_offset > 0) @ptrFromInt(external_decls_offset) else @ptrFromInt(0), .len = self.external_decls.items.items.len }, .capacity = self.external_decls.items.capacity } },
         .imports = .{
             .map = .{
                 .metadata = if (imports_result.map_metadata_offset > 0) @ptrFromInt(imports_result.map_metadata_offset) else null,
@@ -297,28 +297,31 @@ pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
             },
             .imports = .{
                 .items = .{
-                    .ptr = if (imports_result.imports_offset > 0) @ptrFromInt(imports_result.imports_offset) else undefined,
+                    .ptr = if (imports_result.imports_offset > 0) @ptrFromInt(imports_result.imports_offset) else @ptrFromInt(0),
                     .len = self.imports.imports.items.len,
                 },
                 .capacity = self.imports.imports.capacity,
             },
             .strings = .{
                 .items = .{
-                    .ptr = if (imports_result.strings_offset > 0) @ptrFromInt(imports_result.strings_offset) else undefined,
+                    .ptr = if (imports_result.strings_offset > 0) @ptrFromInt(imports_result.strings_offset) else @ptrFromInt(0),
                     .len = self.imports.strings.items.len,
                 },
                 .capacity = self.imports.strings.capacity,
             },
         },
-        .module_name = if (module_name_offset > 0) .{ .ptr = @ptrFromInt(module_name_offset), .len = self.module_name.len } else .{ .ptr = undefined, .len = 0 },
+        .module_name = if (module_name_offset > 0) .{ .ptr = @ptrFromInt(module_name_offset), .len = self.module_name.len } else .{ .ptr = @ptrFromInt(0), .len = 0 },
     };
 
     // Set up NodeStore
     cir_ptr.store = .{
-        .gpa = undefined, // Will be set by deserializer
+        .gpa = std.mem.Allocator{
+            .ptr = @ptrFromInt(1),
+            .vtable = @ptrFromInt(1),
+        }, // Will be set by deserializer
         .nodes = .{
             .items = .{
-                .bytes = if (store_result.nodes_offset > 0) @ptrFromInt(store_result.nodes_offset) else undefined,
+                .bytes = if (store_result.nodes_offset > 0) @ptrFromInt(store_result.nodes_offset) else @ptrFromInt(0),
                 .len = self.store.nodes.items.len,
                 .capacity = self.store.nodes.items.capacity,
             },
@@ -326,7 +329,7 @@ pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
         .regions = .{
             .items = .{
                 .items = .{
-                    .ptr = if (store_result.regions_offset > 0) @ptrFromInt(store_result.regions_offset) else undefined,
+                    .ptr = if (store_result.regions_offset > 0) @ptrFromInt(store_result.regions_offset) else @ptrFromInt(0),
                     .len = self.store.regions.items.items.len,
                 },
                 .capacity = self.store.regions.items.capacity,
@@ -334,26 +337,26 @@ pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
         },
         .extra_data = .{
             .items = .{
-                .ptr = if (store_result.extra_data_offset > 0) @ptrFromInt(store_result.extra_data_offset) else undefined,
+                .ptr = if (store_result.extra_data_offset > 0) @ptrFromInt(store_result.extra_data_offset) else @ptrFromInt(0),
                 .len = self.store.extra_data.items.len,
             },
             .capacity = self.store.extra_data.capacity,
         },
-        .scratch_statements = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_statements_offset > 0) @ptrFromInt(store_result.scratch_statements_offset) else undefined, .len = self.store.scratch_statements.items.items.len }, .capacity = self.store.scratch_statements.items.capacity } },
-        .scratch_exprs = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_exprs_offset > 0) @ptrFromInt(store_result.scratch_exprs_offset) else undefined, .len = self.store.scratch_exprs.items.items.len }, .capacity = self.store.scratch_exprs.items.capacity } },
-        .scratch_record_fields = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_record_fields_offset > 0) @ptrFromInt(store_result.scratch_record_fields_offset) else undefined, .len = self.store.scratch_record_fields.items.items.len }, .capacity = self.store.scratch_record_fields.items.capacity } },
-        .scratch_match_branches = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_match_branches_offset > 0) @ptrFromInt(store_result.scratch_match_branches_offset) else undefined, .len = self.store.scratch_match_branches.items.items.len }, .capacity = self.store.scratch_match_branches.items.capacity } },
-        .scratch_match_branch_patterns = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_match_branch_patterns_offset > 0) @ptrFromInt(store_result.scratch_match_branch_patterns_offset) else undefined, .len = self.store.scratch_match_branch_patterns.items.items.len }, .capacity = self.store.scratch_match_branch_patterns.items.capacity } },
-        .scratch_if_branches = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_if_branches_offset > 0) @ptrFromInt(store_result.scratch_if_branches_offset) else undefined, .len = self.store.scratch_if_branches.items.items.len }, .capacity = self.store.scratch_if_branches.items.capacity } },
-        .scratch_where_clauses = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_where_clauses_offset > 0) @ptrFromInt(store_result.scratch_where_clauses_offset) else undefined, .len = self.store.scratch_where_clauses.items.items.len }, .capacity = self.store.scratch_where_clauses.items.capacity } },
-        .scratch_patterns = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_patterns_offset > 0) @ptrFromInt(store_result.scratch_patterns_offset) else undefined, .len = self.store.scratch_patterns.items.items.len }, .capacity = self.store.scratch_patterns.items.capacity } },
-        .scratch_pattern_record_fields = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_pattern_record_fields_offset > 0) @ptrFromInt(store_result.scratch_pattern_record_fields_offset) else undefined, .len = self.store.scratch_pattern_record_fields.items.items.len }, .capacity = self.store.scratch_pattern_record_fields.items.capacity } },
-        .scratch_record_destructs = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_record_destructs_offset > 0) @ptrFromInt(store_result.scratch_record_destructs_offset) else undefined, .len = self.store.scratch_record_destructs.items.items.len }, .capacity = self.store.scratch_record_destructs.items.capacity } },
-        .scratch_type_annos = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_type_annos_offset > 0) @ptrFromInt(store_result.scratch_type_annos_offset) else undefined, .len = self.store.scratch_type_annos.items.items.len }, .capacity = self.store.scratch_type_annos.items.capacity } },
-        .scratch_anno_record_fields = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_anno_record_fields_offset > 0) @ptrFromInt(store_result.scratch_anno_record_fields_offset) else undefined, .len = self.store.scratch_anno_record_fields.items.items.len }, .capacity = self.store.scratch_anno_record_fields.items.capacity } },
-        .scratch_exposed_items = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_exposed_items_offset > 0) @ptrFromInt(store_result.scratch_exposed_items_offset) else undefined, .len = self.store.scratch_exposed_items.items.items.len }, .capacity = self.store.scratch_exposed_items.items.capacity } },
-        .scratch_defs = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_defs_offset > 0) @ptrFromInt(store_result.scratch_defs_offset) else undefined, .len = self.store.scratch_defs.items.items.len }, .capacity = self.store.scratch_defs.items.capacity } },
-        .scratch_diagnostics = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_diagnostics_offset > 0) @ptrFromInt(store_result.scratch_diagnostics_offset) else undefined, .len = self.store.scratch_diagnostics.items.items.len }, .capacity = self.store.scratch_diagnostics.items.capacity } },
+        .scratch_statements = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_statements_offset > 0) @ptrFromInt(store_result.scratch_statements_offset) else @ptrFromInt(0), .len = self.store.scratch_statements.items.items.len }, .capacity = self.store.scratch_statements.items.capacity } },
+        .scratch_exprs = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_exprs_offset > 0) @ptrFromInt(store_result.scratch_exprs_offset) else @ptrFromInt(0), .len = self.store.scratch_exprs.items.items.len }, .capacity = self.store.scratch_exprs.items.capacity } },
+        .scratch_record_fields = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_record_fields_offset > 0) @ptrFromInt(store_result.scratch_record_fields_offset) else @ptrFromInt(0), .len = self.store.scratch_record_fields.items.items.len }, .capacity = self.store.scratch_record_fields.items.capacity } },
+        .scratch_match_branches = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_match_branches_offset > 0) @ptrFromInt(store_result.scratch_match_branches_offset) else @ptrFromInt(0), .len = self.store.scratch_match_branches.items.items.len }, .capacity = self.store.scratch_match_branches.items.capacity } },
+        .scratch_match_branch_patterns = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_match_branch_patterns_offset > 0) @ptrFromInt(store_result.scratch_match_branch_patterns_offset) else @ptrFromInt(0), .len = self.store.scratch_match_branch_patterns.items.items.len }, .capacity = self.store.scratch_match_branch_patterns.items.capacity } },
+        .scratch_if_branches = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_if_branches_offset > 0) @ptrFromInt(store_result.scratch_if_branches_offset) else @ptrFromInt(0), .len = self.store.scratch_if_branches.items.items.len }, .capacity = self.store.scratch_if_branches.items.capacity } },
+        .scratch_where_clauses = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_where_clauses_offset > 0) @ptrFromInt(store_result.scratch_where_clauses_offset) else @ptrFromInt(0), .len = self.store.scratch_where_clauses.items.items.len }, .capacity = self.store.scratch_where_clauses.items.capacity } },
+        .scratch_patterns = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_patterns_offset > 0) @ptrFromInt(store_result.scratch_patterns_offset) else @ptrFromInt(0), .len = self.store.scratch_patterns.items.items.len }, .capacity = self.store.scratch_patterns.items.capacity } },
+        .scratch_pattern_record_fields = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_pattern_record_fields_offset > 0) @ptrFromInt(store_result.scratch_pattern_record_fields_offset) else @ptrFromInt(0), .len = self.store.scratch_pattern_record_fields.items.items.len }, .capacity = self.store.scratch_pattern_record_fields.items.capacity } },
+        .scratch_record_destructs = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_record_destructs_offset > 0) @ptrFromInt(store_result.scratch_record_destructs_offset) else @ptrFromInt(0), .len = self.store.scratch_record_destructs.items.items.len }, .capacity = self.store.scratch_record_destructs.items.capacity } },
+        .scratch_type_annos = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_type_annos_offset > 0) @ptrFromInt(store_result.scratch_type_annos_offset) else @ptrFromInt(0), .len = self.store.scratch_type_annos.items.items.len }, .capacity = self.store.scratch_type_annos.items.capacity } },
+        .scratch_anno_record_fields = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_anno_record_fields_offset > 0) @ptrFromInt(store_result.scratch_anno_record_fields_offset) else @ptrFromInt(0), .len = self.store.scratch_anno_record_fields.items.items.len }, .capacity = self.store.scratch_anno_record_fields.items.capacity } },
+        .scratch_exposed_items = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_exposed_items_offset > 0) @ptrFromInt(store_result.scratch_exposed_items_offset) else @ptrFromInt(0), .len = self.store.scratch_exposed_items.items.items.len }, .capacity = self.store.scratch_exposed_items.items.capacity } },
+        .scratch_defs = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_defs_offset > 0) @ptrFromInt(store_result.scratch_defs_offset) else @ptrFromInt(0), .len = self.store.scratch_defs.items.items.len }, .capacity = self.store.scratch_defs.items.capacity } },
+        .scratch_diagnostics = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_diagnostics_offset > 0) @ptrFromInt(store_result.scratch_diagnostics_offset) else @ptrFromInt(0), .len = self.store.scratch_diagnostics.items.items.len }, .capacity = self.store.scratch_diagnostics.items.capacity } },
     };
 
     return write_offset;
@@ -1986,7 +1989,7 @@ pub const ExternalDecl = struct {
 
         const kind_byte = buffer[offset];
         offset += 1;
-        const kind: @TypeOf(@as(@This(), undefined).kind) = switch (kind_byte) {
+        const kind: enum { value, type } = switch (kind_byte) {
             0 => .value,
             1 => .type,
             else => return error.InvalidKind,
@@ -2193,6 +2196,34 @@ pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, so
 
         try tree.endNode(root_begin, attrs);
     }
+}
+
+test "CIR serialization is deterministic" {
+    const allocator = testing.allocator;
+
+    // Create a minimal test ModuleEnv
+    var env = try ModuleEnv.init(allocator, "test");
+    defer env.deinit();
+
+    // Create a minimal test CIR
+    var cir = try CIR.init(&env, "Test");
+    defer cir.deinit();
+
+    // Serialize twice to different buffers
+    const size = cir.serializedSize();
+    const buffer1 = try allocator.alloc(u8, size);
+    defer allocator.free(buffer1);
+    const buffer2 = try allocator.alloc(u8, size);
+    defer allocator.free(buffer2);
+
+    const written1 = try cir.serializeInto(buffer1);
+    const written2 = try cir.serializeInto(buffer2);
+
+    // Both should write the same amount
+    try testing.expectEqual(written1, written2);
+
+    // Both buffers should be byte-for-byte identical
+    try testing.expectEqualSlices(u8, buffer1[0..written1], buffer2[0..written2]);
 }
 
 test "NodeStore - init and deinit" {

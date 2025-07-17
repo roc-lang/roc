@@ -11,6 +11,7 @@ const collections = @import("../collections.zig");
 const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
 const RegionInfo = @import("RegionInfo.zig");
+const Region = @import("Region.zig");
 const relocate_mod = @import("relocate.zig");
 const writeAlignedData = @import("write_aligned.zig").writeAlignedData;
 
@@ -148,9 +149,9 @@ pub fn serializedSize(self: *const Self) usize {
     size += self.idents.interner.regions.items.len * @sizeOf(@TypeOf(self.idents.interner.regions.items[0]));
 
     // StringIdx.Table hash map data
-    if (self.idents.interner.strings.unmanaged.metadata) |_| {
+    if (self.idents.interner.strings.metadata) |_| {
         const metadata_size = self.idents.interner.strings.capacity();
-        size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.idents.interner.strings.unmanaged.metadata)));
+        size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.idents.interner.strings.metadata)));
         size += metadata_size;
         const entry_size = metadata_size * @sizeOf(collections.SmallStringInterner.StringIdx) + metadata_size * @sizeOf(void);
         size += entry_size;
@@ -240,24 +241,40 @@ pub fn serializeInto(self: *const Self, buffer: []u8) !usize {
 
     // Now set up the ModuleEnv struct with file offsets as pointers
     env_ptr.* = Self{
-        .gpa = undefined, // Will be set by deserializer
+        .gpa = std.mem.Allocator{
+            .ptr = @ptrFromInt(1),
+            .vtable = @ptrFromInt(1),
+        }, // Will be set by deserializer
         .idents = .{
             .interner = .{
-                .bytes = .{ .items = .{ .ptr = if (self.idents.interner.bytes.items.len > 0) @ptrFromInt(idents_result.bytes_offset) else @as([*]u8, @ptrFromInt(@alignOf(u8))), .len = self.idents.interner.bytes.items.len }, .capacity = self.idents.interner.bytes.capacity },
-                .strings = .{ .unmanaged = .{ .metadata = if (idents_result.strings_metadata_offset > 0) @ptrFromInt(idents_result.strings_metadata_offset) else null, .size = self.idents.interner.strings.size(), .available = self.idents.interner.strings.available(), .header = self.idents.interner.strings.unmanaged.header } },
-                .outer_indices = .{ .items = .{ .ptr = if (self.idents.interner.outer_indices.items.len > 0) @ptrFromInt(idents_result.indices_offset) else @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(@alignOf(collections.SmallStringInterner.StringIdx))), .len = self.idents.interner.outer_indices.items.len }, .capacity = self.idents.interner.outer_indices.capacity },
-                .regions = .{ .items = .{ .ptr = if (self.idents.interner.regions.items.len > 0) @ptrFromInt(idents_result.regions_offset) else @as([*]base.Region, @ptrFromInt(@alignOf(base.Region))), .len = self.idents.interner.regions.items.len }, .capacity = self.idents.interner.regions.capacity },
+                .bytes = .{ .items = if (self.idents.interner.bytes.items.len > 0) @as([*]u8, @ptrFromInt(idents_result.bytes_offset))[0..self.idents.interner.bytes.items.len] else @as([*]u8, @ptrFromInt(@alignOf(u8)))[0..0], .capacity = self.idents.interner.bytes.capacity },
+                .strings = .{ .metadata = if (idents_result.strings_metadata_offset > 0) @ptrFromInt(idents_result.strings_metadata_offset) else null, .size = self.idents.interner.strings.size, .available = self.idents.interner.strings.available, .header = self.idents.interner.strings.header },
+                .outer_indices = .{ .items = if (self.idents.interner.outer_indices.items.len > 0) @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(idents_result.indices_offset))[0..self.idents.interner.outer_indices.items.len] else @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(@alignOf(collections.SmallStringInterner.StringIdx)))[0..0], .capacity = self.idents.interner.outer_indices.capacity },
+                .regions = .{ .items = if (self.idents.interner.regions.items.len > 0) @as([*]Region, @ptrFromInt(idents_result.regions_offset))[0..self.idents.interner.regions.items.len] else @as([*]Region, @ptrFromInt(@alignOf(Region)))[0..0], .capacity = self.idents.interner.regions.capacity },
             },
-            .attributes = .{ .items = .{ .ptr = if (self.idents.attributes.items.len > 0) @ptrFromInt(idents_result.attributes_offset) else @as([*]base.Ident.Attributes, @ptrFromInt(@alignOf(base.Ident.Attributes))), .len = self.idents.attributes.items.len }, .capacity = self.idents.attributes.capacity },
+            .attributes = .{ .items = if (self.idents.attributes.items.len > 0) @as([*]Ident.Attributes, @ptrFromInt(idents_result.attributes_offset))[0..self.idents.attributes.items.len] else @as([*]Ident.Attributes, @ptrFromInt(@alignOf(Ident.Attributes)))[0..0], .capacity = self.idents.attributes.capacity },
             .next_unique_name = self.idents.next_unique_name,
         },
-        .ident_ids_for_slicing = .{ .items = .{ .items = .{ .ptr = if (self.ident_ids_for_slicing.items.items.len > 0) @ptrFromInt(ident_ids_offset) else @as([*]base.Ident.Idx, @ptrFromInt(@alignOf(base.Ident.Idx))), .len = self.ident_ids_for_slicing.items.items.len }, .capacity = self.ident_ids_for_slicing.items.capacity } },
-        .strings = .{ .buffer = .{ .items = .{ .ptr = if (self.strings.buffer.items.len > 0) @ptrFromInt(strings_buffer_offset) else @as([*]u8, @ptrFromInt(@alignOf(u8))), .len = self.strings.buffer.items.len }, .capacity = self.strings.buffer.capacity } },
-        .types = undefined, // Complex structure, will be set up by types.serializeInto
-        .exposed_by_str = undefined, // Will be set up by hash map serialization
-        .exposed_nodes = undefined, // Will be set up by hash map serialization
-        .line_starts = .{ .items = .{ .items = .{ .ptr = if (self.line_starts.items.items.len > 0) @ptrFromInt(line_starts_offset) else @as([*]u32, @ptrFromInt(@alignOf(u32))), .len = self.line_starts.items.items.len }, .capacity = self.line_starts.items.capacity } },
-        .source = if (self.source.len > 0) .{ .ptr = @ptrFromInt(source_offset), .len = self.source.len } else .{ .ptr = @as([*]const u8, @ptrFromInt(1)), .len = 0 },
+        .ident_ids_for_slicing = .{ .items = .{ .items = if (self.ident_ids_for_slicing.items.items.len > 0) @as([*]Ident.Idx, @ptrFromInt(ident_ids_offset))[0..self.ident_ids_for_slicing.items.items.len] else @as([*]Ident.Idx, @ptrFromInt(@alignOf(Ident.Idx)))[0..0], .capacity = self.ident_ids_for_slicing.items.capacity } },
+        .strings = .{ .buffer = .{ .items = if (self.strings.buffer.items.len > 0) @as([*]u8, @ptrFromInt(strings_buffer_offset))[0..self.strings.buffer.items.len] else @as([*]u8, @ptrFromInt(@alignOf(u8)))[0..0], .capacity = self.strings.buffer.capacity } },
+        .types = .{
+            .slots = .{ .backing = &.{}, .len = 0 },
+            .gpa = std.mem.Allocator{ .ptr = @ptrFromInt(1), .vtable = @ptrFromInt(1) },
+        }, // Complex structure, will be set up by types.serializeInto
+        .exposed_by_str = .{
+            .metadata = null,
+            .size = 0,
+            .available = 0,
+            .header = .{ .values = .{ .metadata = .{ .count = 0, .capacity = 0, .fingerprint = 0 } } },
+        }, // Will be set up by hash map serialization
+        .exposed_nodes = .{
+            .metadata = null,
+            .size = 0,
+            .available = 0,
+            .header = .{ .values = .{ .metadata = .{ .count = 0, .capacity = 0, .fingerprint = 0 } } },
+        }, // Will be set up by hash map serialization
+        .line_starts = .{ .items = .{ .items = if (self.line_starts.items.items.len > 0) @as([*]u32, @ptrFromInt(line_starts_offset))[0..self.line_starts.items.items.len] else @as([*]u32, @ptrFromInt(@alignOf(u32)))[0..0], .capacity = self.line_starts.items.capacity } },
+        .source = if (self.source.len > 0) @as([*]const u8, @ptrFromInt(source_offset))[0..self.source.len] else @as([*]const u8, @ptrFromInt(1))[0..0],
     };
 
     return write_offset;
@@ -298,7 +315,7 @@ fn serializeIdentsAt(self: *const Self, buffer: []u8, write_offset: *usize) !Ide
     }
 
     // Serialize StringIdx.Table
-    if (self.idents.interner.strings.unmanaged.metadata) |metadata| {
+    if (self.idents.interner.strings.metadata) |metadata| {
         write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf(@TypeOf(metadata)));
         result.strings_metadata_offset = write_offset.*;
 
@@ -323,4 +340,29 @@ fn serializeIdentsAt(self: *const Self, buffer: []u8, write_offset: *usize) !Ide
     }
 
     return result;
+}
+
+test "serialization is deterministic" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Create a minimal test ModuleEnv
+    var env = try Self.init(allocator, "test");
+    defer env.deinit();
+
+    // Serialize twice to different buffers
+    const size = env.serializedSize();
+    const buffer1 = try allocator.alloc(u8, size);
+    defer allocator.free(buffer1);
+    const buffer2 = try allocator.alloc(u8, size);
+    defer allocator.free(buffer2);
+
+    const written1 = try env.serializeInto(buffer1);
+    const written2 = try env.serializeInto(buffer2);
+
+    // Both should write the same amount
+    try testing.expectEqual(written1, written2);
+
+    // Both buffers should be byte-for-byte identical
+    try testing.expectEqualSlices(u8, buffer1[0..written1], buffer2[0..written2]);
 }
