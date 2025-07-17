@@ -746,12 +746,11 @@ pub const Store = struct {
     }
 
     /// Serialize this Store into the provided buffer
-    pub fn serializeInto(self: *const Self, buffer: []u8, allocator: Allocator) ![]u8 {
+    pub fn serializeInto(self: *const Self, buffer: []u8) !usize {
         const size = self.serializedSize();
         if (buffer.len < size) return error.BufferTooSmall;
 
         var offset: usize = 0;
-        _ = allocator;
 
         // Write sizes
         const slots_size = self.slots.serializedSize();
@@ -803,7 +802,7 @@ pub const Store = struct {
             @memset(buffer[offset..size], 0);
         }
 
-        return buffer[0..size];
+        return offset;
     }
 
     /// Deserialize a Store from the provided buffer

@@ -12,6 +12,7 @@ const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
 const RegionInfo = @import("RegionInfo.zig");
 const relocate_mod = @import("relocate.zig");
+const writeAlignedData = @import("write_aligned.zig").writeAlignedData;
 
 const Self = @This();
 
@@ -127,4 +128,199 @@ pub fn relocate(self: *Self, offset: isize) void {
         const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
         self.source.ptr = @ptrFromInt(new_ptr);
     }
+}
+
+/// Calculate the exact size needed to serialize this ModuleEnv
+pub fn serializedSize(self: *const Self) usize {
+    var size: usize = 0;
+
+    // ModuleEnv struct itself
+    size += @sizeOf(Self);
+
+    // Ident store data
+    size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.idents.interner.bytes.items)));
+    size += self.idents.interner.bytes.items.len;
+
+    size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.idents.interner.outer_indices.items)));
+    size += self.idents.interner.outer_indices.items.len * @sizeOf(@TypeOf(self.idents.interner.outer_indices.items[0]));
+
+    size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.idents.interner.regions.items)));
+    size += self.idents.interner.regions.items.len * @sizeOf(@TypeOf(self.idents.interner.regions.items[0]));
+
+    // StringIdx.Table hash map data
+    if (self.idents.interner.strings.unmanaged.metadata) |_| {
+        const metadata_size = self.idents.interner.strings.capacity();
+        size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.idents.interner.strings.unmanaged.metadata)));
+        size += metadata_size;
+        const entry_size = metadata_size * @sizeOf(collections.SmallStringInterner.StringIdx) + metadata_size * @sizeOf(void);
+        size += entry_size;
+    }
+
+    // Ident attributes
+    size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.idents.attributes.items)));
+    size += self.idents.attributes.items.len * @sizeOf(@TypeOf(self.idents.attributes.items[0]));
+
+    // ident_ids_for_slicing
+    size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.ident_ids_for_slicing.items.items)));
+    size += self.ident_ids_for_slicing.items.items.len * @sizeOf(@TypeOf(self.ident_ids_for_slicing.items.items[0]));
+
+    // strings
+    size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.strings.buffer.items)));
+    size += self.strings.buffer.items.len;
+
+    // types store
+    size += self.types.serializedSize();
+
+    // exposed_by_str
+    size += self.exposed_by_str.serializedSize();
+
+    // exposed_nodes
+    size += self.exposed_nodes.serializedSize();
+
+    // line_starts
+    size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.line_starts.items.items)));
+    size += self.line_starts.items.items.len * @sizeOf(@TypeOf(self.line_starts.items.items[0]));
+
+    // source
+    size = std.mem.alignForward(usize, size, @alignOf(u8));
+    size += self.source.len;
+
+    return size;
+}
+
+/// Serialize this ModuleEnv into the provided buffer
+/// Buffer must be at least serializedSize() bytes and properly aligned
+pub fn serializeInto(self: *const Self, buffer: []u8) !usize {
+    var write_offset: usize = 0;
+
+    // Write ModuleEnv struct with placeholder pointers
+    const env_ptr = @as(*Self, @ptrCast(@alignCast(buffer.ptr)));
+    write_offset += @sizeOf(Self);
+
+    // Serialize idents
+    const idents_result = try self.serializeIdentsAt(buffer, &write_offset);
+
+    // Serialize ident_ids_for_slicing
+    const ident_ids_offset = if (self.ident_ids_for_slicing.items.items.len > 0) blk: {
+        const data = std.mem.sliceAsBytes(self.ident_ids_for_slicing.items.items);
+        const offset = writeAlignedData(buffer, &write_offset, data, @alignOf(@TypeOf(self.ident_ids_for_slicing.items.items[0])));
+        break :blk offset;
+    } else 0;
+
+    // Serialize strings
+    const strings_buffer_offset = if (self.strings.buffer.items.len > 0) blk: {
+        const offset = writeAlignedData(buffer, &write_offset, self.strings.buffer.items, @alignOf(u8));
+        break :blk offset;
+    } else 0;
+
+    // Serialize types
+    const types_bytes_written = try self.types.serializeInto(buffer[write_offset..]);
+    write_offset += types_bytes_written;
+
+    // Serialize exposed_by_str
+    _ = try self.exposed_by_str.serializeInto(buffer[write_offset..]);
+    write_offset += self.exposed_by_str.serializedSize();
+
+    // Serialize exposed_nodes
+    _ = try self.exposed_nodes.serializeInto(buffer[write_offset..]);
+    write_offset += self.exposed_nodes.serializedSize();
+
+    // Serialize line_starts
+    const line_starts_offset = if (self.line_starts.items.items.len > 0) blk: {
+        const data = std.mem.sliceAsBytes(self.line_starts.items.items);
+        const offset = writeAlignedData(buffer, &write_offset, data, @alignOf(@TypeOf(self.line_starts.items.items[0])));
+        break :blk offset;
+    } else 0;
+
+    // Serialize source
+    const source_offset = if (self.source.len > 0) blk: {
+        const offset = writeAlignedData(buffer, &write_offset, self.source, @alignOf(u8));
+        break :blk offset;
+    } else 0;
+
+    // Now set up the ModuleEnv struct with file offsets as pointers
+    env_ptr.* = Self{
+        .gpa = undefined, // Will be set by deserializer
+        .idents = .{
+            .interner = .{
+                .bytes = .{ .items = .{ .ptr = @ptrFromInt(idents_result.bytes_offset), .len = self.idents.interner.bytes.items.len }, .capacity = self.idents.interner.bytes.capacity },
+                .strings = .{ .unmanaged = .{ .metadata = if (idents_result.strings_metadata_offset > 0) @ptrFromInt(idents_result.strings_metadata_offset) else null, .size = self.idents.interner.strings.size(), .available = self.idents.interner.strings.available(), .header = self.idents.interner.strings.unmanaged.header } },
+                .outer_indices = .{ .items = .{ .ptr = @ptrFromInt(idents_result.indices_offset), .len = self.idents.interner.outer_indices.items.len }, .capacity = self.idents.interner.outer_indices.capacity },
+                .regions = .{ .items = .{ .ptr = @ptrFromInt(idents_result.regions_offset), .len = self.idents.interner.regions.items.len }, .capacity = self.idents.interner.regions.capacity },
+            },
+            .attributes = .{ .items = .{ .ptr = @ptrFromInt(idents_result.attributes_offset), .len = self.idents.attributes.items.len }, .capacity = self.idents.attributes.capacity },
+            .next_unique_name = self.idents.next_unique_name,
+        },
+        .ident_ids_for_slicing = .{ .items = .{ .items = .{ .ptr = if (ident_ids_offset > 0) @ptrFromInt(ident_ids_offset) else undefined, .len = self.ident_ids_for_slicing.items.items.len }, .capacity = self.ident_ids_for_slicing.items.capacity } },
+        .strings = .{ .buffer = .{ .items = .{ .ptr = if (strings_buffer_offset > 0) @ptrFromInt(strings_buffer_offset) else undefined, .len = self.strings.buffer.items.len }, .capacity = self.strings.buffer.capacity } },
+        .types = undefined, // Complex structure, will be set up by types.serializeInto
+        .exposed_by_str = undefined, // Will be set up by hash map serialization
+        .exposed_nodes = undefined, // Will be set up by hash map serialization
+        .line_starts = .{ .items = .{ .items = .{ .ptr = if (line_starts_offset > 0) @ptrFromInt(line_starts_offset) else undefined, .len = self.line_starts.items.items.len }, .capacity = self.line_starts.items.capacity } },
+        .source = if (source_offset > 0) .{ .ptr = @ptrFromInt(source_offset), .len = self.source.len } else .{ .ptr = undefined, .len = 0 },
+    };
+
+    return write_offset;
+}
+
+const IdentsSerializationResult = struct {
+    bytes_offset: usize,
+    indices_offset: usize,
+    regions_offset: usize,
+    strings_metadata_offset: usize,
+    attributes_offset: usize,
+};
+
+fn serializeIdentsAt(self: *const Self, buffer: []u8, write_offset: *usize) !IdentsSerializationResult {
+    var result = IdentsSerializationResult{
+        .bytes_offset = 0,
+        .indices_offset = 0,
+        .regions_offset = 0,
+        .strings_metadata_offset = 0,
+        .attributes_offset = 0,
+    };
+
+    // Serialize interner bytes
+    if (self.idents.interner.bytes.items.len > 0) {
+        result.bytes_offset = writeAlignedData(buffer, write_offset, self.idents.interner.bytes.items, @alignOf(u8));
+    }
+
+    // Serialize interner outer_indices
+    if (self.idents.interner.outer_indices.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.idents.interner.outer_indices.items);
+        result.indices_offset = writeAlignedData(buffer, write_offset, data, @alignOf(@TypeOf(self.idents.interner.outer_indices.items[0])));
+    }
+
+    // Serialize interner regions
+    if (self.idents.interner.regions.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.idents.interner.regions.items);
+        result.regions_offset = writeAlignedData(buffer, write_offset, data, @alignOf(@TypeOf(self.idents.interner.regions.items[0])));
+    }
+
+    // Serialize StringIdx.Table
+    if (self.idents.interner.strings.unmanaged.metadata) |metadata| {
+        write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf(@TypeOf(metadata)));
+        result.strings_metadata_offset = write_offset.*;
+
+        const capacity = self.idents.interner.strings.capacity();
+        const metadata_size = capacity;
+
+        // Write metadata bytes
+        @memcpy(buffer[write_offset.*..][0..metadata_size], @as([*]const u8, @ptrCast(metadata))[0..metadata_size]);
+        write_offset.* += metadata_size;
+
+        // Write the keys and values data that follows metadata
+        const entry_size = capacity * @sizeOf(collections.SmallStringInterner.StringIdx) + capacity * @sizeOf(void);
+        const data_ptr = @as([*]const u8, @ptrCast(metadata)) + metadata_size;
+        @memcpy(buffer[write_offset.*..][0..entry_size], data_ptr[0..entry_size]);
+        write_offset.* += entry_size;
+    }
+
+    // Serialize attributes
+    if (self.idents.attributes.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.idents.attributes.items);
+        result.attributes_offset = writeAlignedData(buffer, write_offset, data, @alignOf(@TypeOf(self.idents.attributes.items[0])));
+    }
+
+    return result;
 }

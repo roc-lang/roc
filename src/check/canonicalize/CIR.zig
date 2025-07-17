@@ -161,6 +161,358 @@ pub fn relocate(self: *CIR, offset: isize) void {
     }
 }
 
+/// Calculate the exact size needed to serialize this CIR
+pub fn serializedSize(self: *const CIR) usize {
+    var size: usize = 0;
+
+    // CIR struct itself
+    size += @sizeOf(CIR);
+
+    // NodeStore
+    size = std.mem.alignForward(usize, size, @alignOf(Node));
+    if (self.store.nodes.items.len > 0) {
+        // Nodes are stored in a MultiArrayList
+        const fields = std.meta.fields(Node);
+        comptime var total_field_size: usize = 0;
+        inline for (fields) |field| {
+            total_field_size += @sizeOf(field.type);
+        }
+        size += total_field_size * self.store.nodes.items.capacity;
+    }
+
+    // Regions
+    size = std.mem.alignForward(usize, size, @alignOf(Region));
+    size += self.store.regions.items.capacity * @sizeOf(Region);
+
+    // Extra data
+    size = std.mem.alignForward(usize, size, @alignOf(u32));
+    size += self.store.extra_data.items.len * @sizeOf(u32);
+
+    // All scratch arrays in NodeStore
+    inline for (std.meta.fields(@TypeOf(self.store))) |field| {
+        if (std.mem.startsWith(u8, field.name, "scratch_")) {
+            const items_type = @TypeOf(@field(self.store, field.name).items.items);
+            if (@typeInfo(items_type).Pointer.child == void) continue;
+
+            size = std.mem.alignForward(usize, size, @alignOf(@typeInfo(items_type).Pointer.child));
+            size += @field(self.store, field.name).items.items.len * @sizeOf(@typeInfo(items_type).Pointer.child);
+        }
+    }
+
+    // Diagnostics array if present
+    if (self.diagnostics) |diags| {
+        size = std.mem.alignForward(usize, size, @alignOf(CIR.Diagnostic));
+        size += diags.len * @sizeOf(CIR.Diagnostic);
+    }
+
+    // External decls
+    size = std.mem.alignForward(usize, size, @alignOf(ExternalDecl));
+    size += self.external_decls.items.items.len * @sizeOf(ExternalDecl);
+
+    // Imports
+    if (self.imports.map.metadata) |_| {
+        const map_capacity = self.imports.map.capacity();
+        size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.imports.map.metadata)));
+        size += map_capacity; // metadata bytes
+        size += map_capacity * @sizeOf([]const u8); // keys
+        size += map_capacity * @sizeOf(Import.Idx); // values
+
+        // String data for keys
+        var iter = self.imports.map.iterator();
+        while (iter.next()) |entry| {
+            size += entry.key_ptr.len;
+        }
+    }
+
+    size = std.mem.alignForward(usize, size, @alignOf([]u8));
+    size += self.imports.imports.items.len * @sizeOf([]u8);
+
+    size = std.mem.alignForward(usize, size, @alignOf(u8));
+    size += self.imports.strings.items.len;
+
+    // Module name
+    size = std.mem.alignForward(usize, size, @alignOf(u8));
+    size += self.module_name.len;
+
+    return size;
+}
+
+/// Serialize this CIR into the provided buffer
+/// Buffer must be at least serializedSize() bytes and properly aligned
+pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
+    const writeAlignedData = @import("../../base/write_aligned.zig").writeAlignedData;
+    var write_offset: usize = 0;
+
+    // Write CIR struct with placeholder pointers
+    const cir_ptr = @as(*CIR, @ptrCast(@alignCast(buffer.ptr)));
+    write_offset += @sizeOf(CIR);
+
+    // Serialize NodeStore
+    const store_result = try self.serializeNodeStoreAt(buffer, &write_offset);
+
+    // Serialize diagnostics if present
+    const diagnostics_offset = if (self.diagnostics) |diags| blk: {
+        if (diags.len > 0) {
+            const data = std.mem.sliceAsBytes(diags);
+            const offset = writeAlignedData(buffer, &write_offset, data, @alignOf(CIR.Diagnostic));
+            break :blk offset;
+        }
+        break :blk 0;
+    } else 0;
+
+    // Serialize external_decls
+    const external_decls_offset = if (self.external_decls.items.items.len > 0) blk: {
+        const data = std.mem.sliceAsBytes(self.external_decls.items.items);
+        const offset = writeAlignedData(buffer, &write_offset, data, @alignOf(ExternalDecl));
+        break :blk offset;
+    } else 0;
+
+    // Serialize imports
+    const imports_result = try self.serializeImportsAt(buffer, &write_offset);
+
+    // Serialize module_name
+    const module_name_offset = if (self.module_name.len > 0) blk: {
+        const offset = writeAlignedData(buffer, &write_offset, self.module_name, @alignOf(u8));
+        break :blk offset;
+    } else 0;
+
+    // Set up the CIR struct with file offsets as pointers
+    cir_ptr.* = CIR{
+        .env = undefined, // Will be set by deserializer
+        .store = undefined, // Complex structure, set up below
+        .temp_source_for_sexpr = null,
+        .diagnostics = if (diagnostics_offset > 0 and self.diagnostics.?.len > 0)
+            @as(?[]CIR.Diagnostic, @ptrFromInt(diagnostics_offset))[0..self.diagnostics.?.len]
+        else
+            null,
+        .all_defs = self.all_defs,
+        .all_statements = self.all_statements,
+        .external_decls = .{ .items = .{ .items = .{ .ptr = if (external_decls_offset > 0) @ptrFromInt(external_decls_offset) else undefined, .len = self.external_decls.items.items.len }, .capacity = self.external_decls.items.capacity } },
+        .imports = .{
+            .map = .{
+                .metadata = if (imports_result.map_metadata_offset > 0) @ptrFromInt(imports_result.map_metadata_offset) else null,
+                .size = self.imports.map.size,
+                .available = self.imports.map.available,
+                .header = self.imports.map.header,
+            },
+            .imports = .{
+                .items = .{
+                    .ptr = if (imports_result.imports_offset > 0) @ptrFromInt(imports_result.imports_offset) else undefined,
+                    .len = self.imports.imports.items.len,
+                },
+                .capacity = self.imports.imports.capacity,
+            },
+            .strings = .{
+                .items = .{
+                    .ptr = if (imports_result.strings_offset > 0) @ptrFromInt(imports_result.strings_offset) else undefined,
+                    .len = self.imports.strings.items.len,
+                },
+                .capacity = self.imports.strings.capacity,
+            },
+        },
+        .module_name = if (module_name_offset > 0) .{ .ptr = @ptrFromInt(module_name_offset), .len = self.module_name.len } else .{ .ptr = undefined, .len = 0 },
+    };
+
+    // Set up NodeStore
+    cir_ptr.store = .{
+        .gpa = undefined, // Will be set by deserializer
+        .nodes = .{
+            .items = .{
+                .bytes = if (store_result.nodes_offset > 0) @ptrFromInt(store_result.nodes_offset) else undefined,
+                .len = self.store.nodes.items.len,
+                .capacity = self.store.nodes.items.capacity,
+            },
+        },
+        .regions = .{
+            .items = .{
+                .items = .{
+                    .ptr = if (store_result.regions_offset > 0) @ptrFromInt(store_result.regions_offset) else undefined,
+                    .len = self.store.regions.items.items.len,
+                },
+                .capacity = self.store.regions.items.capacity,
+            },
+        },
+        .extra_data = .{
+            .items = .{
+                .ptr = if (store_result.extra_data_offset > 0) @ptrFromInt(store_result.extra_data_offset) else undefined,
+                .len = self.store.extra_data.items.len,
+            },
+            .capacity = self.store.extra_data.capacity,
+        },
+        .scratch_statements = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_statements_offset > 0) @ptrFromInt(store_result.scratch_statements_offset) else undefined, .len = self.store.scratch_statements.items.items.len }, .capacity = self.store.scratch_statements.items.capacity } },
+        .scratch_exprs = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_exprs_offset > 0) @ptrFromInt(store_result.scratch_exprs_offset) else undefined, .len = self.store.scratch_exprs.items.items.len }, .capacity = self.store.scratch_exprs.items.capacity } },
+        .scratch_record_fields = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_record_fields_offset > 0) @ptrFromInt(store_result.scratch_record_fields_offset) else undefined, .len = self.store.scratch_record_fields.items.items.len }, .capacity = self.store.scratch_record_fields.items.capacity } },
+        .scratch_match_branches = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_match_branches_offset > 0) @ptrFromInt(store_result.scratch_match_branches_offset) else undefined, .len = self.store.scratch_match_branches.items.items.len }, .capacity = self.store.scratch_match_branches.items.capacity } },
+        .scratch_match_branch_patterns = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_match_branch_patterns_offset > 0) @ptrFromInt(store_result.scratch_match_branch_patterns_offset) else undefined, .len = self.store.scratch_match_branch_patterns.items.items.len }, .capacity = self.store.scratch_match_branch_patterns.items.capacity } },
+        .scratch_if_branches = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_if_branches_offset > 0) @ptrFromInt(store_result.scratch_if_branches_offset) else undefined, .len = self.store.scratch_if_branches.items.items.len }, .capacity = self.store.scratch_if_branches.items.capacity } },
+        .scratch_where_clauses = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_where_clauses_offset > 0) @ptrFromInt(store_result.scratch_where_clauses_offset) else undefined, .len = self.store.scratch_where_clauses.items.items.len }, .capacity = self.store.scratch_where_clauses.items.capacity } },
+        .scratch_patterns = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_patterns_offset > 0) @ptrFromInt(store_result.scratch_patterns_offset) else undefined, .len = self.store.scratch_patterns.items.items.len }, .capacity = self.store.scratch_patterns.items.capacity } },
+        .scratch_pattern_record_fields = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_pattern_record_fields_offset > 0) @ptrFromInt(store_result.scratch_pattern_record_fields_offset) else undefined, .len = self.store.scratch_pattern_record_fields.items.items.len }, .capacity = self.store.scratch_pattern_record_fields.items.capacity } },
+        .scratch_record_destructs = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_record_destructs_offset > 0) @ptrFromInt(store_result.scratch_record_destructs_offset) else undefined, .len = self.store.scratch_record_destructs.items.items.len }, .capacity = self.store.scratch_record_destructs.items.capacity } },
+        .scratch_type_annos = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_type_annos_offset > 0) @ptrFromInt(store_result.scratch_type_annos_offset) else undefined, .len = self.store.scratch_type_annos.items.items.len }, .capacity = self.store.scratch_type_annos.items.capacity } },
+        .scratch_anno_record_fields = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_anno_record_fields_offset > 0) @ptrFromInt(store_result.scratch_anno_record_fields_offset) else undefined, .len = self.store.scratch_anno_record_fields.items.items.len }, .capacity = self.store.scratch_anno_record_fields.items.capacity } },
+        .scratch_exposed_items = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_exposed_items_offset > 0) @ptrFromInt(store_result.scratch_exposed_items_offset) else undefined, .len = self.store.scratch_exposed_items.items.items.len }, .capacity = self.store.scratch_exposed_items.items.capacity } },
+        .scratch_defs = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_defs_offset > 0) @ptrFromInt(store_result.scratch_defs_offset) else undefined, .len = self.store.scratch_defs.items.items.len }, .capacity = self.store.scratch_defs.items.capacity } },
+        .scratch_diagnostics = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_diagnostics_offset > 0) @ptrFromInt(store_result.scratch_diagnostics_offset) else undefined, .len = self.store.scratch_diagnostics.items.items.len }, .capacity = self.store.scratch_diagnostics.items.capacity } },
+    };
+
+    return write_offset;
+}
+
+const NodeStoreSerializationResult = struct {
+    nodes_offset: usize,
+    regions_offset: usize,
+    extra_data_offset: usize,
+    scratch_statements_offset: usize,
+    scratch_exprs_offset: usize,
+    scratch_record_fields_offset: usize,
+    scratch_match_branches_offset: usize,
+    scratch_match_branch_patterns_offset: usize,
+    scratch_if_branches_offset: usize,
+    scratch_where_clauses_offset: usize,
+    scratch_patterns_offset: usize,
+    scratch_pattern_record_fields_offset: usize,
+    scratch_record_destructs_offset: usize,
+    scratch_type_annos_offset: usize,
+    scratch_anno_record_fields_offset: usize,
+    scratch_exposed_items_offset: usize,
+    scratch_defs_offset: usize,
+    scratch_diagnostics_offset: usize,
+};
+
+fn serializeNodeStoreAt(self: *const CIR, buffer: []u8, write_offset: *usize) !NodeStoreSerializationResult {
+    const writeAlignedData = @import("../../base/write_aligned.zig").writeAlignedData;
+    var result: NodeStoreSerializationResult = std.mem.zeroes(NodeStoreSerializationResult);
+
+    // Serialize nodes (MultiArrayList)
+    if (self.store.nodes.items.capacity > 0) {
+        write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf(Node));
+        result.nodes_offset = write_offset.*;
+
+        // Calculate total size of MultiArrayList data
+        const fields = std.meta.fields(Node);
+        comptime var total_field_size: usize = 0;
+        inline for (fields) |field| {
+            total_field_size += @sizeOf(field.type);
+        }
+        const bytes_to_copy = total_field_size * self.store.nodes.items.capacity;
+
+        // Copy the entire MultiArrayList data
+        const src_bytes = @as([*]const u8, @ptrCast(self.store.nodes.items.bytes))[0..bytes_to_copy];
+        @memcpy(buffer[write_offset.*..][0..bytes_to_copy], src_bytes);
+        write_offset.* += bytes_to_copy;
+    }
+
+    // Serialize regions
+    if (self.store.regions.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.regions.items.items);
+        result.regions_offset = writeAlignedData(buffer, write_offset, data, @alignOf(Region));
+    }
+
+    // Serialize extra_data
+    if (self.store.extra_data.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.extra_data.items);
+        result.extra_data_offset = writeAlignedData(buffer, write_offset, data, @alignOf(u32));
+    }
+
+    // Serialize all scratch arrays
+    inline for (std.meta.fields(@TypeOf(result))) |field| {
+        if (std.mem.startsWith(u8, field.name, "scratch_")) {
+            const scratch_field_name = field.name[0 .. field.name.len - "_offset".len];
+            const scratch_items = @field(self.store, scratch_field_name).items.items;
+            if (scratch_items.len > 0) {
+                const data = std.mem.sliceAsBytes(scratch_items);
+                @field(result, field.name) = writeAlignedData(buffer, write_offset, data, @alignOf(@TypeOf(scratch_items[0])));
+            }
+        }
+    }
+
+    return result;
+}
+
+const ImportsSerializationResult = struct {
+    map_metadata_offset: usize,
+    imports_offset: usize,
+    strings_offset: usize,
+};
+
+fn serializeImportsAt(self: *const CIR, buffer: []u8, write_offset: *usize) !ImportsSerializationResult {
+    const writeAlignedData = @import("../../base/write_aligned.zig").writeAlignedData;
+    var result: ImportsSerializationResult = std.mem.zeroes(ImportsSerializationResult);
+
+    // Serialize hash map
+    if (self.imports.map.metadata) |metadata| {
+        write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf(@TypeOf(metadata)));
+        result.map_metadata_offset = write_offset.*;
+
+        const map_capacity = self.imports.map.capacity();
+
+        // Write metadata bytes
+        @memcpy(buffer[write_offset.*..][0..map_capacity], @as([*]const u8, @ptrCast(metadata))[0..map_capacity]);
+        write_offset.* += map_capacity;
+
+        // Reserve space for keys and values arrays
+        write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf([]const u8));
+        const keys_array_offset = write_offset.*;
+        write_offset.* += map_capacity * @sizeOf([]const u8);
+
+        write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf(Import.Idx));
+        const values_array_offset = write_offset.*;
+        write_offset.* += map_capacity * @sizeOf(Import.Idx);
+
+        // Write string data and update key pointers
+        const keys_ptr = self.imports.map.keys();
+        const values_ptr = self.imports.map.values();
+
+        for (0..map_capacity) |i| {
+            const metadata_byte = metadata[i];
+            if (metadata_byte != 0xFF) { // Occupied slot
+                // Write string data
+                write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf(u8));
+                const key_data_offset = write_offset.*;
+                @memcpy(buffer[write_offset.*..][0..keys_ptr[i].len], keys_ptr[i]);
+                write_offset.* += keys_ptr[i].len;
+
+                // Write key slice with offset as pointer
+                const key_slice_ptr = @as(*[]const u8, @ptrCast(@alignCast(&buffer[keys_array_offset + i * @sizeOf([]const u8)])));
+                key_slice_ptr.* = .{
+                    .ptr = @ptrFromInt(key_data_offset),
+                    .len = keys_ptr[i].len,
+                };
+
+                // Copy value
+                const value_ptr = @as(*Import.Idx, @ptrCast(@alignCast(&buffer[values_array_offset + i * @sizeOf(Import.Idx)])));
+                value_ptr.* = values_ptr[i];
+            }
+        }
+    }
+
+    // Serialize imports array
+    if (self.imports.imports.items.len > 0) {
+        result.imports_offset = writeAlignedData(buffer, write_offset, std.mem.sliceAsBytes(self.imports.imports.items), @alignOf([]u8));
+
+        // Update string pointers in imports array
+        const imports_ptr = @as([*][]u8, @ptrCast(@alignCast(buffer.ptr + result.imports_offset)));
+        for (self.imports.imports.items, 0..) |import_str, i| {
+            if (import_str.len > 0) {
+                // String data should be in the strings array
+                const str_offset = @intFromPtr(import_str.ptr) - @intFromPtr(self.imports.strings.items.ptr);
+                imports_ptr[i] = .{
+                    .ptr = @ptrFromInt(result.strings_offset + str_offset),
+                    .len = import_str.len,
+                };
+            }
+        }
+    }
+
+    // Serialize strings
+    if (self.imports.strings.items.len > 0) {
+        result.strings_offset = writeAlignedData(buffer, write_offset, self.imports.strings.items, @alignOf(u8));
+    }
+
+    return result;
+}
+
 /// Records a diagnostic error during canonicalization without blocking compilation.
 ///
 /// This creates a diagnostic node that stores error information for later reporting.
