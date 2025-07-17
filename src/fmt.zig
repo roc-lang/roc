@@ -905,8 +905,8 @@ const Formatter = struct {
                     _ = try fmt.formatExpr(ext);
                     has_items = true;
 
+                    try fmt.push(',');
                     if (fields.len > 0) {
-                        try fmt.push(',');
                         if (is_multiline) {
                             try fmt.newline();
                             try fmt.pushIndent();
