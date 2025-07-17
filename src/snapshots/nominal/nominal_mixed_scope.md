@@ -161,9 +161,9 @@ processColor = |color| {
 	Color.RGB
 
 	match color {
-		Red => LocalStatus.Pending
-		Green => LocalStatus.Complete
-		Blue => LocalStatus.Pending
+		RGB.Red => LocalStatus.Pending
+		RGB.Green => LocalStatus.Complete
+		RGB.Blue => LocalStatus.Pending
 	}
 }
 ~~~

@@ -422,8 +422,8 @@ processColor = |color|
 transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 transform = |result|
 	match result {
-		Ok(rgb) => TypeC.fromColor(rgb)
-		Err(err) => TypeC.default
+		Result.Ok(rgb) => TypeC.fromColor(rgb)
+		Result.Err(err) => TypeC.default
 	}
 ~~~
 # CANONICALIZE

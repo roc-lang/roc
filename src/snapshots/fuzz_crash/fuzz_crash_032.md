@@ -237,7 +237,7 @@ olor = |color| {
 
 	match color {		RGB => LocalStatus.Pending
 		Green => LocalStatus - Complete
-		Blue => LocalStatus.Pending
+		B.Blue => LocalStatus.Pending
 	}
 }
 ~~~

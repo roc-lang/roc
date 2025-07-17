@@ -621,10 +621,10 @@ hex = |str| {
 
 to_str : Color -> Str
 to_str = |color| match color {
-	RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
-	RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-	Named(inner) => inner
-	Hex(inner) => inner
+	Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
+	Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+	Color.Named(inner) => inner
+	Color.Hex(inner) => inner
 }
 
 expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"

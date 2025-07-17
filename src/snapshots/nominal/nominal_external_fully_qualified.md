@@ -113,8 +113,8 @@ import MyResultModule
 handleResult : MyResultModule.MyResultType(Str, I32) -> Str
 handleResult = |result| {
 	match result {
-		Ok(value) => value
-		Err(code) => "Error: $(code.toStr())"
+		MyResultModule.MyResultType.Ok(value) => value
+		MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
 	}
 }
 ~~~

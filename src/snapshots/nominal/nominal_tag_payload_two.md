@@ -108,8 +108,8 @@ ok = |a| MyResult.Ok(a)
 
 is_ok : MyResult(_ok, _err) -> Bool
 is_ok = |result| match result {
-	Ok(_) => Bool.True
-	Err(_) => Bool.False
+	MyResult.Ok(_) => Bool.True
+	MyResult.Err(_) => Bool.False
 }
 ~~~
 # CANONICALIZE

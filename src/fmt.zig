@@ -1208,7 +1208,15 @@ const Formatter = struct {
             },
             .tag => |t| {
                 region = t.region;
-                try fmt.formatIdent(t.tag_tok, null);
+
+                const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
+                for (qualifier_tokens) |tok_idx| {
+                    const tok = @as(Token.Idx, @intCast(tok_idx));
+                    try fmt.pushTokenText(tok);
+                    try fmt.push('.');
+                }
+
+                try fmt.pushTokenText(t.tag_tok);
                 if (t.args.span.len > 0) {
                     try fmt.formatCollection(region, .round, AST.Pattern.Idx, fmt.ast.store.patternSlice(t.args), Formatter.formatPattern);
                 }
