@@ -219,114 +219,36 @@ pub const Repl = struct {
     /// Evaluate source code
     fn evaluateSource(self: *Repl, source: []const u8) ![]const u8 {
         // Extract the last line as the expression to evaluate
-        var last_line = source;
-        if (std.mem.lastIndexOf(u8, source, "\n")) |pos| {
-            last_line = source[pos + 1 ..];
+        var lines = std.mem.tokenizeScalar(u8, source, '\n');
+        var last_line: ?[]const u8 = null;
+        while (lines.next()) |line| {
+            last_line = line;
+        }
+
+        if (last_line == null or last_line.?.len == 0) {
+            return try self.allocator.dupe(u8, "");
+        }
+
+        // Check if the last line is an assignment
+        var expr_source = last_line.?;
+        if (std.mem.indexOf(u8, last_line.?, "=")) |eq_pos| {
+            // Make sure it's not == or other operators
+            if (eq_pos > 0 and last_line.?[eq_pos - 1] != '=' and
+                eq_pos + 1 < last_line.?.len and last_line.?[eq_pos + 1] != '=')
+            {
+                // Extract just the value part after =
+                expr_source = std.mem.trim(u8, last_line.?[eq_pos + 1 ..], " \t");
+            }
         }
 
         // For simple numeric literals, we can evaluate directly
-        if (std.fmt.parseInt(i64, std.mem.trim(u8, last_line, " \t"), 10)) |num| {
+        if (std.fmt.parseInt(i64, std.mem.trim(u8, expr_source, " \t"), 10)) |num| {
             return try std.fmt.allocPrint(self.allocator, "{d}", .{num});
         } else |_| {}
 
-        // For identifiers, look them up in past definitions
-        const trimmed = std.mem.trim(u8, last_line, " \t");
-        if (isSimpleIdentifier(trimmed)) {
-            // Find the most recent definition
-            var i = self.past_defs.items.len;
-            while (i > 0) {
-                i -= 1;
-                const def = self.past_defs.items[i];
-                if (def.ident) |ident| {
-                    if (std.mem.eql(u8, ident, trimmed)) {
-                        // Extract the value from the definition
-                        if (std.mem.indexOf(u8, def.source, "=")) |eq_pos| {
-                            const value = std.mem.trim(u8, def.source[eq_pos + 1 ..], " \t");
-                            // If it's a simple number, return it
-                            if (std.fmt.parseInt(i64, value, 10)) |num| {
-                                return try std.fmt.allocPrint(self.allocator, "{d}", .{num});
-                            } else |_| {
-                                // Try to evaluate the expression recursively
-                                return try self.evaluateExpression(value);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Try to evaluate the expression
-        return try self.evaluateExpression(trimmed);
-    }
-
-    fn evaluateExpression(self: *Repl, expr: []const u8) ![]const u8 {
-        const trimmed = std.mem.trim(u8, expr, " \t");
-
-        // Handle simple arithmetic
-        if (std.mem.indexOf(u8, trimmed, "+")) |plus_pos| {
-            const left = std.mem.trim(u8, trimmed[0..plus_pos], " \t");
-            const right = std.mem.trim(u8, trimmed[plus_pos + 1 ..], " \t");
-
-            // Try to evaluate both sides
-            const left_val = blk: {
-                if (std.fmt.parseInt(i64, left, 10)) |num| {
-                    break :blk num;
-                } else |_| {
-                    if (isSimpleIdentifier(left)) {
-                        if (self.lookupIdentValue(left)) |val| {
-                            break :blk val;
-                        } else |_| {}
-                    }
-                    return try std.fmt.allocPrint(self.allocator, "{s}", .{trimmed});
-                }
-            };
-
-            const right_val = blk: {
-                if (std.fmt.parseInt(i64, right, 10)) |num| {
-                    break :blk num;
-                } else |_| {
-                    if (isSimpleIdentifier(right)) {
-                        if (self.lookupIdentValue(right)) |val| {
-                            break :blk val;
-                        } else |_| {}
-                    }
-                    return try std.fmt.allocPrint(self.allocator, "{s}", .{trimmed});
-                }
-            };
-
-            return try std.fmt.allocPrint(self.allocator, "{d}", .{left_val + right_val});
-        }
-
-        // Default: return the expression as-is
-        return try self.allocator.dupe(u8, trimmed);
-    }
-
-    fn isSimpleIdentifier(text: []const u8) bool {
-        if (text.len == 0) return false;
-        if (!std.ascii.isLower(text[0])) return false;
-        for (text) |c| {
-            if (!std.ascii.isAlphanumeric(c) and c != '_') return false;
-        }
-        return true;
-    }
-
-    fn lookupIdentValue(self: *Repl, ident: []const u8) !i64 {
-        var i = self.past_defs.items.len;
-        while (i > 0) {
-            i -= 1;
-            const def = self.past_defs.items[i];
-            if (def.ident) |def_ident| {
-                if (std.mem.eql(u8, def_ident, ident)) {
-                    if (std.mem.indexOf(u8, def.source, "=")) |eq_pos| {
-                        const value = std.mem.trim(u8, def.source[eq_pos + 1 ..], " \t");
-                        if (std.fmt.parseInt(i64, value, 10)) |num| {
-                            return num;
-                        } else |_| {}
-                    }
-                }
-            }
-        }
-        return error.IdentifierNotFound;
+        // For now, if we can't evaluate it directly, just return the expression
+        // TODO: Implement full interpreter integration with context from past definitions
+        return try self.allocator.dupe(u8, expr_source);
     }
 };
 
@@ -472,4 +394,74 @@ test "Repl - past def ordering" {
         \\x
     ;
     try testing.expectEqualStrings(expected, full_source);
+}
+
+test "Repl - minimal interpreter integration" {
+    const allocator = testing.allocator;
+
+    // Step 1: Create module environment
+    const source = "42";
+    var module_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    defer module_env.deinit();
+
+    // Step 2: Parse as expression
+    var parse_ast = try parse.parseExpr(&module_env, source);
+    defer parse_ast.deinit(allocator);
+
+    // Empty scratch space (required before canonicalization)
+    parse_ast.store.emptyScratch();
+
+    // Step 3: Create CIR
+    var cir = try CIR.init(&module_env, "test");
+    defer cir.deinit();
+
+    // Step 4: Canonicalize
+    var can = try canonicalize.init(&cir, &parse_ast, null);
+    defer can.deinit();
+
+    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
+        return error.CanonicalizeError;
+    };
+
+    // Step 5: Type check
+    var checker = try check_types.init(allocator, &module_env.types, &cir, &.{}, &cir.store.regions);
+    defer checker.deinit();
+
+    _ = try checker.checkExpr(canonical_expr_idx);
+
+    // Step 6: Create evaluation stack
+    var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
+    defer eval_stack.deinit();
+
+    // Step 7: Create layout cache
+    var layout_cache = try layout_store.Store.init(&module_env, &module_env.types);
+    defer layout_cache.deinit();
+
+    // Step 8: Create interpreter
+    var interpreter = try eval.Interpreter.init(allocator, &cir, &eval_stack, &layout_cache, &module_env.types);
+    defer interpreter.deinit();
+
+    // Step 9: Evaluate
+    const result = try interpreter.eval(canonical_expr_idx);
+
+    // Step 10: Verify result
+    try testing.expect(result.layout.tag == .scalar);
+    try testing.expect(result.layout.data.scalar.tag == .int);
+
+    // Read the value back
+    const value: i128 = switch (result.layout.data.scalar.data.int) {
+        .u8 => @as(*u8, @ptrCast(@alignCast(result.ptr))).*,
+        .i8 => @as(*i8, @ptrCast(@alignCast(result.ptr))).*,
+        .u16 => @as(*u16, @ptrCast(@alignCast(result.ptr))).*,
+        .i16 => @as(*i16, @ptrCast(@alignCast(result.ptr))).*,
+        .u32 => @as(*u32, @ptrCast(@alignCast(result.ptr))).*,
+        .i32 => @as(*i32, @ptrCast(@alignCast(result.ptr))).*,
+        .u64 => @as(*u64, @ptrCast(@alignCast(result.ptr))).*,
+        .i64 => @as(*i64, @ptrCast(@alignCast(result.ptr))).*,
+        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(result.ptr))).*),
+        .i128 => @as(*i128, @ptrCast(@alignCast(result.ptr))).*,
+    };
+
+    try testing.expectEqual(@as(i128, 42), value);
 }
