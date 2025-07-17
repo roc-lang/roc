@@ -303,7 +303,7 @@ pub const Store = struct {
         self: *Self,
         tuple_type: types.Tuple,
     ) (LayoutError || std.mem.Allocator.Error)!usize {
-        const elem_slice = self.types_store.getTupleElemsSlice(tuple_type.elems);
+        const elem_slice = self.types_store.sliceVars(tuple_type.elems);
         const num_fields = elem_slice.len;
 
         for (elem_slice, 0..) |var_, index| {

@@ -90,11 +90,8 @@ pub const Store = struct {
     /// Storage for compound type parts
     /// TODO: Consolidate all var lists into 1
     vars: VarSafeList,
-    tuple_elems: VarSafeList,
-    func_args: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
     tags: TagSafeMultiList,
-    tag_args: VarSafeList,
 
     /// Init the unification table
     pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
@@ -113,11 +110,8 @@ pub const Store = struct {
 
             // everything else
             .vars = try VarSafeList.initCapacity(gpa, child_capacity),
-            .tuple_elems = try VarSafeList.initCapacity(gpa, child_capacity),
-            .func_args = try VarSafeList.initCapacity(gpa, child_capacity),
             .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
-            .tag_args = try VarSafeList.initCapacity(gpa, child_capacity),
         };
     }
 
@@ -135,11 +129,8 @@ pub const Store = struct {
 
         // everything else
         self.vars.deinit(self.gpa);
-        self.tuple_elems.deinit(self.gpa);
-        self.func_args.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
-        self.tag_args.deinit(self.gpa);
     }
 
     /// Return the number of type variables in the store.
@@ -220,7 +211,7 @@ pub const Store = struct {
     /// Make a tag data type
     /// Does not insert content into the types store
     pub fn mkTag(self: *Self, name: base.Ident.Idx, args: []const Var) std.mem.Allocator.Error!Tag {
-        const args_range = try self.appendTagArgs(args);
+        const args_range = try self.appendVars(args);
         return Tag{ .name = name, .args = args_range };
     }
 
@@ -270,7 +261,7 @@ pub const Store = struct {
     // Make a function data type with unbound effectfulness
     // Does not insert content into the types store.
     pub fn mkFuncUnbound(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        const args_range = try self.appendFuncArgs(args);
+        const args_range = try self.appendVars(args);
 
         // Check if any arguments need instantiation
         var needs_inst = false;
@@ -296,7 +287,7 @@ pub const Store = struct {
     // Make a pure function data type (as opposed to an effectful or unbound function)
     // Does not insert content into the types store.
     pub fn mkFuncPure(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        const args_range = try self.appendFuncArgs(args);
+        const args_range = try self.appendVars(args);
 
         // Check if any arguments need instantiation
         var needs_inst = false;
@@ -318,7 +309,7 @@ pub const Store = struct {
     // Make an effectful function data type (as opposed to a pure or unbound function)
     // Does not insert content into the types store.
     pub fn mkFuncEffectful(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        const args_range = try self.appendFuncArgs(args);
+        const args_range = try self.appendVars(args);
 
         // Check if any arguments need instantiation
         var needs_inst = false;
@@ -360,7 +351,7 @@ pub const Store = struct {
             .list => |list_var| self.needsInstantiation(list_var),
             .list_unbound => false,
             .tuple => |tuple| blk: {
-                const elems_slice = self.getTupleElemsSlice(tuple.elems);
+                const elems_slice = self.sliceVars(tuple.elems);
                 for (elems_slice) |elem_var| {
                     if (self.needsInstantiation(elem_var)) break :blk true;
                 }
@@ -404,7 +395,7 @@ pub const Store = struct {
     pub fn needsInstantiationTagUnion(self: *const Self, tag_union: types.TagUnion) bool {
         const tags_slice = self.getTagsSlice(tag_union.tags);
         for (tags_slice.items(.args)) |tag_args| {
-            const args_slice = self.getTagArgsSlice(tag_args);
+            const args_slice = self.sliceVars(tag_args);
             for (args_slice) |arg_var| {
                 if (self.needsInstantiation(arg_var)) return true;
             }
@@ -422,21 +413,6 @@ pub const Store = struct {
     /// Append a var to the backing list, returning the idx
     pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
         return try self.vars.appendSlice(self.gpa, s);
-    }
-
-    /// Append a tuple elem to the backing list, returning the idx
-    pub fn appendTupleElem(self: *Self, v: Var) std.mem.Allocator.Error!VarSafeList.Idx {
-        return try self.tuple_elems.append(self.gpa, v);
-    }
-
-    /// Append a slice of tuple elems to the backing list, returning the range
-    pub fn appendTupleElems(self: *Self, slice: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.tuple_elems.appendSlice(self.gpa, slice);
-    }
-
-    /// Append a slice of func args to the backing list, returning the range
-    pub fn appendFuncArgs(self: *Self, slice: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.func_args.appendSlice(self.gpa, slice);
     }
 
     /// Append a record field to the backing list, returning the idx
@@ -459,21 +435,11 @@ pub const Store = struct {
         return try self.tags.appendSlice(self.gpa, slice);
     }
 
-    /// Append a slice of tag args to the backing list, returning the range
-    pub fn appendTagArgs(self: *Self, slice: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.tag_args.appendSlice(self.gpa, slice);
-    }
-
     // sub list getters //
 
-    /// Given a range, get a slice of tuple from the backing list
-    pub fn getTupleElemsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
-        return self.tuple_elems.sliceRange(range);
-    }
-
-    /// Given a range, get a slice of func from the backing list
-    pub fn getFuncArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
-        return self.func_args.sliceRange(range);
+    /// Given a range, get a slice of vars from the backing array
+    pub fn sliceVars(self: *const Self, range: VarSafeList.Range) []Var {
+        return self.vars.sliceRange(range);
     }
 
     /// Given a range, get a slice of record fields from the backing array
@@ -484,11 +450,6 @@ pub const Store = struct {
     /// Given a range, get a slice of tags from the backing array
     pub fn getTagsSlice(self: *const Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
         return self.tags.sliceRange(range);
-    }
-
-    /// Given a range, get a slice of tag args from the backing list
-    pub fn getTagArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
-        return self.tag_args.sliceRange(range);
     }
 
     // helpers - alias types //
@@ -738,15 +699,12 @@ pub const Store = struct {
     pub fn serializedSize(self: *const Self) usize {
         const slots_size = self.slots.serializedSize();
         const descs_size = self.descs.serializedSize();
-        const tuple_elems_size = self.tuple_elems.serializedSize();
-        const func_args_size = self.func_args.serializedSize();
         const record_fields_size = self.record_fields.serializedSize();
         const tags_size = self.tags.serializedSize();
-        const tag_args_size = self.tag_args.serializedSize();
         const vars_size = self.vars.serializedSize();
 
         // Add alignment padding for each component
-        var total_size: usize = @sizeOf(u32) * 8; // size headers
+        var total_size: usize = @sizeOf(u32) * 5; // size headers
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
 
         total_size += slots_size;
@@ -755,19 +713,10 @@ pub const Store = struct {
         total_size += descs_size;
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
 
-        total_size += tuple_elems_size;
-        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
-
-        total_size += func_args_size;
-        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
-
         total_size += record_fields_size;
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
 
         total_size += tags_size;
-        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
-
-        total_size += tag_args_size;
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
 
         total_size += vars_size;
@@ -794,24 +743,12 @@ pub const Store = struct {
         @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(descs_size);
         offset += @sizeOf(u32);
 
-        const tuple_elems_size = self.tuple_elems.serializedSize();
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(tuple_elems_size);
-        offset += @sizeOf(u32);
-
-        const func_args_size = self.func_args.serializedSize();
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(func_args_size);
-        offset += @sizeOf(u32);
-
         const record_fields_size = self.record_fields.serializedSize();
         @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(record_fields_size);
         offset += @sizeOf(u32);
 
         const tags_size = self.tags.serializedSize();
         @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(tags_size);
-        offset += @sizeOf(u32);
-
-        const tag_args_size = self.tag_args.serializedSize();
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(tag_args_size);
         offset += @sizeOf(u32);
 
         const vars_size = self.vars.serializedSize();
@@ -828,16 +765,6 @@ pub const Store = struct {
         offset += descs_slice.len;
 
         offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
-        const tuple_elems_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + tuple_elems_size]));
-        const tuple_elems_slice = try self.tuple_elems.serializeInto(tuple_elems_buffer);
-        offset += tuple_elems_slice.len;
-
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
-        const func_args_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + func_args_size]));
-        const func_args_slice = try self.func_args.serializeInto(func_args_buffer);
-        offset += func_args_slice.len;
-
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
         const record_fields_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + record_fields_size]));
         const record_fields_slice = try self.record_fields.serializeInto(record_fields_buffer);
         offset += record_fields_slice.len;
@@ -846,11 +773,6 @@ pub const Store = struct {
         const tags_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + tags_size]));
         const tags_slice = try self.tags.serializeInto(tags_buffer);
         offset += tags_slice.len;
-
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
-        const tag_args_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + tag_args_size]));
-        const tag_args_slice = try self.tag_args.serializeInto(tag_args_buffer);
-        offset += tag_args_slice.len;
 
         offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
         const vars_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset .. offset + vars_size]));
@@ -867,7 +789,7 @@ pub const Store = struct {
 
     /// Deserialize a Store from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
-        if (buffer.len < @sizeOf(u32) * 8) return error.BufferTooSmall;
+        if (buffer.len < @sizeOf(u32) * 5) return error.BufferTooSmall;
 
         var offset: usize = 0;
 
@@ -878,19 +800,10 @@ pub const Store = struct {
         const descs_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
         offset += @sizeOf(u32);
 
-        const tuple_elems_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-
-        const func_args_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-
         const record_fields_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
         offset += @sizeOf(u32);
 
         const tags_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-
-        const tag_args_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
         offset += @sizeOf(u32);
 
         const vars_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
@@ -907,16 +820,6 @@ pub const Store = struct {
         offset += descs_size;
 
         offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
-        const tuple_elems_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + tuple_elems_size]));
-        const tuple_elems = try VarSafeList.deserializeFrom(tuple_elems_buffer, allocator);
-        offset += tuple_elems_size;
-
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
-        const func_args_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + func_args_size]));
-        const func_args = try VarSafeList.deserializeFrom(func_args_buffer, allocator);
-        offset += func_args_size;
-
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
         const record_fields_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + record_fields_size]));
         const record_fields = try RecordFieldSafeMultiList.deserializeFrom(record_fields_buffer, allocator);
         offset += record_fields_size;
@@ -927,11 +830,6 @@ pub const Store = struct {
         offset += tags_size;
 
         offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
-        const tag_args_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + tag_args_size]));
-        const tag_args = try VarSafeList.deserializeFrom(tag_args_buffer, allocator);
-        offset += tag_args_size;
-
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
         const vars_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + vars_size]));
         const vars = try VarSafeList.deserializeFrom(vars_buffer, allocator);
         offset += vars_size;
@@ -940,11 +838,8 @@ pub const Store = struct {
             .gpa = allocator,
             .slots = slots,
             .descs = descs,
-            .tuple_elems = tuple_elems,
-            .func_args = func_args,
             .record_fields = record_fields,
             .tags = tags,
-            .tag_args = tag_args,
             .vars = vars,
         };
     }

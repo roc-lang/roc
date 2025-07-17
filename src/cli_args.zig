@@ -61,6 +61,7 @@ pub const RunArgs = struct {
     path: []const u8, // the path of the roc file to be executed
     opt: OptLevel = .dev, // the optimization level
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
+    no_cache: bool = false, // bypass the executable cache
 };
 
 /// Arguments for `roc check`
@@ -444,6 +445,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
 fn parseRun(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
+    var no_cache: bool = false;
     var app_args = std.ArrayList([]const u8).init(gpa);
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -464,6 +466,8 @@ fn parseRun(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Erro
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
+        } else if (mem.eql(u8, arg, "--no-cache")) {
+            no_cache = true;
         } else {
             if (path != null) {
                 try app_args.append(arg);
@@ -472,7 +476,7 @@ fn parseRun(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Erro
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .app_args = try app_args.toOwnedSlice() } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {

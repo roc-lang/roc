@@ -196,12 +196,12 @@ test "let-polymorphism with multiple type parameters" {
     try env.store.setVarContent(type_b, types.Content{ .flex_var = null });
 
     // Create input tuple (a, b)
-    const input_elems = try env.store.appendTupleElems(&.{ type_a, type_b });
+    const input_elems = try env.store.appendVars(&.{ type_a, type_b });
     const input_tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = input_elems } } };
     const input_tuple_var = try env.store.freshFromContent(input_tuple_content);
 
     // Create output tuple (b, a)
-    const output_elems = try env.store.appendTupleElems(&.{ type_b, type_a });
+    const output_elems = try env.store.appendVars(&.{ type_b, type_a });
     const output_tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = output_elems } } };
     const output_tuple_var = try env.store.freshFromContent(output_tuple_content);
 
@@ -264,12 +264,12 @@ test "let-polymorphism with simple tag union" {
 
     // Create the Some tag with a single argument
     const some_tag_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("Some"), base.Region.zero());
-    const some_args = try env.store.appendTagArgs(&.{type_param});
+    const some_args = try env.store.appendVars(&.{type_param});
 
     // Create the None tag with no arguments
     const none_tag_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("None"), base.Region.zero());
     // For a tag with no arguments, we use an empty slice
-    const none_args = try env.store.appendTagArgs(&.{});
+    const none_args = try env.store.appendVars(&.{});
 
     // Create tag union
     var tags = std.ArrayList(types.Tag).init(test_allocator);
@@ -311,7 +311,7 @@ test "let-polymorphism interaction with pattern matching" {
     var tags = std.ArrayList(types.Tag).init(test_allocator);
     defer tags.deinit();
 
-    try tags.append(.{ .name = just_tag_name, .args = try env.store.appendTagArgs(&.{type_param}) });
+    try tags.append(.{ .name = just_tag_name, .args = try env.store.appendVars(&.{type_param}) });
     try tags.append(.{ .name = nothing_tag_name, .args = types.Var.SafeList.Range.empty() });
 
     const tags_range = try env.store.appendTags(tags.items);
@@ -349,7 +349,7 @@ test "let-polymorphism preserves sharing within single instantiation" {
     try env.store.setVarContent(type_param, types.Content{ .flex_var = null });
 
     // Create tuple (a, a)
-    const pair_elems = try env.store.appendTupleElems(&.{ type_param, type_param });
+    const pair_elems = try env.store.appendVars(&.{ type_param, type_param });
     const pair_content = types.Content{ .structure = .{ .tuple = .{ .elems = pair_elems } } };
     const pair_var = try env.store.freshFromContent(pair_content);
 

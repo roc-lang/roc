@@ -1965,7 +1965,7 @@ pub fn canonicalizeExpr(
 
                 // Since expr idx map 1-to-1 to variables, we can get cast the slice
                 // of scratch expr idx and cast them to vars
-                const elems_var_range = try self.can_ir.env.types.appendTupleElems(
+                const elems_var_range = try self.can_ir.env.types.appendVars(
                     @ptrCast(@alignCast(
                         self.can_ir.store.scratch_exprs.slice(scratch_top, self.can_ir.store.scratchExprTop()),
                     )),
@@ -3086,7 +3086,7 @@ fn canonicalizePattern(
 
             // Since pattern idx map 1-to-1 to variables, we can get cast the
             // slice of and cast them to vars
-            const elems_var_range = try self.can_ir.env.types.appendTupleElems(
+            const elems_var_range = try self.can_ir.env.types.appendVars(
                 @ptrCast(@alignCast(self.can_ir.store.slicePatterns(patterns_span))),
             );
 
@@ -6083,7 +6083,7 @@ fn canonicalizeTupleType(self: *Self, tuple: CIR.TypeAnno.Tuple, parent_node_idx
         const elem_var = try self.canonicalizeTypeAnnoToTypeVar(tuple_elem_anno_idx);
         _ = try self.scratch_vars.append(self.can_ir.env.gpa, elem_var);
     }
-    const elem_vars_range = try self.can_ir.env.types.appendTupleElems(
+    const elem_vars_range = try self.can_ir.env.types.appendVars(
         self.scratch_vars.items.items[scratch_elems_start..],
     );
 
@@ -6188,7 +6188,7 @@ fn canonicalizeTagUnionType(self: *Self, tag_union: CIR.TypeAnno.TagUnion, paren
                     const args_end = self.scratch_vars.top();
 
                     // Append the tag args to the types store
-                    const args_range = try self.can_ir.env.types.appendTagArgs(
+                    const args_range = try self.can_ir.env.types.appendVars(
                         self.scratch_vars.slice(args_start, args_end),
                     );
 

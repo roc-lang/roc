@@ -280,6 +280,39 @@ fn addMainExe(
         .link_libc = true,
     });
 
+    // Create host.a static library at build time
+    const host_lib = b.addStaticLibrary(.{
+        .name = "platform_host_str_simple",
+        .root_source_file = b.path("src/platform_host_str_simple.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+    });
+    host_lib.linkLibC();
+
+    // Install host.a to the output directory
+    const install_host = b.addInstallArtifact(host_lib, .{});
+    b.getInstallStep().dependOn(&install_host.step);
+
+    // Create shim static library at build time
+    const shim_lib = b.addStaticLibrary(.{
+        .name = "read_roc_file_path_shim",
+        .root_source_file = b.path("src/read_roc_file_path_shim.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+    });
+    shim_lib.linkLibC();
+
+    // Install shim.a to the output directory
+    const install_shim = b.addInstallArtifact(shim_lib, .{});
+    b.getInstallStep().dependOn(&install_shim.step);
+
+    // Copy shim library to source directory for embedding
+    const copy_shim = b.addUpdateSourceFiles();
+    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), "src/libread_roc_file_path_shim.a");
+    exe.step.dependOn(&copy_shim.step);
+
     const config = b.addOptions();
     config.addOption(bool, "llvm", enable_llvm);
     exe.root_module.addOptions("config", config);
