@@ -529,7 +529,15 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
             const shm_name = try std.fmt.allocPrint(gpa, "roc_shm_{}", .{std.Thread.getCurrentId()});
             defer gpa.free(shm_name);
 
-            shm_opt = try SharedMemoryAllocator.create(gpa, shm_name, SharedMemoryAllocator.DEFAULT_SIZE);
+            const page_size = SharedMemoryAllocator.getSystemPageSize() catch |err| {
+                switch (err) {
+                    error.UnsupportedOperatingSystem => {
+                        std.log.err("Shared memory allocator is not supported on this operating system\n", .{});
+                        std.process.exit(1);
+                    },
+                }
+            };
+            shm_opt = try SharedMemoryAllocator.create(gpa, shm_name, SharedMemoryAllocator.DEFAULT_SIZE, page_size);
             const shm_allocator = shm_opt.?.allocator();
 
             // Process with shared memory

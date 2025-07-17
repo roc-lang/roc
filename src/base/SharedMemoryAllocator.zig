@@ -8,7 +8,8 @@
 //!
 //! Parent process:
 //! ```zig
-//! var shm = try SharedMemoryAllocator.create(allocator, "myapp_12345", 1024 * 1024 * 1024);
+//! const page_size = try SharedMemoryAllocator.getSystemPageSize();
+//! var shm = try SharedMemoryAllocator.create(allocator, "myapp_12345", 1024 * 1024 * 1024, page_size);
 //! defer shm.deinit(allocator);
 //!
 //! // Use the allocator...
@@ -32,7 +33,8 @@
 //! const shm_size = args.shm_size; // The actual used size, not 1GB
 //!
 //! // Open with the actual used size, not the full 1GB
-//! var shm = try SharedMemoryAllocator.open(allocator, shm_name, shm_size);
+//! const page_size = try SharedMemoryAllocator.getSystemPageSize();
+//! var shm = try SharedMemoryAllocator.open(allocator, shm_name, shm_size, page_size);
 //! defer shm.deinit(allocator);
 //!
 //! // Access the data...
@@ -45,9 +47,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const SharedMemoryAllocator = @This();
-
-/// Page size constant
-const PAGE_SIZE = 4096;
 
 /// Header stored at the beginning of shared memory to communicate metadata
 pub const Header = extern struct {
@@ -62,7 +61,7 @@ pub const Header = extern struct {
 /// Platform-specific handle for the shared memory
 handle: Handle,
 /// Base pointer to the mapped memory region
-base_ptr: [*]align(PAGE_SIZE) u8,
+base_ptr: [*]align(1) u8,
 /// Total size of the mapped region
 total_size: usize,
 /// Current offset for bump allocation (atomic for thread-safe allocation)
@@ -71,6 +70,8 @@ offset: std.atomic.Value(usize),
 name: []const u8,
 /// Whether this allocator owns the shared memory (should clean up)
 is_owner: bool,
+/// Page size for this system
+page_size: usize,
 
 const Handle = switch (builtin.os.tag) {
     .windows => std.os.windows.HANDLE,
@@ -81,9 +82,45 @@ const Handle = switch (builtin.os.tag) {
 /// This is virtual memory - physical pages are only allocated when written to
 pub const DEFAULT_SIZE = 1 * 1024 * 1024 * 1024;
 
+/// Error type for unsupported operating systems
+pub const PageSizeError = error{UnsupportedOperatingSystem};
+
+/// Get the system's page size at runtime
+pub fn getSystemPageSize() PageSizeError!usize {
+    const page_size: usize = switch (builtin.os.tag) {
+        .windows => blk: {
+            var system_info: std.os.windows.SYSTEM_INFO = undefined;
+            std.os.windows.kernel32.GetSystemInfo(&system_info);
+            break :blk @intCast(system_info.dwPageSize);
+        },
+        .linux => blk: {
+            const result = std.os.linux.getauxval(std.elf.AT_PAGESZ);
+            break :blk if (result != 0) result else 4096;
+        },
+        .macos, .ios, .tvos, .watchos => blk: {
+            var page_size_c: usize = undefined;
+            var size: usize = @sizeOf(usize);
+            _ = std.c.sysctlbyname("hw.pagesize", &page_size_c, &size, null, 0);
+            break :blk page_size_c;
+        },
+        .freebsd, .netbsd, .openbsd, .dragonfly => blk: {
+            const result = std.c.getpagesize();
+            break :blk @intCast(result);
+        },
+        else => return error.UnsupportedOperatingSystem,
+    };
+
+    // Ensure page_size is a power of 2 (required for alignForward)
+    // If not, round up to the next power of 2
+    if (!std.math.isPowerOfTwo(page_size)) {
+        return std.math.ceilPowerOfTwo(usize, page_size) catch 4096;
+    }
+    return page_size;
+}
+
 /// Creates a new shared memory region with the given name and size
-pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize) !SharedMemoryAllocator {
-    const aligned_size = std.mem.alignForward(usize, size, PAGE_SIZE);
+pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: usize) !SharedMemoryAllocator {
+    const aligned_size = std.mem.alignForward(usize, size, page_size);
 
     switch (builtin.os.tag) {
         .windows => {
@@ -183,6 +220,7 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize) !SharedMemo
                 .offset = std.atomic.Value(usize).init(@sizeOf(Header)), // Start after header
                 .name = try gpa.dupe(u8, name),
                 .is_owner = true,
+                .page_size = page_size,
             };
 
             // Initialize header
@@ -199,7 +237,7 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize) !SharedMemo
 
 /// Opens an existing shared memory region by reading its header first.
 /// This function will map only the required amount of memory as specified in the header.
-pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8) !SharedMemoryAllocator {
+pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize) !SharedMemoryAllocator {
     switch (builtin.os.tag) {
         .windows => {
             const wide_name = try std.unicode.utf8ToUtf16LeAllocZ(gpa, name);
@@ -319,6 +357,7 @@ pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8) !SharedMemoryAll
                 .offset = std.atomic.Value(usize).init(@as(usize, @intCast(header.data_offset))),
                 .name = try gpa.dupe(u8, name),
                 .is_owner = false,
+                .page_size = page_size,
             };
         },
         else => @compileError("Unsupported platform"),
@@ -331,8 +370,8 @@ pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8) !SharedMemoryAll
 /// process (obtained via getRecommendedMapSize()), NOT the original allocated size.
 /// This is especially important on macOS where the shared memory object remains at
 /// its original size and cannot be truncated.
-pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize) !SharedMemoryAllocator {
-    const aligned_size = std.mem.alignForward(usize, size, PAGE_SIZE);
+pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: usize) !SharedMemoryAllocator {
+    const aligned_size = std.mem.alignForward(usize, size, page_size);
 
     switch (builtin.os.tag) {
         .windows => {
@@ -407,6 +446,7 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize) !SharedMemory
                 .offset = std.atomic.Value(usize).init(0),
                 .name = try gpa.dupe(u8, name),
                 .is_owner = false,
+                .page_size = page_size,
             };
         },
         else => @compileError("Unsupported platform"),
@@ -544,12 +584,13 @@ pub fn getUsedSize(self: *const SharedMemoryAllocator) usize {
 /// // Pass map_size to child via command line: --shm-size=409600
 ///
 /// // Child process
-/// const shm = try SharedMemoryAllocator.open(allocator, name, map_size);
+/// const page_size = try SharedMemoryAllocator.getSystemPageSize();
+/// const shm = try SharedMemoryAllocator.open(allocator, name, map_size, page_size);
 /// ```
 pub fn getRecommendedMapSize(self: *const SharedMemoryAllocator) usize {
     const used = self.getUsedSize();
-    if (used == 0) return PAGE_SIZE; // Map at least one page
-    return std.mem.alignForward(usize, used, PAGE_SIZE);
+    if (used == 0) return self.page_size; // Map at least one page
+    return std.mem.alignForward(usize, used, self.page_size);
 }
 
 /// Get the remaining available memory
@@ -576,7 +617,7 @@ pub fn shrinkToFit(self: *SharedMemoryAllocator) !usize {
     }
 
     // Align to page boundary
-    const new_size = std.mem.alignForward(usize, used, PAGE_SIZE);
+    const new_size = std.mem.alignForward(usize, used, self.page_size);
     if (new_size >= self.total_size) {
         return self.total_size;
     }
@@ -628,7 +669,8 @@ test "shared memory allocator basic operations" {
     defer testing.allocator.free(name);
 
     // Create shared memory
-    var shm = try SharedMemoryAllocator.create(testing.allocator, name, 1024 * 1024); // 1MB
+    const page_size = try getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(testing.allocator, name, 1024 * 1024, page_size); // 1MB
     defer shm.deinit(testing.allocator);
 
     const shm_allocator = shm.allocator();
@@ -668,7 +710,8 @@ test "shared memory allocator cross-process" {
 
     // Parent: Create and write data
     {
-        var shm = try SharedMemoryAllocator.create(testing.allocator, name, 1024 * 1024);
+        const page_size = try getSystemPageSize();
+        var shm = try SharedMemoryAllocator.create(testing.allocator, name, 1024 * 1024, page_size);
         defer shm.deinit(testing.allocator);
 
         const data = try shm.allocator().alloc(u32, 10);
@@ -689,7 +732,9 @@ test "shared memory allocator with header" {
     defer testing.allocator.free(name);
 
     // Parent process creates and writes data
-    var parent_shm = try SharedMemoryAllocator.create(testing.allocator, name, 1024 * 1024);
+    const page_size = try getSystemPageSize();
+    var parent_shm = try SharedMemoryAllocator.create(testing.allocator, name, 1024 * 1024, page_size);
+    defer parent_shm.deinit(testing.allocator);
 
     const shm_allocator = parent_shm.allocator();
     const data = try shm_allocator.alloc(u32, 100);
@@ -701,7 +746,7 @@ test "shared memory allocator with header" {
     parent_shm.updateHeader();
 
     // Child process opens using header
-    var child_shm = try SharedMemoryAllocator.openWithHeader(testing.allocator, name);
+    var child_shm = try SharedMemoryAllocator.openWithHeader(testing.allocator, name, page_size);
     defer child_shm.deinit(testing.allocator);
 
     // Verify we mapped only what was used, not the full 1MB
@@ -713,7 +758,6 @@ test "shared memory allocator with header" {
     const child_data = @as([*]u32, @ptrCast(@alignCast(data_start)))[0..100];
     for (child_data, 0..) |item, i| {
         try testing.expectEqual(@as(u32, @intCast(i * 2)), item);
-    }    }
     }
 }
 
@@ -727,7 +771,8 @@ test "shared memory allocator shrinkToFit" {
     );
     defer testing.allocator.free(name);
 
-    var shm = try SharedMemoryAllocator.create(testing.allocator, name, 1024 * 1024); // 1MB
+    const page_size = try getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(testing.allocator, name, 1024 * 1024, page_size); // 1MB
     defer shm.deinit(testing.allocator);
 
     const shm_allocator = shm.allocator();
@@ -760,14 +805,14 @@ test "shared memory allocator shrinkToFit" {
             // If it succeeded, verify the constraints
             try testing.expect(new_size < initial_size);
             try testing.expect(new_size >= used_before);
-            try testing.expectEqual(@as(usize, 0), new_size % PAGE_SIZE);
+            try testing.expectEqual(@as(usize, 0), new_size % page_size);
         }
     } else {
         // On Linux and other POSIX systems, should shrink to page-aligned size
         try testing.expect(new_size < initial_size);
         try testing.expect(new_size >= used_before);
         // Should be page-aligned
-        try testing.expectEqual(@as(usize, 0), new_size % PAGE_SIZE);
+        try testing.expectEqual(@as(usize, 0), new_size % page_size);
     }
 
     // Verify we can still use the allocated memory
@@ -789,7 +834,8 @@ test "shared memory allocator thread safety" {
     );
     defer testing.allocator.free(name);
 
-    var shm = try SharedMemoryAllocator.create(testing.allocator, name, 16 * 1024 * 1024); // 16MB
+    const page_size = try getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(testing.allocator, name, 16 * 1024 * 1024, page_size); // 16MB
     defer shm.deinit(testing.allocator);
 
     const shm_allocator = shm.allocator();
