@@ -310,11 +310,16 @@ const Formatter = struct {
         _ = try fmt.flushCommentsBefore(header_region.start);
         _ = try fmt.formatHeader(file.header);
         const statement_slice = fmt.ast.store.statementSlice(file.statements);
-        for (statement_slice) |s| {
+        for (statement_slice, 0..) |s, i| {
             const region = fmt.nodeRegion(@intFromEnum(s));
             _ = try fmt.flushCommentsBefore(region.start);
             try fmt.ensureNewline();
             try fmt.formatStatement(s);
+
+            if (i == statement_slice.len - 1) {
+                // Flush comments before EOF
+                _ = try fmt.flushCommentsBefore(region.end);
+            }
         }
     }
 
