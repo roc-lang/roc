@@ -11,6 +11,7 @@ const collections = @import("../collections.zig");
 const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
 const RegionInfo = @import("RegionInfo.zig");
+const relocate_mod = @import("relocate.zig");
 
 const Self = @This();
 
@@ -92,4 +93,10 @@ pub fn calcLineStarts(self: *Self, source: []const u8) !void {
 /// Get diagnostic position information for a given range
 pub fn calcRegionInfo(self: *const Self, source: []const u8, begin: u32, end: u32) !RegionInfo {
     return RegionInfo.position(source, self.line_starts.items.items, begin, end);
+}
+
+/// Relocate all pointers in this ModuleEnv by the given offset.
+/// This is useful when transferring the ModuleEnv across address spaces.
+pub fn relocate(self: *Self, offset: isize) void {
+    relocate_mod.relocateModuleEnv(self, offset);
 }
