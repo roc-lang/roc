@@ -25,7 +25,6 @@ UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:10:5:10:12
 INVALID SCALAR - :0:0:0:0
 INVALID SCALAR - :0:0:0:0
 INVALID SCALAR - :0:0:0:0
-INVALID SCALAR - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 # PROBLEMS
@@ -58,9 +57,6 @@ Here is the problematic code:
 ```
     ^^^^^^^
 
-
-**INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it appears to be invalid.
 
 **INVALID SCALAR**
 I am part way through parsing this scalar literal (character literal), but it appears to be invalid.
@@ -126,7 +122,7 @@ CloseRound(11:1-11:2),EndOfFile(11:2-11:2),
 		(e-int @3.5-3.9 (value "233"))
 		(e-int @4.5-4.11 (value "128640"))
 		(e-runtime-error (tag "invalid_single_quote"))
-		(e-runtime-error (tag "invalid_single_quote"))
+		(e-int @6.5-6.16 (value "128640"))
 		(e-runtime-error (tag "invalid_single_quote"))
 		(e-runtime-error (tag "invalid_single_quote"))
 		(e-runtime-error (tag "tuple_elem_not_canonicalized"))
@@ -134,5 +130,5 @@ CloseRound(11:1-11:2),EndOfFile(11:2-11:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-11.2 (type "(Num(_size), Num(_size2), Num(_size3), Error, Error, Error, Error, Error, Error)"))
+(expr @1.1-11.2 (type "(Num(_size), Num(_size2), Num(_size3), Error, Num(_size4), Error, Error, Error, Error)"))
 ~~~

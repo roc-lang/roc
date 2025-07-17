@@ -1405,62 +1405,87 @@ fn canonicalizeSingleQuote(
         } });
     }
 
+    var int_val: ?CIR.IntValue = null;
+
     const inner_text = token_text[1 .. token_text.len - 1];
 
-    const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
-        error.InvalidUtf8 => {
+    const escaped = inner_text[0] == '\\';
+
+    if (escaped) {
+        if (inner_text[1] == 'u') {
+            const hex_code = inner_text[3 .. inner_text.len - 1];
+            const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch {
+                return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+                    .region = region,
+                } });
+            };
+
+            if (!std.unicode.utf8ValidCodepoint(codepoint)) {
+                return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+                    .region = region,
+                } });
+            }
+
+            int_val = CIR.IntValue{
+                .bytes = @bitCast(@as(u128, @intCast(codepoint))),
+                .kind = .u128,
+            };
+        } else {
             return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
                 .region = region,
             } });
-        },
-    };
+        }
+    } else {
+        const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
+            error.InvalidUtf8 => {
+                return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+                    .region = region,
+                } });
+            },
+        };
 
-    var iterator = view.iterator();
-    const firstEndpoint = iterator.nextCodepoint();
-    const secondEndpoint = iterator.nextCodepoint();
+        var iterator = view.iterator();
 
-    if (secondEndpoint != null) {
-        // TODO: Handle escape sequences
-        return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-            .region = region,
-        } });
+        if (iterator.nextCodepoint()) |codepoint| {
+            int_val = CIR.IntValue{
+                .bytes = @bitCast(@as(u128, @intCast(codepoint))),
+                .kind = .u128,
+            };
+            std.debug.assert(iterator.nextCodepoint() == null);
+        } else {
+            // only single valid utf8 codepoint can be here after tokenization
+            unreachable;
+        }
     }
 
-    if (firstEndpoint) |u21_val| {
-        const int_val = CIR.IntValue{
-            .bytes = @bitCast(@as(u128, @intCast(u21_val))),
-            .kind = .u128,
-        };
-
-        const int_requirements = types.Num.IntRequirements{
+    if (int_val) |value| {
+        const type_content = Content{ .structure = .{ .num = .{ .num_unbound = types.Num.IntRequirements{
             .sign_needed = false,
-            .bits_needed = @intCast(@sizeOf(@TypeOf(u21_val))),
-        };
-
-        const type_content = Content{ .structure = .{ .num = .{ .num_unbound = int_requirements } } };
+            .bits_needed = @intCast(@sizeOf(u21)),
+        } } } };
 
         if (Idx == CIR.Expr.Idx) {
             const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
                 .e_int = .{
-                    .value = int_val,
+                    .value = value,
                 },
             }, type_content, region);
             return expr_idx;
         } else if (Idx == CIR.Pattern.Idx) {
             const pat_idx = try self.can_ir.addPatternAndTypeVar(CIR.Pattern{
                 .int_literal = .{
-                    .value = int_val,
+                    .value = value,
                 },
             }, type_content, region);
             return pat_idx;
         } else {
             @compileError("Unsupported Idx type");
         }
-    } else {
-        return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-            .region = region,
-        } });
     }
+
+    return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+        .region = region,
+    } });
 }
 
 fn canonicalizeRecordField(
