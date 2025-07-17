@@ -243,12 +243,12 @@ pub fn serializeInto(self: *const Self, buffer: []u8) !usize {
     env_ptr.* = Self{
         .gpa = std.mem.Allocator{
             .ptr = @ptrFromInt(1),
-            .vtable = @ptrFromInt(1),
+            .vtable = @ptrFromInt(@alignOf(*const std.mem.Allocator.VTable)),
         }, // Will be set by deserializer
         .idents = .{
             .interner = .{
                 .bytes = .{ .items = if (self.idents.interner.bytes.items.len > 0) @as([*]u8, @ptrFromInt(idents_result.bytes_offset))[0..self.idents.interner.bytes.items.len] else @as([*]u8, @ptrFromInt(@alignOf(u8)))[0..0], .capacity = self.idents.interner.bytes.capacity },
-                .strings = .{ .metadata = if (idents_result.strings_metadata_offset > 0) @ptrFromInt(idents_result.strings_metadata_offset) else null, .size = self.idents.interner.strings.size, .available = self.idents.interner.strings.available, .header = self.idents.interner.strings.header },
+                .strings = .{ .metadata = if (idents_result.strings_metadata_offset > 0) @ptrFromInt(idents_result.strings_metadata_offset) else null, .size = 0, .available = 0 },
                 .outer_indices = .{ .items = if (self.idents.interner.outer_indices.items.len > 0) @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(idents_result.indices_offset))[0..self.idents.interner.outer_indices.items.len] else @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(@alignOf(collections.SmallStringInterner.StringIdx)))[0..0], .capacity = self.idents.interner.outer_indices.capacity },
                 .regions = .{ .items = if (self.idents.interner.regions.items.len > 0) @as([*]Region, @ptrFromInt(idents_result.regions_offset))[0..self.idents.interner.regions.items.len] else @as([*]Region, @ptrFromInt(@alignOf(Region)))[0..0], .capacity = self.idents.interner.regions.capacity },
             },
@@ -257,21 +257,20 @@ pub fn serializeInto(self: *const Self, buffer: []u8) !usize {
         },
         .ident_ids_for_slicing = .{ .items = .{ .items = if (self.ident_ids_for_slicing.items.items.len > 0) @as([*]Ident.Idx, @ptrFromInt(ident_ids_offset))[0..self.ident_ids_for_slicing.items.items.len] else @as([*]Ident.Idx, @ptrFromInt(@alignOf(Ident.Idx)))[0..0], .capacity = self.ident_ids_for_slicing.items.capacity } },
         .strings = .{ .buffer = .{ .items = if (self.strings.buffer.items.len > 0) @as([*]u8, @ptrFromInt(strings_buffer_offset))[0..self.strings.buffer.items.len] else @as([*]u8, @ptrFromInt(@alignOf(u8)))[0..0], .capacity = self.strings.buffer.capacity } },
-        .types = .{
-            .slots = .{ .backing = &.{}, .len = 0 },
-            .gpa = std.mem.Allocator{ .ptr = @ptrFromInt(1), .vtable = @ptrFromInt(1) },
-        }, // Complex structure, will be set up by types.serializeInto
+        .types = undefined, // Complex structure, will be set up by types.serializeInto
         .exposed_by_str = .{
-            .metadata = null,
-            .size = 0,
-            .available = 0,
-            .header = .{ .values = .{ .metadata = .{ .count = 0, .capacity = 0, .fingerprint = 0 } } },
+            .map = .{
+                .metadata = null,
+                .size = 0,
+                .available = 0,
+            },
         }, // Will be set up by hash map serialization
         .exposed_nodes = .{
-            .metadata = null,
-            .size = 0,
-            .available = 0,
-            .header = .{ .values = .{ .metadata = .{ .count = 0, .capacity = 0, .fingerprint = 0 } } },
+            .map = .{
+                .metadata = null,
+                .size = 0,
+                .available = 0,
+            },
         }, // Will be set up by hash map serialization
         .line_starts = .{ .items = .{ .items = if (self.line_starts.items.items.len > 0) @as([*]u32, @ptrFromInt(line_starts_offset))[0..self.line_starts.items.items.len] else @as([*]u32, @ptrFromInt(@alignOf(u32)))[0..0], .capacity = self.line_starts.items.capacity } },
         .source = if (self.source.len > 0) @as([*]const u8, @ptrFromInt(source_offset))[0..self.source.len] else @as([*]const u8, @ptrFromInt(1))[0..0],

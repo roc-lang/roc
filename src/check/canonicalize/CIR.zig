@@ -190,12 +190,17 @@ pub fn serializedSize(self: *const CIR) usize {
 
     // All scratch arrays in NodeStore
     inline for (std.meta.fields(@TypeOf(self.store))) |field| {
-        if (std.mem.startsWith(u8, field.name, "scratch_")) {
+        if (comptime std.mem.eql(u8, field.name, "gpa")) continue;
+        if (comptime std.mem.eql(u8, field.name, "nodes")) continue;
+        if (comptime std.mem.eql(u8, field.name, "regions")) continue;
+        if (comptime std.mem.eql(u8, field.name, "extra_data")) continue;
+        if (comptime std.mem.startsWith(u8, field.name, "scratch_")) {
             const items_type = @TypeOf(@field(self.store, field.name).items.items);
-            if (@typeInfo(items_type).Pointer.child == void) continue;
+            const items_type_info = @typeInfo(items_type);
+            if (items_type_info == .pointer and items_type_info.pointer.child == void) continue;
 
-            size = std.mem.alignForward(usize, size, @alignOf(@typeInfo(items_type).Pointer.child));
-            size += @field(self.store, field.name).items.items.len * @sizeOf(@typeInfo(items_type).Pointer.child);
+            size = std.mem.alignForward(usize, size, @alignOf(items_type_info.pointer.child));
+            size += @field(self.store, field.name).items.items.len * @sizeOf(items_type_info.pointer.child);
         }
     }
 
@@ -278,11 +283,11 @@ pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
 
     // Set up the CIR struct with file offsets as pointers
     cir_ptr.* = CIR{
-        .env = @ptrFromInt(0), // Will be set by deserializer
+        .env = @ptrFromInt(@alignOf(*base.ModuleEnv)), // Will be set by deserializer
         .store = std.mem.zeroes(@TypeOf(self.store)), // Complex structure, set up below
         .temp_source_for_sexpr = null,
         .diagnostics = if (diagnostics_offset > 0 and self.diagnostics.?.len > 0)
-            @as(?[]CIR.Diagnostic, @ptrFromInt(diagnostics_offset))[0..self.diagnostics.?.len]
+            @as([*]CIR.Diagnostic, @ptrFromInt(diagnostics_offset))[0..self.diagnostics.?.len]
         else
             null,
         .all_defs = self.all_defs,
@@ -317,7 +322,7 @@ pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
     cir_ptr.store = .{
         .gpa = std.mem.Allocator{
             .ptr = @ptrFromInt(1),
-            .vtable = @ptrFromInt(1),
+            .vtable = @ptrFromInt(@alignOf(*const std.mem.Allocator.VTable)),
         }, // Will be set by deserializer
         .nodes = .{
             .items = .{
@@ -418,16 +423,94 @@ fn serializeNodeStoreAt(self: *const CIR, buffer: []u8, write_offset: *usize) !N
         result.extra_data_offset = writeAlignedData(buffer, write_offset, data, @alignOf(u32));
     }
 
-    // Serialize all scratch arrays
-    inline for (std.meta.fields(@TypeOf(result))) |field| {
-        if (std.mem.startsWith(u8, field.name, "scratch_")) {
-            const scratch_field_name = field.name[0 .. field.name.len - "_offset".len];
-            const scratch_items = @field(self.store, scratch_field_name).items.items;
-            if (scratch_items.len > 0) {
-                const data = std.mem.sliceAsBytes(scratch_items);
-                @field(result, field.name) = writeAlignedData(buffer, write_offset, data, @alignOf(@TypeOf(scratch_items[0])));
-            }
-        }
+    // Serialize scratch_statements
+    if (self.store.scratch_statements.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_statements.items.items);
+        result.scratch_statements_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.Statement.Idx));
+    }
+
+    // Serialize scratch_exprs
+    if (self.store.scratch_exprs.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_exprs.items.items);
+        result.scratch_exprs_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.Expr.Idx));
+    }
+
+    // Serialize scratch_record_fields
+    if (self.store.scratch_record_fields.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_record_fields.items.items);
+        result.scratch_record_fields_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.RecordField.Idx));
+    }
+
+    // Serialize scratch_match_branches
+    if (self.store.scratch_match_branches.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_match_branches.items.items);
+        result.scratch_match_branches_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.Expr.Match.Branch.Idx));
+    }
+
+    // Serialize scratch_match_branch_patterns
+    if (self.store.scratch_match_branch_patterns.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_match_branch_patterns.items.items);
+        result.scratch_match_branch_patterns_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.Expr.Match.BranchPattern.Idx));
+    }
+
+    // Serialize scratch_if_branches
+    if (self.store.scratch_if_branches.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_if_branches.items.items);
+        result.scratch_if_branches_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.Expr.IfBranch.Idx));
+    }
+
+    // Serialize scratch_where_clauses
+    if (self.store.scratch_where_clauses.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_where_clauses.items.items);
+        result.scratch_where_clauses_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.WhereClause.Idx));
+    }
+
+    // Serialize scratch_patterns
+    if (self.store.scratch_patterns.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_patterns.items.items);
+        result.scratch_patterns_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.Pattern.Idx));
+    }
+
+    // Serialize scratch_pattern_record_fields
+    if (self.store.scratch_pattern_record_fields.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_pattern_record_fields.items.items);
+        result.scratch_pattern_record_fields_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.PatternRecordField.Idx));
+    }
+
+    // Serialize scratch_record_destructs
+    if (self.store.scratch_record_destructs.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_record_destructs.items.items);
+        result.scratch_record_destructs_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.Pattern.RecordDestruct.Idx));
+    }
+
+    // Serialize scratch_type_annos
+    if (self.store.scratch_type_annos.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_type_annos.items.items);
+        result.scratch_type_annos_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.TypeAnno.Idx));
+    }
+
+    // Serialize scratch_anno_record_fields
+    if (self.store.scratch_anno_record_fields.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_anno_record_fields.items.items);
+        result.scratch_anno_record_fields_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.TypeAnno.RecordField.Idx));
+    }
+
+    // Serialize scratch_exposed_items
+    if (self.store.scratch_exposed_items.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_exposed_items.items.items);
+        result.scratch_exposed_items_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.ExposedItem.Idx));
+    }
+
+    // Serialize scratch_defs
+    if (self.store.scratch_defs.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_defs.items.items);
+        result.scratch_defs_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.Def.Idx));
+    }
+
+    // Serialize scratch_diagnostics
+    if (self.store.scratch_diagnostics.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_diagnostics.items.items);
+        result.scratch_diagnostics_offset = writeAlignedData(buffer, write_offset, data, @alignOf(CIR.Diagnostic.Idx));
     }
 
     return result;
@@ -464,28 +547,28 @@ fn serializeImportsAt(self: *const CIR, buffer: []u8, write_offset: *usize) !Imp
         write_offset.* += map_capacity * @sizeOf(Import.Idx);
 
         // Write string data and update key pointers
-        const keys_ptr = self.imports.map.keys();
-        const values_ptr = self.imports.map.values();
+        var iter = self.imports.map.iterator();
+        var slot_index: usize = 0;
+        while (iter.next()) |entry| {
+            // Find the slot index for this entry
+            while (slot_index < map_capacity and @as(u8, @bitCast(metadata[slot_index])) == 0xFF) : (slot_index += 1) {}
 
-        for (0..map_capacity) |i| {
-            const metadata_byte = metadata[i];
-            if (metadata_byte != 0xFF) { // Occupied slot
+            if (slot_index < map_capacity) {
                 // Write string data
                 write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf(u8));
                 const key_data_offset = write_offset.*;
-                @memcpy(buffer[write_offset.*..][0..keys_ptr[i].len], keys_ptr[i]);
-                write_offset.* += keys_ptr[i].len;
+                @memcpy(buffer[write_offset.*..][0..entry.key_ptr.*.len], entry.key_ptr.*);
+                write_offset.* += entry.key_ptr.*.len;
 
                 // Write key slice with offset as pointer
-                const key_slice_ptr = @as(*[]const u8, @ptrCast(@alignCast(&buffer[keys_array_offset + i * @sizeOf([]const u8)])));
-                key_slice_ptr.* = .{
-                    .ptr = @ptrFromInt(key_data_offset),
-                    .len = keys_ptr[i].len,
-                };
+                const key_slice_ptr = @as(*[]const u8, @ptrCast(@alignCast(&buffer[keys_array_offset + slot_index * @sizeOf([]const u8)])));
+                key_slice_ptr.* = @as([*]const u8, @ptrFromInt(key_data_offset))[0..entry.key_ptr.*.len];
 
                 // Copy value
-                const value_ptr = @as(*Import.Idx, @ptrCast(@alignCast(&buffer[values_array_offset + i * @sizeOf(Import.Idx)])));
-                value_ptr.* = values_ptr[i];
+                const value_ptr = @as(*Import.Idx, @ptrCast(@alignCast(&buffer[values_array_offset + slot_index * @sizeOf(Import.Idx)])));
+                value_ptr.* = entry.value_ptr.*;
+
+                slot_index += 1;
             }
         }
     }
@@ -500,10 +583,7 @@ fn serializeImportsAt(self: *const CIR, buffer: []u8, write_offset: *usize) !Imp
             if (import_str.len > 0) {
                 // String data should be in the strings array
                 const str_offset = @intFromPtr(import_str.ptr) - @intFromPtr(self.imports.strings.items.ptr);
-                imports_ptr[i] = .{
-                    .ptr = @ptrFromInt(result.strings_offset + str_offset),
-                    .len = import_str.len,
-                };
+                imports_ptr[i] = @as([*]u8, @ptrFromInt(result.strings_offset + str_offset))[0..import_str.len];
             }
         }
     }
@@ -1989,11 +2069,6 @@ pub const ExternalDecl = struct {
 
         const kind_byte = buffer[offset];
         offset += 1;
-        const kind: enum { value, type } = switch (kind_byte) {
-            0 => .value,
-            1 => .type,
-            else => return error.InvalidKind,
-        };
 
         const start_offset = std.mem.readInt(u32, buffer[offset .. offset + 4][0..4], .little);
         offset += 4;
@@ -2010,7 +2085,11 @@ pub const ExternalDecl = struct {
             .module_name = module_name,
             .local_name = local_name,
             .type_var = type_var,
-            .kind = kind,
+            .kind = switch (kind_byte) {
+                0 => .value,
+                1 => .type,
+                else => return error.InvalidKind,
+            },
             .region = region,
         };
     }
