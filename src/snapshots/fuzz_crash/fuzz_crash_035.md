@@ -53,6 +53,7 @@ EndOfFile(2:2-2:2),
 ~~~roc
 module []
 {}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -19,7 +19,7 @@ broken_fn2 : a -> b
 # Referencing undefined type variable
 broken_fn3 : a -> b
   where
-    module(c).method : c -> d,
+    module(c).method : c -> d
 ~~~
 # EXPECTED
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:11
@@ -101,7 +101,7 @@ Type variables must be introduced in a type annotation before they can be used.
 This type variable is referenced here:
 **where_clauses_error_cases.md:15:24:15:25:**
 ```roc
-    module(c).method : c -> d,
+    module(c).method : c -> d
 ```
                        ^
 
@@ -114,7 +114,7 @@ Type variables must be introduced in a type annotation before they can be used.
 This type variable is referenced here:
 **where_clauses_error_cases.md:15:29:15:30:**
 ```roc
-    module(c).method : c -> d,
+    module(c).method : c -> d
 ```
                             ^
 
@@ -159,11 +159,11 @@ LowerIdent(9:1-9:11),OpColon(9:12-9:13),LowerIdent(9:14-9:15),OpArrow(9:16-9:18)
 KwWhere(10:3-10:8),
 LowerIdent(13:1-13:11),OpColon(13:12-13:13),LowerIdent(13:14-13:15),OpArrow(13:16-13:18),LowerIdent(13:19-13:20),
 KwWhere(14:3-14:8),
-KwModule(15:5-15:11),NoSpaceOpenRound(15:11-15:12),LowerIdent(15:12-15:13),CloseRound(15:13-15:14),NoSpaceDotLowerIdent(15:14-15:21),OpColon(15:22-15:23),LowerIdent(15:24-15:25),OpArrow(15:26-15:28),LowerIdent(15:29-15:30),Comma(15:30-15:31),EndOfFile(15:31-15:31),
+KwModule(15:5-15:11),NoSpaceOpenRound(15:11-15:12),LowerIdent(15:12-15:13),CloseRound(15:13-15:14),NoSpaceDotLowerIdent(15:14-15:21),OpColon(15:22-15:23),LowerIdent(15:24-15:25),OpArrow(15:26-15:28),LowerIdent(15:29-15:30),EndOfFile(15:30-15:30),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-15.31
+(file @1.1-15.30
 	(module @1.1-1.44
 		(exposes @1.8-1.44
 			(exposed-lower-ident @1.9-1.19
@@ -186,7 +186,7 @@ KwModule(15:5-15:11),NoSpaceOpenRound(15:11-15:12),LowerIdent(15:12-15:13),Close
 				(ty-var @9.19-9.20 (raw "b")))
 			(where
 				(malformed @10.3-10.8 (reason "where_expected_constraints"))))
-		(s-type-anno @13.1-15.31 (name "broken_fn3")
+		(s-type-anno @13.1-15.30 (name "broken_fn3")
 			(ty-fn @13.14-13.20
 				(ty-var @13.14-13.15 (raw "a"))
 				(ty-var @13.19-13.20 (raw "b")))
@@ -202,19 +202,19 @@ module [broken_fn1, broken_fn2, broken_fn3]
 
 # Missing colon in constraint
 broken_fn1 : a -> b
- where
-	,
+	where
+		
 b
 
 # Empty where clause
 broken_fn2 : a -> b
- where
-	,
+	where
+		
 
 # Referencing undefined type variable
 broken_fn3 : a -> b
- where
-	module(c).method : c -> d,
+	where
+		module(c).method : c -> d
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -231,7 +231,7 @@ broken_fn3 : a -> b
 			(ty-var @9.19-9.20 (name "b")))
 		(where
 			(malformed @10.3-10.8)))
-	(s-type-anno @13.1-15.31 (name "broken_fn3")
+	(s-type-anno @13.1-15.30 (name "broken_fn3")
 		(ty-fn @13.14-13.20 (effectful false)
 			(ty-var @13.14-13.15 (name "a"))
 			(ty-var @13.19-13.20 (name "b")))

@@ -8,9 +8,9 @@ type=file
 module [process]
 
 process : a, b -> c
- where
-	module(a).convert : a -> c,
-	module(b).transform : b -> c,
+	where
+		module(a).convert : a -> c,
+		module(b).transform : b -> c
 process = ...
 ~~~
 # EXPECTED
@@ -22,8 +22,8 @@ NIL
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:16),CloseSquare(1:16-1:17),
 LowerIdent(3:1-3:8),OpColon(3:9-3:10),LowerIdent(3:11-3:12),Comma(3:12-3:13),LowerIdent(3:14-3:15),OpArrow(3:16-3:18),LowerIdent(3:19-3:20),
 KwWhere(4:2-4:7),
-KwModule(5:2-5:8),NoSpaceOpenRound(5:8-5:9),LowerIdent(5:9-5:10),CloseRound(5:10-5:11),NoSpaceDotLowerIdent(5:11-5:19),OpColon(5:20-5:21),LowerIdent(5:22-5:23),OpArrow(5:24-5:26),LowerIdent(5:27-5:28),Comma(5:28-5:29),
-KwModule(6:2-6:8),NoSpaceOpenRound(6:8-6:9),LowerIdent(6:9-6:10),CloseRound(6:10-6:11),NoSpaceDotLowerIdent(6:11-6:21),OpColon(6:22-6:23),LowerIdent(6:24-6:25),OpArrow(6:26-6:28),LowerIdent(6:29-6:30),Comma(6:30-6:31),
+KwModule(5:3-5:9),NoSpaceOpenRound(5:9-5:10),LowerIdent(5:10-5:11),CloseRound(5:11-5:12),NoSpaceDotLowerIdent(5:12-5:20),OpColon(5:21-5:22),LowerIdent(5:23-5:24),OpArrow(5:25-5:27),LowerIdent(5:28-5:29),Comma(5:29-5:30),
+KwModule(6:3-6:9),NoSpaceOpenRound(6:9-6:10),LowerIdent(6:10-6:11),CloseRound(6:11-6:12),NoSpaceDotLowerIdent(6:12-6:22),OpColon(6:23-6:24),LowerIdent(6:25-6:26),OpArrow(6:27-6:29),LowerIdent(6:30-6:31),
 LowerIdent(7:1-7:8),OpAssign(7:9-7:10),TripleDot(7:11-7:14),EndOfFile(7:14-7:14),
 ~~~
 # PARSE
@@ -40,14 +40,14 @@ LowerIdent(7:1-7:8),OpAssign(7:9-7:10),TripleDot(7:11-7:14),EndOfFile(7:14-7:14)
 				(ty-var @3.14-3.15 (raw "b"))
 				(ty-var @3.19-3.20 (raw "c")))
 			(where
-				(method @5.2-5.28 (module-of "a") (name "convert")
+				(method @5.3-5.29 (module-of "a") (name "convert")
 					(args
-						(ty-var @5.22-5.23 (raw "a")))
-					(ty-var @5.27-5.28 (raw "c")))
-				(method @6.2-6.30 (module-of "b") (name "transform")
+						(ty-var @5.23-5.24 (raw "a")))
+					(ty-var @5.28-5.29 (raw "c")))
+				(method @6.3-6.31 (module-of "b") (name "transform")
 					(args
-						(ty-var @6.24-6.25 (raw "b")))
-					(ty-var @6.29-6.30 (raw "c")))))
+						(ty-var @6.25-6.26 (raw "b")))
+					(ty-var @6.30-6.31 (raw "c")))))
 		(s-decl @7.1-7.14
 			(p-ident @7.1-7.8 (raw "process"))
 			(e-ellipsis))))
@@ -74,16 +74,16 @@ NO CHANGE
 			(ty-var @3.14-3.15 (name "b"))
 			(ty-var @3.19-3.20 (name "c")))
 		(where
-			(method @5.2-5.28 (module-of "a") (ident "convert")
+			(method @5.3-5.29 (module-of "a") (ident "convert")
 				(args
-					(ty-var @5.22-5.23 (name "a")))
-				(ty-var @5.27-5.28 (name "c")))
-			(method @6.2-6.30 (module-of "b") (ident "transform")
+					(ty-var @5.23-5.24 (name "a")))
+				(ty-var @5.28-5.29 (name "c")))
+			(method @6.3-6.31 (module-of "b") (ident "transform")
 				(args
-					(ty-var @6.24-6.25 (name "b")))
-				(ty-var @6.29-6.30 (name "c")))))
-	(ext-decl @5.2-5.28 (ident "module(a).convert") (kind "value"))
-	(ext-decl @6.2-6.30 (ident "module(b).transform") (kind "value")))
+					(ty-var @6.25-6.26 (name "b")))
+				(ty-var @6.30-6.31 (name "c")))))
+	(ext-decl @5.3-5.29 (ident "module(a).convert") (kind "value"))
+	(ext-decl @6.3-6.31 (ident "module(b).transform") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

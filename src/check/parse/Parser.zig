@@ -2577,6 +2577,7 @@ pub fn parseWhereClause(self: *Parser) std.mem.Allocator.Error!AST.WhereClause.I
         if (self.peek() == .OpColon) {
             // Handle type annotation syntax: module(a).method : type
             self.advance(); // advance past colon
+            const args_start = self.pos;
             const method_type_anno = try self.parseTypeAnno(.not_looking_for_args);
             const method_type = self.store.getTypeAnno(method_type_anno);
 
@@ -2587,7 +2588,7 @@ pub fn parseWhereClause(self: *Parser) std.mem.Allocator.Error!AST.WhereClause.I
                 const args = try self.store.addCollection(
                     .collection_ty_anno,
                     .{
-                        .region = .{ .start = self.pos, .end = self.pos },
+                        .region = .{ .start = args_start, .end = self.pos },
                         .span = fn_type.args.span,
                     },
                 );
@@ -2603,7 +2604,7 @@ pub fn parseWhereClause(self: *Parser) std.mem.Allocator.Error!AST.WhereClause.I
                 const empty_args = try self.store.addCollection(
                     .collection_ty_anno,
                     .{
-                        .region = .{ .start = self.pos, .end = self.pos },
+                        .region = .{ .start = args_start, .end = self.pos },
                         .span = base.DataSpan.empty(),
                     },
                 );
