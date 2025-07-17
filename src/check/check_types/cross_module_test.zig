@@ -382,21 +382,28 @@ test "cross-module type checking - polymorphic instantiation" {
     defer module_a_cir.deinit();
 
     // Store this as an integer literal expression (placeholder)
-    const func_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
-        .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
-    } }, base.Region.zero());
-
-    // Create a function: listLength : List a -> I64
-    const type_var_a = try module_a_env.types.fresh(); // var 0
-    const list_content = Content{ .structure = .{ .list = type_var_a } };
-    const list_var = try module_a_env.types.freshFromContent(list_content);
-    const i64_var = try module_a_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i64 } } });
-
+    const type_var_a = try module_a_cir.addTypeSlotAndTypeVar(
+        @enumFromInt(0),
+        Content{ .flex_var = null },
+        base.Region.zero(),
+        types_mod.Var,
+    );
+    const list_var = try module_a_cir.addTypeSlotAndTypeVar(
+        @enumFromInt(0),
+        Content{ .structure = .{ .list = type_var_a } },
+        base.Region.zero(),
+        types_mod.Var,
+    );
+    const i64_var = try module_a_cir.addTypeSlotAndTypeVar(
+        @enumFromInt(0),
+        Content{ .structure = .{ .num = .{ .int_precision = .i64 } } },
+        base.Region.zero(),
+        types_mod.Var,
+    );
     const func_content = try module_a_env.types.mkFuncPure(&[_]Var{list_var}, i64_var);
-
-    // Set the type of expression 0 to our function type (using var 0)
-    try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
-    try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
+    const func_expr_idx = try module_a_cir.addExprAndTypeVar(.{ .e_int = .{
+        .value = .{ .bytes = [_]u8{0} ** 16, .kind = .i128 },
+    } }, func_content, base.Region.zero());
 
     // Create module B that imports and uses the function with a specific type
     var module_b_env = try base.ModuleEnv.init(allocator, "");
@@ -409,28 +416,24 @@ test "cross-module type checking - polymorphic instantiation" {
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
 
     // Create an external lookup expression
-    const external_lookup_expr = try module_b_cir.store.addExpr(.{
+    const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
             .region = base.Region.zero(),
         },
-    }, base.Region.zero());
-
-    // Ensure we have type variable 0 allocated for external_lookup_expr (expr 0)
-    _ = try module_b_env.types.fresh(); // var 0
+    }, .{ .flex_var = null }, base.Region.zero());
 
     // Create an empty list expression
-    const list_expr = try module_b_cir.store.addExpr(.{
+    const str_var = try module_b_cir.addTypeSlotAndTypeVar(
+        @enumFromInt(0),
+        Content{ .structure = .str },
+        base.Region.zero(),
+        types_mod.Var,
+    );
+    const list_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_empty_list = .{},
-    }, base.Region.zero());
-
-    // Create a list type with strings as elements
-    const str_var = try module_b_env.types.freshFromContent(Content{ .structure = .str });
-    const str_list_content = Content{ .structure = .{ .list = str_var } };
-
-    // Set the list expression's type
-    try module_b_env.types.setVarContent(@enumFromInt(@intFromEnum(list_expr)), str_list_content);
+    }, Content{ .structure = .{ .list = str_var } }, base.Region.zero());
 
     // Create array of module CIRs
     var modules = std.ArrayList(*CIR).init(allocator);
@@ -1043,11 +1046,8 @@ test "cross-module type checking - record type chain" {
     try testing.expectEqual(@as(usize, 2), fields.len);
 
     // Check field names and types
-    const x_ident_c = module_c_env.idents.insert(allocator, base.Ident.for_text("x"));
-    const y_ident_c = module_c_env.idents.insert(allocator, base.Ident.for_text("y"));
-
-    try testing.expectEqual(x_ident_c, fields.items(.name)[0]);
-    try testing.expectEqual(y_ident_c, fields.items(.name)[1]);
+    try testing.expectEqualSlices(u8, "x", module_c_env.idents.getText(fields.items(.name)[0]));
+    try testing.expectEqualSlices(u8, "y", module_c_env.idents.getText(fields.items(.name)[1]));
 
     // Check field x is I32
     const x_resolved = module_c_env.types.resolveVar(fields.items(.var_)[0]);
@@ -1204,21 +1204,18 @@ test "cross-module type checking - polymorphic record chain" {
     try testing.expectEqual(@as(usize, 2), fields.len);
 
     // Check field names and types
-    const value_ident_c = module_c_env.idents.insert(allocator, base.Ident.for_text("value"));
-    const next_ident_c = module_c_env.idents.insert(allocator, base.Ident.for_text("next"));
-
-    try testing.expectEqual(value_ident_c, fields.items(.name)[0]);
-    try testing.expectEqual(next_ident_c, fields.items(.name)[1]);
-
-    // Check field value is Str
-    const value_resolved = module_c_env.types.resolveVar(fields.items(.var_)[0]);
-    try testing.expect(value_resolved.desc.content == .structure);
-    try testing.expect(value_resolved.desc.content.structure == .str);
+    try testing.expectEqualSlices(u8, "next", module_c_env.idents.getText(fields.items(.name)[0]));
+    try testing.expectEqualSlices(u8, "value", module_c_env.idents.getText(fields.items(.name)[1]));
 
     // Check field next is List Str
-    const next_resolved = module_c_env.types.resolveVar(fields.items(.var_)[1]);
+    const next_resolved = module_c_env.types.resolveVar(fields.items(.var_)[0]);
     try testing.expect(next_resolved.desc.content == .structure);
     try testing.expect(next_resolved.desc.content.structure == .list);
+
+    // Check field value is Str
+    const value_resolved = module_c_env.types.resolveVar(fields.items(.var_)[1]);
+    try testing.expect(value_resolved.desc.content == .structure);
+    try testing.expect(value_resolved.desc.content.structure == .str);
 
     const list_elem_var = next_resolved.desc.content.structure.list;
     const list_elem_resolved = module_c_env.types.resolveVar(list_elem_var);
