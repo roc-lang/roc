@@ -604,11 +604,13 @@ pub fn SafeMultiList(comptime T: type) type {
         /// Relocate all pointers in this SafeMultiList by the given offset
         /// Used for FixupCache deserialization
         pub fn relocate(self: *SafeMultiList(T), offset: isize) void {
-            // TODO: Implement SafeMultiList relocation
-            // The MultiArrayList internal structure varies between Zig versions
-            // For now, this is not used in the proof of concept
-            _ = self;
-            _ = offset;
+            // MultiArrayList stores all data in a single bytes field
+            // The field is: bytes: [*]align(@alignOf(T)) u8
+            if (self.items.capacity > 0) {
+                const old_ptr = @intFromPtr(self.items.bytes);
+                const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+                self.items.bytes = @ptrFromInt(new_ptr);
+            }
         }
     };
 }

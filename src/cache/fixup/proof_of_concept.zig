@@ -520,6 +520,125 @@ test "FixupCache hash map stress test with many entries" {
     try std.testing.expectEqual(@as(usize, num_entries), loaded_map.count());
 }
 
+test "FixupCache SafeMultiList relocation" {
+    const allocator = std.testing.allocator;
+
+    // Define a test struct for SafeMultiList
+    const TestItem = struct {
+        value: u32,
+        name: [8]u8,
+        flag: bool,
+    };
+
+    // Create and populate a SafeMultiList
+    var list = collections.SafeMultiList(TestItem){};
+    defer list.deinit(allocator);
+
+    // Add test data
+    try list.append(allocator, .{
+        .value = 42,
+        .name = "first   ".*,
+        .flag = true,
+    });
+    try list.append(allocator, .{
+        .value = 123,
+        .name = "second  ".*,
+        .flag = false,
+    });
+    try list.append(allocator, .{
+        .value = 789,
+        .name = "third   ".*,
+        .flag = true,
+    });
+
+    // Calculate size needed for serialization
+    const list_size = @sizeOf(collections.SafeMultiList(TestItem));
+    const data_size = if (list.items.capacity > 0) blk: {
+        // Calculate the size of the MultiArrayList's internal storage
+        const fields = std.meta.fields(TestItem);
+        var total: usize = 0;
+        inline for (fields) |field| {
+            total += @sizeOf(field.type) * list.items.capacity;
+        }
+        break :blk total;
+    } else 0;
+
+    const total_size = list_size + data_size + 64; // Extra padding
+
+    // Allocate buffer for serialization
+    const buffer = try allocator.alignedAlloc(u8, @alignOf(collections.SafeMultiList(TestItem)), total_size);
+    defer allocator.free(buffer);
+
+    var write_offset: usize = 0;
+
+    // Write SafeMultiList structure
+    const list_ptr = @as(*collections.SafeMultiList(TestItem), @ptrCast(@alignCast(buffer.ptr)));
+    write_offset += @sizeOf(collections.SafeMultiList(TestItem));
+
+    // Write the MultiArrayList data
+    write_offset = std.mem.alignForward(usize, write_offset, @alignOf(TestItem));
+    const data_offset = write_offset;
+
+    if (list.items.capacity > 0) {
+        // Copy the entire MultiArrayList data buffer
+        const bytes_to_copy = data_size;
+        const src_bytes = @as([*]const u8, @ptrCast(list.items.bytes))[0..bytes_to_copy];
+        @memcpy(buffer[data_offset..][0..bytes_to_copy], src_bytes);
+        write_offset += bytes_to_copy;
+    }
+
+    // Set up the list structure with offset as pointer
+    list_ptr.items.bytes = if (data_size > 0) @ptrFromInt(data_offset) else undefined;
+    list_ptr.items.len = list.items.len;
+    list_ptr.items.capacity = list.items.capacity;
+
+    // Simulate writing to disk and reading back
+    const file_content = buffer[0..write_offset];
+    const read_buffer = try allocator.alignedAlloc(u8, @alignOf(collections.SafeMultiList(TestItem)), file_content.len);
+    defer allocator.free(read_buffer);
+    @memcpy(read_buffer, file_content);
+
+    // Cast to SafeMultiList
+    const loaded_list = @as(*collections.SafeMultiList(TestItem), @ptrCast(@alignCast(read_buffer.ptr)));
+
+    // Apply relocation
+    const base_offset = @as(isize, @intCast(@intFromPtr(read_buffer.ptr)));
+    loaded_list.relocate(base_offset);
+
+    // Verify the data
+    try std.testing.expectEqual(list.items.len, loaded_list.items.len);
+    try std.testing.expectEqual(list.items.capacity, loaded_list.items.capacity);
+
+    // Get slices and verify each field
+    const loaded_slice = loaded_list.items.slice();
+
+    // Check values
+    try std.testing.expectEqual(@as(u32, 42), loaded_slice.items(.value)[0]);
+    try std.testing.expectEqual(@as(u32, 123), loaded_slice.items(.value)[1]);
+    try std.testing.expectEqual(@as(u32, 789), loaded_slice.items(.value)[2]);
+
+    // Check names
+    try std.testing.expectEqualStrings("first   ", &loaded_slice.items(.name)[0]);
+    try std.testing.expectEqualStrings("second  ", &loaded_slice.items(.name)[1]);
+    try std.testing.expectEqualStrings("third   ", &loaded_slice.items(.name)[2]);
+
+    // Check flags
+    try std.testing.expectEqual(true, loaded_slice.items(.flag)[0]);
+    try std.testing.expectEqual(false, loaded_slice.items(.flag)[1]);
+    try std.testing.expectEqual(true, loaded_slice.items(.flag)[2]);
+
+    // Verify we can get complete items
+    const item0 = loaded_list.items.get(0);
+    try std.testing.expectEqual(@as(u32, 42), item0.value);
+    try std.testing.expectEqualStrings("first   ", &item0.name);
+    try std.testing.expectEqual(true, item0.flag);
+
+    const item1 = loaded_list.items.get(1);
+    try std.testing.expectEqual(@as(u32, 123), item1.value);
+    try std.testing.expectEqualStrings("second  ", &item1.name);
+    try std.testing.expectEqual(false, item1.flag);
+}
+
 test "FixupCache hash map distribution preserved" {
     const allocator = std.testing.allocator;
 

@@ -117,6 +117,20 @@ pub const Store = struct {
         self.attributes.deinit(gpa);
     }
 
+    /// Relocate all pointers in this Ident.Store by the given offset
+    /// Used for FixupCache deserialization
+    pub fn relocate(self: *Store, offset: isize) void {
+        // Relocate the interner
+        self.interner.relocate(offset);
+
+        // Relocate attributes array
+        if (self.attributes.items.len > 0) {
+            const old_ptr = @intFromPtr(self.attributes.items.ptr);
+            const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+            self.attributes.items.ptr = @ptrFromInt(new_ptr);
+        }
+    }
+
     /// Insert a new identifier into the store.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident, region: Region) std.mem.Allocator.Error!Idx {
         const idx = try self.interner.insert(gpa, ident.raw_text, region);

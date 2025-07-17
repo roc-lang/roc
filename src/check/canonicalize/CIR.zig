@@ -128,6 +128,39 @@ pub fn deinit(self: *CIR) void {
     }
 }
 
+/// Relocate all pointers in this CIR by the given offset
+/// Used for FixupCache deserialization
+pub fn relocate(self: *CIR, offset: isize) void {
+    // Note: env is a pointer that should already be relocated separately
+
+    // Relocate store
+    self.store.relocate(offset);
+
+    // temp_source_for_sexpr is temporary, not relocated
+
+    // Relocate diagnostics if present
+    if (self.diagnostics) |diags| {
+        const old_ptr = @intFromPtr(diags.ptr);
+        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+        self.diagnostics = @as(?[]CIR.Diagnostic, @ptrFromInt(new_ptr));
+    }
+
+    // all_defs and all_statements are spans (indices), not pointers
+
+    // Relocate external_decls
+    self.external_decls.relocate(offset);
+
+    // Relocate imports
+    self.imports.relocate(offset);
+
+    // Relocate module_name string
+    if (self.module_name.len > 0) {
+        const old_ptr = @intFromPtr(self.module_name.ptr);
+        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+        self.module_name.ptr = @ptrFromInt(new_ptr);
+    }
+}
+
 /// Records a diagnostic error during canonicalization without blocking compilation.
 ///
 /// This creates a diagnostic node that stores error information for later reporting.
@@ -1264,6 +1297,58 @@ pub const Import = struct {
                 gop.value_ptr.* = import_idx;
             }
             return gop.value_ptr.*;
+        }
+
+        /// Relocate all pointers in this Import.Store by the given offset
+        /// Used for FixupCache deserialization
+        pub fn relocate(self: *Store, offset: isize) void {
+            // Relocate the hash map metadata
+            if (self.map.metadata) |metadata| {
+                const old_ptr = @intFromPtr(metadata);
+                const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+                self.map.metadata = @ptrFromInt(new_ptr);
+            }
+
+            // Relocate string pointers in the hash map keys
+            if (self.map.metadata != null and self.map.capacity() > 0) {
+                const keys_ptr = self.map.keys();
+                const capacity = self.map.capacity();
+
+                var i: usize = 0;
+                while (i < capacity) : (i += 1) {
+                    const metadata_byte = self.map.metadata.?[i];
+                    if (metadata_byte != 0xFF) { // 0xFF means empty slot
+                        if (keys_ptr[i].len > 0) {
+                            const old_str_ptr = @intFromPtr(keys_ptr[i].ptr);
+                            const new_str_ptr = @as(usize, @intCast(@as(isize, @intCast(old_str_ptr)) + offset));
+                            keys_ptr[i].ptr = @ptrFromInt(new_str_ptr);
+                        }
+                    }
+                }
+            }
+
+            // Relocate imports array
+            if (self.imports.items.len > 0) {
+                const old_ptr = @intFromPtr(self.imports.items.ptr);
+                const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+                self.imports.items.ptr = @ptrFromInt(new_ptr);
+
+                // Relocate each string slice in imports
+                for (self.imports.items) |*import_str| {
+                    if (import_str.len > 0) {
+                        const old_str_ptr = @intFromPtr(import_str.ptr);
+                        const new_str_ptr = @as(usize, @intCast(@as(isize, @intCast(old_str_ptr)) + offset));
+                        import_str.ptr = @ptrFromInt(new_str_ptr);
+                    }
+                }
+            }
+
+            // Relocate strings storage
+            if (self.strings.items.len > 0) {
+                const old_ptr = @intFromPtr(self.strings.items.ptr);
+                const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+                self.strings.items.ptr = @ptrFromInt(new_ptr);
+            }
         }
     };
 };

@@ -98,5 +98,33 @@ pub fn calcRegionInfo(self: *const Self, source: []const u8, begin: u32, end: u3
 /// Relocate all pointers in this ModuleEnv by the given offset.
 /// This is useful when transferring the ModuleEnv across address spaces.
 pub fn relocate(self: *Self, offset: isize) void {
-    relocate_mod.relocateModuleEnv(self, offset);
+    // Note: gpa is not relocated as it's typically a vtable pointer
+
+    // Relocate idents
+    self.idents.relocate(offset);
+
+    // Relocate ident_ids_for_slicing
+    self.ident_ids_for_slicing.relocate(offset);
+
+    // Relocate strings
+    self.strings.relocate(offset);
+
+    // Relocate types
+    self.types.relocate(offset);
+
+    // Relocate exposed_by_str
+    self.exposed_by_str.relocate(offset);
+
+    // Relocate exposed_nodes
+    self.exposed_nodes.relocate(offset);
+
+    // Relocate line_starts
+    self.line_starts.relocate(offset);
+
+    // Relocate source pointer
+    if (self.source.len > 0) {
+        const old_ptr = @intFromPtr(self.source.ptr);
+        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+        self.source.ptr = @ptrFromInt(new_ptr);
+    }
 }

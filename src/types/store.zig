@@ -138,6 +138,25 @@ pub const Store = struct {
         return self.slots.backing.len();
     }
 
+    /// Relocate all pointers in this Store by the given offset
+    /// Used for FixupCache deserialization
+    pub fn relocate(self: *Self, offset: isize) void {
+        // Relocate slots
+        self.slots.relocate(offset);
+
+        // Relocate descs
+        self.descs.relocate(offset);
+
+        // Relocate vars
+        self.vars.relocate(offset);
+
+        // Relocate record_fields
+        self.record_fields.relocate(offset);
+
+        // Relocate tags
+        self.tags.relocate(offset);
+    }
+
     // fresh variables //
 
     /// Create a new unbound, flexible type variable without a name
@@ -898,7 +917,13 @@ const SlotStore = struct {
     }
 
     /// A type-safe index into the store
-    const Idx = enum(u32) { _ };
+    pub const Idx = enum(u32) { _ };
+
+    /// Relocate all pointers in this SlotStore by the given offset
+    /// Used for FixupCache deserialization
+    pub fn relocate(self: *Self, offset: isize) void {
+        self.backing.relocate(offset);
+    }
 };
 
 /// Represents a store of descriptors
@@ -1017,6 +1042,19 @@ const DescStore = struct {
     /// A type-safe index into the store
     /// This type is made public below
     const Idx = enum(u32) { _ };
+
+    /// Relocate all pointers in this DescStore by the given offset
+    /// Used for FixupCache deserialization
+    pub fn relocate(self: *Self, offset: isize) void {
+        // MultiArrayList stores data in internal bytes field
+        const bytes_ptr = &@field(self.backing, "bytes");
+
+        if (bytes_ptr.len > 0) {
+            const old_ptr = @intFromPtr(bytes_ptr.ptr);
+            const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+            bytes_ptr.ptr = @ptrFromInt(new_ptr);
+        }
+    }
 };
 
 /// An index into the desc store

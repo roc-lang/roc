@@ -136,6 +136,42 @@ comptime {
     std.debug.assert(pattern_fields.len == CIR_PATTERN_NODE_COUNT);
 }
 
+/// Relocate all pointers in this NodeStore by the given offset
+/// Used for FixupCache deserialization
+pub fn relocate(self: *NodeStore, offset: isize) void {
+    // Note: gpa is not relocated as it's typically a vtable pointer
+
+    // Relocate nodes
+    self.nodes.relocate(offset);
+
+    // Relocate regions
+    self.regions.relocate(offset);
+
+    // Relocate extra_data
+    if (self.extra_data.items.len > 0) {
+        const old_ptr = @intFromPtr(self.extra_data.items.ptr);
+        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+        self.extra_data.items.ptr = @ptrFromInt(new_ptr);
+    }
+
+    // Relocate all scratch arrays
+    self.scratch_statements.relocate(offset);
+    self.scratch_exprs.relocate(offset);
+    self.scratch_record_fields.relocate(offset);
+    self.scratch_match_branches.relocate(offset);
+    self.scratch_match_branch_patterns.relocate(offset);
+    self.scratch_if_branches.relocate(offset);
+    self.scratch_where_clauses.relocate(offset);
+    self.scratch_patterns.relocate(offset);
+    self.scratch_pattern_record_fields.relocate(offset);
+    self.scratch_record_destructs.relocate(offset);
+    self.scratch_type_annos.relocate(offset);
+    self.scratch_anno_record_fields.relocate(offset);
+    self.scratch_exposed_items.relocate(offset);
+    self.scratch_defs.relocate(offset);
+    self.scratch_diagnostics.relocate(offset);
+}
+
 /// Helper function to get a region by node index, handling the type conversion
 pub fn getRegionAt(store: *const NodeStore, node_idx: Node.Idx) Region {
     const idx: Region.Idx = @enumFromInt(@intFromEnum(node_idx));

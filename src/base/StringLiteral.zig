@@ -46,6 +46,17 @@ pub const Store = struct {
         self.buffer.deinit(gpa);
     }
 
+    /// Relocate all pointers in this StringLiteral.Store by the given offset
+    /// Used for FixupCache deserialization
+    pub fn relocate(self: *Store, offset: isize) void {
+        // Relocate buffer array
+        if (self.buffer.items.len > 0) {
+            const old_ptr = @intFromPtr(self.buffer.items.ptr);
+            const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+            self.buffer.items.ptr = @ptrFromInt(new_ptr);
+        }
+    }
+
     /// Insert a new string into a `StringLiteral.Store`.
     ///
     /// Does not deduplicate, as string literals are expected to be large and mostly unique.

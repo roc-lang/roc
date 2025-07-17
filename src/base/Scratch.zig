@@ -43,6 +43,16 @@ pub fn Scratch(comptime T: type) type {
             return self.items.items[@intCast(start)..];
         }
 
+        /// Relocate all pointers in this Scratch by the given offset
+        /// Used for FixupCache deserialization
+        pub fn relocate(self: *Self, offset: isize) void {
+            if (self.items.items.len > 0) {
+                const old_ptr = @intFromPtr(self.items.items.ptr);
+                const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+                self.items.items.ptr = @ptrFromInt(new_ptr);
+            }
+        }
+
         /// Creates a new span starting at start.  Moves the items from scratch
         /// to extra_data as appropriate.
         pub fn spanFromStart(self: *Self, start: u32, gpa: std.mem.Allocator, data: *std.ArrayListUnmanaged(u32)) std.mem.Allocator.Error!base.DataSpan {
