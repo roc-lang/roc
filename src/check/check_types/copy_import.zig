@@ -168,7 +168,7 @@ fn copyTuple(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!types_mod.Tuple {
-    const elems_slice = source_store.getTupleElemsSlice(tuple.elems);
+    const elems_slice = source_store.sliceVars(tuple.elems);
 
     var dest_elems = std.ArrayList(Var).init(dest_store.gpa);
     defer dest_elems.deinit();
@@ -178,7 +178,7 @@ fn copyTuple(
         try dest_elems.append(dest_elem);
     }
 
-    const dest_range = try dest_store.appendTupleElems(dest_elems.items);
+    const dest_range = try dest_store.appendVars(dest_elems.items);
     return types_mod.Tuple{ .elems = dest_range };
 }
 
@@ -213,7 +213,7 @@ fn copyFunc(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Func {
-    const args_slice = source_store.getFuncArgsSlice(func.args);
+    const args_slice = source_store.sliceVars(func.args);
 
     var dest_args = std.ArrayList(Var).init(dest_store.gpa);
     defer dest_args.deinit();
@@ -225,7 +225,7 @@ fn copyFunc(
 
     const dest_ret = try copyVar(source_store, dest_store, func.ret, var_mapping, source_idents, dest_idents, allocator);
 
-    const dest_args_range = try dest_store.appendFuncArgs(dest_args.items);
+    const dest_args_range = try dest_store.appendVars(dest_args.items);
     return Func{
         .args = dest_args_range,
         .ret = dest_ret,
@@ -300,7 +300,7 @@ fn copyTagUnion(
     defer fresh_tags.deinit();
 
     for (tags_slice.items(.name), tags_slice.items(.args)) |name, args_range| {
-        const args_slice = source_store.getTagArgsSlice(args_range);
+        const args_slice = source_store.sliceVars(args_range);
 
         var dest_args = std.ArrayList(Var).init(dest_store.gpa);
         defer dest_args.deinit();
@@ -310,7 +310,7 @@ fn copyTagUnion(
             try dest_args.append(dest_arg);
         }
 
-        const dest_args_range = try dest_store.appendTagArgs(dest_args.items);
+        const dest_args_range = try dest_store.appendVars(dest_args.items);
 
         _ = try fresh_tags.append(.{
             .name = name, // Tag names are local to the union type

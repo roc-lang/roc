@@ -318,7 +318,7 @@ pub const TypeWriter = struct {
             .list => |sub_var| self.countVar(search_var, sub_var, count),
             .list_unbound, .num => {},
             .tuple => |tuple| {
-                const elems = self.env.types.getTupleElemsSlice(tuple.elems);
+                const elems = self.env.types.sliceVars(tuple.elems);
                 for (elems) |elem| {
                     self.countVar(search_var, elem, count);
                 }
@@ -330,7 +330,7 @@ pub const TypeWriter = struct {
                 }
             },
             .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                const args = self.env.types.getFuncArgsSlice(func.args);
+                const args = self.env.types.sliceVars(func.args);
                 for (args) |arg| {
                     self.countVar(search_var, arg, count);
                 }
@@ -357,7 +357,7 @@ pub const TypeWriter = struct {
                 var iter = tag_union.tags.iterIndices();
                 while (iter.next()) |tag_idx| {
                     const tag = self.env.types.tags.get(tag_idx);
-                    const args = self.env.types.getTagArgsSlice(tag.args);
+                    const args = self.env.types.sliceVars(tag.args);
                     for (args) |arg_var| {
                         self.countVar(search_var, arg_var, count);
                     }
@@ -498,7 +498,7 @@ pub const TypeWriter = struct {
 
     /// Write a tuple type
     fn writeTuple(self: *Self, tuple: types.Tuple, root_var: types.Var) Allocator.Error!void {
-        const elems = self.env.types.getTupleElemsSlice(tuple.elems);
+        const elems = self.env.types.sliceVars(tuple.elems);
         _ = try self.buf.writer().write("(");
         for (elems, 0..) |elem, i| {
             if (i > 0) _ = try self.buf.writer().write(", ");
@@ -557,7 +557,7 @@ pub const TypeWriter = struct {
 
     /// Write a function type with a specific arrow (`->` or `=>`)
     fn writeFuncWithArrow(self: *Self, func: types.Func, arrow: []const u8, root_var: types.Var) Allocator.Error!void {
-        const args = self.env.types.getFuncArgsSlice(func.args);
+        const args = self.env.types.sliceVars(func.args);
 
         // Write arguments
         if (args.len == 0) {
@@ -726,7 +726,7 @@ pub const TypeWriter = struct {
     /// Write a single tag
     fn writeTag(self: *Self, tag: types.Tag, root_var: types.Var) Allocator.Error!void {
         _ = try self.buf.writer().write(self.env.idents.getText(tag.name));
-        const args = self.env.types.getTagArgsSlice(tag.args);
+        const args = self.env.types.sliceVars(tag.args);
         if (args.len > 0) {
             _ = try self.buf.writer().write("(");
             for (args, 0..) |arg, i| {
