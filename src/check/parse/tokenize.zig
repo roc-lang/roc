@@ -47,7 +47,9 @@ pub const Token = struct {
         MultilineStringEnd, // the """ that ends a multiline string
         StringPart,
         SingleQuote,
-        MalformedSingleQuote, // malformed, but should be treated similar to a SingleQuote in the parser
+        MalformedSingleQuoteUnclosed, // malformed, but should be treated similar to a SingleQuote in the parser
+        MalformedSingleQuoteEmpty, // malformed, but should be treated similar to a SingleQuote in the parser
+        MalformedSingleQuoteTooLong, // malformed, but should be treated similar to a SingleQuote in the parser
         Int,
         MalformedNumberBadSuffix, // malformed, but should be treated similar to an int in the parser
         MalformedNumberUnicodeSuffix, // malformed, but should be treated similar to an int in the parser
@@ -310,7 +312,9 @@ pub const Token = struct {
                 .MalformedOpaqueNameWithoutName,
                 .MalformedUnicodeIdent,
                 .MalformedUnknownToken,
-                .MalformedSingleQuote,
+                .MalformedSingleQuoteUnclosed,
+                .MalformedSingleQuoteEmpty,
+                .MalformedSingleQuoteTooLong,
                 => true,
             };
         }
@@ -493,9 +497,6 @@ pub const Diagnostic = struct {
         InvalidUnicodeEscapeSequence,
         InvalidEscapeSequence,
         UnclosedString,
-        UnclosedSingleQuote,
-        EmptySingleQuote,
-        TooLongSingleQuote,
         OverClosedBrace,
         MismatchedBrace,
         NonPrintableUnicodeInStrLiteral,
@@ -908,7 +909,7 @@ pub const Cursor = struct {
             TooLong,
         };
         std.debug.assert(self.peek() == '\'');
-        const start = self.pos;
+
         // Skip the initial quote.
         self.pos += 1;
         var state: State = .Empty;
@@ -925,8 +926,7 @@ pub const Cursor = struct {
             switch (state) {
                 .Empty => switch (c) {
                     '\'' => {
-                        self.pushMessage(.EmptySingleQuote, start, self.pos);
-                        return .MalformedSingleQuote;
+                        return .MalformedSingleQuoteEmpty;
                     },
                     '\\' => {
                         self.chompEscapeSequence();
@@ -948,16 +948,14 @@ pub const Cursor = struct {
                 },
                 .TooLong => switch (c) {
                     '\'' => {
-                        self.pushMessage(.TooLongSingleQuote, start, self.pos);
-                        return .MalformedSingleQuote;
+                        return .MalformedSingleQuoteTooLong;
                     },
                     else => {},
                 },
             }
         }
 
-        self.pushMessage(.UnclosedSingleQuote, start, self.pos);
-        return .MalformedSingleQuote;
+        return .MalformedSingleQuoteUnclosed;
     }
 
     /// Chomps a UTF-8 codepoint and advances the cursor position.
@@ -2161,7 +2159,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .MalformedNamedUnderscoreUnicode,
             .MalformedOpaqueNameUnicode,
             .MalformedOpaqueNameWithoutName,
-            .MalformedSingleQuote,
+            .MalformedSingleQuoteEmpty,
+            .MalformedSingleQuoteTooLong,
+            .MalformedSingleQuoteUnclosed,
             => {
                 return error.Unsupported;
             },
