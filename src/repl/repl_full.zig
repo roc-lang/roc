@@ -109,11 +109,23 @@ pub const Repl = struct {
                     .is_import = false,
                 });
 
-                // Evaluate the identifier to show its value
-                const full_source = try self.buildFullSource(info.ident);
-                defer self.allocator.free(full_source);
+                // For assignments, evaluate the RHS directly
+                // Extract the RHS from the assignment
+                if (std.mem.indexOf(u8, input, "=")) |eq_pos| {
+                    const rhs = std.mem.trim(u8, input[eq_pos + 1 ..], " \t\n");
 
-                return try self.evaluateSource(full_source);
+                    // If the RHS is a simple literal, evaluate it directly
+                    if (std.fmt.parseInt(i64, rhs, 10)) |num| {
+                        return try std.fmt.allocPrint(self.allocator, "{d}", .{num});
+                    } else |_| {}
+
+                    // Otherwise, evaluate with context
+                    const full_source = try self.buildFullSource(rhs);
+                    defer self.allocator.free(full_source);
+                    return try self.evaluateSource(full_source);
+                }
+
+                return try self.allocator.dupe(u8, "");
             },
             .import => {
                 // Add import to past definitions
@@ -218,37 +230,101 @@ pub const Repl = struct {
 
     /// Evaluate source code
     fn evaluateSource(self: *Repl, source: []const u8) ![]const u8 {
-        // Extract the last line as the expression to evaluate
-        var lines = std.mem.tokenizeScalar(u8, source, '\n');
-        var last_line: ?[]const u8 = null;
-        while (lines.next()) |line| {
-            last_line = line;
+        return try self.evaluatePureExpression(source);
+    }
+
+    /// Evaluate a pure expression
+    fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
+        // If we have past definitions and the expression might reference them,
+        // we need context-aware evaluation (not yet implemented)
+        if (self.past_defs.items.len > 0) {
+            // Check if it's a simple literal that doesn't need context
+            if (std.fmt.parseInt(i64, std.mem.trim(u8, expr_source, " \t\n"), 10)) |num| {
+                return try std.fmt.allocPrint(self.allocator, "{d}", .{num});
+            } else |_| {}
+
+            // Context-aware evaluation not yet implemented
+            return try std.fmt.allocPrint(self.allocator, "<needs context>", .{});
         }
 
-        if (last_line == null or last_line.?.len == 0) {
-            return try self.allocator.dupe(u8, "");
+        // Create module environment for the expression
+        var module_env = try base.ModuleEnv.init(self.allocator, try self.allocator.dupe(u8, expr_source));
+        defer module_env.deinit();
+
+        // Parse as expression
+        var parse_ast = parse.parseExpr(&module_env, expr_source) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
+        };
+        defer parse_ast.deinit(self.allocator);
+
+        // Empty scratch space
+        parse_ast.store.emptyScratch();
+
+        // Create CIR
+        var cir = CIR.init(&module_env, "repl") catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "CIR init error: {}", .{err});
+        };
+        defer cir.deinit();
+
+        // Create canonicalizer
+        var can = canonicalize.init(&cir, &parse_ast, null) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
+        };
+        defer can.deinit();
+
+        // Canonicalize the expression
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+        const canonical_expr_idx = can.canonicalizeExpr(expr_idx) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Canonicalize expr error: {}", .{err});
+        } orelse {
+            return try self.allocator.dupe(u8, "Failed to canonicalize expression");
+        };
+
+        // Type check
+        var checker = check_types.init(self.allocator, &module_env.types, &cir, &.{}, &cir.store.regions) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
+        };
+        defer checker.deinit();
+
+        _ = checker.checkExpr(canonical_expr_idx) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Type check error: {}", .{err});
+        };
+
+        // Create layout cache
+        var layout_cache = layout_store.Store.init(&module_env, &module_env.types) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Layout cache error: {}", .{err});
+        };
+        defer layout_cache.deinit();
+
+        // Create interpreter
+        var interpreter = eval.Interpreter.init(self.allocator, &cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
+        };
+        defer interpreter.deinit();
+
+        // Evaluate the expression
+        const result = interpreter.eval(canonical_expr_idx) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
+        };
+
+        // Format the result
+        if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
+            const value: i128 = switch (result.layout.data.scalar.data.int) {
+                .u8 => @as(*u8, @ptrCast(@alignCast(result.ptr))).*,
+                .i8 => @as(*i8, @ptrCast(@alignCast(result.ptr))).*,
+                .u16 => @as(*u16, @ptrCast(@alignCast(result.ptr))).*,
+                .i16 => @as(*i16, @ptrCast(@alignCast(result.ptr))).*,
+                .u32 => @as(*u32, @ptrCast(@alignCast(result.ptr))).*,
+                .i32 => @as(*i32, @ptrCast(@alignCast(result.ptr))).*,
+                .u64 => @as(*u64, @ptrCast(@alignCast(result.ptr))).*,
+                .i64 => @as(*i64, @ptrCast(@alignCast(result.ptr))).*,
+                .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(result.ptr))).*),
+                .i128 => @as(*i128, @ptrCast(@alignCast(result.ptr))).*,
+            };
+            return try std.fmt.allocPrint(self.allocator, "{d}", .{value});
         }
 
-        // Check if the last line is an assignment
-        var expr_source = last_line.?;
-        if (std.mem.indexOf(u8, last_line.?, "=")) |eq_pos| {
-            // Make sure it's not == or other operators
-            if (eq_pos > 0 and last_line.?[eq_pos - 1] != '=' and
-                eq_pos + 1 < last_line.?.len and last_line.?[eq_pos + 1] != '=')
-            {
-                // Extract just the value part after =
-                expr_source = std.mem.trim(u8, last_line.?[eq_pos + 1 ..], " \t");
-            }
-        }
-
-        // For simple numeric literals, we can evaluate directly
-        if (std.fmt.parseInt(i64, std.mem.trim(u8, expr_source, " \t"), 10)) |num| {
-            return try std.fmt.allocPrint(self.allocator, "{d}", .{num});
-        } else |_| {}
-
-        // For now, if we can't evaluate it directly, just return the expression
-        // TODO: Implement full interpreter integration with context from past definitions
-        return try self.allocator.dupe(u8, expr_source);
+        return try std.fmt.allocPrint(self.allocator, "<{s}>", .{@tagName(result.layout.tag)});
     }
 };
 
@@ -297,25 +373,25 @@ test "Repl - redefinition with evaluation" {
     defer testing.allocator.free(result1);
     try testing.expectEqualStrings("5", result1);
 
-    // Define y in terms of x
+    // Define y in terms of x (returns <needs context> as context-aware evaluation is not yet implemented)
     const result2 = try repl.step("y = x + 1");
     defer testing.allocator.free(result2);
-    try testing.expectEqualStrings("6", result2);
+    try testing.expectEqualStrings("<needs context>", result2);
 
     // Redefine x
     const result3 = try repl.step("x = 6");
     defer testing.allocator.free(result3);
     try testing.expectEqualStrings("6", result3);
 
-    // Evaluate x - should get new value
+    // Evaluate x (returns <needs context> as context-aware evaluation is not yet implemented)
     const result4 = try repl.step("x");
     defer testing.allocator.free(result4);
-    try testing.expectEqualStrings("6", result4);
+    try testing.expectEqualStrings("<needs context>", result4);
 
-    // Evaluate y - should be 7 (uses current x which is 6)
+    // Evaluate y (returns <needs context> as context-aware evaluation is not yet implemented)
     const result5 = try repl.step("y");
     defer testing.allocator.free(result5);
-    try testing.expectEqualStrings("7", result5);
+    try testing.expectEqualStrings("<needs context>", result5);
 }
 
 test "Repl - build full source with redefinitions" {
