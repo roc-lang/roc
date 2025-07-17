@@ -11,6 +11,7 @@ pub const StringLiteral = @import("base/StringLiteral.zig");
 pub const RegionInfo = @import("base/RegionInfo.zig");
 pub const Scratch = @import("base/Scratch.zig").Scratch;
 pub const parallel = @import("base/parallel.zig");
+pub const iovec_serialize = @import("base/iovec_serialize.zig");
 
 /// Whether a function calls itself.
 pub const Recursive = enum {

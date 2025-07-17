@@ -14,6 +14,7 @@ const RegionInfo = @import("RegionInfo.zig");
 const Region = @import("Region.zig");
 const relocate_mod = @import("relocate.zig");
 const writeAlignedData = @import("write_aligned.zig").writeAlignedData;
+const iovec_serialize = @import("iovec_serialize.zig");
 
 const Self = @This();
 
@@ -364,4 +365,186 @@ test "serialization is deterministic" {
 
     // Both buffers should be byte-for-byte identical
     try testing.expectEqualSlices(u8, buffer1[0..written1], buffer2[0..written2]);
+}
+
+test "iovec serialization matches buffer serialization" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Create a test ModuleEnv with some data
+    var env = try Self.init(allocator, "test source");
+    defer env.deinit();
+
+    // Add some test data
+    const ident1 = try env.idents.insert(allocator, Ident.for_text("test_ident"), Region.zero());
+    _ = ident1;
+    _ = try env.strings.insert(allocator, "test string");
+
+    // Buffer serialization
+    const size = env.serializedSize();
+    const buffer = try allocator.alloc(u8, size);
+    defer allocator.free(buffer);
+    const written = try env.serializeInto(buffer);
+
+    // IoVec serialization
+    var writer = iovec_serialize.IovecWriter.init(allocator);
+    defer writer.deinit();
+    _ = try env.appendToIovecs(&writer);
+    try writer.finalize();
+
+    // Convert iovecs to buffer for comparison
+    const iovec_buffer = try iovec_serialize.iovecsToBuf(allocator, writer.iovecs.items);
+    defer allocator.free(iovec_buffer);
+
+    // The buffers should be identical
+    try testing.expectEqual(written, iovec_buffer.len);
+    try testing.expectEqualSlices(u8, buffer[0..written], iovec_buffer);
+}
+
+/// Append this ModuleEnv to an iovec writer for serialization
+pub fn appendToIovecs(self: *const Self, writer: *iovec_serialize.IovecWriter) !usize {
+    const struct_offset = writer.getOffset();
+
+    // Reserve space for the ModuleEnv struct header
+    const env_offset = try writer.reserveStruct(Self);
+
+    // Serialize idents
+    const idents_result = try self.appendIdentsToIovecs(writer);
+
+    // Serialize ident_ids_for_slicing
+    const ident_ids_offset = if (self.ident_ids_for_slicing.items.items.len > 0) blk: {
+        const data = std.mem.sliceAsBytes(self.ident_ids_for_slicing.items.items);
+        const offset = try writer.appendAligned(data, @alignOf(@TypeOf(self.ident_ids_for_slicing.items.items[0])));
+        break :blk offset;
+    } else 0;
+
+    // Serialize strings
+    const strings_buffer_offset = if (self.strings.buffer.items.len > 0) blk: {
+        const offset = try writer.appendAligned(self.strings.buffer.items, @alignOf(u8));
+        break :blk offset;
+    } else 0;
+
+    // Serialize types
+    _ = writer.getOffset(); // types_offset
+    _ = try self.types.appendToIovecs(writer);
+
+    // Serialize exposed_by_str
+    _ = writer.getOffset(); // exposed_by_str_offset
+    _ = try self.exposed_by_str.appendToIovecs(writer);
+
+    // Serialize exposed_nodes
+    _ = writer.getOffset(); // exposed_nodes_offset
+    _ = try self.exposed_nodes.appendToIovecs(writer);
+
+    // Serialize line_starts
+    const line_starts_offset = if (self.line_starts.items.items.len > 0) blk: {
+        const data = std.mem.sliceAsBytes(self.line_starts.items.items);
+        const offset = try writer.appendAligned(data, @alignOf(@TypeOf(self.line_starts.items.items[0])));
+        break :blk offset;
+    } else 0;
+
+    // Serialize source
+    const source_offset = if (self.source.len > 0) blk: {
+        const offset = try writer.appendAligned(self.source, @alignOf(u8));
+        break :blk offset;
+    } else 0;
+
+    // Now create the ModuleEnv struct with file offsets as pointers
+    const env_header = Self{
+        .gpa = std.mem.Allocator{
+            .ptr = @ptrFromInt(1),
+            .vtable = @ptrFromInt(@alignOf(*const std.mem.Allocator.VTable)),
+        }, // Will be set by deserializer
+        .idents = .{
+            .interner = .{
+                .bytes = .{ .items = if (self.idents.interner.bytes.items.len > 0) @as([*]u8, @ptrFromInt(idents_result.bytes_offset))[0..self.idents.interner.bytes.items.len] else @as([*]u8, @ptrFromInt(@alignOf(u8)))[0..0], .capacity = self.idents.interner.bytes.capacity },
+                .strings = .{ .metadata = if (idents_result.strings_metadata_offset > 0) @ptrFromInt(idents_result.strings_metadata_offset) else null, .size = 0, .available = 0 },
+                .outer_indices = .{ .items = if (self.idents.interner.outer_indices.items.len > 0) @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(idents_result.indices_offset))[0..self.idents.interner.outer_indices.items.len] else @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(@alignOf(collections.SmallStringInterner.StringIdx)))[0..0], .capacity = self.idents.interner.outer_indices.capacity },
+                .regions = .{ .items = if (self.idents.interner.regions.items.len > 0) @as([*]Region, @ptrFromInt(idents_result.regions_offset))[0..self.idents.interner.regions.items.len] else @as([*]Region, @ptrFromInt(@alignOf(Region)))[0..0], .capacity = self.idents.interner.regions.capacity },
+            },
+            .attributes = .{ .items = if (self.idents.attributes.items.len > 0) @as([*]Ident.Attributes, @ptrFromInt(idents_result.attributes_offset))[0..self.idents.attributes.items.len] else @as([*]Ident.Attributes, @ptrFromInt(@alignOf(Ident.Attributes)))[0..0], .capacity = self.idents.attributes.capacity },
+            .next_unique_name = self.idents.next_unique_name,
+        },
+        .ident_ids_for_slicing = .{ .items = .{ .items = if (self.ident_ids_for_slicing.items.items.len > 0) @as([*]Ident.Idx, @ptrFromInt(ident_ids_offset))[0..self.ident_ids_for_slicing.items.items.len] else @as([*]Ident.Idx, @ptrFromInt(@alignOf(Ident.Idx)))[0..0], .capacity = self.ident_ids_for_slicing.items.capacity } },
+        .strings = .{ .buffer = .{ .items = if (self.strings.buffer.items.len > 0) @as([*]u8, @ptrFromInt(strings_buffer_offset))[0..self.strings.buffer.items.len] else @as([*]u8, @ptrFromInt(@alignOf(u8)))[0..0], .capacity = self.strings.buffer.capacity } },
+        .types = undefined, // Complex structure, will be set up by types.appendToIovecs
+        .exposed_by_str = .{
+            .map = .{
+                .metadata = null,
+                .size = 0,
+                .available = 0,
+            },
+        }, // Will be set up by hash map serialization
+        .exposed_nodes = .{
+            .map = .{
+                .metadata = null,
+                .size = 0,
+                .available = 0,
+            },
+        }, // Will be set up by hash map serialization
+        .line_starts = .{ .items = .{ .items = if (self.line_starts.items.items.len > 0) @as([*]u32, @ptrFromInt(line_starts_offset))[0..self.line_starts.items.items.len] else @as([*]u32, @ptrFromInt(@alignOf(u32)))[0..0], .capacity = self.line_starts.items.capacity } },
+        .source = if (self.source.len > 0) @as([*]const u8, @ptrFromInt(source_offset))[0..self.source.len] else @as([*]const u8, @ptrFromInt(1))[0..0],
+    };
+
+    // Write the header struct at the reserved offset
+    try writer.writeDeferredStruct(env_offset, env_header);
+
+    return struct_offset;
+}
+
+fn appendIdentsToIovecs(self: *const Self, writer: *iovec_serialize.IovecWriter) !IdentsSerializationResult {
+    var result = IdentsSerializationResult{
+        .bytes_offset = 0,
+        .indices_offset = 0,
+        .regions_offset = 0,
+        .strings_metadata_offset = 0,
+        .attributes_offset = 0,
+    };
+
+    // Serialize interner bytes
+    if (self.idents.interner.bytes.items.len > 0) {
+        result.bytes_offset = try writer.appendAligned(self.idents.interner.bytes.items, @alignOf(u8));
+    }
+
+    // Serialize interner outer_indices
+    if (self.idents.interner.outer_indices.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.idents.interner.outer_indices.items);
+        result.indices_offset = try writer.appendAligned(data, @alignOf(@TypeOf(self.idents.interner.outer_indices.items[0])));
+    }
+
+    // Serialize interner regions
+    if (self.idents.interner.regions.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.idents.interner.regions.items);
+        result.regions_offset = try writer.appendAligned(data, @alignOf(@TypeOf(self.idents.interner.regions.items[0])));
+    }
+
+    // Serialize StringIdx.Table
+    if (self.idents.interner.strings.metadata) |metadata| {
+        const aligned_offset = std.mem.alignForward(usize, writer.getOffset(), @alignOf(@TypeOf(metadata)));
+        const padding = aligned_offset - writer.getOffset();
+        if (padding > 0) {
+            try writer.appendBytes(&@import("write_aligned.zig").ZERO_PADDING[0..padding]);
+        }
+        result.strings_metadata_offset = writer.getOffset();
+
+        const capacity = self.idents.interner.strings.capacity();
+        const metadata_size = capacity;
+
+        // Write metadata bytes
+        const metadata_bytes = @as([*]const u8, @ptrCast(metadata))[0..metadata_size];
+        try writer.appendBytes(metadata_bytes);
+
+        // Write entries
+        const entry_size = capacity * @sizeOf(collections.SmallStringInterner.StringIdx) + capacity * @sizeOf(void);
+        const entries_ptr = @as([*]const u8, @ptrCast(metadata)) + metadata_size;
+        try writer.appendBytes(entries_ptr[0..entry_size]);
+    }
+
+    // Serialize attributes
+    if (self.idents.attributes.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.idents.attributes.items);
+        result.attributes_offset = try writer.appendAligned(data, @alignOf(@TypeOf(self.idents.attributes.items[0])));
+    }
+
+    return result;
 }

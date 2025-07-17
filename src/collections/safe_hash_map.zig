@@ -117,6 +117,23 @@ pub fn SafeStringHashMap(comptime V: type) type {
             return buffer[0..offset];
         }
 
+        /// Append this hash map to an iovec writer for serialization
+        pub fn appendToIovecs(self: *const Self, writer: *@import("../base/iovec_serialize.zig").IovecWriter) !usize {
+            const start_offset = writer.getOffset();
+
+            // Create a temporary buffer for the serialized data
+            // This is not ideal but hash maps need contiguous serialization
+            const size = self.serializedSize();
+            const allocator = writer.iovecs.allocator;
+            const buffer = try allocator.alloc(u8, size);
+            defer allocator.free(buffer);
+
+            _ = try self.serializeInto(buffer);
+            try writer.appendBytes(buffer);
+
+            return start_offset;
+        }
+
         /// Deserialize a hash map from the provided buffer
         pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
             if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;

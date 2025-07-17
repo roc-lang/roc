@@ -805,6 +805,23 @@ pub const Store = struct {
         return offset;
     }
 
+    /// Append this Store to an iovec writer for serialization
+    pub fn appendToIovecs(self: *const Self, writer: *@import("../base/iovec_serialize.zig").IovecWriter) !usize {
+        const start_offset = writer.getOffset();
+
+        // For now, serialize to a temporary buffer and append it
+        // This maintains compatibility with the existing serialization format
+        const size = self.serializedSize();
+        const allocator = writer.iovecs.allocator;
+        const buffer = try allocator.alloc(u8, size);
+        defer allocator.free(buffer);
+
+        _ = try self.serializeInto(buffer);
+        try writer.appendBytes(buffer);
+
+        return start_offset;
+    }
+
     /// Deserialize a Store from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
         if (buffer.len < @sizeOf(u32) * 5) return error.BufferTooSmall;

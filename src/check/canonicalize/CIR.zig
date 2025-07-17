@@ -367,6 +367,255 @@ pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
     return write_offset;
 }
 
+/// Append this CIR to an iovec writer for serialization
+pub fn appendToIovecs(self: *const CIR, writer: *@import("../../base/iovec_serialize.zig").IovecWriter) !usize {
+    const struct_offset = writer.getOffset();
+
+    // Reserve space for the CIR struct header
+    const cir_offset = try writer.reserveStruct(CIR);
+
+    // Serialize diagnostics
+    const diagnostics_offset = if (self.diagnostics) |diags| blk: {
+        if (diags.len > 0) {
+            const data = std.mem.sliceAsBytes(diags);
+            const offset = try writer.appendAligned(data, @alignOf(Diagnostic));
+            break :blk offset;
+        }
+        break :blk 0;
+    } else 0;
+
+    // Serialize external_decls
+    const external_decls_offset = if (self.external_decls.items.items.len > 0) blk: {
+        const data = std.mem.sliceAsBytes(self.external_decls.items.items);
+        const offset = try writer.appendAligned(data, @alignOf(ExternalDecl));
+        break :blk offset;
+    } else 0;
+
+    // Serialize module_name
+    const module_name_offset = if (self.module_name.len > 0) blk: {
+        const offset = try writer.appendAligned(self.module_name, @alignOf(u8));
+        break :blk offset;
+    } else 0;
+
+    // Serialize NodeStore
+    const store_result = try self.appendNodeStoreToIovecs(writer);
+
+    // Serialize imports
+    const imports_result = try self.appendImportsToIovecs(writer);
+
+    // Create the CIR struct with file offsets as pointers
+    var cir_header = CIR{
+        .env = @ptrFromInt(@alignOf(*base.ModuleEnv)), // Will be set by deserializer
+        .store = std.mem.zeroes(@TypeOf(self.store)), // Complex structure, set up below
+        .temp_source_for_sexpr = null,
+        .diagnostics = if (diagnostics_offset > 0 and self.diagnostics.?.len > 0)
+            @as([*]CIR.Diagnostic, @ptrFromInt(diagnostics_offset))[0..self.diagnostics.?.len]
+        else
+            null,
+        .all_defs = self.all_defs,
+        .all_statements = self.all_statements,
+        .external_decls = .{ .items = .{ .items = if (external_decls_offset > 0) @as([*]ExternalDecl, @ptrFromInt(external_decls_offset))[0..self.external_decls.items.items.len] else @as([*]ExternalDecl, @ptrFromInt(@alignOf(ExternalDecl)))[0..0], .capacity = self.external_decls.items.capacity } },
+        .imports = .{
+            .map = .{
+                .metadata = if (imports_result.map_metadata_offset > 0) @ptrFromInt(imports_result.map_metadata_offset) else null,
+                .size = self.imports.map.size,
+                .available = self.imports.map.available,
+                .header = self.imports.map.header,
+            },
+            .imports = .{
+                .items = .{
+                    .ptr = if (imports_result.imports_offset > 0) @ptrFromInt(imports_result.imports_offset) else @ptrFromInt(0),
+                    .len = self.imports.imports.items.len,
+                },
+                .capacity = self.imports.imports.capacity,
+            },
+            .strings = .{
+                .items = .{
+                    .ptr = if (imports_result.strings_offset > 0) @ptrFromInt(imports_result.strings_offset) else @ptrFromInt(0),
+                    .len = self.imports.strings.items.len,
+                },
+                .capacity = self.imports.strings.capacity,
+            },
+        },
+        .module_name = if (module_name_offset > 0) .{ .ptr = @ptrFromInt(module_name_offset), .len = self.module_name.len } else .{ .ptr = @ptrFromInt(0), .len = 0 },
+    };
+
+    // Set up NodeStore in the header
+    cir_header.store = .{
+        .gpa = std.mem.Allocator{
+            .ptr = @ptrFromInt(1),
+            .vtable = @ptrFromInt(@alignOf(*const std.mem.Allocator.VTable)),
+        }, // Will be set by deserializer
+        .nodes = .{
+            .items = .{
+                .bytes = if (store_result.nodes_offset > 0) @ptrFromInt(store_result.nodes_offset) else @ptrFromInt(0),
+                .len = self.store.nodes.items.len,
+                .capacity = self.store.nodes.items.capacity,
+            },
+        },
+        .regions = .{
+            .items = .{
+                .items = .{
+                    .ptr = if (store_result.regions_offset > 0) @ptrFromInt(store_result.regions_offset) else @ptrFromInt(0),
+                    .len = self.store.regions.items.items.len,
+                },
+                .capacity = self.store.regions.items.capacity,
+            },
+        },
+        .extra_data = .{
+            .items = .{
+                .ptr = if (store_result.extra_data_offset > 0) @ptrFromInt(store_result.extra_data_offset) else @ptrFromInt(0),
+                .len = self.store.extra_data.items.len,
+            },
+            .capacity = self.store.extra_data.capacity,
+        },
+        .scratch_statements = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_statements_offset > 0) @ptrFromInt(store_result.scratch_statements_offset) else @ptrFromInt(0), .len = self.store.scratch_statements.items.items.len }, .capacity = self.store.scratch_statements.items.capacity } },
+        .scratch_exprs = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_exprs_offset > 0) @ptrFromInt(store_result.scratch_exprs_offset) else @ptrFromInt(0), .len = self.store.scratch_exprs.items.items.len }, .capacity = self.store.scratch_exprs.items.capacity } },
+        .scratch_record_fields = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_record_fields_offset > 0) @ptrFromInt(store_result.scratch_record_fields_offset) else @ptrFromInt(0), .len = self.store.scratch_record_fields.items.items.len }, .capacity = self.store.scratch_record_fields.items.capacity } },
+        .scratch_match_branches = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_match_branches_offset > 0) @ptrFromInt(store_result.scratch_match_branches_offset) else @ptrFromInt(0), .len = self.store.scratch_match_branches.items.items.len }, .capacity = self.store.scratch_match_branches.items.capacity } },
+        .scratch_match_branch_patterns = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_match_branch_patterns_offset > 0) @ptrFromInt(store_result.scratch_match_branch_patterns_offset) else @ptrFromInt(0), .len = self.store.scratch_match_branch_patterns.items.items.len }, .capacity = self.store.scratch_match_branch_patterns.items.capacity } },
+        .scratch_if_branches = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_if_branches_offset > 0) @ptrFromInt(store_result.scratch_if_branches_offset) else @ptrFromInt(0), .len = self.store.scratch_if_branches.items.items.len }, .capacity = self.store.scratch_if_branches.items.capacity } },
+        .scratch_where_clauses = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_where_clauses_offset > 0) @ptrFromInt(store_result.scratch_where_clauses_offset) else @ptrFromInt(0), .len = self.store.scratch_where_clauses.items.items.len }, .capacity = self.store.scratch_where_clauses.items.capacity } },
+        .scratch_patterns = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_patterns_offset > 0) @ptrFromInt(store_result.scratch_patterns_offset) else @ptrFromInt(0), .len = self.store.scratch_patterns.items.items.len }, .capacity = self.store.scratch_patterns.items.capacity } },
+        .scratch_pattern_record_fields = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_pattern_record_fields_offset > 0) @ptrFromInt(store_result.scratch_pattern_record_fields_offset) else @ptrFromInt(0), .len = self.store.scratch_pattern_record_fields.items.items.len }, .capacity = self.store.scratch_pattern_record_fields.items.capacity } },
+        .scratch_record_destructs = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_record_destructs_offset > 0) @ptrFromInt(store_result.scratch_record_destructs_offset) else @ptrFromInt(0), .len = self.store.scratch_record_destructs.items.items.len }, .capacity = self.store.scratch_record_destructs.items.capacity } },
+        .scratch_type_annos = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_type_annos_offset > 0) @ptrFromInt(store_result.scratch_type_annos_offset) else @ptrFromInt(0), .len = self.store.scratch_type_annos.items.items.len }, .capacity = self.store.scratch_type_annos.items.capacity } },
+        .scratch_anno_record_fields = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_anno_record_fields_offset > 0) @ptrFromInt(store_result.scratch_anno_record_fields_offset) else @ptrFromInt(0), .len = self.store.scratch_anno_record_fields.items.items.len }, .capacity = self.store.scratch_anno_record_fields.items.capacity } },
+        .scratch_exposed_items = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_exposed_items_offset > 0) @ptrFromInt(store_result.scratch_exposed_items_offset) else @ptrFromInt(0), .len = self.store.scratch_exposed_items.items.items.len }, .capacity = self.store.scratch_exposed_items.items.capacity } },
+        .scratch_defs = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_defs_offset > 0) @ptrFromInt(store_result.scratch_defs_offset) else @ptrFromInt(0), .len = self.store.scratch_defs.items.items.len }, .capacity = self.store.scratch_defs.items.capacity } },
+        .scratch_diagnostics = .{ .items = .{ .items = .{ .ptr = if (store_result.scratch_diagnostics_offset > 0) @ptrFromInt(store_result.scratch_diagnostics_offset) else @ptrFromInt(0), .len = self.store.scratch_diagnostics.items.items.len }, .capacity = self.store.scratch_diagnostics.items.capacity } },
+    };
+
+    // Write the header struct at the reserved offset
+    try writer.writeDeferredStruct(cir_offset, cir_header);
+
+    return struct_offset;
+}
+
+fn appendNodeStoreToIovecs(self: *const CIR, writer: *@import("../../base/iovec_serialize.zig").IovecWriter) !NodeStoreSerializationResult {
+    var result: NodeStoreSerializationResult = std.mem.zeroes(NodeStoreSerializationResult);
+
+    // Serialize nodes
+    if (self.store.nodes.items.len > 0) {
+        result.nodes_offset = try writer.appendAligned(self.store.nodes.items.bytes, @alignOf(Node));
+    }
+
+    // Serialize regions
+    if (self.store.regions.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.regions.items.items);
+        result.regions_offset = try writer.appendAligned(data, @alignOf(base.Region));
+    }
+
+    // Serialize extra_data
+    if (self.store.extra_data.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.extra_data.items);
+        result.extra_data_offset = try writer.appendAligned(data, @alignOf(u32));
+    }
+
+    // Serialize all scratch arrays
+    if (self.store.scratch_statements.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_statements.items.items);
+        result.scratch_statements_offset = try writer.appendAligned(data, @alignOf(CIR.Statement.Idx));
+    }
+
+    if (self.store.scratch_exprs.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_exprs.items.items);
+        result.scratch_exprs_offset = try writer.appendAligned(data, @alignOf(CIR.Expr.Idx));
+    }
+
+    if (self.store.scratch_record_fields.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_record_fields.items.items);
+        result.scratch_record_fields_offset = try writer.appendAligned(data, @alignOf(CIR.RecordField.Idx));
+    }
+
+    if (self.store.scratch_match_branches.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_match_branches.items.items);
+        result.scratch_match_branches_offset = try writer.appendAligned(data, @alignOf(CIR.Expr.Match.Branch.Idx));
+    }
+
+    if (self.store.scratch_match_branch_patterns.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_match_branch_patterns.items.items);
+        result.scratch_match_branch_patterns_offset = try writer.appendAligned(data, @alignOf(CIR.Expr.Match.BranchPattern.Idx));
+    }
+
+    if (self.store.scratch_if_branches.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_if_branches.items.items);
+        result.scratch_if_branches_offset = try writer.appendAligned(data, @alignOf(CIR.Expr.IfBranch.Idx));
+    }
+
+    if (self.store.scratch_where_clauses.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_where_clauses.items.items);
+        result.scratch_where_clauses_offset = try writer.appendAligned(data, @alignOf(CIR.WhereClause.Idx));
+    }
+
+    if (self.store.scratch_patterns.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_patterns.items.items);
+        result.scratch_patterns_offset = try writer.appendAligned(data, @alignOf(CIR.Pattern.Idx));
+    }
+
+    if (self.store.scratch_pattern_record_fields.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_pattern_record_fields.items.items);
+        result.scratch_pattern_record_fields_offset = try writer.appendAligned(data, @alignOf(CIR.PatternRecordField.Idx));
+    }
+
+    if (self.store.scratch_record_destructs.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_record_destructs.items.items);
+        result.scratch_record_destructs_offset = try writer.appendAligned(data, @alignOf(CIR.Pattern.RecordDestruct.Idx));
+    }
+
+    if (self.store.scratch_type_annos.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_type_annos.items.items);
+        result.scratch_type_annos_offset = try writer.appendAligned(data, @alignOf(CIR.TypeAnno.Idx));
+    }
+
+    if (self.store.scratch_anno_record_fields.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_anno_record_fields.items.items);
+        result.scratch_anno_record_fields_offset = try writer.appendAligned(data, @alignOf(CIR.TypeAnno.RecordField.Idx));
+    }
+
+    if (self.store.scratch_exposed_items.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_exposed_items.items.items);
+        result.scratch_exposed_items_offset = try writer.appendAligned(data, @alignOf(CIR.ExposedItem.Idx));
+    }
+
+    if (self.store.scratch_defs.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_defs.items.items);
+        result.scratch_defs_offset = try writer.appendAligned(data, @alignOf(CIR.Def.Idx));
+    }
+
+    if (self.store.scratch_diagnostics.items.items.len > 0) {
+        const data = std.mem.sliceAsBytes(self.store.scratch_diagnostics.items.items);
+        result.scratch_diagnostics_offset = try writer.appendAligned(data, @alignOf(CIR.Diagnostic.Idx));
+    }
+
+    return result;
+}
+
+fn appendImportsToIovecs(self: *const CIR, writer: *@import("../../base/iovec_serialize.zig").IovecWriter) !ImportsSerializationResult {
+    var result: ImportsSerializationResult = std.mem.zeroes(ImportsSerializationResult);
+
+    // For now, serialize imports to a temporary buffer
+    // This maintains compatibility with the complex hash map serialization
+    const size = self.imports.serializedSize();
+    if (size > 0) {
+        const allocator = writer.iovecs.allocator;
+        const buffer = try allocator.alloc(u8, size);
+        defer allocator.free(buffer);
+
+        const serialized = try self.imports.serializeInto(buffer);
+        const start_offset = writer.getOffset();
+        try writer.appendBytes(serialized);
+
+        // Set offsets based on the structure of Import.Store serialization
+        // This is a bit hacky but maintains compatibility
+        result.map_metadata_offset = start_offset;
+        // The other offsets would need to be calculated based on the internal structure
+        // For now, we'll leave them as 0 since the imports will be deserialized as a whole
+    }
+
+    return result;
+}
+
 const NodeStoreSerializationResult = struct {
     nodes_offset: usize,
     regions_offset: usize,
