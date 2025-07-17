@@ -1387,6 +1387,61 @@ fn canonicalizeDeclWithAnnotation(
     return def_idx;
 }
 
+fn parseSingleQuoteCodepoint(
+    inner_text: []const u8,
+) ?u21 {
+    const escaped = inner_text[0] == '\\';
+
+    if (escaped) {
+        const c = inner_text[1];
+        switch (c) {
+            'u' => {
+                const hex_code = inner_text[3 .. inner_text.len - 1];
+                const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch {
+                    return null;
+                };
+
+                if (!std.unicode.utf8ValidCodepoint(codepoint)) {
+                    return null;
+                }
+
+                return codepoint;
+            },
+            '\\', '"', '\'', '$' => {
+                return c;
+            },
+            'n' => {
+                return '\n';
+            },
+            'r' => {
+                return '\r';
+            },
+            't' => {
+                return '\t';
+            },
+            else => {
+                return null;
+            },
+        }
+    } else {
+        const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
+            error.InvalidUtf8 => {
+                return null;
+            },
+        };
+
+        var iterator = view.iterator();
+
+        if (iterator.nextCodepoint()) |codepoint| {
+            std.debug.assert(iterator.nextCodepoint() == null);
+            return codepoint;
+        } else {
+            // only single valid utf8 codepoint can be here after tokenization
+            unreachable;
+        }
+    }
+}
+
 fn canonicalizeSingleQuote(
     self: *Self,
     token_region: AST.TokenizedRegion,
@@ -1398,77 +1453,7 @@ fn canonicalizeSingleQuote(
     // Resolve to a string slice from the source
     const token_text = self.parse_ir.resolve(token);
 
-    // Check if token is malformed (less than 2 characters means no closing quote)
-    if (token_text.len < 2) {
-        return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-            .region = region,
-        } });
-    }
-
-    var int_val: ?u21 = null;
-
-    var inner_text = token_text[1 .. token_text.len - 1];
-
-    const escaped = inner_text[0] == '\\';
-
-    if (escaped) {
-        const c = inner_text[1];
-        switch (c) {
-            'u' => {
-                const hex_code = inner_text[3 .. inner_text.len - 1];
-                const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch {
-                    return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-                        .region = region,
-                    } });
-                };
-
-                if (!std.unicode.utf8ValidCodepoint(codepoint)) {
-                    return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-                        .region = region,
-                    } });
-                }
-
-                int_val = codepoint;
-            },
-            '\\', '"', '\'', '$' => {
-                int_val = c;
-            },
-            'n' => {
-                int_val = '\n';
-            },
-            'r' => {
-                int_val = '\r';
-            },
-            't' => {
-                int_val = '\t';
-            },
-            else => {
-                return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-                    .region = region,
-                } });
-            },
-        }
-    } else {
-        const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
-            error.InvalidUtf8 => {
-                return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-                    .region = region,
-                } });
-            },
-        };
-
-        var iterator = view.iterator();
-
-        if (iterator.nextCodepoint()) |codepoint| {
-            int_val = codepoint;
-            std.debug.assert(iterator.nextCodepoint() == null);
-        } else {
-            // only single valid utf8 codepoint can be here after tokenization
-            unreachable;
-        }
-    }
-
-    if (int_val) |codepoint| {
+    if (parseSingleQuoteCodepoint(token_text[1 .. token_text.len - 1])) |codepoint| {
         const type_content = Content{ .structure = .{ .num = .{ .num_unbound = types.Num.IntRequirements{
             .sign_needed = false,
             .bits_needed = @intCast(@sizeOf(u21)),
