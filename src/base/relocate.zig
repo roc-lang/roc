@@ -10,8 +10,6 @@ const collections = @import("../collections.zig");
 const types_mod = @import("../types.zig");
 const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
-const Region = @import("Region.zig");
-const canonicalize = @import("../check/canonicalize.zig");
 
 /// Relocate all pointers in a ModuleEnv by the given offset
 /// This function traverses all data structures within the ModuleEnv and adjusts
@@ -50,46 +48,13 @@ pub fn relocateModuleEnv(env: *ModuleEnv, offset: isize) void {
     }
 }
 
-/// Relocate all pointers in a CIR by the given offset
-pub fn relocateCIR(cir: *canonicalize.CIR, offset: isize) void {
-    // Relocate NodeStore
-    relocateNodeStore(&cir.store, offset);
-
-    // Relocate external_decls
-    relocateSafeList(canonicalize.CIR.ExternalDecl, &cir.external_decls, offset);
-
-    // Note: imports hash map would need reconstruction
-    // module_name is already a slice that gets relocated with the module
-}
-
-/// Relocate pointers in a NodeStore
-fn relocateNodeStore(store: *canonicalize.CIR.NodeStore, offset: isize) void {
-    // Relocate nodes (MultiArrayList)
-    relocateMultiArrayList(canonicalize.CIR.Node, &store.nodes, offset);
-
-    // Relocate regions (MultiArrayList)
-    relocateMultiArrayList(Region, &store.regions, offset);
-
-    // Relocate extra_data
-    relocateArrayListUnmanaged(u32, &store.extra_data, offset);
-
-    // Note: Scratch arrays are not serialized, they're working memory
-}
-
 /// Relocate pointers in an Ident.Store
 fn relocateIdentStore(store: *Ident.Store, offset: isize) void {
-    // The Ident.Store contains:
-    // - interner: SmallStringInterner which has:
-    //   - bytes: std.ArrayListUnmanaged(u8)
-    //   - strings: StringIdx.Table (hash map - needs special handling)
-    //   - outer_indices: std.ArrayListUnmanaged(StringIdx)
-    //   - regions: std.ArrayListUnmanaged(Region)
-    // - attributes: std.ArrayListUnmanaged(Attributes)
-    relocateArrayListUnmanaged(u8, &store.interner.bytes, offset);
-    // Note: strings hash map needs reconstruction, not simple relocation
-    relocateArrayListUnmanaged(collections.SmallStringInterner.StringIdx, &store.interner.outer_indices, offset);
-    relocateArrayListUnmanaged(Region, &store.interner.regions, offset);
-    relocateArrayListUnmanaged(Ident.Attributes, &store.attributes, offset);
+    // The SmallStringInterner contains:
+    // - buffer: std.ArrayListUnmanaged(u8)
+    // - string_offsets: std.ArrayListUnmanaged(u32)
+    relocateArrayListUnmanaged(u8, &store.store.buffer, offset);
+    relocateArrayListUnmanaged(u32, &store.store.string_offsets, offset);
 }
 
 /// Relocate pointers in a StringLiteral.Store
@@ -191,11 +156,18 @@ fn relocateArrayListUnmanaged(comptime T: type, list: *std.ArrayListUnmanaged(T)
 
 /// Relocate pointers in a MultiArrayList
 fn relocateMultiArrayList(comptime T: type, list: *std.MultiArrayList(T), offset: isize) void {
-    // MultiArrayList stores all data in a single bytes slice
-    // We just need to relocate this one pointer
-    if (list.bytes.len > 0) {
-        const old_ptr = @intFromPtr(list.bytes.ptr);
+    // MultiArrayList has internal fields we need to update
+    // The structure contains:
+    // - bytes: []u8 (the actual data storage)
+    // - len: usize
+    // - capacity: usize
+
+    // Access the internal bytes field directly
+    const bytes_ptr = &@field(list, "bytes");
+
+    if (bytes_ptr.len > 0) {
+        const old_ptr = @intFromPtr(bytes_ptr.ptr);
         const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-        list.bytes.ptr = @ptrFromInt(new_ptr);
+        bytes_ptr.ptr = @ptrFromInt(new_ptr);
     }
 }

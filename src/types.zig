@@ -11,7 +11,6 @@ const types = @import("./types/types.zig");
 // Get rid of all of the reexporting. types.zig and types/types.zig should not exist separately.
 pub const Alias = types.Alias;
 pub const Content = types.Content;
-pub const Descriptor = types.Descriptor;
 pub const FlatType = types.FlatType;
 pub const Func = types.Func;
 pub const NominalType = types.NominalType;
