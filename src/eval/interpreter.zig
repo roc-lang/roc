@@ -15,6 +15,7 @@ const target = @import("../base/target.zig");
 const base = @import("../base.zig");
 const collections = @import("../collections.zig");
 
+/// Errors that can occur during expression evaluation
 pub const EvalError = error{
     Crash,
     OutOfMemory,
@@ -52,6 +53,7 @@ const WorkKind = enum {
     if_check_condition,
 };
 
+/// Represents a unit of work to be processed during evaluation
 pub const WorkItem = struct {
     kind: WorkKind,
     expr_idx: CIR.Expr.Idx,

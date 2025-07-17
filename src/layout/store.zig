@@ -679,7 +679,7 @@ pub const Store = struct {
                         if (tags.len == 2) {
                             var is_bool = true;
                             for (tags.items(.args)) |tag_args| {
-                                const args_slice = self.types_store.getTagArgsSlice(tag_args);
+                                const args_slice = self.types_store.sliceVars(tag_args);
                                 if (args_slice.len != 0) {
                                     is_bool = false;
                                     break;
@@ -710,7 +710,7 @@ pub const Store = struct {
                         // If all tags have no payload, we just need the discriminant
                         var has_payload = false;
                         for (tags.items(.args)) |tag_args| {
-                            const args_slice = self.types_store.getTagArgsSlice(tag_args);
+                            const args_slice = self.types_store.sliceVars(tag_args);
                             if (args_slice.len > 0) {
                                 has_payload = true;
                                 break;
