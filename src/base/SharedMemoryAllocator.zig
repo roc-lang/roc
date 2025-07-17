@@ -9,7 +9,8 @@
 //! Parent process:
 //! ```zig
 //! const page_size = try SharedMemoryAllocator.getSystemPageSize();
-//! var shm = try SharedMemoryAllocator.create(allocator, "myapp_12345", 1024 * 1024 * 1024, page_size);
+//! const size = 1024 * 1024 * 1024; // 1GB
+//! var shm = try SharedMemoryAllocator.create(allocator, "myapp_12345", size, page_size);
 //! defer shm.deinit(allocator);
 //!
 //! // Use the allocator...
@@ -114,10 +115,6 @@ const Handle = switch (builtin.os.tag) {
     else => std.posix.fd_t,
 };
 
-/// Default size for the shared memory region (1GB)
-/// This is virtual memory - physical pages are only allocated when written to
-pub const DEFAULT_SIZE = 1 * 1024 * 1024 * 1024;
-
 /// Error type for unsupported operating systems
 pub const PageSizeError = error{UnsupportedOperatingSystem};
 
@@ -147,11 +144,8 @@ pub fn getSystemPageSize() PageSizeError!usize {
     };
 
     // Ensure page_size is a power of 2 (required for alignForward)
-    // If not, round up to the next power of 2
-    if (!std.math.isPowerOfTwo(page_size)) {
-        return std.math.ceilPowerOfTwo(usize, page_size) catch 4096;
-    }
-    return page_size;
+    // Round up to the next power of 2 if needed (no-op if already power of 2)
+    return std.math.ceilPowerOfTwo(usize, page_size) catch 4096;
 }
 
 /// Creates a new shared memory region with the given name and size

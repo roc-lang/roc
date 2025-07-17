@@ -65,6 +65,9 @@ const ColorPalette = reporting.ColorPalette;
 
 const legalDetailsFileContent = @embedFile("legal_details");
 
+/// Default size for shared memory allocator (1GB)
+const SHARED_MEMORY_SIZE = 1 * 1024 * 1024 * 1024;
+
 /// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
@@ -537,7 +540,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                     },
                 }
             };
-            shm_opt = try SharedMemoryAllocator.create(gpa, shm_name, SharedMemoryAllocator.DEFAULT_SIZE, page_size);
+            shm_opt = try SharedMemoryAllocator.create(gpa, shm_name, SHARED_MEMORY_SIZE, page_size);
             const shm_allocator = shm_opt.?.allocator();
 
             // Process with shared memory
