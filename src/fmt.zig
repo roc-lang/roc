@@ -428,8 +428,9 @@ const Formatter = struct {
                     const items_region = fmt.regionInSlice(AST.ExposedItem.Idx, items);
                     // This is a near copy of formatCollection because to make that function
                     // work correctly, the exposed items have to be in a new Node type that
-                    // will have its own region
-                    const items_multiline = fmt.ast.regionIsMultiline(items_region);
+                    // will have its own region.
+                    // Include the open and close squares.
+                    const items_multiline = fmt.ast.regionIsMultiline(.{ .start = items_region.start - 1, .end = items_region.end + 1 });
                     const braces = Braces.square;
                     try fmt.push(braces.start());
                     if (items.len == 0) {
@@ -443,6 +444,7 @@ const Formatter = struct {
                             const arg_region = fmt.nodeRegion(@intFromEnum(item));
                             if (items_multiline) {
                                 _ = try fmt.flushCommentsBefore(arg_region.start);
+                                try fmt.ensureNewline();
                                 try fmt.pushIndent();
                             }
                             _ = try fmt.formatExposedItem(item);
@@ -450,14 +452,15 @@ const Formatter = struct {
                                 try fmt.pushAll(", ");
                             }
                             if (items_multiline) {
-                                try fmt.push(',');
-                                if (x == items.len - 1) {
-                                    _ = try fmt.flushCommentsAfter(arg_region.end);
+                                if (x != items.len - 1) {
+                                    try fmt.push(',');
                                 }
                             }
                             x += 1;
                         }
                         if (items_multiline) {
+                            _ = try fmt.flushCommentsBefore(i.region.end - 1);
+                            try fmt.ensureNewline();
                             fmt.curr_indent -= 1;
                             try fmt.pushIndent();
                         }

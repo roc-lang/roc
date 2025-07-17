@@ -1197,7 +1197,9 @@ app [main!] { pf: platform "c" }
 import pf.Stdout exposing [line!]
 
 import Stdot
-	exposing [Cust]
+	exposing [ # tem
+		Cust
+	]
 
 import Bae as Gooe
 import
