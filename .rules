@@ -79,13 +79,13 @@ When writing Roc code in tests or examples, remember these syntax rules:
 
 - **Naming Convention**: Roc uses `snake_case` for identifiers, not `camelCase`
 - **Boolean Operators**: Use `and` and `or` keywords, not `&&` or `||`
-- **Lambda Syntax**: Anonymous functions use bars: `my_fn = |arg1, arg2| other_fn arg1 arg2`
+- **Lambda Syntax**: Anonymous functions use bars: `my_fn = |arg1, arg2| other_fn(arg1, arg2)`
 - **If Expressions**: The syntax is `if condition then_branch else else_branch` with no `then` keyword
 - **Blocks**: Use curly braces to define inline variables. The last expression in the block is its return value:
   ```
   my_fn = |arg1, arg2| {
       inline = arg1
-      inline2 = other_fn inline arg2
+      inline2 = other_fn(inline, arg2)
       answer = inline + inline2
 
       answer
