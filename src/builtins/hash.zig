@@ -34,7 +34,7 @@ const primes = [_]u64{
 
 fn read_bytes(comptime bytes: u8, data: []const u8) u64 {
     const T = std.meta.Int(.unsigned, 8 * bytes);
-    return mem.readIntLittle(T, data[0..bytes]);
+    return std.mem.readInt(T, data[0..bytes], .little);
 }
 
 fn read_8bytes_swapped(data: []const u8) u64 {
@@ -88,7 +88,7 @@ const WyhashStateless = struct {
 
         var off: usize = 0;
         while (off < b.len) : (off += 32) {
-            @call(.{ .modifier = .always_inline }, self.round, .{b[off .. off + 32]});
+            self.round(b[off .. off + 32]);
         }
 
         self.msg_len += b.len;
@@ -143,9 +143,10 @@ const WyhashStateless = struct {
     pub fn hash(seed: u64, input: []const u8) u64 {
         const aligned_len = input.len - (input.len % 32);
 
-        var c = WyhashStateless.init(seed);
-        @call(.{ .modifier = .always_inline }, c.update, .{input[0..aligned_len]});
-        return @call(.{ .modifier = .always_inline }, c.final, .{input[aligned_len..]});
+        const c = WyhashStateless.init(seed);
+        var hasher = c;
+        hasher.update(input[0..aligned_len]);
+        return hasher.final(input[aligned_len..]);
     }
 };
 
@@ -170,7 +171,7 @@ pub const Wyhash = struct {
 
         if (self.buf_len != 0 and self.buf_len + b.len >= 32) {
             off += 32 - self.buf_len;
-            mem.copy(u8, self.buf[self.buf_len..], b[0..off]);
+            @memcpy(self.buf[self.buf_len .. self.buf_len + off], b[0..off]);
             self.state.update(self.buf[0..]);
             self.buf_len = 0;
         }
@@ -179,8 +180,9 @@ pub const Wyhash = struct {
         const aligned_len = remain_len - (remain_len % 32);
         self.state.update(b[off .. off + aligned_len]);
 
-        mem.copy(u8, self.buf[self.buf_len..], b[off + aligned_len ..]);
-        self.buf_len += @as(u8, @intCast(b[off + aligned_len ..].len));
+        const remaining_data = b[off + aligned_len ..];
+        @memcpy(self.buf[self.buf_len .. self.buf_len + remaining_data.len], remaining_data);
+        self.buf_len += @as(u8, @intCast(remaining_data.len));
     }
 
     pub fn final(self: *Wyhash) u64 {
@@ -236,7 +238,7 @@ test "test vectors streaming" {
 
 test "iterative non-divisible update" {
     var buf: [8192]u8 = undefined;
-    for (buf, 0..) |*e, i| {
+    for (&buf, 0..) |*e, i| {
         e.* = @as(u8, @truncate(i));
     }
 
@@ -249,7 +251,7 @@ test "iterative non-divisible update" {
         var wy = Wyhash.init(seed);
         var i: usize = 0;
         while (i < end) : (i += 33) {
-            wy.update(buf[i..std.math.min(i + 33, end)]);
+            wy.update(buf[i..@min(i + 33, end)]);
         }
         const iterative_hash = wy.final();
 

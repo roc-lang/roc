@@ -199,11 +199,11 @@ pub const RocList = extern struct {
         return (ptr - 1)[0];
     }
 
-    pub fn makeUniqueExtra(self: RocList, alignment: u32, element_width: usize, elements_refcounted: bool, dec: Dec, update_mode: UpdateMode) RocList {
+    pub fn makeUniqueExtra(self: RocList, alignment: u32, element_width: usize, elements_refcounted: bool, inc: Inc, dec: Dec, update_mode: UpdateMode) RocList {
         if (update_mode == .InPlace) {
             return self;
         } else {
-            return self.makeUnique(alignment, element_width, elements_refcounted, dec);
+            return self.makeUnique(alignment, element_width, elements_refcounted, inc, dec);
         }
     }
 
