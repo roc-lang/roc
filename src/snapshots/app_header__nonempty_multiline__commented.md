@@ -48,14 +48,7 @@ CloseCurly(8:2-8:3),EndOfFile(8:3-8:3),
 ~~~
 # FORMATTED
 ~~~roc
-app # Comment after keyword
-	[ # Comment after provides open
-		main!, # Comment after exposed item
-	]
-	{ # Comment after packages open
-		pf: platform "../main.roc", # Comment after platform
-		other: "../../other/main.roc" # Comment after last package
-	}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

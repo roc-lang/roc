@@ -40,7 +40,7 @@ CloseCurly(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~roc
 app [] {
 	f: platform "",
-	r: ""
+	r: "",
 }
 ~~~
 # CANONICALIZE

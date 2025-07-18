@@ -395,7 +395,7 @@ import ExternalModule as ExtMod
 
 # Simple qualified type
 simpleQualified : Color.RGB
-simpleQualified = Color.RGB({r: 255, g: 0, b: 0})
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 
 # Aliased qualified type
 aliasedQualified : ExtMod.DataType
@@ -411,7 +411,7 @@ resultType = Result.Ok(42)
 
 # Function returning qualified type
 getColor : {} -> Color.RGB
-getColor = |_| Color.RGB({r: 0, g: 255, b: 0})
+getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 
 # Function accepting qualified type
 processColor : Color.RGB -> Str

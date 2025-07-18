@@ -230,7 +230,7 @@ my_empty_list = []
 my_nonempty_list = [num, frac]
 
 # Record with polymorphic field
-make_container = |value| {data: value, count: 1}
+make_container = |value| { data: value, count: 1 }
 
 # Used with different types
 int_container = make_container(num)
@@ -249,7 +249,7 @@ updated_int = update_data(int_container, 100)
 updated_str = update_data(str_container, "world")
 
 # Function returning polymorphic record
-identity_record = |x| {value: x}
+identity_record = |x| { value: x }
 
 # Used at different types
 int_record = identity_record(42)

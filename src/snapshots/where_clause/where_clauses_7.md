@@ -83,8 +83,9 @@ Hash(a, hasher) # After header
 	: # After colon
 		a # After var
 			where # After where
-				module(a).hash : hasher -> # After arrow
-					hasher, # After first clause
+				module(a).hash : hasher # After method
+					-> # After arrow
+						hasher, # After first clause
 				module(hasher).Hasher
 
 Decode(a) : a

@@ -44,7 +44,7 @@ app
 	]
 	{
 		pf: platform "../main.roc",
-		somePkg: "../main.roc"
+		somePkg: "../main.roc",
 	}
 ~~~
 # CANONICALIZE
