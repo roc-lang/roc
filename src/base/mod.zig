@@ -15,6 +15,7 @@ pub const target = @import("target.zig");
 
 pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
 pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
+pub const writeAlignedData = @import("write_aligned.zig").writeAlignedData;
 
 /// Whether a function calls itself.
 pub const Recursive = enum {

@@ -3,12 +3,12 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../../base.zig");
+const base = @import("base");
 const tracy = @import("../../tracy.zig");
-const types = @import("../../types.zig");
-const collections = @import("../../collections.zig");
+const types = @import("types");
+const collections = @import("collections");
 const reporting = @import("../../reporting.zig");
-const serialization = @import("../../serialization/mod.zig");
+const serialization = @import("serialization");
 const SExpr = base.SExpr;
 const Scratch = base.Scratch;
 const DataSpan = base.DataSpan;
@@ -21,7 +21,7 @@ const CalledVia = base.CalledVia;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
 
-pub const RocDec = @import("../../builtins/dec.zig").RocDec;
+pub const RocDec = @import("builtins").dec.RocDec;
 pub const Node = @import("Node.zig");
 pub const NodeStore = @import("NodeStore.zig");
 pub const Expr = @import("Expression.zig").Expr;
@@ -233,7 +233,7 @@ pub fn serializedSize(self: *const CIR) usize {
 /// Serialize this CIR into the provided buffer
 /// Buffer must be at least serializedSize() bytes and properly aligned
 pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
-    const writeAlignedData = @import("../../base/write_aligned.zig").writeAlignedData;
+    const writeAlignedData = base.writeAlignedData;
     var write_offset: usize = 0;
 
     // Write CIR struct with placeholder pointers
@@ -339,7 +339,7 @@ pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
 }
 
 /// Append this CIR to an iovec writer for serialization
-pub fn appendToIovecs(self: *const CIR, writer: *@import("../../base/iovec_serialize.zig").IovecWriter) !usize {
+pub fn appendToIovecs(self: *const CIR, writer: *base.iovec_serialize.IovecWriter) !usize {
     const struct_offset = writer.getOffset();
 
     // Reserve space for the CIR struct header
@@ -452,7 +452,7 @@ pub fn appendToIovecs(self: *const CIR, writer: *@import("../../base/iovec_seria
     return struct_offset;
 }
 
-fn appendNodeStoreToIovecs(self: *const CIR, writer: *@import("../../base/iovec_serialize.zig").IovecWriter) !NodeStoreSerializationResult {
+fn appendNodeStoreToIovecs(self: *const CIR, writer: *base.iovec_serialize.IovecWriter) !NodeStoreSerializationResult {
     var result: NodeStoreSerializationResult = std.mem.zeroes(NodeStoreSerializationResult);
 
     // Serialize nodes
@@ -551,7 +551,7 @@ fn appendNodeStoreToIovecs(self: *const CIR, writer: *@import("../../base/iovec_
     return result;
 }
 
-fn appendImportsToIovecs(self: *const CIR, writer: *@import("../../base/iovec_serialize.zig").IovecWriter) !ImportsSerializationResult {
+fn appendImportsToIovecs(self: *const CIR, writer: *base.iovec_serialize.IovecWriter) !ImportsSerializationResult {
     var result: ImportsSerializationResult = std.mem.zeroes(ImportsSerializationResult);
 
     const start_offset = writer.getOffset();
@@ -614,7 +614,7 @@ const NodeStoreSerializationResult = struct {
 };
 
 fn serializeNodeStoreAt(self: *const CIR, buffer: []u8, write_offset: *usize) !NodeStoreSerializationResult {
-    const writeAlignedData = @import("../../base/write_aligned.zig").writeAlignedData;
+    const writeAlignedData = base.writeAlignedData;
     var result: NodeStoreSerializationResult = std.mem.zeroes(NodeStoreSerializationResult);
 
     // Serialize nodes (MultiArrayList)

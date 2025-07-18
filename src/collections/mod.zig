@@ -17,17 +17,17 @@ pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
 
 pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 
-pub const FrozenStringMap = @import("collections/FrozenMap.zig").FrozenStringMap;
+pub const FrozenStringMap = @import("FrozenMap.zig").FrozenStringMap;
 
-pub const FrozenU32Map = @import("collections/FrozenMap.zig").FrozenU32Map;
+pub const FrozenU32Map = @import("FrozenMap.zig").FrozenU32Map;
 
-pub const BuildableFrozenStringMap = @import("collections/FrozenMap.zig").BuildableFrozenStringMap;
+pub const BuildableFrozenStringMap = @import("FrozenMap.zig").BuildableFrozenStringMap;
 
-pub const SortedArrayBuilder = @import("collections/FrozenMap.zig").SortedArrayBuilder;
+pub const SortedArrayBuilder = @import("FrozenMap.zig").SortedArrayBuilder;
 
-pub const FrozenInternMap = @import("collections/FrozenMap.zig").FrozenInternMap;
+pub const FrozenInternMap = @import("FrozenMap.zig").FrozenInternMap;
 
-pub const BuildableFrozenInternMap = @import("collections/FrozenMap.zig").BuildableFrozenInternMap;
+pub const BuildableFrozenInternMap = @import("FrozenMap.zig").BuildableFrozenInternMap;
 
 /// A range that must have at least one element
 pub const NonEmptyRange = struct {
