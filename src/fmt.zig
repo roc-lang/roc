@@ -328,7 +328,6 @@ const Formatter = struct {
         const statement = fmt.ast.store.getStatement(si);
         const node_region = fmt.nodeRegion(@intFromEnum(si));
         const multiline = fmt.ast.regionIsMultiline(node_region);
-        var flushed = false;
         const orig_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = orig_indent;
@@ -380,6 +379,7 @@ const Formatter = struct {
                 _ = try fmt.formatExpr(e.expr);
             },
             .import => |i| {
+                var flushed = false;
                 try fmt.pushAll("import");
                 if (multiline) {
                     flushed = try fmt.flushCommentsBefore(if (i.qualifier_tok) |q| q else i.module_name_tok);
@@ -400,8 +400,10 @@ const Formatter = struct {
                         if (flushed) {
                             fmt.curr_indent += 1;
                             try fmt.pushIndent();
+                            try fmt.pushAll("as");
+                        } else {
+                            try fmt.pushAll(" as");
                         }
-                        try fmt.pushAll("as");
                         flushed = try fmt.flushCommentsBefore(a);
                         if (!flushed) {
                             try fmt.push(' ');
