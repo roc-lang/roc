@@ -523,7 +523,7 @@ fn appendIdentsToIovecs(self: *const Self, writer: *iovec_serialize.IovecWriter)
         const aligned_offset = std.mem.alignForward(usize, writer.getOffset(), @alignOf(@TypeOf(metadata)));
         const padding = aligned_offset - writer.getOffset();
         if (padding > 0) {
-            try writer.appendBytes(&@import("write_aligned.zig").ZERO_PADDING[0..padding]);
+            try writer.appendBytes(@import("write_aligned.zig").ZERO_PADDING[0..padding]);
         }
         result.strings_metadata_offset = writer.getOffset();
 

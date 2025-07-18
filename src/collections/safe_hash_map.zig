@@ -121,15 +121,25 @@ pub fn SafeStringHashMap(comptime V: type) type {
         pub fn appendToIovecs(self: *const Self, writer: *@import("../base/iovec_serialize.zig").IovecWriter) !usize {
             const start_offset = writer.getOffset();
 
-            // Create a temporary buffer for the serialized data
-            // This is not ideal but hash maps need contiguous serialization
-            const size = self.serializedSize();
-            const allocator = writer.iovecs.allocator;
-            const buffer = try allocator.alloc(u8, size);
-            defer allocator.free(buffer);
+            // Write count
+            const entry_count: u32 = @intCast(self.map.count());
+            try writer.appendStruct(entry_count);
 
-            _ = try self.serializeInto(buffer);
-            try writer.appendBytes(buffer);
+            // Write entries
+            var iter = self.map.iterator();
+            while (iter.next()) |entry| {
+                // Write key length
+                const key_len: u32 = @intCast(entry.key_ptr.len);
+                try writer.appendStruct(key_len);
+
+                // Write key bytes
+                try writer.appendBytes(entry.key_ptr.*);
+
+                // Write value bytes (if not void)
+                if (V != void) {
+                    try writer.appendStruct(entry.value_ptr.*);
+                }
+            }
 
             return start_offset;
         }

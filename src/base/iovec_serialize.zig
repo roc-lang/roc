@@ -15,6 +15,8 @@ pub const IovecWriter = struct {
     /// Deferred writes - these will be written to a buffer and added as a single iovec at the end
     deferred_writes: std.ArrayList(DeferredWrite) = undefined,
     allocator: std.mem.Allocator,
+    /// Track buffers we own and need to free
+    owned_buffers: std.ArrayList([]u8) = undefined,
 
     const Self = @This();
 
@@ -28,12 +30,18 @@ pub const IovecWriter = struct {
             .iovecs = std.ArrayList(std.posix.iovec_const).init(allocator),
             .deferred_writes = std.ArrayList(DeferredWrite).init(allocator),
             .allocator = allocator,
+            .owned_buffers = std.ArrayList([]u8).init(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.iovecs.deinit();
         self.deferred_writes.deinit();
+        // Free all owned buffers
+        for (self.owned_buffers.items) |buffer| {
+            self.allocator.free(buffer);
+        }
+        self.owned_buffers.deinit();
     }
 
     /// Get the current offset (total bytes that would be written)
@@ -86,10 +94,15 @@ pub const IovecWriter = struct {
     /// when finalize() is called
     pub fn writeDeferredStruct(self: *Self, offset: usize, value: anytype) !void {
         const bytes = std.mem.asBytes(&value);
+        // We need to copy the bytes since the value might be a temporary
+        const data_copy = try self.allocator.alloc(u8, bytes.len);
+        @memcpy(data_copy, bytes);
         try self.deferred_writes.append(.{
             .offset = offset,
-            .data = bytes,
+            .data = data_copy,
         });
+        // Track this allocation so we can free it later
+        try self.owned_buffers.append(data_copy);
     }
 
     /// Finalize the writer by applying all deferred writes
@@ -116,6 +129,9 @@ pub const IovecWriter = struct {
             .base = deferred_buffer.ptr,
             .len = deferred_buffer.len,
         });
+
+        // Track this buffer so we can free it later
+        try self.owned_buffers.append(deferred_buffer);
     }
 
     /// Get total size that would be written
@@ -142,16 +158,75 @@ pub const IovecWriter = struct {
             // Write the entire buffer at once
             try file.pwriteAll(buffer, offset);
         } else {
-            // Use pwritev on POSIX systems
+            // Use pwritev on POSIX systems with proper partial write handling
             var bytes_written: usize = 0;
+            var current_iovec: usize = 0;
+            var iovec_offset: usize = 0;
             const total_size = self.totalSize();
 
             while (bytes_written < total_size) {
-                const n = try std.posix.pwritev(file.handle, self.iovecs.items, offset + bytes_written);
+                // Create adjusted iovec array for partial writes
+                const remaining_iovecs = self.iovecs.items.len - current_iovec;
+                var adjusted_iovecs = try self.allocator.alloc(std.posix.iovec_const, remaining_iovecs);
+                defer self.allocator.free(adjusted_iovecs);
+
+                // Copy remaining iovecs, adjusting first one for partial write
+                for (self.iovecs.items[current_iovec..], 0..) |iovec, j| {
+                    if (j == 0 and iovec_offset > 0) {
+                        // Adjust first iovec for partial write
+                        adjusted_iovecs[j] = .{
+                            .base = @ptrFromInt(@intFromPtr(iovec.base) + iovec_offset),
+                            .len = iovec.len - iovec_offset,
+                        };
+                    } else {
+                        adjusted_iovecs[j] = iovec;
+                    }
+                }
+
+                const n = try std.posix.pwritev(file.handle, adjusted_iovecs, offset + bytes_written);
                 if (n == 0) return error.UnexpectedEof;
+
+                // Update position tracking
                 bytes_written += n;
+                var remaining = n;
+
+                // Figure out where we are now
+                while (remaining > 0 and current_iovec < self.iovecs.items.len) {
+                    const iovec_remaining = self.iovecs.items[current_iovec].len - iovec_offset;
+                    if (remaining >= iovec_remaining) {
+                        remaining -= iovec_remaining;
+                        current_iovec += 1;
+                        iovec_offset = 0;
+                    } else {
+                        iovec_offset += remaining;
+                        remaining = 0;
+                    }
+                }
             }
         }
+    }
+
+    /// Write all iovecs to a file atomically using a temporary file
+    /// This ensures we don't leave a partially written file on error
+    pub fn writevToFileAtomic(self: *const Self, dir: std.fs.Dir, file_path: []const u8, mode: std.fs.File.Mode) !void {
+        // Generate temporary file name
+        var tmp_name_buf: [256]u8 = undefined;
+        const tmp_name = try std.fmt.bufPrint(&tmp_name_buf, "{s}.tmp.{d}", .{ file_path, std.time.milliTimestamp() });
+
+        // Write to temporary file
+        const tmp_file = try dir.createFile(tmp_name, .{ .mode = mode });
+        defer tmp_file.close();
+
+        // If write fails, ensure temp file is deleted
+        errdefer dir.deleteFile(tmp_name) catch {};
+
+        try self.writevToFile(tmp_file, 0);
+
+        // Sync to ensure data is on disk
+        try tmp_file.sync();
+
+        // Atomically rename temp file to final name
+        try dir.rename(tmp_name, file_path);
     }
 };
 
@@ -224,4 +299,177 @@ test "IovecWriter struct serialization" {
 
     // Verify the buffer contains the expected data
     try testing.expectEqualSlices(u8, &data, buffer);
+}
+
+test "IovecWriter atomic file write" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var writer = IovecWriter.init(allocator);
+    defer writer.deinit();
+
+    // Add some test data
+    try writer.appendBytes("hello");
+    try writer.appendBytes("world");
+
+    // Create a temporary directory for testing
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Write atomically
+    try writer.writevToFileAtomic(tmp_dir.dir, "test_file.bin", 0o644);
+
+    // Verify the file exists and has correct content
+    const file = try tmp_dir.dir.openFile("test_file.bin", .{});
+    defer file.close();
+
+    var buffer: [10]u8 = undefined;
+    const bytes_read = try file.read(&buffer);
+    try testing.expectEqual(@as(usize, 10), bytes_read);
+    try testing.expectEqualStrings("helloworld", buffer[0..bytes_read]);
+
+    // Ensure no temp files remain
+    var iter = tmp_dir.dir.iterate();
+    var count: usize = 0;
+    while (try iter.next()) |entry| {
+        count += 1;
+        try testing.expectEqualStrings("test_file.bin", entry.name);
+    }
+    try testing.expectEqual(@as(usize, 1), count);
+}
+
+test "IovecWriter deferred writes memory management" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var writer = IovecWriter.init(allocator);
+    defer writer.deinit();
+
+    // Create some deferred writes
+    const TestStruct = struct { a: u32, b: u64 };
+    const offset1 = try writer.reserveStruct(TestStruct);
+    const offset2 = try writer.reserveStruct(TestStruct);
+
+    // Verify offsets are correct
+    try testing.expectEqual(@as(usize, 0), offset1);
+    try testing.expectEqual(@as(usize, @sizeOf(TestStruct)), offset2);
+
+    // Write deferred structs
+    try writer.writeDeferredStruct(offset1, TestStruct{ .a = 42, .b = 100 });
+    try writer.writeDeferredStruct(offset2, TestStruct{ .a = 84, .b = 200 });
+
+    // Finalize - this should allocate a buffer that gets tracked
+    try writer.finalize();
+
+    // Verify owned_buffers has the deferred buffer plus the two struct copies
+    try testing.expectEqual(@as(usize, 3), writer.owned_buffers.items.len);
+
+    // Verify the data is correct
+    // The finalized buffer only contains the deferred writes
+    const deferred_buffer = writer.iovecs.items[0]; // First iovec is the deferred buffer
+    try testing.expectEqual(@as(usize, @sizeOf(TestStruct) * 2), deferred_buffer.len);
+
+    // Read structs from the deferred buffer
+    const struct1 = @as(*const TestStruct, @ptrCast(@alignCast(deferred_buffer.base))).*;
+    const struct2 = @as(*const TestStruct, @ptrCast(@alignCast(deferred_buffer.base + @sizeOf(TestStruct)))).*;
+
+    try testing.expectEqual(@as(u32, 42), struct1.a);
+    try testing.expectEqual(@as(u64, 100), struct1.b);
+    try testing.expectEqual(@as(u32, 84), struct2.a);
+    try testing.expectEqual(@as(u64, 200), struct2.b);
+
+    // deinit should free the owned buffer (tested by running with leak detection)
+}
+
+test "IovecWriter partial write simulation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Test that our partial write logic correctly handles iovec boundaries
+    var writer = IovecWriter.init(allocator);
+    defer writer.deinit();
+
+    // Add multiple iovecs of different sizes
+    try writer.appendBytes("hello"); // 5 bytes
+    try writer.appendBytes("world"); // 5 bytes
+    try writer.appendBytes("foo"); // 3 bytes
+    try writer.appendBytes("bar"); // 3 bytes
+
+    // Total: 16 bytes across 4 iovecs
+
+    // Simulate partial write scenarios
+    {
+        // Scenario 1: Write stops in middle of first iovec
+        var current_iovec: usize = 0;
+        var iovec_offset: usize = 0;
+        var remaining: usize = 3; // Only 3 bytes written
+
+        while (remaining > 0 and current_iovec < writer.iovecs.items.len) {
+            const iovec_remaining = writer.iovecs.items[current_iovec].len - iovec_offset;
+            if (remaining >= iovec_remaining) {
+                remaining -= iovec_remaining;
+                current_iovec += 1;
+                iovec_offset = 0;
+            } else {
+                iovec_offset += remaining;
+                remaining = 0;
+            }
+        }
+
+        try testing.expectEqual(@as(usize, 0), current_iovec);
+        try testing.expectEqual(@as(usize, 3), iovec_offset);
+    }
+
+    {
+        // Scenario 2: Write completes first iovec and stops in second
+        var current_iovec: usize = 0;
+        var iovec_offset: usize = 0;
+        var remaining: usize = 7; // 7 bytes written
+
+        while (remaining > 0 and current_iovec < writer.iovecs.items.len) {
+            const iovec_remaining = writer.iovecs.items[current_iovec].len - iovec_offset;
+            if (remaining >= iovec_remaining) {
+                remaining -= iovec_remaining;
+                current_iovec += 1;
+                iovec_offset = 0;
+            } else {
+                iovec_offset += remaining;
+                remaining = 0;
+            }
+        }
+
+        try testing.expectEqual(@as(usize, 1), current_iovec);
+        try testing.expectEqual(@as(usize, 2), iovec_offset);
+    }
+}
+
+test "IovecWriter Windows fallback" {
+    if (builtin.os.tag != .windows) return;
+
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var writer = IovecWriter.init(allocator);
+    defer writer.deinit();
+
+    // Add some data
+    try writer.appendBytes("hello");
+    try writer.appendBytes("world");
+
+    // Create temporary file for testing
+    const tmp_dir = testing.tmp_dir;
+    const tmp_file = try tmp_dir.dir.createFile("test_iovec.bin", .{});
+    defer tmp_file.close();
+    defer tmp_dir.dir.deleteFile("test_iovec.bin") catch {};
+
+    // Write using Windows fallback
+    try writer.writevToFile(tmp_file, 0);
+
+    // Verify file contents
+    try tmp_file.seekTo(0);
+    var read_buffer: [10]u8 = undefined;
+    const bytes_read = try tmp_file.read(&read_buffer);
+
+    try testing.expectEqual(@as(usize, 10), bytes_read);
+    try testing.expectEqualStrings("helloworld", read_buffer[0..bytes_read]);
 }

@@ -809,17 +809,134 @@ pub const Store = struct {
     pub fn appendToIovecs(self: *const Self, writer: *@import("../base/iovec_serialize.zig").IovecWriter) !usize {
         const start_offset = writer.getOffset();
 
-        // For now, serialize to a temporary buffer and append it
-        // This maintains compatibility with the existing serialization format
-        const size = self.serializedSize();
-        const allocator = writer.iovecs.allocator;
-        const buffer = try allocator.alloc(u8, size);
-        defer allocator.free(buffer);
+        // Reserve space for size headers (5 u32 values)
+        const header_offset = writer.getOffset();
+        try writer.appendBytes(&[_]u8{0} ** (@sizeOf(u32) * 5));
 
-        _ = try self.serializeInto(buffer);
-        try writer.appendBytes(buffer);
+        // Align for slots
+        _ = try writer.appendAligned(&[_]u8{}, SERIALIZATION_ALIGNMENT);
+
+        // Append slots
+        const slots_size = self.slots.serializedSize();
+        if (slots_size > 0) {
+            try self.appendSlotStoreToIovecs(writer);
+        }
+
+        // Append descs
+        const descs_size = self.descs.serializedSize();
+        if (descs_size > 0) {
+            try appendDescStoreToIovecs(&self.descs, writer);
+        }
+
+        // Align for record_fields
+        _ = try writer.appendAligned(&[_]u8{}, SERIALIZATION_ALIGNMENT);
+
+        // Append record_fields
+        const record_fields_size = self.record_fields.serializedSize();
+        if (record_fields_size > 0) {
+            try appendSafeMultiListToIovecs(RecordField, &self.record_fields, writer);
+        }
+
+        // Align for tags
+        _ = try writer.appendAligned(&[_]u8{}, SERIALIZATION_ALIGNMENT);
+
+        // Append tags
+        const tags_size = self.tags.serializedSize();
+        if (tags_size > 0) {
+            try appendSafeMultiListToIovecs(Tag, &self.tags, writer);
+        }
+
+        // Align for vars
+        _ = try writer.appendAligned(&[_]u8{}, SERIALIZATION_ALIGNMENT);
+
+        // Append vars
+        const vars_size = self.vars.serializedSize();
+        if (vars_size > 0) {
+            try appendSafeListToIovecs(Var, &self.vars, writer);
+        }
+
+        // Final alignment
+        _ = try writer.appendAligned(&[_]u8{}, SERIALIZATION_ALIGNMENT);
+
+        // Write size headers as deferred writes
+        var size_headers: [5]u32 = undefined;
+        size_headers[0] = @intCast(slots_size);
+        size_headers[1] = @intCast(descs_size);
+        size_headers[2] = @intCast(record_fields_size);
+        size_headers[3] = @intCast(tags_size);
+        size_headers[4] = @intCast(vars_size);
+
+        try writer.writeDeferredStruct(header_offset, size_headers);
 
         return start_offset;
+    }
+
+    fn appendSlotStoreToIovecs(self: *const Self, writer: *@import("../base/iovec_serialize.zig").IovecWriter) !void {
+        // SlotStore is a wrapper around SafeList(Slot)
+        try appendSafeListToIovecs(Slot, &self.slots.backing, writer);
+    }
+
+    fn appendDescStoreToIovecs(descs: *const DescStore, writer: *@import("../base/iovec_serialize.zig").IovecWriter) !void {
+        // DescStore has a more complex structure
+        // First write the count
+        const count: u32 = @intCast(descs.backing.len());
+        try writer.appendStruct(count);
+
+        // Then write each descriptor
+        var iter = descs.backing.iterator();
+        while (iter.next()) |*desc| {
+            try appendDescriptorToIovecs(desc, writer);
+        }
+    }
+
+    fn appendDescriptorToIovecs(desc: *const Desc, writer: *@import("../base/iovec_serialize.zig").IovecWriter) !void {
+        // A Descriptor contains Content, Rank, and Mark
+        // For now, serialize to a small buffer since descriptors are complex
+        const size = @sizeOf(Desc);
+        const buffer = try writer.allocator.alloc(u8, size);
+        defer writer.allocator.free(buffer);
+
+        // Serialize the descriptor
+        @memcpy(buffer[0..@sizeOf(Content)], std.mem.asBytes(&desc.content));
+        @memcpy(buffer[@sizeOf(Content) .. @sizeOf(Content) + @sizeOf(Rank)], std.mem.asBytes(&desc.rank));
+        @memcpy(buffer[@sizeOf(Content) + @sizeOf(Rank) ..], std.mem.asBytes(&desc.mark));
+
+        try writer.appendBytes(buffer);
+    }
+
+    fn appendSafeListToIovecs(comptime T: type, list: *const collections.SafeList(T), writer: *@import("../base/iovec_serialize.zig").IovecWriter) !void {
+        // Write count
+        const count: u32 = @intCast(list.items.items.len);
+        try writer.appendStruct(count);
+
+        // Write items
+        if (list.items.items.len > 0) {
+            const bytes = std.mem.sliceAsBytes(list.items.items);
+            try writer.appendBytes(bytes);
+        }
+    }
+
+    fn appendSafeMultiListToIovecs(comptime T: type, list: *const collections.SafeMultiList(T), writer: *@import("../base/iovec_serialize.zig").IovecWriter) !void {
+        // SafeMultiList has items and indices
+        // Write items count
+        const items_count: u32 = @intCast(list.items.items.len);
+        try writer.appendStruct(items_count);
+
+        // Write items
+        if (list.items.items.len > 0) {
+            const items_bytes = std.mem.sliceAsBytes(list.items.items);
+            try writer.appendBytes(items_bytes);
+        }
+
+        // Write indices count
+        const indices_count: u32 = @intCast(list.indices.items.len);
+        try writer.appendStruct(indices_count);
+
+        // Write indices
+        if (list.indices.items.len > 0) {
+            const indices_bytes = std.mem.sliceAsBytes(list.indices.items);
+            try writer.appendBytes(indices_bytes);
+        }
     }
 
     /// Deserialize a Store from the provided buffer
