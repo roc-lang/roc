@@ -1105,6 +1105,7 @@ const Formatter = struct {
                     branch_region = fmt.nodeRegion(@intFromEnum(b));
                     const branch = fmt.ast.store.getBranch(b);
                     _ = try fmt.flushCommentsBefore(branch_region.start);
+                    try fmt.ensureNewline();
                     try fmt.pushIndent();
                     const pattern_region = try fmt.formatPattern(branch.pattern);
                     var flushed = try fmt.flushCommentsBefore(pattern_region.end);

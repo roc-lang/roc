@@ -235,7 +235,8 @@ olor = |color| {
 	
 	Color.RGB
 
-	match color {		RGB => LocalStatus.Pending
+	match color {
+		RGB => LocalStatus.Pending
 		Green => LocalStatus - Complete
 		B.Blue => LocalStatus.Pending
 	}

@@ -1507,14 +1507,16 @@ match_time = |
 	a, # rg
 	b,
 | # As
-	match a {		lue | Red => {
+	match a {
+		lue | Red => {
 			x
 			x
 		}
 		Blue => 1
 		"foo" => # ent
 			00
-		"foo" | "bar" => 20		[1, 2, 3, .. as rest] # Aftet
+		"foo" | "bar" => 20
+		[1, 2, 3, .. as rest] # Aftet
 			=> ment
 
 
