@@ -93,3 +93,16 @@ pub fn calcLineStarts(self: *Self, source: []const u8) !void {
 pub fn calcRegionInfo(self: *const Self, source: []const u8, begin: u32, end: u32) !RegionInfo {
     return RegionInfo.position(source, self.line_starts.items.items, begin, end);
 }
+
+/// Freeze all interners in this module environment, preventing any new entries from being added.
+/// This should be called after parsing is complete.
+pub fn freezeInterners(self: *Self) void {
+    self.idents.freeze();
+    self.strings.freeze();
+}
+
+/// Temporarily unfreeze all interners in this module environment.
+pub fn unfreezeInterners(self: *Self) void {
+    self.idents.unfreeze();
+    self.strings.unfreeze();
+}

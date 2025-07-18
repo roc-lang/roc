@@ -782,15 +782,12 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                             var origin_module: ?*const CIR = null;
 
                             // Check if it's the current module
-                            const current_module_ident = try self.cir.env.idents.insert(self.gpa, base.Ident.for_text(self.cir.module_name), base.Region.zero());
-                            if (std.mem.eql(u8, origin_module_path, self.cir.env.idents.getText(current_module_ident))) {
+                            if (std.mem.eql(u8, origin_module_path, self.cir.module_name)) {
                                 origin_module = self.cir;
                             } else {
                                 // Search through imported modules
                                 for (self.other_modules, 0..) |other_module, idx| {
-                                    const other_module_ident = try other_module.env.idents.insert(self.gpa, base.Ident.for_text(other_module.module_name), base.Region.zero());
-                                    const other_path = other_module.env.idents.getText(other_module_ident);
-                                    if (std.mem.eql(u8, origin_module_path, other_path)) {
+                                    if (std.mem.eql(u8, origin_module_path, other_module.module_name)) {
                                         origin_module_idx = @enumFromInt(idx);
                                         origin_module = other_module;
                                         break;

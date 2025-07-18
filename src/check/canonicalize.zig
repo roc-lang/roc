@@ -779,6 +779,9 @@ pub fn canonicalizeFile(
 
     // Assert that everything is in-sync
     self.can_ir.debugAssertArraysInSync();
+
+    // Freeze the interners after canonicalization is complete
+    self.can_ir.env.freezeInterners();
 }
 
 fn createExposedScope(

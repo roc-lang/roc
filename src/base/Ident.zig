@@ -377,7 +377,17 @@ pub const Store = struct {
 
     /// Get the region for an identifier.
     pub fn getRegion(self: *const Store, idx: Idx) Region {
-        return self.interner.getRegion(@enumFromInt(@as(u32, idx.idx)));
+        return self.interner.getRegion(@enumFromInt(idx.idx));
+    }
+
+    /// Freeze the identifier store, preventing any new entries from being added.
+    pub fn freeze(self: *Store) void {
+        self.interner.freeze();
+    }
+
+    /// Temporarily unfreeze the identifier store.
+    pub fn unfreeze(self: *Store) void {
+        self.interner.unfreeze();
     }
 };
 
