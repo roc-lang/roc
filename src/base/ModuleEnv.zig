@@ -290,63 +290,18 @@ pub fn serializeInto(self: *const Self, buffer: []u8) !usize {
 }
 
 const IdentsSerializationResult = struct {
-    bytes_offset: usize,
-    indices_offset: usize,
-    regions_offset: usize,
-    strings_metadata_offset: usize,
-    attributes_offset: usize,
+    offset: usize,
+    size: usize,
 };
 
 fn serializeIdentsAt(self: *const Self, buffer: []u8, write_offset: *usize) !IdentsSerializationResult {
-    var result = IdentsSerializationResult{
-        .bytes_offset = 0,
-        .indices_offset = 0,
-        .regions_offset = 0,
-        .strings_metadata_offset = 0,
-        .attributes_offset = 0,
-    };
+    var result: IdentsSerializationResult = std.mem.zeroes(IdentsSerializationResult);
 
-    // Serialize interner bytes
-    if (self.idents.interner.bytes.items.len > 0) {
-        result.bytes_offset = writeAlignedData(buffer, write_offset, self.idents.interner.bytes.items, @alignOf(u8));
-    }
-
-    // Serialize interner outer_indices
-    if (self.idents.interner.outer_indices.items.len > 0) {
-        const data = std.mem.sliceAsBytes(self.idents.interner.outer_indices.items);
-        result.indices_offset = writeAlignedData(buffer, write_offset, data, @alignOf(@TypeOf(self.idents.interner.outer_indices.items[0])));
-    }
-
-    // Serialize interner regions
-    if (self.idents.interner.regions.items.len > 0) {
-        const data = std.mem.sliceAsBytes(self.idents.interner.regions.items);
-        result.regions_offset = writeAlignedData(buffer, write_offset, data, @alignOf(@TypeOf(self.idents.interner.regions.items[0])));
-    }
-
-    // Serialize StringIdx.Table
-    if (self.idents.interner.strings.metadata) |metadata| {
-        write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf(@TypeOf(metadata)));
-        result.strings_metadata_offset = write_offset.*;
-
-        const capacity = self.idents.interner.strings.capacity();
-        const metadata_size = capacity;
-
-        // Write metadata bytes
-        @memcpy(buffer[write_offset.*..][0..metadata_size], @as([*]const u8, @ptrCast(metadata))[0..metadata_size]);
-        write_offset.* += metadata_size;
-
-        // Write the keys and values data that follows metadata
-        const entry_size = capacity * @sizeOf(collections.SmallStringInterner.StringIdx) + capacity * @sizeOf(void);
-        const data_ptr = @as([*]const u8, @ptrCast(metadata)) + metadata_size;
-        @memcpy(buffer[write_offset.*..][0..entry_size], data_ptr[0..entry_size]);
-        write_offset.* += entry_size;
-    }
-
-    // Serialize attributes
-    if (self.idents.attributes.items.len > 0) {
-        const data = std.mem.sliceAsBytes(self.idents.attributes.items);
-        result.attributes_offset = writeAlignedData(buffer, write_offset, data, @alignOf(@TypeOf(self.idents.attributes.items[0])));
-    }
+    // Use Ident.Store's own serialization which properly handles the frozen interner
+    result.offset = write_offset.*;
+    const ident_bytes = try self.idents.serializeInto(buffer[write_offset.*..], self.gpa);
+    result.size = ident_bytes.len;
+    write_offset.* += ident_bytes.len;
 
     return result;
 }

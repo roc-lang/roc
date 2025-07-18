@@ -117,42 +117,6 @@ pub fn SafeStringHashMap(comptime V: type) type {
             return buffer[0..offset];
         }
 
-        /// Append this hash map to an iovec writer for serialization
-        pub fn appendToIovecs(self: *const Self, writer: *@import("../base/iovec_serialize.zig").IovecWriter) !usize {
-            const start_offset = writer.getOffset();
-
-            // For StringHashMap, we can optimize by adding the backing arrays directly
-            const capacity = self.map.capacity();
-
-            // Write count and capacity
-            try writer.appendStruct(@as(u32, @intCast(self.map.count())));
-            try writer.appendStruct(@as(u32, @intCast(capacity)));
-
-            if (capacity > 0) {
-                // Add metadata array directly as an iovec
-                if (self.map.metadata) |metadata| {
-                    try writer.appendBytes(@as([*]const u8, @ptrCast(metadata))[0..capacity]);
-                }
-
-                // StringHashMap stores keys and values in separate arrays
-                // We need to serialize the actual string data, not just the pointers
-                // So we still need to iterate for the string data
-                var iter = self.map.iterator();
-                while (iter.next()) |entry| {
-                    // Write key length and data
-                    try writer.appendStruct(@as(u32, @intCast(entry.key_ptr.len)));
-                    try writer.appendBytes(entry.key_ptr.*);
-
-                    // Write value (if not void)
-                    if (V != void) {
-                        try writer.appendStruct(entry.value_ptr.*);
-                    }
-                }
-            }
-
-            return start_offset;
-        }
-
         /// Deserialize a hash map from the provided buffer
         pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
             if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;

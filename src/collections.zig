@@ -23,6 +23,8 @@ pub const FrozenU32Map = @import("collections/FrozenMap.zig").FrozenU32Map;
 
 pub const BuildableFrozenStringMap = @import("collections/FrozenMap.zig").BuildableFrozenStringMap;
 
+pub const SortedArrayBuilder = @import("collections/FrozenMap.zig").SortedArrayBuilder;
+
 /// A range that must have at least one element
 pub const NonEmptyRange = struct {
     /// Starting index (inclusive)

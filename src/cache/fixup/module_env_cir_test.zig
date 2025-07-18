@@ -207,8 +207,8 @@ test "CIR serialization and relocation" {
 
     // Verify imports
     try std.testing.expectEqual(@as(usize, 2), loaded_cir.imports.imports.items.len);
-    try std.testing.expect(loaded_cir.imports.map.contains("Base"));
-    try std.testing.expect(loaded_cir.imports.map.contains("List"));
+    try std.testing.expect(loaded_cir.imports.contains(allocator, "Base"));
+    try std.testing.expect(loaded_cir.imports.contains(allocator, "List"));
 
     // Verify module name
     try std.testing.expectEqualStrings("TestModule", loaded_cir.module_name);

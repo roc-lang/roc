@@ -550,6 +550,181 @@ pub fn BuildableFrozenStringMap(comptime T: type) type {
     };
 }
 
+/// A builder for creating sorted arrays directly without using hash maps
+/// This is more efficient when we know we won't have duplicates
+pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
+    return struct {
+        entries: std.ArrayListUnmanaged(Entry) = .{},
+        sorted: bool = true,
+
+        const Self = @This();
+
+        pub const Entry = struct {
+            key: K,
+            value: V,
+
+            fn lessThan(_: void, a: Entry, b: Entry) bool {
+                if (K == []const u8) {
+                    return std.mem.lessThan(u8, a.key, b.key);
+                } else if (@typeInfo(K) == .Int or @typeInfo(K) == .Enum) {
+                    return a.key < b.key;
+                } else {
+                    @compileError("Unsupported key type for SortedArrayBuilder");
+                }
+            }
+        };
+
+        pub fn init() Self {
+            return .{};
+        }
+
+        pub fn deinit(self: *Self, allocator: Allocator) void {
+            if (K == []const u8) {
+                // Free string keys
+                for (self.entries.items) |entry| {
+                    allocator.free(entry.key);
+                }
+            }
+            self.entries.deinit(allocator);
+        }
+
+        /// Add a key-value pair
+        pub fn put(self: *Self, allocator: Allocator, key: K, value: V) !void {
+            const new_key = if (K == []const u8) try allocator.dupe(u8, key) else key;
+
+            // Check if we need to maintain sorted order
+            if (self.sorted and self.entries.items.len > 0) {
+                const last = self.entries.items[self.entries.items.len - 1];
+                if (K == []const u8) {
+                    self.sorted = std.mem.lessThan(u8, last.key, new_key);
+                } else {
+                    self.sorted = last.key < new_key;
+                }
+            }
+
+            try self.entries.append(allocator, .{ .key = new_key, .value = value });
+        }
+
+        /// Get value by key (requires sorting first if not already sorted)
+        pub fn get(self: *Self, allocator: Allocator, key: K) ?V {
+            self.ensureSorted(allocator);
+
+            var left: usize = 0;
+            var right: usize = self.entries.items.len;
+
+            while (left < right) {
+                const mid = left + (right - left) / 2;
+                const mid_key = self.entries.items[mid].key;
+
+                const cmp = if (K == []const u8)
+                    std.mem.order(u8, mid_key, key)
+                else if (mid_key == key)
+                    std.math.Order.eq
+                else if (mid_key < key)
+                    std.math.Order.lt
+                else
+                    std.math.Order.gt;
+
+                switch (cmp) {
+                    .eq => return self.entries.items[mid].value,
+                    .lt => left = mid + 1,
+                    .gt => right = mid,
+                }
+            }
+            return null;
+        }
+
+        /// Ensure the array is sorted
+        pub fn ensureSorted(self: *Self, allocator: Allocator) void {
+            _ = allocator;
+            if (!self.sorted) {
+                std.sort.pdq(Entry, self.entries.items, {}, Entry.lessThan);
+                self.sorted = true;
+            }
+        }
+
+        /// Get the number of entries
+        pub fn count(self: *const Self) usize {
+            return self.entries.items.len;
+        }
+
+        /// Convert to a frozen map (sorts if needed)
+        pub fn toFrozen(self: *Self, allocator: Allocator) !if (K == []const u8) FrozenStringMap(V) else FrozenU32Map(V) {
+            self.ensureSorted(allocator);
+
+            const entries = try allocator.alloc(Entry, self.entries.items.len);
+            @memcpy(entries, self.entries.items);
+
+            // Clear our entries without freeing the keys (frozen map owns them now)
+            self.entries.items.len = 0;
+            self.entries.deinit(allocator);
+            self.entries = .{};
+
+            if (K == []const u8) {
+                return FrozenStringMap(V){ .entries = entries };
+            } else {
+                return FrozenU32Map(V){ .entries = entries };
+            }
+        }
+
+        /// Serialize directly (must be sorted first)
+        pub fn serializeInto(self: *Self, allocator: Allocator, buffer: []u8) ![]u8 {
+            self.ensureSorted(allocator);
+
+            var offset: usize = 0;
+
+            // Write count
+            if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
+            std.mem.writeInt(u32, buffer[0..4], @intCast(self.entries.items.len), .little);
+            offset += @sizeOf(u32);
+
+            // Write entries
+            for (self.entries.items) |entry| {
+                if (K == []const u8) {
+                    // String key: write length then data
+                    if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
+                    std.mem.writeInt(u32, buffer[offset..][0..4], @intCast(entry.key.len), .little);
+                    offset += @sizeOf(u32);
+
+                    if (offset + entry.key.len > buffer.len) return error.BufferTooSmall;
+                    @memcpy(buffer[offset..][0..entry.key.len], entry.key);
+                    offset += entry.key.len;
+                } else {
+                    // Numeric key
+                    if (offset + @sizeOf(K) > buffer.len) return error.BufferTooSmall;
+                    @memcpy(buffer[offset..][0..@sizeOf(K)], std.mem.asBytes(&entry.key));
+                    offset += @sizeOf(K);
+                }
+
+                // Write value
+                if (@sizeOf(V) > 0) {
+                    if (offset + @sizeOf(V) > buffer.len) return error.BufferTooSmall;
+                    @memcpy(buffer[offset..][0..@sizeOf(V)], std.mem.asBytes(&entry.value));
+                    offset += @sizeOf(V);
+                }
+            }
+
+            return buffer[0..offset];
+        }
+
+        /// Get serialized size
+        pub fn serializedSize(self: *const Self) usize {
+            var size: usize = @sizeOf(u32); // count
+
+            for (self.entries.items) |entry| {
+                if (K == []const u8) {
+                    size += @sizeOf(u32) + entry.key.len; // key length + key data
+                } else {
+                    size += @sizeOf(K); // key
+                }
+                size += @sizeOf(V); // value
+            }
+
+            return size;
+        }
+    };
+}
+
 test "FrozenStringMap basic operations" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -601,6 +776,63 @@ test "FrozenStringMap with void values" {
     try testing.expect(frozen.contains("world"));
     try testing.expect(frozen.contains("test"));
     try testing.expect(!frozen.contains("missing"));
+}
+
+test "SortedArrayBuilder basic operations" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var builder = SortedArrayBuilder([]const u8, u32).init();
+    defer builder.deinit(allocator);
+
+    // Add items in random order
+    try builder.put(allocator, "zebra", 100);
+    try builder.put(allocator, "apple", 50);
+    try builder.put(allocator, "banana", 150);
+    try builder.put(allocator, "cherry", 30);
+
+    // Test count
+    try testing.expectEqual(@as(usize, 4), builder.count());
+
+    // Test get (forces sorting)
+    try testing.expectEqual(@as(?u32, 50), builder.get(allocator, "apple"));
+    try testing.expectEqual(@as(?u32, 150), builder.get(allocator, "banana"));
+    try testing.expectEqual(@as(?u32, 30), builder.get(allocator, "cherry"));
+    try testing.expectEqual(@as(?u32, 100), builder.get(allocator, "zebra"));
+    try testing.expectEqual(@as(?u32, null), builder.get(allocator, "missing"));
+
+    // Test serialization
+    const size = builder.serializedSize();
+    const buffer = try allocator.alloc(u8, size);
+    defer allocator.free(buffer);
+
+    const serialized = try builder.serializeInto(allocator, buffer);
+    try testing.expectEqual(size, serialized.len);
+
+    // Verify serialized data starts with count
+    const count = std.mem.readInt(u32, serialized[0..4], .little);
+    try testing.expectEqual(@as(u32, 4), count);
+}
+
+test "SortedArrayBuilder maintains sorted order when added in order" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var builder = SortedArrayBuilder([]const u8, u16).init();
+    defer builder.deinit(allocator);
+
+    // Add items in sorted order
+    try builder.put(allocator, "aaa", 1);
+    try builder.put(allocator, "bbb", 2);
+    try builder.put(allocator, "ccc", 3);
+    try builder.put(allocator, "ddd", 4);
+
+    // Should still be marked as sorted
+    try testing.expect(builder.sorted);
+
+    // Get should work without sorting
+    try testing.expectEqual(@as(?u16, 1), builder.get(allocator, "aaa"));
+    try testing.expectEqual(@as(?u16, 4), builder.get(allocator, "ddd"));
 }
 
 test "FrozenU32Map basic operations" {

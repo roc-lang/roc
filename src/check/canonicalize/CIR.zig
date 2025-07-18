@@ -215,19 +215,7 @@ pub fn serializedSize(self: *const CIR) usize {
     size += self.external_decls.items.items.len * @sizeOf(ExternalDecl);
 
     // Imports
-    if (self.imports.map.metadata) |_| {
-        const map_capacity = self.imports.map.capacity();
-        size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.imports.map.metadata)));
-        size += map_capacity; // metadata bytes
-        size += map_capacity * @sizeOf([]const u8); // keys
-        size += map_capacity * @sizeOf(Import.Idx); // values
-
-        // String data for keys
-        var iter = self.imports.map.iterator();
-        while (iter.next()) |entry| {
-            size += entry.key_ptr.len;
-        }
-    }
+    size += self.imports.serializedSize();
 
     size = std.mem.alignForward(usize, size, @alignOf([]u8));
     size += self.imports.imports.items.len * @sizeOf([]u8);
@@ -294,11 +282,7 @@ pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
         .all_statements = self.all_statements,
         .external_decls = .{ .items = .{ .items = if (external_decls_offset > 0) @as([*]ExternalDecl, @ptrFromInt(external_decls_offset))[0..self.external_decls.items.items.len] else &[_]ExternalDecl{}, .capacity = self.external_decls.items.capacity } },
         .imports = .{
-            .map = .{
-                .metadata = if (imports_result.map_metadata_offset > 0) @ptrFromInt(imports_result.map_metadata_offset) else null,
-                .size = self.imports.map.size,
-                .available = self.imports.map.available,
-            },
+            .sorted_imports = undefined, // Will be deserialized
             .imports = .{
                 .items = if (imports_result.imports_offset > 0) @as([*][]u8, @ptrFromInt(imports_result.imports_offset))[0..self.imports.imports.items.len] else &[_][]u8{},
                 .capacity = self.imports.imports.capacity,
@@ -403,11 +387,7 @@ pub fn appendToIovecs(self: *const CIR, writer: *@import("../../base/iovec_seria
         .all_statements = self.all_statements,
         .external_decls = .{ .items = .{ .items = if (external_decls_offset > 0) @as([*]ExternalDecl, @ptrFromInt(external_decls_offset))[0..self.external_decls.items.items.len] else @as([*]ExternalDecl, @ptrFromInt(@alignOf(ExternalDecl)))[0..0], .capacity = self.external_decls.items.capacity } },
         .imports = .{
-            .map = .{
-                .metadata = if (imports_result.map_metadata_offset > 0) @ptrFromInt(imports_result.map_metadata_offset) else null,
-                .size = self.imports.map.size,
-                .available = self.imports.map.available,
-            },
+            .sorted_imports = undefined, // Will be deserialized
             .imports = .{
                 .items = .{
                     .ptr = if (imports_result.imports_offset > 0) @ptrFromInt(imports_result.imports_offset) else undefined,
@@ -576,24 +556,11 @@ fn appendImportsToIovecs(self: *const CIR, writer: *@import("../../base/iovec_se
 
     const start_offset = writer.getOffset();
 
-    // Write map count
-    const map_count: u32 = @intCast(self.imports.map.count());
-    try writer.appendStruct(map_count);
-
-    // Write map entries
-    var iter = self.imports.map.iterator();
-    while (iter.next()) |entry| {
-        // Key length
-        const key_len: u32 = @intCast(entry.key_ptr.len);
-        try writer.appendStruct(key_len);
-
-        // Key bytes
-        try writer.appendBytes(entry.key_ptr.*);
-
-        // Value (Import.Idx)
-        const idx_value: u32 = @intFromEnum(entry.value_ptr.*);
-        try writer.appendStruct(idx_value);
-    }
+    // Serialize sorted imports
+    const gpa = self.env.gpa;
+    const serialized_size = self.imports.sorted_imports.serializedSize();
+    const buffer = try writer.reserveBytes(serialized_size);
+    _ = try self.imports.sorted_imports.serializeInto(gpa, buffer);
 
     // Write imports array count
     const imports_count: u32 = @intCast(self.imports.imports.items.len);
@@ -775,81 +742,22 @@ fn serializeNodeStoreAt(self: *const CIR, buffer: []u8, write_offset: *usize) !N
 }
 
 const ImportsSerializationResult = struct {
-    map_metadata_offset: usize,
     imports_offset: usize,
     strings_offset: usize,
 };
 
 fn serializeImportsAt(self: *const CIR, buffer: []u8, write_offset: *usize) !ImportsSerializationResult {
-    const writeAlignedData = @import("../../base/write_aligned.zig").writeAlignedData;
-    var result: ImportsSerializationResult = std.mem.zeroes(ImportsSerializationResult);
+    const result: ImportsSerializationResult = std.mem.zeroes(ImportsSerializationResult);
 
-    // Serialize hash map
-    if (self.imports.map.metadata) |metadata| {
-        write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf(@TypeOf(metadata)));
-        result.map_metadata_offset = write_offset.*;
+    // Use Import.Store's own serialization
+    const imports_bytes = try self.imports.serializeInto(self.env.gpa, buffer[write_offset.*..]);
+    write_offset.* += imports_bytes.len;
 
-        const map_capacity = self.imports.map.capacity();
+    // The Import.Store serialization already includes everything we need
+    // Just need to record where the data sections start for relocation
 
-        // Write metadata bytes
-        @memcpy(buffer[write_offset.*..][0..map_capacity], @as([*]const u8, @ptrCast(metadata))[0..map_capacity]);
-        write_offset.* += map_capacity;
-
-        // Reserve space for keys and values arrays
-        write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf([]const u8));
-        const keys_array_offset = write_offset.*;
-        write_offset.* += map_capacity * @sizeOf([]const u8);
-
-        write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf(Import.Idx));
-        const values_array_offset = write_offset.*;
-        write_offset.* += map_capacity * @sizeOf(Import.Idx);
-
-        // Write string data and update key pointers
-        var iter = self.imports.map.iterator();
-        var slot_index: usize = 0;
-        while (iter.next()) |entry| {
-            // Find the slot index for this entry
-            while (slot_index < map_capacity and @as(u8, @bitCast(metadata[slot_index])) == 0xFF) : (slot_index += 1) {}
-
-            if (slot_index < map_capacity) {
-                // Write string data
-                write_offset.* = std.mem.alignForward(usize, write_offset.*, @alignOf(u8));
-                const key_data_offset = write_offset.*;
-                @memcpy(buffer[write_offset.*..][0..entry.key_ptr.*.len], entry.key_ptr.*);
-                write_offset.* += entry.key_ptr.*.len;
-
-                // Write key slice with offset as pointer
-                const key_slice_ptr = @as(*[]const u8, @ptrCast(@alignCast(&buffer[keys_array_offset + slot_index * @sizeOf([]const u8)])));
-                key_slice_ptr.* = @as([*]const u8, @ptrFromInt(key_data_offset))[0..entry.key_ptr.*.len];
-
-                // Copy value
-                const value_ptr = @as(*Import.Idx, @ptrCast(@alignCast(&buffer[values_array_offset + slot_index * @sizeOf(Import.Idx)])));
-                value_ptr.* = entry.value_ptr.*;
-
-                slot_index += 1;
-            }
-        }
-    }
-
-    // Serialize imports array
-    if (self.imports.imports.items.len > 0) {
-        result.imports_offset = writeAlignedData(buffer, write_offset, std.mem.sliceAsBytes(self.imports.imports.items), @alignOf([]u8));
-
-        // Update string pointers in imports array
-        const imports_ptr = @as([*][]u8, @ptrCast(@alignCast(buffer.ptr + result.imports_offset)));
-        for (self.imports.imports.items, 0..) |import_str, i| {
-            if (import_str.len > 0) {
-                // String data should be in the strings array
-                const str_offset = @intFromPtr(import_str.ptr) - @intFromPtr(self.imports.strings.items.ptr);
-                imports_ptr[i] = @as([*]u8, @ptrFromInt(result.strings_offset + str_offset))[0..import_str.len];
-            }
-        }
-    }
-
-    // Serialize strings
-    if (self.imports.strings.items.len > 0) {
-        result.strings_offset = writeAlignedData(buffer, write_offset, self.imports.strings.items, @alignOf(u8));
-    }
+    // Note: imports array and strings are serialized as part of Import.Store.serializeInto
+    // We don't need separate offsets for them anymore since they're part of the sorted structure
 
     return result;
 }
@@ -1959,8 +1867,8 @@ pub const Import = struct {
 
     /// A store for interning imported module names
     pub const Store = struct {
-        /// Map from module name string to Import.Idx
-        map: std.StringHashMapUnmanaged(Import.Idx) = .{},
+        /// Sorted array of module names to Import.Idx
+        sorted_imports: collections.SortedArrayBuilder([]const u8, Import.Idx) = .{},
         /// List of imports indexed by Import.Idx
         imports: std.ArrayListUnmanaged([]u8) = .{},
         /// Storage for module name strings
@@ -1971,7 +1879,7 @@ pub const Import = struct {
         }
 
         pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
-            self.map.deinit(gpa);
+            self.sorted_imports.deinit(gpa);
             self.imports.deinit(gpa);
             self.strings.deinit(gpa);
         }
@@ -1980,15 +1888,8 @@ pub const Import = struct {
         pub fn serializedSize(self: *const Store) usize {
             var size: usize = 0;
 
-            // Count for map entries
-            size += @sizeOf(u32);
-
-            // Map entries
-            var iter = self.map.iterator();
-            while (iter.next()) |entry| {
-                // Key length + key bytes + value
-                size += @sizeOf(u32) + entry.key_ptr.len + @sizeOf(Import.Idx);
-            }
+            // Sorted imports size
+            size += self.sorted_imports.serializedSize();
 
             // Imports array count
             size += @sizeOf(u32);
@@ -2005,32 +1906,15 @@ pub const Import = struct {
         }
 
         /// Serialize this Store into the provided buffer
-        pub fn serializeInto(self: *const Store, buffer: []u8) ![]u8 {
+        pub fn serializeInto(self: *const Store, gpa: std.mem.Allocator, buffer: []u8) ![]u8 {
             const size = self.serializedSize();
             if (buffer.len < size) return error.BufferTooSmall;
 
             var offset: usize = 0;
 
-            // Write map count
-            std.mem.writeInt(u32, buffer[offset..][0..4], @intCast(self.map.count()), .little);
-            offset += @sizeOf(u32);
-
-            // Write map entries
-            var iter = self.map.iterator();
-            while (iter.next()) |entry| {
-                // Key length
-                const key_len: u32 = @intCast(entry.key_ptr.len);
-                std.mem.writeInt(u32, buffer[offset..][0..4], key_len, .little);
-                offset += @sizeOf(u32);
-
-                // Key bytes
-                @memcpy(buffer[offset..][0..entry.key_ptr.len], entry.key_ptr.*);
-                offset += entry.key_ptr.len;
-
-                // Value (Import.Idx)
-                std.mem.writeInt(u32, buffer[offset..][0..4], @intFromEnum(entry.value_ptr.*), .little);
-                offset += @sizeOf(u32);
-            }
+            // Write sorted imports
+            const sorted_bytes = try self.sorted_imports.serializeInto(gpa, buffer[offset..]);
+            offset += sorted_bytes.len;
 
             // Write imports array count
             std.mem.writeInt(u32, buffer[offset..][0..4], @intCast(self.imports.items.len), .little);
@@ -2063,44 +1947,112 @@ pub const Import = struct {
 
         /// Get or create an Import.Idx for a module name
         pub fn getOrPut(self: *Store, gpa: std.mem.Allocator, module_name: []const u8) !Import.Idx {
-            const gop = try self.map.getOrPut(gpa, module_name);
-            if (!gop.found_existing) {
-                // Store the string
-                const start = self.strings.items.len;
-                try self.strings.appendSlice(gpa, module_name);
-                const stored_name = self.strings.items[start..];
-
-                const import_idx: Import.Idx = @enumFromInt(self.imports.items.len);
-                try self.imports.append(gpa, stored_name);
-                gop.value_ptr.* = import_idx;
+            // Check if already exists
+            if (self.sorted_imports.get(gpa, module_name)) |existing| {
+                return existing;
             }
-            return gop.value_ptr.*;
+
+            // Store the string
+            const start = self.strings.items.len;
+            try self.strings.appendSlice(gpa, module_name);
+            const stored_name = self.strings.items[start..];
+
+            const import_idx: Import.Idx = @enumFromInt(self.imports.items.len);
+            try self.imports.append(gpa, stored_name);
+
+            // Add to sorted array
+            try self.sorted_imports.put(gpa, stored_name, import_idx);
+
+            return import_idx;
+        }
+
+        /// Get an Import.Idx by module name
+        pub fn get(self: *Store, gpa: std.mem.Allocator, module_name: []const u8) ?Import.Idx {
+            return self.sorted_imports.get(gpa, module_name);
+        }
+
+        /// Check if a module name exists in the store
+        pub fn contains(self: *Store, gpa: std.mem.Allocator, module_name: []const u8) bool {
+            return self.sorted_imports.get(gpa, module_name) != null;
+        }
+
+        /// Deserialize an Import.Store from a buffer
+        pub fn deserializeFrom(buffer: []const u8, gpa: std.mem.Allocator) !Store {
+            var offset: usize = 0;
+            var store = Store.init();
+
+            // Read sorted imports count
+            if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
+            const sorted_count = std.mem.readInt(u32, buffer[0..4], .little);
+            offset += @sizeOf(u32);
+
+            // Read sorted import entries
+            for (0..sorted_count) |_| {
+                // Read key length
+                if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
+                const key_len = std.mem.readInt(u32, buffer[offset..][0..4], .little);
+                offset += @sizeOf(u32);
+
+                // Read key
+                if (offset + key_len > buffer.len) return error.BufferTooSmall;
+                const key = buffer[offset..][0..key_len];
+                offset += key_len;
+
+                // Read value (Import.Idx)
+                if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
+                const idx_value = std.mem.readInt(u32, buffer[offset..][0..4], .little);
+                offset += @sizeOf(u32);
+
+                // Add to our sorted imports (it will maintain order)
+                try store.sorted_imports.put(gpa, key, @enumFromInt(idx_value));
+            }
+
+            // Read imports array count
+            if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
+            const imports_count = std.mem.readInt(u32, buffer[offset..][0..4], .little);
+            offset += @sizeOf(u32);
+
+            // Read imports array
+            for (0..imports_count) |_| {
+                // Read string length
+                if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
+                const str_len = std.mem.readInt(u32, buffer[offset..][0..4], .little);
+                offset += @sizeOf(u32);
+
+                // Read string
+                if (offset + str_len > buffer.len) return error.BufferTooSmall;
+                const str = try gpa.dupe(u8, buffer[offset..][0..str_len]);
+                offset += str_len;
+
+                try store.imports.append(gpa, str);
+            }
+
+            // Read strings storage
+            if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
+            const strings_len = std.mem.readInt(u32, buffer[offset..][0..4], .little);
+            offset += @sizeOf(u32);
+
+            if (offset + strings_len > buffer.len) return error.BufferTooSmall;
+            try store.strings.appendSlice(gpa, buffer[offset..][0..strings_len]);
+
+            return store;
         }
 
         /// Relocate all pointers in this Import.Store by the given offset
         /// Used for FixupCache deserialization
         pub fn relocate(self: *Store, offset: isize) void {
-            // Relocate the hash map metadata
-            if (self.map.metadata) |metadata| {
-                const old_ptr = @intFromPtr(metadata);
-                const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-                self.map.metadata = @ptrFromInt(new_ptr);
-            }
+            // Relocate sorted_imports entries
+            if (self.sorted_imports.entries.items.len > 0) {
+                const old_entries_ptr = @intFromPtr(self.sorted_imports.entries.items.ptr);
+                const new_entries_ptr = @as(usize, @intCast(@as(isize, @intCast(old_entries_ptr)) + offset));
+                self.sorted_imports.entries.items.ptr = @ptrFromInt(new_entries_ptr);
 
-            // Relocate string pointers in the hash map keys
-            if (self.map.metadata != null and self.map.capacity() > 0) {
-                const keys_ptr = self.map.keys();
-                const capacity = self.map.capacity();
-
-                var i: usize = 0;
-                while (i < capacity) : (i += 1) {
-                    const metadata_byte = self.map.metadata.?[i];
-                    if (metadata_byte != 0xFF) { // 0xFF means empty slot
-                        if (keys_ptr[i].len > 0) {
-                            const old_str_ptr = @intFromPtr(keys_ptr[i].ptr);
-                            const new_str_ptr = @as(usize, @intCast(@as(isize, @intCast(old_str_ptr)) + offset));
-                            keys_ptr[i].ptr = @ptrFromInt(new_str_ptr);
-                        }
+                // Relocate each string key
+                for (self.sorted_imports.entries.items) |*entry| {
+                    if (entry.key.len > 0) {
+                        const old_str_ptr = @intFromPtr(entry.key.ptr);
+                        const new_str_ptr = @as(usize, @intCast(@as(isize, @intCast(old_str_ptr)) + offset));
+                        entry.key.ptr = @ptrFromInt(new_str_ptr);
                     }
                 }
             }

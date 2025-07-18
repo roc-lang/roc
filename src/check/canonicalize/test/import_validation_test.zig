@@ -312,9 +312,9 @@ test "import interner - comprehensive usage example" {
 
     // Verify Import.Idx assignments
     // Get Import.Idx values from the imports store
-    const list_import = cir.imports.map.get("List");
-    const dict_import = cir.imports.map.get("Dict");
-    const result_import = cir.imports.map.get("Result");
+    const list_import = cir.imports.get(allocator, "List");
+    const dict_import = cir.imports.get(allocator, "Dict");
+    const result_import = cir.imports.get(allocator, "Result");
 
     // All should have Import.Idx values
     try testing.expect(list_import != null);
