@@ -159,14 +159,7 @@ pub fn serializedSize(self: *const Self) usize {
     size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.idents.interner.regions.items)));
     size += self.idents.interner.regions.items.len * @sizeOf(@TypeOf(self.idents.interner.regions.items[0]));
 
-    // StringIdx.Table hash map data
-    if (self.idents.interner.strings.metadata) |_| {
-        const metadata_size = self.idents.interner.strings.capacity();
-        size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.idents.interner.strings.metadata)));
-        size += metadata_size;
-        const entry_size = metadata_size * @sizeOf(collections.SmallStringInterner.StringIdx) + metadata_size * @sizeOf(void);
-        size += entry_size;
-    }
+    // Skip the StringIdx.Table hash map - not needed after freeze
 
     // Ident attributes
     size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.idents.attributes.items)));
@@ -259,7 +252,7 @@ pub fn serializeInto(self: *const Self, buffer: []u8) !usize {
         .idents = .{
             .interner = .{
                 .bytes = .{ .items = if (self.idents.interner.bytes.items.len > 0) @as([*]u8, @ptrFromInt(idents_result.bytes_offset))[0..self.idents.interner.bytes.items.len] else @as([*]u8, @ptrFromInt(@alignOf(u8)))[0..0], .capacity = self.idents.interner.bytes.capacity },
-                .strings = .{ .metadata = if (idents_result.strings_metadata_offset > 0) @ptrFromInt(idents_result.strings_metadata_offset) else null, .size = 0, .available = 0 },
+                .strings = .{ .metadata = null, .size = 0, .available = 0 },
                 .outer_indices = .{ .items = if (self.idents.interner.outer_indices.items.len > 0) @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(idents_result.indices_offset))[0..self.idents.interner.outer_indices.items.len] else @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(@alignOf(collections.SmallStringInterner.StringIdx)))[0..0], .capacity = self.idents.interner.outer_indices.capacity },
                 .regions = .{ .items = if (self.idents.interner.regions.items.len > 0) @as([*]Region, @ptrFromInt(idents_result.regions_offset))[0..self.idents.interner.regions.items.len] else @as([*]Region, @ptrFromInt(@alignOf(Region)))[0..0], .capacity = self.idents.interner.regions.capacity },
             },
@@ -421,7 +414,7 @@ pub fn appendToIovecs(self: *const Self, writer: *iovec_serialize.IovecWriter) !
         .idents = .{
             .interner = .{
                 .bytes = .{ .items = if (self.idents.interner.bytes.items.len > 0) @as([*]u8, @ptrFromInt(idents_result.bytes_offset))[0..self.idents.interner.bytes.items.len] else @as([*]u8, @ptrFromInt(@alignOf(u8)))[0..0], .capacity = self.idents.interner.bytes.capacity },
-                .strings = .{ .metadata = if (idents_result.strings_metadata_offset > 0) @ptrFromInt(idents_result.strings_metadata_offset) else null, .size = 0, .available = 0 },
+                .strings = .{ .metadata = null, .size = 0, .available = 0 },
                 .outer_indices = .{ .items = if (self.idents.interner.outer_indices.items.len > 0) @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(idents_result.indices_offset))[0..self.idents.interner.outer_indices.items.len] else @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(@alignOf(collections.SmallStringInterner.StringIdx)))[0..0], .capacity = self.idents.interner.outer_indices.capacity },
                 .regions = .{ .items = if (self.idents.interner.regions.items.len > 0) @as([*]Region, @ptrFromInt(idents_result.regions_offset))[0..self.idents.interner.regions.items.len] else @as([*]Region, @ptrFromInt(@alignOf(Region)))[0..0], .capacity = self.idents.interner.regions.capacity },
             },
@@ -481,27 +474,9 @@ fn appendIdentsToIovecs(self: *const Self, writer: *iovec_serialize.IovecWriter)
         result.regions_offset = try writer.appendAligned(data, @alignOf(@TypeOf(self.idents.interner.regions.items[0])));
     }
 
-    // Serialize StringIdx.Table
-    if (self.idents.interner.strings.metadata) |metadata| {
-        const aligned_offset = std.mem.alignForward(usize, writer.getOffset(), @alignOf(@TypeOf(metadata)));
-        const padding = aligned_offset - writer.getOffset();
-        if (padding > 0) {
-            try writer.appendBytes(@import("write_aligned.zig").ZERO_PADDING[0..padding]);
-        }
-        result.strings_metadata_offset = writer.getOffset();
-
-        const capacity = self.idents.interner.strings.capacity();
-        const metadata_size = capacity;
-
-        // Write metadata bytes
-        const metadata_bytes = @as([*]const u8, @ptrCast(metadata))[0..metadata_size];
-        try writer.appendBytes(metadata_bytes);
-
-        // Write entries
-        const entry_size = capacity * @sizeOf(collections.SmallStringInterner.StringIdx) + capacity * @sizeOf(void);
-        const entries_ptr = @as([*]const u8, @ptrCast(metadata)) + metadata_size;
-        try writer.appendBytes(entries_ptr[0..entry_size]);
-    }
+    // Skip the StringIdx.Table hash map entirely - it's not needed after freeze!
+    // When deserializing, we'll reconstruct an empty hash map since the interner is frozen
+    // and no new strings will be added.
 
     // Serialize attributes
     if (self.idents.attributes.items.len > 0) {

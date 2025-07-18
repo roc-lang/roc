@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const Region = @import("../base/Region.zig");
+const IovecWriter = @import("../base/iovec_serialize.zig").IovecWriter;
 
 const Self = @This();
 
@@ -140,12 +141,8 @@ pub fn relocate(self: *Self, offset: isize) void {
         self.regions.items.ptr = @ptrFromInt(new_ptr);
     }
 
-    // Relocate the strings hash map metadata
-    if (self.strings.unmanaged.metadata) |metadata| {
-        const old_ptr = @intFromPtr(metadata);
-        const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-        self.strings.unmanaged.metadata = @ptrFromInt(new_ptr);
-    }
+    // Skip relocating the strings hash map - it's not serialized after freeze
+    // The hash map will be reconstructed as empty during deserialization
 }
 
 /// Freeze the interner, preventing any new entries from being added.
@@ -154,6 +151,45 @@ pub fn freeze(self: *Self) void {
         self.frozen = true;
     }
 }
+
+/// Append this SmallStringInterner to an iovec writer for serialization
+/// After freezing, we only need to serialize the lookup arrays, not the hash map
+pub fn appendToIovecs(self: *const Self, writer: *IovecWriter) !usize {
+    const start_offset = writer.getOffset();
+
+    // Write metadata (lengths)
+    const metadata = struct {
+        bytes_len: u32,
+        indices_len: u32,
+    }{
+        .bytes_len = @intCast(self.bytes.items.len),
+        .indices_len = @intCast(self.outer_indices.items.len),
+    };
+    try writer.appendStruct(metadata);
+
+    // Add the entire bytes array as a single iovec
+    if (self.bytes.items.len > 0) {
+        try writer.appendBytes(self.bytes.items);
+    }
+
+    // Add the entire outer_indices array as a single iovec
+    if (self.outer_indices.items.len > 0) {
+        const indices_bytes = std.mem.sliceAsBytes(self.outer_indices.items);
+        try writer.appendBytes(indices_bytes);
+    }
+
+    // Add the entire regions array as a single iovec
+    if (self.regions.items.len > 0) {
+        const regions_bytes = std.mem.sliceAsBytes(self.regions.items);
+        try writer.appendBytes(regions_bytes);
+    }
+
+    // Skip the hash map entirely - it's not needed after freeze!
+    // When deserializing, we'll reconstruct an empty hash map
+
+    return start_offset;
+}
+
 /// TODO
 pub const StringIdx = enum(u32) {
     _,
