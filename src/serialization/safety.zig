@@ -4,7 +4,8 @@
 //! during serialization and deserialization operations.
 
 const std = @import("std");
-const mod = @import("mod.zig");
+
+pub const SERIALIZATION_ALIGNMENT = 16;
 
 /// Pattern used to detect uninitialized memory
 pub const CANARY_PATTERN: u8 = 0xAA;
@@ -64,8 +65,8 @@ pub fn createCanaryBufferAligned(allocator: std.mem.Allocator, size: usize, comp
 }
 
 /// Create a buffer with standard serialization alignment filled with canary pattern
-pub fn createStandardAlignedCanaryBuffer(allocator: std.mem.Allocator, size: usize) ![]align(mod.SERIALIZATION_ALIGNMENT) u8 {
-    const buffer = try allocator.alignedAlloc(u8, mod.SERIALIZATION_ALIGNMENT, size);
+pub fn createStandardAlignedCanaryBuffer(allocator: std.mem.Allocator, size: usize) ![]align(SERIALIZATION_ALIGNMENT) u8 {
+    const buffer = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, size);
     @memset(buffer, CANARY_PATTERN);
     return buffer;
 }

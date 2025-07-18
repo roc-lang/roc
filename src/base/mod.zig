@@ -1,16 +1,19 @@
 //! Basic types that are useful throughout the compiler.
 
-const std = @import("std");
-const parse = @import("check/parse.zig");
+pub const SExprTree = @import("SExprTree.zig");
+pub const Ident = @import("Ident.zig");
+pub const Region = @import("Region.zig");
+pub const ModuleEnv = @import("ModuleEnv.zig");
+pub const StringLiteral = @import("StringLiteral.zig");
+pub const RegionInfo = @import("RegionInfo.zig");
+pub const Scratch = @import("Scratch.zig").Scratch;
+pub const parallel = @import("parallel.zig");
+pub const SmallStringInterner = @import("SmallStringInterner.zig");
 
-pub const SExprTree = @import("base/SExprTree.zig");
-pub const Ident = @import("base/Ident.zig");
-pub const Region = @import("base/Region.zig");
-pub const ModuleEnv = @import("base/ModuleEnv.zig");
-pub const StringLiteral = @import("base/StringLiteral.zig");
-pub const RegionInfo = @import("base/RegionInfo.zig");
-pub const Scratch = @import("base/Scratch.zig").Scratch;
-pub const parallel = @import("base/parallel.zig");
+pub const target = @import("target.zig");
+
+pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
+pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 
 /// Whether a function calls itself.
 pub const Recursive = enum {

@@ -1,13 +1,12 @@
 //! Generate Reports for type checking errors
 
 const std = @import("std");
-const base = @import("../../base.zig");
+const base = @import("base");
 const tracy = @import("../../tracy.zig");
-const collections = @import("../../collections.zig");
+const collections = @import("collections");
 const can = @import("../canonicalize.zig");
-const types_mod = @import("../../types/types.zig");
+const types_mod = @import("types");
 const reporting = @import("../../reporting.zig");
-const store_mod = @import("../../types/store.zig");
 const snapshot = @import("./snapshot.zig");
 
 const Report = reporting.Report;
@@ -16,7 +15,7 @@ const UnderlineRegion = @import("../../reporting/document.zig").UnderlineRegion;
 const SourceCodeDisplayRegion = @import("../../reporting/document.zig").SourceCodeDisplayRegion;
 
 const CIR = can.CIR;
-const TypesStore = store_mod.Store;
+const TypesStore = types_mod.Store;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 

@@ -8,3 +8,4 @@ Performs Hindley-Milner type inference with constraint solving and unification o
 - [src/check/check_types/snapshot.zig](./snapshot.zig): Handles type state snapshots for backtracking during inference.
 - [src/check/check_types/problem.zig](./problem.zig): Collects and formats type errors with precise diagnostic information.
 - [src/check/check_types/copy_import.zig](./copy_import.zig): Manages type information sharing and copying between modules.
+- [src/check/check_types/test_rigid_instantiation.zig](./test_rigid_instantiation.zig): Unit tests for rigid variable instantiation ensuring correct handling of generic type parameters and polymorphic type instantiation.

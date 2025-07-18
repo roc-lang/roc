@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../../../base.zig");
+const base = @import("base");
 const parse = @import("../../parse.zig");
 const canonicalize = @import("../../canonicalize.zig");
 const CIR = canonicalize.CIR;
@@ -312,9 +312,9 @@ test "import interner - comprehensive usage example" {
 
     // Verify Import.Idx assignments
     // Get Import.Idx values from the imports store
-    const list_import = cir.imports.map.get("List");
-    const dict_import = cir.imports.map.get("Dict");
-    const result_import = cir.imports.map.get("Result");
+    const list_import = cir.imports.map.getContext("List", std.hash_map.StringContext{});
+    const dict_import = cir.imports.map.getContext("Dict", std.hash_map.StringContext{});
+    const result_import = cir.imports.map.getContext("Result", std.hash_map.StringContext{});
 
     // All should have Import.Idx values
     try testing.expect(list_import != null);

@@ -1,7 +1,7 @@
 //! Diagnostics related to canonicalization
 
 const std = @import("std");
-const base = @import("../../base.zig");
+const base = @import("base");
 const reporting = @import("../../reporting.zig");
 
 const Region = base.Region;

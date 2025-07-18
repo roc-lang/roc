@@ -1,10 +1,10 @@
 //! Tests for canonicalizing boolean expressions
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../base.zig");
+const base = @import("base");
 const parse = @import("./parse.zig");
 const canonicalize = @import("./canonicalize.zig");
-const types = @import("../types.zig");
+const types = @import("types");
 const CIR = @import("./canonicalize/CIR.zig");
 
 test "canonicalize True as Bool" {

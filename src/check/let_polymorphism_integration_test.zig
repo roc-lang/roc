@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../base.zig");
+const base = @import("base");
 const parse = @import("parse.zig");
 const canonicalize = @import("canonicalize.zig");
 const check_types = @import("check_types.zig");

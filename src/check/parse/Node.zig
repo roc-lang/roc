@@ -5,7 +5,7 @@
 //! therefore how it's data and main_token fields should
 //! be interpreted.
 
-const collections = @import("../../collections.zig");
+const collections = @import("collections");
 const AST = @import("AST.zig");
 const TokenIdx = @import("tokenize.zig").Token.Idx;
 

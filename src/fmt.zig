@@ -1,18 +1,21 @@
 //! Formatting logic for Roc modules.
 
 const std = @import("std");
+const base = @import("base");
 const parse = @import("check/parse.zig");
-const collections = @import("collections.zig");
+const collections = @import("collections");
 const Filesystem = @import("fs/Filesystem.zig");
 
-const base = @import("base.zig");
 const tracy = @import("tracy.zig");
 const tokenize = @import("check/parse/tokenize.zig");
+
+const Parser = @import("check/parse/Parser.zig").Parser;
 
 const Token = tokenize.Token;
 const AST = parse.AST;
 const Node = parse.Node;
 const NodeStore = parse.NodeStore;
+const SafeList = collections.SafeList;
 
 const fatal = collections.utils.fatal;
 
@@ -210,7 +213,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
     // compute offsets of each line, looping over bytes of the input
-    var line_offsets = try @import("collections.zig").SafeList(u32).initCapacity(gpa, 256);
+    var line_offsets = try SafeList(u32).initCapacity(gpa, 256);
     defer line_offsets.deinit(gpa);
     _ = try line_offsets.append(gpa, 0);
     for (source, 0..) |c, i| {
@@ -2083,8 +2086,6 @@ fn exprFmtsSame(source: []const u8, flags: FormatFlags) !void {
     try exprFmtsTo(source, source, flags);
 }
 fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !void {
-    const Parser = @import("check/parse/Parser.zig").Parser;
-
     const gpa = std.testing.allocator;
 
     var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));

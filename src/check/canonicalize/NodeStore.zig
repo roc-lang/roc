@@ -1,20 +1,22 @@
 //! Stores AST nodes and provides scratch arrays for working with nodes.
 
 const std = @import("std");
-const base = @import("../../base.zig");
-const types = @import("../../types.zig");
-const collections = @import("../../collections.zig");
+const base = @import("base");
+const types = @import("types");
+const collections = @import("collections");
 const Node = @import("Node.zig");
 const CIR = @import("CIR.zig");
-const RocDec = @import("../../builtins/dec.zig").RocDec;
-const PackedDataSpan = @import("../../base/PackedDataSpan.zig");
-const SERIALIZATION_ALIGNMENT = @import("../../serialization/mod.zig").SERIALIZATION_ALIGNMENT;
+const RocDec = @import("builtins").RocDec;
+
+const SERIALIZATION_ALIGNMENT = 16;
 
 const DataSpan = base.DataSpan;
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
 const Diagnostic = @import("Diagnostic.zig");
 const Ident = base.Ident;
+const PackedDataSpan = base.PackedDataSpan;
+const FunctionArgs = base.FunctionArgs;
 
 const NodeStore = @This();
 
@@ -580,7 +582,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_dot_access => {
             const args_span = if (node.data_3 != 0) blk: {
-                const packed_span = PackedDataSpan.FunctionArgs.fromU32(node.data_3);
+                const packed_span = FunctionArgs.fromU32(node.data_3);
                 const data_span = packed_span.toDataSpan();
                 break :blk CIR.Expr.Span{ .span = data_span };
             } else null;
@@ -1286,8 +1288,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
             node.data_2 = @bitCast(e.field_name);
             if (e.args) |args| {
                 // Use PackedDataSpan for efficient storage - FunctionArgs config is good for method call args
-                std.debug.assert(PackedDataSpan.FunctionArgs.canFit(args.span));
-                const packed_span = PackedDataSpan.FunctionArgs.fromDataSpanUnchecked(args.span);
+                std.debug.assert(FunctionArgs.canFit(args.span));
+                const packed_span = FunctionArgs.fromDataSpanUnchecked(args.span);
                 node.data_3 = packed_span.toU32();
             } else {
                 node.data_3 = 0; // No args

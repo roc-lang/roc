@@ -7,16 +7,16 @@
 //! 3. LOADED: Handle queries for tokens, AST, CIR, types, etc. Handle reset to go back to READY
 
 const std = @import("std");
+const base = @import("base");
 const parse = @import("check/parse.zig");
 const can = @import("check/canonicalize.zig");
 const check_types = @import("check/check_types.zig");
-const base = @import("base.zig");
 const WasmFilesystem = @import("playground/WasmFilesystem.zig");
 const reporting = @import("reporting.zig");
 const snapshot = @import("snapshot.zig");
-const SExprTree = @import("base/SExprTree.zig");
-const types = @import("types.zig");
+const types = @import("types");
 
+const SExprTree = base.SExprTree;
 const ModuleEnv = base.ModuleEnv;
 const Allocator = std.mem.Allocator;
 

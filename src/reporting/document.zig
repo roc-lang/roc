@@ -6,12 +6,14 @@
 //! directives, and structural elements.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+const base = @import("base");
 const renderer = @import("renderer.zig");
-const RenderTarget = renderer.RenderTarget;
 const ReportingConfig = @import("config.zig").ReportingConfig;
-const RegionInfo = @import("../base.zig").RegionInfo;
-const collections = @import("../collections.zig");
+const collections = @import("collections");
+
+const Allocator = std.mem.Allocator;
+const RenderTarget = renderer.RenderTarget;
+const RegionInfo = base.RegionInfo;
 
 /// A source code region with highlighting information.
 pub const SourceRegion = struct {

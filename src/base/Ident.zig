@@ -6,11 +6,11 @@
 //! in constant time. Storing IDs in each IR instead of strings also uses less memory in the IRs.
 
 const std = @import("std");
-const collections = @import("../collections.zig");
+const mod = @import("mod.zig");
 const Region = @import("Region.zig");
-const serialization = @import("../serialization/mod.zig");
+const serialization = @import("serialization");
 
-const SmallStringInterner = collections.SmallStringInterner;
+const SmallStringInterner = mod.SmallStringInterner;
 
 const Ident = @This();
 
@@ -99,7 +99,7 @@ pub const Attributes = packed struct(u3) {
 
 /// An interner for identifier names.
 pub const Store = struct {
-    interner: SmallStringInterner = .{},
+    interner: SmallStringInterner,
     attributes: std.ArrayListUnmanaged(Attributes) = .{},
     next_unique_name: u32 = 0,
 
@@ -305,11 +305,11 @@ pub const Store = struct {
         // Deserialize interner outer_indices
         const outer_indices_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
         offset += @sizeOf(u32);
-        var outer_indices = std.ArrayListUnmanaged(@import("../collections/SmallStringInterner.zig").StringIdx){};
+        var outer_indices = std.ArrayListUnmanaged(SmallStringInterner.StringIdx){};
         if (outer_indices_len > 0) {
-            const outer_indices_bytes = outer_indices_len * @sizeOf(@import("../collections/SmallStringInterner.zig").StringIdx);
+            const outer_indices_bytes = outer_indices_len * @sizeOf(SmallStringInterner.StringIdx);
             if (offset + outer_indices_bytes > buffer.len) return error.BufferTooSmall;
-            const outer_indices_data = @as([*]const @import("../collections/SmallStringInterner.zig").StringIdx, @ptrCast(@alignCast(buffer.ptr + offset)));
+            const outer_indices_data = @as([*]const SmallStringInterner.StringIdx, @ptrCast(@alignCast(buffer.ptr + offset)));
             try outer_indices.appendSlice(gpa, outer_indices_data[0..outer_indices_len]);
             offset += outer_indices_bytes;
         }
@@ -349,19 +349,11 @@ pub const Store = struct {
         if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
         const next_unique_name = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
 
-        // Rebuild the strings hash table
-        var strings = @import("../collections/SmallStringInterner.zig").StringIdx.Table{};
-        try strings.ensureTotalCapacityContext(gpa, @intCast(outer_indices.items.len), @import("../collections/SmallStringInterner.zig").StringIdx.TableContext{ .bytes = &bytes });
-
-        // Re-populate the hash table
-        for (outer_indices.items) |string_idx| {
-            const string_bytes = std.mem.sliceTo(bytes.items[@intFromEnum(string_idx)..], 0);
-            const entry = try strings.getOrPutContextAdapted(gpa, string_bytes, @import("../collections/SmallStringInterner.zig").StringIdx.TableAdapter{ .bytes = &bytes }, @import("../collections/SmallStringInterner.zig").StringIdx.TableContext{ .bytes = &bytes });
-            entry.key_ptr.* = string_idx;
-        }
+        // Create empty strings hash table (used only for deduplication during insertion)
+        const strings = std.StringHashMapUnmanaged(SmallStringInterner.StringIdx){};
 
         // Construct the interner
-        const interner = @import("../collections/SmallStringInterner.zig"){
+        const interner = SmallStringInterner{
             .bytes = bytes,
             .strings = strings,
             .outer_indices = outer_indices,

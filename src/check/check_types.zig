@@ -3,10 +3,10 @@
 //! This module implements constraint-based type inference.
 
 const std = @import("std");
-const base = @import("../base.zig");
+const base = @import("base");
 const tracy = @import("../tracy.zig");
-const collections = @import("../collections.zig");
-const types_mod = @import("../types.zig");
+const collections = @import("collections");
+const types_mod = @import("types");
 const can = @import("canonicalize.zig");
 const unifier = @import("check_types/unify.zig");
 const occurs = @import("check_types/occurs.zig");
@@ -15,10 +15,10 @@ const snapshot = @import("check_types/snapshot.zig");
 const instantiate = @import("check_types/instantiate.zig");
 const copy_import = @import("check_types/copy_import.zig");
 const CIR = @import("./canonicalize/CIR.zig");
-const ModuleEnv = @import("../base/ModuleEnv.zig");
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
+const ModuleEnv = base.ModuleEnv;
 const Ident = base.Ident;
 const Region = base.Region;
 const Func = types_mod.Func;
