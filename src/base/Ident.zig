@@ -384,11 +384,6 @@ pub const Store = struct {
     pub fn freeze(self: *Store) void {
         self.interner.freeze();
     }
-
-    /// Temporarily unfreeze the identifier store.
-    pub fn unfreeze(self: *Store) void {
-        self.interner.unfreeze();
-    }
 };
 
 test "from_bytes validates empty text" {

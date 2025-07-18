@@ -82,13 +82,6 @@ pub const Store = struct {
         }
     }
 
-    /// Temporarily unfreeze the store.
-    pub fn unfreeze(self: *Store) void {
-        if (std.debug.runtime_safety) {
-            self.frozen = false;
-        }
-    }
-
     /// Calculate the size needed to serialize this StringLiteral.Store
     pub fn serializedSize(self: *const Store) usize {
         // Header: 4 bytes for buffer length

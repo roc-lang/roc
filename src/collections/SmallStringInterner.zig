@@ -123,13 +123,6 @@ pub fn freeze(self: *Self) void {
     }
 }
 
-/// Temporarily unfreeze the interner.
-pub fn unfreeze(self: *Self) void {
-    if (std.debug.runtime_safety) {
-        self.frozen = false;
-    }
-}
-
 /// TODO
 pub const StringIdx = enum(u32) {
     _,

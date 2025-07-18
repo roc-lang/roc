@@ -100,9 +100,3 @@ pub fn freezeInterners(self: *Self) void {
     self.idents.freeze();
     self.strings.freeze();
 }
-
-/// Temporarily unfreeze all interners in this module environment.
-pub fn unfreezeInterners(self: *Self) void {
-    self.idents.unfreeze();
-    self.strings.unfreeze();
-}
