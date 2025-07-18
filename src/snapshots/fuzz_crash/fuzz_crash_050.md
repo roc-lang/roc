@@ -35,6 +35,7 @@ EndOfFile(3:2-3:2),
 ~~~roc
 module []
 _0 = {}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

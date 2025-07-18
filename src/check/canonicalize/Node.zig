@@ -97,6 +97,7 @@ pub const Tag = enum {
     pattern_identifier,
     pattern_as,
     pattern_applied_tag,
+    pattern_nominal,
     pattern_record_destructure,
     pattern_list,
     pattern_tuple,

@@ -1118,6 +1118,7 @@ pub const Pattern = union(enum) {
     tag: struct {
         tag_tok: Token.Idx,
         args: Pattern.Span,
+        qualifiers: Token.Span,
         region: TokenizedRegion,
     },
     int: struct {

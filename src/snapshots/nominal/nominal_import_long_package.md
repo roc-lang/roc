@@ -135,7 +135,8 @@ import design.Styles
 
 
 red : CE
-red = ...
+red = ... # not implemented
+
 ~~~
 # CANONICALIZE
 ~~~clojure

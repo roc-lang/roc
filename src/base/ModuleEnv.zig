@@ -98,6 +98,16 @@ pub fn calcRegionInfo(self: *const Self, source: []const u8, begin: u32, end: u3
     return RegionInfo.position(source, self.line_starts.items.items, begin, end);
 }
 
+/// Freeze all interners in this module environment, preventing any new entries from being added.
+/// This should be called after canonicalization is complete, so that
+/// we know it's safe to serialize/deserialize the part of the interner
+/// that goes from ident to string, because we don't go from string to ident
+/// after canonicalization!
+pub fn freezeInterners(self: *Self) void {
+    self.idents.interner.freeze();
+    self.strings.freeze();
+}
+
 /// Relocate all pointers in this ModuleEnv by the given offset.
 /// This is useful when transferring the ModuleEnv across address spaces.
 pub fn relocate(self: *Self, offset: isize) void {

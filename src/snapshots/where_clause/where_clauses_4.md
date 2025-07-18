@@ -58,12 +58,7 @@ KwWhere(6:2-6:7),KwModule(6:8-6:14),NoSpaceOpenRound(6:14-6:15),LowerIdent(6:15-
 ~~~
 # FORMATTED
 ~~~roc
-module [decode]
-
-import Decode exposing [Decode]
-
-decodeThings : List(List(U8)) -> List(a)
- where module(a).Decode
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

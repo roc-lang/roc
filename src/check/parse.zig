@@ -98,7 +98,7 @@ fn parseStatementAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
     @panic("Statement to parse was not found in AST");
 }
 
-/// Parses a Roc statement - only for use in snapshots. The returned AST should be deallocated by calling deinit
+/// Parses a single Roc statement for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
 pub fn parseStatement(env: *base.ModuleEnv, source: []const u8) std.mem.Allocator.Error!AST {
     return try runParse(env, source, parseStatementAndReturnIdx);
