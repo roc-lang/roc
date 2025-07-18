@@ -95,7 +95,10 @@ pub fn calcRegionInfo(self: *const Self, source: []const u8, begin: u32, end: u3
 }
 
 /// Freeze all interners in this module environment, preventing any new entries from being added.
-/// This should be called after parsing is complete.
+/// This should be called after canonicalization is complete, so that
+/// we know it's safe to serialize/deserialize the part of the interner
+/// that goes from ident to string, because we don't go from string to ident
+/// (or add new entries) in any of the later stages of compilation.
 pub fn freezeInterners(self: *Self) void {
     self.idents.freeze();
     self.strings.freeze();

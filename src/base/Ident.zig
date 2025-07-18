@@ -366,6 +366,7 @@ pub const Store = struct {
             .strings = strings,
             .outer_indices = outer_indices,
             .regions = regions,
+            .frozen = if (std.debug.runtime_safety) false else {},
         };
 
         return Store{

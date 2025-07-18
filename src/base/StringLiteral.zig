@@ -32,7 +32,9 @@ pub const Store = struct {
     /// continues to the previous byte
     buffer: std.ArrayListUnmanaged(u8) = .{},
     /// When true, no new entries can be added to the store.
-    /// This is set after parsing is complete.
+    /// This is set after canonicalization is complete, so that
+    /// we know it's safe to serialize/deserialize the part of the interner
+    /// that goes from ident to string, because we don't go from string to ident anymore.
     frozen: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
 
     /// Intiizalizes a `StringLiteral.Store` with capacity `bytes` of space.
