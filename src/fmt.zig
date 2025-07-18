@@ -1403,7 +1403,6 @@ const Formatter = struct {
 
                 var platform_field: ?AST.RecordField.Idx = null;
                 var package_fields_list = try std.ArrayListUnmanaged(AST.RecordField.Idx).initCapacity(fmt.ast.store.gpa, 10);
-                var i: usize = 0;
                 const packages_slice = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
                 for (packages_slice) |package_idx| {
                     if (package_idx == a.platform_idx) {
@@ -1412,7 +1411,6 @@ const Formatter = struct {
                     }
                     try package_fields_list.append(fmt.ast.store.gpa, package_idx);
                 }
-                i = 0;
                 const package_fields = try package_fields_list.toOwnedSlice(fmt.ast.store.gpa);
                 defer fmt.ast.store.gpa.free(package_fields);
 
@@ -1431,14 +1429,15 @@ const Formatter = struct {
                         try fmt.push(' ');
                         _ = try fmt.formatExpr(v);
                     }
-                    if (!packages_multiline and package_fields.len > 0) {
-                        try fmt.pushAll(", ");
-                    }
-                    if (packages_multiline) {
-                        try fmt.push(',');
+                    if (package_fields.len > 0) {
+                        if (!packages_multiline) {
+                            try fmt.pushAll(", ");
+                        } else {
+                            try fmt.push(',');
+                        }
                     }
                 }
-                for (package_fields) |field_idx| {
+                for (package_fields, 0..) |field_idx, i| {
                     const item_region = fmt.nodeRegion(@intFromEnum(field_idx));
                     if (packages_multiline) {
                         _ = try fmt.flushCommentsBefore(item_region.start);
@@ -1446,10 +1445,12 @@ const Formatter = struct {
                         try fmt.pushIndent();
                     }
                     _ = try fmt.formatRecordField(field_idx);
-                    if (!packages_multiline and i < package_fields.len - 1) {
-                        try fmt.pushAll(", ");
-                    } else if (packages_multiline) {
-                        try fmt.push(',');
+                    if (i < package_fields.len - 1) {
+                        if (!packages_multiline) {
+                            try fmt.pushAll(", ");
+                        } else if (packages_multiline) {
+                            try fmt.push(',');
+                        }
                     }
                     _ = try fmt.flushCommentsBefore(item_region.end);
                 }
