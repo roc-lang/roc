@@ -1452,7 +1452,6 @@ const Formatter = struct {
                             try fmt.push(',');
                         }
                     }
-                    _ = try fmt.flushCommentsBefore(item_region.end);
                 }
                 if (packages_multiline) {
                     _ = try fmt.flushCommentsBefore(packages.region.end - 1);
