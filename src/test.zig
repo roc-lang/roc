@@ -9,13 +9,13 @@ const testing = std.testing;
 
 test {
     testing.refAllDeclsRecursive(@import("serialization"));
-        testing.refAllDeclsRecursive(@import("collections"));
+    testing.refAllDeclsRecursive(@import("collections"));
     testing.refAllDeclsRecursive(@import("types"));
 
-    // Using refAllDeclsRecursive here gives "error: @fence is deprecated, use other atomics to establish ordering" for 
-    // some reason in an internal zig file. I suspect we need to update our zig version to resolve this 
+    // Using refAllDeclsRecursive here gives "error: @fence is deprecated, use other atomics to establish ordering" for
+    // some reason in an internal zig file. I suspect we need to update our zig version to resolve this
     testing.refAllDecls(@import("base"));
-    
+
     testing.refAllDeclsRecursive(@import("main.zig"));
     testing.refAllDeclsRecursive(@import("cache/mod.zig"));
     testing.refAllDeclsRecursive(@import("cache/CacheModule.zig"));
