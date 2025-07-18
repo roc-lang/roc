@@ -37,11 +37,13 @@ test "ModuleEnv serialization and relocation" {
     _ = var1;
     _ = var2;
 
-    // Add to exposed maps
-    try env.exposed_by_str.put(allocator, "myFunc", {});
-    try env.exposed_by_str.put(allocator, "otherFunc", {});
-    try env.exposed_nodes.put(allocator, "myFunc", 42);
-    try env.exposed_nodes.put(allocator, "otherFunc", 123);
+    // Add to exposed maps using intern indices
+    const my_func_idx = env.idents.interner.outer_indices.items.len - 2; // ident1 was "myFunc"
+    const other_func_idx = env.idents.interner.outer_indices.items.len - 1; // ident2 was "otherFunc"
+    try env.exposed_by_str.put(allocator, @intCast(my_func_idx), {});
+    try env.exposed_by_str.put(allocator, @intCast(other_func_idx), {});
+    try env.exposed_nodes.put(allocator, @intCast(my_func_idx), 42);
+    try env.exposed_nodes.put(allocator, @intCast(other_func_idx), 123);
 
     // Freeze exposed maps before serialization
     try env.freeze();
@@ -103,12 +105,27 @@ test "ModuleEnv serialization and relocation" {
 
     // Verify exposed maps
     try std.testing.expectEqual(@as(usize, 2), loaded_env.exposed_by_str.count());
-    try std.testing.expect(loaded_env.exposed_by_str.contains("myFunc"));
-    try std.testing.expect(loaded_env.exposed_by_str.contains("otherFunc"));
+
+    // Find the intern indices in the loaded environment
+    var my_func_loaded_idx: ?u32 = null;
+    var other_func_loaded_idx: ?u32 = null;
+    for (loaded_env.idents.interner.outer_indices.items, 0..) |_, idx| {
+        const text = loaded_env.idents.interner.getText(@enumFromInt(idx));
+        if (std.mem.eql(u8, text, "myFunc")) {
+            my_func_loaded_idx = @intCast(idx);
+        } else if (std.mem.eql(u8, text, "otherFunc")) {
+            other_func_loaded_idx = @intCast(idx);
+        }
+    }
+
+    try std.testing.expect(my_func_loaded_idx != null);
+    try std.testing.expect(other_func_loaded_idx != null);
+    try std.testing.expect(loaded_env.exposed_by_str.containsConst(my_func_loaded_idx.?));
+    try std.testing.expect(loaded_env.exposed_by_str.containsConst(other_func_loaded_idx.?));
 
     try std.testing.expectEqual(@as(usize, 2), loaded_env.exposed_nodes.count());
-    try std.testing.expectEqual(@as(u16, 42), loaded_env.exposed_nodes.get("myFunc").?);
-    try std.testing.expectEqual(@as(u16, 123), loaded_env.exposed_nodes.get("otherFunc").?);
+    try std.testing.expectEqual(@as(u16, 42), loaded_env.exposed_nodes.getConst(my_func_loaded_idx.?).?);
+    try std.testing.expectEqual(@as(u16, 123), loaded_env.exposed_nodes.getConst(other_func_loaded_idx.?).?);
 
     // Verify line starts
     try std.testing.expectEqual(@as(u32, 3), loaded_env.line_starts.len());

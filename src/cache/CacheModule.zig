@@ -284,8 +284,8 @@ pub const CacheModule = struct {
             allocator,
         );
         const types_store = try TypeStore.deserializeFrom(self.getComponentData(.types_store), allocator);
-        const exposed_by_str = try collections.BuildableFrozenStringMap(void).deserializeFrom(self.getComponentData(.exposed_by_str), allocator);
-        const exposed_nodes = try collections.BuildableFrozenStringMap(u16).deserializeFrom(self.getComponentData(.exposed_nodes), allocator);
+        const exposed_by_str = try collections.BuildableFrozenInternMap(void).deserializeFrom(self.getComponentData(.exposed_by_str), allocator);
+        const exposed_nodes = try collections.BuildableFrozenInternMap(u16).deserializeFrom(self.getComponentData(.exposed_nodes), allocator);
 
         // Create ModuleEnv from deserialized components
         var module_env = base.ModuleEnv{

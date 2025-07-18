@@ -799,71 +799,83 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                                 // Look up the method in the origin module's exports
                                 const method_name_str = self.cir.env.idents.getText(dot_access.field_name);
 
+                                // Look up the method name in the module's interner to get its index
+                                var found_idx: ?u32 = null;
+                                for (module.env.idents.interner.outer_indices.items, 0..) |_, idx| {
+                                    const text = module.env.idents.interner.getText(@enumFromInt(idx));
+                                    if (std.mem.eql(u8, text, method_name_str)) {
+                                        found_idx = @intCast(idx);
+                                        break;
+                                    }
+                                }
+
                                 // Search through the module's exposed nodes
-                                if (module.env.exposed_nodes.get(method_name_str)) |node_idx| {
-                                    // Found the method!
-                                    const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(node_idx));
+                                if (found_idx) |idx| {
+                                    if (module.env.exposed_nodes.getConst(idx)) |node_idx| {
+                                        // Found the method!
+                                        const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(node_idx));
 
-                                    // Check if we've already copied this import
-                                    const cache_key = ImportCacheKey{
-                                        .module_idx = origin_module_idx orelse @enumFromInt(0), // Current module
-                                        .expr_idx = target_expr_idx,
-                                    };
+                                        // Check if we've already copied this import
+                                        const cache_key = ImportCacheKey{
+                                            .module_idx = origin_module_idx orelse @enumFromInt(0), // Current module
+                                            .expr_idx = target_expr_idx,
+                                        };
 
-                                    const method_var = if (self.import_cache.get(cache_key)) |cached_var|
-                                        cached_var
-                                    else blk: {
-                                        // Copy the method's type from the origin module to our type store
-                                        const source_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
-                                        const new_copy = try copy_import.copyImportedType(
-                                            &module.env.types,
-                                            self.types,
-                                            source_var,
-                                            &module.env.idents,
-                                            &self.cir.env.idents,
-                                            self.gpa,
-                                        );
-                                        try self.import_cache.put(self.gpa, cache_key, new_copy);
-                                        break :blk new_copy;
-                                    };
+                                        const method_var = if (self.import_cache.get(cache_key)) |cached_var|
+                                            cached_var
+                                        else blk: {
+                                            // Copy the method's type from the origin module to our type store
+                                            const source_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
+                                            const new_copy = try copy_import.copyImportedType(
+                                                &module.env.types,
+                                                self.types,
+                                                source_var,
+                                                &module.env.idents,
+                                                &self.cir.env.idents,
+                                                self.gpa,
+                                            );
+                                            try self.import_cache.put(self.gpa, cache_key, new_copy);
+                                            break :blk new_copy;
+                                        };
 
-                                    // Check all arguments
-                                    var i: u32 = 0;
-                                    while (i < args_span.span.len) : (i += 1) {
-                                        const arg_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(args_span.span.start + i));
-                                        does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
+                                        // Check all arguments
+                                        var i: u32 = 0;
+                                        while (i < args_span.span.len) : (i += 1) {
+                                            const arg_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(args_span.span.start + i));
+                                            does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
+                                        }
+
+                                        // Create argument list for the function call
+                                        var args = std.ArrayList(Var).init(self.gpa);
+                                        defer args.deinit();
+
+                                        // Add the receiver (the nominal type) as the first argument
+                                        try args.append(receiver_var);
+
+                                        // Add the remaining arguments
+                                        i = 0;
+                                        while (i < args_span.span.len) : (i += 1) {
+                                            const arg_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(args_span.span.start + i));
+                                            const arg_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
+                                            try args.append(arg_var);
+                                        }
+
+                                        // Create a function type for the method call
+                                        const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+                                        const func_content = try self.types.mkFuncUnbound(args.items, dot_access_var);
+                                        const expected_func_var = try self.freshFromContent(func_content, expr_region);
+
+                                        // Unify with the imported method type
+                                        _ = try self.unify(expected_func_var, method_var);
+
+                                        // Store the resolved method info for code generation
+                                        // This will be used by the code generator to emit the correct function call
+                                        // For now, the type information in the expression variable is sufficient
+                                    } else {
+                                        // Method not found in origin module
+                                        // TODO: Add a proper error type for method not found on nominal type
+                                        try self.types.setVarContent(@enumFromInt(@intFromEnum(expr_idx)), .err);
                                     }
-
-                                    // Create argument list for the function call
-                                    var args = std.ArrayList(Var).init(self.gpa);
-                                    defer args.deinit();
-
-                                    // Add the receiver (the nominal type) as the first argument
-                                    try args.append(receiver_var);
-
-                                    // Add the remaining arguments
-                                    i = 0;
-                                    while (i < args_span.span.len) : (i += 1) {
-                                        const arg_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(args_span.span.start + i));
-                                        const arg_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
-                                        try args.append(arg_var);
-                                    }
-
-                                    // Create a function type for the method call
-                                    const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                                    const func_content = try self.types.mkFuncUnbound(args.items, dot_access_var);
-                                    const expected_func_var = try self.freshFromContent(func_content, expr_region);
-
-                                    // Unify with the imported method type
-                                    _ = try self.unify(expected_func_var, method_var);
-
-                                    // Store the resolved method info for code generation
-                                    // This will be used by the code generator to emit the correct function call
-                                    // For now, the type information in the expression variable is sufficient
-                                } else {
-                                    // Method not found in origin module
-                                    // TODO: Add a proper error type for method not found on nominal type
-                                    try self.types.setVarContent(@enumFromInt(@intFromEnum(expr_idx)), .err);
                                 }
                             } else {
                                 // Origin module not found

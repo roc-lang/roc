@@ -25,6 +25,10 @@ pub const BuildableFrozenStringMap = @import("collections/FrozenMap.zig").Builda
 
 pub const SortedArrayBuilder = @import("collections/FrozenMap.zig").SortedArrayBuilder;
 
+pub const FrozenInternMap = @import("collections/FrozenMap.zig").FrozenInternMap;
+
+pub const BuildableFrozenInternMap = @import("collections/FrozenMap.zig").BuildableFrozenInternMap;
+
 /// A range that must have at least one element
 pub const NonEmptyRange = struct {
     /// Starting index (inclusive)

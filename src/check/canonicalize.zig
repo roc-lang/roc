@@ -587,7 +587,15 @@ pub fn canonicalizeFile(
                     if (self.exposed_ident_texts.contains(ident_text)) {
                         // Store the def index as u16 in exposed_nodes
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                        try self.can_ir.env.exposed_nodes.put(self.can_ir.env.gpa, ident_text, def_idx_u16);
+
+                        // Get the canonicalized def to find the identifier
+                        const def = self.can_ir.store.getDef(def_idx);
+                        const can_pattern = self.can_ir.store.getPattern(def.pattern);
+                        if (can_pattern == .assign) {
+                            // Use the intern index from the canonicalized pattern
+                            const intern_idx = @as(u32, can_pattern.assign.ident.idx);
+                            try self.can_ir.env.exposed_nodes.put(self.can_ir.env.gpa, intern_idx, def_idx_u16);
+                        }
                     }
 
                     _ = self.exposed_ident_texts.remove(ident_text);
@@ -815,8 +823,13 @@ fn createExposedScope(
                 const token_region = self.parse_ir.tokens.resolve(@intCast(ident.ident));
                 const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
-                // Add to exposed_by_str for permanent storage (unconditionally)
-                try self.can_ir.env.exposed_by_str.put(gpa, ident_text, {});
+                // Intern the identifier into the CIR's store
+                const cir_ident_idx = try self.can_ir.env.idents.insert(gpa, base.Ident.for_text(ident_text), self.parse_ir.tokenizedRegionToRegion(ident.region));
+                const cir_intern_idx = @as(u32, cir_ident_idx.idx);
+
+                // Add to exposed_by_str using the CIR's intern index
+                // The map will handle deduplication if the same index is added multiple times
+                try self.can_ir.env.exposed_by_str.put(gpa, cir_intern_idx, {});
 
                 // Also build exposed_scope with proper identifiers
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
@@ -848,8 +861,13 @@ fn createExposedScope(
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_name.ident));
                 const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
-                // Add to exposed_by_str for permanent storage (unconditionally)
-                try self.can_ir.env.exposed_by_str.put(gpa, type_text, {});
+                // Intern the type name into the CIR's store
+                const cir_ident_idx = try self.can_ir.env.idents.insert(gpa, base.Ident.for_text(type_text), self.parse_ir.tokenizedRegionToRegion(type_name.region));
+                const cir_intern_idx = @as(u32, cir_ident_idx.idx);
+
+                // Add to exposed_by_str using the CIR's intern index
+                // The map will handle deduplication if the same index is added multiple times
+                try self.can_ir.env.exposed_by_str.put(gpa, cir_intern_idx, {});
 
                 // Also build exposed_scope with proper identifiers
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
@@ -881,8 +899,13 @@ fn createExposedScope(
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_with_constructors.ident));
                 const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
-                // Add to exposed_by_str for permanent storage (unconditionally)
-                try self.can_ir.env.exposed_by_str.put(gpa, type_text, {});
+                // Intern the type name into the CIR's store
+                const cir_ident_idx = try self.can_ir.env.idents.insert(gpa, base.Ident.for_text(type_text), self.parse_ir.tokenizedRegionToRegion(type_with_constructors.region));
+                const cir_intern_idx = @as(u32, cir_ident_idx.idx);
+
+                // Add to exposed_by_str using the CIR's intern index
+                // The map will handle deduplication if the same index is added multiple times
+                try self.can_ir.env.exposed_by_str.put(gpa, cir_intern_idx, {});
 
                 // Also build exposed_scope with proper identifiers
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
@@ -1287,8 +1310,19 @@ fn introduceExposedItemsIntoScope(
             const exposed_item = self.can_ir.store.getExposedItem(exposed_item_idx);
             const item_name_text = self.can_ir.env.idents.getText(exposed_item.name);
 
+            // Look up the string in the target module's interner to get its index
+            // This requires searching through the interner's outer_indices
+            var found_idx: ?u32 = null;
+            for (module_env.idents.interner.outer_indices.items, 0..) |_, idx| {
+                const text = module_env.idents.interner.getText(@enumFromInt(idx));
+                if (std.mem.eql(u8, text, item_name_text)) {
+                    found_idx = @intCast(idx);
+                    break;
+                }
+            }
+
             // Check if the item is exposed by the module
-            if (!module_env.exposed_by_str.contains(item_name_text)) {
+            if (found_idx == null or !module_env.exposed_by_str.containsConst(found_idx.?)) {
                 // Determine if it's a type or value based on capitalization
                 const first_char = item_name_text[0];
 
@@ -1587,7 +1621,20 @@ pub fn canonicalizeExpr(
                             const field_text = self.can_ir.env.idents.getText(ident);
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
-                                    break :blk module_env.exposed_nodes.get(field_text) orelse 0;
+                                    // Look up the field text in the module's interner
+                                    var found_idx: ?u32 = null;
+                                    for (module_env.idents.interner.outer_indices.items, 0..) |_, idx| {
+                                        const text = module_env.idents.interner.getText(@enumFromInt(idx));
+                                        if (std.mem.eql(u8, text, field_text)) {
+                                            found_idx = @intCast(idx);
+                                            break;
+                                        }
+                                    }
+                                    if (found_idx) |idx| {
+                                        break :blk module_env.exposed_nodes.getConst(idx) orelse 0;
+                                    } else {
+                                        break :blk 0;
+                                    }
                                 } else {
                                     break :blk 0;
                                 }
@@ -1636,7 +1683,20 @@ pub fn canonicalizeExpr(
                             const field_text = self.can_ir.env.idents.getText(exposed_info.original_name);
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
-                                    break :blk module_env.exposed_nodes.get(field_text) orelse 0;
+                                    // Look up the field text in the module's interner
+                                    var found_idx: ?u32 = null;
+                                    for (module_env.idents.interner.outer_indices.items, 0..) |_, idx| {
+                                        const text = module_env.idents.interner.getText(@enumFromInt(idx));
+                                        if (std.mem.eql(u8, text, field_text)) {
+                                            found_idx = @intCast(idx);
+                                            break;
+                                        }
+                                    }
+                                    if (found_idx) |idx| {
+                                        break :blk module_env.exposed_nodes.getConst(idx) orelse 0;
+                                    } else {
+                                        break :blk 0;
+                                    }
                                 } else {
                                     break :blk 0;
                                 }
@@ -6321,7 +6381,20 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const field_text = self.can_ir.env.idents.getText(field_name);
     const target_node_idx = if (self.module_envs) |envs_map| blk: {
         if (envs_map.get(module_text)) |module_env| {
-            break :blk module_env.exposed_nodes.get(field_text) orelse 0;
+            // Look up the field text in the module's interner
+            var found_idx: ?u32 = null;
+            for (module_env.idents.interner.outer_indices.items, 0..) |_, idx| {
+                const text = module_env.idents.interner.getText(@enumFromInt(idx));
+                if (std.mem.eql(u8, text, field_text)) {
+                    found_idx = @intCast(idx);
+                    break;
+                }
+            }
+            if (found_idx) |idx| {
+                break :blk module_env.exposed_nodes.getConst(idx) orelse 0;
+            } else {
+                break :blk 0;
+            }
         } else {
             break :blk 0;
         }

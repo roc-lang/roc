@@ -25,10 +25,10 @@ strings: StringLiteral.Store,
 types: types_mod.Store,
 /// Map of exposed items by their string representation (not interned)
 /// This is built during canonicalization and preserved for later use
-exposed_by_str: collections.BuildableFrozenStringMap(void),
+exposed_by_str: collections.BuildableFrozenInternMap(void),
 /// Map of exposed item names to their CIR node indices (stored as u16)
 /// This is populated during canonicalization to allow cross-module lookups
-exposed_nodes: collections.BuildableFrozenStringMap(u16),
+exposed_nodes: collections.BuildableFrozenInternMap(u16),
 
 /// Line starts for error reporting. We retain only start and offset positions in the IR
 /// and then use these line starts to calculate the line number and column number as required.
@@ -48,8 +48,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .ident_ids_for_slicing = try collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
         .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
         .types = try types_mod.Store.initCapacity(gpa, 2048, 512),
-        .exposed_by_str = try collections.BuildableFrozenStringMap(void).initCapacity(gpa, 64),
-        .exposed_nodes = try collections.BuildableFrozenStringMap(u16).initCapacity(gpa, 64),
+        .exposed_by_str = collections.BuildableFrozenInternMap(void).init(),
+        .exposed_nodes = collections.BuildableFrozenInternMap(u16).init(),
         .line_starts = try collections.SafeList(u32).initCapacity(gpa, 256),
         .source = source,
     };
@@ -70,8 +70,9 @@ pub fn deinit(self: *Self) void {
 
 /// Freeze the exposed maps for efficient read-only access after canonicalization
 pub fn freeze(self: *Self) !void {
-    try self.exposed_by_str.freeze(self.gpa);
-    try self.exposed_nodes.freeze(self.gpa);
+    // Ensure the maps are sorted before any const operations
+    self.exposed_by_str.ensureSorted();
+    self.exposed_nodes.ensureSorted();
 }
 
 /// Calculate and store line starts from the source text
