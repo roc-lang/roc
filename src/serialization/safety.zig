@@ -5,6 +5,7 @@
 
 const std = @import("std");
 
+/// TODO
 pub const SERIALIZATION_ALIGNMENT = 16;
 
 /// Pattern used to detect uninitialized memory
