@@ -6,9 +6,8 @@
 //! them as offsets into the source code with additional metadata.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const collections = @import("../../collections.zig");
-const base = @import("../../base.zig");
+const base = @import("base");
+const collections = @import("collections");
 const tracy = @import("../../tracy.zig");
 
 /// representation of a token in the source code, like '+', 'foo', '=', '{'

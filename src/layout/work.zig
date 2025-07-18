@@ -2,9 +2,9 @@
 //! This data structure tracks pending work between one iteration and the next.
 
 const std = @import("std");
-const types = @import("../types/types.zig");
+const types = @import("types");
 const layout = @import("./layout.zig");
-const Ident = @import("../base/Ident.zig");
+const Ident = @import("base").Ident;
 
 /// Work queue for layout computation, tracking pending and resolved containers
 pub const Work = struct {

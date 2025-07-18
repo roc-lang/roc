@@ -4,10 +4,8 @@
 
 const std = @import("std");
 const testing = std.testing;
+const base = @import("base");
 const snapshot_mod = @import("snapshot.zig");
-const NodeType = snapshot_mod.NodeType;
-const base = @import("base.zig");
-const RegionInfo = base.RegionInfo;
 const parse = @import("check/parse.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const check_types = @import("check/check_types.zig");
@@ -16,6 +14,9 @@ const eval = @import("eval/interpreter.zig");
 const stack = @import("eval/stack.zig");
 const layout_store = @import("layout/store.zig");
 const reporting = @import("reporting.zig");
+
+const NodeType = snapshot_mod.NodeType;
+const RegionInfo = base.RegionInfo;
 
 /// Represents a problem entry from either EXPECTED or PROBLEMS section
 const ProblemEntry = struct {

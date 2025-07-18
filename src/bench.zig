@@ -1,10 +1,10 @@
 //! Benchmarking utility for the Roc compiler, exposed as --z-* arguments in the main binary.
 
 const std = @import("std");
-const fmt = @import("fmt.zig");
-const base = @import("base.zig");
-const collections = @import("collections.zig");
+const base = @import("base");
 const tracy = @import("tracy.zig");
+const fmt = @import("fmt.zig");
+const collections = @import("collections");
 
 const tokenize = @import("check/parse/tokenize.zig");
 const parse = @import("check/parse.zig");

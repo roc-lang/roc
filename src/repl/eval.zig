@@ -1,20 +1,21 @@
 //! REPL evaluation module that processes expressions and maintains state
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const base = @import("../base.zig");
+const base = @import("base");
 const parse = @import("../check/parse.zig");
 const canonicalize = @import("../check/canonicalize.zig");
 const check_types = @import("../check/check_types.zig");
-const types = @import("../types.zig");
-const types_store = @import("../types/store.zig");
+const types = @import("types");
+const types_store = types.store;
 const layout_store = @import("../layout/store.zig");
 const layout = @import("../layout/layout.zig");
 const eval = @import("../eval/interpreter.zig");
 const stack = @import("../eval/stack.zig");
+
+const writers = types.writers;
+const Allocator = std.mem.Allocator;
+const target = base.target;
 const CIR = canonicalize.CIR;
-const target = @import("../base/target.zig");
-const writers = @import("../types/writers.zig");
 
 /// Read-Eval-Print Loop implementation for interactive Roc expression evaluation
 pub const Repl = struct {

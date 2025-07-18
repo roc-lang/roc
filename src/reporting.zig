@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const base = @import("base.zig");
+const base = @import("base");
 
 pub const Severity = @import("reporting/severity.zig").Severity;
 pub const Document = @import("reporting/document.zig").Document;

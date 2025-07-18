@@ -16,18 +16,17 @@
 
 const std = @import("std");
 
-const base = @import("../../base.zig");
-const collections = @import("../../collections.zig");
-const types = @import("../../types/types.zig");
-const store = @import("../../types/store.zig");
+const base = @import("base");
+const collections = @import("collections");
+const types = @import("types");
 
 const Ident = base.Ident;
 
 const MkSafeList = collections.SafeList;
 
-const Store = store.Store;
-const DescStoreIdx = store.DescStoreIdx;
-const ResolvedVarDesc = store.ResolvedVarDesc;
+const Store = types.Store;
+const DescStoreIdx = types.DescStoreIdx;
+const ResolvedVarDesc = types.ResolvedVarDesc;
 
 const Desc = types.Descriptor;
 const Content = types.Content;

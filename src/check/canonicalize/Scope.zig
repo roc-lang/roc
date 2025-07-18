@@ -1,8 +1,8 @@
 //! Scope management for identifier resolution during canonicalization.
 
 const std = @import("std");
-const base = @import("../../base.zig");
-const collections = @import("../../collections.zig");
+const base = @import("base");
+const collections = @import("collections");
 const CIR = @import("CIR.zig");
 
 const Ident = base.Ident;

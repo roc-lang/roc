@@ -6,8 +6,8 @@
 //! interned (and deduplicated) data instead of storing the values themselves.
 
 const std = @import("std");
-const types_mod = @import("../types.zig");
-const collections = @import("../collections.zig");
+const types_mod = @import("types");
+const collections = @import("collections");
 const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
 const RegionInfo = @import("RegionInfo.zig");
@@ -19,7 +19,7 @@ const iovec_serialize = @import("iovec_serialize.zig");
 const Self = @This();
 
 gpa: std.mem.Allocator,
-idents: Ident.Store = .{},
+idents: Ident.Store,
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 types: types_mod.Store,

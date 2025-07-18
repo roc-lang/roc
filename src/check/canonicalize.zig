@@ -5,13 +5,13 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../base.zig");
+const base = @import("base");
 const tracy = @import("../tracy.zig");
 const parse = @import("parse.zig");
 const tokenize = @import("parse/tokenize.zig");
-const collections = @import("../collections.zig");
-const types = @import("../types.zig");
-const RocDec = @import("../builtins/dec.zig").RocDec;
+const collections = @import("collections");
+const types = @import("types");
+const RocDec = @import("builtins").RocDec;
 
 const NodeStore = @import("./canonicalize/NodeStore.zig");
 const Scope = @import("./canonicalize/Scope.zig");

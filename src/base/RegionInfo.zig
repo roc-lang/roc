@@ -5,7 +5,7 @@
 //! as this is more compact, and then when we need to we can calculate the line and column information
 //! using line_starts and the offsets.
 const std = @import("std");
-const collections = @import("../collections.zig");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 
 // byte indexes into the source text

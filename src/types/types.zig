@@ -12,10 +12,10 @@
 //! these types, please consider their size impact and unification performance.
 
 const std = @import("std");
-const testing = std.testing;
-const collections = @import("../collections.zig");
-const Ident = @import("../base/Ident.zig");
+const base = @import("base");
+const collections = @import("collections");
 
+const Ident = base.Ident;
 const MkSafeList = collections.SafeList;
 const MkSafeMultiList = collections.SafeMultiList;
 
@@ -96,7 +96,7 @@ pub const Mark = enum(u32) {
 
     /// Get the next mark
     pub fn next(self: Self) Self {
-        return self + 1;
+        return @enumFromInt(@intFromEnum(self) + 1);
     }
 };
 
@@ -661,73 +661,73 @@ pub const TwoTags = struct {
 test "Precision.size() and alignment()" {
 
     // u8 and i8 should have size and alignment of 1
-    try testing.expectEqual(1, Num.Int.Precision.u8.size());
-    try testing.expectEqual(1, Num.Int.Precision.i8.size());
-    try testing.expectEqual(1, Num.Int.Precision.u8.alignment().toByteUnits());
-    try testing.expectEqual(1, Num.Int.Precision.i8.alignment().toByteUnits());
+    try std.testing.expectEqual(1, Num.Int.Precision.u8.size());
+    try std.testing.expectEqual(1, Num.Int.Precision.i8.size());
+    try std.testing.expectEqual(1, Num.Int.Precision.u8.alignment().toByteUnits());
+    try std.testing.expectEqual(1, Num.Int.Precision.i8.alignment().toByteUnits());
 
     // u16 and i16 should have size and alignment of 2
-    try testing.expectEqual(2, Num.Int.Precision.u16.size());
-    try testing.expectEqual(2, Num.Int.Precision.i16.size());
-    try testing.expectEqual(2, Num.Int.Precision.u16.alignment().toByteUnits());
-    try testing.expectEqual(2, Num.Int.Precision.i16.alignment().toByteUnits());
+    try std.testing.expectEqual(2, Num.Int.Precision.u16.size());
+    try std.testing.expectEqual(2, Num.Int.Precision.i16.size());
+    try std.testing.expectEqual(2, Num.Int.Precision.u16.alignment().toByteUnits());
+    try std.testing.expectEqual(2, Num.Int.Precision.i16.alignment().toByteUnits());
 
     // u32 and i32 should have size and alignment of 4
-    try testing.expectEqual(4, Num.Int.Precision.u32.size());
-    try testing.expectEqual(4, Num.Int.Precision.i32.size());
-    try testing.expectEqual(4, Num.Int.Precision.u32.alignment().toByteUnits());
-    try testing.expectEqual(4, Num.Int.Precision.i32.alignment().toByteUnits());
+    try std.testing.expectEqual(4, Num.Int.Precision.u32.size());
+    try std.testing.expectEqual(4, Num.Int.Precision.i32.size());
+    try std.testing.expectEqual(4, Num.Int.Precision.u32.alignment().toByteUnits());
+    try std.testing.expectEqual(4, Num.Int.Precision.i32.alignment().toByteUnits());
 
     // u64 and i64 should have size and alignment of 8
-    try testing.expectEqual(8, Num.Int.Precision.u64.size());
-    try testing.expectEqual(8, Num.Int.Precision.i64.size());
-    try testing.expectEqual(8, Num.Int.Precision.u64.alignment().toByteUnits());
-    try testing.expectEqual(8, Num.Int.Precision.i64.alignment().toByteUnits());
+    try std.testing.expectEqual(8, Num.Int.Precision.u64.size());
+    try std.testing.expectEqual(8, Num.Int.Precision.i64.size());
+    try std.testing.expectEqual(8, Num.Int.Precision.u64.alignment().toByteUnits());
+    try std.testing.expectEqual(8, Num.Int.Precision.i64.alignment().toByteUnits());
 
     // u128 and i128 should have size and alignment of 16
-    try testing.expectEqual(16, Num.Int.Precision.u128.size());
-    try testing.expectEqual(16, Num.Int.Precision.i128.size());
-    try testing.expectEqual(16, Num.Int.Precision.u128.alignment().toByteUnits());
-    try testing.expectEqual(16, Num.Int.Precision.i128.alignment().toByteUnits());
+    try std.testing.expectEqual(16, Num.Int.Precision.u128.size());
+    try std.testing.expectEqual(16, Num.Int.Precision.i128.size());
+    try std.testing.expectEqual(16, Num.Int.Precision.u128.alignment().toByteUnits());
+    try std.testing.expectEqual(16, Num.Int.Precision.i128.alignment().toByteUnits());
 
     // f32 should have size and alignment of 4
-    try testing.expectEqual(4, Num.Frac.Precision.f32.size());
-    try testing.expectEqual(4, Num.Frac.Precision.f32.alignment().toByteUnits());
+    try std.testing.expectEqual(4, Num.Frac.Precision.f32.size());
+    try std.testing.expectEqual(4, Num.Frac.Precision.f32.alignment().toByteUnits());
 
     // f64 should have size and alignment of 8
-    try testing.expectEqual(8, Num.Frac.Precision.f64.size());
-    try testing.expectEqual(8, Num.Frac.Precision.f64.alignment().toByteUnits());
+    try std.testing.expectEqual(8, Num.Frac.Precision.f64.size());
+    try std.testing.expectEqual(8, Num.Frac.Precision.f64.alignment().toByteUnits());
 
     // dec should have size and alignment of 16
-    try testing.expectEqual(16, Num.Frac.Precision.dec.size());
-    try testing.expectEqual(16, Num.Frac.Precision.dec.alignment().toByteUnits());
+    try std.testing.expectEqual(16, Num.Frac.Precision.dec.size());
+    try std.testing.expectEqual(16, Num.Frac.Precision.dec.alignment().toByteUnits());
 }
 
 test "BitsNeeded.fromValue calculates correct bits for various values" {
     const BitsNeeded = Num.Int.BitsNeeded;
 
     // Test minimum signed value adjustments
-    try testing.expectEqual(BitsNeeded.@"7", BitsNeeded.fromValue(127)); // -128 adjusted
-    try testing.expectEqual(BitsNeeded.@"8", BitsNeeded.fromValue(128)); // -128 not adjusted
+    try std.testing.expectEqual(BitsNeeded.@"7", BitsNeeded.fromValue(127)); // -128 adjusted
+    try std.testing.expectEqual(BitsNeeded.@"8", BitsNeeded.fromValue(128)); // -128 not adjusted
 
     // Test other values
-    try testing.expectEqual(BitsNeeded.@"7", BitsNeeded.fromValue(0));
-    try testing.expectEqual(BitsNeeded.@"7", BitsNeeded.fromValue(1));
-    try testing.expectEqual(BitsNeeded.@"7", BitsNeeded.fromValue(127));
-    try testing.expectEqual(BitsNeeded.@"8", BitsNeeded.fromValue(255));
-    try testing.expectEqual(BitsNeeded.@"9_to_15", BitsNeeded.fromValue(256));
-    try testing.expectEqual(BitsNeeded.@"16", BitsNeeded.fromValue(65535));
-    try testing.expectEqual(BitsNeeded.@"17_to_31", BitsNeeded.fromValue(65536));
+    try std.testing.expectEqual(BitsNeeded.@"7", BitsNeeded.fromValue(0));
+    try std.testing.expectEqual(BitsNeeded.@"7", BitsNeeded.fromValue(1));
+    try std.testing.expectEqual(BitsNeeded.@"7", BitsNeeded.fromValue(127));
+    try std.testing.expectEqual(BitsNeeded.@"8", BitsNeeded.fromValue(255));
+    try std.testing.expectEqual(BitsNeeded.@"9_to_15", BitsNeeded.fromValue(256));
+    try std.testing.expectEqual(BitsNeeded.@"16", BitsNeeded.fromValue(65535));
+    try std.testing.expectEqual(BitsNeeded.@"17_to_31", BitsNeeded.fromValue(65536));
 
     // Test that toBits returns expected values
-    try testing.expectEqual(@as(u8, 7), BitsNeeded.@"7".toBits());
-    try testing.expectEqual(@as(u8, 8), BitsNeeded.@"8".toBits());
-    try testing.expectEqual(@as(u8, 9), BitsNeeded.@"9_to_15".toBits());
-    try testing.expectEqual(@as(u8, 16), BitsNeeded.@"16".toBits());
-    try testing.expectEqual(@as(u8, 17), BitsNeeded.@"17_to_31".toBits());
-    try testing.expectEqual(@as(u8, 32), BitsNeeded.@"32".toBits());
-    try testing.expectEqual(@as(u8, 33), BitsNeeded.@"33_to_63".toBits());
-    try testing.expectEqual(@as(u8, 64), BitsNeeded.@"64".toBits());
-    try testing.expectEqual(@as(u8, 65), BitsNeeded.@"65_to_127".toBits());
-    try testing.expectEqual(@as(u8, 128), BitsNeeded.@"128".toBits());
+    try std.testing.expectEqual(@as(u8, 7), BitsNeeded.@"7".toBits());
+    try std.testing.expectEqual(@as(u8, 8), BitsNeeded.@"8".toBits());
+    try std.testing.expectEqual(@as(u8, 9), BitsNeeded.@"9_to_15".toBits());
+    try std.testing.expectEqual(@as(u8, 16), BitsNeeded.@"16".toBits());
+    try std.testing.expectEqual(@as(u8, 17), BitsNeeded.@"17_to_31".toBits());
+    try std.testing.expectEqual(@as(u8, 32), BitsNeeded.@"32".toBits());
+    try std.testing.expectEqual(@as(u8, 33), BitsNeeded.@"33_to_63".toBits());
+    try std.testing.expectEqual(@as(u8, 64), BitsNeeded.@"64".toBits());
+    try std.testing.expectEqual(@as(u8, 65), BitsNeeded.@"65_to_127".toBits());
+    try std.testing.expectEqual(@as(u8, 128), BitsNeeded.@"128".toBits());
 }

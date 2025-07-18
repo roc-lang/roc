@@ -3,15 +3,15 @@
 //! Result is at `./zig-out/bin/roc`
 
 const std = @import("std");
-const fmt = @import("fmt.zig");
-const base = @import("base.zig");
-const collections = @import("collections.zig");
-const reporting = @import("reporting.zig");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
-// const coordinate = @import("coordinate.zig");
+const fmt = @import("fmt.zig");
+const base = @import("base");
+const collections = @import("collections");
+const reporting = @import("reporting.zig");
 const coordinate_simple = @import("coordinate_simple.zig");
-
 const tracy = @import("tracy.zig");
+
 const Filesystem = @import("fs/Filesystem.zig");
 const cli_args = @import("cli_args.zig");
 const cache_mod = @import("cache/mod.zig");
@@ -22,7 +22,6 @@ const parse = @import("check/parse.zig");
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 
-const builtin = @import("builtin");
 const read_roc_file_path_shim_lib = if (builtin.is_test) &[_]u8{} else @embedFile("libread_roc_file_path_shim.a");
 const c = std.c;
 

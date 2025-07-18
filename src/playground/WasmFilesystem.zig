@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const Filesystem = @import("../fs/Filesystem.zig");
-const collections = @import("../collections.zig");
+const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
 // Helper function to handle OOM errors

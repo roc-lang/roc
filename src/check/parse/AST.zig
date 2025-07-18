@@ -12,9 +12,9 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../../base.zig");
+const base = @import("base");
 const tokenize = @import("tokenize.zig");
-const collections = @import("../../collections.zig");
+const collections = @import("collections");
 const reporting = @import("../../reporting.zig");
 
 const Node = @import("Node.zig");

@@ -6,7 +6,7 @@
 //! Reports combine a title, severity level, and formatted document content.
 
 const std = @import("std");
-const base = @import("../base.zig");
+const base = @import("base");
 const config = @import("config.zig");
 const document = @import("document.zig");
 const renderer = @import("renderer.zig");

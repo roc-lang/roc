@@ -6,10 +6,10 @@
 //! following the "Inform Don't Block" philosophy.
 
 const std = @import("std");
+const base = @import("base");
 const tracy = @import("../../tracy.zig");
 const tokenize = @import("tokenize.zig");
-const collections = @import("../../collections.zig");
-const base = @import("../../base.zig");
+const collections = @import("collections");
 
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");

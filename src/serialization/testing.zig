@@ -4,6 +4,8 @@ const std = @import("std");
 const safety = @import("safety.zig");
 const mod = @import("mod.zig");
 
+const SERIALIZATION_ALIGNMENT = safety.SERIALIZATION_ALIGNMENT;
+
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
@@ -31,31 +33,31 @@ pub fn testSerialization(comptime T: type, value: *const T, allocator: Allocator
     defer deinitValue(T, &deserialized, allocator);
 
     // Test deterministic output - create aligned buffer
-    const buffer2 = try allocator.alignedAlloc(u8, mod.SERIALIZATION_ALIGNMENT, size);
+    const buffer2 = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, size);
     defer allocator.free(buffer2);
     const serialized2 = try serializeValue(T, value, buffer2, allocator);
     try testing.expectEqualSlices(u8, serialized, serialized2);
 
     // Test boundary conditions
     if (size > 0) {
-        const small_buffer = try allocator.alignedAlloc(u8, mod.SERIALIZATION_ALIGNMENT, size - 1);
+        const small_buffer = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, size - 1);
         defer allocator.free(small_buffer);
         try testing.expectError(error.BufferTooSmall, serializeValue(T, value, small_buffer, allocator));
     }
 }
 
 /// Helper function to create aligned buffer with standard alignment
-fn createStandardAlignedBuffer(allocator: Allocator, size: usize) ![]align(mod.SERIALIZATION_ALIGNMENT) u8 {
-    return try allocator.alignedAlloc(u8, mod.SERIALIZATION_ALIGNMENT, size);
+fn createStandardAlignedBuffer(allocator: Allocator, size: usize) ![]align(SERIALIZATION_ALIGNMENT) u8 {
+    return try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, size);
 }
 
 /// Helper function to create aligned canary buffer with standard alignment
-fn createStandardAlignedCanaryBuffer(allocator: Allocator, size: usize) ![]align(mod.SERIALIZATION_ALIGNMENT) u8 {
+fn createStandardAlignedCanaryBuffer(allocator: Allocator, size: usize) ![]align(SERIALIZATION_ALIGNMENT) u8 {
     return try safety.createStandardAlignedCanaryBuffer(allocator, size);
 }
 
 /// Helper function to serialize a value, handling different function signatures
-fn serializeValue(comptime T: type, value: *const T, buffer: []align(mod.SERIALIZATION_ALIGNMENT) u8, allocator: Allocator) ![]const u8 {
+fn serializeValue(comptime T: type, value: *const T, buffer: []align(SERIALIZATION_ALIGNMENT) u8, allocator: Allocator) ![]const u8 {
     if (!@hasDecl(T, "serializeInto")) {
         @compileError("Type " ++ @typeName(T) ++ " does not implement serializeInto");
     }
@@ -80,7 +82,7 @@ fn serializeValue(comptime T: type, value: *const T, buffer: []align(mod.SERIALI
 /// Helper function to deserialize a value, handling different function signatures
 fn deserializeValue(comptime T: type, buffer: []const u8, allocator: Allocator) !T {
     // Create properly aligned mutable buffer copy
-    const new_buffer = try allocator.alignedAlloc(u8, mod.SERIALIZATION_ALIGNMENT, buffer.len);
+    const new_buffer = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, buffer.len);
     defer allocator.free(new_buffer);
     @memcpy(new_buffer, buffer);
 

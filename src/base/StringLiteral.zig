@@ -1,8 +1,8 @@
 //! Strings written inline in Roc code, e.g. `x = "abc"`.
 
 const std = @import("std");
-const collections = @import("../collections.zig");
-const serialization = @import("../serialization/mod.zig");
+const collections = @import("collections");
+const serialization = @import("serialization");
 const testing = std.testing;
 
 /// The index of this string in a `StringLiteral.Store`.

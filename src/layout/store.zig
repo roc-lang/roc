@@ -1,16 +1,16 @@
 //! Stores Layout values by index.
 
 const std = @import("std");
-const types = @import("../types/types.zig");
-const types_store = @import("../types/store.zig");
+const base = @import("base");
+const types = @import("types");
 const layout_ = @import("./layout.zig");
-const base = @import("../base.zig");
-const target = @import("../base/target.zig");
-const collections = @import("../collections.zig");
-const Ident = @import("../base/Ident.zig");
-const Region = @import("../base/Region.zig");
+const collections = @import("collections");
 const work = @import("./work.zig");
 
+const types_store = types.store;
+const target = base.target;
+const Ident = base.Ident;
+const Region = base.Region;
 const Var = types.Var;
 const Layout = layout_.Layout;
 const Idx = layout_.Idx;

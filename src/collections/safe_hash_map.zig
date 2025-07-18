@@ -6,7 +6,7 @@
 const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
-const serialization = @import("../serialization/mod.zig");
+const serialization = @import("serialization");
 
 /// A type-safe string hash map with serialization support
 pub fn SafeStringHashMap(comptime V: type) type {
@@ -23,7 +23,7 @@ pub fn SafeStringHashMap(comptime V: type) type {
         /// Initialize with capacity
         pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
             var map = std.StringHashMapUnmanaged(V){};
-            try map.ensureTotalCapacity(gpa, @intCast(capacity));
+            try map.ensureTotalCapacityContext(gpa, @intCast(capacity), std.hash_map.StringContext{});
             return Self{ .map = map };
         }
 
@@ -40,7 +40,7 @@ pub fn SafeStringHashMap(comptime V: type) type {
         /// Put a key-value pair (takes ownership of key)
         pub fn put(self: *Self, gpa: Allocator, key: []const u8, value: V) Allocator.Error!void {
             // Check if key already exists and get the old key if so
-            const result = try self.map.getOrPut(gpa, key);
+            const result = try self.map.getOrPutContext(gpa, key, std.hash_map.StringContext{});
             if (result.found_existing) {
                 // Free the old key before replacing
                 gpa.free(result.key_ptr.*);
@@ -55,7 +55,7 @@ pub fn SafeStringHashMap(comptime V: type) type {
 
         /// Get a value by key
         pub fn get(self: *const Self, key: []const u8) ?V {
-            return self.map.get(key);
+            return self.map.getContext(key, std.hash_map.StringContext{});
         }
 
         /// Get the number of entries
@@ -65,7 +65,7 @@ pub fn SafeStringHashMap(comptime V: type) type {
 
         /// Check if a key exists in the map
         pub fn contains(self: *const Self, key: []const u8) bool {
-            return self.map.contains(key);
+            return self.map.containsContext(key, std.hash_map.StringContext{});
         }
 
         /// Calculate the size needed to serialize this hash map

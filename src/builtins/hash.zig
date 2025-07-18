@@ -143,7 +143,7 @@ const WyhashStateless = struct {
     pub fn hash(seed: u64, input: []const u8) u64 {
         const aligned_len = input.len - (input.len % 32);
 
-        var c = WyhashStateless.init(seed);
+        const c = WyhashStateless.init(seed);
         @call(.{ .modifier = .always_inline }, c.update, .{input[0..aligned_len]});
         return @call(.{ .modifier = .always_inline }, c.final, .{input[aligned_len..]});
     }

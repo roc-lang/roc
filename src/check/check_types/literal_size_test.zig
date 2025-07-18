@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const types = @import("../../types/types.zig");
-const base = @import("../../base.zig");
+const base = @import("base");
 const unify = @import("../unify.zig");
 const TypesStore = @import("../../types/store.zig").TypesStore;
 const Content = types.Content;

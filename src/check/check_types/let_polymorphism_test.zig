@@ -4,13 +4,14 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../../base.zig");
-const types = @import("../../types/types.zig");
-const TypesStore = @import("../../types/store.zig").Store;
+const base = @import("base");
+const types = @import("types");
 const check_types = @import("../check_types.zig");
 const instantiate = @import("instantiate.zig");
 const parse = @import("../parse.zig");
 const canonicalize = @import("../canonicalize.zig");
+
+const TypesStore = types.Store;
 const CIR = canonicalize.CIR;
 
 const test_allocator = testing.allocator;

@@ -12,8 +12,8 @@
 //! "inform, don't block" compilation philosophy.
 
 const std = @import("std");
-const base = @import("../../base.zig");
-const types = @import("../../types.zig");
+const base = @import("base");
+const types = @import("types");
 const CIR = @import("CIR.zig");
 
 const Region = base.Region;

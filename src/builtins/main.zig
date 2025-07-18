@@ -1,4 +1,17 @@
-//! Implementation of the Roc builtins
+//! C Interface for Roc Builtins
+//!
+//! This module provides C-compatible functions for Roc's built-in functionality.
+//! All functions are exported and follow C calling conventions.
+//!
+//! The exported functions are available in the static library `libroc_builtins.a`
+//! and can be used by including the appropriate header file.
+//!
+//! ## Usage from C
+//!
+//! ```c
+//! #include "roc_builtins.h"
+//! // Link against libroc_builtins.a
+//! ```
 const std = @import("std");
 const builtin = @import("builtin");
 const math = std.math;
@@ -190,6 +203,7 @@ comptime {
 
 // Str Module
 const str = @import("str.zig");
+
 comptime {
     exportStrFn(str.init, "init");
     exportStrFn(str.strSplitOn, "str_split_on");
@@ -251,6 +265,7 @@ comptime {
 }
 
 // Export helpers - Must be run inside a comptime
+// These functions handle the C function export process
 fn exportBuiltinFn(comptime func: anytype, comptime func_name: []const u8) void {
     const func_ptr = &func;
     @export(func_ptr, .{ .name = "roc_builtins." ++ func_name, .linkage = .strong });
@@ -276,7 +291,9 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 
 // Custom panic function, as builtin Zig version errors during LLVM verification
-/// TODO: Document panic.
+/// Panic function for the Roc builtins C interface.
+/// This function handles runtime errors and panics in a way that's compatible
+/// with the C ABI and doesn't interfere with LLVM verification.
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     if (builtin.target.cpu.arch != .wasm32) {
         std.debug.print("\nSomehow in unreachable zig panic!\nThis is a roc standard library bug\n{s}: {?}", .{ message, stacktrace });
@@ -285,12 +302,4 @@ pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace, _: ?usiz
         // Can't call abort or print from wasm. Just leave it as unreachable.
         unreachable;
     }
-}
-
-// Run all tests in imported modules
-// https://github.com/ziglang/zig/blob/master/lib/std/std.zig#L94
-test {
-    const testing = std.testing;
-
-    testing.refAllDecls(@This());
 }

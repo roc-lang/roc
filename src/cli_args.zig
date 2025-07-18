@@ -2,7 +2,7 @@
 const std = @import("std");
 const testing = std.testing;
 const mem = std.mem;
-const collections = @import("collections.zig");
+const collections = @import("collections");
 
 /// The core type representing a parsed command
 /// We could use anonymous structs for the argument types instead of defining one for each command to be more concise,

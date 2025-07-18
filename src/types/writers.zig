@@ -6,69 +6,34 @@
 //! compiler's internal type representations.
 
 const std = @import("std");
-const base = @import("../base.zig");
-const store = @import("../types/store.zig");
-const types = @import("../types/types.zig");
+const base = @import("base");
+const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
-
-const SExpr = base.SExpr;
-const ModuleEnv = base.ModuleEnv;
-const Ident = base.Ident;
-
+const Desc = types.Descriptor;
 const Var = types.Var;
 const Content = types.Content;
-const FlatType = types.FlatType;
-const Num = types.Num;
-const Record = types.Record;
+const Rank = types.Rank;
+const Mark = types.Mark;
 const RecordField = types.RecordField;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
+const VarSafeList = Var.SafeList;
+const RecordFieldSafeMultiList = RecordField.SafeMultiList;
+const TagSafeMultiList = Tag.SafeMultiList;
+const Descriptor = types.Descriptor;
+const TypeIdent = types.TypeIdent;
+const Alias = types.Alias;
+const FlatType = types.FlatType;
+const NominalType = types.NominalType;
+const Record = types.Record;
+const Num = types.Num;
+const Tuple = types.Tuple;
+const Func = types.Func;
 
-/// Helper that to writes variables as s-exprs
-pub const SExprWriter = struct {
-    /// Write all variables in the type store into the writer as an s-exprs
-    pub fn allVarsToSExprStr(writer: std.io.AnyWriter, gpa: std.mem.Allocator, env: *const ModuleEnv) Allocator.Error!void {
-        var root_node = SExpr.init(gpa, "types_store");
-        defer root_node.deinit(gpa);
-
-        if (env.types.slots.backing.len() == 0) {
-            root_node.appendStringAttr(gpa, "vars", "empty");
-        }
-
-        var type_writer = try TypeWriter.init(gpa, env);
-        defer type_writer.deinit();
-
-        var var_buf = try std.ArrayList(u8).initCapacity(gpa, 8);
-        defer var_buf.deinit();
-
-        for (0..env.types.slots.backing.len()) |slot_idx| {
-            const var_: Var = @enumFromInt(slot_idx);
-
-            var var_node = SExpr.init(gpa, "type_var");
-
-            try var_buf.writer().print("{}", .{@intFromEnum(var_)});
-            var_node.appendStringAttr(gpa, "var", var_buf.items[0..]);
-            var_buf.clearRetainingCapacity();
-
-            try type_writer.write(var_);
-            var_node.appendStringAttr(gpa, "type", type_writer.get());
-
-            root_node.appendNode(gpa, &var_node);
-        }
-
-        root_node.toStringPretty(writer);
-    }
-
-    /// Convert some content to an s-expr node
-    pub fn varToSExpr(gpa: std.mem.Allocator, type_writer: TypeWriter, var_: Var) SExpr {
-        try type_writer.writerVar(var_);
-
-        var node = SExpr.init(gpa, "type");
-        node.appendStringAttr(gpa, type_writer.writer.context);
-        return node;
-    }
-};
+// const SExpr = base.SExpr;
+const ModuleEnv = base.ModuleEnv;
+const Ident = base.Ident;
 
 const TypeContext = enum {
     General,
@@ -94,7 +59,7 @@ pub const TypeWriter = struct {
     name_counters: std.EnumMap(TypeContext, u32),
 
     /// Initialize a TypeWriter with an immutable ModuleEnv reference.
-    pub fn init(gpa: std.mem.Allocator, env: *const ModuleEnv) Allocator.Error!Self {
+    pub fn init(gpa: std.mem.Allocator, env: *const ModuleEnv) std.mem.Allocator.Error!Self {
         return .{
             .env = env,
             .buf = try std.ArrayList(u8).initCapacity(gpa, 32),
@@ -113,7 +78,7 @@ pub const TypeWriter = struct {
         return self.buf.items[0..];
     }
 
-    pub fn write(self: *Self, var_: types.Var) Allocator.Error!void {
+    pub fn write(self: *Self, var_: Var) std.mem.Allocator.Error!void {
         self.buf.clearRetainingCapacity();
         self.next_name_index = 0;
         self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
@@ -177,7 +142,7 @@ pub const TypeWriter = struct {
         }
     }
 
-    fn generateContextualName(self: *Self, context: TypeContext) Allocator.Error!void {
+    fn generateContextualName(self: *Self, context: TypeContext) std.mem.Allocator.Error!void {
         const base_name = switch (context) {
             .NumContent => "size",
             .ListContent => "elem",
@@ -247,7 +212,7 @@ pub const TypeWriter = struct {
         self.name_counters.put(context, counter + 1);
     }
 
-    fn writeNameCheckingCollisions(self: *Self, candidate_name: []const u8) Allocator.Error!void {
+    fn writeNameCheckingCollisions(self: *Self, candidate_name: []const u8) std.mem.Allocator.Error!void {
         // Check if this name already exists in the identifier store
         var exists = false;
 
@@ -282,13 +247,13 @@ pub const TypeWriter = struct {
     }
 
     /// Count how many times a variable appears in a type
-    fn countVarOccurrences(self: *const Self, search_var: types.Var, root_var: types.Var) usize {
+    fn countVarOccurrences(self: *const Self, search_var: Var, root_var: Var) usize {
         var count: usize = 0;
         self.countVar(search_var, root_var, &count);
         return count;
     }
 
-    fn countVar(self: *const Self, search_var: types.Var, current_var: types.Var, count: *usize) void {
+    fn countVar(self: *const Self, search_var: Var, current_var: Var, count: *usize) void {
         if (current_var == search_var) {
             count.* += 1;
         }
@@ -311,7 +276,7 @@ pub const TypeWriter = struct {
         }
     }
 
-    fn countVarInFlatType(self: *const Self, search_var: types.Var, flat_type: FlatType, count: *usize) void {
+    fn countVarInFlatType(self: *const Self, search_var: Var, flat_type: FlatType, count: *usize) void {
         switch (flat_type) {
             .str, .empty_record, .empty_tag_union => {},
             .box => |sub_var| self.countVar(search_var, sub_var, count),
@@ -368,7 +333,7 @@ pub const TypeWriter = struct {
     }
 
     /// Convert a var to a type string
-    fn writeVarWithContext(self: *Self, var_: types.Var, context: TypeContext, root_var: types.Var) Allocator.Error!void {
+    fn writeVarWithContext(self: *Self, var_: Var, context: TypeContext, root_var: Var) std.mem.Allocator.Error!void {
         if (@intFromEnum(var_) >= self.env.types.slots.backing.len()) {
             // Debug assert that the variable is in bounds - if not, we have a bug in type checking
             _ = try self.buf.writer().write("invalid_type");
@@ -410,12 +375,12 @@ pub const TypeWriter = struct {
         }
     }
 
-    fn writeVar(self: *Self, var_: types.Var, root_var: types.Var) Allocator.Error!void {
+    fn writeVar(self: *Self, var_: Var, root_var: Var) std.mem.Allocator.Error!void {
         try self.writeVarWithContext(var_, .General, root_var);
     }
 
     /// Write an alias type
-    fn writeAlias(self: *Self, alias: types.Alias, root_var: types.Var) Allocator.Error!void {
+    fn writeAlias(self: *Self, alias: Alias, root_var: Var) std.mem.Allocator.Error!void {
         _ = try self.buf.writer().write(self.env.idents.getText(alias.ident.ident_idx));
         var args_iter = self.env.types.iterAliasArgs(alias);
         if (args_iter.count() > 0) {
@@ -436,7 +401,7 @@ pub const TypeWriter = struct {
     }
 
     /// Convert a flat type to a type string
-    fn writeFlatType(self: *Self, flat_type: FlatType, root_var: types.Var) Allocator.Error!void {
+    fn writeFlatType(self: *Self, flat_type: FlatType, root_var: Var) std.mem.Allocator.Error!void {
         switch (flat_type) {
             .str => {
                 _ = try self.buf.writer().write("Str");
@@ -497,7 +462,7 @@ pub const TypeWriter = struct {
     }
 
     /// Write a tuple type
-    fn writeTuple(self: *Self, tuple: types.Tuple, root_var: types.Var) Allocator.Error!void {
+    fn writeTuple(self: *Self, tuple: Tuple, root_var: Var) std.mem.Allocator.Error!void {
         const elems = self.env.types.sliceVars(tuple.elems);
         _ = try self.buf.writer().write("(");
         for (elems, 0..) |elem, i| {
@@ -508,7 +473,7 @@ pub const TypeWriter = struct {
     }
 
     /// Write a nominal type
-    fn writeNominalType(self: *Self, nominal_type: types.NominalType, root_var: types.Var) Allocator.Error!void {
+    fn writeNominalType(self: *Self, nominal_type: NominalType, root_var: Var) std.mem.Allocator.Error!void {
         _ = try self.buf.writer().write(self.env.idents.getText(nominal_type.ident.ident_idx));
 
         var args_iter = self.env.types.iterNominalArgs(nominal_type);
@@ -529,7 +494,7 @@ pub const TypeWriter = struct {
     }
 
     /// Write record fields without extension
-    fn writeRecordFields(self: *Self, fields: types.RecordField.SafeMultiList.Range, root_var: types.Var) Allocator.Error!void {
+    fn writeRecordFields(self: *Self, fields: RecordField.SafeMultiList.Range, root_var: Var) std.mem.Allocator.Error!void {
         if (fields.isEmpty()) {
             _ = try self.buf.writer().write("{}");
             return;
@@ -556,7 +521,7 @@ pub const TypeWriter = struct {
     }
 
     /// Write a function type with a specific arrow (`->` or `=>`)
-    fn writeFuncWithArrow(self: *Self, func: types.Func, arrow: []const u8, root_var: types.Var) Allocator.Error!void {
+    fn writeFuncWithArrow(self: *Self, func: Func, arrow: []const u8, root_var: Var) std.mem.Allocator.Error!void {
         const args = self.env.types.sliceVars(func.args);
 
         // Write arguments
@@ -577,7 +542,7 @@ pub const TypeWriter = struct {
     }
 
     /// Write a record type
-    fn writeRecord(self: *Self, record: types.Record, root_var: types.Var) Allocator.Error!void {
+    fn writeRecord(self: *Self, record: Record, root_var: Var) std.mem.Allocator.Error!void {
         const fields = self.env.types.getRecordFieldsSlice(record.fields);
 
         _ = try self.buf.writer().write("{ ");
@@ -634,7 +599,7 @@ pub const TypeWriter = struct {
     }
 
     /// Helper to write record extension, handling nested records
-    fn writeRecordExtension(self: *Self, ext_var: types.Var, num_fields: usize, root_var: types.Var) Allocator.Error!void {
+    fn writeRecordExtension(self: *Self, ext_var: Var, num_fields: usize, root_var: Var) std.mem.Allocator.Error!void {
         const ext_resolved = self.env.types.resolveVar(ext_var);
         switch (ext_resolved.desc.content) {
             .structure => |flat_type| switch (flat_type) {
@@ -679,7 +644,7 @@ pub const TypeWriter = struct {
     }
 
     /// Write a tag union type
-    fn writeTagUnion(self: *Self, tag_union: types.TagUnion, root_var: types.Var) Allocator.Error!void {
+    fn writeTagUnion(self: *Self, tag_union: TagUnion, root_var: Var) std.mem.Allocator.Error!void {
         _ = try self.buf.writer().write("[");
         var iter = tag_union.tags.iterIndices();
         while (iter.next()) |tag_idx| {
@@ -724,7 +689,7 @@ pub const TypeWriter = struct {
     }
 
     /// Write a single tag
-    fn writeTag(self: *Self, tag: types.Tag, root_var: types.Var) Allocator.Error!void {
+    fn writeTag(self: *Self, tag: Tag, root_var: Var) std.mem.Allocator.Error!void {
         _ = try self.buf.writer().write(self.env.idents.getText(tag.name));
         const args = self.env.types.sliceVars(tag.args);
         if (args.len > 0) {
@@ -738,7 +703,7 @@ pub const TypeWriter = struct {
     }
 
     /// Convert a num type to a type string
-    fn writeNum(self: *Self, num: Num, root_var: types.Var) Allocator.Error!void {
+    fn writeNum(self: *Self, num: Num, root_var: Var) std.mem.Allocator.Error!void {
         switch (num) {
             .num_poly => |poly| {
                 _ = try self.buf.writer().write("Num(");
@@ -789,7 +754,7 @@ pub const TypeWriter = struct {
         }
     }
 
-    fn writeIntType(self: *Self, prec: types.Num.Int.Precision) Allocator.Error!void {
+    fn writeIntType(self: *Self, prec: Num.Int.Precision) std.mem.Allocator.Error!void {
         _ = switch (prec) {
             .u8 => try self.buf.writer().write("U8"),
             .i8 => try self.buf.writer().write("I8"),
@@ -804,7 +769,7 @@ pub const TypeWriter = struct {
         };
     }
 
-    fn writeFracType(self: *Self, prec: types.Num.Frac.Precision) Allocator.Error!void {
+    fn writeFracType(self: *Self, prec: Num.Frac.Precision) std.mem.Allocator.Error!void {
         _ = switch (prec) {
             .f32 => try self.buf.writer().write("F32"),
             .f64 => try self.buf.writer().write("F64"),

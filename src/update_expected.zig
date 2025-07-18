@@ -2,7 +2,7 @@
 //! This ensures that snapshot test expectations stay in sync with actual compiler output.
 
 const std = @import("std");
-const base = @import("base.zig");
+const base = @import("base");
 
 const verbose_log = false;
 
