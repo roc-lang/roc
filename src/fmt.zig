@@ -495,10 +495,8 @@ const Formatter = struct {
                         try fmt.ensureNewline();
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
                     }
-                    try fmt.formatWhereConstraint(w);
+                    try fmt.formatWhereConstraint(w, multiline);
                 }
             },
             .type_anno => |t| {
@@ -524,10 +522,8 @@ const Formatter = struct {
                         try fmt.ensureNewline();
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
                     }
-                    try fmt.formatWhereConstraint(w);
+                    try fmt.formatWhereConstraint(w, multiline);
                 }
             },
             .expect => |e| {
@@ -613,12 +609,6 @@ const Formatter = struct {
         }
     }
 
-    fn whereClauseHasTrailingComma(fmt: *Formatter, region: AST.TokenizedRegion) bool {
-        const tags = fmt.ast.tokens.tokens.items(.tag);
-        // Just check if the last token is a comma
-        return tags[region.end - 1] == .Comma;
-    }
-
     /// Check if there's a newline in the source text before the given token
     fn hasNewlineBefore(fmt: *Formatter, token_idx: Token.Idx) bool {
         if (token_idx == 0) return false;
@@ -657,35 +647,45 @@ const Formatter = struct {
         return false;
     }
 
-    fn formatWhereConstraint(fmt: *Formatter, w: AST.Collection.Idx) !void {
+    fn formatWhereConstraint(fmt: *Formatter, w: AST.Collection.Idx, flushed: bool) !void {
         const start_indent = fmt.curr_indent;
         defer fmt.curr_indent = start_indent;
-        try fmt.pushAll("where");
-        var i: usize = 0;
         const clause_coll = fmt.ast.store.getCollection(w);
-        const clauses_multiline = fmt.whereClauseHasTrailingComma(clause_coll.region);
         const clause_slice = fmt.ast.store.whereClauseSlice(.{ .span = clause_coll.span });
-        for (clause_slice) |clause| {
+
+        if (!flushed) {
+            if (clause_coll.span.len > 1) {
+                try fmt.ensureNewline();
+                fmt.curr_indent += 1;
+                try fmt.pushIndent();
+            } else {
+                try fmt.push(' ');
+            }
+        }
+
+        try fmt.pushAll("where");
+
+        const multiline = clause_coll.span.len > 1;
+        for (clause_slice, 0..) |clause, i| {
             const clause_region = fmt.nodeRegion(@intFromEnum(clause));
             const flushed_after_clause = try fmt.flushCommentsBefore(clause_region.start);
-            if (i == 0 and (clauses_multiline or flushed_after_clause)) {
+            if (i == 0 and (multiline or flushed_after_clause)) {
                 fmt.curr_indent += 1;
             } else if (i == 0) {
                 try fmt.push(' ');
             }
-            if (clauses_multiline or flushed_after_clause) {
+            if (multiline or flushed_after_clause) {
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
             }
-            try fmt.formatWhereClause(clause, clauses_multiline or flushed_after_clause);
+            try fmt.formatWhereClause(clause, multiline or flushed_after_clause);
             if (i < clause_slice.len - 1) {
-                if ((!clauses_multiline and !flushed_after_clause) and i < clause_slice.len - 1) {
-                    try fmt.pushAll(", ");
-                } else if (clauses_multiline or flushed_after_clause) {
+                if (multiline or flushed_after_clause) {
                     try fmt.push(',');
+                } else {
+                    try fmt.pushAll(", ");
                 }
             }
-            i += 1;
         }
     }
 
