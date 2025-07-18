@@ -2,8 +2,8 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../../../base.zig");
-const types_mod = @import("../../../types.zig");
+const base = @import("base");
+const types_mod = @import("types");
 const snapshot = @import("../snapshot.zig");
 const Ident = base.Ident;
 

@@ -3,14 +3,14 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../base.zig");
+const base = @import("base");
 const cache = @import("../cache/mod.zig");
-const collections = @import("../collections.zig");
+const collections = @import("collections");
 const Can = @import("../check/canonicalize.zig");
 const Scope = @import("../check/canonicalize/Scope.zig");
 const parse = @import("../check/parse.zig");
 const Filesystem = @import("../fs/Filesystem.zig");
-const types = @import("../types.zig");
+const types = @import("types");
 
 const Package = base.Package;
 const ModuleImport = base.ModuleImport;

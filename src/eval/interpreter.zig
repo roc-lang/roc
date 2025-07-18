@@ -5,15 +5,16 @@
 //! push results. No heap allocations are used for intermediate results.
 
 const std = @import("std");
+const base = @import("base");
 const CIR = @import("../check/canonicalize/CIR.zig");
-const types = @import("../types/types.zig");
-const types_store = @import("../types/store.zig");
+const types = @import("types");
 const layout = @import("../layout/layout.zig");
 const layout_store = @import("../layout/store.zig");
 const stack = @import("stack.zig");
-const target = @import("../base/target.zig");
-const base = @import("../base.zig");
-const collections = @import("../collections.zig");
+const collections = @import("collections");
+
+const types_store = types.store;
+const target = base.target;
 
 /// Errors that can occur during expression evaluation
 pub const EvalError = error{

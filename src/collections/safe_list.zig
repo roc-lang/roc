@@ -1,7 +1,7 @@
 //! Lists that make it easier to avoid incorrect indexing.
 
 const std = @import("std");
-const serialization = @import("../serialization/mod.zig");
+const serialization = @import("serialization");
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
@@ -358,7 +358,7 @@ pub fn SafeList(comptime T: type) type {
             return Iterator{
                 .array = self,
                 .len = self.len(),
-                .current = 0,
+                .current = @enumFromInt(0),
             };
         }
     };

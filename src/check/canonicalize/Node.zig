@@ -6,8 +6,8 @@
 //! be interpreted.
 
 const std = @import("std");
-const base = @import("../../base.zig");
-const collections = @import("../../collections.zig");
+const base = @import("base");
+const collections = @import("collections");
 
 data_1: u32,
 data_2: u32,

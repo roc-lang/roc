@@ -4,9 +4,7 @@
 //! raw source text into a structured AST representation that subsequent compiler phases can process.
 
 const std = @import("std");
-const testing = std.testing;
-
-const base = @import("../base.zig");
+const base = @import("base");
 const tracy = @import("../tracy.zig");
 const tokenize = @import("parse/tokenize.zig");
 const TokenIndex = tokenize.TokenIndex;

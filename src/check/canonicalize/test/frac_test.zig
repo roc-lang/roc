@@ -6,12 +6,12 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../../../base.zig");
+const base = @import("base");
 const parse = @import("../../parse.zig");
 const canonicalize = @import("../../../check/canonicalize.zig");
 const CIR = canonicalize.CIR;
-const types = @import("../../../types/types.zig");
-const RocDec = @import("../../../builtins/dec.zig").RocDec;
+const types = @import("types").types;
+const RocDec = @import("builtins").RocDec;
 
 const test_allocator = testing.allocator;
 

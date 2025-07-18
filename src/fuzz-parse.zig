@@ -10,7 +10,7 @@
 const std = @import("std");
 const fmt = @import("fmt.zig");
 const parse = @import("check/parse.zig");
-const base = @import("base.zig");
+const base = @import("base");
 
 /// Hook for AFL++ to initialize the fuzz test environment.
 pub export fn zig_fuzz_init() void {}

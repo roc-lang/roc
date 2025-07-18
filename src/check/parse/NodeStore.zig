@@ -4,8 +4,8 @@
 //! the AST.
 
 const std = @import("std");
-const base = @import("../../base.zig");
-const collections = @import("../../collections.zig");
+const base = @import("base");
+const collections = @import("collections");
 
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");

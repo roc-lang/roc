@@ -10,7 +10,7 @@ const Annotation = @import("document.zig").Annotation;
 const ColorPalette = @import("style.zig").ColorPalette;
 const ColorUtils = @import("style.zig").ColorUtils;
 pub const ReportingConfig = @import("config.zig").ReportingConfig;
-const collections = @import("../collections.zig");
+const collections = @import("collections");
 const source_region = @import("source_region.zig");
 
 /// TODO find a better solution this is temporary to make CI happy
