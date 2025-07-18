@@ -52,7 +52,13 @@ LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),Underscore(4:12-4:13),Co
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [process]
+
+process : a, b -> c
+	where
+		module(a).convert : a -> c,
+		module(b).transform : b -> c
+process = |_, _| ...
 ~~~
 # CANONICALIZE
 ~~~clojure

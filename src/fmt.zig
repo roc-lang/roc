@@ -495,10 +495,8 @@ const Formatter = struct {
                         try fmt.ensureNewline();
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
                     }
-                    try fmt.formatWhereConstraint(w);
+                    try fmt.formatWhereConstraint(w, multiline);
                 }
             },
             .type_anno => |t| {
@@ -524,10 +522,8 @@ const Formatter = struct {
                         try fmt.ensureNewline();
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
                     }
-                    try fmt.formatWhereConstraint(w);
+                    try fmt.formatWhereConstraint(w, multiline);
                 }
             },
             .expect => |e| {
@@ -613,12 +609,6 @@ const Formatter = struct {
         }
     }
 
-    fn whereClauseHasTrailingComma(fmt: *Formatter, region: AST.TokenizedRegion) bool {
-        const tags = fmt.ast.tokens.tokens.items(.tag);
-        // Just check if the last token is a comma
-        return tags[region.end - 1] == .Comma;
-    }
-
     /// Check if there's a newline in the source text before the given token
     fn hasNewlineBefore(fmt: *Formatter, token_idx: Token.Idx) bool {
         if (token_idx == 0) return false;
@@ -657,35 +647,45 @@ const Formatter = struct {
         return false;
     }
 
-    fn formatWhereConstraint(fmt: *Formatter, w: AST.Collection.Idx) !void {
+    fn formatWhereConstraint(fmt: *Formatter, w: AST.Collection.Idx, flushed: bool) !void {
         const start_indent = fmt.curr_indent;
         defer fmt.curr_indent = start_indent;
-        try fmt.pushAll("where");
-        var i: usize = 0;
         const clause_coll = fmt.ast.store.getCollection(w);
-        const clauses_multiline = fmt.whereClauseHasTrailingComma(clause_coll.region);
         const clause_slice = fmt.ast.store.whereClauseSlice(.{ .span = clause_coll.span });
-        for (clause_slice) |clause| {
+
+        if (!flushed) {
+            if (clause_coll.span.len > 1) {
+                try fmt.ensureNewline();
+                fmt.curr_indent += 1;
+                try fmt.pushIndent();
+            } else {
+                try fmt.push(' ');
+            }
+        }
+
+        try fmt.pushAll("where");
+
+        const multiline = clause_coll.span.len > 1;
+        for (clause_slice, 0..) |clause, i| {
             const clause_region = fmt.nodeRegion(@intFromEnum(clause));
             const flushed_after_clause = try fmt.flushCommentsBefore(clause_region.start);
-            if (i == 0 and (clauses_multiline or flushed_after_clause)) {
+            if (i == 0 and (multiline or flushed_after_clause)) {
                 fmt.curr_indent += 1;
             } else if (i == 0) {
                 try fmt.push(' ');
             }
-            if (clauses_multiline or flushed_after_clause) {
+            if (multiline or flushed_after_clause) {
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
             }
-            try fmt.formatWhereClause(clause, clauses_multiline or flushed_after_clause);
+            try fmt.formatWhereClause(clause, multiline or flushed_after_clause);
             if (i < clause_slice.len - 1) {
-                if ((!clauses_multiline and !flushed_after_clause) and i < clause_slice.len - 1) {
-                    try fmt.pushAll(", ");
-                } else if (clauses_multiline or flushed_after_clause) {
+                if (multiline or flushed_after_clause) {
                     try fmt.push(',');
+                } else {
+                    try fmt.pushAll(", ");
                 }
             }
-            i += 1;
         }
     }
 
@@ -1403,7 +1403,6 @@ const Formatter = struct {
 
                 var platform_field: ?AST.RecordField.Idx = null;
                 var package_fields_list = try std.ArrayListUnmanaged(AST.RecordField.Idx).initCapacity(fmt.ast.store.gpa, 10);
-                var i: usize = 0;
                 const packages_slice = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
                 for (packages_slice) |package_idx| {
                     if (package_idx == a.platform_idx) {
@@ -1412,7 +1411,6 @@ const Formatter = struct {
                     }
                     try package_fields_list.append(fmt.ast.store.gpa, package_idx);
                 }
-                i = 0;
                 const package_fields = try package_fields_list.toOwnedSlice(fmt.ast.store.gpa);
                 defer fmt.ast.store.gpa.free(package_fields);
 
@@ -1431,14 +1429,15 @@ const Formatter = struct {
                         try fmt.push(' ');
                         _ = try fmt.formatExpr(v);
                     }
-                    if (!packages_multiline and package_fields.len > 0) {
-                        try fmt.pushAll(", ");
-                    }
-                    if (packages_multiline) {
-                        try fmt.push(',');
+                    if (package_fields.len > 0) {
+                        if (!packages_multiline) {
+                            try fmt.pushAll(", ");
+                        } else {
+                            try fmt.push(',');
+                        }
                     }
                 }
-                for (package_fields) |field_idx| {
+                for (package_fields, 0..) |field_idx, i| {
                     const item_region = fmt.nodeRegion(@intFromEnum(field_idx));
                     if (packages_multiline) {
                         _ = try fmt.flushCommentsBefore(item_region.start);
@@ -1446,12 +1445,13 @@ const Formatter = struct {
                         try fmt.pushIndent();
                     }
                     _ = try fmt.formatRecordField(field_idx);
-                    if (!packages_multiline and i < package_fields.len - 1) {
-                        try fmt.pushAll(", ");
-                    } else if (packages_multiline) {
-                        try fmt.push(',');
+                    if (i < package_fields.len - 1) {
+                        if (!packages_multiline) {
+                            try fmt.pushAll(", ");
+                        } else if (packages_multiline) {
+                            try fmt.push(',');
+                        }
                     }
-                    _ = try fmt.flushCommentsBefore(item_region.end);
                 }
                 if (packages_multiline) {
                     _ = try fmt.flushCommentsBefore(packages.region.end - 1);
