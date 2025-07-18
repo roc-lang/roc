@@ -1198,7 +1198,7 @@ import pf.Stdout exposing [line!]
 
 import Stdot
 	exposing [ # tem
-		Cust
+		Cust,
 	]
 
 import Bae as Gooe
@@ -1235,9 +1235,7 @@ add = |Rum| {
 	}
 }
 
-me = |
-	a, # b,
-| # As
+me = |a| # As
 	match a {		lue => {
 			x
 		}
@@ -1294,7 +1292,7 @@ ma = |_| {
 		line!("Ag ${n} to ${er}")
 		ber + n
 	}
-	rd = {foo: 123, bar: "H", baz: tag, qux: Ok(world), ned}
+	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world), ned }
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
 	m
 	(

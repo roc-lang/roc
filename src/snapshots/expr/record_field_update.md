@@ -35,7 +35,7 @@ OpenCurly(1:1-1:2),DoubleDot(1:3-1:5),LowerIdent(1:5-1:11),Comma(1:11-1:12),Lowe
 ~~~
 # FORMATTED
 ~~~roc
-{..person, age: 31}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

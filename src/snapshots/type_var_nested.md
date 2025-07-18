@@ -200,7 +200,7 @@ identity = |x| x
 
 # Nested type variables in records
 make_pair : a, b -> { first : a, second : b }
-make_pair = |x, y| {first: x, second: y}
+make_pair = |x, y| { first: x, second: y }
 
 # Function that works with lists of any type
 list_length : List(_a) -> U64
