@@ -73,6 +73,19 @@ Snapshots are powerful for debugging as they show the compiler's output at every
 
 The `PROBLEMS` section provides human-readable diagnostics. When you modify the compiler, run `zig build snapshot` and review the diffs to ensure any changes are intentional before they are committed to the repository.
 
+## Performance Optimizations
+
+### FrozenMap Collections
+
+After canonicalization, certain hash maps (like `exposed_by_str` and `exposed_nodes` in ModuleEnv) become read-only. These are converted to `FrozenMap` collections which provide:
+
+- **Deterministic serialization**: Entries are sorted by key, ensuring reproducible builds
+- **Zero-copy deserialization**: Data can be memory-mapped directly without rebuilding hash tables
+- **No uninitialized memory**: Unlike raw hash map serialization, only actual data is written
+- **Efficient lookups**: Binary search on sorted arrays performs well for small maps (10-100 entries)
+
+The `BuildableFrozenStringMap` type allows building during canonicalization, then freezing for optimal read-only access. This eliminates the issues with serializing raw hash map internals while maintaining good performance.
+
 ## Roc Language Syntax
 
 When writing Roc code in tests or examples, remember these syntax rules:

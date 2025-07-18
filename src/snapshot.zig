@@ -507,6 +507,9 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         defer original_sexpr.deinit();
         try original_tree.toStringPretty(original_sexpr.writer().any());
 
+        // Freeze exposed maps before creating cache
+        try module_env.freeze();
+
         // Create and serialize MmapCache
         const cache_data = try cache.CacheModule.create(allocator, &module_env, &can_ir, 0, 0);
         defer allocator.free(cache_data);

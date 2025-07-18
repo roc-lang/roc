@@ -43,6 +43,9 @@ test "ModuleEnv serialization and relocation" {
     try env.exposed_nodes.put(allocator, "myFunc", 42);
     try env.exposed_nodes.put(allocator, "otherFunc", 123);
 
+    // Freeze exposed maps before serialization
+    try env.freeze();
+
     // Add line starts
     _ = try env.line_starts.append(allocator, 0);
     _ = try env.line_starts.append(allocator, 10);

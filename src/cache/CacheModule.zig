@@ -284,8 +284,8 @@ pub const CacheModule = struct {
             allocator,
         );
         const types_store = try TypeStore.deserializeFrom(self.getComponentData(.types_store), allocator);
-        const exposed_by_str = try SafeStringHashMap(void).deserializeFrom(self.getComponentData(.exposed_by_str), allocator);
-        const exposed_nodes = try SafeStringHashMap(u16).deserializeFrom(self.getComponentData(.exposed_nodes), allocator);
+        const exposed_by_str = try collections.BuildableFrozenStringMap(void).deserializeFrom(self.getComponentData(.exposed_by_str), allocator);
+        const exposed_nodes = try collections.BuildableFrozenStringMap(u16).deserializeFrom(self.getComponentData(.exposed_nodes), allocator);
 
         // Create ModuleEnv from deserialized components
         var module_env = base.ModuleEnv{
@@ -613,6 +613,9 @@ test "create and restore cache" {
     defer original_sexpr.deinit();
     try original_tree.toStringPretty(original_sexpr.writer().any());
 
+    // Freeze exposed maps before creating cache
+    try module_env.freeze();
+
     // Create cache from real data
     const cache_data = try CacheModule.create(gpa, &module_env, &cir, 0, 0);
     defer gpa.free(cache_data);
@@ -688,6 +691,9 @@ test "cache filesystem roundtrip with in-memory storage" {
     var original_sexpr = std.ArrayList(u8).init(gpa);
     defer original_sexpr.deinit();
     try original_tree.toStringPretty(original_sexpr.writer().any());
+
+    // Freeze exposed maps before creating cache
+    try module_env.freeze();
 
     // Create cache from real data
     const cache_data = try CacheModule.create(gpa, &module_env, &cir, 0, 0);
