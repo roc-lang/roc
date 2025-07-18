@@ -828,7 +828,7 @@ fn createExposedScope(
                 const cir_intern_idx = @as(u32, cir_ident_idx.idx);
 
                 // Add to exposed_by_str using the CIR's intern index
-                // The map will handle deduplication if the same index is added multiple times
+                // Each occurrence gets a unique index, even for duplicate strings
                 try self.can_ir.env.exposed_by_str.put(gpa, cir_intern_idx, {});
 
                 // Also build exposed_scope with proper identifiers
@@ -866,7 +866,7 @@ fn createExposedScope(
                 const cir_intern_idx = @as(u32, cir_ident_idx.idx);
 
                 // Add to exposed_by_str using the CIR's intern index
-                // The map will handle deduplication if the same index is added multiple times
+                // Each occurrence gets a unique index, even for duplicate strings
                 try self.can_ir.env.exposed_by_str.put(gpa, cir_intern_idx, {});
 
                 // Also build exposed_scope with proper identifiers
@@ -904,7 +904,7 @@ fn createExposedScope(
                 const cir_intern_idx = @as(u32, cir_ident_idx.idx);
 
                 // Add to exposed_by_str using the CIR's intern index
-                // The map will handle deduplication if the same index is added multiple times
+                // Each occurrence gets a unique index, even for duplicate strings
                 try self.can_ir.env.exposed_by_str.put(gpa, cir_intern_idx, {});
 
                 // Also build exposed_scope with proper identifiers
