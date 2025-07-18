@@ -879,13 +879,16 @@ pub const Store = struct {
     fn appendDescStoreToIovecs(descs: *const DescStore, writer: *@import("../base/iovec_serialize.zig").IovecWriter) !void {
         // DescStore has a more complex structure
         // First write the count
-        const count: u32 = @intCast(descs.backing.len());
+        const count: u32 = @intCast(descs.backing.len);
         try writer.appendStruct(count);
 
         // Then write each descriptor
-        var iter = descs.backing.iterator();
-        while (iter.next()) |*desc| {
-            try appendDescriptorToIovecs(desc, writer);
+        if (descs.backing.len > 0) {
+            const slice = descs.backing.slice();
+            for (slice.items(.content), slice.items(.rank), slice.items(.mark)) |content, rank, mark| {
+                const desc = Desc{ .content = content, .rank = rank, .mark = mark };
+                try appendDescriptorToIovecs(&desc, writer);
+            }
         }
     }
 
@@ -917,25 +920,20 @@ pub const Store = struct {
     }
 
     fn appendSafeMultiListToIovecs(comptime T: type, list: *const collections.SafeMultiList(T), writer: *@import("../base/iovec_serialize.zig").IovecWriter) !void {
-        // SafeMultiList has items and indices
-        // Write items count
-        const items_count: u32 = @intCast(list.items.items.len);
-        try writer.appendStruct(items_count);
+        // SafeMultiList wraps a MultiArrayList
+        // Write count
+        const count: u32 = @intCast(list.items.len);
+        try writer.appendStruct(count);
 
         // Write items
-        if (list.items.items.len > 0) {
-            const items_bytes = std.mem.sliceAsBytes(list.items.items);
-            try writer.appendBytes(items_bytes);
-        }
-
-        // Write indices count
-        const indices_count: u32 = @intCast(list.indices.items.len);
-        try writer.appendStruct(indices_count);
-
-        // Write indices
-        if (list.indices.items.len > 0) {
-            const indices_bytes = std.mem.sliceAsBytes(list.indices.items);
-            try writer.appendBytes(indices_bytes);
+        if (list.items.len > 0) {
+            const slice = list.items.slice();
+            // Serialize each field of the MultiArrayList
+            inline for (comptime std.meta.fields(T)) |field| {
+                const field_data = slice.items(@field(std.meta.FieldEnum(T), field.name));
+                const field_bytes = std.mem.sliceAsBytes(field_data);
+                try writer.appendBytes(field_bytes);
+            }
         }
     }
 

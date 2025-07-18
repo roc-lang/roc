@@ -121,23 +121,32 @@ pub fn SafeStringHashMap(comptime V: type) type {
         pub fn appendToIovecs(self: *const Self, writer: *@import("../base/iovec_serialize.zig").IovecWriter) !usize {
             const start_offset = writer.getOffset();
 
-            // Write count
-            const entry_count: u32 = @intCast(self.map.count());
-            try writer.appendStruct(entry_count);
+            // For StringHashMap, we can optimize by adding the backing arrays directly
+            const capacity = self.map.capacity();
 
-            // Write entries
-            var iter = self.map.iterator();
-            while (iter.next()) |entry| {
-                // Write key length
-                const key_len: u32 = @intCast(entry.key_ptr.len);
-                try writer.appendStruct(key_len);
+            // Write count and capacity
+            try writer.appendStruct(@as(u32, @intCast(self.map.count())));
+            try writer.appendStruct(@as(u32, @intCast(capacity)));
 
-                // Write key bytes
-                try writer.appendBytes(entry.key_ptr.*);
+            if (capacity > 0) {
+                // Add metadata array directly as an iovec
+                if (self.map.metadata) |metadata| {
+                    try writer.appendBytes(@as([*]const u8, @ptrCast(metadata))[0..capacity]);
+                }
 
-                // Write value bytes (if not void)
-                if (V != void) {
-                    try writer.appendStruct(entry.value_ptr.*);
+                // StringHashMap stores keys and values in separate arrays
+                // We need to serialize the actual string data, not just the pointers
+                // So we still need to iterate for the string data
+                var iter = self.map.iterator();
+                while (iter.next()) |entry| {
+                    // Write key length and data
+                    try writer.appendStruct(@as(u32, @intCast(entry.key_ptr.len)));
+                    try writer.appendBytes(entry.key_ptr.*);
+
+                    // Write value (if not void)
+                    if (V != void) {
+                        try writer.appendStruct(entry.value_ptr.*);
+                    }
                 }
             }
 
