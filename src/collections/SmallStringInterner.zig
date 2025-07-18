@@ -22,6 +22,9 @@ strings: StringIdx.Table = .{},
 /// It also maps 1:1 with a region at the same index.
 outer_indices: std.ArrayListUnmanaged(StringIdx) = .{},
 regions: std.ArrayListUnmanaged(Region) = .{},
+/// When true, no new entries can be added to the interner.
+/// This is set after parsing is complete.
+frozen: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) { _ };
@@ -58,6 +61,9 @@ pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
 
 /// Add a string to this interner, returning a unique, serial index.
 pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8, region: Region) std.mem.Allocator.Error!Idx {
+    if (std.debug.runtime_safety) {
+        std.debug.assert(!self.frozen); // Should not insert into a frozen interner
+    }
     const entry = try self.strings.getOrPutContextAdapted(
         gpa,
         string,
@@ -77,6 +83,9 @@ pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8, region: R
 }
 
 fn addOuterIdForStringIndex(self: *Self, gpa: std.mem.Allocator, string_offset: StringIdx, region: Region) std.mem.Allocator.Error!Idx {
+    if (std.debug.runtime_safety) {
+        std.debug.assert(!self.frozen); // Should not add outer IDs to a frozen interner
+    }
     const len: Idx = @enumFromInt(@as(u32, @truncate(self.outer_indices.items.len)));
     try self.outer_indices.append(gpa, string_offset);
     try self.regions.append(gpa, region);
@@ -105,6 +114,13 @@ pub fn getText(self: *const Self, idx: Idx) []u8 {
 /// Get the region for an interned string.
 pub fn getRegion(self: *const Self, idx: Idx) Region {
     return self.regions.items[@as(usize, @intFromEnum(idx))];
+}
+
+/// Freeze the interner, preventing any new entries from being added.
+pub fn freeze(self: *Self) void {
+    if (std.debug.runtime_safety) {
+        self.frozen = true;
+    }
 }
 
 /// TODO

@@ -366,6 +366,7 @@ pub const Store = struct {
             .strings = strings,
             .outer_indices = outer_indices,
             .regions = regions,
+            .frozen = if (std.debug.runtime_safety) false else {},
         };
 
         return Store{
@@ -377,7 +378,12 @@ pub const Store = struct {
 
     /// Get the region for an identifier.
     pub fn getRegion(self: *const Store, idx: Idx) Region {
-        return self.interner.getRegion(@enumFromInt(@as(u32, idx.idx)));
+        return self.interner.getRegion(@enumFromInt(idx.idx));
+    }
+
+    /// Freeze the identifier store, preventing any new entries from being added.
+    pub fn freeze(self: *Store) void {
+        self.interner.freeze();
     }
 };
 
