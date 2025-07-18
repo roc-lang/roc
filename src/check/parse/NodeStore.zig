@@ -2091,7 +2091,7 @@ pub fn tokenSlice(store: *NodeStore, span: Token.Span) []Token.Idx {
 
 /// Returns the start position for a new Span of exposedItemIdxs in scratch
 pub fn scratchExposedItemTop(store: *NodeStore) u32 {
-    return store.scratch_anno_record_fields.top();
+    return store.scratch_exposed_items.top();
 }
 
 /// Places a new AST.ExposedItem.Idx in the scratch.
