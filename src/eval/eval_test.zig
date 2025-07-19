@@ -126,26 +126,23 @@ test "eval runtime error - returns crash error" {
 
     // Check if the expression is a runtime error
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    if (expr == .e_runtime_error) {
-        // Create a stack for evaluation
-        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-        defer eval_stack.deinit();
 
-        // Create layout store
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
+    try testing.expect(expr == .e_runtime_error);
 
-        // Evaluating a runtime error should return an error
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
-        defer interpreter.deinit();
-        const result = interpreter.eval(resources.expr_idx);
-        try testing.expectError(eval.EvalError.Crash, result);
-    } else {
-        // If crash syntax is not supported in canonicalization, skip
-        return error.SkipZigTest;
-    }
+    // Create a stack for evaluation
+    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+    defer eval_stack.deinit();
+
+    // Create layout store
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
+
+    // Evaluating a runtime error should return an error
+    var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+    defer interpreter.deinit();
+    const result = interpreter.eval(resources.expr_idx);
+    try testing.expectError(eval.EvalError.Crash, result);
 }
-
 
 test "eval binop - basic implementation" {
     const source = "5 + 3";
@@ -551,7 +548,6 @@ test "eval empty record" {
         try testing.expectEqual(stack_before, stack_after);
     }
 }
-
 
 test "interpreter reuse across multiple evaluations" {
     // This test demonstrates that the interpreter can be reused across multiple
