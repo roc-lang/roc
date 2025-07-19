@@ -128,6 +128,13 @@ h == foo
 }
 ~~~
 # EXPECTED
+PARSE ERROR - fuzz_crash_019.md:52:16:52:16
+PARSE ERROR - fuzz_crash_019.md:58:4:58:4
+PARSE ERROR - fuzz_crash_019.md:59:3:59:3
+PARSE ERROR - fuzz_crash_019.md:60:16:60:16
+PARSE ERROR - fuzz_crash_019.md:62:5:62:5
+PARSE ERROR - fuzz_crash_019.md:63:7:63:7
+PARSE ERROR - fuzz_crash_019.md:66:12:66:12
 UNDECLARED TYPE - fuzz_crash_019.md:13:13:13:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:13:19:13:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:19:4:19:6
@@ -177,6 +184,90 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:120:6:120:9
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_019.md:52:2:52:2
 TYPE MISMATCH - fuzz_crash_019.md:84:2:84:4
 # PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_019.md:52:16:52:16:**
+```roc
+	match a {lue  {
+```
+               
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_019.md:58:4:58:4:**
+```roc
+			1	"for" => 20[1, ] # t
+```
+   
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_019.md:59:3:59:3:**
+```roc
+		ment
+```
+  
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_019.md:60:16:60:16:**
+```roc
+		[1, 2, 3,est]123
+```
+               
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_019.md:62:5:62:5:**
+```roc
+		] 23
+```
+    
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_019.md:63:7:63:7:**
+```roc
+		3.1 314
+```
+      
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_019.md:66:12:66:12:**
+```roc
+		(1, 2, 3)123
+```
+           
+
+
 **UNDECLARED TYPE**
 The type _Lis_ is not declared in this scope.
 
@@ -1240,7 +1331,8 @@ add = |num| {
 }
 
 me = |a, Tb| # As
-	match a {		lue => {
+	match a {
+		lue => {
 			x
 		}
 		Blue => {
@@ -1248,7 +1340,9 @@ me = |a, Tb| # As
 		}
 		er # ent
 			=> # ent
-				1		"for" => 20		[
+				1
+		"for" => 20
+		[
 			1,
 		] # t
 			=> # t

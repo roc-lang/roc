@@ -2142,6 +2142,12 @@ pub fn parseBranch(self: *Parser) std.mem.Allocator.Error!AST.MatchBranch.Idx {
         });
 
         self.advance();
+    } else {
+        // Add diagnostic for missing arrow
+        try self.pushDiagnostic(.match_branch_missing_arrow, .{
+            .start = self.pos,
+            .end = self.pos,
+        });
     }
     const b = try self.parseExpr();
     return try self.store.addMatchBranch(.{
