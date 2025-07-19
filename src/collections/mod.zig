@@ -17,11 +17,7 @@ pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
 
 pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 
-pub const SortedArrayBuilder = @import("FrozenMap.zig").SortedArrayBuilder;
-
-pub const FrozenInternMap = @import("FrozenMap.zig").FrozenInternMap;
-
-pub const BuildableFrozenInternMap = @import("FrozenMap.zig").BuildableFrozenInternMap;
+pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 
 /// A range that must have at least one element
 pub const NonEmptyRange = struct {

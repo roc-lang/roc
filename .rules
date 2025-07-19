@@ -84,7 +84,7 @@ After canonicalization, certain hash maps (like `exposed_by_str` and `exposed_no
 - **No uninitialized memory**: Unlike raw hash map serialization, only actual data is written
 - **Efficient lookups**: Binary search on sorted arrays performs well for small maps (10-100 entries)
 
-The `BuildableFrozenInternMap` type allows building during canonicalization with intern indices as keys, then freezing for optimal read-only access. This eliminates the issues with serializing raw hash map internals while maintaining good performance.
+The `SortedArrayBuilder` type allows building sorted key-value mappings during canonicalization. It supports both string and numeric keys, maintains sorted order for deterministic serialization, and provides efficient binary search lookups. This eliminates the issues with serializing raw hash map internals while maintaining good performance.
 
 ## Roc Language Syntax
 
