@@ -2259,7 +2259,7 @@ pub fn parseTypeHeader(self: *Parser) std.mem.Allocator.Error!AST.TypeHeader.Idx
         switch (err) {
             error.ExpectedNotFound => {
                 self.store.clearScratchTypeAnnosFrom(scratch_top);
-                return try self.pushMalformed(AST.TypeHeader.Idx, .expected_ty_anno_end, start);
+                return try self.pushMalformed(AST.TypeHeader.Idx, .expected_ty_anno_close_round, start);
             },
             error.OutOfMemory => return error.OutOfMemory,
         }
@@ -2359,51 +2359,74 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
             self.advance(); // Advance past NamedUnderscore
         },
         .NoSpaceOpenRound, .OpenRound => {
-            // Probably a tuple
-            self.advance(); // Advance past OpenRound
-            const after_round = self.pos;
-            const scratch_top = self.store.scratchTypeAnnoTop();
-            while (self.peek() != .CloseRound and self.peek() != .OpArrow and self.peek() != .OpFatArrow and self.peek() != .EndOfFile) {
-                // Looking for args here so that we don't capture an un-parenthesized fn's args
-                try self.store.addScratchTypeAnno(try self.parseTypeAnno(.looking_for_args));
-                if (self.peek() != .Comma) {
-                    break;
+            // Tuple or higher order function
+            const saved_pos = self.pos;
+
+            // Look for a similarly nested OpArrow or OpFatArrow
+            var is_higher_order_function = false;
+            var lookahead_pos = self.pos + 1;
+            var depth: u32 = 0;
+            while (lookahead_pos < self.tok_buf.tokens.len) {
+                const tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
+                switch (tok) {
+                    .OpenRound, .NoSpaceOpenRound => depth += 1,
+                    .CloseRound => {
+                        if (depth == 0) {
+                            break;
+                        }
+                        depth -= 1;
+                    },
+                    .OpArrow, .OpFatArrow => {
+                        if (depth == 0) {
+                            is_higher_order_function = true;
+                            break;
+                        }
+                    },
+                    .EndOfFile => break,
+                    else => {
+                        // Ignore other tokens
+                    },
                 }
-                self.advance(); // Advance past Comma
+                lookahead_pos += 1;
             }
-            if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
-                // use the scratch for the args for the func, advance, get the ret and set this to be a fn
-                // since it's a function, as long as we find the CloseRound we can just return here.
-                const args = try self.store.typeAnnoSpanFrom(scratch_top);
-                const effectful = self.peek() == .OpFatArrow;
-                self.advance(); // Advance past arrow
-                const ret = try self.parseTypeAnno(.looking_for_args);
-                if (self.peek() != .CloseRound) {
-                    self.store.clearScratchTypeAnnosFrom(scratch_top);
-                    return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_end_of_function, start);
-                }
-                const function = try self.store.addTypeAnno(.{ .@"fn" = .{
-                    .args = args,
-                    .ret = ret,
-                    .effectful = effectful,
-                    .region = .{ .start = after_round, .end = self.pos },
-                } });
-                self.advance();
-                return try self.store.addTypeAnno(.{ .parens = .{
-                    .anno = function,
+
+            // Restore parser position after lookahead
+            self.pos = saved_pos;
+
+            self.advance(); // Advance past OpenRound
+            if (is_higher_order_function) {
+                const type_anno = try self.parseTypeAnno(.not_looking_for_args);
+
+                self.expect(.CloseRound) catch {
+                    return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, start);
+                };
+
+                anno = try self.store.addTypeAnno(.{ .parens = .{
+                    .anno = type_anno,
                     .region = .{ .start = start, .end = self.pos },
                 } });
+            } else {
+                const scratch_top = self.store.scratchTypeAnnoTop();
+                while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+                    // Looking for args here so that we don't capture an un-parenthesized fn's args
+                    try self.store.addScratchTypeAnno(try self.parseTypeAnno(.looking_for_args));
+                    if (self.peek() != .Comma) {
+                        break;
+                    }
+                    self.advance(); // Advance past Comma
+                }
+
+                self.expect(.CloseRound) catch {
+                    self.store.clearScratchTypeAnnosFrom(scratch_top);
+                    return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, start);
+                };
+
+                const annos = try self.store.typeAnnoSpanFrom(scratch_top);
+                anno = try self.store.addTypeAnno(.{ .tuple = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .annos = annos,
+                } });
             }
-            if (self.peek() != .CloseRound) {
-                self.store.clearScratchTypeAnnosFrom(scratch_top);
-                return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_end, start);
-            }
-            self.advance(); // Advance past CloseRound
-            const annos = try self.store.typeAnnoSpanFrom(scratch_top);
-            anno = try self.store.addTypeAnno(.{ .tuple = .{
-                .region = .{ .start = start, .end = self.pos },
-                .annos = annos,
-            } });
         },
         .OpenCurly => {
             self.advance(); // Advance past OpenCurly
@@ -2457,7 +2480,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
         const not_followed_by_colon = two_away_tok != .OpColon;
         if ((looking_for_args == .not_looking_for_args) and
             (curr_is_arrow or
-                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon) and next_tok != .CloseCurly)))
+                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon) and next_tok != .CloseCurly and next_tok != .KwModule)))
         {
             const scratch_top = self.store.scratchTypeAnnoTop();
             try self.store.addScratchTypeAnno(an);
@@ -2472,7 +2495,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
             const effectful = self.peek() == .OpFatArrow;
             self.advance(); // Advance past arrow
             // TODO: Handle thin vs fat arrow
-            const ret = try self.parseTypeAnno(.looking_for_args);
+            const ret = try self.parseTypeAnno(.not_looking_for_args);
             return try self.store.addTypeAnno(.{ .@"fn" = .{
                 .region = .{ .start = start, .end = self.pos },
                 .args = args,

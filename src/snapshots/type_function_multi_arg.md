@@ -13,70 +13,9 @@ curry = |fn| |x| |y| fn(x, y)
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_function_multi_arg.md:3:24:3:26
-PARSE ERROR - type_function_multi_arg.md:3:34:3:36
-PARSE ERROR - type_function_multi_arg.md:3:42:3:43
-INVALID STATEMENT - type_function_multi_arg.md:3:24:3:26
-INVALID STATEMENT - type_function_multi_arg.md:3:27:3:43
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **->** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_function_multi_arg.md:3:24:3:26:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                       ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expr_arrow_expects_ident`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_function_multi_arg.md:3:34:3:36:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                                 ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_round_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_function_multi_arg.md:3:42:3:43:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                                         ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_function_multi_arg.md:3:24:3:26:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                       ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_function_multi_arg.md:3:27:3:43:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                          ^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
@@ -99,13 +38,17 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.23 (name "curry")
-			(ty-fn @3.10-3.22
-				(underscore-ty-var @3.10-3.12 (raw "_a"))
-				(underscore-ty-var @3.14-3.16 (raw "_b"))
-				(underscore-ty-var @3.20-3.22 (raw "_c"))))
-		(e-malformed @3.24-3.26 (reason "expr_unexpected_token"))
-		(e-malformed @3.42-3.43 (reason "expected_expr_close_round_or_comma"))
+		(s-type-anno @3.1-3.43 (name "curry")
+			(ty-fn @3.9-3.43
+				(ty-fn @3.10-3.22
+					(underscore-ty-var @3.10-3.12 (raw "_a"))
+					(underscore-ty-var @3.14-3.16 (raw "_b"))
+					(underscore-ty-var @3.20-3.22 (raw "_c")))
+				(ty-fn @3.28-3.42
+					(underscore-ty-var @3.28-3.30 (raw "_a"))
+					(ty-fn @3.34-3.42
+						(underscore-ty-var @3.34-3.36 (raw "_b"))
+						(underscore-ty-var @3.40-3.42 (raw "_c"))))))
 		(s-decl @4.1-4.30
 			(p-ident @4.1-4.6 (raw "curry"))
 			(e-lambda @4.9-4.30
@@ -130,13 +73,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-
-curry : (_a, _b -> _c)
-
-curry = |fn| |x| |y| fn(x, y)
-
-main! = |_| {}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -158,7 +95,21 @@ main! = |_| {}
 						(e-lookup-local @4.25-4.26
 							(p-assign @4.15-4.16 (ident "x")))
 						(e-lookup-local @4.28-4.29
-							(p-assign @4.19-4.20 (ident "y"))))))))
+							(p-assign @4.19-4.20 (ident "y")))))))
+		(annotation @4.1-4.6
+			(declared-type
+				(ty-fn @3.9-3.43 (effectful false)
+					(ty-parens @3.9-3.23
+						(ty-fn @3.10-3.22 (effectful false)
+							(ty-var @3.10-3.12 (name "_a"))
+							(ty-var @3.14-3.16 (name "_b"))
+							(ty-var @3.20-3.22 (name "_c"))))
+					(ty-parens @3.27-3.43
+						(ty-fn @3.28-3.42 (effectful false)
+							(ty-var @3.28-3.30 (name "_a"))
+							(ty-fn @3.34-3.42 (effectful false)
+								(ty-var @3.34-3.36 (name "_b"))
+								(ty-var @3.40-3.42 (name "_c")))))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
@@ -170,9 +121,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.6 (type "_arg, _arg2 -> ret -> _arg3 -> _arg4 -> ret2"))
+		(patt @4.1-4.6 (type "_a, _b -> _c -> _a -> _b -> _c"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
 	(expressions
-		(expr @4.9-4.30 (type "_arg, _arg2 -> ret -> _arg3 -> _arg4 -> ret2"))
+		(expr @4.9-4.30 (type "_a, _b -> _c -> _a -> _b -> _c"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~

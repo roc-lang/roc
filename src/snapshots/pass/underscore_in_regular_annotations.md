@@ -15,7 +15,7 @@ identity = |x| x
 
 # Function with underscore in annotation
 process : List(_) -> Str
-process = |list| "processed"
+process = |_list| "processed"
 
 # Record with underscore
 get_data : { field: _, other: U32 } -> U32
@@ -35,172 +35,12 @@ map = |_, _| []
 
 # Named underscore type variables
 transform : _a -> _b -> _b
-transform = |_, b| b
+transform = |_| |b| b
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - underscore_in_regular_annotations.md:26:15:26:16
-PARSE ERROR - underscore_in_regular_annotations.md:26:17:26:21
-PARSE ERROR - underscore_in_regular_annotations.md:26:28:26:32
-UNEXPECTED TOKEN IN EXPRESSION - underscore_in_regular_annotations.md:27:5:27:6
-UNEXPECTED TOKEN IN EXPRESSION - underscore_in_regular_annotations.md:30:22:30:24
-UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
-INVALID STATEMENT - underscore_in_regular_annotations.md:26:15:26:16
-INVALID STATEMENT - underscore_in_regular_annotations.md:27:5:27:6
-INVALID STATEMENT - underscore_in_regular_annotations.md:27:7:27:16
-INVALID STATEMENT - underscore_in_regular_annotations.md:30:22:30:24
-INVALID STATEMENT - underscore_in_regular_annotations.md:30:25:30:27
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:26:15:26:16:**
-```roc
-map : (a -> b), List(a) -> List(b)
-```
-              ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:26:17:26:21:**
-```roc
-map : (a -> b), List(a) -> List(b)
-```
-                ^^^^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:26:28:26:32:**
-```roc
-map : (a -> b), List(a) -> List(b)
-```
-                           ^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:27:5:27:6:**
-```roc
-map = |_, _| []
-```
-    ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **->** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:30:22:30:24:**
-```roc
-transform : _a -> _b -> _b
-```
-                     ^^
-
-
-**UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**underscore_in_regular_annotations.md:11:12:11:16:**
-```roc
-process = |list| "processed"
-```
-           ^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_in_regular_annotations.md:26:15:26:16:**
-```roc
-map : (a -> b), List(a) -> List(b)
-```
-              ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_in_regular_annotations.md:27:5:27:6:**
-```roc
-map = |_, _| []
-```
-    ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_in_regular_annotations.md:27:7:27:16:**
-```roc
-map = |_, _| []
-```
-      ^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_in_regular_annotations.md:30:22:30:24:**
-```roc
-transform : _a -> _b -> _b
-```
-                     ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_in_regular_annotations.md:30:25:30:27:**
-```roc
-transform : _a -> _b -> _b
-```
-                        ^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
@@ -209,7 +49,7 @@ LowerIdent(4:1-4:5),OpAssign(4:6-4:7),OpBar(4:8-4:9),LowerIdent(4:9-4:10),OpBar(
 LowerIdent(6:1-6:9),OpColon(6:10-6:11),LowerIdent(6:12-6:13),OpArrow(6:14-6:16),LowerIdent(6:17-6:18),
 LowerIdent(7:1-7:9),OpAssign(7:10-7:11),OpBar(7:12-7:13),LowerIdent(7:13-7:14),OpBar(7:14-7:15),LowerIdent(7:16-7:17),
 LowerIdent(10:1-10:8),OpColon(10:9-10:10),UpperIdent(10:11-10:15),NoSpaceOpenRound(10:15-10:16),Underscore(10:16-10:17),CloseRound(10:17-10:18),OpArrow(10:19-10:21),UpperIdent(10:22-10:25),
-LowerIdent(11:1-11:8),OpAssign(11:9-11:10),OpBar(11:11-11:12),LowerIdent(11:12-11:16),OpBar(11:16-11:17),StringStart(11:18-11:19),StringPart(11:19-11:28),StringEnd(11:28-11:29),
+LowerIdent(11:1-11:8),OpAssign(11:9-11:10),OpBar(11:11-11:12),NamedUnderscore(11:12-11:17),OpBar(11:17-11:18),StringStart(11:19-11:20),StringPart(11:20-11:29),StringEnd(11:29-11:30),
 LowerIdent(14:1-14:9),OpColon(14:10-14:11),OpenCurly(14:12-14:13),LowerIdent(14:14-14:19),OpColon(14:19-14:20),Underscore(14:21-14:22),Comma(14:22-14:23),LowerIdent(14:24-14:29),OpColon(14:29-14:30),UpperIdent(14:31-14:34),CloseCurly(14:35-14:36),OpArrow(14:37-14:39),UpperIdent(14:40-14:43),
 LowerIdent(15:1-15:9),OpAssign(15:10-15:11),OpBar(15:12-15:13),LowerIdent(15:13-15:19),OpBar(15:19-15:20),LowerIdent(15:21-15:27),NoSpaceDotLowerIdent(15:27-15:33),
 LowerIdent(18:1-18:14),OpColon(18:15-18:16),UpperIdent(18:17-18:23),NoSpaceOpenRound(18:23-18:24),Underscore(18:24-18:25),Comma(18:25-18:26),UpperIdent(18:27-18:30),CloseRound(18:30-18:31),OpArrow(18:32-18:34),UpperIdent(18:35-18:38),
@@ -221,11 +61,11 @@ CloseCurly(23:5-23:6),
 LowerIdent(26:1-26:4),OpColon(26:5-26:6),OpenRound(26:7-26:8),LowerIdent(26:8-26:9),OpArrow(26:10-26:12),LowerIdent(26:13-26:14),CloseRound(26:14-26:15),Comma(26:15-26:16),UpperIdent(26:17-26:21),NoSpaceOpenRound(26:21-26:22),LowerIdent(26:22-26:23),CloseRound(26:23-26:24),OpArrow(26:25-26:27),UpperIdent(26:28-26:32),NoSpaceOpenRound(26:32-26:33),LowerIdent(26:33-26:34),CloseRound(26:34-26:35),
 LowerIdent(27:1-27:4),OpAssign(27:5-27:6),OpBar(27:7-27:8),Underscore(27:8-27:9),Comma(27:9-27:10),Underscore(27:11-27:12),OpBar(27:12-27:13),OpenSquare(27:14-27:15),CloseSquare(27:15-27:16),
 LowerIdent(30:1-30:10),OpColon(30:11-30:12),NamedUnderscore(30:13-30:15),OpArrow(30:16-30:18),NamedUnderscore(30:19-30:21),OpArrow(30:22-30:24),NamedUnderscore(30:25-30:27),
-LowerIdent(31:1-31:10),OpAssign(31:11-31:12),OpBar(31:13-31:14),Underscore(31:14-31:15),Comma(31:15-31:16),LowerIdent(31:17-31:18),OpBar(31:18-31:19),LowerIdent(31:20-31:21),EndOfFile(31:21-31:21),
+LowerIdent(31:1-31:10),OpAssign(31:11-31:12),OpBar(31:13-31:14),Underscore(31:14-31:15),OpBar(31:15-31:16),OpBar(31:17-31:18),LowerIdent(31:18-31:19),OpBar(31:19-31:20),LowerIdent(31:21-31:22),EndOfFile(31:22-31:22),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-31.21
+(file @1.1-31.22
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -255,13 +95,13 @@ LowerIdent(31:1-31:10),OpAssign(31:11-31:12),OpBar(31:13-31:14),Underscore(31:14
 					(ty @10.11-10.15 (name "List"))
 					(_))
 				(ty @10.22-10.25 (name "Str"))))
-		(s-decl @11.1-11.29
+		(s-decl @11.1-11.30
 			(p-ident @11.1-11.8 (raw "process"))
-			(e-lambda @11.11-11.29
+			(e-lambda @11.11-11.30
 				(args
-					(p-ident @11.12-11.16 (raw "list")))
-				(e-string @11.18-11.29
-					(e-string-part @11.19-11.28 (raw "processed")))))
+					(p-ident @11.12-11.17 (raw "_list")))
+				(e-string @11.19-11.30
+					(e-string-part @11.20-11.29 (raw "processed")))))
 		(s-type-anno @14.1-14.43 (name "get_data")
 			(ty-fn @14.12-14.43
 				(ty-record @14.12-14.36
@@ -302,32 +142,39 @@ LowerIdent(31:1-31:10),OpAssign(31:11-31:12),OpBar(31:13-31:14),Underscore(31:14
 							(p-tag @22.9-22.17 (raw "Err")
 								(p-ident @22.13-22.16 (raw "msg")))
 							(e-ident @22.21-22.24 (raw "msg")))))))
-		(s-type-anno @26.1-26.15 (name "map")
-			(ty-fn @26.8-26.14
-				(ty-var @26.8-26.9 (raw "a"))
-				(ty-var @26.13-26.14 (raw "b"))))
-		(e-malformed @26.15-26.16 (reason "expr_unexpected_token"))
-		(s-malformed @26.17-26.27 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @26.28-27.4 (tag "expected_colon_after_type_annotation"))
-		(e-malformed @27.5-27.6 (reason "expr_unexpected_token"))
-		(e-lambda @27.7-27.16
-			(args
-				(p-underscore)
-				(p-underscore))
-			(e-list @27.14-27.16))
-		(s-type-anno @30.1-30.21 (name "transform")
-			(ty-fn @30.13-30.21
-				(underscore-ty-var @30.13-30.15 (raw "_a"))
-				(underscore-ty-var @30.19-30.21 (raw "_b"))))
-		(e-malformed @30.22-30.24 (reason "expr_unexpected_token"))
-		(e-ident @30.25-30.27 (raw "_b"))
-		(s-decl @31.1-31.21
-			(p-ident @31.1-31.10 (raw "transform"))
-			(e-lambda @31.13-31.21
+		(s-type-anno @26.1-26.35 (name "map")
+			(ty-fn @26.7-26.35
+				(ty-fn @26.8-26.14
+					(ty-var @26.8-26.9 (raw "a"))
+					(ty-var @26.13-26.14 (raw "b")))
+				(ty-apply @26.17-26.24
+					(ty @26.17-26.21 (name "List"))
+					(ty-var @26.22-26.23 (raw "a")))
+				(ty-apply @26.28-26.35
+					(ty @26.28-26.32 (name "List"))
+					(ty-var @26.33-26.34 (raw "b")))))
+		(s-decl @27.1-27.16
+			(p-ident @27.1-27.4 (raw "map"))
+			(e-lambda @27.7-27.16
 				(args
 					(p-underscore)
-					(p-ident @31.17-31.18 (raw "b")))
-				(e-ident @31.20-31.21 (raw "b"))))))
+					(p-underscore))
+				(e-list @27.14-27.16)))
+		(s-type-anno @30.1-30.27 (name "transform")
+			(ty-fn @30.13-30.27
+				(underscore-ty-var @30.13-30.15 (raw "_a"))
+				(ty-fn @30.19-30.27
+					(underscore-ty-var @30.19-30.21 (raw "_b"))
+					(underscore-ty-var @30.25-30.27 (raw "_b")))))
+		(s-decl @31.1-31.22
+			(p-ident @31.1-31.10 (raw "transform"))
+			(e-lambda @31.13-31.22
+				(args
+					(p-underscore))
+				(e-lambda @31.17-31.22
+					(args
+						(p-ident @31.18-31.19 (raw "b")))
+					(e-ident @31.21-31.22 (raw "b")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -341,7 +188,7 @@ identity = |x| x
 
 # Function with underscore in annotation
 process : List(_) -> Str
-process = |list| "processed"
+process = |_list| "processed"
 
 # Record with underscore
 get_data : { field : _, other : U32 } -> U32
@@ -356,13 +203,12 @@ handle_result = |result|
 	}
 
 # Underscore in function arguments
-map : (a -> b)
-|_, _| []
+map : (a -> b), List(a) -> List(b)
+map = |_, _| []
 
 # Named underscore type variables
-transform : _a -> _b
-_b
-transform = |_, b| b
+transform : _a -> _b -> _b
+transform = |_| |b| b
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -393,11 +239,11 @@ transform = |_, b| b
 					(ty-var @6.17-6.18 (name "a"))))))
 	(d-let
 		(p-assign @11.1-11.8 (ident "process"))
-		(e-lambda @11.11-11.29
+		(e-lambda @11.11-11.30
 			(args
-				(p-assign @11.12-11.16 (ident "list")))
-			(e-string @11.18-11.29
-				(e-literal @11.19-11.28 (string "processed"))))
+				(p-assign @11.12-11.17 (ident "_list")))
+			(e-string @11.19-11.30
+				(e-literal @11.20-11.29 (string "processed"))))
 		(annotation @11.1-11.8
 			(declared-type
 				(ty-fn @10.11-10.25 (effectful false)
@@ -455,13 +301,40 @@ transform = |_, b| b
 						(ty @18.27-18.30 (name "Str")))
 					(ty @18.35-18.38 (name "Str"))))))
 	(d-let
-		(p-assign @31.1-31.10 (ident "transform"))
-		(e-lambda @31.13-31.21
+		(p-assign @27.1-27.4 (ident "map"))
+		(e-lambda @27.7-27.16
 			(args
-				(p-underscore @31.14-31.15)
-				(p-assign @31.17-31.18 (ident "b")))
-			(e-lookup-local @31.20-31.21
-				(p-assign @31.17-31.18 (ident "b"))))))
+				(p-underscore @27.8-27.9)
+				(p-underscore @27.11-27.12))
+			(e-empty_list @27.14-27.16))
+		(annotation @27.1-27.4
+			(declared-type
+				(ty-fn @26.7-26.35 (effectful false)
+					(ty-parens @26.7-26.15
+						(ty-fn @26.8-26.14 (effectful false)
+							(ty-var @26.8-26.9 (name "a"))
+							(ty-var @26.13-26.14 (name "b"))))
+					(ty-apply @26.17-26.24 (symbol "List")
+						(ty-var @26.22-26.23 (name "a")))
+					(ty-apply @26.28-26.35 (symbol "List")
+						(ty-var @26.33-26.34 (name "b")))))))
+	(d-let
+		(p-assign @31.1-31.10 (ident "transform"))
+		(e-lambda @31.13-31.22
+			(args
+				(p-underscore @31.14-31.15))
+			(e-lambda @31.17-31.22
+				(args
+					(p-assign @31.18-31.19 (ident "b")))
+				(e-lookup-local @31.21-31.22
+					(p-assign @31.18-31.19 (ident "b")))))
+		(annotation @31.1-31.10
+			(declared-type
+				(ty-fn @30.13-30.27 (effectful false)
+					(ty-var @30.13-30.15 (name "_a"))
+					(ty-fn @30.19-30.27 (effectful false)
+						(ty-var @30.19-30.21 (name "_b"))
+						(ty-var @30.25-30.27 (name "_b"))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -472,12 +345,14 @@ transform = |_, b| b
 		(patt @11.1-11.8 (type "Error -> Str"))
 		(patt @15.1-15.9 (type "{ field: _field2, other: U32 } -> U32"))
 		(patt @19.1-19.14 (type "Error -> Str"))
-		(patt @31.1-31.10 (type "_arg, _arg2 -> _ret")))
+		(patt @27.1-27.4 (type "a -> b, Error -> Error"))
+		(patt @31.1-31.10 (type "_a -> _b -> _b")))
 	(expressions
 		(expr @4.8-4.13 (type "_arg -> _ret"))
 		(expr @7.12-7.17 (type "a -> a"))
-		(expr @11.11-11.29 (type "Error -> Str"))
+		(expr @11.11-11.30 (type "Error -> Str"))
 		(expr @15.12-15.33 (type "{ field: _field2, other: U32 } -> U32"))
 		(expr @19.17-23.6 (type "Error -> Str"))
-		(expr @31.13-31.21 (type "_arg, _arg2 -> _ret"))))
+		(expr @27.7-27.16 (type "a -> b, Error -> Error"))
+		(expr @31.13-31.22 (type "_a -> _b -> _b"))))
 ~~~

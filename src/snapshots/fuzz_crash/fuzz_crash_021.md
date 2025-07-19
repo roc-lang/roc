@@ -52,7 +52,7 @@ Fli/main.roc" }
 
 
 **PARSE ERROR**
-A parsing error occurred: `expected_ty_anno_end`
+A parsing error occurred: `expected_ty_anno_close_round`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -64,7 +64,7 @@ Pair(a, b+ : (
 
 
 **PARSE ERROR**
-A parsing error occurred: `expected_ty_anno_end`
+A parsing error occurred: `expected_ty_anno_close_round`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -130,7 +130,7 @@ UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8)
 		(s-type-decl @3.1-3.15
 			(header @3.1-3.11 (name "<malformed>")
 				(args))
-			(ty-malformed @3.14-3.15 (tag "expected_ty_anno_end")))))
+			(ty-malformed @3.14-3.15 (tag "expected_ty_anno_close_round")))))
 ~~~
 # FORMATTED
 ~~~roc
