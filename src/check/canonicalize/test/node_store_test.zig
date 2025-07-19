@@ -541,18 +541,6 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
-        .too_long_single_quote = .{
-            .region = from_raw_offsets(690, 700),
-        },
-    });
-
-    try diagnostics.append(CIR.Diagnostic{
-        .empty_single_quote = .{
-            .region = from_raw_offsets(710, 720),
-        },
-    });
-
-    try diagnostics.append(CIR.Diagnostic{
         .f64_pattern_literal = .{
             .region = from_raw_offsets(730, 740),
         },

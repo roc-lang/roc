@@ -135,7 +135,6 @@ pub const Tag = enum {
     diag_not_implemented,
     diag_invalid_num_literal,
     diag_invalid_single_quote,
-    diag_too_long_single_quote,
     diag_empty_single_quote,
     diag_empty_tuple,
     diag_ident_already_in_scope,

@@ -122,10 +122,9 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .InvalidUnicodeEscapeSequence => "INVALID UNICODE ESCAPE SEQUENCE",
         .InvalidEscapeSequence => "INVALID ESCAPE SEQUENCE",
         .UnclosedString => "UNCLOSED STRING",
-        .UnclosedSingleQuote => "UNCLOSED SINGLE QUOTE",
         .OverClosedBrace => "OVER CLOSED BRACE",
         .MismatchedBrace => "MISMATCHED BRACE",
-        .NonPrintableUnicodeInStrLiteral => "NON-PRINTABLE UNICODE IN STRING LITERAL",
+        .NonPrintableUnicodeInStrLiteral => "NON-PRINTABLE UNICODE IN STRING-LIKE LITERAL",
         .InvalidUtf8InSource => "INVALID UTF-8",
     };
 
@@ -137,10 +136,9 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .InvalidUnicodeEscapeSequence => "This Unicode escape sequence is not valid.",
         .InvalidEscapeSequence => "This escape sequence is not recognized.",
         .UnclosedString => "This string is missing a closing quote.",
-        .UnclosedSingleQuote => "This character literal is missing a closing single quote.",
         .OverClosedBrace => "There are too many closing braces here.",
         .MismatchedBrace => "This brace does not match the corresponding opening brace.",
-        .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string literals.",
+        .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string-like literals.",
         .InvalidUtf8InSource => "Invalid UTF-8 encoding found in source code. Roc source files must be valid UTF-8.",
     };
 

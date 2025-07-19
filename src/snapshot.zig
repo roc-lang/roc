@@ -64,7 +64,7 @@ fn tokenToCategory(token: tokenize.Token.Tag) TokenCategory {
         .UpperIdent, .LowerIdent, .DotLowerIdent, .DotUpperIdent, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .NamedUnderscore, .OpaqueName => .identifier,
 
         // Strings
-        .StringStart, .StringEnd, .StringPart, .MultilineStringStart, .MultilineStringEnd, .SingleQuote, .MalformedSingleQuoteUnclosed => .string,
+        .StringStart, .StringEnd, .StringPart, .MultilineStringStart, .MultilineStringEnd, .SingleQuote, .MalformedSingleQuoteUnclosed, .MalformedSingleQuoteEmpty, .MalformedSingleQuoteTooLong => .string,
 
         // Numbers
         .Float, .Int, .DotInt, .NoSpaceDotInt, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits => .number,

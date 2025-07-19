@@ -10,15 +10,11 @@ module[}('
 ~~~
 # EXPECTED
 MISMATCHED BRACE - :0:0:0:0
-UNCLOSED SINGLE QUOTE - :0:0:0:0
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_039.md:1:10:1:11
 INVALID STATEMENT - fuzz_crash_039.md:1:9:2:2
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.
-
-**UNCLOSED SINGLE QUOTE**
-This character literal is missing a closing single quote.
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **'** is not expected in an expression.

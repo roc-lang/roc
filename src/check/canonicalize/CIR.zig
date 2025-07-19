@@ -291,8 +291,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             );
         },
         .invalid_single_quote => Diagnostic.buildInvalidSingleQuoteReport(allocator),
-        .too_long_single_quote => Diagnostic.buildTooLongSingleQuoteReport(allocator),
-        .empty_single_quote => Diagnostic.buildEmptySingleQuoteReport(allocator),
         .crash_expects_string => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
             break :blk Diagnostic.buildCrashExpectsStringReport(allocator, region_info, filename, self.temp_source_for_sexpr.?, self.env.line_starts.items.items);
