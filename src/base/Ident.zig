@@ -237,27 +237,33 @@ pub const Store = struct {
     pub fn appendToIovecs(self: *const Store, writer: anytype) !usize {
         const start_offset = writer.getOffset();
         
-        // Serialize the interner using its appendToIovecs method
+        // Reserve space for the Store struct with proper alignment
+        const store_struct_offset = try writer.reserveStruct(Store);
+        
+        // Serialize the interner 
         _ = try self.interner.appendToIovecs(writer);
         
-        // Serialize attributes
-        const attributes_len: u32 = @intCast(self.attributes.items.len);
-        try writer.appendStruct(attributes_len);
+        // Serialize attributes and get their offset  
+        const attributes_offset = if (self.attributes.items.len > 0) blk: {
+            const offset = try writer.appendAligned(std.mem.sliceAsBytes(self.attributes.items), @alignOf(Attributes));
+            break :blk offset;
+        } else 0;
         
-        if (attributes_len > 0) {
-            // Write attributes directly as bytes (zero-copy)
-            // Each Attributes is 3 bits, we pack them as u8
-            try writer.appendBytes(std.mem.sliceAsBytes(self.attributes.items));
-        }
+        // Create a new Store struct with corrected pointers pointing to serialized locations
+        const corrected_store = Store{
+            .interner = self.interner, // The interner's appendToIovecs already corrected its internal pointers
+            .attributes = .{
+                .items = if (self.attributes.items.len > 0) 
+                    @as([*]Attributes, @ptrFromInt(attributes_offset))[0..self.attributes.items.len]
+                else 
+                    @as([*]Attributes, @ptrFromInt(@alignOf(Attributes)))[0..0],
+                .capacity = self.attributes.capacity,
+            },
+            .next_unique_name = self.next_unique_name,
+        };
         
-        // Align for next u32 
-        _ = try writer.appendAligned(&[_]u8{}, @alignOf(u32));
-        
-        // Serialize next_unique_name
-        try writer.appendStruct(self.next_unique_name);
-        
-        // Ensure final alignment
-        _ = try writer.appendAligned(&[_]u8{}, serialization.SERIALIZATION_ALIGNMENT);
+        // Write the corrected Store struct to the reserved location
+        try writer.writeDeferredStruct(store_struct_offset, corrected_store);
         
         return start_offset;
     }
