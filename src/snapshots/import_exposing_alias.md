@@ -73,16 +73,7 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~
 # FORMATTED
 ~~~roc
-module [main]
-
-import json.Json exposing [decode as fromJson, encode as toJson]
-
-main = {
-	data = {name: "Bob", age: 25}
-	encoded = toJson(data)
-	decoded = fromJson(encoded)
-	decoded
-}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

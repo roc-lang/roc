@@ -46,7 +46,7 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 # FORMATTED
 ~~~roc
 match [] {
-	empty => {ints: [1, 2, 3], strs: ["a", "b", "c"], empty: empty}
+	empty => { ints: [1, 2, 3], strs: ["a", "b", "c"], empty: empty }
 }
 ~~~
 # CANONICALIZE

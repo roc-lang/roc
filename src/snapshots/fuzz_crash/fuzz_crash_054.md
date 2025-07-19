@@ -40,7 +40,7 @@ LowerIdent(2:1-2:2),CloseSquare(2:2-2:3),EndOfFile(2:3-2:3),
 ~~~roc
 app [] { f: platform "" }
 import S exposing [
-	c as f
+	c as f,
 ]
 ~~~
 # CANONICALIZE

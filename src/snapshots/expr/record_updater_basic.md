@@ -48,10 +48,7 @@ LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpenCurly(4:11-4:12),DoubleDot(4:13-4:15)
 ~~~
 # FORMATTED
 ~~~roc
-module [person, updated]
-
-person = {name: "Alice", age: 30}
-updated = {..person, age: 31}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -579,7 +579,7 @@ handleResponse = |response|
 combineResults : Result(Value, Error), Status -> Result(Response, Error)
 combineResults = |jsonResult, httpStatus|
 	match jsonResult {
-		Ok(value) => Ok({body: Json.encode(value), status: httpStatus})
+		Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
 		Err(error) => Err(error)
 	}
 ~~~

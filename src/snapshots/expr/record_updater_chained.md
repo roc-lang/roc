@@ -73,12 +73,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpenCurly(6:9-6:10),DoubleDot(6:11-6:13),L
 ~~~
 # FORMATTED
 ~~~roc
-module [person, final]
-
-person = {name: "Alice", age: 30, city: "Boston"}
-updated_one = {..person, age: 31}
-updated2 = {..updated_one, city: "New York"}
-final = {..updated2, name: "Alice Smith", age: 32}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

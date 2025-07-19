@@ -45,7 +45,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 ~~~
 # FORMATTED
 ~~~roc
-{name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

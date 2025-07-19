@@ -550,9 +550,9 @@ nested_empty = [empty_list, empty_list, empty_list]
 mixed_nested = [empty_list, [1, 2], empty_list, [3, 4]]
 
 # Polymorphic record with empty list
-poly_record = {items: empty_list, count: 0}
-use_poly_record1 = {items: [1, 2, 3], count: 0}
-use_poly_record2 = {items: ["x", "y", "z"], count: 0}
+poly_record = { items: empty_list, count: 0 }
+use_poly_record1 = { items: [1, 2, 3], count: 0 }
+use_poly_record2 = { items: ["x", "y", "z"], count: 0 }
 
 # Complex nested structure with multiple polymorphic uses
 base_config = {
@@ -560,8 +560,8 @@ base_config = {
 	metadata: {
 		version: num,
 		ratio: frac,
-		description: str
-	}
+		description: str,
+	},
 }
 
 # Different instantiations of base_config
@@ -570,9 +570,9 @@ config1 = {
 	metadata: {
 		version: num,
 		ratio: frac,
-		description: str
+		description: str,
 	},
-	name: "integers"
+	name: "integers",
 }
 
 config2 = { # Test comment 1
@@ -580,13 +580,13 @@ config2 = { # Test comment 1
 	metadata: { # Test comment 3
 		version: num, # Test comment 4
 		ratio: frac, # Test comment 5
-		description: str # Test comment 6
+		description: str, # Test comment 6
 	}, # Test comment 7
-	name: "fruits" # Test comment 8
+	name: "fruits", # Test comment 8
 } # Test comment 9
 
 # Polymorphic function-like structures
-make_container = |val| {value: val, wrapper: [val]}
+make_container = |val| { value: val, wrapper: [val] }
 container1 = make_container(num)
 container2 = make_container(str)
 container3 = make_container(frac)
@@ -597,39 +597,39 @@ deep = {
 		level2: {
 			level3: {
 				data: empty_list,
-				value: num
+				value: num,
 			},
-			items: [num, num * 2, num * 3]
+			items: [num, num * 2, num * 3],
 		},
-		collection: empty_list
+		collection: empty_list,
 	},
 	results: [
-		{data: [1], tag: "single"},
-		{data: [1, 2], tag: "ints"},
-		{data: [1, 2, 3], tag: "more"},
-	]
+		{ data: [1], tag: "single" },
+		{ data: [1, 2], tag: "ints" },
+		{ data: [1, 2, 3], tag: "more" },
+	],
 }
 
 # Polymorphic values used in computations
 compute1 = num + 10
 compute2 = num * 2
 compute3 = [num, num]
-compute4 = {base: num, derived: [num, num + 1, num + 2]}
+compute4 = { base: num, derived: [num, num + 1, num + 2] }
 
 # Mixed polymorphic structures
 mixed = {
-	numbers: {value: num, list: [num, num], float: frac},
-	strings: {value: str, list: [str, str]},
+	numbers: { value: num, list: [num, num], float: frac },
+	strings: { value: str, list: [str, str] },
 	empty_lists: {
 		raw: empty_list,
 		in_list: [empty_list],
-		in_record: {data: empty_list}
+		in_record: { data: empty_list },
 	},
 	computations: {
 		from_num: num * 100,
 		from_frac: frac * 10.0,
-		list_from_num: [num, num, num]
-	}
+		list_from_num: [num, num, num],
+	},
 }
 
 main = |_| {

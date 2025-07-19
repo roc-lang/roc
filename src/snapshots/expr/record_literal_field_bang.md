@@ -36,7 +36,7 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~roc
 {
 	answer: 42,
-	launchTheNukes!: |{}| ...
+	launchTheNukes!: |{}| ...,
 }
 ~~~
 # CANONICALIZE

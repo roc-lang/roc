@@ -1582,7 +1582,7 @@ import # Comment after import keyword
 	pf.StdoutMultiline # Comment after ident
 		exposing [ # Comment after exposing open
 			line!, # Comment after exposed item
-			write! # Another after exposed item
+			write!, # Another after exposed item
 		] # Comment after exposing close
 
 import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]

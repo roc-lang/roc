@@ -74,7 +74,7 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 getName : { name : Str, age : U64 } -> Str
 getName = |_person| "hello"
 
-main! = |_| getName({name: "luke", age: 21})
+main! = |_| getName({ name: "luke", age: 21 })
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -263,7 +263,7 @@ bar = [1, 2, 3]
 BadRecord := { field : _, other : U32 }
 
 baz : BadRecord
-baz = {field: "hi", other: 5}
+baz = { field: "hi", other: 5 }
 
 BadFunction := _ -> _
 

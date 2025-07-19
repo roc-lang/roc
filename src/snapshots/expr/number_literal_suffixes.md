@@ -565,7 +565,7 @@ CloseCurly(34:1-34:2),EndOfFile(34:2-34:2),
 	i16Bin: 0b101i16,
 	i32Bin: 0b101i32,
 	i64Bin: 0b101i64,
-	i128Bin: 0b101i128
+	i128Bin: 0b101i128,
 }
 ~~~
 # CANONICALIZE

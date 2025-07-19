@@ -262,7 +262,7 @@ main! = |_| {
 	userId = 123
 
 	person : Person
-	person = {name: "Alice", age: 30}
+	person = { name: "Alice", age: 30 }
 
 	color : Color
 	color = Red

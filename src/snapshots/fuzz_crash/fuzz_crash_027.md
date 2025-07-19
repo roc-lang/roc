@@ -1577,7 +1577,7 @@ main! = |_| { # Yeah Ie
 		line!("Adding ${n} to ${number}")
 		number = number + n
 	}
-	record = {foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned}
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 	m_tuple = (
 		123,
