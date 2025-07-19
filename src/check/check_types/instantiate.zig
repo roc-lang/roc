@@ -5,9 +5,9 @@
 //! component for proper handling of annotated functions in the type system.
 
 const std = @import("std");
-const base = @import("../../base.zig");
-const types_mod = @import("../../types.zig");
-const collections = @import("../../collections.zig");
+const base = @import("base");
+const types_mod = @import("types");
+const collections = @import("collections");
 const TypesStore = types_mod.Store;
 const Var = types_mod.Var;
 const Content = types_mod.Content;

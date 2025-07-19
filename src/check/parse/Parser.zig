@@ -6,10 +6,10 @@
 //! following the "Inform Don't Block" philosophy.
 
 const std = @import("std");
+const base = @import("base");
 const tracy = @import("../../tracy.zig");
 const tokenize = @import("tokenize.zig");
-const collections = @import("../../collections.zig");
-const base = @import("../../base.zig");
+const collections = @import("collections");
 
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");
@@ -1297,6 +1297,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator
                                 .len = 0,
                             } },
                             .tag_tok = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
                         } });
                     } else {
                         // Tag with args
@@ -1319,6 +1320,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator
                             .region = .{ .start = start, .end = self.pos },
                             .args = args,
                             .tag_tok = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
                         } });
                     }
                 } else {
@@ -2140,6 +2142,12 @@ pub fn parseBranch(self: *Parser) std.mem.Allocator.Error!AST.MatchBranch.Idx {
         });
 
         self.advance();
+    } else {
+        // Add diagnostic for missing arrow
+        try self.pushDiagnostic(.match_branch_missing_arrow, .{
+            .start = self.pos,
+            .end = self.pos,
+        });
     }
     const b = try self.parseExpr();
     return try self.store.addMatchBranch(.{
@@ -2575,6 +2583,7 @@ pub fn parseWhereClause(self: *Parser) std.mem.Allocator.Error!AST.WhereClause.I
         if (self.peek() == .OpColon) {
             // Handle type annotation syntax: module(a).method : type
             self.advance(); // advance past colon
+            const args_start = self.pos;
             const method_type_anno = try self.parseTypeAnno(.not_looking_for_args);
             const method_type = self.store.getTypeAnno(method_type_anno);
 
@@ -2585,7 +2594,7 @@ pub fn parseWhereClause(self: *Parser) std.mem.Allocator.Error!AST.WhereClause.I
                 const args = try self.store.addCollection(
                     .collection_ty_anno,
                     .{
-                        .region = .{ .start = self.pos, .end = self.pos },
+                        .region = .{ .start = args_start, .end = self.pos },
                         .span = fn_type.args.span,
                     },
                 );
@@ -2601,7 +2610,7 @@ pub fn parseWhereClause(self: *Parser) std.mem.Allocator.Error!AST.WhereClause.I
                 const empty_args = try self.store.addCollection(
                     .collection_ty_anno,
                     .{
-                        .region = .{ .start = self.pos, .end = self.pos },
+                        .region = .{ .start = args_start, .end = self.pos },
                         .span = base.DataSpan.empty(),
                     },
                 );

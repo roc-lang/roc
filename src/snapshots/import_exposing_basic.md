@@ -76,7 +76,7 @@ module [main]
 import json.Json exposing [decode, encode]
 
 main = {
-	data = {name: "Alice", age: 30}
+	data = { name: "Alice", age: 30 }
 	encoded = encode(data)
 	decoded = decode(encoded)
 	decoded

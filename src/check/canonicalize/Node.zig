@@ -6,8 +6,8 @@
 //! be interpreted.
 
 const std = @import("std");
-const base = @import("../../base.zig");
-const collections = @import("../../collections.zig");
+const base = @import("base");
+const collections = @import("collections");
 
 data_1: u32,
 data_2: u32,
@@ -97,6 +97,7 @@ pub const Tag = enum {
     pattern_identifier,
     pattern_as,
     pattern_applied_tag,
+    pattern_nominal,
     pattern_record_destructure,
     pattern_list,
     pattern_tuple,
@@ -134,7 +135,6 @@ pub const Tag = enum {
     diag_not_implemented,
     diag_invalid_num_literal,
     diag_invalid_single_quote,
-    diag_too_long_single_quote,
     diag_empty_single_quote,
     diag_empty_tuple,
     diag_ident_already_in_scope,

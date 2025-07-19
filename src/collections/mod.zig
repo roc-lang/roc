@@ -11,11 +11,11 @@ const std = @import("std");
 /// in the interpreter for stack allocations.
 pub const max_roc_alignment: std.mem.Alignment = .@"16";
 
-pub const SafeList = @import("collections/safe_list.zig").SafeList;
+pub const SafeList = @import("safe_list.zig").SafeList;
+pub const SafeRange = @import("safe_list.zig").SafeRange;
+pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
 
-pub const SafeMultiList = @import("collections/safe_list.zig").SafeMultiList;
-
-pub const SafeStringHashMap = @import("collections/safe_hash_map.zig").SafeStringHashMap;
+pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 
 /// A range that must have at least one element
 pub const NonEmptyRange = struct {
@@ -25,7 +25,7 @@ pub const NonEmptyRange = struct {
     count: u32,
 
     /// Convert to a SafeMultiList range
-    pub fn toRange(self: NonEmptyRange, comptime Idx: type) @import("collections/safe_list.zig").SafeRange(Idx) {
+    pub fn toRange(self: NonEmptyRange, comptime Idx: type) SafeRange(Idx) {
         std.debug.assert(self.count > 0);
         return .{
             .start = @enumFromInt(self.start),
@@ -33,8 +33,6 @@ pub const NonEmptyRange = struct {
         };
     }
 };
-
-pub const SmallStringInterner = @import("collections/SmallStringInterner.zig");
 
 /// A key-value map that uses direct array indexing instead of hashing.
 /// Keys must be enums that are convertible to indices, and key value 0 is reserved

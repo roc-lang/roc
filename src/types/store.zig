@@ -2,10 +2,10 @@
 //! Contains both Slot & Descriptor stores
 
 const std = @import("std");
-const base = @import("../base.zig");
-const collections = @import("../collections.zig");
-const types = @import("./types.zig");
-const serialization = @import("../serialization/mod.zig");
+const base = @import("base");
+const collections = @import("collections");
+const serialization = @import("serialization");
+const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 const Desc = types.Descriptor;
@@ -19,6 +19,13 @@ const Tag = types.Tag;
 const VarSafeList = Var.SafeList;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 const TagSafeMultiList = Tag.SafeMultiList;
+const Descriptor = types.Descriptor;
+const TypeIdent = types.TypeIdent;
+const Alias = types.Alias;
+const FlatType = types.FlatType;
+const NominalType = types.NominalType;
+const Record = types.Record;
+const Num = types.Num;
 
 const SERIALIZATION_ALIGNMENT = serialization.SERIALIZATION_ALIGNMENT;
 
@@ -116,9 +123,9 @@ pub const Store = struct {
     }
 
     /// Ensure that slots & descriptor arrays have at least the provided capacity
-    pub fn ensureTotalCapacity(self: *const Self, capacity: usize) Allocator.Error!void {
+    pub fn ensureTotalCapacity(self: *Self, capacity: usize) Allocator.Error!void {
         try self.descs.backing.ensureTotalCapacity(self.gpa, capacity);
-        try self.slots.backing.ensureTotalCapacity(self.gpa, capacity);
+        try self.slots.backing.items.ensureTotalCapacity(self.gpa, capacity);
     }
 
     /// Deinit the unification table
@@ -217,7 +224,7 @@ pub const Store = struct {
 
     /// Make alias data type
     /// Does not insert content into the types store
-    pub fn mkAlias(self: *Self, ident: types.TypeIdent, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
+    pub fn mkAlias(self: *Self, ident: TypeIdent, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
 
@@ -226,7 +233,7 @@ pub const Store = struct {
         span.count = span.count + 1;
 
         return Content{
-            .alias = types.Alias{
+            .alias = Alias{
                 .ident = ident,
                 .vars = .{ .nonempty = span },
             },
@@ -237,7 +244,7 @@ pub const Store = struct {
     /// Does not insert content into the types store
     pub fn mkNominal(
         self: *Self,
-        ident: types.TypeIdent,
+        ident: TypeIdent,
         backing_var: Var,
         args: []const Var,
         origin_module: base.Ident.Idx,
@@ -249,8 +256,8 @@ pub const Store = struct {
         span.start = backing_idx;
         span.count = span.count + 1;
 
-        return Content{ .structure = types.FlatType{
-            .nominal_type = types.NominalType{
+        return Content{ .structure = FlatType{
+            .nominal_type = NominalType{
                 .ident = ident,
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
@@ -344,7 +351,7 @@ pub const Store = struct {
         };
     }
 
-    pub fn needsInstantiationFlatType(self: *const Self, flat_type: types.FlatType) bool {
+    pub fn needsInstantiationFlatType(self: *const Self, flat_type: FlatType) bool {
         return switch (flat_type) {
             .str => false,
             .box => |box_var| self.needsInstantiation(box_var),
@@ -376,7 +383,7 @@ pub const Store = struct {
         };
     }
 
-    pub fn needsInstantiationRecord(self: *const Self, record: types.Record) bool {
+    pub fn needsInstantiationRecord(self: *const Self, record: Record) bool {
         const fields_slice = self.getRecordFieldsSlice(record.fields);
         for (fields_slice.items(.var_)) |type_var| {
             if (self.needsInstantiation(type_var)) return true;
@@ -384,7 +391,7 @@ pub const Store = struct {
         return self.needsInstantiation(record.ext);
     }
 
-    pub fn needsInstantiationRecordFields(self: *const Self, fields: types.RecordField.SafeMultiList.Range) bool {
+    pub fn needsInstantiationRecordFields(self: *const Self, fields: RecordField.SafeMultiList.Range) bool {
         const fields_slice = self.getRecordFieldsSlice(fields);
         for (fields_slice.items(.var_)) |type_var| {
             if (self.needsInstantiation(type_var)) return true;
@@ -392,7 +399,7 @@ pub const Store = struct {
         return false;
     }
 
-    pub fn needsInstantiationTagUnion(self: *const Self, tag_union: types.TagUnion) bool {
+    pub fn needsInstantiationTagUnion(self: *const Self, tag_union: TagUnion) bool {
         const tags_slice = self.getTagsSlice(tag_union.tags);
         for (tags_slice.items(.args)) |tag_args| {
             const args_slice = self.sliceVars(tag_args);
@@ -426,8 +433,8 @@ pub const Store = struct {
     }
 
     /// Append a tag to the backing list, returning the idx
-    pub fn appendTag(self: *Self, tag: Tag) TagSafeMultiList.Idx {
-        return self.tags.append(self.gpa, tag);
+    pub fn appendTag(self: *Self, tag: Tag) Allocator.Error!TagSafeMultiList.Idx {
+        return try self.tags.append(self.gpa, tag);
     }
 
     /// Append a slice of tags to the backing list, returning the range
@@ -458,20 +465,20 @@ pub const Store = struct {
     // is the backing variable, and the remainder are the arguments
 
     /// Get the backing var for this alias type
-    pub fn getAliasBackingVar(self: *const Self, alias: types.Alias) Var {
+    pub fn getAliasBackingVar(self: *const Self, alias: Alias) Var {
         std.debug.assert(alias.vars.nonempty.count > 0);
         return self.vars.get(alias.vars.nonempty.start).*;
     }
 
     /// Get the arg vars for this alias type
-    pub fn sliceAliasArgs(self: *const Self, alias: types.Alias) []Var {
+    pub fn sliceAliasArgs(self: *const Self, alias: Alias) []Var {
         std.debug.assert(alias.vars.nonempty.count > 0);
         const slice = self.vars.sliceRange(alias.vars.nonempty);
         return slice[1..];
     }
 
     /// Get the an iterator arg vars for this alias type
-    pub fn iterAliasArgs(self: *const Self, alias: types.Alias) VarSafeList.Iterator {
+    pub fn iterAliasArgs(self: *const Self, alias: Alias) VarSafeList.Iterator {
         std.debug.assert(alias.vars.nonempty.count > 0);
         var span = alias.vars.nonempty;
         span.dropFirstElem();
@@ -484,20 +491,20 @@ pub const Store = struct {
     // is the backing variable, and the remainder are the arguments
 
     /// Get the backing var for this nominal type
-    pub fn getNominalBackingVar(self: *const Self, nominal: types.NominalType) Var {
+    pub fn getNominalBackingVar(self: *const Self, nominal: NominalType) Var {
         std.debug.assert(nominal.vars.nonempty.count > 0);
         return self.vars.get(nominal.vars.nonempty.start).*;
     }
 
     /// Get the arg vars for this nominal type
-    pub fn sliceNominalArgs(self: *const Self, nominal: types.NominalType) []Var {
+    pub fn sliceNominalArgs(self: *const Self, nominal: NominalType) []Var {
         std.debug.assert(nominal.vars.nonempty.count > 0);
         const slice = self.vars.sliceRange(nominal.vars.nonempty);
         return slice[1..];
     }
 
     /// Get the an iterator arg vars for this nominal type
-    pub fn iterNominalArgs(self: *const Self, nominal: types.NominalType) VarSafeList.Iterator {
+    pub fn iterNominalArgs(self: *const Self, nominal: NominalType) VarSafeList.Iterator {
         std.debug.assert(nominal.vars.nonempty.count > 0);
         var span = nominal.vars.nonempty;
         span.dropFirstElem();
@@ -609,7 +616,7 @@ pub const Store = struct {
         // The highest index we need is alias_var + 1 + num_args
         // (alias var, backing var, then each arg)
         const max_idx = @intFromEnum(alias_var) + 1 + num_args;
-        try self.fillInSlotsThru(@enumFromInt(max_idx));
+        try self.*.testOnlyFillInSlotsThru(@enumFromInt(max_idx));
     }
 
     // union //
@@ -1048,11 +1055,11 @@ test "resolveVarAndCompressPath - no-op on already root" {
     defer store.deinit();
 
     const num_flex = try store.fresh();
-    const requirements = types.Num.IntRequirements{
+    const requirements = Num.IntRequirements{
         .sign_needed = false,
         .bits_needed = 0,
     };
-    const num = types.Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_flex, .requirements = requirements } } } };
+    const num = Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_flex, .requirements = requirements } } } };
     const num_var = try store.freshFromContent(num);
 
     const result = store.resolveVarAndCompressPath(num_var);
@@ -1069,11 +1076,11 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     defer store.deinit();
 
     const num_flex = try store.fresh();
-    const requirements = types.Num.IntRequirements{
+    const requirements = Num.IntRequirements{
         .sign_needed = false,
         .bits_needed = 0,
     };
-    const num = types.Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_flex, .requirements = requirements } } } };
+    const num = Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_flex, .requirements = requirements } } } };
     const c = try store.freshFromContent(num);
     const b = try store.freshRedirect(c);
     const a = try store.freshRedirect(b);
@@ -1108,22 +1115,22 @@ test "DescStore serialization comprehensive" {
     defer store.deinit(gpa);
 
     // Add various descriptor types including edge cases
-    const desc1 = types.Descriptor{
+    const desc1 = Descriptor{
         .content = Content{ .flex_var = null },
-        .rank = types.Rank.generalized,
-        .mark = types.Mark.none,
+        .rank = Rank.generalized,
+        .mark = Mark.none,
     };
 
-    const desc2 = types.Descriptor{
+    const desc2 = Descriptor{
         .content = Content{ .flex_var = @bitCast(@as(u32, 0)) },
-        .rank = types.Rank.top_level,
-        .mark = types.Mark.visited,
+        .rank = Rank.top_level,
+        .mark = Mark.visited,
     };
 
-    const desc3 = types.Descriptor{
+    const desc3 = Descriptor{
         .content = Content{ .flex_var = @bitCast(@as(u32, 0xFFFFFFFF)) },
-        .rank = types.Rank.top_level,
-        .mark = types.Mark.visited,
+        .rank = Rank.top_level,
+        .mark = Mark.visited,
     };
 
     _ = try store.insert(gpa, desc1);

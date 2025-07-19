@@ -4,8 +4,8 @@
 //! the AST.
 
 const std = @import("std");
-const base = @import("../../base.zig");
-const collections = @import("../../collections.zig");
+const base = @import("base");
+const collections = @import("collections");
 
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");
@@ -426,11 +426,16 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             node.main_token = i.ident_tok;
         },
         .tag => |t| {
+            const data_start = @as(u32, @intCast(store.extra_data.items.len));
+            try store.extra_data.append(store.gpa, t.args.span.len);
+            try store.extra_data.append(store.gpa, t.qualifiers.span.start);
+            try store.extra_data.append(store.gpa, t.qualifiers.span.len);
+
             node.tag = .tag_patt;
             node.region = t.region;
             node.main_token = t.tag_tok;
             node.data.lhs = t.args.span.start;
-            node.data.rhs = t.args.span.len;
+            node.data.rhs = data_start;
         },
         .int => |n| {
             node.tag = .int_patt;
@@ -1203,11 +1208,22 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
             } };
         },
         .tag_patt => {
+            const args_start = node.data.lhs;
+
+            const ed_start = @as(usize, @intCast(node.data.rhs));
+            const args_len = store.extra_data.items[ed_start];
+            const qualifiers_start = store.extra_data.items[ed_start + 1];
+            const qualifiers_len = store.extra_data.items[ed_start + 2];
+
             return .{ .tag = .{
                 .tag_tok = node.main_token,
                 .args = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = args_start,
+                    .len = args_len,
+                } },
+                .qualifiers = .{ .span = .{
+                    .start = qualifiers_start,
+                    .len = qualifiers_len,
                 } },
                 .region = node.region,
             } };
@@ -2075,7 +2091,7 @@ pub fn tokenSlice(store: *NodeStore, span: Token.Span) []Token.Idx {
 
 /// Returns the start position for a new Span of exposedItemIdxs in scratch
 pub fn scratchExposedItemTop(store: *NodeStore) u32 {
-    return store.scratch_anno_record_fields.top();
+    return store.scratch_exposed_items.top();
 }
 
 /// Places a new AST.ExposedItem.Idx in the scratch.

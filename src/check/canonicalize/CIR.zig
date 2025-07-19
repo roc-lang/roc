@@ -3,12 +3,12 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../../base.zig");
+const base = @import("base");
+const serialization = @import("serialization");
+const types = @import("types");
+const collections = @import("collections");
 const tracy = @import("../../tracy.zig");
-const types = @import("../../types.zig");
-const collections = @import("../../collections.zig");
 const reporting = @import("../../reporting.zig");
-const serialization = @import("../../serialization/mod.zig");
 const SExpr = base.SExpr;
 const Scratch = base.Scratch;
 const DataSpan = base.DataSpan;
@@ -21,7 +21,7 @@ const CalledVia = base.CalledVia;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
 
-pub const RocDec = @import("../../builtins/dec.zig").RocDec;
+pub const RocDec = @import("builtins").RocDec;
 pub const Node = @import("Node.zig");
 pub const NodeStore = @import("NodeStore.zig");
 pub const Expr = @import("Expression.zig").Expr;
@@ -291,8 +291,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             );
         },
         .invalid_single_quote => Diagnostic.buildInvalidSingleQuoteReport(allocator),
-        .too_long_single_quote => Diagnostic.buildTooLongSingleQuoteReport(allocator),
-        .empty_single_quote => Diagnostic.buildEmptySingleQuoteReport(allocator),
         .crash_expects_string => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
             break :blk Diagnostic.buildCrashExpectsStringReport(allocator, region_info, filename, self.temp_source_for_sexpr.?, self.env.line_starts.items.items);
@@ -1252,7 +1250,7 @@ pub const Import = struct {
 
         /// Get or create an Import.Idx for a module name
         pub fn getOrPut(self: *Store, gpa: std.mem.Allocator, module_name: []const u8) !Import.Idx {
-            const gop = try self.map.getOrPut(gpa, module_name);
+            const gop = try self.map.getOrPutContext(gpa, module_name, std.hash_map.StringContext{});
             if (!gop.found_existing) {
                 // Store the string
                 const start = self.strings.items.len;

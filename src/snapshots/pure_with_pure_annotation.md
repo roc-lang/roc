@@ -85,17 +85,7 @@ LowerIdent(11:1-11:6),OpAssign(11:7-11:8),LowerIdent(11:9-11:12),NoSpaceOpenRoun
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-# Function with pure annotation using thin arrow
-add : I32, I32 -> I32
-add = |x, y| {x: x, y: y}.x
-
-# Another pure function that calls a pure function
-double : I32 -> I32
-double = |x| add(x, x)
-
-main! = add(1, 2)
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

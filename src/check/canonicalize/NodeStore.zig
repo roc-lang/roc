@@ -1,20 +1,22 @@
 //! Stores AST nodes and provides scratch arrays for working with nodes.
 
 const std = @import("std");
-const base = @import("../../base.zig");
-const types = @import("../../types.zig");
-const collections = @import("../../collections.zig");
+const base = @import("base");
+const types = @import("types");
+const collections = @import("collections");
 const Node = @import("Node.zig");
 const CIR = @import("CIR.zig");
-const RocDec = @import("../../builtins/dec.zig").RocDec;
-const PackedDataSpan = @import("../../base/PackedDataSpan.zig");
-const SERIALIZATION_ALIGNMENT = @import("../../serialization/mod.zig").SERIALIZATION_ALIGNMENT;
+const RocDec = @import("builtins").RocDec;
+
+const SERIALIZATION_ALIGNMENT = 16;
 
 const DataSpan = base.DataSpan;
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
 const Diagnostic = @import("Diagnostic.zig");
 const Ident = base.Ident;
+const PackedDataSpan = base.PackedDataSpan;
+const FunctionArgs = base.FunctionArgs;
 
 const NodeStore = @This();
 
@@ -96,7 +98,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 46;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 44;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 28;
 /// Count of the statement nodes in the CIR
@@ -104,7 +106,7 @@ pub const CIR_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the CIR
 pub const CIR_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the pattern nodes in the CIR
-pub const CIR_PATTERN_NODE_COUNT = 12;
+pub const CIR_PATTERN_NODE_COUNT = 13;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
@@ -580,7 +582,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_dot_access => {
             const args_span = if (node.data_3 != 0) blk: {
-                const packed_span = PackedDataSpan.FunctionArgs.fromU32(node.data_3);
+                const packed_span = FunctionArgs.fromU32(node.data_3);
                 const data_span = packed_span.toDataSpan();
                 break :blk CIR.Expr.Span{ .span = data_span };
             } else null;
@@ -750,6 +752,18 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .applied_tag = .{
                     .args = DataSpan.init(arguments_start, arguments_len).as(CIR.Pattern.Span),
                     .name = tag_name,
+                },
+            };
+        },
+        .pattern_nominal => {
+            const nominal_type_decl: CIR.Statement.Idx = @enumFromInt(node.data_1);
+            const backing_pattern: CIR.Pattern.Idx = @enumFromInt(node.data_2);
+            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(node.data_3);
+            return CIR.Pattern{
+                .nominal = .{
+                    .nominal_type_decl = nominal_type_decl,
+                    .backing_pattern = backing_pattern,
+                    .backing_type = backing_type,
                 },
             };
         },
@@ -1274,8 +1288,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
             node.data_2 = @bitCast(e.field_name);
             if (e.args) |args| {
                 // Use PackedDataSpan for efficient storage - FunctionArgs config is good for method call args
-                std.debug.assert(PackedDataSpan.FunctionArgs.canFit(args.span));
-                const packed_span = PackedDataSpan.FunctionArgs.fromDataSpanUnchecked(args.span);
+                std.debug.assert(FunctionArgs.canFit(args.span));
+                const packed_span = FunctionArgs.fromDataSpanUnchecked(args.span);
                 node.data_3 = packed_span.toU32();
             } else {
                 node.data_3 = 0; // No args
@@ -1580,6 +1594,12 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.data_1 = p.args.span.start;
             node.data_2 = p.args.span.len;
             node.data_3 = @bitCast(p.name);
+        },
+        .nominal => |n| {
+            node.tag = .pattern_nominal;
+            node.data_1 = @intFromEnum(n.nominal_type_decl);
+            node.data_2 = @intFromEnum(n.backing_pattern);
+            node.data_3 = @intFromEnum(n.backing_type);
         },
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;
@@ -2292,14 +2312,6 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocato
             node.tag = .diag_invalid_single_quote;
             region = r.region;
         },
-        .too_long_single_quote => |r| {
-            node.tag = .diag_too_long_single_quote;
-            region = r.region;
-        },
-        .empty_single_quote => |r| {
-            node.tag = .diag_empty_single_quote;
-            region = r.region;
-        },
         .empty_tuple => |r| {
             node.tag = .diag_empty_tuple;
             region = r.region;
@@ -2570,12 +2582,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_single_quote => return CIR.Diagnostic{ .invalid_single_quote = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_too_long_single_quote => return CIR.Diagnostic{ .too_long_single_quote = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_empty_single_quote => return CIR.Diagnostic{ .empty_single_quote = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_empty_tuple => return CIR.Diagnostic{ .empty_tuple = .{

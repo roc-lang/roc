@@ -1453,15 +1453,13 @@ app [main!] { pf: platform "c" }
 
 import pf.Stdout exposing [line!, e!]
 
-import Stdot
-# Cose
+import Stdot # Cose
 
 import pkg.S exposing [func as fry, Custom.*]
 
 import Bae as Gooe
 import
 	Ba
-
 Map(a, b) : List(a), (a -> b) -> List(b)
 MapML( # Cere
 	a, # Anre
@@ -1509,14 +1507,16 @@ match_time = |
 	a, # rg
 	b,
 | # As
-	match a {		lue | Red => {
+	match a {
+		lue | Red => {
 			x
 			x
 		}
 		Blue => 1
 		"foo" => # ent
 			00
-		"foo" | "bar" => 20		[1, 2, 3, .. as rest] # Aftet
+		"foo" | "bar" => 20
+		[1, 2, 3, .. as rest] # Aftet
 			=> ment
 
 
@@ -1579,7 +1579,7 @@ main! = |_| { # Yeah Ie
 		line!("Adding ${n} to ${number}")
 		number = number + n
 	}
-	record = {foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned}
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 	m_tuple = (
 		123,

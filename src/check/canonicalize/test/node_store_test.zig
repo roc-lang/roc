@@ -2,9 +2,9 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../../../base.zig");
-const types = @import("../../../types.zig");
-const RocDec = @import("../../../builtins/dec.zig").RocDec;
+const base = @import("base");
+const types = @import("../types");
+const RocDec = @import("builtins").RocDec;
 const Node = @import("../Node.zig");
 const NodeStore = @import("../NodeStore.zig");
 const CIR = @import("../CIR.zig");
@@ -541,18 +541,6 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
-        .too_long_single_quote = .{
-            .region = from_raw_offsets(690, 700),
-        },
-    });
-
-    try diagnostics.append(CIR.Diagnostic{
-        .empty_single_quote = .{
-            .region = from_raw_offsets(710, 720),
-        },
-    });
-
-    try diagnostics.append(CIR.Diagnostic{
         .f64_pattern_literal = .{
             .region = from_raw_offsets(730, 740),
         },
@@ -860,6 +848,13 @@ test "NodeStore round trip - Pattern" {
             .diagnostic = @enumFromInt(2123),
         },
     });
+    try patterns.append(CIR.Pattern{
+        .nominal = .{
+            .nominal_type_decl = @enumFromInt(567),
+            .backing_pattern = @enumFromInt(567),
+            .backing_type = .tag,
+        },
+    });
 
     // Test the round-trip for all patterns with their original regions
     const regions = [_]base.Region{
@@ -875,6 +870,7 @@ test "NodeStore round trip - Pattern" {
         from_raw_offsets(210, 220), // str_literal
         from_raw_offsets(230, 240), // underscore
         from_raw_offsets(250, 260), // runtime_error
+        from_raw_offsets(260, 270), // nominal
     };
 
     for (patterns.items, regions) |pattern, region| {

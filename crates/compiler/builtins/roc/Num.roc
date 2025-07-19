@@ -375,7 +375,7 @@ Int range : Num (Integer range)
 ## when a floating-point calculation encounters an error. For example:
 ## * Dividing a positive [F64] by `0.0` returns ∞.
 ## * Dividing a negative [F64] by `0.0` returns -∞.
-## * Dividing a [F64] of `0.0` by `0.0` returns [*NaN*](Num.is_nan).
+## * Dividing a [F64] of `0.0` by `0.0` returns [*NaN*](Num#is_nan).
 ##
 ## These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ## floating point standard. Because almost all modern processors are built to
@@ -551,7 +551,7 @@ tau = 6.2831853071795864769252867665590057683943387987502
 ## Num.to_str(4.2)
 ## Num.to_str(4.0)
 ## ```
-## When this function is given a non-[finite](Num.is_finite)
+## When this function is given a non-[finite](Num#is_finite)
 ## [F64] or [F32] value, the returned string will be `"NaN"`, `"∞"`, or `"-∞"`.
 ##
 to_str : Num * -> Str
@@ -580,7 +580,7 @@ compare : Num a, Num a -> [LT, EQ, GT]
 ##
 ## `a < b` is shorthand for `Num.is_lt(a, b)`.
 ##
-## If either argument is [*NaN*](Num.is_nan), returns `Bool.false` no matter what. (*NaN*
+## If either argument is [*NaN*](Num#is_nan), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 ## ```roc
 ## 5
@@ -592,7 +592,7 @@ is_lt : Num a, Num a -> Bool
 ##
 ## `a > b` is shorthand for `Num.is_gt a b`.
 ##
-## If either argument is [*NaN*](Num.is_nan), returns `Bool.false` no matter what. (*NaN*
+## If either argument is [*NaN*](Num#is_nan), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 ## ```roc
 ## Num.is_gt(6, 5)
@@ -603,7 +603,7 @@ is_gt : Num a, Num a -> Bool
 ##
 ## `a <= b` is shorthand for `Num.is_lte(a, b)`.
 ##
-## If either argument is [*NaN*](Num.is_nan), returns `Bool.false` no matter what. (*NaN*
+## If either argument is [*NaN*](Num#is_nan), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 is_lte : Num a, Num a -> Bool
 
@@ -611,7 +611,7 @@ is_lte : Num a, Num a -> Bool
 ##
 ## `a >= b` is shorthand for `Num.is_gte(a, b)`.
 ##
-## If either argument is [*NaN*](Num.is_nan), returns `Bool.false` no matter what. (*NaN*
+## If either argument is [*NaN*](Num#is_nan), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 is_gte : Num a, Num a -> Bool
 
@@ -621,7 +621,7 @@ is_gte : Num a, Num a -> Bool
 ##
 ## This function is symmetric: `Num.is_approx_eq(a, b) == Num.is_approx_eq(b, a)`
 ##
-## If either argument is [*NaN*](Num.is_nan), returns `Bool.false` no matter what. (*NaN*
+## If either argument is [*NaN*](Num#is_nan), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 is_approx_eq : Frac a, Frac a, { rtol ?? Frac a, atol ?? Frac a } -> Bool
 is_approx_eq = |x, y, { rtol ?? 0.00001, atol ?? 0.00000001 }|
@@ -853,8 +853,8 @@ atan : Frac a -> Frac a
 ## function a negative number! Calling [sqrt] on a negative [Dec] will cause a panic.
 ##
 ## Calling [sqrt] on [F32] and [F64] values follows these rules:
-## * Passing a negative [F64] or [F32] returns [*NaN*](Num.is_nan).
-## * Passing [*NaN*](Num.is_nan) or -∞ also returns [*NaN*](Num.is_nan).
+## * Passing a negative [F64] or [F32] returns [*NaN*](Num#is_nan).
+## * Passing [*NaN*](Num#is_nan) or -∞ also returns [*NaN*](Num#is_nan).
 ## * Passing ∞ returns ∞.
 ##
 ## > These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
@@ -901,7 +901,7 @@ log_checked = |x|
 ## Calling [div] on [F32] and [F64] values follows these rules:
 ## * Dividing a positive [F64] or [F32] by zero returns ∞.
 ## * Dividing a negative [F64] or [F32] by zero returns -∞.
-## * Dividing a zero [F64] or [F32] by zero returns [*NaN*](Num.is_nan).
+## * Dividing a zero [F64] or [F32] by zero returns [*NaN*](Num#is_nan).
 ##
 ## > These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ## > floating point standard. Because almost all modern processors are built to

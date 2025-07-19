@@ -3,10 +3,10 @@
 //! This module implements constraint-based type inference.
 
 const std = @import("std");
-const base = @import("../base.zig");
+const base = @import("base");
 const tracy = @import("../tracy.zig");
-const collections = @import("../collections.zig");
-const types_mod = @import("../types.zig");
+const collections = @import("collections");
+const types_mod = @import("types");
 const can = @import("canonicalize.zig");
 const unifier = @import("check_types/unify.zig");
 const occurs = @import("check_types/occurs.zig");
@@ -15,10 +15,10 @@ const snapshot = @import("check_types/snapshot.zig");
 const instantiate = @import("check_types/instantiate.zig");
 const copy_import = @import("check_types/copy_import.zig");
 const CIR = @import("./canonicalize/CIR.zig");
-const ModuleEnv = @import("../base/ModuleEnv.zig");
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
+const ModuleEnv = base.ModuleEnv;
 const Ident = base.Ident;
 const Region = base.Region;
 const Func = types_mod.Func;
@@ -287,6 +287,86 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     // Also unify the pattern with the def - needed so lookups work correctly
     // TODO could we unify directly with the pattern elsewhere, to save a type var and unify() here?
     _ = try self.unify(CIR.varFrom(def.pattern), def_var);
+}
+
+/// Check the types for the provided pattern
+pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const pattern = self.cir.store.getPattern(pattern_idx);
+    const pattern_region = self.cir.store.getNodeRegion(CIR.nodeIdxFrom(pattern_idx));
+    switch (pattern) {
+        .nominal => |nominal| {
+            // We are unifying against a nominal type. The way this works is:
+            // 1. First, get the `NominalType` out of the types store
+            // 2. Then, instantiate it's backing var
+            // 3. Next, unify that instantiated var against the CIR backing var
+            // 4. If successful, instantiate the root nominal var, then unify it
+            //    against the root pattern var. (the root pattern var should be flex)
+            //
+            // We have to do all this instantiating to avoid propagating `.err`
+            // types across the module in the event of failure
+
+            const pattern_var = CIR.varFrom(pattern_idx);
+            const pattern_backing_var = CIR.varFrom(nominal.backing_pattern);
+
+            // First, get the qualified variable and check if it's a nominal type
+            const nominal_var = CIR.varFrom(nominal.nominal_type_decl);
+            const nominal_content = self.types.resolveVar(nominal_var).desc.content;
+
+            // Handle cases where the nominal type is malformed or in an error state
+            const nominal_type = switch (nominal_content) {
+                .structure => |structure| switch (structure) {
+                    .nominal_type => |nt| nt,
+                    else => {
+                        // Nominal type is not actually a nominal type - set pattern to error and continue
+                        try self.types.setVarContent(pattern_var, .err);
+                        return;
+                    },
+                },
+                else => {
+                    // Nominal type is in an error state - set pattern to error and continue
+                    try self.types.setVarContent(pattern_var, .err);
+                    return;
+                },
+            };
+
+            // Then, instantiate the nominal types backing var, for unification
+            const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
+            const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, .{ .explicit = pattern_region });
+
+            // Then, unify the nominal type's backing var against the CIR backing var
+            const result = try self.unify(instantiated_backing_var, pattern_backing_var);
+
+            // Handle the result
+            switch (result) {
+                .ok => {
+                    // Then, instantiate the nominal type
+                    const instantiated_qualified_var = try self.instantiateVar(nominal_var, .{ .explicit = pattern_region });
+
+                    // Unify - this should always succeed pattern_var should be flex var
+                    _ = try self.unify(pattern_var, instantiated_qualified_var);
+                },
+                .problem => |problem_idx| {
+                    // Depending on the type of the backing variable, set the type
+                    // mismatch detail so the user gets a better error message
+                    switch (nominal.backing_type) {
+                        .tag => {
+                            self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
+                        },
+                        else => {
+                            // TODO: Add special-case problems for other nominal types
+                        },
+                    }
+
+                    // Then, set the root pattern to be an err
+                    try self.types.setVarContent(pattern_var, .err);
+                },
+            }
+        },
+        else => {},
+    }
 }
 
 /// Check the types for an exprexpression. Returns whether evaluating the expr might perform side effects.
@@ -702,15 +782,12 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                             var origin_module: ?*const CIR = null;
 
                             // Check if it's the current module
-                            const current_module_ident = try self.cir.env.idents.insert(self.gpa, base.Ident.for_text(self.cir.module_name), base.Region.zero());
-                            if (std.mem.eql(u8, origin_module_path, self.cir.env.idents.getText(current_module_ident))) {
+                            if (std.mem.eql(u8, origin_module_path, self.cir.module_name)) {
                                 origin_module = self.cir;
                             } else {
                                 // Search through imported modules
                                 for (self.other_modules, 0..) |other_module, idx| {
-                                    const other_module_ident = try other_module.env.idents.insert(self.gpa, base.Ident.for_text(other_module.module_name), base.Region.zero());
-                                    const other_path = other_module.env.idents.getText(other_module_ident);
-                                    if (std.mem.eql(u8, origin_module_path, other_path)) {
+                                    if (std.mem.eql(u8, origin_module_path, other_module.module_name)) {
                                         origin_module_idx = @enumFromInt(idx);
                                         origin_module = other_module;
                                         break;
@@ -1467,15 +1544,6 @@ test "verify -128 produces 7 bits needed" {
     const bits_needed = types_mod.Num.Int.BitsNeeded.fromValue(adjusted_val);
     try std.testing.expectEqual(types_mod.Num.Int.BitsNeeded.@"7", bits_needed);
     try std.testing.expectEqual(@as(u8, 7), bits_needed.toBits());
-}
-
-/// Check the types for the provided pattern
-pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    _ = self;
-    _ = pattern_idx;
 }
 
 test "lambda with record field access infers correct type" {

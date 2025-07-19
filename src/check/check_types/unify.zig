@@ -41,12 +41,10 @@
 
 const std = @import("std");
 
-const base = @import("../../base.zig");
+const base = @import("base");
 const tracy = @import("../../tracy.zig");
-const collections = @import("../../collections.zig");
-const types_root_mod = @import("../../types.zig");
-const types_mod = @import("../../types/types.zig");
-const store = @import("../../types/store.zig");
+const collections = @import("collections");
+const types_mod = @import("types");
 const problem_mod = @import("./problem.zig");
 const occurs = @import("./occurs.zig");
 const snapshot_mod = @import("./snapshot.zig");
@@ -56,9 +54,9 @@ const Ident = base.Ident;
 
 const SmallStringInterner = collections.SmallStringInterner;
 
-const Slot = store.Slot;
-const ResolvedVarDesc = store.ResolvedVarDesc;
-const ResolvedVarDescs = store.ResolvedVarDescs;
+const Slot = types_mod.Slot;
+const ResolvedVarDesc = types_mod.ResolvedVarDesc;
+const ResolvedVarDescs = types_mod.ResolvedVarDescs;
 
 const TypeIdent = types_mod.TypeIdent;
 const Var = types_mod.Var;
@@ -120,7 +118,7 @@ pub const Result = union(enum) {
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
 pub fn unify(
     module_env: *const base.ModuleEnv,
-    types: *types_root_mod.Store,
+    types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
     unify_scratch: *Scratch,
@@ -135,7 +133,7 @@ pub fn unify(
     unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier(*store.Store).init(module_env, types, unify_scratch, occurs_scratch);
+    var unifier = Unifier(*types_mod.Store).init(module_env, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
         const problem: Problem = blk: {
             switch (err) {
@@ -308,7 +306,7 @@ fn Unifier(comptime StoreTypeB: type) type {
         const Self = @This();
 
         module_env: *const base.ModuleEnv,
-        types_store_a: *store.Store,
+        types_store_a: *types_mod.Store,
         types_store_b: StoreTypeB,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
@@ -318,10 +316,10 @@ fn Unifier(comptime StoreTypeB: type) type {
         /// Init unifier
         pub fn init(
             module_env: *const base.ModuleEnv,
-            types_store: *store.Store,
+            types_store: *types_mod.Store,
             scratch: *Scratch,
             occurs_scratch: *occurs.Scratch,
-        ) Unifier(*store.Store) {
+        ) Unifier(*types_mod.Store) {
             return .{
                 .module_env = module_env,
                 .types_store_a = types_store,
@@ -2606,8 +2604,8 @@ pub fn partitionFields(
     scratch: *Scratch,
     a_fields_range: RecordFieldSafeList.Range,
     b_fields_range: RecordFieldSafeList.Range,
-) std.mem.Allocator.Error!Unifier(*store.Store).PartitionedRecordFields {
-    return try Unifier(*store.Store).partitionFields(ident_store, scratch, a_fields_range, b_fields_range);
+) std.mem.Allocator.Error!Unifier(*types_mod.Store).PartitionedRecordFields {
+    return try Unifier(*types_mod.Store).partitionFields(ident_store, scratch, a_fields_range, b_fields_range);
 }
 
 /// Partitions tags from two tag ranges for unification.
@@ -2616,8 +2614,8 @@ pub fn partitionTags(
     scratch: *Scratch,
     a_tags_range: TagSafeList.Range,
     b_tags_range: TagSafeList.Range,
-) std.mem.Allocator.Error!Unifier(*store.Store).PartitionedTags {
-    return try Unifier(*store.Store).partitionTags(ident_store, scratch, a_tags_range, b_tags_range);
+) std.mem.Allocator.Error!Unifier(*types_mod.Store).PartitionedTags {
+    return try Unifier(*types_mod.Store).partitionTags(ident_store, scratch, a_tags_range, b_tags_range);
 }
 
 /// A reusable memory arena used across unification calls to avoid per-call allocations.
@@ -4090,7 +4088,7 @@ test "unify - func are same" {
         .sign_needed = false,
         .bits_needed = 0,
     };
-    const num = try env.module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_flex, .requirements = requirements } } } });
+    const num = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_flex, .requirements = requirements } } } });
     const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
     const func = try env.mkFuncFlex(&[_]Var{ str, num }, int_i32);
 

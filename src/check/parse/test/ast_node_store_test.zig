@@ -2,9 +2,9 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../../../base.zig");
-const types = @import("../../../types.zig");
-const RocDec = @import("../../../builtins/dec.zig").RocDec;
+const base = @import("base");
+const types = @import("types");
+const RocDec = @import("builtins").RocDec;
 const Node = @import("../Node.zig");
 const NodeStore = @import("../NodeStore.zig");
 const AST = @import("../AST.zig");
@@ -276,6 +276,7 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(AST.Pattern{
         .tag = .{
             .args = AST.Pattern.Span{ .span = rand_span() },
+            .qualifiers = AST.Token.Span{ .span = rand_span() },
             .region = rand_region(),
             .tag_tok = rand_token_idx(),
         },

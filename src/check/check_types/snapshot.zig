@@ -1,12 +1,11 @@
 //! Capture the state of an type at a point in time for the purpose of error reporting.
 
 const std = @import("std");
-const base = @import("../../base.zig");
-const collections = @import("../../collections.zig");
-const types = @import("../../types/types.zig");
-const store_mod = @import("../../types/store.zig");
+const base = @import("base");
+const collections = @import("collections");
+const types = @import("types");
 
-const TypesStore = store_mod.Store;
+const TypesStore = types.Store;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 
