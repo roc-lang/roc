@@ -5,13 +5,13 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../base.zig");
+const base = @import("base");
 const tracy = @import("../tracy.zig");
 const parse = @import("parse.zig");
 const tokenize = @import("parse/tokenize.zig");
-const collections = @import("../collections.zig");
-const types = @import("../types.zig");
-const RocDec = @import("../builtins/dec.zig").RocDec;
+const collections = @import("collections");
+const types = @import("types");
+const RocDec = @import("builtins").RocDec;
 
 const NodeStore = @import("./canonicalize/NodeStore.zig");
 const Scope = @import("./canonicalize/Scope.zig");
@@ -42,7 +42,7 @@ exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track exposed types by text to handle changing indices
 exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Special scope for unqualified nominal tags (e.g., True, False)
-unqualified_nominal_tags: std.HashMapUnmanaged(Ident.Idx, CIR.Statement.Idx, IdentTextContext, 80) = .{},
+unqualified_nominal_tags: std.StringHashMapUnmanaged(CIR.Statement.Idx) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.ArrayListUnmanaged(Region),
 /// Maps var patterns to the function region they were declared in
@@ -164,7 +164,7 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
         .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
         .exposed_scope = Scope.init(false),
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
-        .unqualified_nominal_tags = std.HashMapUnmanaged(Ident.Idx, CIR.Statement.Idx, IdentTextContext, 80){},
+        .unqualified_nominal_tags = std.StringHashMapUnmanaged(CIR.Statement.Idx){},
     };
 
     // Top-level scope is not a function boundary
@@ -325,29 +325,9 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
 
     // Add True and False to unqualified_nominal_tags
     // TODO: in the future, we should have hardcoded constants for these.
-    const true_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("True"), Region.zero());
-    const false_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("False"), Region.zero());
-    const ctx = IdentTextContext{ .idents = &ir.env.idents };
-    try self.unqualified_nominal_tags.putContext(gpa, true_ident, type_decl_idx, ctx);
-    try self.unqualified_nominal_tags.putContext(gpa, false_ident, type_decl_idx, ctx);
+    try self.unqualified_nominal_tags.put(gpa, "True", type_decl_idx);
+    try self.unqualified_nominal_tags.put(gpa, "False", type_decl_idx);
 }
-
-/// Custom hash map context that compares identifiers by their text content
-/// rather than by their index values
-const IdentTextContext = struct {
-    idents: *const base.Ident.Store,
-
-    pub fn hash(self: @This(), key: Ident.Idx) u64 {
-        // Hash based on the text content
-        const text = self.idents.getText(key);
-        return std.hash_map.hashString(text);
-    }
-
-    pub fn eql(self: @This(), a: Ident.Idx, b: Ident.Idx) bool {
-        // Compare based on text content, not index
-        return self.idents.identsHaveSameText(a, b);
-    }
-};
 
 const Self = @This();
 
@@ -799,6 +779,9 @@ pub fn canonicalizeFile(
 
     // Assert that everything is in-sync
     self.can_ir.debugAssertArraysInSync();
+
+    // Freeze the interners after canonicalization is complete
+    self.can_ir.env.freezeInterners();
 }
 
 fn createExposedScope(
@@ -1407,6 +1390,61 @@ fn canonicalizeDeclWithAnnotation(
     return def_idx;
 }
 
+fn parseSingleQuoteCodepoint(
+    inner_text: []const u8,
+) ?u21 {
+    const escaped = inner_text[0] == '\\';
+
+    if (escaped) {
+        const c = inner_text[1];
+        switch (c) {
+            'u' => {
+                const hex_code = inner_text[3 .. inner_text.len - 1];
+                const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch {
+                    return null;
+                };
+
+                if (!std.unicode.utf8ValidCodepoint(codepoint)) {
+                    return null;
+                }
+
+                return codepoint;
+            },
+            '\\', '"', '\'', '$' => {
+                return c;
+            },
+            'n' => {
+                return '\n';
+            },
+            'r' => {
+                return '\r';
+            },
+            't' => {
+                return '\t';
+            },
+            else => {
+                return null;
+            },
+        }
+    } else {
+        const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
+            error.InvalidUtf8 => {
+                return null;
+            },
+        };
+
+        var iterator = view.iterator();
+
+        if (iterator.nextCodepoint()) |codepoint| {
+            std.debug.assert(iterator.nextCodepoint() == null);
+            return codepoint;
+        } else {
+            // only single valid utf8 codepoint can be here after tokenization
+            unreachable;
+        }
+    }
+}
+
 fn canonicalizeSingleQuote(
     self: *Self,
     token_region: AST.TokenizedRegion,
@@ -1418,69 +1456,37 @@ fn canonicalizeSingleQuote(
     // Resolve to a string slice from the source
     const token_text = self.parse_ir.resolve(token);
 
-    // Check if token is malformed (less than 2 characters means no closing quote)
-    if (token_text.len < 2) {
-        return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-            .region = region,
-        } });
-    }
-
-    const inner_text = token_text[1 .. token_text.len - 1];
-
-    const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
-        error.InvalidUtf8 => {
-            return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-                .region = region,
-            } });
-        },
-    };
-
-    var iterator = view.iterator();
-    const firstEndpoint = iterator.nextCodepoint();
-    const secondEndpoint = iterator.nextCodepoint();
-
-    if (secondEndpoint != null) {
-        // TODO: Handle escape sequences
-        return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .too_long_single_quote = .{
-            .region = region,
-        } });
-    }
-
-    if (firstEndpoint) |u21_val| {
-        const int_val = CIR.IntValue{
-            .bytes = @bitCast(@as(u128, @intCast(u21_val))),
+    if (parseSingleQuoteCodepoint(token_text[1 .. token_text.len - 1])) |codepoint| {
+        const type_content = Content{ .structure = .{ .num = .{ .num_unbound = types.Num.IntRequirements{
+            .sign_needed = false,
+            .bits_needed = @intCast(@sizeOf(u21)),
+        } } } };
+        const value_content = CIR.IntValue{
+            .bytes = @bitCast(@as(u128, @intCast(codepoint))),
             .kind = .u128,
         };
-
-        const int_requirements = types.Num.IntRequirements{
-            .sign_needed = false,
-            .bits_needed = @intCast(@sizeOf(@TypeOf(u21_val))),
-        };
-
-        const type_content = Content{ .structure = .{ .num = .{ .num_unbound = int_requirements } } };
-
         if (Idx == CIR.Expr.Idx) {
             const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
                 .e_int = .{
-                    .value = int_val,
+                    .value = value_content,
                 },
             }, type_content, region);
             return expr_idx;
         } else if (Idx == CIR.Pattern.Idx) {
             const pat_idx = try self.can_ir.addPatternAndTypeVar(CIR.Pattern{
                 .int_literal = .{
-                    .value = int_val,
+                    .value = value_content,
                 },
             }, type_content, region);
             return pat_idx;
         } else {
             @compileError("Unsupported Idx type");
         }
-    } else {
-        return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .empty_single_quote = .{
-            .region = region,
-        } });
     }
+
+    return try self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+        .region = region,
+    } });
 }
 
 fn canonicalizeRecordField(
@@ -2553,7 +2559,9 @@ pub fn canonicalizeExpr(
 fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std.mem.Allocator.Error!?CIR.Expr.Idx {
     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-    const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse return null;
+    const parse_tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse return null;
+    const tag_name_text = self.parse_ir.env.idents.getText(parse_tag_name);
+    const tag_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(tag_name_text), region);
 
     var args_span = CIR.Expr.Span{ .span = base.DataSpan.empty() };
 
@@ -2591,8 +2599,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
 
     if (e.qualifiers.span.len == 0) {
         // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
-        const ctx = IdentTextContext{ .idents = &self.can_ir.env.idents };
-        if (self.unqualified_nominal_tags.getContext(tag_name, ctx)) |nominal_type_decl| {
+        if (self.unqualified_nominal_tags.get(tag_name_text)) |nominal_type_decl| {
             // Get the type variable for the nominal type declaration (e.g., Bool type)
             const nominal_type_var = CIR.castIdx(CIR.Statement.Idx, TypeVar, nominal_type_decl);
             const resolved = self.can_ir.env.types.resolveVar(nominal_type_var);
@@ -2918,64 +2925,56 @@ fn canonicalizePattern(
             const tag_union_type = try self.can_ir.env.types.mkTagUnion(&[_]Tag{tag}, ext_var);
 
             // Create the pattern node with type var
-            const pattern_idx = try self.can_ir.addPatternAndTypeVar(CIR.Pattern{
+            const tag_pattern_idx = try self.can_ir.addPatternAndTypeVar(CIR.Pattern{
                 .applied_tag = .{
                     .name = tag_name,
                     .args = args,
                 },
             }, tag_union_type, region);
 
-            return pattern_idx;
+            if (e.qualifiers.span.len == 0) {
+                // If this is a tag without a prefix, then is it an
+                // anonymous tag and we can just return it
+                return tag_pattern_idx;
+            } else {
+                // If this is a tag with a prefix, then is it a nominal tag.
+                //
+                // TODO: Currently this just get the last qualified, then
+                // looks up the associated type. Is this right?
 
-            // TODO: Need to parse & pass in qualifiers here...
+                // Get the last token of the qualifiers
+                const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
+                const last_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
+                const last_tok_ident, const last_tok_region = self.parse_ir.tokens.resolveIdentifierAndRegion(last_tok_idx) orelse {
+                    const feature = try self.can_ir.env.strings.insert(
+                        self.can_ir.env.gpa,
+                        "tag qualifier token is not an ident",
+                    );
+                    return try self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    } });
+                };
 
-            // if (e.qualifiers.span.len == 0) {
-            //     // If this is a tag without a prefix, then is it an
-            //     // anonymous tag and we can just return it
-            //     return tag_expr_idx;
-            // } else {
-            //     // If this is a tag with a prefix, then is it a nominal tag.
-            //     //
-            //     // TODO: Currently this just get the last qualified, then
-            //     // looks up the associated type. Is this right?
+                // Lookup last token (assumed to be a type decl) in scope
+                const nominal_type_decl = self.scopeLookupTypeDecl(last_tok_ident) orelse
+                    return try self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_not_in_scope = .{
+                        .ident = last_tok_ident,
+                        .region = last_tok_region,
+                    } });
 
-            //     // Get the last token of the qualifiers
-            //     const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
-            //     const last_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
-            //     const last_tok_ident, const last_tok_region = self.parse_ir.tokens.resolveIdentifierAndRegion(last_tok_idx) orelse {
-            //         const feature = try self.can_ir.env.strings.insert(
-            //             self.can_ir.env.gpa,
-            //             "tag qualifier token is not an ident",
-            //         );
-            //         return try self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-            //             .feature = feature,
-            //             .region = region,
-            //         } });
-            //     };
+                // Create the nominal pattern
+                // In type checking, this will be unified with the nominal type if the `tag` is valid
+                const pattern_idx = try self.can_ir.addPatternAndTypeVar(CIR.Pattern{
+                    .nominal = .{
+                        .nominal_type_decl = nominal_type_decl,
+                        .backing_pattern = tag_pattern_idx,
+                        .backing_type = .tag,
+                    },
+                }, Content{ .flex_var = null }, last_tok_region);
 
-            //     // Lookup last token (assumed to be a type decl) in scope
-            //     const nominal_type_decl = self.scopeLookupTypeDecl(last_tok_ident) orelse
-            //         return try self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .ident_not_in_scope = .{
-            //             .ident = last_tok_ident,
-            //             .region = last_tok_region,
-            //         } });
-
-            //     // Create the expr
-            //     const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-            //         .e_nominal = .{
-            //             .nominal_type_decl = nominal_type_decl,
-            //             .backing_expr = tag_expr_idx,
-            //             .backing_type = .tag,
-            //         },
-            //     }, last_tok_region);
-
-            //     // Initially set the root expr to be a flex var
-            //     // In type checking, this will be unified with the nominal type if the `tag` is valid
-            //     _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
-
-            //     return expr_idx;
-            // }
-
+                return pattern_idx;
+            }
         },
         .record => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -4138,7 +4137,6 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             // Resolve the fully qualified type name
             const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
 
-            // TODO(jared)
             const type_name_text = self.parse_ir.resolveQualifiedName(ty.qualifiers, ty.token, &strip_tokens);
 
             // Check if this is a qualified type name (contains dots)

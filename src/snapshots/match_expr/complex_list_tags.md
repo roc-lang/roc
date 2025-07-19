@@ -17,41 +17,65 @@ match events {
 # EXPECTED
 PARSE ERROR - complex_list_tags.md:3:22:3:23
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:3:53:3:54
+PARSE ERROR - complex_list_tags.md:3:54:3:54
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:3:54:3:56
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:3:56:3:58
+PARSE ERROR - complex_list_tags.md:3:58:3:58
+PARSE ERROR - complex_list_tags.md:3:69:3:69
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:3:69:3:70
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:3:70:3:71
+PARSE ERROR - complex_list_tags.md:3:71:3:71
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:3:71:3:72
 PARSE ERROR - complex_list_tags.md:4:36:4:37
+PARSE ERROR - complex_list_tags.md:4:79:4:79
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:4:83:4:84
+PARSE ERROR - complex_list_tags.md:4:84:4:84
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:4:84:4:85
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:4:85:4:97
+PARSE ERROR - complex_list_tags.md:4:97:4:97
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:4:97:4:98
 PARSE ERROR - complex_list_tags.md:5:53:5:54
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:5:74:5:75
+PARSE ERROR - complex_list_tags.md:5:75:5:75
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:75:5:76
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:5:76:5:78
+PARSE ERROR - complex_list_tags.md:5:78:5:78
+PARSE ERROR - complex_list_tags.md:5:90:5:90
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:90:5:91
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:5:91:5:97
+PARSE ERROR - complex_list_tags.md:5:97:5:97
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:97:5:99
+PARSE ERROR - complex_list_tags.md:5:109:5:109
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:5:112:5:113
+PARSE ERROR - complex_list_tags.md:5:113:5:113
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:113:5:114
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:5:114:5:116
+PARSE ERROR - complex_list_tags.md:5:116:5:116
+PARSE ERROR - complex_list_tags.md:5:129:5:129
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:129:5:130
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:5:130:5:130
+PARSE ERROR - complex_list_tags.md:5:130:5:130
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:5:130:5:131
 PARSE ERROR - complex_list_tags.md:6:55:6:56
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:81:6:82
+PARSE ERROR - complex_list_tags.md:6:82:6:82
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:6:82:6:97
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:97:6:99
+PARSE ERROR - complex_list_tags.md:6:99:6:99
+PARSE ERROR - complex_list_tags.md:6:110:6:110
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:6:110:6:111
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:111:6:112
+PARSE ERROR - complex_list_tags.md:6:112:6:112
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:6:112:6:114
+PARSE ERROR - complex_list_tags.md:6:124:6:124
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:125:6:126
+PARSE ERROR - complex_list_tags.md:6:126:6:126
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:6:126:6:126
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:126:6:127
+PARSE ERROR - complex_list_tags.md:7:5:7:5
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:7:5:7:6
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:7:7:7:9
+PARSE ERROR - complex_list_tags.md:7:10:7:10
 UNDEFINED VARIABLE - complex_list_tags.md:1:7:1:13
 UNKNOWN OPERATOR - complex_list_tags.md:3:22:3:53
 UNUSED VARIABLE - complex_list_tags.md:3:15:3:16
@@ -142,6 +166,18 @@ Here is the problematic code:
                                                     ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:3:54:3:54:**
+```roc
+    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+```
+                                                     
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, ** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -164,6 +200,30 @@ Here is the problematic code:
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
 ```
                                                        ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:3:58:3:58:**
+```roc
+    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+```
+                                                         
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:3:69:3:69:**
+```roc
+    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+```
+                                                                    
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -190,6 +250,18 @@ Here is the problematic code:
                                                                      ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:3:71:3:71:**
+```roc
+    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+```
+                                                                      
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -214,6 +286,18 @@ Here is the problematic code:
                                    ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:4:79:4:79:**
+```roc
+    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
+```
+                                                                              
+
+
 **UNEXPECTED TOKEN IN PATTERN**
 The token **)** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
@@ -224,6 +308,18 @@ Here is the problematic code:
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
 ```
                                                                                   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:4:84:4:84:**
+```roc
+    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
+```
+                                                                                   
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -248,6 +344,18 @@ Here is the problematic code:
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
 ```
                                                                                     ^^^^^^^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:4:97:4:97:**
+```roc
+    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
+```
+                                                                                                
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -286,6 +394,18 @@ Here is the problematic code:
                                                                          ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:5:75:5:75:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                          
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -308,6 +428,30 @@ Here is the problematic code:
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
 ```
                                                                            ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:5:78:5:78:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                             
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:5:90:5:90:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                         
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -334,6 +478,18 @@ Here is the problematic code:
                                                                                           ^^^^^^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:5:97:5:97:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **${** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -346,6 +502,18 @@ Here is the problematic code:
                                                                                                 ^^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:5:109:5:109:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                            
+
+
 **UNEXPECTED TOKEN IN PATTERN**
 The token **}** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
@@ -356,6 +524,18 @@ Here is the problematic code:
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
 ```
                                                                                                                ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:5:113:5:113:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                                
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -382,6 +562,30 @@ Here is the problematic code:
                                                                                                                  ^^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:5:116:5:116:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                                   
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:5:129:5:129:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                                                
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -397,6 +601,18 @@ Here is the problematic code:
 **UNEXPECTED TOKEN IN PATTERN**
 The token  is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
+
+Here is the problematic code:
+**complex_list_tags.md:5:130:5:130:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                                                 
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **complex_list_tags.md:5:130:5:130:**
@@ -442,6 +658,18 @@ Here is the problematic code:
                                                                                 ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:6:82:6:82:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                 
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token ** then click at ** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -464,6 +692,30 @@ Here is the problematic code:
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
 ```
                                                                                                 ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:6:99:6:99:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                                  
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:6:110:6:110:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                                             
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -490,6 +742,18 @@ Here is the problematic code:
                                                                                                               ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:6:112:6:112:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                                               
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **${** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -502,6 +766,18 @@ Here is the problematic code:
                                                                                                                ^^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:6:124:6:124:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                                                           
+
+
 **UNEXPECTED TOKEN IN PATTERN**
 The token **}** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
@@ -512,6 +788,18 @@ Here is the problematic code:
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
 ```
                                                                                                                             ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:6:126:6:126:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                                                             
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -538,6 +826,18 @@ Here is the problematic code:
                                                                                                                              ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:7:5:7:5:**
+```roc
+    _ => "other event pattern"
+```
+    
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **_** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -560,6 +860,18 @@ Here is the problematic code:
     _ => "other event pattern"
 ```
       ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**complex_list_tags.md:7:10:7:10:**
+```roc
+    _ => "other event pattern"
+```
+         
 
 
 **UNDEFINED VARIABLE**
@@ -1290,11 +1602,35 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~roc
 match events {
 	[] => "no events"
-	[Click(x, y)] => 	 => 	 => Num.toStr	y => 	 => 
-	[KeyPress(key), .. as rest] => 	len => rest	 => 	 => 
-	[Move(dx, dy), Move(dx2, dy2), .. as others] => 	 => 	 => Num.toStr	dy => 	 => 	toStr => dx2	 => 	 => Num.toStr	dy2 => 	 => 
-	[Scroll(amount), Click(x, y), .. as remaining] => 	 => 	 => Num.toStr	x => 	 => 	toStr => y	 => 	 =>
-			 => "other event pattern"
+	[Click(x, y)] => 
+	 => 
+	 => Num.toStr
+	y => 
+	 => 
+	[KeyPress(key), .. as rest] => 
+	len => rest
+	 => 
+	 => 
+	[Move(dx, dy), Move(dx2, dy2), .. as others] => 
+	 => 
+	 => Num.toStr
+	dy => 
+	 => 
+	toStr => dx2
+	 => 
+	 => Num.toStr
+	dy2 => 
+	 => 
+	[Scroll(amount), Click(x, y), .. as remaining] => 
+	 => 
+	 => Num.toStr
+	x => 
+	 => 
+	toStr => y
+	 => 
+	 =>
+		
+	 => "other event pattern"
 }
 ~~~
 # CANONICALIZE

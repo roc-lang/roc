@@ -7,7 +7,9 @@
 //! arrays with values corresponding 1-to-1 to interned values, e.g. regions.
 
 const std = @import("std");
-const Region = @import("../base/Region.zig");
+const mod = @import("mod.zig");
+
+const Region = mod.Region;
 
 const Self = @This();
 
@@ -15,13 +17,16 @@ const Self = @This();
 /// Since strings are small, they are simply null terminated.
 /// This uses only 1 byte to encode the size and is cheap to scan.
 bytes: std.ArrayListUnmanaged(u8) = .{},
-/// A deduplicated set of strings indices referencing into bytes.
-/// The key is the offset into bytes.
-strings: StringIdx.Table = .{},
+/// A deduplicated set of strings mapping to their indices in bytes.
+/// Used for deduplication during insertion. May be empty after deserialization.
+strings: std.StringHashMapUnmanaged(StringIdx) = .{},
 /// A unique ID for every string. This is fundamentally an index into bytes.
 /// It also maps 1:1 with a region at the same index.
 outer_indices: std.ArrayListUnmanaged(StringIdx) = .{},
 regions: std.ArrayListUnmanaged(Region) = .{},
+/// When true, no new entries can be added to the interner.
+/// This is set after parsing is complete.
+frozen: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) { _ };
@@ -33,16 +38,12 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 
     var self = Self{
         .bytes = try std.ArrayListUnmanaged(u8).initCapacity(gpa, capacity * bytes_per_string),
-        .strings = .{},
+        .strings = std.StringHashMapUnmanaged(StringIdx){},
         .outer_indices = try std.ArrayListUnmanaged(StringIdx).initCapacity(gpa, capacity),
         .regions = try std.ArrayListUnmanaged(Region).initCapacity(gpa, capacity),
     };
 
-    try self.strings.ensureTotalCapacityContext(
-        gpa,
-        @intCast(capacity),
-        StringIdx.TableContext{ .bytes = &self.bytes },
-    );
+    try self.strings.ensureTotalCapacity(gpa, @intCast(capacity));
 
     return self;
 }
@@ -51,32 +52,51 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 /// Will invalidate all slices referencing the interner.
 pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
     self.bytes.deinit(gpa);
+
+    // Free all the string keys we allocated
+    var iterator = self.strings.iterator();
+    while (iterator.next()) |entry| {
+        gpa.free(entry.key_ptr.*);
+    }
     self.strings.deinit(gpa);
+
     self.outer_indices.deinit(gpa);
     self.regions.deinit(gpa);
 }
 
 /// Add a string to this interner, returning a unique, serial index.
 pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8, region: Region) std.mem.Allocator.Error!Idx {
-    const entry = try self.strings.getOrPutContextAdapted(
-        gpa,
-        string,
-        StringIdx.TableAdapter{ .bytes = &self.bytes },
-        StringIdx.TableContext{ .bytes = &self.bytes },
-    );
-    if (entry.found_existing) return self.addOuterIdForStringIndex(gpa, entry.key_ptr.*, region);
+    if (std.debug.runtime_safety) {
+        std.debug.assert(!self.frozen); // Should not insert into a frozen interner
+    }
 
-    try self.bytes.ensureUnusedCapacity(gpa, string.len + 1);
-    const string_offset: StringIdx = @enumFromInt(self.bytes.items.len);
+    // Check if string already exists for deduplication
+    const string_offset = if (self.strings.get(string)) |existing_offset|
+        existing_offset
+    else blk: {
+        // String doesn't exist, add it to bytes
+        try self.bytes.ensureUnusedCapacity(gpa, string.len + 1);
+        const new_offset: StringIdx = @enumFromInt(self.bytes.items.len);
 
-    self.bytes.appendSliceAssumeCapacity(string);
-    self.bytes.appendAssumeCapacity(0);
+        self.bytes.appendSliceAssumeCapacity(string);
+        self.bytes.appendAssumeCapacity(0);
 
-    entry.key_ptr.* = string_offset;
+        // Add to HashMap for future deduplication
+        const owned_string = try gpa.dupe(u8, string);
+        try self.strings.put(gpa, owned_string, new_offset);
+
+        break :blk new_offset;
+    };
+
+    // Always create a new serial index, even for duplicate strings
+    // This maintains the 1:1 mapping between indices and regions
     return self.addOuterIdForStringIndex(gpa, string_offset, region);
 }
 
 fn addOuterIdForStringIndex(self: *Self, gpa: std.mem.Allocator, string_offset: StringIdx, region: Region) std.mem.Allocator.Error!Idx {
+    if (std.debug.runtime_safety) {
+        std.debug.assert(!self.frozen); // Should not add outer IDs to a frozen interner
+    }
     const len: Idx = @enumFromInt(@as(u32, @truncate(self.outer_indices.items.len)));
     try self.outer_indices.append(gpa, string_offset);
     try self.regions.append(gpa, region);
@@ -107,38 +127,14 @@ pub fn getRegion(self: *const Self, idx: Idx) Region {
     return self.regions.items[@as(usize, @intFromEnum(idx))];
 }
 
+/// Freeze the interner, preventing any new entries from being added.
+pub fn freeze(self: *Self) void {
+    if (std.debug.runtime_safety) {
+        self.frozen = true;
+    }
+}
+
 /// TODO
 pub const StringIdx = enum(u32) {
     _,
-
-    // This uses an unmanaged hash map due to context management requirements.
-    // It enables us to ensure that an update context is always used with the newest pointer to the underlying bytes allocation.
-    pub const Table = std.HashMapUnmanaged(StringIdx, void, TableContext, std.hash_map.default_max_load_percentage);
-
-    /// These are copied straight out of the zig standard library.
-    /// They are simply modified to give us control over the hash function and bytes allocation.
-    pub const TableContext = struct {
-        bytes: *const std.ArrayListUnmanaged(u8),
-
-        pub fn eql(_: @This(), a: StringIdx, b: StringIdx) bool {
-            return a == b;
-        }
-
-        pub fn hash(ctx: @This(), key: StringIdx) u64 {
-            return std.hash_map.hashString(std.mem.sliceTo(ctx.bytes.items[@intFromEnum(key)..], 0));
-        }
-    };
-
-    pub const TableAdapter = struct {
-        bytes: *const std.ArrayListUnmanaged(u8),
-
-        pub fn eql(ctx: @This(), a: []const u8, b: StringIdx) bool {
-            return std.mem.eql(u8, a, std.mem.sliceTo(ctx.bytes.items[@intFromEnum(b)..], 0));
-        }
-
-        pub fn hash(_: @This(), adapted_key: []const u8) u64 {
-            std.debug.assert(std.mem.indexOfScalar(u8, adapted_key, 0) == null);
-            return std.hash_map.hashString(adapted_key);
-        }
-    };
 };

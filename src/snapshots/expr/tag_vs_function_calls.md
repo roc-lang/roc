@@ -104,7 +104,7 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 	addOne: |x| x + 1,
 	result: addOne(5),
 	nested: Some(Ok(Just(42))),
-	tagList: [Some(1), Some(2), None, Some(3)]
+	tagList: [Some(1), Some(2), None, Some(3)],
 }
 ~~~
 # CANONICALIZE
@@ -163,5 +163,5 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-10.2 (type "{ someTag: [Some(Num(_size))]_others, noneTag: [None]_others2, okTag: [Ok(Str)]_others3, errTag: [Err(Str)]_others4, addOne: _arg -> _ret, result: _field, nested: [Some([Ok([Just(Num(_size2))]_others5)]_others6)]_others7, tagList: List([Some(Num(_size3))][None]_others8) }"))
+(expr @1.1-10.2 (type "{ someTag: [Some(Num(_size))]_others, noneTag: [None]_others2, okTag: [Ok(Str)]_others3, errTag: [Err(Str)]_others4, addOne: Num(_size2) -> Num(_size3), result: _field, nested: [Some([Ok([Just(Num(_size4))]_others5)]_others6)]_others7, tagList: List([Some(Num(_size5))][None]_others8) }"))
 ~~~

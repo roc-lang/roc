@@ -4,14 +4,15 @@
 //! allowing fast serialization and deserialization of ModuleEnv and CIR data.
 
 const std = @import("std");
-const base = @import("../base.zig");
+const base = @import("base");
 const canonicalize = @import("../check/canonicalize.zig");
-const collections = @import("../collections.zig");
-const types = @import("../types.zig");
+const collections = @import("collections");
+const types = @import("types");
 const parse = @import("../check/parse.zig").parse;
-const SExprTree = @import("../base/SExprTree.zig");
+const SExprTree = base.SExprTree;
 const Filesystem = @import("../fs/Filesystem.zig");
-const SERIALIZATION_ALIGNMENT = @import("../serialization/mod.zig").SERIALIZATION_ALIGNMENT;
+
+const SERIALIZATION_ALIGNMENT = 16;
 
 const Allocator = std.mem.Allocator;
 const TypeStore = types.Store;
@@ -268,24 +269,38 @@ pub const CacheModule = struct {
     /// The caller must not free it after calling this function.
     pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) !RestoredData {
         // Deserialize each component
-        const node_store = try NodeStore.deserializeFrom(
+        var node_store = try NodeStore.deserializeFrom(
             @as([]align(@alignOf(Node)) const u8, @alignCast(self.getComponentData(.node_store))),
             allocator,
         );
+        errdefer node_store.deinit();
 
-        const strings = try base.StringLiteral.Store.deserializeFrom(self.getComponentData(.string_store), allocator);
-        const ident_ids_for_slicing = try SafeList(base.Ident.Idx).deserializeFrom(
+        var strings = try base.StringLiteral.Store.deserializeFrom(self.getComponentData(.string_store), allocator);
+        errdefer strings.deinit(allocator);
+
+        var ident_ids_for_slicing = try SafeList(base.Ident.Idx).deserializeFrom(
             @as([]align(@alignOf(base.Ident.Idx)) const u8, @alignCast(self.getComponentData(.ident_ids_for_slicing))),
             allocator,
         );
-        const idents = try base.Ident.Store.deserializeFrom(self.getComponentData(.ident_store), allocator);
-        const line_starts = try SafeList(u32).deserializeFrom(
+        errdefer ident_ids_for_slicing.deinit(allocator);
+
+        var idents = try base.Ident.Store.deserializeFrom(self.getComponentData(.ident_store), allocator);
+        errdefer idents.deinit(allocator);
+
+        var line_starts = try SafeList(u32).deserializeFrom(
             @as([]align(@alignOf(u32)) const u8, @alignCast(self.getComponentData(.line_starts))),
             allocator,
         );
-        const types_store = try TypeStore.deserializeFrom(self.getComponentData(.types_store), allocator);
-        const exposed_by_str = try SafeStringHashMap(void).deserializeFrom(self.getComponentData(.exposed_by_str), allocator);
-        const exposed_nodes = try SafeStringHashMap(u16).deserializeFrom(self.getComponentData(.exposed_nodes), allocator);
+        errdefer line_starts.deinit(allocator);
+
+        var types_store = try TypeStore.deserializeFrom(self.getComponentData(.types_store), allocator);
+        errdefer types_store.deinit();
+
+        var exposed_by_str = try SafeStringHashMap(void).deserializeFrom(self.getComponentData(.exposed_by_str), allocator);
+        errdefer exposed_by_str.deinit(allocator);
+
+        var exposed_nodes = try SafeStringHashMap(u16).deserializeFrom(self.getComponentData(.exposed_nodes), allocator);
+        errdefer exposed_nodes.deinit(allocator);
 
         // Create ModuleEnv from deserialized components
         var module_env = base.ModuleEnv{
@@ -303,10 +318,11 @@ pub const CacheModule = struct {
         errdefer module_env.deinit();
 
         // Deserialize external_decls
-        const external_decls = try CIR.ExternalDecl.SafeList.deserializeFrom(
+        var external_decls = try CIR.ExternalDecl.SafeList.deserializeFrom(
             @as([]align(@alignOf(CIR.ExternalDecl)) const u8, @alignCast(self.getComponentData(.external_decls))),
             allocator,
         );
+        errdefer external_decls.deinit(allocator);
 
         // Create result struct
         var result = RestoredData{

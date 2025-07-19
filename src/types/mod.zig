@@ -5,10 +5,10 @@
 //! the compiler, including type aliases, content types, function types,
 //! and nominal types.
 
-const types = @import("./types/types.zig");
+pub const types = @import("types.zig");
+pub const store = @import("store.zig");
+pub const writers = @import("writers.zig");
 
-// TODO: refactor this to just be types.zig
-// Get rid of all of the reexporting. types.zig and types/types.zig should not exist separately.
 pub const Alias = types.Alias;
 pub const Content = types.Content;
 pub const FlatType = types.FlatType;
@@ -22,8 +22,14 @@ pub const TagUnion = types.TagUnion;
 pub const Tuple = types.Tuple;
 pub const Var = types.Var;
 pub const TypeIdent = types.TypeIdent;
+pub const Descriptor = types.Descriptor;
+pub const TwoRecordFields = types.TwoRecordFields;
+pub const TwoTags = types.TwoTags;
+pub const Rank = types.Rank;
+pub const Mark = types.Mark;
 
-pub const store = @import("./types/store.zig");
-pub const writers = @import("./types/writers.zig");
-
+pub const Slot = store.Slot;
+pub const ResolvedVarDesc = store.ResolvedVarDesc;
+pub const ResolvedVarDescs = store.ResolvedVarDescs;
 pub const Store = store.Store;
+pub const DescStoreIdx = store.DescStoreIdx;

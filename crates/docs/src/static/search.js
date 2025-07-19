@@ -285,7 +285,17 @@ const setupSidebarToggle = () => {
   );
 };
 
-setupSidebarNav();
-setupSearch();
+// Only run setup functions if their required elements are present
+if (document.querySelector(".module-name")) {
+  setupSidebarNav();
+}
+
+if (document.getElementById("module-search")) {
+  setupSearch();
+}
+
 setupCodeBlocks();
-setupSidebarToggle();
+
+if (document.querySelector(".menu-toggle")) {
+  setupSidebarToggle();
+}

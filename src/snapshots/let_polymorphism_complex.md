@@ -550,9 +550,9 @@ nested_empty = [empty_list, empty_list, empty_list]
 mixed_nested = [empty_list, [1, 2], empty_list, [3, 4]]
 
 # Polymorphic record with empty list
-poly_record = {items: empty_list, count: 0}
-use_poly_record1 = {items: [1, 2, 3], count: 0}
-use_poly_record2 = {items: ["x", "y", "z"], count: 0}
+poly_record = { items: empty_list, count: 0 }
+use_poly_record1 = { items: [1, 2, 3], count: 0 }
+use_poly_record2 = { items: ["x", "y", "z"], count: 0 }
 
 # Complex nested structure with multiple polymorphic uses
 base_config = {
@@ -560,8 +560,8 @@ base_config = {
 	metadata: {
 		version: num,
 		ratio: frac,
-		description: str
-	}
+		description: str,
+	},
 }
 
 # Different instantiations of base_config
@@ -570,9 +570,9 @@ config1 = {
 	metadata: {
 		version: num,
 		ratio: frac,
-		description: str
+		description: str,
 	},
-	name: "integers"
+	name: "integers",
 }
 
 config2 = { # Test comment 1
@@ -580,13 +580,13 @@ config2 = { # Test comment 1
 	metadata: { # Test comment 3
 		version: num, # Test comment 4
 		ratio: frac, # Test comment 5
-		description: str # Test comment 6
+		description: str, # Test comment 6
 	}, # Test comment 7
-	name: "fruits" # Test comment 8
+	name: "fruits", # Test comment 8
 } # Test comment 9
 
 # Polymorphic function-like structures
-make_container = |val| {value: val, wrapper: [val]}
+make_container = |val| { value: val, wrapper: [val] }
 container1 = make_container(num)
 container2 = make_container(str)
 container3 = make_container(frac)
@@ -597,39 +597,39 @@ deep = {
 		level2: {
 			level3: {
 				data: empty_list,
-				value: num
+				value: num,
 			},
-			items: [num, num * 2, num * 3]
+			items: [num, num * 2, num * 3],
 		},
-		collection: empty_list
+		collection: empty_list,
 	},
 	results: [
-		{data: [1], tag: "single"},
-		{data: [1, 2], tag: "ints"},
-		{data: [1, 2, 3], tag: "more"},
-	]
+		{ data: [1], tag: "single" },
+		{ data: [1, 2], tag: "ints" },
+		{ data: [1, 2, 3], tag: "more" },
+	],
 }
 
 # Polymorphic values used in computations
 compute1 = num + 10
 compute2 = num * 2
 compute3 = [num, num]
-compute4 = {base: num, derived: [num, num + 1, num + 2]}
+compute4 = { base: num, derived: [num, num + 1, num + 2] }
 
 # Mixed polymorphic structures
 mixed = {
-	numbers: {value: num, list: [num, num], float: frac},
-	strings: {value: str, list: [str, str]},
+	numbers: { value: num, list: [num, num], float: frac },
+	strings: { value: str, list: [str, str] },
 	empty_lists: {
 		raw: empty_list,
 		in_list: [empty_list],
-		in_record: {data: empty_list}
+		in_record: { data: empty_list },
 	},
 	computations: {
 		from_num: num * 100,
 		from_frac: frac * 10.0,
-		list_from_num: [num, num, num]
-	}
+		list_from_num: [num, num, num],
+	},
 }
 
 main = |_| {
@@ -1076,12 +1076,12 @@ main = |_| {
 		(patt @61.1-61.11 (type "{ value: _field, wrapper: List(_elem) }"))
 		(patt @62.1-62.11 (type "{ value: _field, wrapper: List(_elem) }"))
 		(patt @65.1-65.5 (type "{ level1: { level2: { level3: { data: List(Num(_size)), value: Num(_size2) }, items: List(Num(_size3)) }, collection: List(Num(_size4)) }, results: List({ data: List(Num(_size5)), tag: Str }) }"))
-		(patt @84.1-84.9 (type "_a"))
-		(patt @85.1-85.9 (type "_a"))
+		(patt @84.1-84.9 (type "Num(_size)"))
+		(patt @85.1-85.9 (type "Num(_size)"))
 		(patt @86.1-86.9 (type "List(Num(_size))"))
 		(patt @87.1-87.9 (type "{ base: Num(_size), derived: List(Num(_size2)) }"))
-		(patt @90.1-90.6 (type "{ numbers: { value: Num(_size), list: List(Num(_size2)), float: Frac(_size3) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(_size4)), in_list: List(List(Num(_size5))), in_record: { data: List(Num(_size6)) } }, computations: { from_num: _field, from_frac: _field2, list_from_num: List(Num(_size7)) } }"))
-		(patt @105.1-105.5 (type "_arg -> _ret")))
+		(patt @90.1-90.6 (type "{ numbers: { value: Num(_size), list: List(Num(_size2)), float: Frac(_size3) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(_size4)), in_list: List(List(Num(_size5))), in_record: { data: List(Num(_size6)) } }, computations: { from_num: Num(_size7), from_frac: Frac(_size8), list_from_num: List(Num(_size9)) } }"))
+		(patt @105.1-105.5 (type "_arg -> Num(_size)")))
 	(expressions
 		(expr @4.7-4.9 (type "Num(_size)"))
 		(expr @5.8-5.11 (type "Frac(_size)"))
@@ -1105,10 +1105,10 @@ main = |_| {
 		(expr @61.14-61.33 (type "{ value: _field, wrapper: List(_elem) }"))
 		(expr @62.14-62.34 (type "{ value: _field, wrapper: List(_elem) }"))
 		(expr @65.8-81.2 (type "{ level1: { level2: { level3: { data: List(Num(_size)), value: Num(_size2) }, items: List(Num(_size3)) }, collection: List(Num(_size4)) }, results: List({ data: List(Num(_size5)), tag: Str }) }"))
-		(expr @84.12-84.20 (type "_a"))
-		(expr @85.12-85.19 (type "_a"))
+		(expr @84.12-84.20 (type "Num(_size)"))
+		(expr @85.12-85.19 (type "Num(_size)"))
 		(expr @86.12-86.22 (type "List(Num(_size))"))
 		(expr @87.12-87.59 (type "{ base: Num(_size), derived: List(Num(_size2)) }"))
-		(expr @90.9-103.2 (type "{ numbers: { value: Num(_size), list: List(Num(_size2)), float: Frac(_size3) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(_size4)), in_list: List(List(Num(_size5))), in_record: { data: List(Num(_size6)) } }, computations: { from_num: _field, from_frac: _field2, list_from_num: List(Num(_size7)) } }"))
-		(expr @105.8-108.2 (type "_arg -> _ret"))))
+		(expr @90.9-103.2 (type "{ numbers: { value: Num(_size), list: List(Num(_size2)), float: Frac(_size3) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(_size4)), in_list: List(List(Num(_size5))), in_record: { data: List(Num(_size6)) } }, computations: { from_num: Num(_size7), from_frac: Frac(_size8), list_from_num: List(Num(_size9)) } }"))
+		(expr @105.8-108.2 (type "_arg -> Num(_size)"))))
 ~~~

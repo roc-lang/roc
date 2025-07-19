@@ -1699,7 +1699,7 @@ main! = |_| { # Yeah I can leave a comment here
 		Stdout.line!("Adding ${n} to ${number}")
 		number = number + n
 	}
-	record = {foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned}
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 	multiline_tuple = (
 		123,

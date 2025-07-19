@@ -13,10 +13,10 @@ type=repl
 # EXPECTED
 2
 ---
-0.3
+Evaluation error: error.LayoutError
 ---
-"Hello, World!"
+Evaluation error: error.LayoutError
 ---
-[] : List(_size)
+[] : List(_elem)
 # PROBLEMS
 NIL

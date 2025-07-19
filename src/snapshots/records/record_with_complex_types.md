@@ -126,19 +126,19 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 {
 	name: "Alice",
 	scores: [95, 87, 92, 78],
-	status: Active({since: "2023-01-15"}),
-	preferences: {theme: Dark, notifications: Email("alice@example.com")},
+	status: Active({ since: "2023-01-15" }),
+	preferences: { theme: Dark, notifications: Email("alice@example.com") },
 	metadata: Ok(
 		{
 			tags: ["developer", "senior", "fullstack"],
-			permissions: [Read, Write, Admin]
+			permissions: [Read, Write, Admin],
 		},
 	),
 	callback: |x| x + 1,
 	nested: {
 		items: [Some("first"), None, Some("third")],
-		result: Success({data: [1, 2, 3], timestamp: "2024-01-01"})
-	}
+		result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
+	},
 }
 ~~~
 # CANONICALIZE
@@ -233,5 +233,5 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-15.2 (type "{ name: Str, scores: List(Num(_size)), status: [Active({ since: Str })]_others, preferences: { theme: [Dark]_others2, notifications: [Email(Str)]_others3 }, metadata: [Ok({ tags: List(Str), permissions: List([Read]_others4) })]_others5, callback: _arg -> _ret, nested: { items: List([Some(Str)][None]_others6), result: [Success({ data: List(Num(_size2)), timestamp: Str })]_others7 } }"))
+(expr @1.1-15.2 (type "{ name: Str, scores: List(Num(_size)), status: [Active({ since: Str })]_others, preferences: { theme: [Dark]_others2, notifications: [Email(Str)]_others3 }, metadata: [Ok({ tags: List(Str), permissions: List([Read]_others4) })]_others5, callback: Num(_size2) -> Num(_size3), nested: { items: List([Some(Str)][None]_others6), result: [Success({ data: List(Num(_size4)), timestamp: Str })]_others7 } }"))
 ~~~

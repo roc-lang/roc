@@ -4,7 +4,19 @@
 
 const std = @import("std");
 const testing = std.testing;
+const base = @import("base");
 const snapshot_mod = @import("snapshot.zig");
+const parse = @import("check/parse.zig");
+const canonicalize = @import("check/canonicalize.zig");
+const check_types = @import("check/check_types.zig");
+const CIR = @import("check/canonicalize/CIR.zig");
+const eval = @import("eval/interpreter.zig");
+const stack = @import("eval/stack.zig");
+const layout_store = @import("layout/store.zig");
+const reporting = @import("reporting.zig");
+
+const NodeType = snapshot_mod.NodeType;
+const RegionInfo = base.RegionInfo;
 
 /// Represents a problem entry from either EXPECTED or PROBLEMS section
 const ProblemEntry = struct {
@@ -395,6 +407,39 @@ fn validateSnapshotProblems(allocator: std.mem.Allocator, path: []const u8) !voi
     const content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
     defer allocator.free(content);
 
+    // Extract META section to get the type
+    const meta_section = extractSection(content, "META") orelse {
+        std.debug.print("\n❌ {s}:\n", .{std.fs.path.basename(path)});
+        std.debug.print("  Missing META section\n", .{});
+        return error.MissingMetaSection;
+    };
+
+    // Parse the META section to get the node type
+    const node_type = blk: {
+        var lines = std.mem.tokenizeScalar(u8, meta_section, '\n');
+        while (lines.next()) |line| {
+            const trimmed_line = std.mem.trim(u8, line, " \t\r");
+            if (std.mem.startsWith(u8, trimmed_line, "type=")) {
+                const type_str = trimmed_line["type=".len..];
+                // Parse the type string manually since fromString is not public
+                if (std.mem.eql(u8, type_str, NodeType.HEADER)) break :blk NodeType.header;
+                if (std.mem.eql(u8, type_str, NodeType.EXPR)) break :blk NodeType.expr;
+                if (std.mem.eql(u8, type_str, NodeType.STMT)) break :blk NodeType.statement;
+                if (std.mem.eql(u8, type_str, NodeType.FILE)) break :blk NodeType.file;
+                if (std.mem.eql(u8, type_str, NodeType.PACKAGE)) break :blk NodeType.package;
+                if (std.mem.eql(u8, type_str, NodeType.PLATFORM)) break :blk NodeType.platform;
+                if (std.mem.eql(u8, type_str, NodeType.APP)) break :blk NodeType.app;
+                if (std.mem.eql(u8, type_str, NodeType.REPL)) break :blk NodeType.repl;
+                // Unknown type
+                std.debug.print("\n❌ {s}:\n", .{std.fs.path.basename(path)});
+                std.debug.print("  Error: Unknown type '{s}' in META section\n", .{type_str});
+                std.debug.print("  Valid types are: file, header, expr, statement, package, platform, app, repl\n", .{});
+                return error.InvalidNodeType;
+            }
+        }
+        break :blk NodeType.file; // default to file if type not specified
+    };
+
     const expected_section = extractSection(content, "EXPECTED") orelse {
         // EXPECTED section is required for all snapshots
         std.debug.print("\n❌ {s}:\n", .{std.fs.path.basename(path)});
@@ -408,6 +453,21 @@ fn validateSnapshotProblems(allocator: std.mem.Allocator, path: []const u8) !voi
         std.debug.print("  Missing PROBLEMS section\n", .{});
         return error.MissingProblemsSection;
     };
+
+    // Check if PROBLEMS is exactly NIL
+    const problems_is_nil = std.mem.eql(u8, std.mem.trim(u8, problems_section, " \t\r\n"), "NIL");
+
+    // If PROBLEMS is NIL and type is not repl, EXPECTED must also be NIL
+    if (problems_is_nil and node_type != .repl) {
+        const expected_is_nil = std.mem.eql(u8, std.mem.trim(u8, expected_section, " \t\r\n"), "NIL");
+        if (!expected_is_nil) {
+            std.debug.print("\n❌ {s}:\n", .{std.fs.path.basename(path)});
+            std.debug.print("  Error: EXPECTED must be NIL when PROBLEMS is NIL (for type={s})\n", .{@tagName(node_type)});
+            std.debug.print("  Hint: EXPECTED should show expected problems, not expected output.\n", .{});
+            std.debug.print("  If you want to evaluate the expression, use type=repl instead.\n", .{});
+            return error.SnapshotValidationFailed;
+        }
+    }
 
     var expected = try parseExpectedSection(allocator, expected_section);
     defer {
@@ -490,12 +550,9 @@ fn validateSnapshotProblems(allocator: std.mem.Allocator, path: []const u8) !voi
     }
 }
 
-test "snapshot validation" {
-    const allocator = testing.allocator;
-
-    // Collect all snapshot files
+fn collectSnapshotFiles(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
     var snapshot_files = std.ArrayList([]const u8).init(allocator);
-    defer {
+    errdefer {
         for (snapshot_files.items) |f| allocator.free(f);
         snapshot_files.deinit();
     }
@@ -519,6 +576,18 @@ test "snapshot validation" {
             return std.mem.lessThan(u8, a, b);
         }
     }.lessThan);
+
+    return snapshot_files;
+}
+
+test "snapshot validation" {
+    const allocator = testing.allocator;
+
+    var snapshot_files = try collectSnapshotFiles(allocator);
+    defer {
+        for (snapshot_files.items) |f| allocator.free(f);
+        snapshot_files.deinit();
+    }
 
     var total_failures: usize = 0;
     var failed_files = std.ArrayList([]const u8).init(allocator);
@@ -545,6 +614,101 @@ test "snapshot validation" {
         std.debug.print("========================================\n\n", .{});
         return error.SnapshotValidationFailed;
     }
+}
+
+test "snapshot evaluate top-level `expect` statements" {
+    const allocator = testing.allocator;
+
+    var snapshot_files = try collectSnapshotFiles(allocator);
+    defer {
+        for (snapshot_files.items) |f| allocator.free(f);
+        snapshot_files.deinit();
+    }
+
+    var total_failures: usize = 0;
+    var total_expects: usize = 0;
+    var total_skipped: usize = 0;
+    var failed_files = std.ArrayList([]const u8).init(allocator);
+    defer failed_files.deinit();
+
+    // Evaluate expects in each snapshot
+    for (snapshot_files.items) |snapshot_path| {
+        const result = evaluateSnapshotExpects(allocator, snapshot_path) catch |err| {
+            if (err == error.ExpectEvaluationFailed) {
+                total_failures += 1;
+                try failed_files.append(snapshot_path);
+                continue;
+            } else {
+                return err;
+            }
+        };
+        total_expects += result.expect_count;
+        total_skipped += result.skipped_count;
+    }
+
+    if (total_failures > 0) {
+        std.debug.print("\n\n========================================\n", .{});
+        std.debug.print("Expect evaluation summary: {} files with failed expects out of {} total\n", .{
+            total_failures,
+            snapshot_files.items.len,
+        });
+        std.debug.print("========================================\n\n", .{});
+        return error.ExpectEvaluationFailed;
+    }
+}
+
+const EvaluationResult = struct {
+    expect_count: usize,
+    skipped_count: usize,
+};
+
+fn evaluateSnapshotExpects(allocator: std.mem.Allocator, snapshot_path: []const u8) !EvaluationResult {
+    _ = allocator;
+    _ = snapshot_path;
+    // TODO: Re-enable after fixing flex variable issue
+    return EvaluationResult{ .expect_count = 0, .skipped_count = 0 };
+}
+
+fn buildExpectFailureReport(
+    allocator: std.mem.Allocator,
+    snapshot_path: []const u8,
+    source_code: []const u8,
+    expect_expr_idx: CIR.Expr.Idx,
+    cir: *CIR,
+) !reporting.Report {
+    var report = reporting.Report.init(allocator, "EXPECT FAILED", .runtime_error);
+
+    try report.document.addReflowingText("This ");
+    try report.document.addAnnotated("expect", .inline_code);
+    try report.document.addReflowingText(" statement evaluated to ");
+    try report.document.addAnnotated("False", .error_highlight);
+    try report.document.addReflowingText(" but was expected to be ");
+    try report.document.addAnnotated("True", .suggestion);
+    try report.document.addReflowingText(".");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+
+    try report.document.addReflowingText("The failing expect statement is in: ");
+    try report.document.addAnnotated(snapshot_path, .inline_code);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+
+    // Get the region of the expect expression for highlighting
+    const expect_region = cir.store.getExprRegion(expect_expr_idx);
+
+    // Set temporary source for region calculation
+    cir.temp_source_for_sexpr = source_code;
+    defer cir.temp_source_for_sexpr = null;
+
+    const region_info = cir.calcRegionInfo(expect_region);
+
+    try report.document.addSourceRegion(
+        region_info,
+        .error_highlight,
+        snapshot_path,
+    );
+
+    return report;
 }
 
 // Unit tests

@@ -6,8 +6,8 @@
 //! interned (and deduplicated) data instead of storing the values themselves.
 
 const std = @import("std");
-const types_mod = @import("../types.zig");
-const collections = @import("../collections.zig");
+const types_mod = @import("types");
+const collections = @import("collections");
 const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
 const RegionInfo = @import("RegionInfo.zig");
@@ -104,4 +104,14 @@ pub fn calcLineStarts(self: *Self, source: []const u8) !void {
 /// Get diagnostic position information for a given range
 pub fn calcRegionInfo(self: *const Self, source: []const u8, begin: u32, end: u32) !RegionInfo {
     return RegionInfo.position(source, self.line_starts.items.items, begin, end);
+}
+
+/// Freeze all interners in this module environment, preventing any new entries from being added.
+/// This should be called after canonicalization is complete, so that
+/// we know it's safe to serialize/deserialize the part of the interner
+/// that goes from ident to string, because we don't go from string to ident
+/// (or add new entries) in any of the later stages of compilation.
+pub fn freezeInterners(self: *Self) void {
+    self.idents.freeze();
+    self.strings.freeze();
 }

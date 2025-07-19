@@ -4,10 +4,12 @@
 //! (using type and target information from previous steps in compilation).
 
 const std = @import("std");
-const types = @import("../types/types.zig");
-const collections = @import("../collections.zig");
-const Ident = @import("../base/Ident.zig");
-const target = @import("../base/target.zig");
+const base = @import("base");
+const types = @import("types");
+const collections = @import("collections");
+
+const Ident = base.Ident;
+const target = base.target;
 
 /// Tag for Layout variants
 pub const LayoutTag = enum(u4) {
@@ -303,6 +305,11 @@ pub const Layout = packed struct {
     /// bool layout (alias for consistency)
     pub fn boolean() Layout {
         return boolType();
+    }
+
+    /// Check if this layout represents a boolean
+    pub fn isBoolean(self: Layout) bool {
+        return self.tag == .scalar and self.data.scalar.tag == .bool;
     }
 
     /// str layout

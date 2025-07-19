@@ -1,7 +1,7 @@
 //! Modern cache manager that uses BLAKE3-based keys and subdirectory splitting.
 
 const std = @import("std");
-const base = @import("../base.zig");
+const base = @import("base");
 const canonicalize = @import("../check/canonicalize.zig");
 const reporting = @import("../reporting.zig");
 const Filesystem = @import("../fs/Filesystem.zig");
@@ -10,7 +10,7 @@ const Cache = cache_mod.CacheModule;
 const CacheConfig = cache_mod.CacheConfig;
 const CacheStats = cache_mod.CacheStats;
 const CacheReporting = @import("CacheReporting.zig");
-const SERIALIZATION_ALIGNMENT = @import("../serialization/mod.zig").SERIALIZATION_ALIGNMENT;
+const SERIALIZATION_ALIGNMENT = 16;
 const coordinate_simple = @import("../coordinate_simple.zig");
 
 const Allocator = std.mem.Allocator;

@@ -230,7 +230,7 @@ my_empty_list = []
 my_nonempty_list = [num, frac]
 
 # Record with polymorphic field
-make_container = |value| {data: value, count: 1}
+make_container = |value| { data: value, count: 1 }
 
 # Used with different types
 int_container = make_container(num)
@@ -249,7 +249,7 @@ updated_int = update_data(int_container, 100)
 updated_str = update_data(str_container, "world")
 
 # Function returning polymorphic record
-identity_record = |x| {value: x}
+identity_record = |x| { value: x }
 
 # Used at different types
 int_record = identity_record(42)
@@ -418,7 +418,7 @@ main = |_| {
 		(patt @29.1-29.11 (type "{ value: _field }"))
 		(patt @30.1-30.11 (type "{ value: _field }"))
 		(patt @31.1-31.12 (type "{ value: _field }"))
-		(patt @33.1-33.5 (type "_arg -> _ret")))
+		(patt @33.1-33.5 (type "_arg -> Num(_size)")))
 	(expressions
 		(expr @4.7-4.9 (type "Frac(_size)"))
 		(expr @5.8-5.11 (type "Frac(_size)"))
@@ -436,5 +436,5 @@ main = |_| {
 		(expr @29.14-29.33 (type "{ value: _field }"))
 		(expr @30.14-30.37 (type "{ value: _field }"))
 		(expr @31.15-31.41 (type "{ value: _field }"))
-		(expr @33.8-36.2 (type "_arg -> _ret"))))
+		(expr @33.8-36.2 (type "_arg -> Num(_size)"))))
 ~~~

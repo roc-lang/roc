@@ -6,8 +6,8 @@
 //! from other modules.
 
 const std = @import("std");
-const base = @import("../../base.zig");
-const types_mod = @import("../../types.zig");
+const base = @import("base");
+const types_mod = @import("types");
 const TypesStore = types_mod.Store;
 const Var = types_mod.Var;
 const Content = types_mod.Content;

@@ -395,7 +395,7 @@ import ExternalModule as ExtMod
 
 # Simple qualified type
 simpleQualified : Color.RGB
-simpleQualified = Color.RGB({r: 255, g: 0, b: 0})
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 
 # Aliased qualified type
 aliasedQualified : ExtMod.DataType
@@ -411,7 +411,7 @@ resultType = Result.Ok(42)
 
 # Function returning qualified type
 getColor : {} -> Color.RGB
-getColor = |_| Color.RGB({r: 0, g: 255, b: 0})
+getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 
 # Function accepting qualified type
 processColor : Color.RGB -> Str
@@ -422,8 +422,8 @@ processColor = |color|
 transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 transform = |result|
 	match result {
-		Ok(rgb) => TypeC.fromColor(rgb)
-		Err(err) => TypeC.default
+		Result.Ok(rgb) => TypeC.fromColor(rgb)
+		Result.Err(err) => TypeC.default
 	}
 ~~~
 # CANONICALIZE
@@ -500,7 +500,8 @@ transform = |result|
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @42.9-42.23)))
+									(p-nominal @42.9-42.15
+										(p-applied-tag @42.9-42.23))))
 							(value
 								(e-call @42.27-42.47
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -509,7 +510,8 @@ transform = |result|
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @43.9-43.24)))
+									(p-nominal @43.9-43.15
+										(p-applied-tag @43.9-43.24))))
 							(value
 								(e-runtime-error (tag "ident_not_in_scope"))))))))
 		(annotation @40.1-40.10

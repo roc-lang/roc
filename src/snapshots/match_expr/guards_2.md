@@ -12,21 +12,31 @@ match value {
 }
 ~~~
 # EXPECTED
+PARSE ERROR - guards_2.md:2:25:2:25
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:47:2:49
 PARSE ERROR - guards_2.md:2:50:2:51
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:51:2:75
+PARSE ERROR - guards_2.md:2:75:2:75
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:75:2:77
+PARSE ERROR - guards_2.md:2:87:2:87
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:92:2:93
+PARSE ERROR - guards_2.md:2:93:2:93
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:93:2:93
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:93:2:94
+PARSE ERROR - guards_2.md:3:5:3:5
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:12:3:14
+PARSE ERROR - guards_2.md:3:15:3:15
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:22:3:24
+PARSE ERROR - guards_2.md:3:25:3:25
 PARSE ERROR - guards_2.md:3:25:3:26
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:61:3:62
+PARSE ERROR - guards_2.md:3:62:3:62
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:62:3:62
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:62:3:63
+PARSE ERROR - guards_2.md:4:5:4:5
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:4:5:4:6
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:4:7:4:9
+PARSE ERROR - guards_2.md:4:10:4:10
 UNDEFINED VARIABLE - guards_2.md:1:7:1:12
 UNKNOWN OPERATOR - guards_2.md:2:50:2:51
 UNUSED VARIABLE - guards_2.md:2:6:2:11
@@ -51,6 +61,18 @@ INVALID PATTERN - :0:0:0:0
 UNKNOWN OPERATOR - guards_2.md:4:5:4:6
 INVALID PATTERN - :0:0:0:0
 # PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**guards_2.md:2:25:2:25:**
+```roc
+    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
+```
+                        
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -87,6 +109,18 @@ Here is the problematic code:
                                                   ^^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**guards_2.md:2:75:2:75:**
+```roc
+    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
+```
+                                                                          
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **${** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -99,6 +133,18 @@ Here is the problematic code:
                                                                           ^^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**guards_2.md:2:87:2:87:**
+```roc
+    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
+```
+                                                                                      
+
+
 **UNEXPECTED TOKEN IN PATTERN**
 The token **}** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
@@ -109,6 +155,18 @@ Here is the problematic code:
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
                                                                                            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**guards_2.md:2:93:2:93:**
+```roc
+    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
+```
+                                                                                            
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -135,6 +193,18 @@ Here is the problematic code:
                                                                                             ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**guards_2.md:3:5:3:5:**
+```roc
+    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
+```
+    
+
+
 **UNEXPECTED TOKEN IN PATTERN**
 The token **if** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
@@ -147,6 +217,18 @@ Here is the problematic code:
            ^^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**guards_2.md:3:15:3:15:**
+```roc
+    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
+```
+              
+
+
 **UNEXPECTED TOKEN IN PATTERN**
 The token **=>** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
@@ -157,6 +239,18 @@ Here is the problematic code:
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
                      ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**guards_2.md:3:25:3:25:**
+```roc
+    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
+```
+                        
 
 
 **PARSE ERROR**
@@ -183,6 +277,18 @@ Here is the problematic code:
                                                             ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**guards_2.md:3:62:3:62:**
+```roc
+    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
+```
+                                                             
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -207,6 +313,18 @@ Here is the problematic code:
                                                              ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**guards_2.md:4:5:4:5:**
+```roc
+    _ => "other"
+```
+    
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **_** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -229,6 +347,18 @@ Here is the problematic code:
     _ => "other"
 ```
       ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**guards_2.md:4:10:4:10:**
+```roc
+    _ => "other"
+```
+         
 
 
 **UNDEFINED VARIABLE**
@@ -477,9 +607,18 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 # FORMATTED
 ~~~roc
 match value {
-	[first, .. as rest] => 	 => 	toStr => first	 => 	 =>
-		[x, y]	 => x == y	 => 	 => 	 =>
-			 => "other"
+	[first, .. as rest] => 
+	 => 
+	toStr => first
+	 => 
+	 =>
+		[x, y]
+	 => x == y
+	 => 
+	 => 
+	 =>
+		
+	 => "other"
 }
 ~~~
 # CANONICALIZE

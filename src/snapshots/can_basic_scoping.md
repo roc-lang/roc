@@ -153,9 +153,9 @@ outerFunc = |_| {
 	(defs
 		(patt @4.1-4.2 (type "Num(_size)"))
 		(patt @5.1-5.2 (type "Num(_size)"))
-		(patt @8.1-8.10 (type "_arg -> _ret")))
+		(patt @8.1-8.10 (type "_arg -> Num(_size)")))
 	(expressions
 		(expr @4.5-4.6 (type "Num(_size)"))
 		(expr @5.5-5.7 (type "Num(_size)"))
-		(expr @8.13-16.2 (type "_arg -> _ret"))))
+		(expr @8.13-16.2 (type "_arg -> Num(_size)"))))
 ~~~

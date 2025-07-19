@@ -1,8 +1,8 @@
 //! Strings written inline in Roc code, e.g. `x = "abc"`.
 
 const std = @import("std");
-const collections = @import("../collections.zig");
-const serialization = @import("../serialization/mod.zig");
+const collections = @import("collections");
+const serialization = @import("serialization");
 const testing = std.testing;
 
 /// The index of this string in a `StringLiteral.Store`.
@@ -31,6 +31,11 @@ pub const Store = struct {
     /// the first 7 bit would signal the length, the last bit would signal that the length
     /// continues to the previous byte
     buffer: std.ArrayListUnmanaged(u8) = .{},
+    /// When true, no new entries can be added to the store.
+    /// This is set after canonicalization is complete, so that
+    /// we know it's safe to serialize/deserialize the part of the interner
+    /// that goes from ident to string, because we don't go from string to ident anymore.
+    frozen: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
 
     /// Intiizalizes a `StringLiteral.Store` with capacity `bytes` of space.
     /// Note this specifically is the number of bytes for storing strings.
@@ -50,6 +55,9 @@ pub const Store = struct {
     ///
     /// Does not deduplicate, as string literals are expected to be large and mostly unique.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
+        if (std.debug.runtime_safety) {
+            std.debug.assert(!self.frozen); // Should not insert into a frozen store
+        }
         const str_len: u32 = @truncate(string.len);
 
         const str_len_bytes = std.mem.asBytes(&str_len);
@@ -67,6 +75,13 @@ pub const Store = struct {
         const idx_u32: u32 = @intCast(@intFromEnum(idx));
         const str_len = std.mem.bytesAsValue(u32, self.buffer.items[idx_u32 - 4 .. idx_u32]).*;
         return self.buffer.items[idx_u32 .. idx_u32 + str_len];
+    }
+
+    /// Freeze the store, preventing any new entries from being added.
+    pub fn freeze(self: *Store) void {
+        if (std.debug.runtime_safety) {
+            self.frozen = true;
+        }
     }
 
     /// Calculate the size needed to serialize this StringLiteral.Store

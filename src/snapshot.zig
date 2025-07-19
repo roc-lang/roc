@@ -7,25 +7,23 @@
 //! the given Roc code snippet.
 
 const std = @import("std");
-const testing = std.testing;
-const Allocator = std.mem.Allocator;
-const base = @import("base.zig");
-const parallel = base.parallel;
+const base = @import("base");
 const canonicalize = @import("check/canonicalize.zig");
-const types_mod = @import("types.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const cache = @import("cache/mod.zig");
 
 const Solver = @import("check/check_types.zig");
-const CIR = canonicalize.CIR;
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
-const types = @import("types.zig");
+const types = @import("types");
 const reporting = @import("reporting.zig");
 const tokenize = @import("check/parse/tokenize.zig");
-const SExprTree = @import("base/SExprTree.zig");
 const repl = @import("repl/eval.zig");
 
+const Allocator = std.mem.Allocator;
+const SExprTree = base.SExprTree;
+const parallel = base.parallel;
+const CIR = canonicalize.CIR;
 const AST = parse.AST;
 const Report = reporting.Report;
 
@@ -66,7 +64,7 @@ fn tokenToCategory(token: tokenize.Token.Tag) TokenCategory {
         .UpperIdent, .LowerIdent, .DotLowerIdent, .DotUpperIdent, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .NamedUnderscore, .OpaqueName => .identifier,
 
         // Strings
-        .StringStart, .StringEnd, .StringPart, .MultilineStringStart, .MultilineStringEnd, .SingleQuote, .MalformedSingleQuoteUnclosed => .string,
+        .StringStart, .StringEnd, .StringPart, .MultilineStringStart, .MultilineStringEnd, .SingleQuote, .MalformedSingleQuoteUnclosed, .MalformedSingleQuoteEmpty, .MalformedSingleQuoteTooLong => .string,
 
         // Numbers
         .Float, .Int, .DotInt, .NoSpaceDotInt, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits => .number,
@@ -1362,7 +1360,7 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *con
 
         if (i + 1 < tokenizedBuffer.tokens.len) {
             const next_region = tokenizedBuffer.resolve(@intCast(i + 1));
-            if (source_contains_newline_in_range(parse_ast.env.source, region.end.offset, next_region.start.offset)) {
+            if (source_contains_newline_in_range(parse_ast.env.source, @min(region.end.offset, next_region.start.offset), @max(region.end.offset, next_region.start.offset))) {
                 try output.md_writer.writeAll("\n");
             }
         }
@@ -1595,7 +1593,7 @@ fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir
     var solved = std.ArrayList(u8).init(output.gpa);
     defer solved.deinit();
 
-    try types_mod.writers.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, can_ir.env);
+    try types.writers.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, can_ir.env);
 
     // Markdown TYPES section
     try output.md_writer.writeAll(Section.TYPES);
@@ -1819,7 +1817,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 }
 
 /// Extracts the sections from a snapshot file
-fn extractSections(gpa: Allocator, content: []const u8) !Content {
+pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
     var ranges = std.AutoHashMap(Section, Section.Range).init(gpa);
     defer ranges.deinit();
 

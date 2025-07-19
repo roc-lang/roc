@@ -2,15 +2,15 @@
 //! These tests cover various scenarios including boundary conditions, error cases, and complex type layouts
 
 const std = @import("std");
-const base = @import("../base.zig");
-const types = @import("../types/types.zig");
-const types_store = @import("../types/store.zig");
+const base = @import("base");
+const types = @import("types");
 const layout = @import("layout.zig");
 const layout_store_ = @import("store.zig");
-const Ident = @import("../base/Ident.zig");
-const collections = @import("../collections.zig");
-const target = @import("../base/target.zig");
+const collections = @import("collections");
 
+const types_store = types.store;
+const Ident = base.Ident;
+const target = base.target;
 const LayoutError = layout_store_.LayoutError;
 const Store = layout_store_.Store;
 

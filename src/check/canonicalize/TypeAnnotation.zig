@@ -3,10 +3,10 @@
 //! Includes formatting of type annotations to s-expression debug format.
 
 const std = @import("std");
-const base = @import("../../base.zig");
-const types = @import("../../types.zig");
+const base = @import("base");
+const types = @import("types");
 const CIR = @import("CIR.zig");
-const collections = @import("../../collections.zig");
+const collections = @import("collections");
 const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
 const Region = base.Region;

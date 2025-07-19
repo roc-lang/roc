@@ -3,12 +3,12 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("../../base.zig");
+const base = @import("base");
+const serialization = @import("serialization");
+const types = @import("types");
+const collections = @import("collections");
 const tracy = @import("../../tracy.zig");
-const types = @import("../../types.zig");
-const collections = @import("../../collections.zig");
 const reporting = @import("../../reporting.zig");
-const serialization = @import("../../serialization/mod.zig");
 const SExpr = base.SExpr;
 const Scratch = base.Scratch;
 const DataSpan = base.DataSpan;
@@ -21,7 +21,7 @@ const CalledVia = base.CalledVia;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
 
-pub const RocDec = @import("../../builtins/dec.zig").RocDec;
+pub const RocDec = @import("builtins").RocDec;
 pub const Node = @import("Node.zig");
 pub const NodeStore = @import("NodeStore.zig");
 pub const Expr = @import("Expression.zig").Expr;
@@ -316,8 +316,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             );
         },
         .invalid_single_quote => Diagnostic.buildInvalidSingleQuoteReport(allocator),
-        .too_long_single_quote => Diagnostic.buildTooLongSingleQuoteReport(allocator),
-        .empty_single_quote => Diagnostic.buildEmptySingleQuoteReport(allocator),
         .crash_expects_string => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
             break :blk Diagnostic.buildCrashExpectsStringReport(allocator, region_info, filename, self.temp_source_for_sexpr.?, self.env.line_starts.items.items);
@@ -1277,7 +1275,7 @@ pub const Import = struct {
 
         /// Get or create an Import.Idx for a module name
         pub fn getOrPut(self: *Store, gpa: std.mem.Allocator, module_name: []const u8) !Import.Idx {
-            const gop = try self.map.getOrPut(gpa, module_name);
+            const gop = try self.map.getOrPutContext(gpa, module_name, std.hash_map.StringContext{});
             if (!gop.found_existing) {
                 // Store the string
                 const start = self.strings.items.len;
@@ -1717,6 +1715,29 @@ pub const IntValue = struct {
             .bytes = [16]u8{ 0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
             .kind = .i128,
         };
+    }
+
+    pub fn toI128(self: IntValue) i128 {
+        switch (self.kind) {
+            .i128 => {
+                // Convert little-endian bytes to i128
+                var result: i128 = 0;
+                var i: usize = 0;
+                while (i < 16) : (i += 1) {
+                    result |= @as(i128, self.bytes[i]) << @intCast(i * 8);
+                }
+                return result;
+            },
+            .u128 => {
+                // Convert little-endian bytes to u128, then cast to i128
+                var result: u128 = 0;
+                var i: usize = 0;
+                while (i < 16) : (i += 1) {
+                    result |= @as(u128, self.bytes[i]) << @intCast(i * 8);
+                }
+                return @intCast(result);
+            },
+        }
     }
 };
 
