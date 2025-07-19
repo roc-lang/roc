@@ -77,14 +77,21 @@ The `PROBLEMS` section provides human-readable diagnostics. When you modify the 
 
 ### SortedArrayBuilder Collections
 
-After canonicalization, certain hash maps (like `exposed_by_str` and `exposed_nodes` in ModuleEnv) become read-only. These use `SortedArrayBuilder` which provides:
+`SortedArrayBuilder` is used throughout the compiler for building key-value mappings that need deterministic serialization and efficient lookups. Key uses include:
 
-- **Deterministic serialization**: Entries are sorted by key, ensuring reproducible builds
-- **Zero-copy deserialization**: Data can be memory-mapped directly without rebuilding hash tables
-- **No uninitialized memory**: Unlike raw hash map serialization, only actual data is written
-- **Efficient lookups**: Binary search on sorted arrays performs well for small maps (10-100 entries)
+- **Module imports** (`CIR.Import.Store.sorted_imports`): Maps module names to import indices
+- **Exposed items** (`ModuleEnv.exposed_by_str`): Tracks which identifiers are exposed by their intern indices
+- **Exposed definitions** (`ModuleEnv.exposed_nodes`): Maps exposed intern indices to their CIR node locations
 
-The `SortedArrayBuilder` type allows building sorted key-value mappings during canonicalization. It supports both string and numeric keys, maintains sorted order for deterministic serialization, and provides efficient binary search lookups. This eliminates the issues with serializing raw hash map internals while maintaining good performance.
+The `SortedArrayBuilder` provides:
+
+- **Lazy sorting**: Items can be added in any order; sorting happens only when needed
+- **Binary search lookups**: O(log n) search on sorted arrays
+- **Deterministic serialization**: Sorted order ensures reproducible builds
+- **Memory efficiency**: No hash map overhead, just a flat array of key-value pairs
+- **Type flexibility**: Supports both string keys (for imports) and numeric keys (for intern indices)
+
+During compilation, items are added with `put()`, then before serialization or lookups, `ensureSorted()` is called (typically via `freeze()`). This design allows efficient building during parsing while maintaining sorted order for fast lookups during type checking and code generation.
 
 ## Roc Language Syntax
 
