@@ -23,12 +23,9 @@ idents: Ident.Store,
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 types: types_mod.Store,
-/// Map of exposed items by their intern indices
-/// This is built during canonicalization and preserved for later use
-exposed_by_str: collections.SortedArrayBuilder(u32, void),
-/// Map of exposed item intern indices to their CIR node indices (stored as u16)
-/// This is populated during canonicalization to allow cross-module lookups
-exposed_nodes: collections.SortedArrayBuilder(u32, u16),
+/// Collection of exposed items mapping intern indices to CIR node indices
+/// This combines the functionality of the old exposed_by_str and exposed_nodes
+exposed_items: collections.ExposedItems,
 
 /// Line starts for error reporting. We retain only start and offset positions in the IR
 /// and then use these line starts to calculate the line number and column number as required.
@@ -48,8 +45,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .ident_ids_for_slicing = try collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
         .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
         .types = try types_mod.Store.initCapacity(gpa, 2048, 512),
-        .exposed_by_str = collections.SortedArrayBuilder(u32, void).init(),
-        .exposed_nodes = collections.SortedArrayBuilder(u32, u16).init(),
+        .exposed_items = collections.ExposedItems.init(),
         .line_starts = try collections.SafeList(u32).initCapacity(gpa, 256),
         .source = source,
     };
@@ -62,17 +58,15 @@ pub fn deinit(self: *Self) void {
     self.strings.deinit(self.gpa);
     self.types.deinit();
     self.line_starts.deinit(self.gpa);
-    self.exposed_by_str.deinit(self.gpa);
-    self.exposed_nodes.deinit(self.gpa);
+    self.exposed_items.deinit(self.gpa);
 
     self.gpa.free(self.source);
 }
 
 /// Freeze the exposed maps for efficient read-only access after canonicalization
 pub fn freeze(self: *Self) !void {
-    // Ensure the arrays are sorted before any const operations
-    self.exposed_by_str.ensureSorted(self.gpa);
-    self.exposed_nodes.ensureSorted(self.gpa);
+    // Ensure the array is sorted before any const operations
+    self.exposed_items.ensureSorted(self.gpa);
 }
 
 /// Calculate and store line starts from the source text
@@ -132,11 +126,8 @@ pub fn relocate(self: *Self, offset: isize) void {
     // Relocate types
     self.types.relocate(offset);
 
-    // Relocate exposed_by_str
-    self.exposed_by_str.relocate(offset);
-
-    // Relocate exposed_nodes
-    self.exposed_nodes.relocate(offset);
+    // Relocate exposed_items
+    self.exposed_items.relocate(offset);
 
     // Relocate line_starts
     self.line_starts.relocate(offset);
@@ -183,11 +174,8 @@ pub fn serializedSize(self: *const Self) usize {
     // types store
     size += self.types.serializedSize();
 
-    // exposed_by_str
-    size += self.exposed_by_str.serializedSize();
-
-    // exposed_nodes
-    size += self.exposed_nodes.serializedSize();
+    // exposed_items
+    size += self.exposed_items.serializedSize();
 
     // line_starts
     size = std.mem.alignForward(usize, size, @alignOf(@TypeOf(self.line_starts.items.items)));
@@ -229,13 +217,9 @@ pub fn serializeInto(self: *const Self, buffer: []u8) !usize {
     const types_bytes_written = try self.types.serializeInto(buffer[write_offset..]);
     write_offset += types_bytes_written;
 
-    // Serialize exposed_by_str
-    _ = try self.exposed_by_str.serializeInto(buffer[write_offset..]);
-    write_offset += self.exposed_by_str.serializedSize();
-
-    // Serialize exposed_nodes
-    _ = try self.exposed_nodes.serializeInto(buffer[write_offset..]);
-    write_offset += self.exposed_nodes.serializedSize();
+    // Serialize exposed_items
+    _ = try self.exposed_items.serializeInto(self.gpa, buffer[write_offset..]);
+    write_offset += self.exposed_items.serializedSize();
 
     // Serialize line_starts
     const line_starts_offset = if (self.line_starts.items.items.len > 0) blk: {
@@ -269,20 +253,7 @@ pub fn serializeInto(self: *const Self, buffer: []u8) !usize {
         .ident_ids_for_slicing = .{ .items = .{ .items = if (self.ident_ids_for_slicing.items.items.len > 0) @as([*]Ident.Idx, @ptrFromInt(ident_ids_offset))[0..self.ident_ids_for_slicing.items.items.len] else @as([*]Ident.Idx, @ptrFromInt(@alignOf(Ident.Idx)))[0..0], .capacity = self.ident_ids_for_slicing.items.capacity } },
         .strings = .{ .buffer = .{ .items = if (self.strings.buffer.items.len > 0) @as([*]u8, @ptrFromInt(strings_buffer_offset))[0..self.strings.buffer.items.len] else @as([*]u8, @ptrFromInt(@alignOf(u8)))[0..0], .capacity = self.strings.buffer.capacity } },
         .types = undefined, // Complex structure, will be set up by types.serializeInto
-        .exposed_by_str = .{
-            .map = .{
-                .metadata = null,
-                .size = 0,
-                .available = 0,
-            },
-        }, // Will be set up by hash map serialization
-        .exposed_nodes = .{
-            .map = .{
-                .metadata = null,
-                .size = 0,
-                .available = 0,
-            },
-        }, // Will be set up by hash map serialization
+        .exposed_items = collections.ExposedItems.init(), // Will be set up by deserialization
         .line_starts = .{ .items = .{ .items = if (self.line_starts.items.items.len > 0) @as([*]u32, @ptrFromInt(line_starts_offset))[0..self.line_starts.items.items.len] else @as([*]u32, @ptrFromInt(@alignOf(u32)))[0..0], .capacity = self.line_starts.items.capacity } },
         .source = if (self.source.len > 0) @as([*]const u8, @ptrFromInt(source_offset))[0..self.source.len] else @as([*]const u8, @ptrFromInt(1))[0..0],
     };
@@ -346,13 +317,13 @@ pub fn appendToIovecs(self: *const Self, writer: *iovec_serialize.IovecWriter) !
     _ = writer.getOffset(); // types_offset
     _ = try self.types.appendToIovecs(writer);
 
-    // Serialize exposed_by_str
-    _ = writer.getOffset(); // exposed_by_str_offset
-    _ = try self.exposed_by_str.appendToIovecs(writer);
-
-    // Serialize exposed_nodes
-    _ = writer.getOffset(); // exposed_nodes_offset
-    _ = try self.exposed_nodes.appendToIovecs(writer);
+    // Serialize exposed_items
+    _ = writer.getOffset(); // exposed_items_offset
+    const exposed_items_size = self.exposed_items.serializedSize();
+    const exposed_items_buffer = try self.gpa.alloc(u8, exposed_items_size);
+    defer self.gpa.free(exposed_items_buffer);
+    _ = try self.exposed_items.serializeInto(self.gpa, exposed_items_buffer);
+    try writer.writeAll(exposed_items_buffer);
 
     // Serialize line_starts
     const line_starts_offset = if (self.line_starts.items.items.len > 0) blk: {
@@ -386,20 +357,7 @@ pub fn appendToIovecs(self: *const Self, writer: *iovec_serialize.IovecWriter) !
         .ident_ids_for_slicing = .{ .items = .{ .items = if (self.ident_ids_for_slicing.items.items.len > 0) @as([*]Ident.Idx, @ptrFromInt(ident_ids_offset))[0..self.ident_ids_for_slicing.items.items.len] else @as([*]Ident.Idx, @ptrFromInt(@alignOf(Ident.Idx)))[0..0], .capacity = self.ident_ids_for_slicing.items.capacity } },
         .strings = .{ .buffer = .{ .items = if (self.strings.buffer.items.len > 0) @as([*]u8, @ptrFromInt(strings_buffer_offset))[0..self.strings.buffer.items.len] else @as([*]u8, @ptrFromInt(@alignOf(u8)))[0..0], .capacity = self.strings.buffer.capacity } },
         .types = undefined, // Complex structure, will be set up by types.appendToIovecs
-        .exposed_by_str = .{
-            .map = .{
-                .metadata = null,
-                .size = 0,
-                .available = 0,
-            },
-        }, // Will be set up by hash map serialization
-        .exposed_nodes = .{
-            .map = .{
-                .metadata = null,
-                .size = 0,
-                .available = 0,
-            },
-        }, // Will be set up by hash map serialization
+        .exposed_items = collections.ExposedItems.init(), // Will be set up by deserialization
         .line_starts = .{ .items = .{ .items = if (self.line_starts.items.items.len > 0) @as([*]u32, @ptrFromInt(line_starts_offset))[0..self.line_starts.items.items.len] else @as([*]u32, @ptrFromInt(@alignOf(u32)))[0..0], .capacity = self.line_starts.items.capacity } },
         .source = if (self.source.len > 0) @as([*]const u8, @ptrFromInt(source_offset))[0..self.source.len] else @as([*]const u8, @ptrFromInt(1))[0..0],
     };

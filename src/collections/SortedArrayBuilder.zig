@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const print = std.debug.print;
 
 /// A builder for creating sorted arrays directly without using hash maps
 /// This is more efficient when we know we won't have duplicates
@@ -98,12 +99,87 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             return null;
         }
 
-        /// Ensure the array is sorted
+        /// Ensure the array is sorted and deduplicate any duplicate entries
         pub fn ensureSorted(self: *Self, allocator: Allocator) void {
-            _ = allocator;
             if (!self.sorted) {
                 std.sort.pdq(Entry, self.entries.items, {}, Entry.lessThan);
                 self.sorted = true;
+
+                // Check for and report duplicates, then deduplicate
+                self.deduplicateAndReport(allocator);
+            }
+        }
+
+        /// Check for duplicates, report them, and remove duplicates keeping the last occurrence
+        fn deduplicateAndReport(self: *Self, allocator: Allocator) void {
+            if (self.entries.items.len <= 1) return;
+
+            // First pass: detect and report duplicates
+            var i: usize = 1;
+            var reported_duplicate = false;
+            while (i < self.entries.items.len) {
+                const prev_entry = self.entries.items[i - 1];
+                const curr_entry = self.entries.items[i];
+                const is_duplicate = if (K == []const u8)
+                    std.mem.eql(u8, prev_entry.key, curr_entry.key)
+                else
+                    prev_entry.key == curr_entry.key;
+
+                if (is_duplicate) {
+                    if (!reported_duplicate) {
+                        if (K == []const u8) {
+                            print("Warning: Duplicate key found: '{s}'\n", .{curr_entry.key});
+                        } else {
+                            print("Warning: Duplicate key found: {any}\n", .{curr_entry.key});
+                        }
+                        reported_duplicate = true;
+                    }
+                }
+                i += 1;
+            }
+
+            // Second pass: deduplicate by keeping last occurrence
+            var write_index: usize = 0;
+            for (self.entries.items, 0..) |entry, read_index| {
+                var should_keep = true;
+
+                // Look ahead to see if there's a duplicate later
+                for (self.entries.items[read_index + 1 ..]) |future_entry| {
+                    const is_duplicate = if (K == []const u8)
+                        std.mem.eql(u8, entry.key, future_entry.key)
+                    else
+                        entry.key == future_entry.key;
+
+                    if (is_duplicate) {
+                        should_keep = false;
+                        break;
+                    }
+                }
+
+                if (should_keep) {
+                    if (write_index != read_index) {
+                        self.entries.items[write_index] = entry;
+                    }
+                    write_index += 1;
+                } else {
+                    // Free the string key that we're not keeping
+                    if (K == []const u8) {
+                        allocator.free(entry.key);
+                    }
+                }
+            }
+
+            // Update the length to reflect deduplicated entries
+            self.entries.items.len = write_index;
+        }
+
+        /// Relocate pointers after memory movement
+        pub fn relocate(self: *Self, offset: isize) void {
+            // Relocate the entries array pointer
+            if (self.entries.items.len > 0) {
+                const old_ptr = @intFromPtr(self.entries.items.ptr);
+                const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+                self.entries.items.ptr = @ptrFromInt(new_ptr);
             }
         }
 
@@ -282,4 +358,87 @@ test "SortedArrayBuilder maintains sorted order when added in order" {
     // Get should work without sorting
     try testing.expectEqual(@as(?u16, 1), builder.get(allocator, "aaa"));
     try testing.expectEqual(@as(?u16, 4), builder.get(allocator, "ddd"));
+}
+
+test "SortedArrayBuilder handles duplicates with string keys" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var builder = SortedArrayBuilder([]const u8, u32).init();
+    defer builder.deinit(allocator);
+
+    // Add duplicate keys with different values
+    try builder.put(allocator, "apple", 10);
+    try builder.put(allocator, "banana", 20);
+    try builder.put(allocator, "apple", 30); // duplicate key
+    try builder.put(allocator, "cherry", 40);
+    try builder.put(allocator, "banana", 50); // duplicate key
+
+    // Initial count includes duplicates
+    try testing.expectEqual(@as(usize, 5), builder.count());
+
+    // Force sorting and deduplication
+    builder.ensureSorted(allocator);
+
+    // Count should be reduced after deduplication
+    try testing.expectEqual(@as(usize, 3), builder.count());
+
+    // Should return the last value for each key (keeping last occurrence)
+    try testing.expectEqual(@as(?u32, 30), builder.get(allocator, "apple"));
+    try testing.expectEqual(@as(?u32, 50), builder.get(allocator, "banana"));
+    try testing.expectEqual(@as(?u32, 40), builder.get(allocator, "cherry"));
+}
+
+test "SortedArrayBuilder handles duplicates with numeric keys" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var builder = SortedArrayBuilder(u32, []const u8).init();
+    defer builder.deinit(allocator);
+
+    // Add duplicate keys with different values
+    try builder.put(allocator, 100, "first");
+    try builder.put(allocator, 200, "second");
+    try builder.put(allocator, 100, "updated_first"); // duplicate key
+    try builder.put(allocator, 300, "third");
+
+    // Initial count includes duplicates
+    try testing.expectEqual(@as(usize, 4), builder.count());
+
+    // Force sorting and deduplication
+    builder.ensureSorted(allocator);
+
+    // Count should be reduced after deduplication
+    try testing.expectEqual(@as(usize, 3), builder.count());
+
+    // Should return the last value for each key
+    try testing.expectEqual(@as(?[]const u8, "updated_first"), builder.get(allocator, 100));
+    try testing.expectEqual(@as(?[]const u8, "second"), builder.get(allocator, 200));
+    try testing.expectEqual(@as(?[]const u8, "third"), builder.get(allocator, 300));
+}
+
+test "SortedArrayBuilder no duplicates case" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var builder = SortedArrayBuilder([]const u8, u16).init();
+    defer builder.deinit(allocator);
+
+    // Add unique keys only
+    try builder.put(allocator, "unique1", 1);
+    try builder.put(allocator, "unique2", 2);
+    try builder.put(allocator, "unique3", 3);
+
+    const original_count = builder.count();
+
+    // Force sorting (should not change count)
+    builder.ensureSorted(allocator);
+
+    // Count should remain the same
+    try testing.expectEqual(original_count, builder.count());
+
+    // All values should be retrievable
+    try testing.expectEqual(@as(?u16, 1), builder.get(allocator, "unique1"));
+    try testing.expectEqual(@as(?u16, 2), builder.get(allocator, "unique2"));
+    try testing.expectEqual(@as(?u16, 3), builder.get(allocator, "unique3"));
 }

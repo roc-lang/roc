@@ -354,7 +354,7 @@ test "complex case with redundant, shadowing, and not implemented" {
     try testing.expect(found_not_implemented);
 }
 
-test "exposed_by_str is populated correctly" {
+test "exposed_items is populated correctly" {
     const allocator = testing.allocator;
 
     const source =
@@ -379,15 +379,15 @@ test "exposed_by_str is populated correctly" {
 
     try canonicalizer.canonicalizeFile();
 
-    // Check that exposed_by_str contains all exposed items
+    // Check that exposed_items contains all exposed items
     // First find the intern indices for the exposed items
     var foo_idx: ?u32 = null;
     var bar_idx: ?u32 = null;
     var my_type_idx: ?u32 = null;
 
-    // The exposed_by_str map contains the actual intern indices used during canonicalization
+    // The exposed_items map contains the actual intern indices used during canonicalization
     // We need to find these specific indices, not just any index for the same text
-    for (env.exposed_by_str.entries.items) |entry| {
+    for (env.exposed_items.items.entries.items) |entry| {
         const text = env.idents.interner.getText(@enumFromInt(entry.key));
         if (std.mem.eql(u8, text, "foo") and foo_idx == null) {
             foo_idx = entry.key;
@@ -405,16 +405,30 @@ test "exposed_by_str is populated correctly" {
     // Freeze the environment to ensure maps are sorted and deduplicated
     try env.freeze();
 
-    try testing.expect(env.exposed_by_str.get(allocator, foo_idx.?) != null);
-    try testing.expect(env.exposed_by_str.get(allocator, bar_idx.?) != null);
-    try testing.expect(env.exposed_by_str.get(allocator, my_type_idx.?) != null);
+    try testing.expect(env.exposed_items.isExposed(allocator, foo_idx.?));
+    try testing.expect(env.exposed_items.isExposed(allocator, bar_idx.?));
+    try testing.expect(env.exposed_items.isExposed(allocator, my_type_idx.?));
 
-    // Should have 4 entries (including duplicate "foo")
-    // The interner gives different indices for duplicate strings
-    try testing.expectEqual(@as(usize, 4), env.exposed_by_str.count());
+    // ExposedItems behavior explanation:
+    // The new ExposedItems combines the old exposed_by_str and exposed_nodes into a single collection.
+    // In this test: module [foo, bar, MyType, foo]
+    //
+    // We get 6 entries because:
+    // 1. createExposedScope adds each exposed item (including duplicates) with node index 0
+    //    - "foo" (first occurrence) -> intern index A, node index 0
+    //    - "bar" -> intern index B, node index 0
+    //    - "MyType" -> intern index C, node index 0
+    //    - "foo" (second occurrence) -> intern index D, node index 0 (different intern index!)
+    // 2. canonicalizeFile adds items with definitions using their actual node indices
+    //    - "foo" definition -> intern index E, node index > 0
+    //    - "bar" definition -> intern index F, node index > 0
+    //
+    // Total: 6 entries (4 from declarations + 2 from definitions)
+    // The interner creates unique indices for each occurrence, so no deduplication occurs.
+    try testing.expectEqual(@as(usize, 6), env.exposed_items.count());
 }
 
-test "exposed_by_str persists after canonicalization" {
+test "exposed_items persists after canonicalization" {
     const allocator = testing.allocator;
 
     const source =
@@ -439,14 +453,14 @@ test "exposed_by_str persists after canonicalization" {
 
     try canonicalizer.canonicalizeFile();
 
-    // All exposed items should be in exposed_by_str, even those not implemented
+    // All exposed items should be in exposed_items, even those not implemented
     // First find the intern indices
     var x_idx: ?u32 = null;
     var y_idx: ?u32 = null;
     var z_idx: ?u32 = null;
 
-    // Find the intern indices that were actually stored in exposed_by_str
-    for (env.exposed_by_str.entries.items) |entry| {
+    // Find the intern indices that were actually stored in exposed_items
+    for (env.exposed_items.items.entries.items) |entry| {
         const text = env.idents.interner.getText(@enumFromInt(entry.key));
         if (std.mem.eql(u8, text, "x") and x_idx == null) {
             x_idx = entry.key;
@@ -464,15 +478,29 @@ test "exposed_by_str persists after canonicalization" {
     // Freeze the environment to ensure maps are sorted
     try env.freeze();
 
-    try testing.expect(env.exposed_by_str.get(allocator, x_idx.?) != null);
-    try testing.expect(env.exposed_by_str.get(allocator, y_idx.?) != null);
-    try testing.expect(env.exposed_by_str.get(allocator, z_idx.?) != null);
+    try testing.expect(env.exposed_items.isExposed(allocator, x_idx.?));
+    try testing.expect(env.exposed_items.isExposed(allocator, y_idx.?));
+    try testing.expect(env.exposed_items.isExposed(allocator, z_idx.?));
 
-    // Verify the map persists in env after canonicalization is complete
-    try testing.expectEqual(@as(usize, 3), env.exposed_by_str.count());
+    // ExposedItems behavior explanation:
+    // In this test: module [x, y, z] with x=1, y=2, and z undefined
+    //
+    // We get 5 entries because:
+    // 1. createExposedScope adds all declared items with node index 0:
+    //    - "x" -> intern index A, node index 0
+    //    - "y" -> intern index B, node index 0
+    //    - "z" -> intern index C, node index 0
+    // 2. canonicalizeFile adds only items with definitions:
+    //    - "x" definition -> intern index D, node index > 0
+    //    - "y" definition -> intern index E, node index > 0
+    //    - "z" has no definition, so no additional entry
+    //
+    // Total: 5 entries (3 from declarations + 2 from definitions)
+    // "z" appears only once since it has no definition to add a second entry.
+    try testing.expectEqual(@as(usize, 5), env.exposed_items.count());
 }
 
-test "exposed_by_str never has entries removed" {
+test "exposed_items never has entries removed" {
     const allocator = testing.allocator;
 
     const source =
@@ -497,15 +525,15 @@ test "exposed_by_str never has entries removed" {
 
     try canonicalizer.canonicalizeFile();
 
-    // All exposed items should remain in exposed_by_str
+    // All exposed items should remain in exposed_items
     // Even though foo appears twice and baz is not implemented,
-    // exposed_by_str should have all unique exposed identifiers
+    // exposed_items should have all unique exposed identifiers
     // First find the intern indices
     var foo_idx: ?u32 = null;
     var bar_idx: ?u32 = null;
     var baz_idx: ?u32 = null;
-    // Find the intern indices that were actually stored in exposed_by_str
-    for (env.exposed_by_str.entries.items) |entry| {
+    // Find the intern indices that were actually stored in exposed_items
+    for (env.exposed_items.items.entries.items) |entry| {
         const text = env.idents.interner.getText(@enumFromInt(entry.key));
         if (std.mem.eql(u8, text, "foo") and foo_idx == null) {
             foo_idx = entry.key;
@@ -523,11 +551,25 @@ test "exposed_by_str never has entries removed" {
     // Freeze the environment to ensure maps are sorted
     try env.freeze();
 
-    try testing.expect(env.exposed_by_str.get(allocator, foo_idx.?) != null);
-    try testing.expect(env.exposed_by_str.get(allocator, bar_idx.?) != null);
-    try testing.expect(env.exposed_by_str.get(allocator, baz_idx.?) != null);
+    try testing.expect(env.exposed_items.isExposed(allocator, foo_idx.?));
+    try testing.expect(env.exposed_items.isExposed(allocator, bar_idx.?));
+    try testing.expect(env.exposed_items.isExposed(allocator, baz_idx.?));
 
-    // Should have exactly 3 unique entries
-    // Note: 'foo' is exposed twice, so we get 4 entries instead of 3
-    try testing.expectEqual(@as(usize, 4), env.exposed_by_str.count());
+    // ExposedItems behavior explanation:
+    // In this test: module [foo, bar, foo, baz] with all items having definitions
+    //
+    // We get 7 entries because:
+    // 1. createExposedScope adds each declared item (including duplicates) with node index 0:
+    //    - "foo" (first occurrence) -> intern index A, node index 0
+    //    - "bar" -> intern index B, node index 0
+    //    - "foo" (second occurrence) -> intern index C, node index 0 (different intern index!)
+    //    - "baz" -> intern index D, node index 0
+    // 2. canonicalizeFile adds all items with definitions:
+    //    - "foo" definition -> intern index E, node index > 0
+    //    - "bar" definition -> intern index F, node index > 0
+    //    - "baz" definition -> intern index G, node index > 0
+    //
+    // Total: 7 entries (4 from declarations + 3 from definitions)
+    // Even though "foo" appears twice in the declaration, each gets a unique intern index.
+    try testing.expectEqual(@as(usize, 7), env.exposed_items.count());
 }

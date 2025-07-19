@@ -32,10 +32,10 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     const decode_problem_idx = try json_env.idents.insert(allocator, Ident.for_text("DecodeProblem"), Region.zero());
 
     // Add to exposed map using intern indices
-    try json_env.exposed_by_str.put(allocator, @intFromEnum(decode_idx), {});
-    try json_env.exposed_by_str.put(allocator, @intFromEnum(encode_idx), {});
-    try json_env.exposed_by_str.put(allocator, @intFromEnum(json_error_idx), {});
-    try json_env.exposed_by_str.put(allocator, @intFromEnum(decode_problem_idx), {});
+    try json_env.exposed_items.put(allocator, @intFromEnum(decode_idx), 0);
+    try json_env.exposed_items.put(allocator, @intFromEnum(encode_idx), 0);
+    try json_env.exposed_items.put(allocator, @intFromEnum(json_error_idx), 0);
+    try json_env.exposed_items.put(allocator, @intFromEnum(decode_problem_idx), 0);
 
     try module_envs.put("Json", &json_env);
 
@@ -50,9 +50,9 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     const result_idx = try utils_env.idents.insert(allocator, Ident.for_text("Result"), Region.zero());
 
     // Add to exposed map using intern indices
-    try utils_env.exposed_by_str.put(allocator, @intFromEnum(map_idx), {});
-    try utils_env.exposed_by_str.put(allocator, @intFromEnum(filter_idx), {});
-    try utils_env.exposed_by_str.put(allocator, @intFromEnum(result_idx), {});
+    try utils_env.exposed_items.put(allocator, @intFromEnum(map_idx), 0);
+    try utils_env.exposed_items.put(allocator, @intFromEnum(filter_idx), 0);
+    try utils_env.exposed_items.put(allocator, @intFromEnum(result_idx), 0);
 
     try module_envs.put("Utils", &utils_env);
 
@@ -521,7 +521,7 @@ test "module-qualified lookups with e_lookup_external" {
     try expectEqual(true, found_dict_empty);
 }
 
-test "exposed_nodes - tracking CIR node indices for exposed items" {
+test "exposed_items - tracking CIR node indices for exposed items" {
     const allocator = testing.allocator;
 
     // Create module environments with exposed items
@@ -538,16 +538,11 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     const multiply_idx = try math_env.idents.insert(allocator, Ident.for_text("multiply"), Region.zero());
     const pi_idx = try math_env.idents.insert(allocator, Ident.for_text("PI"), Region.zero());
 
-    // Add to exposed maps using intern indices
-    try math_env.exposed_by_str.put(allocator, @intFromEnum(add_idx), {});
-    try math_env.exposed_by_str.put(allocator, @intFromEnum(multiply_idx), {});
-    try math_env.exposed_by_str.put(allocator, @intFromEnum(pi_idx), {});
-
-    // Simulate having CIR node indices for these exposed items
+    // Add to exposed maps using intern indices with CIR node indices
     // In real usage, these would be set during canonicalization of MathUtils
-    try math_env.exposed_nodes.put(allocator, @intFromEnum(add_idx), 100);
-    try math_env.exposed_nodes.put(allocator, @intFromEnum(multiply_idx), 200);
-    try math_env.exposed_nodes.put(allocator, @intFromEnum(pi_idx), 300);
+    try math_env.exposed_items.put(allocator, @intFromEnum(add_idx), 100);
+    try math_env.exposed_items.put(allocator, @intFromEnum(multiply_idx), 200);
+    try math_env.exposed_items.put(allocator, @intFromEnum(pi_idx), 300);
 
     try module_envs.put("MathUtils", &math_env);
 
@@ -617,14 +612,14 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     try expectEqual(true, found_multiply_with_idx_200);
     try expectEqual(true, found_pi_with_idx_300);
 
-    // Test case where exposed_nodes is not populated (should get 0)
+    // Test case where exposed_items is not populated (should get 0)
     var empty_env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
     defer empty_env.deinit();
 
     // Intern the string first
     const undefined_idx = try empty_env.idents.insert(allocator, Ident.for_text("undefined"), Region.zero());
-    try empty_env.exposed_by_str.put(allocator, @intFromEnum(undefined_idx), {});
-    // Don't add to exposed_nodes - should default to 0
+    try empty_env.exposed_items.put(allocator, @intFromEnum(undefined_idx), 0);
+    // Node index defaults to 0
     try module_envs.put("EmptyModule", &empty_env);
 
     const source2 =

@@ -40,10 +40,8 @@ test "ModuleEnv serialization and relocation" {
     // Add to exposed maps using intern indices
     const my_func_idx = env.idents.interner.outer_indices.items.len - 2; // ident1 was "myFunc"
     const other_func_idx = env.idents.interner.outer_indices.items.len - 1; // ident2 was "otherFunc"
-    try env.exposed_by_str.put(allocator, @intCast(my_func_idx), {});
-    try env.exposed_by_str.put(allocator, @intCast(other_func_idx), {});
-    try env.exposed_nodes.put(allocator, @intCast(my_func_idx), 42);
-    try env.exposed_nodes.put(allocator, @intCast(other_func_idx), 123);
+    try env.exposed_items.put(allocator, @intCast(my_func_idx), 42);
+    try env.exposed_items.put(allocator, @intCast(other_func_idx), 123);
 
     // Freeze exposed maps before serialization
     try env.freeze();
@@ -104,7 +102,7 @@ test "ModuleEnv serialization and relocation" {
     try std.testing.expectEqual(@as(usize, 2), loaded_env.types.len());
 
     // Verify exposed maps
-    try std.testing.expectEqual(@as(usize, 2), loaded_env.exposed_by_str.count());
+    try std.testing.expectEqual(@as(usize, 2), loaded_env.exposed_items.count());
 
     // Find the intern indices in the loaded environment
     var my_func_loaded_idx: ?u32 = null;
@@ -120,12 +118,12 @@ test "ModuleEnv serialization and relocation" {
 
     try std.testing.expect(my_func_loaded_idx != null);
     try std.testing.expect(other_func_loaded_idx != null);
-    try std.testing.expect(loaded_env.exposed_by_str.get(allocator, my_func_loaded_idx.?) != null);
-    try std.testing.expect(loaded_env.exposed_by_str.get(allocator, other_func_loaded_idx.?) != null);
+    try std.testing.expect(loaded_env.exposed_items.isExposed(allocator, my_func_loaded_idx.?));
+    try std.testing.expect(loaded_env.exposed_items.isExposed(allocator, other_func_loaded_idx.?));
 
-    try std.testing.expectEqual(@as(usize, 2), loaded_env.exposed_nodes.count());
-    try std.testing.expectEqual(@as(u16, 42), loaded_env.exposed_nodes.get(allocator, my_func_loaded_idx.?).?);
-    try std.testing.expectEqual(@as(u16, 123), loaded_env.exposed_nodes.get(allocator, other_func_loaded_idx.?).?);
+    try std.testing.expectEqual(@as(usize, 2), loaded_env.exposed_items.count());
+    try std.testing.expectEqual(@as(u16, 42), loaded_env.exposed_items.getNodeIndex(allocator, my_func_loaded_idx.?).?);
+    try std.testing.expectEqual(@as(u16, 123), loaded_env.exposed_items.getNodeIndex(allocator, other_func_loaded_idx.?).?);
 
     // Verify line starts
     try std.testing.expectEqual(@as(u32, 3), loaded_env.line_starts.len());

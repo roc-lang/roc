@@ -594,7 +594,7 @@ pub fn canonicalizeFile(
                         if (can_pattern == .assign) {
                             // Use the intern index from the canonicalized pattern
                             const intern_idx = @as(u32, can_pattern.assign.ident.idx);
-                            try self.can_ir.env.exposed_nodes.put(self.can_ir.env.gpa, intern_idx, def_idx_u16);
+                            try self.can_ir.env.exposed_items.put(self.can_ir.env.gpa, intern_idx, def_idx_u16);
                         }
                     }
 
@@ -827,9 +827,9 @@ fn createExposedScope(
                 const cir_ident_idx = try self.can_ir.env.idents.insert(gpa, base.Ident.for_text(ident_text), self.parse_ir.tokenizedRegionToRegion(ident.region));
                 const cir_intern_idx = @as(u32, cir_ident_idx.idx);
 
-                // Add to exposed_by_str using the CIR's intern index
+                // Add to exposed_items using the CIR's intern index
                 // Each occurrence gets a unique index, even for duplicate strings
-                try self.can_ir.env.exposed_by_str.put(gpa, cir_intern_idx, {});
+                try self.can_ir.env.exposed_items.put(gpa, cir_intern_idx, 0);
 
                 // Also build exposed_scope with proper identifiers
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
@@ -865,9 +865,9 @@ fn createExposedScope(
                 const cir_ident_idx = try self.can_ir.env.idents.insert(gpa, base.Ident.for_text(type_text), self.parse_ir.tokenizedRegionToRegion(type_name.region));
                 const cir_intern_idx = @as(u32, cir_ident_idx.idx);
 
-                // Add to exposed_by_str using the CIR's intern index
+                // Add to exposed_items using the CIR's intern index
                 // Each occurrence gets a unique index, even for duplicate strings
-                try self.can_ir.env.exposed_by_str.put(gpa, cir_intern_idx, {});
+                try self.can_ir.env.exposed_items.put(gpa, cir_intern_idx, 0);
 
                 // Also build exposed_scope with proper identifiers
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
@@ -903,9 +903,9 @@ fn createExposedScope(
                 const cir_ident_idx = try self.can_ir.env.idents.insert(gpa, base.Ident.for_text(type_text), self.parse_ir.tokenizedRegionToRegion(type_with_constructors.region));
                 const cir_intern_idx = @as(u32, cir_ident_idx.idx);
 
-                // Add to exposed_by_str using the CIR's intern index
+                // Add to exposed_items using the CIR's intern index
                 // Each occurrence gets a unique index, even for duplicate strings
-                try self.can_ir.env.exposed_by_str.put(gpa, cir_intern_idx, {});
+                try self.can_ir.env.exposed_items.put(gpa, cir_intern_idx, 0);
 
                 // Also build exposed_scope with proper identifiers
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
@@ -1322,7 +1322,7 @@ fn introduceExposedItemsIntoScope(
             }
 
             // Check if the item is exposed by the module
-            if (found_idx == null or module_env.exposed_by_str.get(self.can_ir.env.gpa, found_idx.?) == null) {
+            if (found_idx == null or !module_env.exposed_items.isExposed(self.can_ir.env.gpa, found_idx.?)) {
                 // Determine if it's a type or value based on capitalization
                 const first_char = item_name_text[0];
 
@@ -1631,7 +1631,7 @@ pub fn canonicalizeExpr(
                                         }
                                     }
                                     if (found_idx) |idx| {
-                                        break :blk module_env.exposed_nodes.get(self.can_ir.env.gpa, idx) orelse 0;
+                                        break :blk module_env.exposed_items.getNodeIndex(self.can_ir.env.gpa, idx) orelse 0;
                                     } else {
                                         break :blk 0;
                                     }
@@ -1693,7 +1693,7 @@ pub fn canonicalizeExpr(
                                         }
                                     }
                                     if (found_idx) |idx| {
-                                        break :blk module_env.exposed_nodes.get(self.can_ir.env.gpa, idx) orelse 0;
+                                        break :blk module_env.exposed_items.getNodeIndex(self.can_ir.env.gpa, idx) orelse 0;
                                     } else {
                                         break :blk 0;
                                     }
@@ -6391,7 +6391,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
                 }
             }
             if (found_idx) |idx| {
-                break :blk module_env.exposed_nodes.get(self.can_ir.env.gpa, idx) orelse 0;
+                break :blk module_env.exposed_items.getNodeIndex(self.can_ir.env.gpa, idx) orelse 0;
             } else {
                 break :blk 0;
             }

@@ -31,11 +31,8 @@ pub fn relocateModuleEnv(env: *ModuleEnv, offset: isize) void {
     // Relocate types
     relocateTypeStore(&env.types, offset);
 
-    // Relocate exposed_by_str
-    env.exposed_by_str.relocate(offset);
-
-    // Relocate exposed_nodes
-    env.exposed_nodes.relocate(offset);
+    // Relocate exposed_items
+    env.exposed_items.relocate(offset);
 
     // Relocate line_starts
     env.line_starts.relocate(offset);

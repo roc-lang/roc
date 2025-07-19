@@ -54,9 +54,11 @@ pub const Header = struct {
     ident_store: ComponentInfo,
     line_starts: ComponentInfo,
     types_store: ComponentInfo,
-    exposed_by_str: ComponentInfo,
-    exposed_nodes: ComponentInfo,
+    exposed_items: ComponentInfo,
     external_decls: ComponentInfo,
+
+    /// Padding to maintain header alignment after combining exposed_by_str and exposed_nodes
+    _padding_component: ComponentInfo,
 
     /// Spans can be stored directly since they're small
     all_defs: CIR.Def.Span,
@@ -120,8 +122,7 @@ pub const CacheModule = struct {
         const ident_store_size = module_env.idents.serializedSize();
         const line_starts_size = module_env.line_starts.serializedSize();
         const types_store_size = module_env.types.serializedSize();
-        const exposed_by_str_size = module_env.exposed_by_str.serializedSize();
-        const exposed_nodes_size = module_env.exposed_nodes.serializedSize();
+        const exposed_items_size = module_env.exposed_items.serializedSize();
         const external_decls_size = cir.external_decls.serializedSize();
 
         // Calculate aligned offsets
@@ -152,12 +153,8 @@ pub const CacheModule = struct {
         offset += @intCast(types_store_size);
 
         offset = @intCast(std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT));
-        const exposed_by_str_offset = offset;
-        offset += @intCast(exposed_by_str_size);
-
-        offset = @intCast(std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT));
-        const exposed_nodes_offset = offset;
-        offset += @intCast(exposed_nodes_size);
+        const exposed_items_offset = offset;
+        offset += @intCast(exposed_items_size);
 
         offset = @intCast(std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT));
         const external_decls_offset = offset;
@@ -187,9 +184,9 @@ pub const CacheModule = struct {
             .ident_store = .{ .offset = ident_store_offset, .length = @intCast(ident_store_size) },
             .line_starts = .{ .offset = line_starts_offset, .length = @intCast(line_starts_size) },
             .types_store = .{ .offset = types_store_offset, .length = @intCast(types_store_size) },
-            .exposed_by_str = .{ .offset = exposed_by_str_offset, .length = @intCast(exposed_by_str_size) },
-            .exposed_nodes = .{ .offset = exposed_nodes_offset, .length = @intCast(exposed_nodes_size) },
+            .exposed_items = .{ .offset = exposed_items_offset, .length = @intCast(exposed_items_size) },
             .external_decls = .{ .offset = external_decls_offset, .length = @intCast(external_decls_size) },
+            ._padding_component = .{ .offset = 0, .length = 0 },
             .all_defs = cir.all_defs,
             .all_statements = cir.all_statements,
             .error_count = error_count,
@@ -206,8 +203,7 @@ pub const CacheModule = struct {
         std.debug.assert(ident_store_offset % SERIALIZATION_ALIGNMENT == 0);
         std.debug.assert(line_starts_offset % SERIALIZATION_ALIGNMENT == 0);
         std.debug.assert(types_store_offset % SERIALIZATION_ALIGNMENT == 0);
-        std.debug.assert(exposed_by_str_offset % SERIALIZATION_ALIGNMENT == 0);
-        std.debug.assert(exposed_nodes_offset % SERIALIZATION_ALIGNMENT == 0);
+        std.debug.assert(exposed_items_offset % SERIALIZATION_ALIGNMENT == 0);
         std.debug.assert(external_decls_offset % SERIALIZATION_ALIGNMENT == 0);
 
         // Serialize each component
@@ -218,8 +214,7 @@ pub const CacheModule = struct {
         _ = try module_env.idents.serializeInto(data_section[ident_store_offset .. ident_store_offset + ident_store_size], allocator);
         _ = try module_env.line_starts.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[line_starts_offset .. line_starts_offset + line_starts_size])));
         _ = try module_env.types.serializeInto(data_section[types_store_offset .. types_store_offset + types_store_size]);
-        _ = try module_env.exposed_by_str.serializeInto(allocator, data_section[exposed_by_str_offset .. exposed_by_str_offset + exposed_by_str_size]);
-        _ = try module_env.exposed_nodes.serializeInto(allocator, data_section[exposed_nodes_offset .. exposed_nodes_offset + exposed_nodes_size]);
+        _ = try module_env.exposed_items.serializeInto(allocator, data_section[exposed_items_offset .. exposed_items_offset + exposed_items_size]);
         _ = try cir.external_decls.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[external_decls_offset .. external_decls_offset + external_decls_size])));
 
         // TODO Calculate and store checksum
@@ -296,11 +291,8 @@ pub const CacheModule = struct {
         var types_store = try TypeStore.deserializeFrom(self.getComponentData(.types_store), allocator);
         errdefer types_store.deinit();
 
-        var exposed_by_str = try collections.SortedArrayBuilder(u32, void).deserializeFrom(self.getComponentData(.exposed_by_str), allocator);
-        errdefer exposed_by_str.deinit(allocator);
-
-        var exposed_nodes = try collections.SortedArrayBuilder(u32, u16).deserializeFrom(self.getComponentData(.exposed_nodes), allocator);
-        errdefer exposed_nodes.deinit(allocator);
+        var exposed_items = try collections.ExposedItems.deserializeFrom(self.getComponentData(.exposed_items), allocator);
+        errdefer exposed_items.deinit(allocator);
 
         // Create ModuleEnv from deserialized components
         var module_env = base.ModuleEnv{
@@ -309,8 +301,7 @@ pub const CacheModule = struct {
             .ident_ids_for_slicing = ident_ids_for_slicing,
             .strings = strings,
             .types = types_store,
-            .exposed_by_str = exposed_by_str,
-            .exposed_nodes = exposed_nodes,
+            .exposed_items = exposed_items,
             .line_starts = line_starts,
             .source = source,
         };
@@ -353,8 +344,7 @@ pub const CacheModule = struct {
             .ident_store => self.header.ident_store,
             .line_starts => self.header.line_starts,
             .types_store => self.header.types_store,
-            .exposed_by_str => self.header.exposed_by_str,
-            .exposed_nodes => self.header.exposed_nodes,
+            .exposed_items => self.header.exposed_items,
             .external_decls => self.header.external_decls,
         };
         return self.data[info.offset .. info.offset + info.length];
@@ -374,8 +364,7 @@ pub const CacheModule = struct {
                 .ident_store = self.header.ident_store.length,
                 .line_starts = self.header.line_starts.length,
                 .types_store = self.header.types_store.length,
-                .exposed_by_str = self.header.exposed_by_str.length,
-                .exposed_nodes = self.header.exposed_nodes.length,
+                .exposed_items = self.header.exposed_items.length,
                 .external_decls = self.header.external_decls.length,
             },
         };
@@ -393,8 +382,7 @@ pub const CacheModule = struct {
                 .ident_store => self.header.ident_store,
                 .line_starts => self.header.line_starts,
                 .types_store => self.header.types_store,
-                .exposed_by_str => self.header.exposed_by_str,
-                .exposed_nodes => self.header.exposed_nodes,
+                .exposed_items => self.header.exposed_items,
                 .external_decls => self.header.external_decls,
             };
 
@@ -561,8 +549,7 @@ const ComponentType = enum {
     ident_store,
     line_starts,
     types_store,
-    exposed_by_str,
-    exposed_nodes,
+    exposed_items,
     external_decls,
 };
 
@@ -579,8 +566,7 @@ pub const Diagnostics = struct {
         ident_store: u32,
         line_starts: u32,
         types_store: u32,
-        exposed_by_str: u32,
-        exposed_nodes: u32,
+        exposed_items: u32,
         external_decls: u32,
     },
 };

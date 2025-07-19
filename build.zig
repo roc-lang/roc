@@ -82,6 +82,7 @@ pub fn build(b: *std.Build) void {
 
     // Configure module dependencies
     module_collections.addImport("serialization", module_serialization);
+    module_collections.addImport("base", module_base);
 
     module_base.addImport("serialization", module_serialization);
     module_base.addImport("collections", module_collections);

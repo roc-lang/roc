@@ -154,12 +154,12 @@ pub fn relocate(self: *Self, offset: isize) void {
 
     // Relocate the strings hash map
     // Although it's not serialized, we relocate it for future use cases
-    if (self.strings.unmanaged.size > 0) {
+    if (self.strings.size > 0) {
         // Relocate the metadata pointer
-        if (self.strings.unmanaged.metadata) |metadata| {
+        if (self.strings.metadata) |metadata| {
             const old_ptr = @intFromPtr(metadata);
             const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-            self.strings.unmanaged.metadata = @ptrFromInt(new_ptr);
+            self.strings.metadata = @ptrFromInt(new_ptr);
         }
     }
 }
