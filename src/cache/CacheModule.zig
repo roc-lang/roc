@@ -218,8 +218,8 @@ pub const CacheModule = struct {
         _ = try module_env.idents.serializeInto(data_section[ident_store_offset .. ident_store_offset + ident_store_size], allocator);
         _ = try module_env.line_starts.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[line_starts_offset .. line_starts_offset + line_starts_size])));
         _ = try module_env.types.serializeInto(data_section[types_store_offset .. types_store_offset + types_store_size]);
-        _ = try module_env.exposed_by_str.serializeInto(data_section[exposed_by_str_offset .. exposed_by_str_offset + exposed_by_str_size]);
-        _ = try module_env.exposed_nodes.serializeInto(data_section[exposed_nodes_offset .. exposed_nodes_offset + exposed_nodes_size]);
+        _ = try module_env.exposed_by_str.serializeInto(allocator, data_section[exposed_by_str_offset .. exposed_by_str_offset + exposed_by_str_size]);
+        _ = try module_env.exposed_nodes.serializeInto(allocator, data_section[exposed_nodes_offset .. exposed_nodes_offset + exposed_nodes_size]);
         _ = try cir.external_decls.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[external_decls_offset .. external_decls_offset + external_decls_size])));
 
         // TODO Calculate and store checksum
@@ -296,10 +296,10 @@ pub const CacheModule = struct {
         var types_store = try TypeStore.deserializeFrom(self.getComponentData(.types_store), allocator);
         errdefer types_store.deinit();
 
-        var exposed_by_str = try collections.BuildableFrozenInternMap(void).deserializeFrom(self.getComponentData(.exposed_by_str), allocator);
+        var exposed_by_str = try collections.SortedArrayBuilder(u32, void).deserializeFrom(self.getComponentData(.exposed_by_str), allocator);
         errdefer exposed_by_str.deinit(allocator);
 
-        var exposed_nodes = try collections.BuildableFrozenInternMap(u16).deserializeFrom(self.getComponentData(.exposed_nodes), allocator);
+        var exposed_nodes = try collections.SortedArrayBuilder(u32, u16).deserializeFrom(self.getComponentData(.exposed_nodes), allocator);
         errdefer exposed_nodes.deinit(allocator);
 
         // Create ModuleEnv from deserialized components

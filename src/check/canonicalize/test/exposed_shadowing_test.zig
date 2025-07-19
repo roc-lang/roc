@@ -405,9 +405,9 @@ test "exposed_by_str is populated correctly" {
     // Freeze the environment to ensure maps are sorted and deduplicated
     try env.freeze();
 
-    try testing.expect(env.exposed_by_str.containsConst(foo_idx.?));
-    try testing.expect(env.exposed_by_str.containsConst(bar_idx.?));
-    try testing.expect(env.exposed_by_str.containsConst(my_type_idx.?));
+    try testing.expect(env.exposed_by_str.get(allocator, foo_idx.?) != null);
+    try testing.expect(env.exposed_by_str.get(allocator, bar_idx.?) != null);
+    try testing.expect(env.exposed_by_str.get(allocator, my_type_idx.?) != null);
 
     // Should have 4 entries (including duplicate "foo")
     // The interner gives different indices for duplicate strings
@@ -464,9 +464,9 @@ test "exposed_by_str persists after canonicalization" {
     // Freeze the environment to ensure maps are sorted
     try env.freeze();
 
-    try testing.expect(env.exposed_by_str.containsConst(x_idx.?));
-    try testing.expect(env.exposed_by_str.containsConst(y_idx.?));
-    try testing.expect(env.exposed_by_str.containsConst(z_idx.?));
+    try testing.expect(env.exposed_by_str.get(allocator, x_idx.?) != null);
+    try testing.expect(env.exposed_by_str.get(allocator, y_idx.?) != null);
+    try testing.expect(env.exposed_by_str.get(allocator, z_idx.?) != null);
 
     // Verify the map persists in env after canonicalization is complete
     try testing.expectEqual(@as(usize, 3), env.exposed_by_str.count());
@@ -523,9 +523,9 @@ test "exposed_by_str never has entries removed" {
     // Freeze the environment to ensure maps are sorted
     try env.freeze();
 
-    try testing.expect(env.exposed_by_str.containsConst(foo_idx.?));
-    try testing.expect(env.exposed_by_str.containsConst(bar_idx.?));
-    try testing.expect(env.exposed_by_str.containsConst(baz_idx.?));
+    try testing.expect(env.exposed_by_str.get(allocator, foo_idx.?) != null);
+    try testing.expect(env.exposed_by_str.get(allocator, bar_idx.?) != null);
+    try testing.expect(env.exposed_by_str.get(allocator, baz_idx.?) != null);
 
     // Should have exactly 3 unique entries
     // Note: 'foo' is exposed twice, so we get 4 entries instead of 3

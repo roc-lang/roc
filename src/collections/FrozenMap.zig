@@ -33,7 +33,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             fn lessThan(_: void, a: Entry, b: Entry) bool {
                 if (K == []const u8) {
                     return std.mem.lessThan(u8, a.key, b.key);
-                } else if (@typeInfo(K) == .Int or @typeInfo(K) == .Enum) {
+                } else if (@typeInfo(K) == .int or @typeInfo(K) == .@"enum") {
                     return a.key < b.key;
                 } else {
                     @compileError("Unsupported key type for SortedArrayBuilder");
@@ -116,8 +116,12 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         }
 
         /// Serialize directly (must be sorted first)
-        pub fn serializeInto(self: *Self, allocator: Allocator, buffer: []u8) ![]u8 {
-            self.ensureSorted(allocator);
+        pub fn serializeInto(self: *const Self, allocator: Allocator, buffer: []u8) ![]u8 {
+            _ = allocator; // Not needed for serialization, but kept for API consistency
+            // Note: caller must ensure the array is sorted before serialization
+            if (!self.sorted) {
+                @panic("SortedArrayBuilder must be sorted before serialization");
+            }
 
             var offset: usize = 0;
 
@@ -169,6 +173,59 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             }
 
             return size;
+        }
+
+        /// Deserialize from buffer
+        pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
+            if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
+
+            var offset: usize = 0;
+
+            // Read count
+            const entry_count = std.mem.readInt(u32, buffer[offset..][0..4], .little);
+            offset += @sizeOf(u32);
+
+            // Create builder with capacity
+            var self = Self.init();
+            try self.entries.ensureTotalCapacity(allocator, entry_count);
+
+            // Read entries
+            for (0..entry_count) |_| {
+                // Read key based on type
+                const key = if (K == []const u8) blk: {
+                    if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
+                    const key_len = std.mem.readInt(u32, buffer[offset..][0..4], .little);
+                    offset += @sizeOf(u32);
+
+                    if (offset + key_len > buffer.len) return error.BufferTooSmall;
+                    const key_data = buffer[offset..][0..key_len];
+                    offset += key_len;
+
+                    // Allocate and copy the key
+                    const key_copy = try allocator.dupe(u8, key_data);
+                    break :blk key_copy;
+                } else blk: {
+                    if (offset + @sizeOf(K) > buffer.len) return error.BufferTooSmall;
+                    const key = std.mem.bytesToValue(K, buffer[offset..][0..@sizeOf(K)]);
+                    offset += @sizeOf(K);
+                    break :blk key;
+                };
+
+                // Read value
+                const value = if (@sizeOf(V) > 0) blk: {
+                    if (offset + @sizeOf(V) > buffer.len) return error.BufferTooSmall;
+                    const val = std.mem.bytesToValue(V, buffer[offset..][0..@sizeOf(V)]);
+                    offset += @sizeOf(V);
+                    break :blk val;
+                } else {};
+
+                self.entries.appendAssumeCapacity(.{ .key = key, .value = value });
+            }
+
+            // Mark as sorted since serialized data should be sorted
+            self.sorted = true;
+
+            return self;
         }
     };
 }

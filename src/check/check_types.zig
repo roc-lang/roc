@@ -811,7 +811,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
                                 // Search through the module's exposed nodes
                                 if (found_idx) |idx| {
-                                    if (module.env.exposed_nodes.getConst(idx)) |node_idx| {
+                                    if (module.env.exposed_nodes.get(module.env.gpa, idx)) |node_idx| {
                                         // Found the method!
                                         const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(node_idx));
 

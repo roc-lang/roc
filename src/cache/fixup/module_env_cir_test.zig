@@ -120,12 +120,12 @@ test "ModuleEnv serialization and relocation" {
 
     try std.testing.expect(my_func_loaded_idx != null);
     try std.testing.expect(other_func_loaded_idx != null);
-    try std.testing.expect(loaded_env.exposed_by_str.containsConst(my_func_loaded_idx.?));
-    try std.testing.expect(loaded_env.exposed_by_str.containsConst(other_func_loaded_idx.?));
+    try std.testing.expect(loaded_env.exposed_by_str.get(allocator, my_func_loaded_idx.?) != null);
+    try std.testing.expect(loaded_env.exposed_by_str.get(allocator, other_func_loaded_idx.?) != null);
 
     try std.testing.expectEqual(@as(usize, 2), loaded_env.exposed_nodes.count());
-    try std.testing.expectEqual(@as(u16, 42), loaded_env.exposed_nodes.getConst(my_func_loaded_idx.?).?);
-    try std.testing.expectEqual(@as(u16, 123), loaded_env.exposed_nodes.getConst(other_func_loaded_idx.?).?);
+    try std.testing.expectEqual(@as(u16, 42), loaded_env.exposed_nodes.get(allocator, my_func_loaded_idx.?).?);
+    try std.testing.expectEqual(@as(u16, 123), loaded_env.exposed_nodes.get(allocator, other_func_loaded_idx.?).?);
 
     // Verify line starts
     try std.testing.expectEqual(@as(u32, 3), loaded_env.line_starts.len());

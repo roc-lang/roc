@@ -1322,7 +1322,7 @@ fn introduceExposedItemsIntoScope(
             }
 
             // Check if the item is exposed by the module
-            if (found_idx == null or !module_env.exposed_by_str.containsConst(found_idx.?)) {
+            if (found_idx == null or module_env.exposed_by_str.get(self.can_ir.env.gpa, found_idx.?) == null) {
                 // Determine if it's a type or value based on capitalization
                 const first_char = item_name_text[0];
 
@@ -1631,7 +1631,7 @@ pub fn canonicalizeExpr(
                                         }
                                     }
                                     if (found_idx) |idx| {
-                                        break :blk module_env.exposed_nodes.getConst(idx) orelse 0;
+                                        break :blk module_env.exposed_nodes.get(self.can_ir.env.gpa, idx) orelse 0;
                                     } else {
                                         break :blk 0;
                                     }
@@ -1693,7 +1693,7 @@ pub fn canonicalizeExpr(
                                         }
                                     }
                                     if (found_idx) |idx| {
-                                        break :blk module_env.exposed_nodes.getConst(idx) orelse 0;
+                                        break :blk module_env.exposed_nodes.get(self.can_ir.env.gpa, idx) orelse 0;
                                     } else {
                                         break :blk 0;
                                     }
@@ -6391,7 +6391,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
                 }
             }
             if (found_idx) |idx| {
-                break :blk module_env.exposed_nodes.getConst(idx) orelse 0;
+                break :blk module_env.exposed_nodes.get(self.can_ir.env.gpa, idx) orelse 0;
             } else {
                 break :blk 0;
             }

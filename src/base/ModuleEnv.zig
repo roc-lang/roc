@@ -23,12 +23,12 @@ idents: Ident.Store,
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 types: types_mod.Store,
-/// Map of exposed items by their string representation (not interned)
+/// Map of exposed items by their intern indices
 /// This is built during canonicalization and preserved for later use
-exposed_by_str: collections.BuildableFrozenInternMap(void),
-/// Map of exposed item names to their CIR node indices (stored as u16)
+exposed_by_str: collections.SortedArrayBuilder(u32, void),
+/// Map of exposed item intern indices to their CIR node indices (stored as u16)
 /// This is populated during canonicalization to allow cross-module lookups
-exposed_nodes: collections.BuildableFrozenInternMap(u16),
+exposed_nodes: collections.SortedArrayBuilder(u32, u16),
 
 /// Line starts for error reporting. We retain only start and offset positions in the IR
 /// and then use these line starts to calculate the line number and column number as required.
@@ -48,8 +48,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .ident_ids_for_slicing = try collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
         .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
         .types = try types_mod.Store.initCapacity(gpa, 2048, 512),
-        .exposed_by_str = collections.BuildableFrozenInternMap(void).init(),
-        .exposed_nodes = collections.BuildableFrozenInternMap(u16).init(),
+        .exposed_by_str = collections.SortedArrayBuilder(u32, void).init(),
+        .exposed_nodes = collections.SortedArrayBuilder(u32, u16).init(),
         .line_starts = try collections.SafeList(u32).initCapacity(gpa, 256),
         .source = source,
     };
@@ -70,9 +70,9 @@ pub fn deinit(self: *Self) void {
 
 /// Freeze the exposed maps for efficient read-only access after canonicalization
 pub fn freeze(self: *Self) !void {
-    // Ensure the maps are sorted before any const operations
-    self.exposed_by_str.ensureSorted();
-    self.exposed_nodes.ensureSorted();
+    // Ensure the arrays are sorted before any const operations
+    self.exposed_by_str.ensureSorted(self.gpa);
+    self.exposed_nodes.ensureSorted(self.gpa);
 }
 
 /// Calculate and store line starts from the source text
