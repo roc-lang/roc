@@ -22,10 +22,10 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
     expr_idx: CIR.Expr.Idx,
 } {
     const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    module_env.* = try base.ModuleEnv.init(allocator, source);
 
     const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = try parse.parseExpr(module_env, source);
+    parse_ast.* = try parse.parseExpr(module_env);
 
     parse_ast.store.emptyScratch();
 

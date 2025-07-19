@@ -80,8 +80,12 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
         for (roc_files.items) |roc_file| {
             if (is_parse) {
                 // Parse mode
-                var parse_env = try base.ModuleEnv.init(gpa, roc_file.content);
-                var ir = try parse.parse(&parse_env, roc_file.content);
+
+                // ModuleEnv takes ownership of the source code, so we need to dupe it each iteration
+                const source_copy = try gpa.dupe(u8, roc_file.content);
+                var parse_env = try base.ModuleEnv.init(gpa, source_copy);
+
+                var ir = try parse.parse(&parse_env);
                 iteration_tokens += ir.tokens.tokens.len;
                 ir.deinit(gpa);
                 parse_env.deinit();

@@ -6486,7 +6486,7 @@ const ScopeTestContext = struct {
     fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!ScopeTestContext {
         // heap allocate env for testing
         const env = try gpa.create(base.ModuleEnv);
-        env.* = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        env.* = try base.ModuleEnv.init(gpa, "");
 
         // heap allocate CIR for testing
         const cir = try gpa.create(CIR);
@@ -6799,10 +6799,10 @@ test "hexadecimal integer literals" {
     const gpa = gpa_state.allocator();
 
     for (test_cases) |tc| {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, tc.literal));
+        var env = try base.ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
-        var ast = try parse.parseExpr(&env, tc.literal);
+        var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
         var cir = try CIR.init(&env, "Test");
@@ -6889,10 +6889,10 @@ test "binary integer literals" {
     const gpa = gpa_state.allocator();
 
     for (test_cases) |tc| {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, tc.literal));
+        var env = try base.ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
-        var ast = try parse.parseExpr(&env, tc.literal);
+        var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
         var cir = try CIR.init(&env, "Test");
@@ -6979,10 +6979,10 @@ test "octal integer literals" {
     const gpa = gpa_state.allocator();
 
     for (test_cases) |tc| {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, tc.literal));
+        var env = try base.ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
-        var ast = try parse.parseExpr(&env, tc.literal);
+        var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
         var cir = try CIR.init(&env, "Test");
@@ -7069,10 +7069,10 @@ test "integer literals with uppercase base prefixes" {
     const gpa = gpa_state.allocator();
 
     for (test_cases) |tc| {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, tc.literal));
+        var env = try base.ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
-        var ast = try parse.parseExpr(&env, tc.literal);
+        var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
         var cir = try CIR.init(&env, "Test");
@@ -7131,7 +7131,7 @@ test "numeric literal patterns use pattern idx as type var" {
 
     // Test that int literal patterns work and use the pattern index as the type variable
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7176,7 +7176,7 @@ test "numeric literal patterns use pattern idx as type var" {
 
     // Test that f64 literal patterns work
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7228,7 +7228,7 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test int_unbound pattern
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7266,7 +7266,7 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test int_poly pattern (polymorphic integer that can be different int types)
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7316,7 +7316,7 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test num_unbound pattern (can be int or frac)
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7354,7 +7354,7 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test num_poly pattern (polymorphic num that can be int or frac)
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7400,7 +7400,7 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test frac_unbound pattern
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7444,10 +7444,10 @@ test "record literal uses record_unbound" {
     {
         const source1 = "{ x: 42, y: \"hello\" }";
 
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source1));
+        var env = try base.ModuleEnv.init(gpa, source1);
         defer env.deinit();
 
-        var ast = try parse.parseExpr(&env, source1);
+        var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
         var cir = try CIR.init(&env, "Test");
@@ -7482,10 +7482,10 @@ test "record literal uses record_unbound" {
     {
         const source2 = "{}";
 
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source2));
+        var env = try base.ModuleEnv.init(gpa, source2);
         defer env.deinit();
 
-        var ast = try parse.parseExpr(&env, source2);
+        var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
         var cir = try CIR.init(&env, "Test");
@@ -7520,10 +7520,10 @@ test "record literal uses record_unbound" {
     {
         const source3 = "{ value: 123 }";
 
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source3));
+        var env = try base.ModuleEnv.init(gpa, source3);
         defer env.deinit();
 
-        var ast = try parse.parseExpr(&env, source3);
+        var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
         var cir = try CIR.init(&env, "Test");
@@ -7565,10 +7565,10 @@ test "record_unbound basic functionality" {
     const source = "{ x: 42, y: 99 }";
 
     // Test that record literals create record_unbound types
-    var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var env = try base.ModuleEnv.init(gpa, source);
     defer env.deinit();
 
-    var ast = try parse.parseExpr(&env, source);
+    var ast = try parse.parseExpr(&env);
     defer ast.deinit(gpa);
 
     var cir = try CIR.init(&env, "Test");
@@ -7608,11 +7608,11 @@ test "record_unbound with multiple fields" {
     const gpa = std.testing.allocator;
     const source = "{ a: 123, b: 456, c: 789 }";
 
-    var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var env = try base.ModuleEnv.init(gpa, source);
     defer env.deinit();
 
     // Create record_unbound with multiple fields
-    var ast = try parse.parseExpr(&env, source);
+    var ast = try parse.parseExpr(&env);
     defer ast.deinit(gpa);
 
     var cir = try CIR.init(&env, "Test");
@@ -7650,7 +7650,7 @@ test "record_unbound with multiple fields" {
 test "record with extension variable" {
     const gpa = std.testing.allocator;
 
-    var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var env = try base.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
     var cir = try CIR.init(&env, "Test");
@@ -7726,7 +7726,7 @@ test "numeric pattern types: unbound vs polymorphic - frac" {
 
     // Test frac_poly pattern
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7782,7 +7782,7 @@ test "pattern numeric literal value edge cases" {
 
     // Test max/min integer values
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7811,7 +7811,7 @@ test "pattern numeric literal value edge cases" {
 
     // Test small decimal pattern
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7835,7 +7835,7 @@ test "pattern numeric literal value edge cases" {
 
     // Test dec literal pattern
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7857,7 +7857,7 @@ test "pattern numeric literal value edge cases" {
 
     // Test special float values
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7883,7 +7883,7 @@ test "pattern literal type transitions" {
 
     // Test transitioning from unbound to concrete type
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7929,7 +7929,7 @@ test "pattern literal type transitions" {
 
     // Test hex/binary/octal patterns must be integers
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -7975,7 +7975,7 @@ test "pattern type inference with numeric literals" {
 
     // Test that pattern indices work correctly as type variables with type inference
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");
@@ -8044,7 +8044,7 @@ test "pattern type inference with numeric literals" {
 
     // Test patterns with type constraints from context
     {
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try base.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         var cir = try CIR.init(&env, "Test");

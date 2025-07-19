@@ -12,12 +12,11 @@ test "canonicalize True as Bool" {
     const source = "True";
 
     // Initialize ModuleEnv
-    const owned_source = try allocator.dupe(u8, source);
-    var module_env = try base.ModuleEnv.init(allocator, owned_source);
+    var module_env = try base.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Parse
-    var parse_ast = try parse.parseExpr(&module_env, source);
+    var parse_ast = try parse.parseExpr(&module_env);
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
@@ -53,12 +52,11 @@ test "canonicalize False as Bool" {
     const source = "False";
 
     // Initialize ModuleEnv
-    const owned_source = try allocator.dupe(u8, source);
-    var module_env = try base.ModuleEnv.init(allocator, owned_source);
+    var module_env = try base.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Parse
-    var parse_ast = try parse.parseExpr(&module_env, source);
+    var parse_ast = try parse.parseExpr(&module_env);
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
@@ -94,12 +92,11 @@ test "canonicalize random tag not as Bool" {
     const source = "SomeTag";
 
     // Initialize ModuleEnv
-    const owned_source = try allocator.dupe(u8, source);
-    var module_env = try base.ModuleEnv.init(allocator, owned_source);
+    var module_env = try base.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Parse
-    var parse_ast = try parse.parseExpr(&module_env, source);
+    var parse_ast = try parse.parseExpr(&module_env);
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 

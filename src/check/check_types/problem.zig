@@ -168,7 +168,6 @@ pub const ReportBuilder = struct {
         module_env: *const base.ModuleEnv,
         can_ir: *const can.CIR,
         snapshots: *const snapshot.Store,
-        source: []const u8,
         filename: []const u8,
         other_modules: []const *const can.CIR,
     ) Self {
@@ -178,7 +177,7 @@ pub const ReportBuilder = struct {
             .module_env = module_env,
             .can_ir = can_ir,
             .snapshots = snapshots,
-            .source = source,
+            .source = module_env.source,
             .filename = filename,
             .other_modules = other_modules,
         };
