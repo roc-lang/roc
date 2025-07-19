@@ -75,9 +75,9 @@ The `PROBLEMS` section provides human-readable diagnostics. When you modify the 
 
 ## Performance Optimizations
 
-### FrozenMap Collections
+### SortedArrayBuilder Collections
 
-After canonicalization, certain hash maps (like `exposed_by_str` and `exposed_nodes` in ModuleEnv) become read-only. These are converted to `FrozenMap` collections which provide:
+After canonicalization, certain hash maps (like `exposed_by_str` and `exposed_nodes` in ModuleEnv) become read-only. These use `SortedArrayBuilder` which provides:
 
 - **Deterministic serialization**: Entries are sorted by key, ensuring reproducible builds
 - **Zero-copy deserialization**: Data can be memory-mapped directly without rebuilding hash tables
