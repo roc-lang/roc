@@ -98,7 +98,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 46;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 47;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 28;
 /// Count of the statement nodes in the CIR
@@ -2539,6 +2539,13 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocato
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
+        .duplicate_exposed_item => |r| {
+            node.tag = .diag_duplicate_exposed_item;
+            region = r.duplicate_region;
+            node.data_1 = @bitCast(r.item_name);
+            node.data_2 = r.original_region.start.offset;
+            node.data_3 = r.original_region.end.offset;
+        },
         .crash_expects_string => |r| {
             node.tag = .diag_crash_expects_string;
             region = r.region;
@@ -2795,6 +2802,14 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_duplicate_record_field => return CIR.Diagnostic{ .duplicate_record_field = .{
             .field_name = @bitCast(node.data_1),
+            .duplicate_region = store.getRegionAt(node_idx),
+            .original_region = .{
+                .start = .{ .offset = @intCast(node.data_2) },
+                .end = .{ .offset = @intCast(node.data_3) },
+            },
+        } },
+        .diag_duplicate_exposed_item => return CIR.Diagnostic{ .duplicate_exposed_item = .{
+            .item_name = @bitCast(node.data_1),
             .duplicate_region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = @intCast(node.data_2) },

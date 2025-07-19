@@ -13,7 +13,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const print = std.debug.print;
 
 /// A builder for creating sorted arrays directly without using hash maps
 /// This is more efficient when we know we won't have duplicates
@@ -116,7 +115,6 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
             // First pass: detect and report duplicates
             var i: usize = 1;
-            var reported_duplicate = false;
             while (i < self.entries.items.len) {
                 const prev_entry = self.entries.items[i - 1];
                 const curr_entry = self.entries.items[i];
@@ -126,14 +124,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                     prev_entry.key == curr_entry.key;
 
                 if (is_duplicate) {
-                    if (!reported_duplicate) {
-                        if (K == []const u8) {
-                            print("Warning: Duplicate key found: '{s}'\n", .{curr_entry.key});
-                        } else {
-                            print("Warning: Duplicate key found: {any}\n", .{curr_entry.key});
-                        }
-                        reported_duplicate = true;
-                    }
+                    // Note: Duplicate detection is handled by caller via detectDuplicates() method
                 }
                 i += 1;
             }
@@ -171,6 +162,43 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
             // Update the length to reflect deduplicated entries
             self.entries.items.len = write_index;
+        }
+
+        /// Detect duplicates without modifying the array - returns list of duplicate keys
+        pub fn detectDuplicates(self: *Self, allocator: Allocator) ![]K {
+            var duplicates = std.ArrayList(K).init(allocator);
+
+            if (self.entries.items.len <= 1) return duplicates.toOwnedSlice();
+
+            // Ensure sorted first
+            if (!self.sorted) {
+                std.sort.pdq(Entry, self.entries.items, {}, Entry.lessThan);
+                self.sorted = true;
+            }
+
+            var reported_keys = std.AutoHashMap(K, void).init(allocator);
+            defer reported_keys.deinit();
+
+            var i: usize = 1;
+            while (i < self.entries.items.len) {
+                const prev_entry = self.entries.items[i - 1];
+                const curr_entry = self.entries.items[i];
+                const is_duplicate = if (K == []const u8)
+                    std.mem.eql(u8, prev_entry.key, curr_entry.key)
+                else
+                    prev_entry.key == curr_entry.key;
+
+                if (is_duplicate) {
+                    // Report duplicate only once per unique key
+                    const result = try reported_keys.getOrPut(curr_entry.key);
+                    if (!result.found_existing) {
+                        try duplicates.append(curr_entry.key);
+                    }
+                }
+                i += 1;
+            }
+
+            return duplicates.toOwnedSlice();
         }
 
         /// Relocate pointers after memory movement
@@ -358,6 +386,41 @@ test "SortedArrayBuilder maintains sorted order when added in order" {
     // Get should work without sorting
     try testing.expectEqual(@as(?u16, 1), builder.get(allocator, "aaa"));
     try testing.expectEqual(@as(?u16, 4), builder.get(allocator, "ddd"));
+}
+
+test "SortedArrayBuilder detectDuplicates example usage" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var builder = SortedArrayBuilder(u32, u16).init();
+    defer builder.deinit(allocator);
+
+    // Add some entries with duplicates
+    try builder.put(allocator, 100, 1);
+    try builder.put(allocator, 200, 2);
+    try builder.put(allocator, 100, 3); // duplicate of 100
+    try builder.put(allocator, 300, 4);
+    try builder.put(allocator, 200, 5); // duplicate of 200
+
+    // Detect duplicates before sorting/deduplicating
+    const duplicates = try builder.detectDuplicates(allocator);
+    defer allocator.free(duplicates);
+
+    // Example: Report duplicates (in real code, this would push diagnostics)
+    for (duplicates) |duplicate_key| {
+        // In a real compiler, you'd push a diagnostic here:
+        // try cir.pushDiagnostic(CIR.Diagnostic{ .duplicate_exposed_item = ... });
+        std.debug.print("Found duplicate key: {d}\n", .{duplicate_key});
+    }
+
+    // Verify we found the expected duplicates
+    try testing.expectEqual(@as(usize, 2), duplicates.len);
+
+    // After detection, normal operations work as expected
+    try builder.ensureSorted(allocator);
+    try testing.expectEqual(@as(usize, 3), builder.count()); // Deduplicated
+    try testing.expectEqual(@as(?u16, 3), builder.get(allocator, 100)); // Last value kept
+    try testing.expectEqual(@as(?u16, 5), builder.get(allocator, 200)); // Last value kept
 }
 
 test "SortedArrayBuilder handles duplicates with string keys" {

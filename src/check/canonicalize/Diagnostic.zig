@@ -170,6 +170,11 @@ pub const Diagnostic = union(enum) {
         duplicate_region: Region,
         original_region: Region,
     },
+    duplicate_exposed_item: struct {
+        item_name: Ident.Idx,
+        duplicate_region: Region,
+        original_region: Region,
+    },
     f64_pattern_literal: struct {
         region: Region,
     },
@@ -236,6 +241,7 @@ pub const Diagnostic = union(enum) {
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
             .duplicate_record_field => |d| d.duplicate_region,
+            .duplicate_exposed_item => |d| d.duplicate_region,
             .invalid_single_quote => |d| d.region,
             .too_long_single_quote => |d| d.region,
             .empty_single_quote => |d| d.region,
@@ -1236,6 +1242,55 @@ pub const Diagnostic = union(enum) {
 
         try report.document.addLineBreak();
         try report.document.addReflowingText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
+
+        return report;
+    }
+
+    pub fn buildDuplicateExposedItemReport(
+        allocator: Allocator,
+        item_name: []const u8,
+        duplicate_region_info: base.RegionInfo,
+        original_region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "DUPLICATE EXPOSED ITEM", .runtime_error);
+        const owned_item_name = try report.addOwnedString(item_name);
+
+        try report.document.addReflowingText("The exposed item ");
+        try report.document.addInlineCode(owned_item_name);
+        try report.document.addReflowingText(" appears multiple times in the module's exposed list.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show where the duplicate item is
+        try report.document.addReflowingText("This item is duplicated here:");
+        try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            duplicate_region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The item ");
+        try report.document.addInlineCode(owned_item_name);
+        try report.document.addReflowingText(" was first exposed here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            original_region_info,
+            .dimmed,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Exposed items must be unique. Consider removing the duplicate.");
 
         return report;
     }

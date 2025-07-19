@@ -535,6 +535,14 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
+        .duplicate_exposed_item = .{
+            .item_name = @bitCast(@as(u32, 3234)),
+            .duplicate_region = from_raw_offsets(635, 645),
+            .original_region = from_raw_offsets(655, 665),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
         .invalid_single_quote = .{
             .region = from_raw_offsets(670, 680),
         },

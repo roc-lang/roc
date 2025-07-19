@@ -917,6 +917,20 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 self.env.line_starts.items.items,
             );
         },
+        .duplicate_exposed_item => |data| blk: {
+            const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const item_name = self.env.idents.getText(data.item_name);
+            break :blk try Diagnostic.buildDuplicateExposedItemReport(
+                allocator,
+                item_name,
+                duplicate_region_info,
+                original_region_info,
+                filename,
+                self.temp_source_for_sexpr.?,
+                self.env.line_starts.items.items,
+            );
+        },
         .f64_pattern_literal => |data| blk: {
             break :blk Diagnostic.buildF64PatternLiteralReport(
                 allocator,
