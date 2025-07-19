@@ -2619,11 +2619,6 @@ pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, so
     }
 }
 
-test "CIR serialization is deterministic" {
-    // Skip this test as it uses the old serialization method which has different behavior
-    // from our new IoVec-based approach. The snapshots pass, confirming the new approach works.
-    return error.SkipZigTest;
-}
 
 test "NodeStore - init and deinit" {
     var store = try CIR.NodeStore.init(testing.allocator);

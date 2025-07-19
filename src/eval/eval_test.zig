@@ -146,10 +146,6 @@ test "eval runtime error - returns crash error" {
     }
 }
 
-test "eval tag - already primitive" {
-    // Skip this test for now as tag_union layout is not yet implemented
-    return error.SkipZigTest;
-}
 
 test "eval binop - basic implementation" {
     const source = "5 + 3";
@@ -556,14 +552,6 @@ test "eval empty record" {
     }
 }
 
-test "eval integer literal directly from CIR node" {
-    // This test creates expressions without proper canonicalization/type checking,
-    // which means there are no corresponding type variables in the type store.
-    // Since eval now requires real layouts from the type checker, this test
-    // would need significant rework to properly set up the type system.
-    // For now, skip this test.
-    return error.SkipZigTest;
-}
 
 test "interpreter reuse across multiple evaluations" {
     // This test demonstrates that the interpreter can be reused across multiple

@@ -276,17 +276,6 @@ fn serializeIdentsAt(self: *const Self, buffer: []u8, write_offset: *usize) !Ide
     return result;
 }
 
-test "serialization is deterministic" {
-    // Skip this test as it uses the old serialization method which has different behavior
-    // from our new IoVec-based approach. The snapshots pass, confirming the new approach works.
-    return error.SkipZigTest;
-}
-
-test "iovec serialization matches buffer serialization" {
-    // Skip this test as the old buffer serialization has different alignment requirements
-    // than the new IoVec approach. The snapshots pass, confirming the new approach works.
-    return error.SkipZigTest;
-}
 
 /// Append this ModuleEnv to an iovec writer for serialization
 pub fn appendToIovecs(self: *const Self, writer: *iovec_serialize.IovecWriter) !usize {
