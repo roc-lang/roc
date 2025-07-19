@@ -150,18 +150,8 @@ pub fn build(b: *std.Build) void {
         .os_tag = .freestanding,
     }), false, null);
 
-    const playground_install = b.addInstallArtifact(playground_exe, .{
-        .dest_dir = .{ .override = .{ .custom = "playground" } },
-    });
-
-    const playground_html_install = b.addInstallFile(b.path("src/playground/index.html"), "playground/index.html");
-    const playground_css_install = b.addInstallFile(b.path("src/playground/styles.css"), "playground/styles.css");
-    const playground_js_install = b.addInstallFile(b.path("src/playground/app.js"), "playground/app.js");
-
+    const playground_install = b.addInstallArtifact(playground_exe, .{});
     playground_step.dependOn(&playground_install.step);
-    playground_step.dependOn(&playground_html_install.step);
-    playground_step.dependOn(&playground_css_install.step);
-    playground_step.dependOn(&playground_js_install.step);
 
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
