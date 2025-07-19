@@ -2,19 +2,27 @@
 //! This module provides a state machine interface between JavaScript and the Roc compiler.
 //!
 //! State Machine:
-//! 1. START: Initialize module, return "READY" message
+//! 1. START: Initialize module, return compiler version
 //! 2. READY: Receive Roc source, compile through all stages, return "LOADED" with diagnostics
 //! 3. LOADED: Handle queries for tokens, AST, CIR, types, etc. Handle reset to go back to READY
+//!
+//! Compilation Strategy:
+//! The playground uses Roc's "keep going" approach - all compiler stages run even when there
+//! are errors in earlier stages. This provides better user experience by showing type information
+//! and later-stage errors even when there are syntax errors. Malformed nodes are used to
+//! represent invalid code, allowing the compiler to continue through all stages.
 
 const std = @import("std");
 const base = @import("base");
 const parse = @import("check/parse.zig");
+const build_options = @import("build_options");
 const can = @import("check/canonicalize.zig");
 const check_types = @import("check/check_types.zig");
 const WasmFilesystem = @import("playground/WasmFilesystem.zig");
 const reporting = @import("reporting.zig");
 const snapshot = @import("snapshot.zig");
 const types = @import("types");
+const problem = @import("check/check_types/problem.zig");
 
 const SExprTree = base.SExprTree;
 const ModuleEnv = base.ModuleEnv;
@@ -47,6 +55,7 @@ const MessageType = enum {
     QUERY_AST,
     QUERY_CIR,
     QUERY_TYPES,
+    GET_TYPE_INFO,
     RESET,
 
     pub fn fromString(str: []const u8) ?MessageType {
@@ -56,6 +65,7 @@ const MessageType = enum {
         if (std.mem.eql(u8, str, "QUERY_AST")) return .QUERY_AST;
         if (std.mem.eql(u8, str, "QUERY_CIR")) return .QUERY_CIR;
         if (std.mem.eql(u8, str, "QUERY_TYPES")) return .QUERY_TYPES;
+        if (std.mem.eql(u8, str, "GET_TYPE_INFO")) return .GET_TYPE_INFO;
         if (std.mem.eql(u8, str, "RESET")) return .RESET;
         return null;
     }
@@ -76,6 +86,23 @@ const ResponseStatus = enum {
             .INVALID_MESSAGE => "INVALID_MESSAGE",
         };
     }
+};
+
+/// Diagnostic region information for frontend integration
+const DiagnosticRegion = struct {
+    start_line: u32,
+    start_column: u32,
+    end_line: u32,
+    end_column: u32,
+};
+
+/// Diagnostic information for frontend integration
+const DiagnosticSeverity = enum { @"error", warning, info };
+
+const Diagnostic = struct {
+    severity: DiagnosticSeverity,
+    message: []const u8,
+    region: DiagnosticRegion,
 };
 
 /// Compiler stage data
@@ -188,7 +215,8 @@ fn handleStartState(message_type: MessageType, _: std.json.Value, response_buffe
     switch (message_type) {
         .INIT => {
             current_state = .READY;
-            return writeSuccessResponse(response_buffer, "READY TO RECEIVE ROC SOURCE FILE", null);
+            const compiler_version = build_options.compiler_version;
+            return writeSuccessResponse(response_buffer, compiler_version, null);
         },
         else => {
             return writeErrorResponse(response_buffer, .INVALID_STATE, "Can only handle INIT in START state");
@@ -226,7 +254,8 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
         },
         .RESET => {
             // Already in READY state, just acknowledge
-            return writeSuccessResponse(response_buffer, "READY TO RECEIVE ROC SOURCE FILE", null);
+            const compiler_version = build_options.compiler_version;
+            return writeSuccessResponse(response_buffer, compiler_version, null);
         },
         else => {
             return writeErrorResponse(response_buffer, .INVALID_STATE, "Can only handle LOAD_SOURCE or RESET in READY state");
@@ -235,7 +264,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
 }
 
 /// Handle messages in LOADED state
-fn handleLoadedState(message_type: MessageType, _: std.json.Value, response_buffer: []u8) usize {
+fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, response_buffer: []u8) usize {
     const data = compiler_data.?;
 
     switch (message_type) {
@@ -251,6 +280,9 @@ fn handleLoadedState(message_type: MessageType, _: std.json.Value, response_buff
         .QUERY_TYPES => {
             return writeTypesResponse(response_buffer, data);
         },
+        .GET_TYPE_INFO => {
+            return writeTypeInfoResponse(response_buffer, data, message_json);
+        },
         .RESET => {
             // Clean up and go back to READY
             if (compiler_data) |*old_data| {
@@ -259,7 +291,8 @@ fn handleLoadedState(message_type: MessageType, _: std.json.Value, response_buff
             }
             current_state = .READY;
 
-            return writeSuccessResponse(response_buffer, "READY TO RECEIVE ROC SOURCE FILE", null);
+            const compiler_version = build_options.compiler_version;
+            return writeSuccessResponse(response_buffer, compiler_version, null);
         },
         else => {
             return writeErrorResponse(response_buffer, .INVALID_STATE, "Invalid message type for LOADED state");
@@ -267,8 +300,30 @@ fn handleLoadedState(message_type: MessageType, _: std.json.Value, response_buff
     }
 }
 
-/// Compile source through all compiler stages
+/// Compile source through all compiler stages using Roc's "keep going" strategy.
+/// All stages run even when there are errors in earlier stages, using malformed nodes
+/// to represent invalid code and allow continued compilation.
 fn compileSource(source: []const u8) !CompilerStageData {
+    // Handle empty input gracefully to prevent crashes
+    if (source.len == 0) {
+        // Return empty compiler stage data for completely empty input
+        var module_env = try allocator.create(ModuleEnv);
+        const owned_source = try allocator.dupe(u8, source);
+        module_env.* = try ModuleEnv.init(allocator, owned_source);
+        try module_env.calcLineStarts(source);
+        return CompilerStageData.init(allocator, module_env);
+    }
+
+    const trimmed_source = std.mem.trim(u8, source, " \t\n\r");
+    if (trimmed_source.len == 0) {
+        // Return empty compiler stage data for whitespace-only input
+        var module_env = try allocator.create(ModuleEnv);
+        const owned_source = try allocator.dupe(u8, source);
+        module_env.* = try ModuleEnv.init(allocator, owned_source);
+        try module_env.calcLineStarts(source);
+        return CompilerStageData.init(allocator, module_env);
+    }
+
     // Set up the source in WASM filesystem
     WasmFilesystem.setSource(allocator, source);
 
@@ -284,60 +339,77 @@ fn compileSource(source: []const u8) !CompilerStageData {
     var parse_ast = try parse.parse(module_env, source);
     result.parse_ast = parse_ast;
 
-    // Collect tokenize diagnostics
+    // Collect tokenize diagnostics with additional error handling
     for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator) catch continue;
+        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator) catch {
+            // Log the error and continue processing other diagnostics
+            // This prevents crashes on malformed diagnostics or empty input
+            continue;
+        };
         result.tokenize_reports.append(report) catch continue;
     }
 
-    // Collect parse diagnostics
+    // Collect parse diagnostics with additional error handling
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(module_env, diagnostic, allocator, "main.roc") catch continue;
+        const report = parse_ast.parseDiagnosticToReport(module_env, diagnostic, allocator, "main.roc") catch {
+            // Log the error and continue processing other diagnostics
+            // This prevents crashes on malformed diagnostics or empty input
+            continue;
+        };
         result.parse_reports.append(report) catch continue;
     }
 
-    // Stage 2: Canonicalization (if parsing succeeded)
-    if (parse_ast.parse_diagnostics.items.len == 0) {
-        // Initialize CIR directly in result to ensure stable pointer
-        result.can_ir = try can.CIR.init(module_env, "main");
-        var can_ir = &result.can_ir.?;
+    // Stage 2: Canonicalization (always run, even with parse errors)
+    // The canonicalizer handles malformed parse nodes and continues processing
+    // Initialize CIR directly in result to ensure stable pointer
+    result.can_ir = try can.CIR.init(module_env, "main");
+    var can_ir = &result.can_ir.?;
 
-        var canonicalizer = try can.init(can_ir, &parse_ast, null);
-        defer canonicalizer.deinit();
+    var canonicalizer = try can.init(can_ir, &parse_ast, null);
+    defer canonicalizer.deinit();
 
-        canonicalizer.canonicalizeFile() catch {};
+    canonicalizer.canonicalizeFile() catch {};
 
-        // Debug: Log the spans after canonicalization
-        const defs_count = can_ir.store.sliceDefs(can_ir.all_defs).len;
-        const stmts_count = can_ir.store.sliceStatements(can_ir.all_statements).len;
-        _ = defs_count;
-        _ = stmts_count;
+    // Debug: Log the spans after canonicalization
+    const defs_count = can_ir.store.sliceDefs(can_ir.all_defs).len;
+    const stmts_count = can_ir.store.sliceStatements(can_ir.all_statements).len;
+    _ = defs_count;
+    _ = stmts_count;
 
-        // Collect canonicalization diagnostics
-        const can_diags = can_ir.getDiagnostics() catch &.{};
-        for (can_diags) |diag| {
-            const report = can_ir.diagnosticToReport(diag, allocator, source, "main.roc") catch continue;
-            result.can_reports.append(report) catch continue;
-        }
+    // Collect canonicalization diagnostics
+    const can_diags = can_ir.getDiagnostics() catch &.{};
+    for (can_diags) |diag| {
+        const report = can_ir.diagnosticToReport(diag, allocator, source, "main.roc") catch continue;
+        result.can_reports.append(report) catch continue;
     }
 
-    // Stage 3: Type checking (if canonicalization succeeded)
-    if (result.can_ir) |*can_ir| {
-        if (result.can_reports.items.len == 0) {
-            const empty_modules: []const *can.CIR = &.{};
-            // Use pointer to the stored CIR to ensure solver references valid memory
-            var solver = try check_types.init(allocator, &module_env.types, can_ir, empty_modules, &can_ir.store.regions);
-            result.solver = solver;
+    // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)
+    // The type checker works with malformed canonical nodes to provide partial type information
+    if (result.can_ir) |*type_can_ir| {
+        const empty_modules: []const *can.CIR = &.{};
+        // Use pointer to the stored CIR to ensure solver references valid memory
+        var solver = try check_types.init(allocator, &module_env.types, type_can_ir, empty_modules, &type_can_ir.store.regions);
+        result.solver = solver;
 
-            solver.checkDefs() catch {};
+        solver.checkDefs() catch {};
 
-            // Collect type checking problems
-            var iter = solver.problems.problems.iterIndices();
-            while (iter.next()) |idx| {
-                const problem = solver.problems.problems.get(idx);
-                // TODO: generate report from problem
-                _ = problem;
-            }
+        // Collect type checking problems and convert them to reports using ReportBuilder
+        var report_builder = problem.ReportBuilder.init(
+            allocator,
+            module_env,
+            type_can_ir,
+            &solver.snapshots,
+            source,
+            "main.roc",
+            &.{}, // other_modules - empty for playground
+        );
+        defer report_builder.deinit();
+
+        var iter = solver.problems.problems.iterIndices();
+        while (iter.next()) |idx| {
+            const type_problem = solver.problems.problems.get(idx);
+            const report = report_builder.build(type_problem) catch continue;
+            result.type_reports.append(report) catch continue;
         }
     }
 
@@ -375,11 +447,34 @@ fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []
 }
 
 /// Write response for LOADED state with diagnostics
+///
+/// This function implements a two-tier diagnostic system:
+/// 1. SUMMARY: Counts ALL diagnostics from reports (for "Found X errors, Y warnings" display)
+/// 2. VISUAL INDICATORS: Only diagnostics with region info (for gutter markers & squiggly lines)
+///
+/// The summary provides the complete diagnostic picture, while visual indicators are limited
+/// to diagnostics that can be precisely positioned in the editor.
 fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) usize {
     var stream = std.io.fixedBufferStream(response_buffer);
     var writer = stream.writer();
 
-    // Count total diagnostics
+    // TIER 1: Extract diagnostics for VISUAL INDICATORS (gutter markers, squiggly lines)
+    // This is a filtered subset - only includes diagnostics that have region information
+    // for precise positioning in the editor. Limited to 100 items to avoid UI performance issues.
+    var diagnostics = std.ArrayList(Diagnostic).init(allocator);
+    defer diagnostics.deinit();
+
+    // Extract diagnostics from all stages with additional safeguards
+    extractDiagnosticsFromReports(&diagnostics, data.tokenize_reports) catch {
+        // Log error but continue - don't fail the entire response
+    };
+    extractDiagnosticsFromReports(&diagnostics, data.parse_reports) catch {};
+    extractDiagnosticsFromReports(&diagnostics, data.can_reports) catch {};
+    extractDiagnosticsFromReports(&diagnostics, data.type_reports) catch {};
+
+    // TIER 2: Count ALL diagnostics from reports (for SUMMARY display)
+    // This includes ALL diagnostics regardless of whether they have region info.
+    // Used for the "Found X errors, Y warnings" message shown to users.
     var total_errors: u32 = 0;
     var total_warnings: u32 = 0;
 
@@ -393,8 +488,24 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) usize {
 
     writer.writeAll("{\"status\":\"SUCCESS\",\"message\":\"LOADED\",\"diagnostics\":{") catch return 0;
 
-    // Write summary
+    // Write summary with stage breakdown for debugging
     writer.print("\"summary\":{{\"errors\":{},\"warnings\":{}}},", .{ total_errors, total_warnings }) catch return 0;
+
+    // Add debug information showing counts by stage and report counts
+    writer.print("\"debug_counts\":{{\"tokenize\":{{\"errors\":{},\"warnings\":{},\"total_reports\":{}}},\"parse\":{{\"errors\":{},\"warnings\":{},\"total_reports\":{}}},\"can\":{{\"errors\":{},\"warnings\":{},\"total_reports\":{}}},\"type\":{{\"errors\":{},\"warnings\":{},\"total_reports\":{}}}}},", .{ tokenize_counts.errors, tokenize_counts.warnings, data.tokenize_reports.items.len, parse_counts.errors, parse_counts.warnings, data.parse_reports.items.len, can_counts.errors, can_counts.warnings, data.can_reports.items.len, type_counts.errors, type_counts.warnings, data.type_reports.items.len }) catch return 0;
+
+    // Write structured diagnostics array with safeguards
+    writer.writeAll("\"list\":[") catch return 0;
+    if (diagnostics.items.len > 0) {
+        for (diagnostics.items, 0..) |diagnostic, i| {
+            if (i > 0) writer.writeAll(",") catch return 0;
+            writeDiagnosticJson(writer, diagnostic) catch {
+                // Skip malformed diagnostic but continue with others
+                continue;
+            };
+        }
+    }
+    writer.writeAll("],") catch return 0;
 
     // Write HTML diagnostics
     writer.writeAll("\"html\":\"") catch return 0;
@@ -437,64 +548,84 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) usize {
     return stream.getWritten().len;
 }
 
-/// Write tokens response by reusing the snapshot module
+/// Generate an interactive source range span for the playground
+fn writeSourceRangeSpan(writer: anytype, region: base.Region, source: []const u8, line_starts: []const u32) !void {
+    const region_info = base.RegionInfo.position(source, line_starts, region.start.offset, region.end.offset) catch {
+        // Fallback to byte offsets if line calculation fails
+        try writer.print("<span class=\"source-range\" data-start-byte=\"{d}\" data-end-byte=\"{d}\">@{d}-{d}</span>", .{ region.start.offset, region.end.offset, region.start.offset, region.end.offset });
+        return;
+    };
+
+    // Generate interactive span with line/column info
+    try writer.print("<span class=\"source-range\" data-start-byte=\"{d}\" data-end-byte=\"{d}\" data-start-line=\"{d}\" data-start-col=\"{d}\" data-end-line=\"{d}\" data-end-col=\"{d}\">@{d}.{d}-{d}.{d}</span>", .{ region.start.offset, region.end.offset, region_info.start_line_idx + 1, region_info.start_col_idx + 1, region_info.end_line_idx + 1, region_info.end_col_idx + 1, region_info.start_line_idx + 1, region_info.start_col_idx + 1, region_info.end_line_idx + 1, region_info.end_col_idx + 1 });
+}
+
+/// Write tokens response with direct HTML generation
 fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) usize {
     var stream = std.io.fixedBufferStream(response_buffer);
     var writer = stream.writer();
 
-    writer.writeAll("{\"status\":\"SUCCESS\",\"data\":") catch return 0;
+    writer.writeAll("{\"status\":\"SUCCESS\",\"data\":\"") catch return 0;
 
-    // Generate tokens using the snapshot generator
-    // Write tokens as a markdown snapshot
+    // Generate tokens HTML directly
     if (data.parse_ast) |ast| {
         // Create a new arena for this query
         var local_arena = std.heap.ArenaAllocator.init(allocator);
         defer local_arena.deinit();
         const arena_allocator = local_arena.allocator();
 
-        var mut_ast = ast;
-        var sexpr_buffer = std.ArrayList(u8).init(arena_allocator);
-        defer sexpr_buffer.deinit();
+        var html_buffer = std.ArrayList(u8).init(arena_allocator);
+        defer html_buffer.deinit();
+        var html_writer = html_buffer.writer();
 
-        var md_buffer = std.ArrayList(u8).init(arena_allocator);
-        defer md_buffer.deinit();
+        // Write HTML container
+        html_writer.writeAll("<div class=\"token-list\">") catch return 0;
 
-        var dual_output = snapshot.DualOutput.init(allocator, &md_buffer, null);
+        // Generate tokens from AST
+        const token_tags = ast.tokens.tokens.items(.tag);
+        const token_extras = ast.tokens.tokens.items(.extra);
 
-        const content = snapshot.Content{
-            .meta = .{
-                .description = "Playground",
-                .node_type = .file,
-            },
-            .source = data.module_env.source,
-            .expected = null,
-            .formatted = null,
-            .has_canonicalize = false,
-        };
+        for (token_tags, token_extras, 0..) |tag, _, i| {
+            const token_name = @tagName(tag);
+            const region = ast.tokens.resolve(i);
 
-        snapshot.generateTokensSection(&dual_output, &mut_ast, &content, data.module_env) catch {
-            return writeErrorResponse(response_buffer, .ERROR, "Failed to generate tokens section");
-        };
+            // Determine CSS class based on token type
+            var css_class: []const u8 = "default";
+            if (std.mem.startsWith(u8, token_name, "Kw")) {
+                css_class = "keyword";
+            } else if (std.mem.indexOf(u8, token_name, "Ident")) |_| {
+                css_class = "identifier";
+            } else if (std.mem.startsWith(u8, token_name, "Op")) {
+                css_class = "operator";
+            } else if (std.mem.indexOf(u8, token_name, "String")) |_| {
+                css_class = "string";
+            } else if (std.mem.indexOf(u8, token_name, "Number")) |_| {
+                css_class = "number";
+            } else if (std.mem.indexOf(u8, token_name, "Open")) |_| {
+                css_class = "punctuation";
+            } else if (std.mem.indexOf(u8, token_name, "Close")) |_| {
+                css_class = "punctuation";
+            } else if (std.mem.eql(u8, token_name, "EndOfFile")) {
+                css_class = "eof";
+            }
 
-        // The output from generateTokensSection is a full markdown section.
-        // We need to extract just the S-expression content.
-        const full_output = md_buffer.items;
-        const sexpr_start_str = "~~~zig\n";
-        const sexpr_end_str = "\n~~~\n";
+            // Write token HTML with interactive source range
+            html_writer.print("<span class=\"token {s}\">", .{css_class}) catch return 0;
+            html_writer.print("<span class=\"token-type\">{s}</span>", .{token_name}) catch return 0;
+            html_writer.writeAll(" ") catch return 0;
+            writeSourceRangeSpan(html_writer, region, data.module_env.source, data.module_env.line_starts.items.items) catch return 0;
+            html_writer.writeAll("</span>") catch return 0;
+        }
 
-        const start_index = std.mem.indexOf(u8, full_output, sexpr_start_str) orelse 0;
-        const end_index = std.mem.lastIndexOf(u8, full_output, sexpr_end_str) orelse full_output.len;
-        const sexpr_content = full_output[start_index + sexpr_start_str.len .. end_index];
+        html_writer.writeAll("</div>") catch return 0;
 
-        // Wrap the content in JSON
-        writer.writeAll("\"") catch return 0;
-        writeJsonString(writer, sexpr_content) catch return 0;
-        writer.writeAll("\"") catch return 0;
+        // Write the HTML content as JSON string
+        writeJsonString(writer, html_buffer.items) catch return 0;
     } else {
         return writeErrorResponse(response_buffer, .ERROR, "Tokens not available");
     }
 
-    writer.writeAll("}") catch return 0;
+    writer.writeAll("\"}") catch return 0;
     return stream.getWritten().len;
 }
 
@@ -586,6 +717,128 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) usize {
     return stream.getWritten().len;
 }
 
+/// Write type info response for a specific position
+fn writeTypeInfoResponse(response_buffer: []u8, data: CompilerStageData, message_json: std.json.Value) usize {
+    // Parse the position from the message
+    const line = message_json.object.get("line") orelse {
+        return writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Missing line parameter");
+    };
+    const ch = message_json.object.get("ch") orelse {
+        return writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Missing ch parameter");
+    };
+    const identifier = message_json.object.get("identifier") orelse {
+        return writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Missing identifier parameter");
+    };
+
+    const line_num = switch (line) {
+        .integer => |i| @as(u32, @intCast(i)),
+        else => return writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid line parameter"),
+    };
+    const ch_num = switch (ch) {
+        .integer => |i| @as(u32, @intCast(i)),
+        else => return writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid ch parameter"),
+    };
+    const ident_str = switch (identifier) {
+        .string => |s| s,
+        else => return writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid identifier parameter"),
+    };
+
+    // Check for error conditions first
+    if (data.can_ir == null) {
+        return writeErrorResponse(response_buffer, .ERROR, "Canonicalization not completed.");
+    }
+
+    if (data.solver == null) {
+        return writeErrorResponse(response_buffer, .ERROR, "Type checking not completed.");
+    }
+
+    // Convert line/ch to byte offset
+    const source = data.module_env.source;
+    const line_starts = data.module_env.line_starts.items.items;
+
+    if (line_num >= line_starts.len) {
+        return writeErrorResponse(response_buffer, .ERROR, "Line number out of range");
+    }
+
+    const line_start = line_starts[line_num];
+    const byte_offset = line_start + ch_num;
+
+    if (byte_offset >= source.len) {
+        return writeErrorResponse(response_buffer, .ERROR, "Position out of range");
+    }
+
+    // Find type information for the identifier at this position
+    const type_info = findTypeInfoAtPosition(data, byte_offset, ident_str) catch {
+        return writeErrorResponse(response_buffer, .ERROR, "Failed to find type information");
+    };
+
+    // Write the response
+    var stream = std.io.fixedBufferStream(response_buffer);
+    var writer = stream.writer();
+
+    if (type_info) |info| {
+        writer.writeAll("{\"status\":\"SUCCESS\",\"type_info\":{\"type\":\"") catch return 0;
+        writeJsonString(writer, info) catch return 0;
+        writer.writeAll("\"}}") catch return 0;
+    } else {
+        writer.writeAll("{\"status\":\"SUCCESS\",\"type_info\":null}") catch return 0;
+    }
+
+    return stream.getWritten().len;
+}
+
+/// Find type information for an identifier at a specific byte position
+fn findTypeInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier: []const u8) !?[]const u8 {
+    const cir = data.can_ir.?;
+    const gpa = cir.env.gpa;
+
+    // Create TypeWriter for converting types to strings
+    var type_writer = types.writers.TypeWriter.init(gpa, cir.env) catch return null;
+    defer type_writer.deinit();
+
+    // Iterate through all definitions to find one that contains this position
+    const all_defs = cir.store.sliceDefs(cir.all_defs);
+
+    for (all_defs) |def_idx| {
+        const def = cir.store.getDef(def_idx);
+
+        // Check if this definition's pattern contains the byte offset
+        const pattern_region = cir.store.getPatternRegion(def.pattern);
+
+        if (byte_offset >= pattern_region.start.offset and byte_offset < pattern_region.end.offset) {
+            // Check if this pattern matches our identifier
+            const pattern = cir.store.getPattern(def.pattern);
+
+            switch (pattern) {
+                .assign => |assign| {
+                    // Get the identifier text
+                    const ident_text = cir.env.idents.getText(assign.ident);
+
+                    // Check if this matches our target identifier
+                    if (std.mem.eql(u8, ident_text, identifier)) {
+                        // Get the type variable for this definition
+                        const def_var = @as(types.Var, @enumFromInt(@intFromEnum(def_idx)));
+
+                        // Write the type to string
+                        type_writer.write(def_var) catch return null;
+
+                        // Return a copy of the type string
+                        const type_str = type_writer.get();
+                        const owned_str = gpa.dupe(u8, type_str) catch return null;
+                        return owned_str;
+                    }
+                },
+                else => {
+                    // For other pattern types, we could implement additional matching logic
+                    // For now, skip non-assign patterns
+                },
+            }
+        }
+    }
+
+    return null;
+}
+
 /// Write types response in S-expression format
 fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) usize {
     // Check for error conditions first
@@ -653,6 +906,73 @@ fn countDiagnostics(reports: []reporting.Report) struct { errors: u32, warnings:
     }
 
     return .{ .errors = errors, .warnings = warnings };
+}
+
+/// Extract diagnostics from reports for VISUAL INDICATORS only.
+///
+/// This function filters reports to only include those with region information
+/// that can be precisely positioned in the editor for gutter markers and squiggly lines.
+///
+/// Reports without region info are SKIPPED here but are still counted in the summary.
+/// This is intentional - the summary should show the complete diagnostic picture,
+/// while visual indicators are limited to locationally-precise diagnostics.
+fn extractDiagnosticsFromReports(
+    diagnostics: *std.ArrayList(Diagnostic),
+    reports: std.ArrayList(reporting.Report),
+) !void {
+    var count: usize = 0;
+    const max_diagnostics = 100; // Limit visual indicators to avoid UI performance issues
+
+    for (reports.items) |*report| {
+        if (count >= max_diagnostics) break;
+
+        // Try to extract region info from the report
+        // If no region info is available, skip this report for visual indicators
+        // (it will still be counted in the summary statistics)
+        const region_info = report.getRegionInfo() orelse continue;
+
+        // Additional validation for empty or invalid regions
+        if (region_info.start_line_idx == 0 and region_info.start_col_idx == 0 and
+            region_info.end_line_idx == 0 and region_info.end_col_idx == 0)
+        {
+            continue; // Skip invalid zero regions
+        }
+
+        // Get the title as the message
+        const message = report.title;
+
+        // Convert report severity to diagnostic severity
+        const diagnostic_severity = switch (report.severity) {
+            .info => DiagnosticSeverity.info,
+            .warning => DiagnosticSeverity.warning,
+            .runtime_error => DiagnosticSeverity.@"error",
+            .fatal => DiagnosticSeverity.@"error",
+        };
+
+        try diagnostics.append(Diagnostic{
+            .severity = diagnostic_severity,
+            .message = message,
+            .region = DiagnosticRegion{
+                .start_line = region_info.start_line_idx,
+                .start_column = region_info.start_col_idx,
+                .end_line = region_info.end_line_idx,
+                .end_column = region_info.end_col_idx,
+            },
+        });
+
+        count += 1;
+    }
+}
+
+fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
+    try writer.print("{{\"severity\":\"{s}\",\"message\":\"", .{@tagName(diagnostic.severity)});
+    try writeJsonString(writer, diagnostic.message);
+    try writer.print("\",\"region\":{{\"start_line\":{d},\"start_column\":{d},\"end_line\":{d},\"end_column\":{d}}}}}", .{
+        diagnostic.region.start_line,
+        diagnostic.region.start_column,
+        diagnostic.region.end_line,
+        diagnostic.region.end_column,
+    });
 }
 
 /// Write a string with JSON escaping
