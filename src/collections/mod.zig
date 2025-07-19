@@ -21,8 +21,6 @@ pub const FrozenStringMap = @import("FrozenMap.zig").FrozenStringMap;
 
 pub const FrozenU32Map = @import("FrozenMap.zig").FrozenU32Map;
 
-pub const BuildableFrozenStringMap = @import("FrozenMap.zig").BuildableFrozenStringMap;
-
 pub const SortedArrayBuilder = @import("FrozenMap.zig").SortedArrayBuilder;
 
 pub const FrozenInternMap = @import("FrozenMap.zig").FrozenInternMap;
