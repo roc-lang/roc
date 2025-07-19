@@ -556,38 +556,13 @@ fn appendImportsToIovecs(self: *const CIR, writer: *base.iovec_serialize.IovecWr
 
     const start_offset = writer.getOffset();
 
-    // Serialize sorted imports
-    const gpa = self.env.gpa;
-    const serialized_size = self.imports.sorted_imports.serializedSize();
-    const buffer = try writer.reserveBytes(serialized_size);
-    _ = try self.imports.sorted_imports.serializeInto(gpa, buffer);
-
-    // Write imports array count
-    const imports_count: u32 = @intCast(self.imports.imports.items.len);
-    try writer.appendStruct(imports_count);
-
-    // Write imports array
-    for (self.imports.imports.items) |import_str| {
-        // String length
-        const str_len: u32 = @intCast(import_str.len);
-        try writer.appendStruct(str_len);
-
-        // String bytes
-        try writer.appendBytes(import_str);
-    }
-
-    // Write strings storage
-    result.strings_offset = writer.getOffset();
-    const strings_len: u32 = @intCast(self.imports.strings.items.len);
-    try writer.appendStruct(strings_len);
-
-    if (self.imports.strings.items.len > 0) {
-        try writer.appendBytes(self.imports.strings.items);
-    }
+    // Use Import.Store's appendToIovecs method for zero-copy serialization
+    _ = try self.imports.appendToIovecs(writer);
 
     // Set the result offsets
     result.map_metadata_offset = start_offset;
     result.imports_offset = start_offset; // We're serializing everything together
+    result.strings_offset = start_offset; // Strings are included in the Import.Store serialization
 
     return result;
 }
@@ -1919,6 +1894,38 @@ pub const Import = struct {
             return size;
         }
 
+        /// Append this Store to an iovec writer for serialization
+        pub fn appendToIovecs(self: *const Store, writer: anytype) !usize {
+            const start_offset = writer.getOffset();
+            
+            // Write sorted imports using its appendToIovecs method
+            _ = try self.sorted_imports.appendToIovecs(writer);
+            
+            // Write imports array count
+            const imports_count: u32 = @intCast(self.imports.items.len);
+            try writer.appendStruct(imports_count);
+            
+            // Write imports array
+            for (self.imports.items) |import_str| {
+                // String length
+                const str_len: u32 = @intCast(import_str.len);
+                try writer.appendStruct(str_len);
+                // String bytes
+                try writer.appendBytes(import_str);
+            }
+            
+            // Write strings storage length
+            const strings_len: u32 = @intCast(self.strings.items.len);
+            try writer.appendStruct(strings_len);
+            
+            // Write strings storage
+            if (self.strings.items.len > 0) {
+                try writer.appendBytes(self.strings.items);
+            }
+            
+            return start_offset;
+        }
+
         /// Serialize this Store into the provided buffer
         pub fn serializeInto(self: *const Store, gpa: std.mem.Allocator, buffer: []u8) ![]u8 {
             const size = self.serializedSize();
@@ -2356,6 +2363,32 @@ pub const ExternalDecl = struct {
         offset += 4;
 
         return buffer[0..offset];
+    }
+
+    /// Append this external declaration to an iovec writer for serialization
+    pub fn appendToIovecs(self: *const @This(), writer: *base.iovec_serialize.IovecWriter) !void {
+        // Serialize qualified_name
+        try writer.appendBytes(std.mem.asBytes(&@as(u32, @bitCast(self.qualified_name))));
+
+        // Serialize module_name
+        try writer.appendBytes(std.mem.asBytes(&@as(u32, @bitCast(self.module_name))));
+
+        // Serialize local_name
+        try writer.appendBytes(std.mem.asBytes(&@as(u32, @bitCast(self.local_name))));
+
+        // Serialize type_var
+        try writer.appendBytes(std.mem.asBytes(&@as(u32, @intFromEnum(self.type_var))));
+
+        // Serialize kind
+        const kind_byte: u8 = switch (self.kind) {
+            .value => 0,
+            .type => 1,
+        };
+        try writer.appendBytes(std.mem.asBytes(&kind_byte));
+
+        // Serialize region
+        try writer.appendBytes(std.mem.asBytes(&@as(u32, self.region.start.offset)));
+        try writer.appendBytes(std.mem.asBytes(&@as(u32, self.region.end.offset)));
     }
 
     /// Deserialize an external declaration from the provided buffer

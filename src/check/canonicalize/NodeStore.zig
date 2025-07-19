@@ -7,6 +7,7 @@ const collections = @import("collections");
 const Node = @import("Node.zig");
 const CIR = @import("CIR.zig");
 const RocDec = @import("builtins").RocDec;
+const iovec_serialize = base.iovec_serialize;
 
 const SERIALIZATION_ALIGNMENT = 16;
 
@@ -2935,40 +2936,69 @@ pub fn serializedSize(self: *const NodeStore) usize {
     return std.mem.alignForward(usize, raw_size, SERIALIZATION_ALIGNMENT);
 }
 
-/// Serialize this NodeStore into the provided buffer
-/// Buffer must be at least serializedSize() bytes and properly aligned
-pub fn serializeInto(self: *const NodeStore, buffer: []align(SERIALIZATION_ALIGNMENT) u8) ![]u8 {
-    const size = self.serializedSize();
-    if (buffer.len < size) return error.BufferTooSmall;
+/// Append this NodeStore to an iovec writer for serialization
+pub fn appendToIovecs(self: *const NodeStore, writer: *iovec_serialize.IovecWriter) !usize {
+    const start_offset = writer.getOffset();
 
-    var offset: usize = 0;
-
-    // Serialize nodes - cast to proper alignment for Node type
-    const nodes_slice = try self.nodes.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
-    offset += nodes_slice.len;
+    // Serialize nodes
+    _ = try self.nodes.appendToIovecs(writer);
 
     // Serialize regions
-    const regions_slice = try self.regions.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
-    offset += regions_slice.len;
+    _ = try self.regions.appendToIovecs(writer);
 
     // Serialize extra_data length
-    const extra_len_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset)));
-    extra_len_ptr.* = @intCast(self.extra_data.items.len);
+    const extra_len: u32 = @intCast(self.extra_data.items.len);
+    try writer.appendStruct(extra_len);
+
+    // Serialize extra_data items
+    if (self.extra_data.items.len > 0) {
+        const extra_bytes = std.mem.sliceAsBytes(self.extra_data.items);
+        try writer.appendBytes(extra_bytes);
+    }
+
+    // Add padding to maintain alignment
+    const current_size = writer.getOffset() - start_offset;
+    const aligned_size = std.mem.alignForward(usize, current_size, SERIALIZATION_ALIGNMENT);
+    if (aligned_size > current_size) {
+        const padding_size = aligned_size - current_size;
+        const padding = try writer.allocator.alloc(u8, padding_size);
+        @memset(padding, 0);
+        try writer.appendBytes(padding);
+        try writer.owned_buffers.append(padding);
+    }
+
+    return writer.getOffset() - start_offset;
+}
+
+/// Serialize this NodeStore into the provided buffer
+pub fn serializeInto(self: *const NodeStore, buffer: []align(@alignOf(Node)) u8) ![]u8 {
+    var offset: usize = 0;
+
+    // Serialize nodes - we need proper alignment for Node type
+    const nodes_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..]));
+    const nodes_serialized = try self.nodes.serializeInto(nodes_buffer);
+    offset += nodes_serialized.len;
+
+    // Serialize regions - align to next alignment boundary
+    offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+    const regions_buffer = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..]));
+    const regions_serialized = try self.regions.serializeInto(regions_buffer);
+    offset += regions_serialized.len;
+
+    // Serialize extra_data length
+    if (buffer.len < offset + @sizeOf(u32)) return error.BufferTooSmall;
+    @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = @intCast(self.extra_data.items.len);
     offset += @sizeOf(u32);
 
     // Serialize extra_data items
     if (self.extra_data.items.len > 0) {
-        const extra_ptr = @as([*]u32, @ptrCast(@alignCast(buffer.ptr + offset)));
-        @memcpy(extra_ptr, self.extra_data.items);
-        offset += self.extra_data.items.len * @sizeOf(u32);
+        const items_size = self.extra_data.items.len * @sizeOf(u32);
+        if (buffer.len < offset + items_size) return error.BufferTooSmall;
+        @memcpy(buffer[offset .. offset + items_size], std.mem.sliceAsBytes(self.extra_data.items));
+        offset += items_size;
     }
 
-    // Zero out any padding bytes
-    if (offset < size) {
-        @memset(buffer[offset..size], 0);
-    }
-
-    return buffer[0..size];
+    return buffer[0..offset];
 }
 
 /// Deserialize a NodeStore from the provided buffer

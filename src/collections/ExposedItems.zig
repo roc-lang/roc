@@ -60,6 +60,11 @@ pub const ExposedItems = struct {
         return self.items.serializedSize();
     }
 
+    /// Append to iovec writer for serialization
+    pub fn appendToIovecs(self: *const Self, writer: anytype) !usize {
+        return self.items.appendToIovecs(writer);
+    }
+
     /// Serialize into buffer
     pub fn serializeInto(self: *const Self, allocator: Allocator, buffer: []u8) ![]u8 {
         return self.items.serializeInto(allocator, buffer);

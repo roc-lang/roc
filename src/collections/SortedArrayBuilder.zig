@@ -14,6 +14,16 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+// Conditional import for appendToIovecs support
+const base = if (@import("builtin").is_test) 
+    struct { 
+        const iovec_serialize = struct { 
+            const IovecWriter = void; 
+        }; 
+    } 
+else 
+    @import("base");
+
 /// A builder for creating sorted arrays directly without using hash maps
 /// This is more efficient when we know we won't have duplicates
 pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
@@ -214,6 +224,40 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         /// Get the number of entries
         pub fn count(self: *const Self) usize {
             return self.entries.items.len;
+        }
+
+        /// Append this SortedArrayBuilder to an iovec writer for serialization
+        pub fn appendToIovecs(self: *const Self, writer: anytype) !usize {
+            const start_offset = writer.getOffset();
+            
+            // Must be sorted before serialization
+            if (!self.sorted) {
+                @panic("SortedArrayBuilder must be sorted before serialization");
+            }
+            
+            // Write count
+            const entry_count: u32 = @intCast(self.entries.items.len);
+            try writer.appendStruct(entry_count);
+            
+            // Write entries directly as iovecs (zero-copy)
+            for (self.entries.items) |entry| {
+                if (K == []const u8) {
+                    // String key: write length then data
+                    const key_len: u32 = @intCast(entry.key.len);
+                    try writer.appendStruct(key_len);
+                    try writer.appendBytes(entry.key);
+                } else {
+                    // Numeric key - append directly as bytes
+                    try writer.appendBytes(std.mem.asBytes(&entry.key));
+                }
+                
+                // Write value
+                if (@sizeOf(V) > 0) {
+                    try writer.appendBytes(std.mem.asBytes(&entry.value));
+                }
+            }
+            
+            return start_offset;
         }
 
         /// Serialize directly (must be sorted first)
@@ -417,7 +461,7 @@ test "SortedArrayBuilder detectDuplicates example usage" {
     try testing.expectEqual(@as(usize, 2), duplicates.len);
 
     // After detection, normal operations work as expected
-    try builder.ensureSorted(allocator);
+    builder.ensureSorted(allocator);
     try testing.expectEqual(@as(usize, 3), builder.count()); // Deduplicated
     try testing.expectEqual(@as(?u16, 3), builder.get(allocator, 100)); // Last value kept
     try testing.expectEqual(@as(?u16, 5), builder.get(allocator, 200)); // Last value kept
@@ -505,3 +549,4 @@ test "SortedArrayBuilder no duplicates case" {
     try testing.expectEqual(@as(?u16, 2), builder.get(allocator, "unique2"));
     try testing.expectEqual(@as(?u16, 3), builder.get(allocator, "unique3"));
 }
+

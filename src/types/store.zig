@@ -64,6 +64,23 @@ pub const Slot = union(enum) {
         return buffer[0..self.serializedSize()];
     }
 
+    /// Append this Slot to an iovec writer for serialization
+    pub fn appendToIovecs(self: *const Slot, writer: anytype) !void {
+        // Write tag
+        const tag: u8 = switch (self.*) {
+            .root => 0,
+            .redirect => 1,
+        };
+        try writer.appendStruct(tag);
+
+        // Write data
+        const data: u32 = switch (self.*) {
+            .root => |idx| @intFromEnum(idx),
+            .redirect => |var_| @intFromEnum(var_),
+        };
+        try writer.appendStruct(data);
+    }
+
     /// Deserialize a Slot from the provided buffer
     pub fn deserializeFrom(buffer: []const u8) !Slot {
         if (buffer.len < @sizeOf(u8) + @sizeOf(u32)) return error.BufferTooSmall;
@@ -1043,6 +1060,11 @@ const SlotStore = struct {
         return self.backing.serializedSize();
     }
 
+    /// Append this SlotStore to an iovec writer for serialization
+    pub fn appendToIovecs(self: *const Self, writer: anytype) !usize {
+        return self.backing.appendToIovecs(writer);
+    }
+
     /// Serialize this SlotStore into the provided buffer
     pub fn serializeInto(self: *const Self, buffer: []align(SERIALIZATION_ALIGNMENT) u8) ![]align(SERIALIZATION_ALIGNMENT) const u8 {
         return self.backing.serializeInto(buffer);
@@ -1106,6 +1128,35 @@ const DescStore = struct {
         const raw_size = @sizeOf(u32) + (self.backing.len * (@sizeOf(Content) + 1 + 4));
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
         return std.mem.alignForward(usize, raw_size, SERIALIZATION_ALIGNMENT);
+    }
+
+    /// Append this DescStore to an iovec writer for serialization
+    pub fn appendToIovecs(self: *const Self, writer: anytype) !usize {
+        const start_offset = writer.getOffset();
+        
+        // Write count
+        const count: u32 = @intCast(self.backing.len);
+        try writer.appendStruct(count);
+        
+        // Write data
+        if (self.backing.len > 0) {
+            const slice = self.backing.slice();
+            for (slice.items(.content), slice.items(.rank), slice.items(.mark)) |content, rank, mark| {
+                // Serialize each field individually to avoid padding
+                try writer.appendBytes(std.mem.asBytes(&content));
+                
+                const rank_byte: u8 = @intFromEnum(rank);
+                try writer.appendBytes(std.mem.asBytes(&rank_byte));
+                
+                const mark_value: u32 = @intFromEnum(mark);
+                try writer.appendBytes(std.mem.asBytes(&mark_value));
+            }
+        }
+        
+        // Ensure alignment
+        _ = try writer.appendAligned(&[_]u8{}, SERIALIZATION_ALIGNMENT);
+        
+        return start_offset;
     }
 
     /// Serialize this DescStore into the provided buffer

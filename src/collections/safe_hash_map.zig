@@ -84,6 +84,33 @@ pub fn SafeStringHashMap(comptime V: type) type {
             return size;
         }
 
+        /// Append this hash map to an iovec writer for serialization
+        pub fn appendToIovecs(self: *const Self, writer: anytype) !usize {
+            const start_offset = writer.getOffset();
+            
+            // Write count
+            const entry_count: u32 = @intCast(self.map.count());
+            try writer.appendStruct(entry_count);
+            
+            // Write entries directly as iovecs (zero-copy for strings)
+            var iter = self.map.iterator();
+            while (iter.next()) |entry| {
+                // Write key length
+                const key_len: u32 = @intCast(entry.key_ptr.len);
+                try writer.appendStruct(key_len);
+                
+                // Write key bytes (zero-copy)
+                try writer.appendBytes(entry.key_ptr.*);
+                
+                // Write value bytes (if not void)
+                if (V != void) {
+                    try writer.appendBytes(std.mem.asBytes(entry.value_ptr));
+                }
+            }
+            
+            return start_offset;
+        }
+
         /// Serialize this hash map into the provided buffer
         pub fn serializeInto(self: *const Self, buffer: []u8) ![]u8 {
             const size = self.serializedSize();

@@ -233,6 +233,35 @@ pub const Store = struct {
         return std.mem.alignForward(usize, size, serialization.SERIALIZATION_ALIGNMENT);
     }
 
+    /// Append this Ident.Store to an iovec writer for serialization
+    pub fn appendToIovecs(self: *const Store, writer: anytype) !usize {
+        const start_offset = writer.getOffset();
+        
+        // Serialize the interner using its appendToIovecs method
+        _ = try self.interner.appendToIovecs(writer);
+        
+        // Serialize attributes
+        const attributes_len: u32 = @intCast(self.attributes.items.len);
+        try writer.appendStruct(attributes_len);
+        
+        if (attributes_len > 0) {
+            // Write attributes directly as bytes (zero-copy)
+            // Each Attributes is 3 bits, we pack them as u8
+            try writer.appendBytes(std.mem.sliceAsBytes(self.attributes.items));
+        }
+        
+        // Align for next u32 
+        _ = try writer.appendAligned(&[_]u8{}, @alignOf(u32));
+        
+        // Serialize next_unique_name
+        try writer.appendStruct(self.next_unique_name);
+        
+        // Ensure final alignment
+        _ = try writer.appendAligned(&[_]u8{}, serialization.SERIALIZATION_ALIGNMENT);
+        
+        return start_offset;
+    }
+
     /// Serialize this Ident.Store into the provided buffer
     pub fn serializeInto(self: *const Store, buffer: []u8, gpa: std.mem.Allocator) ![]u8 {
         const size = self.serializedSize();

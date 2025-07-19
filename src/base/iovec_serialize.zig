@@ -3,6 +3,12 @@
 //! This module provides utilities for serializing data structures using scatter-gather I/O
 //! (vectored I/O) instead of memory mapping. This approach allows us to build up a list
 //! of memory regions to write without copying data into a single buffer first.
+//!
+//! ## Platform Support
+//!
+//! - **POSIX systems**: Uses `pwritev()` for efficient scatter-gather I/O
+//! - **Windows**: Automatically falls back to buffering all iovecs into a single
+//!   memory buffer and writing with `pwriteAll()`, since Windows doesn't have pwritev
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -139,22 +145,30 @@ pub const IovecWriter = struct {
         return self.current_offset;
     }
 
+    /// Serialize all iovecs into a single buffer
+    /// This is essentially the same logic as the Windows fallback in writevToFile
+    pub fn serialize(self: *const Self, allocator: std.mem.Allocator) ![]u8 {
+        const total_size = self.totalSize();
+        const buffer = try allocator.alloc(u8, total_size);
+        
+        // Copy all iovec data into the buffer
+        var write_offset: usize = 0;
+        for (self.iovecs.items) |iov| {
+            @memcpy(buffer[write_offset..][0..iov.len], iov.base[0..iov.len]);
+            write_offset += iov.len;
+        }
+        
+        return buffer;
+    }
+
     /// Write all iovecs to a file using pwritev (POSIX) or fallback (Windows)
     /// Note: You should call finalize() before this if you have any deferred writes
     pub fn writevToFile(self: *const Self, file: std.fs.File, offset: u64) !void {
         if (builtin.os.tag == .windows) {
-            // Windows doesn't have pwritev, so we need to allocate and copy
-            const total_size = self.totalSize();
-            const buffer = try self.iovecs.allocator.alloc(u8, total_size);
-            defer self.iovecs.allocator.free(buffer);
-
-            // Copy all iovec data into the buffer
-            var write_offset: usize = 0;
-            for (self.iovecs.items) |iov| {
-                @memcpy(buffer[write_offset..][0..iov.len], iov.base[0..iov.len]);
-                write_offset += iov.len;
-            }
-
+            // Windows doesn't have pwritev, so serialize to a buffer and write it
+            const buffer = try self.serialize(self.allocator);
+            defer self.allocator.free(buffer);
+            
             // Write the entire buffer at once
             try file.pwriteAll(buffer, offset);
         } else {
@@ -241,7 +255,7 @@ pub fn SerializableToIovecs(comptime Self: type) type {
     };
 }
 
-/// Helper to create a buffer from iovecs for testing/debugging
+/// Helper to create a buffer from iovecs for testing/debugging  
 pub fn iovecsToBuf(allocator: std.mem.Allocator, iovecs: []const std.posix.iovec_const) ![]u8 {
     var total_size: usize = 0;
     for (iovecs) |iov| {
@@ -443,6 +457,25 @@ test "IovecWriter partial write simulation" {
     }
 }
 
+test "IovecWriter serialize method" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var writer = IovecWriter.init(allocator);
+    defer writer.deinit();
+
+    // Add some data
+    try writer.appendBytes("hello");
+    try writer.appendBytes("world");
+    
+    // Test the serialize method
+    const buffer = try writer.serialize(allocator);
+    defer allocator.free(buffer);
+    
+    try testing.expectEqual(@as(usize, 10), buffer.len);
+    try testing.expectEqualStrings("helloworld", buffer);
+}
+
 test "IovecWriter Windows fallback" {
     if (builtin.os.tag != .windows) return;
 
@@ -457,12 +490,13 @@ test "IovecWriter Windows fallback" {
     try writer.appendBytes("world");
 
     // Create temporary file for testing
-    const tmp_dir = testing.tmp_dir;
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    
     const tmp_file = try tmp_dir.dir.createFile("test_iovec.bin", .{});
     defer tmp_file.close();
-    defer tmp_dir.dir.deleteFile("test_iovec.bin") catch {};
 
-    // Write using Windows fallback
+    // Write using Windows fallback (which now uses serialize() internally)
     try writer.writevToFile(tmp_file, 0);
 
     // Verify file contents

@@ -247,6 +247,49 @@ pub fn SafeList(comptime T: type) type {
             return buffer[0..size];
         }
 
+        /// Append this list to an iovec writer for serialization
+        pub fn appendToIovecs(self: *const SafeList(T), writer: anytype) !usize {
+            const start_offset = writer.getOffset();
+
+            // Write count
+            const count: u32 = @intCast(self.items.items.len);
+            try writer.appendStruct(count);
+
+            // Check if T has custom appendToIovecs
+            if (comptime switch (@typeInfo(T)) {
+                .@"struct", .@"union", .@"enum", .@"opaque" => @hasDecl(T, "appendToIovecs"),
+                else => false,
+            }) {
+                // Use custom appendToIovecs for each item
+                for (self.items.items) |*item| {
+                    _ = try item.appendToIovecs(writer);
+                }
+            } else {
+                // Use direct bytes for POD types
+                if (@typeInfo(T) == .@"struct" or @typeInfo(T) == .int or @typeInfo(T) == .float or @typeInfo(T) == .@"enum") {
+                    if (self.items.items.len > 0) {
+                        const bytes = std.mem.sliceAsBytes(self.items.items);
+                        try writer.appendBytes(bytes);
+                    }
+                } else {
+                    @compileError("Cannot serialize non-POD type " ++ @typeName(T) ++ " without custom serialization methods");
+                }
+            }
+
+            // Add padding to maintain alignment
+            const current_size = writer.getOffset() - start_offset;
+            const aligned_size = std.mem.alignForward(usize, current_size, SERIALIZATION_ALIGNMENT);
+            if (aligned_size > current_size) {
+                const padding_size = aligned_size - current_size;
+                const padding = try writer.allocator.alloc(u8, padding_size);
+                @memset(padding, 0);
+                try writer.appendBytes(padding);
+                try writer.owned_buffers.append(padding);
+            }
+
+            return writer.getOffset() - start_offset;
+        }
+
         /// Deserialize from buffer, using provided allocator
         pub fn deserializeFrom(buffer: []align(@alignOf(T)) const u8, allocator: Allocator) !SafeList(T) {
             if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
@@ -574,6 +617,48 @@ pub fn SafeMultiList(comptime T: type) type {
             }
 
             return buffer[0..size];
+        }
+
+        /// Append this list to an iovec writer for serialization
+        pub fn appendToIovecs(self: *const SafeMultiList(T), writer: anytype) !usize {
+            const start_offset = writer.getOffset();
+
+            // Write count
+            const count: u32 = @intCast(self.items.len);
+            try writer.appendStruct(count);
+
+            // If T is a POD type, serialize each item
+            if (@typeInfo(T) == .@"struct" or @typeInfo(T) == .int or @typeInfo(T) == .float) {
+                if (self.items.len > 0) {
+                    // We need to create a contiguous buffer for the items since MultiArrayList stores them non-contiguously
+                    const items_size = self.items.len * @sizeOf(T);
+                    const items_buffer = try writer.allocator.alloc(u8, items_size);
+                    const data_ptr = @as([*]T, @ptrCast(@alignCast(items_buffer.ptr)));
+                    
+                    // Copy each item from the MultiArrayList to contiguous memory
+                    for (0..self.items.len) |i| {
+                        data_ptr[i] = self.items.get(i);
+                    }
+                    
+                    try writer.appendBytes(items_buffer);
+                    try writer.owned_buffers.append(items_buffer);
+                }
+            } else {
+                @compileError("Cannot serialize non-POD type " ++ @typeName(T));
+            }
+
+            // Add padding to maintain alignment
+            const current_size = writer.getOffset() - start_offset;
+            const aligned_size = std.mem.alignForward(usize, current_size, SERIALIZATION_ALIGNMENT);
+            if (aligned_size > current_size) {
+                const padding_size = aligned_size - current_size;
+                const padding = try writer.allocator.alloc(u8, padding_size);
+                @memset(padding, 0);
+                try writer.appendBytes(padding);
+                try writer.owned_buffers.append(padding);
+            }
+
+            return writer.getOffset() - start_offset;
         }
 
         /// Deserialize from buffer, using provided allocator

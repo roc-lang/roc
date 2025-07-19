@@ -104,6 +104,33 @@ pub const Store = struct {
         return std.mem.alignForward(usize, raw_size, serialization.SERIALIZATION_ALIGNMENT);
     }
 
+    /// Append this StringLiteral.Store to an iovec writer for serialization
+    pub fn appendToIovecs(self: *const Store, writer: anytype) !usize {
+        const start_offset = writer.getOffset();
+        
+        // Write buffer length
+        const buffer_len: u32 = @intCast(self.buffer.items.len);
+        try writer.appendStruct(buffer_len);
+        
+        // Write buffer data directly as bytes (zero-copy)
+        if (self.buffer.items.len > 0) {
+            try writer.appendBytes(self.buffer.items);
+        }
+        
+        // Ensure alignment by adding padding if needed
+        const alignment = serialization.SERIALIZATION_ALIGNMENT;
+        const current_offset = writer.getOffset();
+        const aligned_offset = std.mem.alignForward(usize, current_offset, alignment);
+        const padding_size = aligned_offset - current_offset;
+        if (padding_size > 0) {
+            // Add padding bytes to maintain alignment
+            const padding = [_]u8{0} ** serialization.SERIALIZATION_ALIGNMENT;
+            try writer.appendBytes(padding[0..padding_size]);
+        }
+        
+        return start_offset;
+    }
+
     /// Serialize this StringLiteral.Store into the provided buffer
     /// Buffer must be at least serializedSize() bytes
     pub fn serializeInto(self: *const Store, buffer: []u8) ![]u8 {
