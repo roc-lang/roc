@@ -28,26 +28,18 @@ const SExprTree = base.SExprTree;
 const ModuleEnv = base.ModuleEnv;
 const Allocator = std.mem.Allocator;
 
-// Use a fixed buffer allocator to avoid posix dependencies
-var global_buffer: [1024 * 1024 * 64]u8 align(16) = undefined; // 64MB buffer, aligned
-var fba = std.heap.FixedBufferAllocator.init(&global_buffer);
-const allocator = fba.allocator();
+const allocator: Allocator = .{
+    .ptr = undefined,
+    .vtable = &std.heap.WasmAllocator.vtable,
+};
 
-// Track memory usage for debugging
-fn getMemoryUsage() struct { used: usize, total: usize } {
-    const used = fba.end_index;
-    const total = global_buffer.len;
-    return .{ .used = used, .total = total };
-}
-
-/// State machine states
 const State = enum {
     START,
     READY,
     LOADED,
 };
 
-/// Message types for communication
+/// Message types for communication with the playground
 const MessageType = enum {
     INIT,
     LOAD_SOURCE,
@@ -178,8 +170,6 @@ export fn init() void {
         data.deinit();
         compiler_data = null;
     }
-    // Reset the allocator on init to start fresh
-    fba.reset();
 }
 
 /// Process a message and return response length
@@ -1016,8 +1006,6 @@ export fn cleanup() void {
         data.deinit();
         compiler_data = null;
     }
-    // Reset allocator on cleanup
-    fba.reset();
 
     // Clean up global source
     if (WasmFilesystem.global_source) |source| {
