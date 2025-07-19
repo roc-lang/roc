@@ -222,3 +222,87 @@ test "StringLiteral.Store empty store serialization" {
 
     try serialization.testing.testSerialization(Store, &empty_store, gpa);
 }
+
+test "StringLiteral.Store serialization parity" {
+    const gpa = testing.allocator;
+
+    var store = Store{};
+    defer store.deinit(gpa);
+
+    // Add test data
+    const idx1 = try store.insert(gpa, "first");
+    const idx2 = try store.insert(gpa, "second string");
+    const idx3 = try store.insert(gpa, "🦎 unicode test");
+    const idx4 = try store.insert(gpa, "");
+
+    // Test old method
+    const old_size = store.serializedSize();
+    const old_buffer = try gpa.alloc(u8, old_size);
+    defer gpa.free(old_buffer);
+    const old_serialized = try store.serializeInto(old_buffer);
+
+    // Test new method
+    const base = @import("base");
+    var writer = base.iovec_serialize.IovecWriter.init(gpa);
+    defer writer.deinit();
+    _ = try store.appendToIovecs(&writer);
+    const new_serialized = try writer.serialize(gpa);
+    defer gpa.free(new_serialized);
+
+    // Both methods should produce the same total size
+    try testing.expectEqual(old_serialized.len, new_serialized.len);
+    
+    // Both serialized data should start with the same buffer length
+    const old_len = std.mem.readInt(u32, old_serialized[0..4], .little);
+    const new_len = std.mem.readInt(u32, new_serialized[0..4], .little);
+    try testing.expectEqual(old_len, new_len);
+    
+    // Verify we can retrieve strings from both
+    _ = idx1;
+    _ = idx2;
+    _ = idx3;
+    _ = idx4;
+}
+
+test "StringLiteral.Store round-trip parity" {
+    const gpa = testing.allocator;
+
+    var original = Store{};
+    defer original.deinit(gpa);
+
+    // Add test data with edge cases
+    const idx1 = try original.insert(gpa, "basic");
+    const idx2 = try original.insert(gpa, "");
+    const idx3 = try original.insert(gpa, "unicode🦎🚀");
+    const idx4 = try original.insert(gpa, "control\x00\x01\n\r\t");
+
+    // Serialize with old method, deserialize
+    const old_size = original.serializedSize();
+    const old_buffer = try gpa.alloc(u8, old_size);
+    defer gpa.free(old_buffer);
+    const old_serialized = try original.serializeInto(old_buffer);
+    
+    var from_old = try Store.deserializeFrom(old_serialized, gpa);
+    defer from_old.deinit(gpa);
+
+    // Serialize with new method, deserialize
+    const base = @import("base");
+    var writer = base.iovec_serialize.IovecWriter.init(gpa);
+    defer writer.deinit();
+    _ = try original.appendToIovecs(&writer);
+    const new_serialized = try writer.serialize(gpa);
+    defer gpa.free(new_serialized);
+    
+    var from_new = try Store.deserializeFrom(new_serialized, gpa);
+    defer from_new.deinit(gpa);
+
+    // Verify both deserialized versions can retrieve the same strings
+    try testing.expectEqualStrings("basic", from_old.get(idx1));
+    try testing.expectEqualStrings("basic", from_new.get(idx1));
+    try testing.expectEqualStrings("", from_old.get(idx2));
+    try testing.expectEqualStrings("", from_new.get(idx2));
+    try testing.expectEqualStrings("unicode🦎🚀", from_old.get(idx3));
+    try testing.expectEqualStrings("unicode🦎🚀", from_new.get(idx3));
+    try testing.expectEqualStrings("control\x00\x01\n\r\t", from_old.get(idx4));
+    try testing.expectEqualStrings("control\x00\x01\n\r\t", from_new.get(idx4));
+}

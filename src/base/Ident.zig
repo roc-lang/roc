@@ -556,3 +556,95 @@ test "Ident.Store empty store serialization" {
 
     try serialization.testing.testSerialization(Store, &empty_store, gpa);
 }
+
+test "Ident.Store serialization parity" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.initCapacity(gpa, 16);
+    defer store.deinit(gpa);
+
+    // Add test data
+    const ident1 = Ident.for_text("hello");
+    const ident2 = Ident.for_text("world!");
+    const ident3 = Ident.for_text("_ignored");
+    const region = Region.zero();
+    
+    _ = try store.insert(gpa, ident1, region);
+    _ = try store.insert(gpa, ident2, region);
+    _ = try store.insert(gpa, ident3, region);
+    _ = try store.genUnique(gpa);
+
+    // Test old method
+    const old_size = store.serializedSize();
+    const old_buffer = try gpa.alignedAlloc(u8, @alignOf(u32), old_size);
+    defer gpa.free(old_buffer);
+    const old_serialized = try store.serializeInto(old_buffer, gpa);
+
+    // Test new method
+    const base = @import("base");
+    var writer = base.iovec_serialize.IovecWriter.init(gpa);
+    defer writer.deinit();
+    _ = try store.appendToIovecs(&writer);
+    const new_serialized = try writer.serialize(gpa);
+    defer gpa.free(new_serialized);
+
+    // Both methods should produce the same total size
+    try std.testing.expectEqual(old_serialized.len, new_serialized.len);
+    
+    // Both serialized data should start with the same bytes length
+    const old_bytes_len = std.mem.readInt(u32, old_serialized[0..4], .little);
+    const new_bytes_len = std.mem.readInt(u32, new_serialized[0..4], .little);
+    try std.testing.expectEqual(old_bytes_len, new_bytes_len);
+}
+
+test "Ident.Store round-trip parity" {
+    const gpa = std.testing.allocator;
+
+    var original = try Store.initCapacity(gpa, 16);
+    defer original.deinit(gpa);
+
+    // Add test data with edge cases
+    const ident1 = Ident.for_text("basic");
+    const ident2 = Ident.for_text("_ignored");
+    const ident3 = Ident.for_text("effectful!");
+    const ident4 = Ident.for_text("a");
+    const region = Region.zero();
+    
+    const idx1 = try original.insert(gpa, ident1, region);
+    const idx2 = try original.insert(gpa, ident2, region);
+    const idx3 = try original.insert(gpa, ident3, region);
+    const idx4 = try original.insert(gpa, ident4, region);
+
+    // Serialize with old method, deserialize
+    const old_size = original.serializedSize();
+    const old_buffer = try gpa.alignedAlloc(u8, @alignOf(u32), old_size);
+    defer gpa.free(old_buffer);
+    const old_serialized = try original.serializeInto(old_buffer, gpa);
+    
+    var from_old = try Store.deserializeFrom(old_serialized, gpa);
+    defer from_old.deinit(gpa);
+
+    // Serialize with new method, deserialize
+    const base = @import("base");
+    var writer = base.iovec_serialize.IovecWriter.init(gpa);
+    defer writer.deinit();
+    _ = try original.appendToIovecs(&writer);
+    const new_serialized = try writer.serialize(gpa);
+    defer gpa.free(new_serialized);
+    
+    var from_new = try Store.deserializeFrom(new_serialized, gpa);
+    defer from_new.deinit(gpa);
+
+    // Verify both deserialized versions can retrieve the same identifiers
+    try std.testing.expectEqualStrings("basic", from_old.getText(idx1));
+    try std.testing.expectEqualStrings("basic", from_new.getText(idx1));
+    try std.testing.expectEqualStrings("_ignored", from_old.getText(idx2));
+    try std.testing.expectEqualStrings("_ignored", from_new.getText(idx2));
+    try std.testing.expectEqualStrings("effectful!", from_old.getText(idx3));
+    try std.testing.expectEqualStrings("effectful!", from_new.getText(idx3));
+    try std.testing.expectEqualStrings("a", from_old.getText(idx4));
+    try std.testing.expectEqualStrings("a", from_new.getText(idx4));
+    
+    // Verify next_unique_name is preserved
+    try std.testing.expectEqual(from_old.next_unique_name, from_new.next_unique_name);
+}

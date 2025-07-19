@@ -419,3 +419,121 @@ test "SafeStringHashMap void value serialization framework test" {
     // Test serialization using the testing framework
     try serialization.testing.testSerialization(SafeStringHashMap(void), &map, gpa);
 }
+
+test "SafeStringHashMap serialization parity - u32 values" {
+    const gpa = testing.allocator;
+
+    var map = SafeStringHashMap(u32).init();
+    defer map.deinit(gpa);
+
+    // Add test data
+    try map.put(gpa, "zebra", 100);
+    try map.put(gpa, "apple", 50);
+    try map.put(gpa, "banana", 150);
+    try map.put(gpa, "cherry", 30);
+
+    // Test old method
+    const old_size = map.serializedSize();
+    const old_buffer = try gpa.alloc(u8, old_size);
+    defer gpa.free(old_buffer);
+    const old_serialized = try map.serializeInto(old_buffer);
+
+    // Test new method
+    const base = @import("base");
+    var writer = base.iovec_serialize.IovecWriter.init(gpa);
+    defer writer.deinit();
+    _ = try map.appendToIovecs(&writer);
+    const new_serialized = try writer.serialize(gpa);
+    defer gpa.free(new_serialized);
+
+    // Both methods should produce the same total size
+    try testing.expectEqual(old_serialized.len, new_serialized.len);
+    
+    // Both serialized data should start with the same count
+    const old_count = std.mem.readInt(u32, old_serialized[0..4], .little);
+    const new_count = std.mem.readInt(u32, new_serialized[0..4], .little);
+    try testing.expectEqual(old_count, new_count);
+    try testing.expectEqual(@as(u32, 4), old_count);
+}
+
+test "SafeStringHashMap serialization parity - void values" {
+    const gpa = testing.allocator;
+
+    var map = SafeStringHashMap(void).init();
+    defer map.deinit(gpa);
+
+    // Add test data (keys only since values are void)
+    try map.put(gpa, "test1", {});
+    try map.put(gpa, "test2", {});
+    try map.put(gpa, "unicode🦎", {});
+
+    // Test old method
+    const old_size = map.serializedSize();
+    const old_buffer = try gpa.alloc(u8, old_size);
+    defer gpa.free(old_buffer);
+    const old_serialized = try map.serializeInto(old_buffer);
+
+    // Test new method
+    const base = @import("base");
+    var writer = base.iovec_serialize.IovecWriter.init(gpa);
+    defer writer.deinit();
+    _ = try map.appendToIovecs(&writer);
+    const new_serialized = try writer.serialize(gpa);
+    defer gpa.free(new_serialized);
+
+    // Both methods should produce the same total size
+    try testing.expectEqual(old_serialized.len, new_serialized.len);
+    
+    // Both serialized data should start with the same count
+    const old_count = std.mem.readInt(u32, old_serialized[0..4], .little);
+    const new_count = std.mem.readInt(u32, new_serialized[0..4], .little);
+    try testing.expectEqual(old_count, new_count);
+    try testing.expectEqual(@as(u32, 3), old_count);
+}
+
+test "SafeStringHashMap round-trip parity" {
+    const gpa = testing.allocator;
+
+    var original = SafeStringHashMap(u16).init();
+    defer original.deinit(gpa);
+
+    // Add test data with edge cases
+    try original.put(gpa, "empty", 0);
+    try original.put(gpa, "max", 0xFFFF);
+    try original.put(gpa, "unicode🦎", 12345);
+    try original.put(gpa, "", 999); // empty key
+    try original.put(gpa, "a", 1); // single char key
+
+    // Serialize with old method, deserialize
+    const old_size = original.serializedSize();
+    const old_buffer = try gpa.alloc(u8, old_size);
+    defer gpa.free(old_buffer);
+    const old_serialized = try original.serializeInto(old_buffer);
+    
+    var from_old = try SafeStringHashMap(u16).deserializeFrom(old_serialized, gpa);
+    defer from_old.deinit(gpa);
+
+    // Serialize with new method, deserialize
+    const base = @import("base");
+    var writer = base.iovec_serialize.IovecWriter.init(gpa);
+    defer writer.deinit();
+    _ = try original.appendToIovecs(&writer);
+    const new_serialized = try writer.serialize(gpa);
+    defer gpa.free(new_serialized);
+    
+    var from_new = try SafeStringHashMap(u16).deserializeFrom(new_serialized, gpa);
+    defer from_new.deinit(gpa);
+
+    // Verify both deserialized versions have the same data
+    try testing.expectEqual(from_old.count(), from_new.count());
+    try testing.expectEqual(@as(u16, 0), from_old.get("empty").?);
+    try testing.expectEqual(@as(u16, 0), from_new.get("empty").?);
+    try testing.expectEqual(@as(u16, 0xFFFF), from_old.get("max").?);
+    try testing.expectEqual(@as(u16, 0xFFFF), from_new.get("max").?);
+    try testing.expectEqual(@as(u16, 12345), from_old.get("unicode🦎").?);
+    try testing.expectEqual(@as(u16, 12345), from_new.get("unicode🦎").?);
+    try testing.expectEqual(@as(u16, 999), from_old.get("").?);
+    try testing.expectEqual(@as(u16, 999), from_new.get("").?);
+    try testing.expectEqual(@as(u16, 1), from_old.get("a").?);
+    try testing.expectEqual(@as(u16, 1), from_new.get("a").?);
+}

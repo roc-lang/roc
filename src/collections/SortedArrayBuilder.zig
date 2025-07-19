@@ -14,15 +14,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// Conditional import for appendToIovecs support
-const base = if (@import("builtin").is_test) 
-    struct { 
-        const iovec_serialize = struct { 
-            const IovecWriter = void; 
-        }; 
-    } 
-else 
-    @import("base");
+// Import base for both testing and runtime
+const base = @import("base");
+const IovecWriter = base.iovec_serialize.IovecWriter;
 
 /// A builder for creating sorted arrays directly without using hash maps
 /// This is more efficient when we know we won't have duplicates
@@ -227,7 +221,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         }
 
         /// Append this SortedArrayBuilder to an iovec writer for serialization
-        pub fn appendToIovecs(self: *const Self, writer: anytype) !usize {
+        pub fn appendToIovecs(self: *const Self, writer: *IovecWriter) !usize {
             const start_offset = writer.getOffset();
             
             // Must be sorted before serialization
@@ -548,5 +542,119 @@ test "SortedArrayBuilder no duplicates case" {
     try testing.expectEqual(@as(?u16, 1), builder.get(allocator, "unique1"));
     try testing.expectEqual(@as(?u16, 2), builder.get(allocator, "unique2"));
     try testing.expectEqual(@as(?u16, 3), builder.get(allocator, "unique3"));
+}
+
+test "SortedArrayBuilder serialization parity - string keys" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var builder = SortedArrayBuilder([]const u8, u32).init();
+    defer builder.deinit(allocator);
+
+    // Add test data
+    try builder.put(allocator, "zebra", 100);
+    try builder.put(allocator, "apple", 50);
+    try builder.put(allocator, "banana", 150);
+    try builder.put(allocator, "cherry", 30);
+    
+    // Ensure sorted
+    builder.ensureSorted(allocator);
+
+    // Test old method
+    const old_size = builder.serializedSize();
+    const old_buffer = try allocator.alloc(u8, old_size);
+    defer allocator.free(old_buffer);
+    const old_serialized = try builder.serializeInto(allocator, old_buffer);
+
+    // Test new method
+    var writer = IovecWriter.init(allocator);
+    defer writer.deinit();
+    _ = try builder.appendToIovecs(&writer);
+    const new_serialized = try writer.serialize(allocator);
+    defer allocator.free(new_serialized);
+
+    // Verify identical output
+    try testing.expectEqual(old_serialized.len, new_serialized.len);
+    try testing.expectEqualSlices(u8, old_serialized, new_serialized);
+}
+
+test "SortedArrayBuilder serialization parity - numeric keys" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var builder = SortedArrayBuilder(u32, []const u8).init();
+    defer builder.deinit(allocator);
+
+    // Add test data
+    try builder.put(allocator, 300, "third");
+    try builder.put(allocator, 100, "first");
+    try builder.put(allocator, 200, "second");
+    
+    // Ensure sorted
+    builder.ensureSorted(allocator);
+
+    // Test old method
+    const old_size = builder.serializedSize();
+    const old_buffer = try allocator.alloc(u8, old_size);
+    defer allocator.free(old_buffer);
+    const old_serialized = try builder.serializeInto(allocator, old_buffer);
+
+    // Test new method
+    var writer = IovecWriter.init(allocator);
+    defer writer.deinit();
+    _ = try builder.appendToIovecs(&writer);
+    const new_serialized = try writer.serialize(allocator);
+    defer allocator.free(new_serialized);
+
+    // Verify identical output
+    try testing.expectEqual(old_serialized.len, new_serialized.len);
+    try testing.expectEqualSlices(u8, old_serialized, new_serialized);
+}
+
+test "SortedArrayBuilder round-trip parity" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var original = SortedArrayBuilder([]const u8, u32).init();
+    defer original.deinit(allocator);
+
+    // Add test data with various edge cases
+    try original.put(allocator, "empty", 0);
+    try original.put(allocator, "max", 0xFFFFFFFF);
+    try original.put(allocator, "unicode🦎", 12345);
+    try original.put(allocator, "", 999); // empty key
+    
+    // Ensure sorted
+    original.ensureSorted(allocator);
+
+    // Serialize with old method, deserialize
+    const old_size = original.serializedSize();
+    const old_buffer = try allocator.alloc(u8, old_size);
+    defer allocator.free(old_buffer);
+    const old_serialized = try original.serializeInto(allocator, old_buffer);
+    
+    var from_old = try SortedArrayBuilder([]const u8, u32).deserializeFrom(old_serialized, allocator);
+    defer from_old.deinit(allocator);
+
+    // Serialize with new method, deserialize
+    var writer = IovecWriter.init(allocator);
+    defer writer.deinit();
+    _ = try original.appendToIovecs(&writer);
+    const new_serialized = try writer.serialize(allocator);
+    defer allocator.free(new_serialized);
+    
+    var from_new = try SortedArrayBuilder([]const u8, u32).deserializeFrom(new_serialized, allocator);
+    defer from_new.deinit(allocator);
+
+    // Verify both deserialized versions are identical
+    try testing.expectEqual(from_old.count(), from_new.count());
+    try testing.expectEqual(@as(?u32, 0), from_old.get(allocator, "empty"));
+    try testing.expectEqual(@as(?u32, 0), from_new.get(allocator, "empty"));
+    try testing.expectEqual(@as(?u32, 0xFFFFFFFF), from_old.get(allocator, "max"));
+    try testing.expectEqual(@as(?u32, 0xFFFFFFFF), from_new.get(allocator, "max"));
+    try testing.expectEqual(@as(?u32, 12345), from_old.get(allocator, "unicode🦎"));
+    try testing.expectEqual(@as(?u32, 12345), from_new.get(allocator, "unicode🦎"));
+    try testing.expectEqual(@as(?u32, 999), from_old.get(allocator, ""));
+    try testing.expectEqual(@as(?u32, 999), from_new.get(allocator, ""));
 }
 

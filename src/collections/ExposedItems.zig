@@ -163,3 +163,83 @@ test "ExposedItems serialization" {
     try testing.expectEqual(@as(?u16, 3), deserialized.getNodeIndex(allocator, 200));
     try testing.expectEqual(@as(?u16, 1), deserialized.getNodeIndex(allocator, 300));
 }
+
+test "ExposedItems serialization parity" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var exposed = ExposedItems.init();
+    defer exposed.deinit(allocator);
+
+    // Add test data
+    try exposed.put(allocator, 500, 10);
+    try exposed.put(allocator, 100, 20);
+    try exposed.put(allocator, 300, 30);
+    try exposed.put(allocator, 200, 40);
+    
+    // Ensure sorted
+    exposed.ensureSorted(allocator);
+
+    // Test old method
+    const old_size = exposed.serializedSize();
+    const old_buffer = try allocator.alloc(u8, old_size);
+    defer allocator.free(old_buffer);
+    const old_serialized = try exposed.serializeInto(allocator, old_buffer);
+
+    // Test new method
+    const base = @import("base");
+    var writer = base.iovec_serialize.IovecWriter.init(allocator);
+    defer writer.deinit();
+    _ = try exposed.appendToIovecs(&writer);
+    const new_serialized = try writer.serialize(allocator);
+    defer allocator.free(new_serialized);
+
+    // Both methods should produce identical output
+    try testing.expectEqual(old_serialized.len, new_serialized.len);
+    try testing.expectEqualSlices(u8, old_serialized, new_serialized);
+}
+
+test "ExposedItems round-trip parity" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var original = ExposedItems.init();
+    defer original.deinit(allocator);
+
+    // Add test data
+    try original.put(allocator, 0, 0); // min values
+    try original.put(allocator, 0xFFFFFFFF, 0xFFFF); // max values
+    try original.put(allocator, 12345, 999);
+    
+    // Ensure sorted
+    original.ensureSorted(allocator);
+
+    // Serialize with old method, deserialize
+    const old_size = original.serializedSize();
+    const old_buffer = try allocator.alloc(u8, old_size);
+    defer allocator.free(old_buffer);
+    const old_serialized = try original.serializeInto(allocator, old_buffer);
+    
+    var from_old = try ExposedItems.deserializeFrom(old_serialized, allocator);
+    defer from_old.deinit(allocator);
+
+    // Serialize with new method, deserialize
+    const base = @import("base");
+    var writer = base.iovec_serialize.IovecWriter.init(allocator);
+    defer writer.deinit();
+    _ = try original.appendToIovecs(&writer);
+    const new_serialized = try writer.serialize(allocator);
+    defer allocator.free(new_serialized);
+    
+    var from_new = try ExposedItems.deserializeFrom(new_serialized, allocator);
+    defer from_new.deinit(allocator);
+
+    // Verify both deserialized versions are identical
+    try testing.expectEqual(from_old.count(), from_new.count());
+    try testing.expectEqual(@as(?u16, 0), from_old.getNodeIndex(allocator, 0));
+    try testing.expectEqual(@as(?u16, 0), from_new.getNodeIndex(allocator, 0));
+    try testing.expectEqual(@as(?u16, 0xFFFF), from_old.getNodeIndex(allocator, 0xFFFFFFFF));
+    try testing.expectEqual(@as(?u16, 0xFFFF), from_new.getNodeIndex(allocator, 0xFFFFFFFF));
+    try testing.expectEqual(@as(?u16, 999), from_old.getNodeIndex(allocator, 12345));
+    try testing.expectEqual(@as(?u16, 999), from_new.getNodeIndex(allocator, 12345));
+}
