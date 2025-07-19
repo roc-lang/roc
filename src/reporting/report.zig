@@ -202,6 +202,25 @@ pub const Report = struct {
         try self.document.addLineBreak();
     }
 
+    /// Extract region information from the document elements.
+    /// Returns the first source region found, or null if none exists.
+    pub fn getRegionInfo(self: *const Report) ?RegionInfo {
+        for (self.document.elements.items) |element| {
+            switch (element) {
+                .source_code_region => |region_data| {
+                    return RegionInfo{
+                        .start_line_idx = region_data.start_line,
+                        .start_col_idx = region_data.start_column,
+                        .end_line_idx = region_data.end_line,
+                        .end_col_idx = region_data.end_column,
+                    };
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
     /// Check if the report is empty (has no content).
     pub fn isEmpty(self: *const Report) bool {
         return self.document.isEmpty();
