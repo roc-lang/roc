@@ -9,8 +9,9 @@ const std = @import("std");
 const mod = @import("mod.zig");
 const Region = @import("Region.zig");
 const serialization = @import("serialization");
+const collections = @import("collections");
 
-const SmallStringInterner = mod.SmallStringInterner;
+const SmallStringInterner = collections.SmallStringInterner;
 
 const Ident = @This();
 

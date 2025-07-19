@@ -7,10 +7,10 @@
 //! arrays with values corresponding 1-to-1 to interned values, e.g. regions.
 
 const std = @import("std");
-const mod = @import("mod.zig");
+const base = @import("base");
 
-const Region = mod.Region;
-const IovecWriter = @import("iovec_serialize.zig").IovecWriter;
+const Region = base.Region;
+const IovecWriter = base.iovec_serialize.IovecWriter;
 
 const Self = @This();
 
@@ -152,8 +152,16 @@ pub fn relocate(self: *Self, offset: isize) void {
         self.regions.items.ptr = @ptrFromInt(new_ptr);
     }
 
-    // Skip relocating the strings hash map - it's not serialized after freeze
-    // The hash map will be reconstructed as empty during deserialization
+    // Relocate the strings hash map
+    // Although it's not serialized, we relocate it for future use cases
+    if (self.strings.unmanaged.size > 0) {
+        // Relocate the metadata pointer
+        if (self.strings.unmanaged.metadata) |metadata| {
+            const old_ptr = @intFromPtr(metadata);
+            const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+            self.strings.unmanaged.metadata = @ptrFromInt(new_ptr);
+        }
+    }
 }
 
 /// Freeze the interner, preventing any new entries from being added.
