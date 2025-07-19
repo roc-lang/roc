@@ -2940,34 +2940,54 @@ pub fn serializedSize(self: *const NodeStore) usize {
 pub fn appendToIovecs(self: *const NodeStore, writer: *iovec_serialize.IovecWriter) !usize {
     const start_offset = writer.getOffset();
 
-    // Serialize nodes
+    // Reserve space for NodeStore struct
+    const store_struct_offset = try writer.reserveStruct(NodeStore);
+
+    // Serialize nodes (they handle their own struct serialization)
     _ = try self.nodes.appendToIovecs(writer);
 
-    // Serialize regions
+    // Serialize regions (they handle their own struct serialization)
     _ = try self.regions.appendToIovecs(writer);
 
-    // Serialize extra_data length
-    const extra_len: u32 = @intCast(self.extra_data.items.len);
-    try writer.appendStruct(extra_len);
-
-    // Serialize extra_data items
-    if (self.extra_data.items.len > 0) {
+    // Serialize extra_data and get its offset
+    const extra_data_offset = if (self.extra_data.items.len > 0) blk: {
         const extra_bytes = std.mem.sliceAsBytes(self.extra_data.items);
-        try writer.appendBytes(extra_bytes);
-    }
+        const offset = try writer.appendAligned(extra_bytes, @alignOf(u32));
+        break :blk offset;
+    } else 0;
 
-    // Add padding to maintain alignment
-    const current_size = writer.getOffset() - start_offset;
-    const aligned_size = std.mem.alignForward(usize, current_size, SERIALIZATION_ALIGNMENT);
-    if (aligned_size > current_size) {
-        const padding_size = aligned_size - current_size;
-        const padding = try writer.allocator.alloc(u8, padding_size);
-        @memset(padding, 0);
-        try writer.appendBytes(padding);
-        try writer.owned_buffers.append(padding);
-    }
+    // Create corrected NodeStore struct with pointers pointing to serialized data
+    const corrected_store = NodeStore{
+        .gpa = std.mem.Allocator{
+            .ptr = @ptrFromInt(1),
+            .vtable = @ptrFromInt(@alignOf(*const std.mem.Allocator.VTable)),
+        }, // Will be set by deserializer
+        .nodes = self.nodes, // The nodes appendToIovecs already corrected its internal pointers
+        .regions = self.regions, // The regions appendToIovecs already corrected its internal pointers
+        .extra_data = .{
+            .items = if (self.extra_data.items.len > 0)
+                @as([*]u32, @ptrFromInt(extra_data_offset))[0..self.extra_data.items.len]
+            else
+                @as([*]u32, @ptrFromInt(@alignOf(u32)))[0..0],
+            .capacity = self.extra_data.capacity,
+        },
+        .scratch_statements = self.scratch_statements,
+        .scratch_exprs = self.scratch_exprs,
+        .scratch_record_fields = self.scratch_record_fields,
+        .scratch_decl_patterns = self.scratch_decl_patterns,
+        .scratch_destructure_patterns = self.scratch_destructure_patterns,
+        .scratch_call_args = self.scratch_call_args,
+        .scratch_closure_args = self.scratch_closure_args,
+        .scratch_fn_arg_patterns = self.scratch_fn_arg_patterns,
+        .scratch_list_elems = self.scratch_list_elems,
+        .scratch_apply_args = self.scratch_apply_args,
+        .scratch_u32s = self.scratch_u32s,
+    };
 
-    return writer.getOffset() - start_offset;
+    // Write the corrected struct
+    try writer.writeDeferredStruct(store_struct_offset, corrected_store);
+
+    return start_offset;
 }
 
 /// Serialize this NodeStore into the provided buffer

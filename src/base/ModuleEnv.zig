@@ -297,8 +297,8 @@ pub fn appendToIovecs(self: *const Self, writer: *iovec_serialize.IovecWriter) !
     // Reserve space for the ModuleEnv struct header
     const env_offset = try writer.reserveStruct(Self);
 
-    // Serialize idents
-    const idents_result = try self.appendIdentsToIovecs(writer);
+    // Serialize idents using its own appendToIovecs
+    _ = try self.idents.appendToIovecs(writer);
 
     // Serialize ident_ids_for_slicing
     const ident_ids_offset = if (self.ident_ids_for_slicing.items.items.len > 0) blk: {
@@ -317,13 +317,8 @@ pub fn appendToIovecs(self: *const Self, writer: *iovec_serialize.IovecWriter) !
     _ = writer.getOffset(); // types_offset
     _ = try self.types.appendToIovecs(writer);
 
-    // Serialize exposed_items
-    _ = writer.getOffset(); // exposed_items_offset
-    const exposed_items_size = self.exposed_items.serializedSize();
-    const exposed_items_buffer = try self.gpa.alloc(u8, exposed_items_size);
-    defer self.gpa.free(exposed_items_buffer);
-    _ = try self.exposed_items.serializeInto(self.gpa, exposed_items_buffer);
-    try writer.writeAll(exposed_items_buffer);
+    // Serialize exposed_items using its appendToIovecs
+    _ = try self.exposed_items.appendToIovecs(writer);
 
     // Serialize line_starts
     const line_starts_offset = if (self.line_starts.items.items.len > 0) blk: {
@@ -344,16 +339,7 @@ pub fn appendToIovecs(self: *const Self, writer: *iovec_serialize.IovecWriter) !
             .ptr = @ptrFromInt(1),
             .vtable = @ptrFromInt(@alignOf(*const std.mem.Allocator.VTable)),
         }, // Will be set by deserializer
-        .idents = .{
-            .interner = .{
-                .bytes = .{ .items = if (self.idents.interner.bytes.items.len > 0) @as([*]u8, @ptrFromInt(idents_result.bytes_offset))[0..self.idents.interner.bytes.items.len] else @as([*]u8, @ptrFromInt(@alignOf(u8)))[0..0], .capacity = self.idents.interner.bytes.capacity },
-                .strings = .{ .metadata = null, .size = 0, .available = 0 },
-                .outer_indices = .{ .items = if (self.idents.interner.outer_indices.items.len > 0) @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(idents_result.indices_offset))[0..self.idents.interner.outer_indices.items.len] else @as([*]collections.SmallStringInterner.StringIdx, @ptrFromInt(@alignOf(collections.SmallStringInterner.StringIdx)))[0..0], .capacity = self.idents.interner.outer_indices.capacity },
-                .regions = .{ .items = if (self.idents.interner.regions.items.len > 0) @as([*]Region, @ptrFromInt(idents_result.regions_offset))[0..self.idents.interner.regions.items.len] else @as([*]Region, @ptrFromInt(@alignOf(Region)))[0..0], .capacity = self.idents.interner.regions.capacity },
-            },
-            .attributes = .{ .items = if (self.idents.attributes.items.len > 0) @as([*]Ident.Attributes, @ptrFromInt(idents_result.attributes_offset))[0..self.idents.attributes.items.len] else @as([*]Ident.Attributes, @ptrFromInt(@alignOf(Ident.Attributes)))[0..0], .capacity = self.idents.attributes.capacity },
-            .next_unique_name = self.idents.next_unique_name,
-        },
+        .idents = self.idents, // The idents appendToIovecs already set up its internal pointers
         .ident_ids_for_slicing = .{ .items = .{ .items = if (self.ident_ids_for_slicing.items.items.len > 0) @as([*]Ident.Idx, @ptrFromInt(ident_ids_offset))[0..self.ident_ids_for_slicing.items.items.len] else @as([*]Ident.Idx, @ptrFromInt(@alignOf(Ident.Idx)))[0..0], .capacity = self.ident_ids_for_slicing.items.capacity } },
         .strings = .{ .buffer = .{ .items = if (self.strings.buffer.items.len > 0) @as([*]u8, @ptrFromInt(strings_buffer_offset))[0..self.strings.buffer.items.len] else @as([*]u8, @ptrFromInt(@alignOf(u8)))[0..0], .capacity = self.strings.buffer.capacity } },
         .types = undefined, // Complex structure, will be set up by types.appendToIovecs
