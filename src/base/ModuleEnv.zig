@@ -23,8 +23,6 @@ idents: Ident.Store,
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 types: types_mod.Store,
-/// Collection of exposed items mapping intern indices to CIR node indices
-/// This combines the functionality of the old exposed_by_str and exposed_nodes
 exposed_items: collections.ExposedItems,
 
 /// Line starts for error reporting. We retain only start and offset positions in the IR
