@@ -16,7 +16,8 @@ const Allocator = std.mem.Allocator;
 
 // Import base for both testing and runtime
 const base = @import("base");
-const IovecWriter = base.iovec_serialize.IovecWriter;
+const serialization = @import("serialization");
+const IovecWriter = serialization.IovecWriter;
 
 /// A builder for creating sorted arrays directly without using hash maps
 /// This is more efficient when we know we won't have duplicates

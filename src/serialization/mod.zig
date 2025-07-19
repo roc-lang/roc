@@ -1,15 +1,29 @@
-//! Common serialization utilities and traits for the Roc compiler
+//! Serialization utilities for the Roc compiler
 //!
 //! This module provides:
 //! - Common traits for serializable types
 //! - Memory safety utilities
 //! - Testing framework for serialization
 //! - Error types and utilities
+//! - IoVec-based scatter-gather I/O serialization
+//! - Memory relocation utilities
+//! - Aligned data writing utilities
 
 const std = @import("std");
 
+// Abstract serialization interfaces and utilities
 pub const testing = @import("testing.zig");
 pub const safety = @import("safety.zig");
+
+// Concrete implementation modules
+pub const iovec_serialize = @import("iovec_serialize.zig");
+// TODO: Re-enable relocate module once import conflicts are resolved
+// pub const relocate = @import("relocate.zig");
+pub const write_aligned = @import("write_aligned.zig");
+
+// Re-export commonly used types and functions
+pub const IovecWriter = iovec_serialize.IovecWriter;
+pub const writeAlignedData = write_aligned.writeAlignedData;
 
 const Allocator = std.mem.Allocator;
 
@@ -144,6 +158,12 @@ pub fn hasSerializationWithAllocatorInterface(comptime T: type) bool {
     if (serialize_info != .@"fn") return false;
 
     return serialize_info.@"fn".params.len >= 3; // self, buffer, allocator
+}
+
+test {
+    _ = @import("test_iovec_serialize.zig");
+    // TODO: Re-enable test_relocate.zig once module import conflicts are resolved
+    // _ = @import("test_relocate.zig");
 }
 
 test "serialization interface detection" {

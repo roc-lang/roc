@@ -830,7 +830,7 @@ pub const Store = struct {
     }
 
     /// Append this Store to an iovec writer for serialization
-    pub fn appendToIovecs(self: *const Self, writer: *base.iovec_serialize.IovecWriter) !usize {
+    pub fn appendToIovecs(self: *const Self, writer: *serialization.IovecWriter) !usize {
         const start_offset = writer.getOffset();
 
         // Reserve space for size headers (5 u32 values)
@@ -895,12 +895,12 @@ pub const Store = struct {
         return start_offset;
     }
 
-    fn appendSlotStoreToIovecs(self: *const Self, writer: *base.iovec_serialize.IovecWriter) !void {
+    fn appendSlotStoreToIovecs(self: *const Self, writer: *serialization.IovecWriter) !void {
         // SlotStore is a wrapper around SafeList(Slot)
         try appendSafeListToIovecs(Slot, &self.slots.backing, writer);
     }
 
-    fn appendDescStoreToIovecs(descs: *const DescStore, writer: *base.iovec_serialize.IovecWriter) !void {
+    fn appendDescStoreToIovecs(descs: *const DescStore, writer: *serialization.IovecWriter) !void {
         // DescStore has a more complex structure
         // First write the count
         const count: u32 = @intCast(descs.backing.len);
@@ -916,7 +916,7 @@ pub const Store = struct {
         }
     }
 
-    fn appendDescriptorToIovecs(desc: *const Desc, writer: *base.iovec_serialize.IovecWriter) !void {
+    fn appendDescriptorToIovecs(desc: *const Desc, writer: *serialization.IovecWriter) !void {
         // A Descriptor contains Content, Rank, and Mark
         // For now, serialize to a small buffer since descriptors are complex
         const size = @sizeOf(Desc);
@@ -931,7 +931,7 @@ pub const Store = struct {
         try writer.appendBytes(buffer);
     }
 
-    fn appendSafeListToIovecs(comptime T: type, list: *const collections.SafeList(T), writer: *base.iovec_serialize.IovecWriter) !void {
+    fn appendSafeListToIovecs(comptime T: type, list: *const collections.SafeList(T), writer: *serialization.IovecWriter) !void {
         // Write count
         const count: u32 = @intCast(list.items.items.len);
         try writer.appendStruct(count);
@@ -943,7 +943,7 @@ pub const Store = struct {
         }
     }
 
-    fn appendSafeMultiListToIovecs(comptime T: type, list: *const collections.SafeMultiList(T), writer: *base.iovec_serialize.IovecWriter) !void {
+    fn appendSafeMultiListToIovecs(comptime T: type, list: *const collections.SafeMultiList(T), writer: *serialization.IovecWriter) !void {
         // SafeMultiList wraps a MultiArrayList
         // Write count
         const count: u32 = @intCast(list.items.len);

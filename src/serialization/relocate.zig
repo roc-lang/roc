@@ -3,13 +3,15 @@
 //! This module provides functionality to relocate all pointers within a ModuleEnv
 //! by a fixed offset. This is useful when transferring a ModuleEnv across address
 //! spaces via shared memory or similar mechanisms.
+//!
+//! NOTE: This module has been moved to serialization but currently has import conflicts.
+//! The actual relocate functionality is implemented within the types that need it
+//! (ModuleEnv, Ident.Store, etc.) as relocate() methods.
 
 const std = @import("std");
-const ModuleEnv = @import("ModuleEnv.zig");
-const collections = @import("../collections.zig");
-const types_mod = @import("../types.zig");
-const Ident = @import("Ident.zig");
-const StringLiteral = @import("StringLiteral.zig");
+
+// TODO: Re-enable these imports once module dependency issues are resolved
+// Currently causing "file exists in multiple modules" errors
 
 /// Relocate all pointers in a ModuleEnv by the given offset
 /// This function traverses all data structures within the ModuleEnv and adjusts

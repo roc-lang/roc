@@ -187,8 +187,8 @@ test "ExposedItems serialization parity" {
     const old_serialized = try exposed.serializeInto(allocator, old_buffer);
 
     // Test new method
-    const base = @import("base");
-    var writer = base.iovec_serialize.IovecWriter.init(allocator);
+    const serialization = @import("serialization");
+    var writer = serialization.IovecWriter.init(allocator);
     defer writer.deinit();
     _ = try exposed.appendToIovecs(&writer);
     const new_serialized = try writer.serialize(allocator);
@@ -224,8 +224,8 @@ test "ExposedItems round-trip parity" {
     defer from_old.deinit(allocator);
 
     // Serialize with new method, deserialize
-    const base = @import("base");
-    var writer = base.iovec_serialize.IovecWriter.init(allocator);
+    const serialization = @import("serialization");
+    var writer = serialization.IovecWriter.init(allocator);
     defer writer.deinit();
     _ = try original.appendToIovecs(&writer);
     const new_serialized = try writer.serialize(allocator);

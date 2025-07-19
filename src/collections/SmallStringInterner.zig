@@ -8,9 +8,10 @@
 
 const std = @import("std");
 const base = @import("base");
+const serialization = @import("serialization");
 
 const Region = base.Region;
-const IovecWriter = base.iovec_serialize.IovecWriter;
+const IovecWriter = serialization.IovecWriter;
 
 const Self = @This();
 

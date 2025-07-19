@@ -2,17 +2,17 @@
 
 const std = @import("std");
 const testing = std.testing;
-const ModuleEnv = @import("ModuleEnv.zig");
-const types = @import("../types.zig");
-const Ident = @import("Ident.zig");
-const StringLiteral = @import("StringLiteral.zig");
-const base = @import("../base.zig");
+const base = @import("base");
+const types = @import("types");
+const ModuleEnv = base.ModuleEnv;
+const Ident = base.Ident;
+const StringLiteral = base.StringLiteral;
 const parse = @import("../check/parse.zig");
 const tokenize = @import("../check/parse/tokenize.zig");
 const canonicalize = @import("../check/canonicalize.zig");
 const solve = @import("../check/check_types.zig");
 const interpreter = @import("../eval/interpreter.zig");
-const collections = @import("../collections.zig");
+const collections = @import("collections");
 
 test "ModuleEnv pointer relocation" {
     // Create two fixed buffer allocators - one for the original, one for the copy
@@ -43,10 +43,10 @@ test "ModuleEnv pointer relocation" {
 
     var parser = try parse.Parser.init(tokenized);
     defer parser.deinit();
-    var file = try parser.file();
+    const file = try parser.file();
 
     // Canonicalize
-    var c_input = canonicalize.Input{
+    const c_input = canonicalize.Input{
         .gpa = original_allocator,
         .env = &env,
         .ast = file,
@@ -136,7 +136,7 @@ test "ModuleEnv relocation with REPL-style evaluation" {
 
         var parser = try parse.Parser.init(tokenized);
         defer parser.deinit();
-        var expr = try parser.expr();
+        _ = try parser.expr();
 
         // For expression tests, we need to parse as a full file with the expression
         // So we'll wrap it in a simple assignment
@@ -150,10 +150,10 @@ test "ModuleEnv relocation with REPL-style evaluation" {
         parser.deinit();
         parser = try parse.Parser.init(tokenized);
 
-        var file = try parser.file();
+        const file = try parser.file();
 
         // Canonicalize
-        var c_input = canonicalize.Input{
+        const c_input = canonicalize.Input{
             .gpa = original_allocator,
             .env = &env,
             .ast = file,
@@ -265,10 +265,10 @@ test "ModuleEnv relocation with complex data structures" {
 
     var parser = try parse.Parser.init(tokenized);
     defer parser.deinit();
-    var file = try parser.file();
+    const file = try parser.file();
 
     // Canonicalize
-    var c_input = canonicalize.Input{
+    const c_input = canonicalize.Input{
         .gpa = original_allocator,
         .env = &env,
         .ast = file,
@@ -369,10 +369,10 @@ test "ModuleEnv relocation with snapshot integration" {
         parser.deinit();
         parser = try parse.Parser.init(tokenized);
 
-        var file = try parser.file();
+        const file = try parser.file();
 
         // Canonicalize
-        var c_input = canonicalize.Input{
+        const c_input = canonicalize.Input{
             .gpa = original_allocator,
             .env = &env,
             .ast = file,

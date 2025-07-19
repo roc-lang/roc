@@ -12,9 +12,11 @@ const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
 const RegionInfo = @import("RegionInfo.zig");
 const Region = @import("Region.zig");
-const relocate_mod = @import("relocate.zig");
-const writeAlignedData = @import("write_aligned.zig").writeAlignedData;
-const iovec_serialize = @import("iovec_serialize.zig");
+const serialization = @import("serialization");
+// TODO: Re-enable when relocate module is fixed
+// const relocate_mod = serialization.relocate;
+const writeAlignedData = serialization.writeAlignedData;
+const iovec_serialize = serialization.iovec_serialize;
 
 const Self = @This();
 

@@ -233,7 +233,7 @@ pub fn serializedSize(self: *const CIR) usize {
 /// Serialize this CIR into the provided buffer
 /// Buffer must be at least serializedSize() bytes and properly aligned
 pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
-    const writeAlignedData = base.writeAlignedData;
+    const writeAlignedData = serialization.writeAlignedData;
     var write_offset: usize = 0;
 
     // Write CIR struct with placeholder pointers
@@ -339,7 +339,7 @@ pub fn serializeInto(self: *const CIR, buffer: []u8) !usize {
 }
 
 /// Append this CIR to an iovec writer for serialization
-pub fn appendToIovecs(self: *const CIR, writer: *base.iovec_serialize.IovecWriter) !usize {
+pub fn appendToIovecs(self: *const CIR, writer: *serialization.IovecWriter) !usize {
     const struct_offset = writer.getOffset();
 
     // Reserve space for the CIR struct header
@@ -452,7 +452,7 @@ pub fn appendToIovecs(self: *const CIR, writer: *base.iovec_serialize.IovecWrite
     return struct_offset;
 }
 
-fn appendNodeStoreToIovecs(self: *const CIR, writer: *base.iovec_serialize.IovecWriter) !NodeStoreSerializationResult {
+fn appendNodeStoreToIovecs(self: *const CIR, writer: *serialization.IovecWriter) !NodeStoreSerializationResult {
     var result: NodeStoreSerializationResult = std.mem.zeroes(NodeStoreSerializationResult);
 
     // Serialize nodes
@@ -551,7 +551,7 @@ fn appendNodeStoreToIovecs(self: *const CIR, writer: *base.iovec_serialize.Iovec
     return result;
 }
 
-fn appendImportsToIovecs(self: *const CIR, writer: *base.iovec_serialize.IovecWriter) !ImportsSerializationResult {
+fn appendImportsToIovecs(self: *const CIR, writer: *serialization.IovecWriter) !ImportsSerializationResult {
     var result: ImportsSerializationResult = std.mem.zeroes(ImportsSerializationResult);
 
     const start_offset = writer.getOffset();
@@ -589,7 +589,7 @@ const NodeStoreSerializationResult = struct {
 };
 
 fn serializeNodeStoreAt(self: *const CIR, buffer: []u8, write_offset: *usize) !NodeStoreSerializationResult {
-    const writeAlignedData = base.writeAlignedData;
+    const writeAlignedData = serialization.writeAlignedData;
     var result: NodeStoreSerializationResult = std.mem.zeroes(NodeStoreSerializationResult);
 
     // Serialize nodes (MultiArrayList)
@@ -2366,7 +2366,7 @@ pub const ExternalDecl = struct {
     }
 
     /// Append this external declaration to an iovec writer for serialization
-    pub fn appendToIovecs(self: *const @This(), writer: *base.iovec_serialize.IovecWriter) !void {
+    pub fn appendToIovecs(self: *const @This(), writer: *serialization.IovecWriter) !void {
         // Serialize qualified_name
         try writer.appendBytes(std.mem.asBytes(&@as(u32, @bitCast(self.qualified_name))));
 

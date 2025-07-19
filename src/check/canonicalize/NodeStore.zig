@@ -2,12 +2,13 @@
 
 const std = @import("std");
 const base = @import("base");
+const serialization = @import("serialization");
 const types = @import("types");
 const collections = @import("collections");
 const Node = @import("Node.zig");
 const CIR = @import("CIR.zig");
 const RocDec = @import("builtins").RocDec;
-const iovec_serialize = base.iovec_serialize;
+const iovec_serialize = serialization.iovec_serialize;
 
 const SERIALIZATION_ALIGNMENT = 16;
 

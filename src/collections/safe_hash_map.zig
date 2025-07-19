@@ -439,8 +439,7 @@ test "SafeStringHashMap serialization parity - u32 values" {
     const old_serialized = try map.serializeInto(old_buffer);
 
     // Test new method
-    const base = @import("base");
-    var writer = base.iovec_serialize.IovecWriter.init(gpa);
+    var writer = serialization.IovecWriter.init(gpa);
     defer writer.deinit();
     _ = try map.appendToIovecs(&writer);
     const new_serialized = try writer.serialize(gpa);
@@ -474,8 +473,7 @@ test "SafeStringHashMap serialization parity - void values" {
     const old_serialized = try map.serializeInto(old_buffer);
 
     // Test new method
-    const base = @import("base");
-    var writer = base.iovec_serialize.IovecWriter.init(gpa);
+    var writer = serialization.IovecWriter.init(gpa);
     defer writer.deinit();
     _ = try map.appendToIovecs(&writer);
     const new_serialized = try writer.serialize(gpa);
@@ -514,8 +512,7 @@ test "SafeStringHashMap round-trip parity" {
     defer from_old.deinit(gpa);
 
     // Serialize with new method, deserialize
-    const base = @import("base");
-    var writer = base.iovec_serialize.IovecWriter.init(gpa);
+    var writer = serialization.IovecWriter.init(gpa);
     defer writer.deinit();
     _ = try original.appendToIovecs(&writer);
     const new_serialized = try writer.serialize(gpa);
