@@ -964,7 +964,7 @@ const Formatter = struct {
                 const args = fmt.ast.store.patternSlice(l.args);
                 const body_region = fmt.nodeRegion(@intFromEnum(l.body));
                 const args_region = fmt.regionInSlice(AST.Pattern.Idx, args);
-                const args_are_multiline = args.len > 0 and fmt.ast.regionIsMultiline(args_region);
+                const args_are_multiline = args.len > 0 and fmt.ast.regionIsMultiline(.{ .start = args_region.start - 1, .end = args_region.end + 1 });
                 try fmt.push('|');
                 if (args_are_multiline) {
                     fmt.curr_indent += 1;

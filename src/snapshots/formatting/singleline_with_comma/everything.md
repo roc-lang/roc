@@ -402,7 +402,10 @@ F : [
 
 g : e -> e where module(e).A, module(e).B
 
-h = |x, y| {
+h = |
+	x,
+	y,
+| {
 	h1 = {
 		h11: x,
 		h12: x,
