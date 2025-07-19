@@ -17,10 +17,6 @@ pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
 
 pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 
-pub const FrozenStringMap = @import("FrozenMap.zig").FrozenStringMap;
-
-pub const FrozenU32Map = @import("FrozenMap.zig").FrozenU32Map;
-
 pub const SortedArrayBuilder = @import("FrozenMap.zig").SortedArrayBuilder;
 
 pub const FrozenInternMap = @import("FrozenMap.zig").FrozenInternMap;
