@@ -1235,18 +1235,20 @@ pub const Tokenizer = struct {
                         } else if (n == ' ' or n == '\t' or n == '\n' or n == '\r' or n == '#') {
                             self.cursor.pos += 1;
                             try self.pushTokenNormalHere(.OpBinaryMinus, start);
-                        } else if (n >= '0' and n <= '9' and sp) {
+                        } else if (n >= '0' and n <= '9') {
                             self.cursor.pos += 1;
                             const tag = self.cursor.chompNumber();
                             try self.pushTokenNormalHere(tag, start);
                         } else {
                             self.cursor.pos += 1;
-                            const tokenType: Token.Tag = if (sp) .OpUnaryMinus else .OpBinaryMinus;
+                            // Look at what follows the minus to determine if it's unary
+                            const tokenType: Token.Tag = if (self.canFollowUnaryMinus(n)) .OpUnaryMinus else .OpBinaryMinus;
                             try self.pushTokenNormalHere(tokenType, start);
                         }
                     } else {
                         self.cursor.pos += 1;
-                        try self.pushTokenNormalHere(if (sp) .OpUnaryMinus else .OpBinaryMinus, start);
+                        // No next character - default to unary
+                        try self.pushTokenNormalHere(.OpUnaryMinus, start);
                     }
                 },
 
@@ -1509,6 +1511,21 @@ pub const Tokenizer = struct {
         }
 
         try self.pushTokenNormalHere(.EndOfFile, self.cursor.pos);
+    }
+
+    /// Determines if a character can follow a unary minus (i.e., can start an expression)
+    fn canFollowUnaryMinus(self: *const Tokenizer, c: u8) bool {
+        _ = self;
+        return switch (c) {
+            // Identifiers
+            'a'...'z', 'A'...'Z', '_' => true,
+            // Parentheses for grouped expressions
+            '(' => true,
+            // Unicode characters that might start identifiers
+            0x80...0xFF => true,
+            // Everything else suggests binary minus
+            else => false,
+        };
     }
 
     pub fn tokenizeStringLikeLiteral(self: *Tokenizer) std.mem.Allocator.Error!void {

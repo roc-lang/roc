@@ -11,6 +11,6 @@ type=repl
 # EXPECTED
 True
 ---
-False
+True
 # PROBLEMS
 NIL

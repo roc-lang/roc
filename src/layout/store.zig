@@ -216,6 +216,7 @@ pub const Store = struct {
             .list, .list_of_zst => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
+            .closure => 12, // SimpleClosure
         };
     }
 
@@ -631,19 +632,25 @@ pub const Store = struct {
                         continue :outer;
                     },
                     .fn_pure => |func| {
-                        // TODO
                         _ = func;
-                        std.debug.panic("TODO addTypeVar: fn_pure", .{});
+                        break :flat_type Layout{
+                            .tag = .closure,
+                            .data = .{ .closure = {} },
+                        };
                     },
                     .fn_effectful => |func| {
-                        // TODO
                         _ = func;
-                        std.debug.panic("TODO addTypeVar: fn_effectful", .{});
+                        break :flat_type Layout{
+                            .tag = .closure,
+                            .data = .{ .closure = {} },
+                        };
                     },
                     .fn_unbound => |func| {
-                        // TODO
                         _ = func;
-                        std.debug.panic("TODO addTypeVar: fn_unbound", .{});
+                        break :flat_type Layout{
+                            .tag = .closure,
+                            .data = .{ .closure = {} },
+                        };
                     },
                     .record => |record_type| {
                         const num_fields = try self.gatherRecordFields(record_type);

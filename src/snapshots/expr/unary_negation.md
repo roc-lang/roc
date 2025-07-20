@@ -8,18 +8,17 @@ type=expr
 -foo
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - unary_negation.md:1:1:1:2
+UNDEFINED VARIABLE - unary_negation.md:1:2:1:5
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-Here is the problematic code:
-**unary_negation.md:1:1:1:2:**
+**unary_negation.md:1:2:1:5:**
 ```roc
 -foo
 ```
-^
+ ^^^
 
 
 # TOKENS
@@ -28,19 +27,19 @@ OpUnaryMinus(1:1-1:2),LowerIdent(1:2-1:5),EndOfFile(1:5-1:5),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.2 (reason "expr_unexpected_token"))
+(unary "-"
+	(e-ident @1.2-1.5 (raw "foo")))
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-unary-minus @1.1-1.5
+	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-1.5 (type "Error"))
 ~~~

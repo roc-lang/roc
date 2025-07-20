@@ -600,3 +600,118 @@ test "interpreter reuse across multiple evaluations" {
         try testing.expectEqual(expected_value, value);
     }
 }
+
+test "lambda expressions comprehensive" {
+    const TestCase = struct {
+        src: []const u8,
+        expected: i64,
+        desc: []const u8,
+    };
+
+    const test_cases = [_]TestCase{
+        // Basic lambda functionality
+        .{ .src = "(|x| x + 1)(5)", .expected = 6, .desc = "simple lambda" },
+        .{ .src = "(|x| x * 2 + 1)(10)", .expected = 21, .desc = "complex arithmetic" },
+        .{ .src = "(|x| x - 3)(8)", .expected = 5, .desc = "subtraction" },
+        .{ .src = "(|x| 100 - x)(25)", .expected = 75, .desc = "param in second position" },
+        .{ .src = "(|x| 5)(99)", .expected = 5, .desc = "constant function ignoring param" },
+        .{ .src = "(|x| x + x)(7)", .expected = 14, .desc = "parameter used twice" },
+
+        // Multi-parameter functions
+        .{ .src = "(|x, y| x + y)(3, 4)", .expected = 7, .desc = "two parameters" },
+        .{ .src = "(|a, b, c| a + b + c)(1, 2, 3)", .expected = 6, .desc = "three parameters" },
+
+        // If-expressions within lambda bodies
+        .{ .src = "(|x| if x > 0 x else 0)(5)", .expected = 5, .desc = "max with zero, positive input" },
+        .{ .src = "(|x| if x > 0 x else 0)(-3)", .expected = 0, .desc = "max with zero, negative input" },
+        .{ .src = "(|x| if x == 0 1 else x)(0)", .expected = 1, .desc = "conditional replacement" },
+        .{ .src = "(|x| if x == 0 1 else x)(42)", .expected = 42, .desc = "conditional passthrough" },
+
+        // Unary minus operations
+        .{ .src = "(|x| -x)(5)", .expected = -5, .desc = "unary minus on parameter" },
+        .{ .src = "(|x| -x)(0)", .expected = 0, .desc = "unary minus on zero" },
+        .{ .src = "(|x| -x)(-3)", .expected = 3, .desc = "unary minus on negative (double negative)" },
+        .{ .src = "(|x| -5)(999)", .expected = -5, .desc = "negative literal in lambda" },
+        .{ .src = "(|x| if True -10 else x)(999)", .expected = -10, .desc = "negative literal in if branch" },
+        .{ .src = "(|x| if True -x else 0)(5)", .expected = -5, .desc = "unary minus in if branch" },
+
+        // Complex expressions with unary minus
+        .{ .src = "(|x| if x > 0 x else -x)(-5)", .expected = 5, .desc = "absolute value lambda with negative input" },
+        .{ .src = "(|x| if x > 0 x else -x)(3)", .expected = 3, .desc = "absolute value lambda with positive input" },
+        .{ .src = "(|x| x + 1)(-5)", .expected = -4, .desc = "lambda with negative argument" },
+
+        // Binary operations as workarounds
+        .{ .src = "(|x| 0 - x)(5)", .expected = -5, .desc = "subtraction workaround" },
+    };
+
+    for (test_cases) |case| {
+        const resources = parseAndCanonicalizeExpr(test_allocator, case.src) catch |err| {
+            std.debug.print("PARSE ERROR for {s} ({s}): {any}\n", .{ case.desc, case.src, err });
+            return err;
+        };
+        defer cleanupParseAndCanonical(test_allocator, resources);
+
+        // Create a stack for evaluation
+        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+        defer eval_stack.deinit();
+
+        // Create layout store
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+        defer layout_cache.deinit();
+
+        // Evaluate the function call
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
+
+        const result = interpreter.eval(resources.expr_idx) catch |err| {
+            std.debug.print("EVAL ERROR for {s} ({s}): {any}\n", .{ case.desc, case.src, err });
+            return err;
+        };
+
+        // Extract integer result
+        const int_val = switch (result.layout.data.scalar.data.int) {
+            .i128 => blk: {
+                const raw_val = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
+                break :blk @as(i64, @intCast(raw_val));
+            },
+            .i64 => @as(*i64, @ptrCast(@alignCast(result.ptr))).*,
+            .i32 => @as(i64, @as(*i32, @ptrCast(@alignCast(result.ptr))).*),
+            .u64 => @as(i64, @intCast(@as(*u64, @ptrCast(@alignCast(result.ptr))).*)),
+            .u32 => @as(i64, @intCast(@as(*u32, @ptrCast(@alignCast(result.ptr))).*)),
+            else => {
+                std.debug.print("Unsupported integer type for test\n", .{});
+                return error.UnsupportedType;
+            },
+        };
+
+        try testing.expectEqual(case.expected, int_val);
+    }
+}
+
+test "lambda memory management" {
+    // Simple test to ensure we don't crash with lambda memory management
+    const test_expressions = [_][]const u8{
+        "(|x| x + 1)(5)",
+        "(|x, y| x + y)(10, 20)",
+        "(|a, b, c| a + b + c)(1, 2, 3)",
+    };
+
+    for (test_expressions) |expr| {
+        const resources = try parseAndCanonicalizeExpr(test_allocator, expr);
+        defer cleanupParseAndCanonical(test_allocator, resources);
+
+        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+        defer eval_stack.deinit();
+
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+        defer layout_cache.deinit();
+
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
+        defer interpreter.deinit();
+
+        const result = try interpreter.eval(resources.expr_idx);
+
+        // Verify we got a valid result
+        try testing.expect(result.layout.tag == .scalar);
+    }
+}

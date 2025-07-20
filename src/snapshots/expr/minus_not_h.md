@@ -24,7 +24,7 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpUnaryMinus(1:1-1:2),OpBang(1:2-1:3),LowerIdent(1:3-1:4),EndOfFile(1:4-1:4),
+OpBinaryMinus(1:1-1:2),OpBang(1:2-1:3),LowerIdent(1:3-1:4),EndOfFile(1:4-1:4),
 ~~~
 # PARSE
 ~~~clojure

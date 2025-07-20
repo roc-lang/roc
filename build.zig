@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Omit debug information");
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
+    const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse false;
 
     // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
@@ -53,6 +54,7 @@ pub fn build(b: *std.Build) void {
     // Create compile time build options
     const build_options = b.addOptions();
     build_options.addOption(bool, "enable_tracy", tracy != null);
+    build_options.addOption(bool, "trace_eval", trace_eval);
     build_options.addOption([]const u8, "compiler_version", getCompilerVersion(b, optimize));
     if (target.result.os.tag == .macos and tracy_callstack) {
         std.log.warn("Tracy callstack does not work on MacOS, disabling.", .{});
@@ -174,6 +176,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     builtins_tests.root_module.stack_check = false;
+    builtins_tests.root_module.addOptions("build_options", build_options);
 
     b.default_step.dependOn(&all_tests.step);
     b.default_step.dependOn(playground_step);

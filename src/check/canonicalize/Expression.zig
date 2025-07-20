@@ -261,6 +261,13 @@ pub const Expr = union(enum) {
     /// a and (b or c)     # Logical: and
     /// ```
     e_binop: Binop,
+    /// Unary minus expression that negates a numeric value.
+    ///
+    /// ```roc
+    /// -x              # Unary minus (numeric negation)
+    /// -42             # Unary minus on literal
+    /// ```
+    e_unary_minus: UnaryMinus,
     /// Dot access expression that represents field access or method calls.
     /// The exact meaning is determined after type inference based on the receiver's type:
     /// - Record field access: `person.name`
@@ -403,6 +410,15 @@ pub const Expr = union(enum) {
 
         pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx) Binop {
             return Binop{ .op = op, .lhs = lhs, .rhs = rhs };
+        }
+    };
+
+    /// Unary minus operation for numeric negation.
+    pub const UnaryMinus = struct {
+        expr: Expr.Idx,
+
+        pub fn init(expr: Expr.Idx) UnaryMinus {
+            return UnaryMinus{ .expr = expr };
         }
     };
 
@@ -785,6 +801,17 @@ pub const Expr = union(enum) {
 
                 try ir.store.getExpr(e.lhs).pushToSExprTree(ir, tree, e.lhs);
                 try ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree, e.rhs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_unary_minus => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-unary-minus");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);
 
                 try tree.endNode(begin, attrs);
             },
