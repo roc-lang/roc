@@ -60,7 +60,8 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
     while (i < region.end) {
         if (tags[i] == .Comma and i + 1 < self.tokens.tokens.len and (tags[i + 1] == .CloseSquare or
             tags[i + 1] == .CloseRound or
-            tags[i + 1] == .CloseCurly))
+            tags[i + 1] == .CloseCurly or
+            tags[i + 1] == .OpBar))
         {
             return true;
         }
