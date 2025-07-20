@@ -709,6 +709,9 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
         .e_binop => |binop| {
             does_fx = try self.checkBinopExpr(expr_idx, expr_region, binop);
         },
+        .e_unary_minus => |unary| {
+            does_fx = try self.checkUnaryMinusExpr(expr_idx, expr_region, unary);
+        },
         .e_block => |block| {
             // Check all statements in the block
             const statements = self.cir.store.sliceStatements(block.stmts);
@@ -1131,6 +1134,28 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
         .pipe_forward => {},
         .null_coalesce => {},
     }
+
+    return does_fx;
+}
+
+fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Check the operand expression
+    const does_fx = try self.checkExpr(unary.expr);
+
+    // For unary minus, we constrain the operand and result to be numbers
+    const operand_var = @as(Var, @enumFromInt(@intFromEnum(unary.expr)));
+    const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+    // Create a fresh number variable for the operation
+    const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = true, .bits_needed = 0 } } } };
+    const num_var = try self.freshFromContent(num_content, expr_region);
+
+    // Unify operand and result with the number type
+    _ = try self.unify(operand_var, num_var);
+    _ = try self.unify(result_var, num_var);
 
     return does_fx;
 }

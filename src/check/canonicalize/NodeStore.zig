@@ -100,7 +100,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the CIR
 pub const CIR_DIAGNOSTIC_NODE_COUNT = 44;
 /// Count of the expression nodes in the CIR
-pub const CIR_EXPR_NODE_COUNT = 28;
+pub const CIR_EXPR_NODE_COUNT = 29;
 /// Count of the statement nodes in the CIR
 pub const CIR_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the CIR
@@ -542,10 +542,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .expr = @enumFromInt(node.data_1),
             } };
         },
+        .expr_unary_minus => {
+            return CIR.Expr{ .e_unary_minus = .{
+                .expr = @enumFromInt(node.data_1),
+            } };
+        },
         .expr_static_dispatch,
         .expr_apply,
         .expr_record_update,
-        .expr_unary,
         .expr_suffix_single_question,
         .expr_record_builder,
         => {
@@ -1402,6 +1406,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
             node.data_1 = @intFromEnum(e.op);
             node.data_2 = @intFromEnum(e.lhs);
             node.data_3 = @intFromEnum(e.rhs);
+        },
+        .e_unary_minus => |e| {
+            node.tag = .expr_unary_minus;
+            node.data_1 = @intFromEnum(e.expr);
         },
         .e_block => |e| {
             node.tag = .expr_block;
