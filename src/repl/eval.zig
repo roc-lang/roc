@@ -171,13 +171,11 @@ pub const Repl = struct {
 
     /// Try to parse input as a statement
     fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
-        const source = try self.allocator.dupe(u8, input);
-
-        var module_env = try base.ModuleEnv.init(self.allocator, source);
+        var module_env = try base.ModuleEnv.init(self.allocator, input);
         defer module_env.deinit();
 
         // Try statement parsing
-        if (parse.parseStatement(&module_env, source)) |ast_const| {
+        if (parse.parseStatement(&module_env)) |ast_const| {
             var ast = ast_const;
             defer ast.deinit(self.allocator);
 
@@ -206,7 +204,7 @@ pub const Repl = struct {
         } else |_| {}
 
         // Try expression parsing
-        if (parse.parseExpr(&module_env, source)) |ast_const| {
+        if (parse.parseExpr(&module_env)) |ast_const| {
             var ast = ast_const;
             defer ast.deinit(self.allocator);
             if (ast.root_node_idx != 0) {
@@ -254,11 +252,11 @@ pub const Repl = struct {
         }
 
         // Create module environment for the expression
-        var module_env = try base.ModuleEnv.init(self.allocator, try self.allocator.dupe(u8, expr_source));
+        var module_env = try base.ModuleEnv.init(self.allocator, expr_source);
         defer module_env.deinit();
 
         // Parse as expression
-        var parse_ast = parse.parseExpr(&module_env, expr_source) catch |err| {
+        var parse_ast = parse.parseExpr(&module_env) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
         };
         defer parse_ast.deinit(self.allocator);
@@ -477,11 +475,11 @@ test "Repl - minimal interpreter integration" {
 
     // Step 1: Create module environment
     const source = "42";
-    var module_env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    var module_env = try base.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Step 2: Parse as expression
-    var parse_ast = try parse.parseExpr(&module_env, source);
+    var parse_ast = try parse.parseExpr(&module_env);
     defer parse_ast.deinit(allocator);
 
     // Empty scratch space (required before canonicalization)

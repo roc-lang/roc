@@ -30,6 +30,12 @@ test {
     testing.refAllDeclsRecursive(@import("check/check_types/let_polymorphism_test.zig"));
     testing.refAllDeclsRecursive(@import("check/check_types/test/static_dispatch_test.zig"));
     testing.refAllDeclsRecursive(@import("check/check_types/test/nominal_type_origin_test.zig"));
+    // These seem to be broken:
+    // testing.refAllDeclsRecursive(@import("check/canonicalize/test/int_test.zig"));
+    // testing.refAllDeclsRecursive(@import("check/canonicalize/test/node_store_test.zig"));
+    // testing.refAllDeclsRecursive(@import("check/canonicalize/test/frac_test.zig"));
+    // testing.refAllDeclsRecursive(@import("check/canonicalize/test/import_validation_test.zig"));
+    // testing.refAllDeclsRecursive(@import("check/canonicalize/test/exposed_shadowing_test.zig"));
     testing.refAllDeclsRecursive(@import("snapshot.zig"));
     testing.refAllDeclsRecursive(@import("layout/layout.zig"));
     testing.refAllDeclsRecursive(@import("layout/store.zig"));

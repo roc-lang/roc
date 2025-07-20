@@ -43,16 +43,6 @@ env: *ModuleEnv,
 ///
 /// Uses an efficient data structure, and provides helpers for storing and retrieving nodes.
 store: NodeStore,
-/// Temporary source text used for generating SExpr and Reports, required to calculate region info.
-///
-/// This field exists because:
-/// - CIR may be loaded from cache without access to the original source file
-/// - Region info calculation requires the source text to convert byte offsets to line/column
-/// - The source is only needed temporarily during diagnostic reporting or SExpr generation
-///
-/// Lifetime: The caller must ensure the source remains valid for the duration of the
-/// operation (e.g., `toSExprStr` or `diagnosticToReport` calls).
-temp_source_for_sexpr: ?[]const u8 = null,
 /// Diagnostics extracted from the store (needed because getDiagnostics is destructive)
 diagnostics: ?[]CIR.Diagnostic = null,
 /// All the definitions and in the module, populated by calling `canonicalize_file`
@@ -96,7 +86,6 @@ pub fn fromCache(env: *ModuleEnv, cached_store: NodeStore, all_defs: Def.Span, a
     return CIR{
         .env = env,
         .store = cached_store,
-        .temp_source_for_sexpr = null,
         .diagnostics = null,
         .all_defs = all_defs,
         .all_statements = all_statements,
@@ -107,12 +96,8 @@ pub fn fromCache(env: *ModuleEnv, cached_store: NodeStore, all_defs: Def.Span, a
 }
 
 fn literal_from_source(self: *CIR, start_offset: u32, end_offset: u32) []const u8 {
-    if (self.temp_source_for_sexpr) |actual_source| {
-        if (actual_source.len > 0 and end_offset <= actual_source.len and start_offset <= end_offset) {
-            return actual_source[start_offset..end_offset];
-        } else {
-            return "";
-        }
+    if (self.env.source.len > 0 and end_offset <= self.env.source.len and start_offset <= end_offset) {
+        return self.env.source[start_offset..end_offset];
     } else {
         return "";
     }
@@ -196,13 +181,9 @@ pub fn getDiagnostics(self: *CIR) std.mem.Allocator.Error![]CIR.Diagnostic {
 /// The source parameter is not owned by this function - the caller must ensure it
 /// remains valid for the duration of this call. The returned Report will contain
 /// references to the source text but does not own it.
-pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator, source: ?[]const u8, filename: []const u8) !reporting.Report {
+pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    // Set temporary source for calcRegionInfo
-    self.temp_source_for_sexpr = source orelse self.env.source;
-    defer self.temp_source_for_sexpr = null;
 
     return switch (diagnostic) {
         .not_implemented => |data| blk: {
@@ -217,7 +198,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 ident_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -231,7 +212,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 region_info,
                 original_region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -243,7 +224,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 region_info,
                 literal_text,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -255,7 +236,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 ident_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -267,7 +248,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 ident_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -279,7 +260,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 stmt_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -287,17 +268,29 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             break :blk Diagnostic.buildF64PatternLiteralReport(
                 allocator,
                 data.region,
-                source orelse self.env.source,
+                self.env.source,
             );
         },
         .invalid_single_quote => Diagnostic.buildInvalidSingleQuoteReport(allocator),
         .crash_expects_string => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            break :blk Diagnostic.buildCrashExpectsStringReport(allocator, region_info, filename, self.temp_source_for_sexpr.?, self.env.line_starts.items.items);
+            break :blk Diagnostic.buildCrashExpectsStringReport(
+                allocator,
+                region_info,
+                filename,
+                self.env.source,
+                self.env.line_starts.items.items,
+            );
         },
         .empty_tuple => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            break :blk Diagnostic.buildEmptyTupleReport(allocator, region_info, filename, self.temp_source_for_sexpr.?, self.env.line_starts.items.items);
+            break :blk Diagnostic.buildEmptyTupleReport(
+                allocator,
+                region_info,
+                filename,
+                self.env.source,
+                self.env.line_starts.items.items,
+            );
         },
         .expr_not_canonicalized => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
@@ -305,7 +298,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 allocator,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -325,7 +318,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 allocator,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -339,7 +332,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 new_region_info,
                 original_region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -353,7 +346,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 original_region_info,
                 redeclared_region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -366,7 +359,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 module_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -380,7 +373,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 value_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -394,7 +387,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 type_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -406,7 +399,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 module_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -417,7 +410,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 data.count,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -429,7 +422,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 type_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -441,7 +434,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 type_var_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -455,7 +448,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 original_region_info,
                 redeclared_region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -469,7 +462,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 original_region_info,
                 redeclared_region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -484,7 +477,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 original_region_info,
                 data.cross_scope,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -500,7 +493,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 region_info,
                 original_region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -512,7 +505,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 region_info,
                 data,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -524,7 +517,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 region_info,
                 data,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -538,7 +531,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 duplicate_region_info,
                 original_region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -552,7 +545,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 suggested_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -566,7 +559,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 suggested_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -580,7 +573,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 suggested_name,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -591,7 +584,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 data.is_alias,
                 region_info,
                 filename,
-                self.temp_source_for_sexpr.?,
+                self.env.source,
                 self.env.line_starts.items.items,
             );
         },
@@ -1718,11 +1711,7 @@ pub const IntValue = struct {
 
 /// Helper function to generate the S-expression node for the entire Canonical IR.
 /// If a single expression is provided, only that expression is returned.
-pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: ?[]const u8) std.mem.Allocator.Error!void {
-    // Set temporary source for region info calculation during SExpr generation
-    ir.temp_source_for_sexpr = source orelse ir.env.source;
-    defer ir.temp_source_for_sexpr = null;
-
+pub fn pushToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
     if (maybe_expr_idx) |expr_idx| {
         // Only output the given expression
         try ir.store.getExpr(expr_idx).pushToSExprTree(ir, tree, expr_idx);
@@ -1777,10 +1766,7 @@ pub fn calcRegionInfo(self: *const CIR, region: Region) base.RegionInfo {
 
     // In the Can IR, regions store byte offsets directly, not token indices.
     // We can use these offsets directly to calculate the diagnostic position.
-    const source = self.temp_source_for_sexpr orelse {
-        // No source available, return empty region info
-        return empty;
-    };
+    const source = self.env.source;
 
     const info = base.RegionInfo.position(source, self.env.line_starts.items.items, region.start.offset, region.end.offset) catch {
         // Return a zero position if we can't calculate it
@@ -1832,11 +1818,7 @@ pub fn getNodeRegionInfo(ir: *const CIR, idx: anytype) base.RegionInfo {
 /// Helper function to convert type information from the Canonical IR to an SExpr node
 /// in S-expression format for snapshot testing. Implements the definition-focused
 /// format showing final types for defs, expressions, and builtins.
-pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree, source: []const u8) std.mem.Allocator.Error!void {
-    // Set temporary source for region info calculation during SExpr generation
-    ir.temp_source_for_sexpr = source;
-    defer ir.temp_source_for_sexpr = null;
-
+pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
     const gpa = ir.env.gpa;
 
     // Create TypeWriter for converting types to strings

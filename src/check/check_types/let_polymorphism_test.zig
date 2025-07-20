@@ -24,7 +24,7 @@ const TestEnv = struct {
 
 fn setupTestEnvironment(allocator: std.mem.Allocator) !TestEnv {
     const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, ""));
+    module_env.* = try base.ModuleEnv.init(allocator, "");
 
     const store = try allocator.create(TypesStore);
     store.* = try TypesStore.init(allocator);

@@ -422,13 +422,13 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
 
     // Parse the source code based on node type
     var parse_ast: AST = switch (content.meta.node_type) {
-        .file => try parse.parse(&module_env, content.source),
-        .header => try parse.parseHeader(&module_env, content.source),
-        .expr => try parse.parseExpr(&module_env, content.source),
-        .statement => try parse.parseStatement(&module_env, content.source),
-        .package => try parse.parse(&module_env, content.source),
-        .platform => try parse.parse(&module_env, content.source),
-        .app => try parse.parse(&module_env, content.source),
+        .file => try parse.parse(&module_env),
+        .header => try parse.parseHeader(&module_env),
+        .expr => try parse.parseExpr(&module_env),
+        .statement => try parse.parseStatement(&module_env),
+        .package => try parse.parse(&module_env),
+        .platform => try parse.parse(&module_env),
+        .app => try parse.parse(&module_env),
         .repl => unreachable, // Handled above
     };
     defer parse_ast.deinit(allocator);
@@ -499,7 +499,7 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         // Generate original S-expression for comparison
         var original_tree = SExprTree.init(allocator);
         defer original_tree.deinit();
-        try CIR.pushToSExprTree(&can_ir, null, &original_tree, content.source);
+        try CIR.pushToSExprTree(&can_ir, null, &original_tree);
 
         var original_sexpr = std.ArrayList(u8).init(allocator);
         defer original_sexpr.deinit();
@@ -513,9 +513,7 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
 
         // Restore ModuleEnv and CIR
-        // Duplicate source since restore takes ownership
-        const restored_source = try allocator.dupe(u8, content.source);
-        var restored = try loaded_cache.restore(allocator, module_name, restored_source);
+        var restored = try loaded_cache.restore(allocator, module_name, content.source);
         defer restored.module_env.deinit();
         defer restored.cir.deinit();
 
@@ -524,7 +522,7 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         // Generate S-expression from restored CIR
         var restored_tree = SExprTree.init(allocator);
         defer restored_tree.deinit();
-        try CIR.pushToSExprTree(&restored.cir, null, &restored_tree, content.source);
+        try CIR.pushToSExprTree(&restored.cir, null, &restored_tree);
 
         var restored_sexpr = std.ArrayList(u8).init(allocator);
         defer restored_sexpr.deinit();
@@ -557,12 +555,12 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
     try generateExpectedSection(&output, &content);
-    try generateProblemsSection(&output, &parse_ast, &can_ir, &solver, &content, output_path, &module_env);
+    try generateProblemsSection(&output, &parse_ast, &can_ir, &solver, output_path, &module_env);
     try generateTokensSection(&output, &parse_ast, &content, &module_env);
     try generateParseSection(&output, &content, &parse_ast, &module_env);
     try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, &content, &can_ir, maybe_expr_idx);
-    try generateTypesSection(&output, &content, &can_ir, maybe_expr_idx);
+    try generateCanonicalizeSection(&output, &can_ir, maybe_expr_idx);
+    try generateTypesSection(&output, &can_ir, maybe_expr_idx);
 
     try generateHtmlClosing(&output);
 
@@ -1168,7 +1166,7 @@ fn generateExpectedSection(output: *DualOutput, content: *const Content) !void {
 }
 
 /// Generate PROBLEMS section for both markdown and HTML
-fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, solver: *Solver, content: *const Content, snapshot_path: []const u8, module_env: *base.ModuleEnv) !void {
+fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, solver: *Solver, snapshot_path: []const u8, module_env: *base.ModuleEnv) !void {
     try output.begin_section("PROBLEMS");
 
     // HTML PROBLEMS section
@@ -1238,7 +1236,7 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
     // Don't free diagnostics here - CIR owns them and will free them in deinit()
     for (diagnostics) |diagnostic| {
         canonicalize_problems += 1;
-        var report: reporting.Report = can_ir.diagnosticToReport(diagnostic, output.gpa, content.source, snapshot_path) catch |err| {
+        var report: reporting.Report = can_ir.diagnosticToReport(diagnostic, output.gpa, snapshot_path) catch |err| {
             try output.md_writer.print("Error creating canonicalization report: {}\n", .{err});
             if (output.html_writer) |writer| {
                 try writer.print("                    <p>Error creating canonicalization report: {}</p>\n", .{err});
@@ -1274,7 +1272,6 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
             module_env,
             can_ir,
             &solver.snapshots,
-            content.source,
             snapshot_path,
             empty_modules,
         );
@@ -1535,10 +1532,10 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 }
 
 /// Generate CANONICALIZE section for both markdown and HTML
-fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+fn generateCanonicalizeSection(output: *DualOutput, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
-    try can_ir.pushToSExprTree(maybe_expr_idx, &tree, content.source);
+    try can_ir.pushToSExprTree(maybe_expr_idx, &tree);
 
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
@@ -1562,10 +1559,10 @@ fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can
 }
 
 /// Generate TYPES section for both markdown and HTML
-fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+fn generateTypesSection(output: *DualOutput, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
-    try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree, content.source);
+    try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree);
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");

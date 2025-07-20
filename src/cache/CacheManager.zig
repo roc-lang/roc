@@ -22,11 +22,9 @@ const CIR = canonicalize.CIR;
 pub const CacheResult = union(enum) {
     hit: coordinate_simple.ProcessResult,
     miss: struct {
-        source: []const u8,
+        key: [32]u8,
     },
-    invalid: struct {
-        source: []const u8,
-    },
+    not_enabled,
 };
 
 /// Cache manager using BLAKE3-based keys.
@@ -55,30 +53,21 @@ pub const CacheManager = struct {
     /// Look up a cache entry by content and compiler version.
     ///
     /// Returns CacheResult indicating hit, miss, or invalid entry.
-    /// IMPORTANT: This function takes ownership of source only.
-    /// compiler_version is borrowed (not owned).
-    /// On cache miss/invalid, source is returned in the result for the caller to reuse.
+    /// Both source and compiler_version are borrowed (not owned).
     pub fn loadFromCache(
         self: *Self,
-        source: []const u8,
         compiler_version: []const u8,
+        source: []const u8,
     ) CacheResult {
         if (!self.config.enabled) {
-            return CacheResult{ .miss = .{
-                .source = source,
-            } };
+            return .not_enabled;
         }
 
-        const cache_key = self.generateCacheKey(source, compiler_version) catch {
-            return CacheResult{ .miss = .{
-                .source = source,
-            } };
-        };
-        defer self.allocator.free(cache_key);
+        const cache_key = generateCacheKey(source, compiler_version);
 
         const cache_path = self.getCacheFilePath(cache_key) catch {
             return CacheResult{ .miss = .{
-                .source = source,
+                .key = cache_key,
             } };
         };
         defer self.allocator.free(cache_path);
@@ -88,7 +77,7 @@ pub const CacheManager = struct {
         if (!exists) {
             self.stats.recordMiss();
             return CacheResult{ .miss = .{
-                .source = source,
+                .key = cache_key,
             } };
         }
 
@@ -99,7 +88,7 @@ pub const CacheManager = struct {
             }
             self.stats.recordMiss();
             return CacheResult{ .miss = .{
-                .source = source,
+                .key = cache_key,
             } };
         };
         defer mapped_cache.deinit(self.allocator);
@@ -114,8 +103,8 @@ pub const CacheManager = struct {
                 std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
             }
             self.stats.recordInvalidation();
-            return CacheResult{ .invalid = .{
-                .source = source,
+            return CacheResult{ .miss = .{
+                .key = cache_key,
             } };
         };
 
@@ -128,16 +117,10 @@ pub const CacheManager = struct {
     ///
     /// Serializes the ProcessResult and stores it in the cache using BLAKE3-based
     /// filenames with subdirectory splitting.
-    pub fn store(self: *Self, content: []const u8, compiler_version: []const u8, process_result: *const coordinate_simple.ProcessResult) !void {
+    pub fn store(self: *Self, cache_key: [32]u8, process_result: *const coordinate_simple.ProcessResult) !void {
         if (!self.config.enabled) {
             return;
         }
-
-        const cache_key = self.generateCacheKey(content, compiler_version) catch {
-            self.stats.recordStoreFailure();
-            return;
-        };
-        defer self.allocator.free(cache_key);
 
         // Ensure cache subdirectory exists
         self.ensureCacheSubdir(cache_key) catch |err| {
@@ -193,32 +176,31 @@ pub const CacheManager = struct {
     }
 
     /// Generate a BLAKE3-based cache key from source and compiler version.
-    fn generateCacheKey(self: *Self, source: []const u8, compiler_version: []const u8) ![]u8 {
-        // Combine source and compiler version
-        const combined = try std.fmt.allocPrint(self.allocator, "{s}|{s}", .{ source, compiler_version });
-        defer self.allocator.free(combined);
-
-        // Hash with BLAKE3
-        const hash = cache_mod.blake3Hash(combined);
-
-        // Convert to hex string
-        const hex_key = try self.allocator.alloc(u8, hash.len * 2);
-        _ = std.fmt.bufPrint(hex_key, "{}", .{std.fmt.fmtSliceHexLower(&hash)}) catch unreachable;
-
-        return hex_key;
+    fn generateCacheKey(source: []const u8, compiler_version: []const u8) [32]u8 {
+        var hasher = std.crypto.hash.Blake3.init(.{});
+        hasher.update(std.mem.asBytes(&compiler_version.len));
+        hasher.update(compiler_version);
+        hasher.update(std.mem.asBytes(&source.len));
+        hasher.update(source);
+        var hash: [32]u8 = undefined;
+        hasher.final(&hash);
+        return hash;
     }
 
     /// Get the full cache file path for a given cache key.
     /// Uses subdirectory splitting: first 2 chars for subdir, rest for filename.
-    fn getCacheFilePath(self: *Self, cache_key: []const u8) ![]u8 {
+    fn getCacheFilePath(self: *Self, cache_key: [32]u8) ![]u8 {
         const entries_dir = try self.config.getCacheEntriesDir(self.allocator);
         defer self.allocator.free(entries_dir);
 
-        if (cache_key.len < 2) return error.InvalidCacheKey;
-
         // Split key: first 2 chars for subdirectory, rest for filename
-        const subdir = cache_key[0..2];
-        const filename = cache_key[2..];
+        var subdir_buf: [2]u8 = undefined;
+        _ = std.fmt.bufPrint(&subdir_buf, "{}", .{std.fmt.fmtSliceHexLower(cache_key[0..1])}) catch unreachable;
+        const subdir = subdir_buf[0..];
+
+        var filename_buf: [62]u8 = undefined;
+        _ = std.fmt.bufPrint(&filename_buf, "{}", .{std.fmt.fmtSliceHexLower(cache_key[1..32])}) catch unreachable;
+        const filename = filename_buf[0..];
 
         const cache_subdir = try std.fs.path.join(self.allocator, &[_][]const u8{ entries_dir, subdir });
         defer self.allocator.free(cache_subdir);
@@ -227,13 +209,14 @@ pub const CacheManager = struct {
     }
 
     /// Ensure the cache subdirectory exists for the given cache key.
-    fn ensureCacheSubdir(self: *Self, cache_key: []const u8) !void {
+    fn ensureCacheSubdir(self: *Self, cache_key: [32]u8) !void {
         const entries_dir = try self.config.getCacheEntriesDir(self.allocator);
         defer self.allocator.free(entries_dir);
 
-        if (cache_key.len < 2) return error.InvalidCacheKey;
-
-        const subdir = cache_key[0..2];
+        // Print the hex of the first byte into a fixed-size buffer for the subdir
+        var subdir_buf: [2]u8 = undefined;
+        _ = std.fmt.bufPrint(&subdir_buf, "{}", .{std.fmt.fmtSliceHexLower(cache_key[0..1])}) catch unreachable;
+        const subdir = subdir_buf[0..];
         const full_subdir = try std.fs.path.join(self.allocator, &[_][]const u8{ entries_dir, subdir });
         defer self.allocator.free(full_subdir);
 
@@ -302,6 +285,8 @@ pub const CacheManager = struct {
         // Create ProcessResult with proper ownership
         const process_result = coordinate_simple.ProcessResult{
             .cir = cir,
+            .source = source,
+            .own_source = true,
             .reports = reports,
             .was_cached = true,
         };
@@ -330,30 +315,17 @@ test "CacheManager initialization" {
 }
 
 test "CacheManager generateCacheKey" {
-    const allocator = testing.allocator;
-    const config = CacheConfig{};
-    const filesystem = Filesystem.testing();
-
-    var manager = CacheManager.init(allocator, config, filesystem);
-
     const content = "module [test]\n\ntest = 42";
     const compiler_version = "roc-zig-0.11.0-debug";
 
-    const key1 = try manager.generateCacheKey(content, compiler_version);
-    defer allocator.free(key1);
-    const key2 = try manager.generateCacheKey(content, compiler_version);
-    defer allocator.free(key2);
+    const key1 = CacheManager.generateCacheKey(compiler_version, content);
+    const key2 = CacheManager.generateCacheKey(compiler_version, content);
 
     // Same input should produce same key
-    try testing.expectEqualStrings(key1, key2);
+    try testing.expectEqualSlices(u8, &key1, &key2);
 
-    // Should be 64 hex characters (32 bytes * 2)
-    try testing.expectEqual(@as(usize, 64), key1.len);
-
-    // Should only contain hex characters
-    for (key1) |char| {
-        try testing.expect(std.ascii.isHex(char));
-    }
+    // Should be 32 bytes
+    try testing.expectEqual(@as(usize, 32), key1.len);
 }
 
 test "CacheManager getCacheFilePath with subdirectory splitting" {
@@ -363,7 +335,12 @@ test "CacheManager getCacheFilePath with subdirectory splitting" {
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
-    const cache_key = "abcdef123456789";
+    const cache_key = [_]u8{
+        0xab, 0xcd, 0xef, 0x12, 0x34, 0x56, 0x78, 0x90,
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+        0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00,
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+    };
     const cache_path = try manager.getCacheFilePath(cache_key);
     defer allocator.free(cache_path);
 
@@ -388,13 +365,12 @@ test "CacheManager loadFromCache miss" {
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
-    const source = try allocator.dupe(u8, "module [test]\n\ntest = 42");
+    const source = "module [test]\n\ntest = 42";
 
     const result = manager.loadFromCache(source, "roc-zig-0.11.0-debug");
     switch (result) {
-        .miss => |returned| {
+        .miss => |_| {
             try testing.expect(manager.stats.misses == 1);
-            allocator.free(returned.source);
         },
         else => return error.TestUnexpectedResult,
     }
@@ -407,26 +383,12 @@ test "CacheManager disabled" {
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
-    const source = try allocator.dupe(u8, "module [test]\n\ntest = 42");
+    const source = "module [test]\n\ntest = 42";
 
     const result = manager.loadFromCache(source, "roc-zig-0.11.0-debug");
     switch (result) {
-        .miss => |returned| {
-            allocator.free(returned.source);
-        },
+        .not_enabled => |_| {},
         else => return error.TestUnexpectedResult,
     }
     try testing.expect(manager.stats.getTotalOps() == 0); // No stats recorded when disabled
-}
-
-test "CacheManager short cache key error" {
-    const allocator = testing.allocator;
-    const config = CacheConfig{};
-    const filesystem = Filesystem.testing();
-
-    var manager = CacheManager.init(allocator, config, filesystem);
-
-    const short_key = "x"; // Too short for subdirectory splitting
-    const result = manager.getCacheFilePath(short_key);
-    try testing.expectError(error.InvalidCacheKey, result);
 }

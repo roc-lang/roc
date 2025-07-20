@@ -159,18 +159,17 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
             break :blk buf;
         }
     };
-    defer gpa.free(contents);
 
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
+    var module_env = try base.ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
-    var parse_ast: AST = try parse.parse(&module_env, contents);
+    var parse_ast: AST = try parse.parse(&module_env);
     defer parse_ast.deinit(gpa);
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
         parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, contents, parse_ast);
+        try printParseErrors(gpa, module_env.source, parse_ast);
         return error.ParsingFailed;
     }
 
@@ -179,7 +178,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
         var formatted = std.ArrayList(u8).init(gpa);
         defer formatted.deinit();
         try formatAst(parse_ast, formatted.writer().any());
-        if (!std.mem.eql(u8, formatted.items, contents)) {
+        if (!std.mem.eql(u8, formatted.items, module_env.source)) {
             try unformatted_files.?.append(path);
         }
     } else { // Otherwise actually format it
@@ -193,18 +192,17 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 /// Format the contents of stdin and output the result to stdout
 pub fn formatStdin(gpa: std.mem.Allocator) !void {
     const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
-    defer gpa.free(contents);
-
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, contents));
+    // ModuleEnv takes ownership of contents
+    var module_env = try base.ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
-    var parse_ast: AST = try parse.parse(&module_env, contents);
+    var parse_ast: AST = try parse.parse(&module_env);
     defer parse_ast.deinit(gpa);
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
         parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, contents, parse_ast);
+        try printParseErrors(gpa, module_env.source, parse_ast);
         return error.ParsingFailed;
     }
 
@@ -2146,7 +2144,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, input));
     defer module_env.deinit();
 
-    var parse_ast = try parse.parse(&module_env, input);
+    var parse_ast = try parse.parse(&module_env);
     defer parse_ast.deinit(gpa);
 
     // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.
