@@ -39,16 +39,12 @@ pub const Repl = struct {
 
     /// Process a single REPL input and return the output
     pub fn step(self: *Repl, input: []const u8) Allocator.Error![]const u8 {
-        // Trim whitespace from input
-        const trimmed = std.mem.trim(u8, input, " \t\n\r");
-
         // Create a fresh module environment for this evaluation
-        const source = try self.allocator.dupe(u8, trimmed);
-        var module_env = try base.ModuleEnv.init(self.allocator, source);
+        var module_env = try base.ModuleEnv.init(self.allocator, input);
         defer module_env.deinit();
 
         // Parse the expression
-        var parse_ast = parse.parseExpr(&module_env, trimmed) catch |err| {
+        var parse_ast = parse.parseExpr(&module_env) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
         };
         defer parse_ast.deinit(self.allocator);

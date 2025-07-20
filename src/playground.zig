@@ -298,9 +298,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
         var module_env = try allocator.create(ModuleEnv);
-        const owned_source = try allocator.dupe(u8, source);
-        module_env.* = try ModuleEnv.init(allocator, owned_source);
-        try module_env.calcLineStarts(source);
+        module_env.* = try ModuleEnv.init(allocator, source);
+        try module_env.calcLineStarts();
         return CompilerStageData.init(allocator, module_env);
     }
 
@@ -308,9 +307,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
     if (trimmed_source.len == 0) {
         // Return empty compiler stage data for whitespace-only input
         var module_env = try allocator.create(ModuleEnv);
-        const owned_source = try allocator.dupe(u8, source);
-        module_env.* = try ModuleEnv.init(allocator, owned_source);
-        try module_env.calcLineStarts(source);
+        module_env.* = try ModuleEnv.init(allocator, source);
+        try module_env.calcLineStarts();
         return CompilerStageData.init(allocator, module_env);
     }
 
@@ -319,14 +317,13 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
-    const owned_source = try allocator.dupe(u8, source);
-    module_env.* = try ModuleEnv.init(allocator, owned_source);
-    try module_env.calcLineStarts(source);
+    module_env.* = try ModuleEnv.init(allocator, source);
+    try module_env.calcLineStarts();
 
     var result = CompilerStageData.init(allocator, module_env);
 
     // Stage 1: Parse (includes tokenization)
-    var parse_ast = try parse.parse(module_env, source);
+    var parse_ast = try parse.parse(module_env);
     result.parse_ast = parse_ast;
 
     // Collect tokenize diagnostics with additional error handling
@@ -369,7 +366,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Collect canonicalization diagnostics
     const can_diags = can_ir.getDiagnostics() catch &.{};
     for (can_diags) |diag| {
-        const report = can_ir.diagnosticToReport(diag, allocator, source, "main.roc") catch continue;
+        const report = can_ir.diagnosticToReport(diag, allocator, "main.roc") catch continue;
         result.can_reports.append(report) catch continue;
     }
 
@@ -389,7 +386,6 @@ fn compileSource(source: []const u8) !CompilerStageData {
             module_env,
             type_can_ir,
             &solver.snapshots,
-            source,
             "main.roc",
             &.{}, // other_modules - empty for playground
         );
@@ -694,7 +690,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) usize {
     }
 
     const mutable_cir = @constCast(&cir);
-    can.CIR.pushToSExprTree(mutable_cir, null, &tree, data.module_env.source) catch {};
+    can.CIR.pushToSExprTree(mutable_cir, null, &tree) catch {};
     tree.toHtml(sexpr_writer) catch {};
 
     // Success case - write the response
@@ -858,7 +854,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) usize {
 
     // Use the same as snapshot system
     const mutable_cir = @constCast(&cir);
-    mutable_cir.pushTypesToSExprTree(null, &tree, data.module_env.source) catch |err| {
+    mutable_cir.pushTypesToSExprTree(null, &tree) catch |err| {
         // If type generation fails, return an error message
         const error_msg = switch (err) {
             error.OutOfMemory => "Out of memory while generating types",

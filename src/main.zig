@@ -517,7 +517,15 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     } else null;
 
     // Process the file and get Reports
-    var process_result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path, if (cache_manager) |*cm| cm else null, args.time) catch |err| handleProcessFileError(err, stderr, args.path);
+    var process_result = coordinate_simple.processFile(
+        gpa,
+        Filesystem.default(),
+        args.path,
+        if (cache_manager) |*cm| cm else null,
+        args.time,
+    ) catch |err| {
+        handleProcessFileError(err, stderr, args.path);
+    };
 
     defer process_result.deinit(gpa);
 

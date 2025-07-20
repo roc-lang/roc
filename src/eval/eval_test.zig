@@ -24,12 +24,11 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
 } {
     // Initialize the ModuleEnv
     const module_env = try allocator.create(base.ModuleEnv);
-    const owned_source = try allocator.dupe(u8, source);
-    module_env.* = try base.ModuleEnv.init(allocator, owned_source);
+    module_env.* = try base.ModuleEnv.init(allocator, source);
 
     // Parse the source code as an expression
     const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = try parse.parseExpr(module_env, source);
+    parse_ast.* = try parse.parseExpr(module_env);
 
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
