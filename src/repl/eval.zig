@@ -1,4 +1,4 @@
-//! REPL implementation that uses real parsing and evaluation
+//! The evaluation part of the Read-Eval-Print-Loop (REPL)
 
 const std = @import("std");
 const base = @import("base");
