@@ -18,19 +18,26 @@ const target = base.target;
 const CIR = canonicalize.CIR;
 const AST = parse.AST;
 
+/// Type of definition stored in the REPL history
+const DefKind = union(enum) {
+    /// An assignment with an identifier
+    assignment: []const u8,
+    /// An import statement
+    import,
+};
+
 /// Represents a past definition in the REPL session
 const PastDef = struct {
     /// The source code of the definition
     source: []const u8,
-    /// The identifier name if it's an assignment
-    ident: ?[]const u8,
-    /// Whether this is an import statement
-    is_import: bool,
+    /// The kind of definition
+    kind: DefKind,
 
     pub fn deinit(self: *PastDef, allocator: Allocator) void {
         allocator.free(self.source);
-        if (self.ident) |ident| {
-            allocator.free(ident);
+        switch (self.kind) {
+            .assignment => |ident| allocator.free(ident),
+            .import => {},
         }
     }
 };
@@ -106,8 +113,7 @@ pub const Repl = struct {
                 // Add to past definitions (allows redefinition)
                 try self.past_defs.append(.{
                     .source = try self.allocator.dupe(u8, input),
-                    .ident = try self.allocator.dupe(u8, info.ident),
-                    .is_import = false,
+                    .kind = .{ .assignment = try self.allocator.dupe(u8, info.ident) },
                 });
 
                 // For assignments, evaluate the RHS directly
@@ -132,8 +138,7 @@ pub const Repl = struct {
                 // Add import to past definitions
                 try self.past_defs.append(.{
                     .source = try self.allocator.dupe(u8, input),
-                    .ident = null,
-                    .is_import = true,
+                    .kind = .import,
                 });
 
                 return try self.allocator.dupe(u8, "");
@@ -402,20 +407,17 @@ test "Repl - build full source with redefinitions" {
     // Add definitions manually to test source building
     try repl.past_defs.append(.{
         .source = try testing.allocator.dupe(u8, "x = 5"),
-        .ident = try testing.allocator.dupe(u8, "x"),
-        .is_import = false,
+        .kind = .{ .assignment = try testing.allocator.dupe(u8, "x") },
     });
 
     try repl.past_defs.append(.{
         .source = try testing.allocator.dupe(u8, "y = x + 1"),
-        .ident = try testing.allocator.dupe(u8, "y"),
-        .is_import = false,
+        .kind = .{ .assignment = try testing.allocator.dupe(u8, "y") },
     });
 
     try repl.past_defs.append(.{
         .source = try testing.allocator.dupe(u8, "x = 6"),
-        .ident = try testing.allocator.dupe(u8, "x"),
-        .is_import = false,
+        .kind = .{ .assignment = try testing.allocator.dupe(u8, "x") },
     });
 
     // Build full source for evaluating y
@@ -438,20 +440,17 @@ test "Repl - past def ordering" {
     // Manually add definitions to test ordering
     try repl.past_defs.append(.{
         .source = try testing.allocator.dupe(u8, "x = 1"),
-        .ident = try testing.allocator.dupe(u8, "x"),
-        .is_import = false,
+        .kind = .{ .assignment = try testing.allocator.dupe(u8, "x") },
     });
 
     try repl.past_defs.append(.{
         .source = try testing.allocator.dupe(u8, "x = 2"),
-        .ident = try testing.allocator.dupe(u8, "x"),
-        .is_import = false,
+        .kind = .{ .assignment = try testing.allocator.dupe(u8, "x") },
     });
 
     try repl.past_defs.append(.{
         .source = try testing.allocator.dupe(u8, "x = 3"),
-        .ident = try testing.allocator.dupe(u8, "x"),
-        .is_import = false,
+        .kind = .{ .assignment = try testing.allocator.dupe(u8, "x") },
     });
 
     // Verify all definitions are kept in order
