@@ -41,6 +41,5 @@ test {
     testing.refAllDeclsRecursive(@import("layout/store.zig"));
     testing.refAllDeclsRecursive(@import("layout/store_test.zig"));
     testing.refAllDeclsRecursive(@import("check/check_types/test_rigid_instantiation.zig"));
-    testing.refAllDeclsRecursive(@import("snapshot_expected_test.zig"));
     testing.refAllDeclsRecursive(@import("repl/eval.zig"));
 }

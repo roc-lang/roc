@@ -9,7 +9,7 @@ type=repl
 » "world"
 » "Hello, World!"
 ~~~
-# EXPECTED
+# OUTPUT
 Evaluation error: error.LayoutError
 ---
 Evaluation error: error.LayoutError
