@@ -551,7 +551,9 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                 args.path,
                 if (cache_manager) |*cm| cm else null,
                 args.time,
-            ) catch |err| handleProcessFileError(err, stderr, args.path);
+            ) catch |err| {
+                handleProcessFileError(err, stderr, args.path);
+            };
 
             // Print shared memory usage info before shrinking
             if (args.verbose) {
@@ -575,7 +577,9 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                 args.path,
                 if (cache_manager) |*cm| cm else null,
                 args.time,
-            ) catch |err| handleProcessFileError(err, stderr, args.path);
+            ) catch |err| {
+                handleProcessFileError(err, stderr, args.path);
+            };
         }
     };
 

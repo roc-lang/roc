@@ -22,10 +22,10 @@ test "exposed but not implemented - values" {
         \\foo = 42
     ;
 
-    var env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
-    var ast = try parse.parse(&env, source);
+    var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
     var cir = try CIR.init(&env, "Test");
@@ -63,10 +63,10 @@ test "exposed but not implemented - types" {
         \\MyType : [A, B]
     ;
 
-    var env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
-    var ast = try parse.parse(&env, source);
+    var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
     var cir = try CIR.init(&env, "Test");
@@ -106,10 +106,10 @@ test "redundant exposed entries" {
         \\MyType : [A, B]
     ;
 
-    var env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
-    var ast = try parse.parse(&env, source);
+    var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
     var cir = try CIR.init(&env, "Test");
@@ -155,10 +155,10 @@ test "shadowing with exposed items" {
         \\y = "second"
     ;
 
-    var env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
-    var ast = try parse.parse(&env, source);
+    var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
     var cir = try CIR.init(&env, "Test");
@@ -194,10 +194,10 @@ test "shadowing non-exposed items" {
         \\# Shadowing is allowed for non-exposed items
     ;
 
-    var env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
-    var ast = try parse.parse(&env, source);
+    var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
     var cir = try CIR.init(&env, "Test");
@@ -240,10 +240,10 @@ test "exposed items correctly tracked across shadowing" {
         \\# z is exposed but never defined
     ;
 
-    var env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
-    var ast = try parse.parse(&env, source);
+    var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
     var cir = try CIR.init(&env, "Test");
@@ -305,10 +305,10 @@ test "complex case with redundant, shadowing, and not implemented" {
         \\c = 100
     ;
 
-    var env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
-    var ast = try parse.parse(&env, source);
+    var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
     var cir = try CIR.init(&env, "Test");
@@ -365,10 +365,10 @@ test "exposed_by_str is populated correctly" {
         \\MyType : [A, B]
     ;
 
-    var env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
-    var ast = try parse.parse(&env, source);
+    var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
     var cir = try CIR.init(&env, "Test");
@@ -399,10 +399,10 @@ test "exposed_by_str persists after canonicalization" {
         \\# z is not defined
     ;
 
-    var env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
-    var ast = try parse.parse(&env, source);
+    var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
     var cir = try CIR.init(&env, "Test");
@@ -433,10 +433,10 @@ test "exposed_by_str never has entries removed" {
         \\baz = 3.14
     ;
 
-    var env = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
-    var ast = try parse.parse(&env, source);
+    var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
     var cir = try CIR.init(&env, "Test");

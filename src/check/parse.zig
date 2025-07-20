@@ -23,16 +23,16 @@ test {
     _ = @import("parse/test/ast_node_store_test.zig");
 }
 
-fn runParse(env: *base.ModuleEnv, source: []const u8, parserCall: *const fn (*Parser) std.mem.Allocator.Error!u32) std.mem.Allocator.Error!AST {
+fn runParse(env: *base.ModuleEnv, parserCall: *const fn (*Parser) std.mem.Allocator.Error!u32) std.mem.Allocator.Error!AST {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Calculate and store line starts for diagnostic position calculation
-    try env.calcLineStarts(source);
+    try env.calcLineStarts();
 
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
-    var tokenizer = try tokenize.Tokenizer.init(env, source, msg_slice);
+    var tokenizer = try tokenize.Tokenizer.init(env, env.source, msg_slice);
     try tokenizer.tokenize();
     const result = tokenizer.finishAndDeinit();
 
@@ -57,8 +57,8 @@ fn runParse(env: *base.ModuleEnv, source: []const u8, parserCall: *const fn (*Pa
 
 /// Parses a single Roc file.  The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parse(env: *base.ModuleEnv, source: []const u8) std.mem.Allocator.Error!AST {
-    return try runParse(env, source, parseFileAndReturnIdx);
+pub fn parse(env: *base.ModuleEnv) std.mem.Allocator.Error!AST {
+    return try runParse(env, parseFileAndReturnIdx);
 }
 
 fn parseFileAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
@@ -73,8 +73,8 @@ fn parseExprAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
 
 /// Parses a Roc expression - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseExpr(env: *base.ModuleEnv, source: []const u8) std.mem.Allocator.Error!AST {
-    return try runParse(env, source, parseExprAndReturnIdx);
+pub fn parseExpr(env: *base.ModuleEnv) std.mem.Allocator.Error!AST {
+    return try runParse(env, parseExprAndReturnIdx);
 }
 
 fn parseHeaderAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
@@ -84,8 +84,8 @@ fn parseHeaderAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
 
 /// Parses a Roc Header - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseHeader(env: *base.ModuleEnv, source: []const u8) std.mem.Allocator.Error!AST {
-    return try runParse(env, source, parseHeaderAndReturnIdx);
+pub fn parseHeader(env: *base.ModuleEnv) std.mem.Allocator.Error!AST {
+    return try runParse(env, parseHeaderAndReturnIdx);
 }
 
 fn parseStatementAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
@@ -98,6 +98,6 @@ fn parseStatementAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
 
 /// Parses a single Roc statement for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseStatement(env: *base.ModuleEnv, source: []const u8) std.mem.Allocator.Error!AST {
-    return try runParse(env, source, parseStatementAndReturnIdx);
+pub fn parseStatement(env: *base.ModuleEnv) std.mem.Allocator.Error!AST {
+    return try runParse(env, parseStatementAndReturnIdx);
 }

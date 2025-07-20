@@ -37,7 +37,7 @@ pub const TimingInfo = struct {
 /// for proper diagnostic reporting.
 ///
 /// This struct owns:
-/// - The source text (which the reports reference but don't own)
+/// - The source text (which the reports reference)
 /// - The CIR data
 /// - The reports
 ///
@@ -45,6 +45,8 @@ pub const TimingInfo = struct {
 /// must outlive any usage of the reports.
 pub const ProcessResult = struct {
     cir: *CIR,
+    source: []const u8,
+    own_source: bool, // Whether we own the source text (true if processed from file)
     reports: []reporting.Report,
     timing: ?TimingInfo = null,
     error_count: u32 = 0,
@@ -64,6 +66,10 @@ pub const ProcessResult = struct {
         }
 
         self.cir.deinit();
+        if (self.own_source) {
+            // If we own the source, we need to free it
+            gpa.free(self.source);
+        }
         gpa.destroy(self.cir);
     }
 };
@@ -129,7 +135,7 @@ pub fn processFileWithAllocators(
         const compiler_version = getCompilerVersion();
 
         // Check cache - loadFromCache takes ownership of source only
-        const cache_result = cache.loadFromCache(source, compiler_version);
+        const cache_result = cache.loadFromCache(compiler_version, source);
 
         switch (cache_result) {
             .hit => |process_result| {
@@ -138,34 +144,25 @@ pub fn processFileWithAllocators(
             },
             .miss => |returned| {
                 // Cache miss - we get back ownership of source
-                // Process normally with returned source
-                var process_result = try processSourceInternal(gpa, returned.source, filepath, config);
+                var process_result = try processSourceInternal(gpa, source, true, filepath, config);
                 process_result.was_cached = false;
 
                 // Store in cache (don't fail compilation if cache store fails)
-                cache.store(returned.source, compiler_version, &process_result) catch |err| {
+                cache.store(returned.key, &process_result) catch |err| {
                     std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
                 };
 
                 return process_result;
             },
-            .invalid => |returned| {
-                // Cache invalid - we get back ownership of source
-                // Process normally with returned source
-                var process_result = try processSourceInternal(gpa, returned.source, filepath, config);
-                process_result.was_cached = false;
-
-                // Store in cache (don't fail compilation if cache store fails)
-                cache.store(returned.source, compiler_version, &process_result) catch |err| {
-                    std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
-                };
-
-                return process_result;
+            .not_enabled => {
+                // We pass ownership of the source to processSourceInternal
+                return try processSourceInternal(gpa, source, true, filepath, config);
             },
         }
+    } else {
+        // No caching
+        return try processSourceInternalWithAllocators(gpa, shared_allocator, source, filepath, config);
     }
-
-    return try processSourceInternalWithAllocators(gpa, shared_allocator, source, filepath, config);
 }
 
 /// Process source code directly and return both CIR and reports for proper reporting.
@@ -173,8 +170,6 @@ pub fn processFileWithAllocators(
 /// Unlike processFile, this function must clone the source since the caller
 /// retains ownership of the input. Use this when you already have source text
 /// in memory (e.g., from tests, REPL, or other tools).
-///
-/// The source is duplicated and owned by the ModuleEnv in the returned ProcessResult.
 ///
 /// `processSource` is used by the fuzzer.
 pub fn processSource(
@@ -215,11 +210,10 @@ fn collectTiming(config: ProcessConfig, timer: *?std.time.Timer, timing_info: *?
 /// The config.collect_timing parameter controls whether to collect timing information:
 /// - true: Collect timing information for each compilation phase
 /// - false: Skip timing collection for faster processing
-///
-/// The source is always duplicated for the ModuleEnv, which owns the copy.
 fn processSourceInternal(
     gpa: std.mem.Allocator,
     source: []const u8,
+    own_source: bool, // Whether we own the source text (true if processed from file)
     filename: []const u8,
     config: ProcessConfig,
 ) !ProcessResult {
@@ -267,10 +261,10 @@ fn processSourceInternalWithAllocators(
     module_env.* = try ModuleEnv.initWithAllocators(gpa, shared_allocator, owned_source_for_env);
 
     // Calculate line starts for region info
-    try module_env.*.calcLineStarts(source);
+    try module_env.*.calcLineStarts();
 
     // Parse the source code
-    var parse_ast: AST = try parse.parse(module_env, source);
+    var parse_ast: AST = try parse.parse(module_env);
     defer parse_ast.deinit(gpa);
 
     // Create an arraylist for capturing diagnostic reports.
@@ -316,7 +310,7 @@ fn processSourceInternalWithAllocators(
     const diagnostics = try cir.getDiagnostics();
     defer gpa.free(diagnostics);
     for (diagnostics) |diagnostic| {
-        const report = try cir.diagnosticToReport(diagnostic, gpa, source, filename);
+        const report = try cir.diagnosticToReport(diagnostic, gpa, filename);
         try reports.append(report);
     }
 
@@ -341,7 +335,6 @@ fn processSourceInternalWithAllocators(
         module_env,
         cir,
         &solver.snapshots,
-        module_env.source,
         filename,
         empty_modules,
     );
@@ -371,6 +364,8 @@ fn processSourceInternalWithAllocators(
 
     return ProcessResult{
         .cir = cir,
+        .source = source,
+        .own_source = own_source,
         .reports = final_reports,
         .timing = timing_info,
         .error_count = error_count,

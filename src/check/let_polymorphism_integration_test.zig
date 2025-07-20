@@ -23,11 +23,11 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    module_env.* = try ModuleEnv.init(allocator, source);
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = try parse.parseExpr(module_env, source);
+    parse_ast.* = try parse.parseExpr(module_env);
 
     // Check for parse errors
     if (parse_ast.hasErrors()) {
@@ -90,11 +90,11 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    module_env.* = try ModuleEnv.init(allocator, source);
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = parse.parse(module_env, source);
+    parse_ast.* = parse.parse(module_env);
 
     // Check for parse errors
     if (parse_ast.hasErrors()) {
@@ -162,11 +162,11 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    module_env.* = try ModuleEnv.init(allocator, source);
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = try parse.parseStatement(module_env, source);
+    parse_ast.* = try parse.parseStatement(module_env);
 
     // Check for parse errors
     if (parse_ast.hasErrors()) {

@@ -265,8 +265,7 @@ pub const CacheModule = struct {
     };
 
     /// Restore ModuleEnv and CIR from the cached data
-    /// IMPORTANT: This function takes ownership of `source`.
-    /// The caller must not free it after calling this function.
+    /// IMPORTANT: This expects source to remain valid for the lifetime of the restored ModuleEnv.
     pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) !RestoredData {
         // Deserialize each component
         var node_store = try NodeStore.deserializeFrom(
@@ -330,7 +329,6 @@ pub const CacheModule = struct {
             .cir = CIR{
                 .env = undefined, // Will be set below
                 .store = node_store,
-                .temp_source_for_sexpr = null,
                 .all_defs = self.header.all_defs,
                 .all_statements = self.header.all_statements,
                 .external_decls = external_decls,
@@ -608,14 +606,14 @@ test "create and restore cache" {
     ;
 
     // Parse the source
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var module_env = try base.ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 
     var cir = try CIR.init(&module_env, "TestModule");
     defer cir.deinit();
 
     // Parse and canonicalize
-    var ast = try parse(&module_env, source);
+    var ast = try parse(&module_env);
     defer ast.deinit(gpa);
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -625,7 +623,7 @@ test "create and restore cache" {
     // Generate original S-expression for comparison
     var original_tree = SExprTree.init(gpa);
     defer original_tree.deinit();
-    try CIR.pushToSExprTree(&cir, null, &original_tree, source);
+    try CIR.pushToSExprTree(&cir, null, &original_tree);
 
     var original_sexpr = std.ArrayList(u8).init(gpa);
     defer original_sexpr.deinit();
@@ -643,7 +641,7 @@ test "create and restore cache" {
 
     // Restore ModuleEnv and CIR
     // Duplicate source since restore takes ownership
-    const restored = try cache.restore(gpa, "TestModule", try gpa.dupe(u8, source));
+    const restored = try cache.restore(gpa, "TestModule", source);
 
     var restored_module_env = restored.module_env;
     defer restored_module_env.deinit();
@@ -657,7 +655,7 @@ test "create and restore cache" {
     var restored_tree = SExprTree.init(gpa);
     defer restored_tree.deinit();
 
-    try CIR.pushToSExprTree(&restored_cir, null, &restored_tree, source);
+    try CIR.pushToSExprTree(&restored_cir, null, &restored_tree);
 
     var restored_sexpr = std.ArrayList(u8).init(gpa);
     defer restored_sexpr.deinit();
@@ -684,14 +682,14 @@ test "cache filesystem roundtrip with in-memory storage" {
     ;
 
     // Parse the source
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var module_env = try base.ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 
     var cir = try CIR.init(&module_env, "TestModule");
     defer cir.deinit();
 
     // Parse and canonicalize
-    var ast = try parse(&module_env, source);
+    var ast = try parse(&module_env);
     defer ast.deinit(gpa);
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -701,7 +699,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     // Generate original S-expression for comparison
     var original_tree = SExprTree.init(gpa);
     defer original_tree.deinit();
-    try CIR.pushToSExprTree(&cir, null, &original_tree, source);
+    try CIR.pushToSExprTree(&cir, null, &original_tree);
 
     var original_sexpr = std.ArrayList(u8).init(gpa);
     defer original_sexpr.deinit();
@@ -785,7 +783,7 @@ test "cache filesystem roundtrip with in-memory storage" {
 
     // Restore from the roundtrip cache
     // Duplicate source since restore takes ownership
-    const restored = try roundtrip_cache.restore(gpa, "TestModule", try gpa.dupe(u8, source));
+    const restored = try roundtrip_cache.restore(gpa, "TestModule", source);
 
     var restored_module_env = restored.module_env;
     defer restored_module_env.deinit();
@@ -799,7 +797,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     var restored_tree = SExprTree.init(gpa);
     defer restored_tree.deinit();
 
-    try CIR.pushToSExprTree(&restored_cir, null, &restored_tree, source);
+    try CIR.pushToSExprTree(&restored_cir, null, &restored_tree);
 
     var restored_sexpr = std.ArrayList(u8).init(gpa);
     defer restored_sexpr.deinit();

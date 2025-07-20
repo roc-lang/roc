@@ -23,10 +23,10 @@ fn parseAndCanonicalizeFrac(allocator: std.mem.Allocator, source: []const u8) !s
     expr_idx: CIR.Expr.Idx,
 } {
     const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
+    module_env.* = try base.ModuleEnv.init(allocator, source);
 
     const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = try parse.parseExpr(module_env, source);
+    parse_ast.* = try parse.parseExpr(module_env);
 
     parse_ast.store.emptyScratch();
 
@@ -302,13 +302,13 @@ test "fractional literal - NaN handling" {
     // The parser will fail before canonicalization
     // This test verifies that behavior
     const module_env = try test_allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, "NaN"));
+    module_env.* = try base.ModuleEnv.init(test_allocator, "NaN");
     defer {
         module_env.deinit();
         test_allocator.destroy(module_env);
     }
 
-    var parse_ast = try parse.parseExpr(module_env, "NaN");
+    var parse_ast = try parse.parseExpr(module_env);
     defer parse_ast.deinit(test_allocator);
 
     // Check if it parsed as an identifier instead of a number
@@ -324,13 +324,13 @@ test "fractional literal - infinity handling" {
     // The parser will fail before canonicalization
     // This test verifies that behavior
     const module_env = try test_allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, "Infinity"));
+    module_env.* = try base.ModuleEnv.init(test_allocator, "Infinity");
     defer {
         module_env.deinit();
         test_allocator.destroy(module_env);
     }
 
-    var parse_ast = try parse.parseExpr(module_env, "Infinity");
+    var parse_ast = try parse.parseExpr(module_env);
     defer parse_ast.deinit(test_allocator);
 
     // Check if it parsed as an identifier instead of a number

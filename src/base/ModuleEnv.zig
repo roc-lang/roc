@@ -72,18 +72,16 @@ pub fn deinit(self: *Self) void {
     self.line_starts.deinit(self.gpa);
     self.exposed_by_str.deinit(self.gpa);
     self.exposed_nodes.deinit(self.gpa);
-
-    self.gpa.free(self.source);
 }
 
 /// Calculate and store line starts from the source text
-pub fn calcLineStarts(self: *Self, source: []const u8) !void {
+pub fn calcLineStarts(self: *Self) !void {
     // Reset line_starts by creating a new SafeList
     self.line_starts.deinit(self.gpa);
     self.line_starts = try collections.SafeList(u32).initCapacity(self.gpa, 256);
 
     // if the source is empty, we're done
-    if (source.len == 0) {
+    if (self.source.len == 0) {
         return;
     }
 
@@ -92,7 +90,7 @@ pub fn calcLineStarts(self: *Self, source: []const u8) !void {
 
     // find all newlines in the source, save their offset
     var pos: u32 = 0;
-    for (source) |c| {
+    for (self.source) |c| {
         if (c == '\n') {
             // next line starts after the newline in the current position
             _ = try self.line_starts.append(self.gpa, pos + 1);
