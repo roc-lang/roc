@@ -65,7 +65,7 @@ var t= ]
 
 
 **PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
+A parsing error occurred: `expected_expr_close_curly`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
