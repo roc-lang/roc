@@ -8,7 +8,7 @@ type=repl
 » True
 » False
 ~~~
-# EXPECTED
+# OUTPUT
 1
 ---
 1

@@ -9,7 +9,7 @@ type=repl
 » 3.14
 » 1 + 2
 ~~~
-# EXPECTED
+# OUTPUT
 42
 ---
 Evaluation error: error.LayoutError
