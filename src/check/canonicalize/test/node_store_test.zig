@@ -271,6 +271,9 @@ test "NodeStore round trip - Expressions" {
         ),
     });
     try expressions.append(CIR.Expr{
+        .e_unary_minus = CIR.Expr.UnaryMinus.init(@enumFromInt(500)),
+    });
+    try expressions.append(CIR.Expr{
         .e_dot_access = .{
             .receiver = @enumFromInt(3012),
             .field_name = @bitCast(@as(u32, 3123)),

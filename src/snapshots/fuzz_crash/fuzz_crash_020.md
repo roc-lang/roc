@@ -1326,7 +1326,9 @@ add = |Rum| {
 	}
 }
 
-me = |a| # As
+me = |
+	a, # b,
+| # As
 	match a {
 		lue => {
 			x

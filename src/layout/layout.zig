@@ -20,6 +20,7 @@ pub const LayoutTag = enum(u4) {
     list_of_zst, // List of zero-sized types, e.g. List({}) - needs a special-cased runtime implementation
     record,
     tuple,
+    closure,
 };
 
 /// The Layout untagged union should take up this many bits in memory.
@@ -114,6 +115,7 @@ pub const LayoutUnion = packed union {
     list_of_zst: void,
     record: RecordLayout,
     tuple: TupleLayout,
+    closure: void,
 };
 
 /// Record field layout
@@ -284,6 +286,7 @@ pub const Layout = packed struct {
             .list, .list_of_zst => target_usize.alignment(),
             .record => self.data.record.alignment,
             .tuple => self.data.tuple.alignment,
+            .closure => target_usize.alignment(),
         };
     }
 

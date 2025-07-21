@@ -14,6 +14,6 @@ type=repl
 ---
 Evaluation error: error.LayoutError
 ---
-3
+42
 # PROBLEMS
 NIL

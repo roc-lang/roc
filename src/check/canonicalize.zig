@@ -2276,13 +2276,39 @@ pub fn canonicalizeExpr(
             } });
             return expr_idx;
         },
-        .unary_op => |_| {
-            const feature = try self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize unary_op expression");
-            const expr_idx = try self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
-            return expr_idx;
+        .unary_op => |unary| {
+            const region = self.parse_ir.tokenizedRegionToRegion(unary.region);
+            const operator_token = self.parse_ir.tokens.tokens.get(unary.operator);
+
+            switch (operator_token.tag) {
+                .OpUnaryMinus => {
+                    // Canonicalize the operand expression
+                    const operand_expr = (try self.canonicalizeExpr(unary.expr)) orelse {
+                        const feature = try self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize unary_minus operand");
+                        const expr_idx = try self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
+                            .feature = feature,
+                            .region = region,
+                        } });
+                        return expr_idx;
+                    };
+
+                    // Create unary minus CIR expression
+                    const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
+                        .e_unary_minus = CIR.Expr.UnaryMinus.init(operand_expr),
+                    }, Content{ .flex_var = null }, region);
+
+                    return expr_idx;
+                },
+                else => {
+                    // Other operators not yet implemented or malformed
+                    const feature = try self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize unary_op expression (non-minus)");
+                    const expr_idx = try self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    } });
+                    return expr_idx;
+                },
+            }
         },
         .if_then_else => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);

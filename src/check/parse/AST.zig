@@ -60,7 +60,8 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
     while (i < region.end) {
         if (tags[i] == .Comma and i + 1 < self.tokens.tokens.len and (tags[i + 1] == .CloseSquare or
             tags[i + 1] == .CloseRound or
-            tags[i + 1] == .CloseCurly))
+            tags[i + 1] == .CloseCurly or
+            tags[i + 1] == .OpBar))
         {
             return true;
         }
@@ -193,30 +194,22 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
     };
 
     const title = switch (diagnostic.tag) {
-        .bad_indent => "BAD INDENTATION",
         .multiple_platforms => "MULTIPLE PLATFORMS",
         .no_platform => "NO PLATFORM",
         .missing_header => "MISSING HEADER",
-        .list_not_closed => "LIST NOT CLOSED",
         .missing_arrow => "MISSING ARROW",
         .expected_exposes => "EXPECTED EXPOSES",
         .expected_exposes_close_square => "EXPECTED CLOSING BRACKET",
         .expected_exposes_open_square => "EXPECTED OPENING BRACKET",
         .expected_imports => "EXPECTED IMPORTS",
-        .expected_imports_close_curly => "EXPECTED CLOSING BRACE",
-        .expected_imports_open_curly => "EXPECTED OPENING BRACE",
-        .header_unexpected_token => "UNEXPECTED TOKEN IN HEADER",
         .pattern_unexpected_token => "UNEXPECTED TOKEN IN PATTERN",
         .pattern_list_rest_old_syntax => "BAD LIST REST PATTERN SYNTAX",
         .pattern_unexpected_eof => "UNEXPECTED END OF FILE IN PATTERN",
         .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
-        .statement_unexpected_eof => "UNEXPECTED END OF FILE",
-        .statement_unexpected_token => "UNEXPECTED TOKEN",
         .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
         .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
         .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
-        .where_expected_where => "WHERE CLAUSE ERROR",
         .where_expected_mod_open => "WHERE CLAUSE ERROR",
         .where_expected_var => "WHERE CLAUSE ERROR",
         .where_expected_mod_close => "WHERE CLAUSE ERROR",
@@ -261,18 +254,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
             try report.document.addIndent(1);
             try report.document.addCodeBlock("{ pf: platform \"../basic-cli/platform.roc\" }");
         },
-        .bad_indent => {
-            try report.document.addReflowingText("The indentation here is inconsistent with the surrounding code.");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Make sure to use consistent spacing for indentation.");
-        },
-        .list_not_closed => {
-            try report.document.addReflowingText("This list is missing a closing bracket.");
-            try report.document.addLineBreak();
-            try report.document.addText("Add a ");
-            try report.document.addAnnotated("]", .emphasized);
-            try report.document.addText(" to close the list.");
-        },
         .missing_arrow => {
             try report.document.addText("Expected an arrow ");
             try report.document.addAnnotated("->", .emphasized);
@@ -288,24 +269,11 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
             try report.document.addText("For example: ");
             try report.document.addCodeBlock("module [main, add, subtract]");
         },
-        .expected_imports, .expected_imports_close_curly, .expected_imports_open_curly => {
+        .expected_imports => {
             try report.document.addReflowingText("Import statements must specify what is being imported.");
             try report.document.addLineBreak();
             try report.document.addText("For example: ");
             try report.document.addCodeBlock("import pf.Stdout exposing [line!]");
-        },
-        .header_unexpected_token => {
-            // Try to get the actual token text
-            const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.env.source[region.start.offset..region.end.offset]
-            else
-                "<unknown>";
-            const owned_token = try report.addOwnedString(token_text);
-            try report.document.addText("The token ");
-            try report.document.addAnnotated(owned_token, .error_highlight);
-            try report.document.addText(" is not expected in a module header.");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Module headers should only contain the module name and exposing list.");
         },
         .pattern_unexpected_token => {
             const token_text = if (diagnostic.region.start != diagnostic.region.end)
@@ -346,23 +314,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
             try report.document.addText(", or ");
             try report.document.addType("List U64");
             try report.document.addText(".");
-        },
-        .statement_unexpected_eof => {
-            try report.document.addReflowingText("This statement is incomplete - the file ended unexpectedly.");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Complete the statement or remove the incomplete statement.");
-        },
-        .statement_unexpected_token => {
-            const token_text = if (diagnostic.region.start != diagnostic.region.end)
-                self.env.source[region.start.offset..region.end.offset]
-            else
-                "<unknown>";
-            const owned_token = try report.addOwnedString(token_text);
-            try report.document.addText("The token ");
-            try report.document.addAnnotated(owned_token, .error_highlight);
-            try report.document.addText(" is not expected in a statement.");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Statements can be definitions, assignments, or expressions.");
         },
         .string_unexpected_token => {
             const token_text = if (diagnostic.region.start != diagnostic.region.end)
@@ -432,13 +383,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *base.ModuleEnv, diagnostic: Dia
             try report.document.addLineBreak();
             try report.document.addIndent(1);
             try report.document.addAnnotated("Maybe(List(U64))", .dimmed);
-        },
-        .where_expected_where => {
-            try report.document.addReflowingText("Expected a ");
-            try report.document.addKeyword("where");
-            try report.document.addText(" clause here.");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Where clauses define constraints on type variables.");
         },
         .where_expected_mod_open => {
             try report.document.addReflowingText("Expected an opening parenthesis after ");
@@ -569,18 +513,14 @@ pub const Diagnostic = struct {
 
     /// different types of diagnostic errors
     pub const Tag = enum {
-        bad_indent,
         multiple_platforms,
         no_platform,
         missing_header,
-        list_not_closed,
         missing_arrow,
         expected_exposes,
         expected_exposes_close_square,
         expected_exposes_open_square,
         expected_imports,
-        expected_imports_close_curly,
-        expected_imports_open_curly,
         expected_package_or_platform_name,
         expected_package_or_platform_colon,
         expected_package_or_platform_string,
@@ -601,21 +541,17 @@ pub const Diagnostic = struct {
         expected_requires_rigids_open_curly,
         expected_requires_signatures_close_curly,
         expected_requires_signatures_open_curly,
-        expect_closing_paren,
         header_expected_open_square,
         header_expected_close_square,
-        header_unexpected_token,
         pattern_unexpected_token,
         pattern_list_rest_old_syntax,
         pattern_unexpected_eof,
         bad_as_pattern_name,
         ty_anno_unexpected_token,
-        statement_unexpected_eof,
         statement_unexpected_token,
         string_unexpected_token,
         string_expected_close_interpolation,
         string_unclosed,
-        expr_if_missing_else,
         expr_no_space_dot_int,
         import_exposing_no_open,
         import_exposing_no_close,
@@ -641,10 +577,7 @@ pub const Diagnostic = struct {
         expr_unexpected_token,
         expected_expr_record_field_name,
         expected_ty_apply_close_round,
-        expected_ty_anno_end_of_function,
-        expected_ty_anno_end,
         expected_expr_apply_close_round,
-        where_expected_where,
         where_expected_mod_open,
         where_expected_var,
         where_expected_mod_close,
@@ -664,6 +597,10 @@ pub const Diagnostic = struct {
         for_expected_in,
         match_branch_wrong_arrow,
         match_branch_missing_arrow,
+        expected_ty_anno_close_round,
+        expected_ty_anno_close_round_or_comma,
+        expected_expr_comma,
+        expected_expr_close_curly,
     };
 };
 

@@ -1156,6 +1156,54 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
                 return statement_idx;
             }
         },
+        .OpenCurly => {
+            const start = self.pos;
+
+            // Look for a similarly nested CloseCurly
+            var is_record_destructure = false;
+            var lookahead_pos = self.pos + 1;
+            var depth: u32 = 0;
+            while (lookahead_pos < self.tok_buf.tokens.len) {
+                const tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
+                switch (tok) {
+                    .OpenCurly => depth += 1,
+                    .CloseCurly => {
+                        if (depth == 0) {
+                            const token_after_close_curly = self.tok_buf.tokens.items(.tag)[lookahead_pos + 1];
+                            if (token_after_close_curly == .OpAssign) {
+                                is_record_destructure = true;
+                            }
+                            break;
+                        }
+                        depth -= 1;
+                    },
+                    .EndOfFile => break,
+                    else => {
+                        // Ignore other tokens
+                    },
+                }
+                lookahead_pos += 1;
+            }
+
+            // Restore parser position after lookahead
+            self.pos = start;
+
+            if (is_record_destructure) {
+                const patt_idx = try self.parsePatternNoAlts();
+
+                self.expect(.OpAssign) catch {
+                    return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
+                };
+
+                const idx = try self.parseExpr();
+                const statement_idx = try self.store.addStatement(.{ .decl = .{
+                    .pattern = patt_idx,
+                    .body = idx,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                return statement_idx;
+            }
+        },
         else => {},
     }
 
@@ -1812,7 +1860,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
 
                 // Expect comma after extension
                 if (self.peek() != .Comma) {
-                    return try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                    return try self.pushMalformed(AST.Expr.Idx, .expected_expr_comma, self.pos);
                 }
                 self.advance(); // consume comma
 
@@ -1976,6 +2024,17 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
                 .region = .{ .start = start, .end = self.pos },
             } });
             self.advance();
+        },
+        .OpUnaryMinus => {
+            const operator_token = start;
+            self.advance(); // consume the minus token
+            // Parse the operand with high precedence (unary operators bind tightly)
+            const operand = try self.parseExprWithBp(100);
+            expr = try self.store.addExpr(.{ .unary_op = .{
+                .operator = operator_token,
+                .expr = operand,
+                .region = .{ .start = start, .end = self.pos },
+            } });
         },
         else => {
             return try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, start);
@@ -2259,7 +2318,7 @@ pub fn parseTypeHeader(self: *Parser) std.mem.Allocator.Error!AST.TypeHeader.Idx
         switch (err) {
             error.ExpectedNotFound => {
                 self.store.clearScratchTypeAnnosFrom(scratch_top);
-                return try self.pushMalformed(AST.TypeHeader.Idx, .expected_ty_anno_end, start);
+                return try self.pushMalformed(AST.TypeHeader.Idx, .expected_ty_anno_close_round_or_comma, start);
             },
             error.OutOfMemory => return error.OutOfMemory,
         }
@@ -2380,7 +2439,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
                 const ret = try self.parseTypeAnno(.looking_for_args);
                 if (self.peek() != .CloseRound) {
                     self.store.clearScratchTypeAnnosFrom(scratch_top);
-                    return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_end_of_function, start);
+                    return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, start);
                 }
                 const function = try self.store.addTypeAnno(.{ .@"fn" = .{
                     .args = args,
@@ -2396,7 +2455,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
             }
             if (self.peek() != .CloseRound) {
                 self.store.clearScratchTypeAnnosFrom(scratch_top);
-                return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_end, start);
+                return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, start);
             }
             self.advance(); // Advance past CloseRound
             const annos = try self.store.typeAnnoSpanFrom(scratch_top);
@@ -2706,7 +2765,7 @@ pub fn parseBlock(self: *Parser, start: u32) std.mem.Allocator.Error!AST.Expr.Id
     }
 
     self.expect(.CloseCurly) catch {
-        try self.pushDiagnostic(.expected_expr_close_curly_or_comma, .{
+        try self.pushDiagnostic(.expected_expr_close_curly, .{
             .start = self.pos,
             .end = self.pos,
         });
