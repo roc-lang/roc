@@ -1156,31 +1156,37 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
                 return statement_idx;
             }
         },
-        .OpenCurly => {
+        .OpenCurly, .OpenRound => {
+            const open_token = self.peek();
+            const close_token: AST.Token.Tag = switch (open_token) {
+                .OpenCurly => .CloseCurly,
+                .OpenRound => .CloseRound,
+                else => return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos),
+            };
+
             const start = self.pos;
 
-            // Look for a similarly nested CloseCurly
-            var is_record_destructure = false;
+            // Look for a similarly nested close token
+            var is_destructure = false;
             var lookahead_pos = self.pos + 1;
             var depth: u32 = 0;
             while (lookahead_pos < self.tok_buf.tokens.len) {
                 const tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
-                switch (tok) {
-                    .OpenCurly => depth += 1,
-                    .CloseCurly => {
-                        if (depth == 0) {
-                            const token_after_close_curly = self.tok_buf.tokens.items(.tag)[lookahead_pos + 1];
-                            if (token_after_close_curly == .OpAssign) {
-                                is_record_destructure = true;
-                            }
-                            break;
+                if (tok == open_token) {
+                    depth += 1;
+                } else if (tok == close_token) {
+                    if (depth == 0) {
+                        const token_after_close_curly = self.tok_buf.tokens.items(.tag)[lookahead_pos + 1];
+                        if (token_after_close_curly == .OpAssign) {
+                            is_destructure = true;
                         }
-                        depth -= 1;
-                    },
-                    .EndOfFile => break,
-                    else => {
-                        // Ignore other tokens
-                    },
+                        break;
+                    }
+                    depth -= 1;
+                } else if (tok == .EndOfFile) {
+                    break;
+                } else {
+                    // Ignore other tokens
                 }
                 lookahead_pos += 1;
             }
@@ -1188,7 +1194,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
             // Restore parser position after lookahead
             self.pos = start;
 
-            if (is_record_destructure) {
+            if (is_destructure) {
                 const patt_idx = try self.parsePatternNoAlts();
 
                 self.expect(.OpAssign) catch {
