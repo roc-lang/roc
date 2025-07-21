@@ -17,6 +17,6 @@ Evaluation error: error.LayoutError
 ---
 Evaluation error: error.LayoutError
 ---
-[] : List(_elem)
+<list_of_zst>
 # PROBLEMS
 NIL

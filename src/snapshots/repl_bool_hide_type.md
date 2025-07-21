@@ -9,8 +9,8 @@ type=repl
 » False
 ~~~
 # EXPECTED
-True
+1
 ---
-True
+1
 # PROBLEMS
 NIL

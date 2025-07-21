@@ -312,20 +312,35 @@ pub const Repl = struct {
         };
 
         // Format the result
-        if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
-            const value: i128 = switch (result.layout.data.scalar.data.int) {
-                .u8 => @as(*u8, @ptrCast(@alignCast(result.ptr))).*,
-                .i8 => @as(*i8, @ptrCast(@alignCast(result.ptr))).*,
-                .u16 => @as(*u16, @ptrCast(@alignCast(result.ptr))).*,
-                .i16 => @as(*i16, @ptrCast(@alignCast(result.ptr))).*,
-                .u32 => @as(*u32, @ptrCast(@alignCast(result.ptr))).*,
-                .i32 => @as(*i32, @ptrCast(@alignCast(result.ptr))).*,
-                .u64 => @as(*u64, @ptrCast(@alignCast(result.ptr))).*,
-                .i64 => @as(*i64, @ptrCast(@alignCast(result.ptr))).*,
-                .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(result.ptr))).*),
-                .i128 => @as(*i128, @ptrCast(@alignCast(result.ptr))).*,
-            };
-            return try std.fmt.allocPrint(self.allocator, "{d}", .{value});
+        if (result.layout.tag == .scalar) {
+            switch (result.layout.data.scalar.tag) {
+                .bool => {
+                    // Boolean values are stored as u8 (1 for True, 0 for False)
+                    const bool_value = @as(*u8, @ptrCast(@alignCast(result.ptr))).*;
+                    return try self.allocator.dupe(u8, if (bool_value == 1) "True" else "False");
+                },
+                .int => {
+                    const value: i128 = switch (result.layout.data.scalar.data.int) {
+                        .u8 => @as(*u8, @ptrCast(@alignCast(result.ptr))).*,
+                        .i8 => @as(*i8, @ptrCast(@alignCast(result.ptr))).*,
+                        .u16 => @as(*u16, @ptrCast(@alignCast(result.ptr))).*,
+                        .i16 => @as(*i16, @ptrCast(@alignCast(result.ptr))).*,
+                        .u32 => @as(*u32, @ptrCast(@alignCast(result.ptr))).*,
+                        .i32 => @as(*i32, @ptrCast(@alignCast(result.ptr))).*,
+                        .u64 => @as(*u64, @ptrCast(@alignCast(result.ptr))).*,
+                        .i64 => @as(*i64, @ptrCast(@alignCast(result.ptr))).*,
+                        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(result.ptr))).*),
+                        .i128 => @as(*i128, @ptrCast(@alignCast(result.ptr))).*,
+                    };
+                    return try std.fmt.allocPrint(self.allocator, "{d}", .{value});
+                },
+                else => {},
+            }
+        }
+
+        // Handle empty list specially
+        if (result.layout.tag == .list_of_zst) {
+            return try self.allocator.dupe(u8, "<list_of_zst>");
         }
 
         return try std.fmt.allocPrint(self.allocator, "<{s}>", .{@tagName(result.layout.tag)});
