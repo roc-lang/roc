@@ -31,72 +31,11 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - rigid_var_no_instantiation_error.md:6:12:6:13
-UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:6:6:6:7
-UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:6:9:6:10
-UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:7:6:7:7
-UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:7:9:7:10
 UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:17:21:17:30
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:17:5:17:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**rigid_var_no_instantiation_error.md:6:12:6:13:**
-```roc
-    (x, y) = pair
-```
-           ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**rigid_var_no_instantiation_error.md:6:6:6:7:**
-```roc
-    (x, y) = pair
-```
-     ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**rigid_var_no_instantiation_error.md:6:9:6:10:**
-```roc
-    (x, y) = pair
-```
-        ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**rigid_var_no_instantiation_error.md:7:6:7:7:**
-```roc
-    (y, x)
-```
-     ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**rigid_var_no_instantiation_error.md:7:9:7:10:**
-```roc
-    (y, x)
-```
-        ^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `true` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -189,11 +128,11 @@ CloseCurly(24:1-24:2),EndOfFile(24:2-24:2),
 					(p-ident @5.9-5.13 (raw "pair")))
 				(e-block @5.15-8.2
 					(statements
-						(e-tuple @6.5-6.11
-							(e-ident @6.6-6.7 (raw "x"))
-							(e-ident @6.9-6.10 (raw "y")))
-						(e-malformed @6.12-6.13 (reason "expr_unexpected_token"))
-						(e-ident @6.14-6.18 (raw "pair"))
+						(s-decl @6.5-6.18
+							(p-tuple @6.5-6.11
+								(p-ident @6.6-6.7 (raw "x"))
+								(p-ident @6.9-6.10 (raw "y")))
+							(e-ident @6.14-6.18 (raw "pair")))
 						(e-tuple @7.5-7.11
 							(e-ident @7.6-7.7 (raw "y"))
 							(e-ident @7.9-7.10 (raw "x")))))))
@@ -240,9 +179,7 @@ app [main!] { pf: platform "../basic-cli/platform.roc" }
 # Polymorphic function that swaps elements of a tuple
 swap : (a, b) -> (b, a)
 swap = |pair| {
-	(x, y)
-	
-	pair
+	(x, y) = pair
 	(y, x)
 }
 
@@ -271,18 +208,19 @@ main! = |_| {
 			(args
 				(p-assign @5.9-5.13 (ident "pair")))
 			(e-block @5.15-8.2
-				(s-expr @6.5-6.11
-					(e-tuple @6.5-6.11
-						(elems
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-runtime-error (tag "ident_not_in_scope")))))
-				(s-expr @6.14-6.18
+				(s-let @6.5-6.18
+					(p-tuple @6.5-6.11
+						(patterns
+							(p-assign @6.6-6.7 (ident "x"))
+							(p-assign @6.9-6.10 (ident "y"))))
 					(e-lookup-local @6.14-6.18
 						(p-assign @5.9-5.13 (ident "pair"))))
 				(e-tuple @7.5-7.11
 					(elems
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "ident_not_in_scope"))))))
+						(e-lookup-local @7.6-7.7
+							(p-assign @6.9-6.10 (ident "y")))
+						(e-lookup-local @7.9-7.10
+							(p-assign @6.6-6.7 (ident "x")))))))
 		(annotation @5.1-5.5
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)
@@ -338,9 +276,9 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "(a, b) -> (Error, Error)"))
+		(patt @5.1-5.5 (type "(a, b) -> (b, a)"))
 		(patt @11.1-11.6 (type "_arg -> {}")))
 	(expressions
-		(expr @5.8-8.2 (type "(a, b) -> (Error, Error)"))
+		(expr @5.8-8.2 (type "(a, b) -> (b, a)"))
 		(expr @11.9-24.2 (type "_arg -> {}"))))
 ~~~

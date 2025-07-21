@@ -17,68 +17,9 @@ swap = |pair| {
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_var_multiple.md:6:21:6:22
-UNDEFINED VARIABLE - type_var_multiple.md:6:6:6:11
-UNDEFINED VARIABLE - type_var_multiple.md:6:13:6:19
-UNDEFINED VARIABLE - type_var_multiple.md:7:6:7:12
-UNDEFINED VARIABLE - type_var_multiple.md:7:14:7:19
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_multiple.md:6:21:6:22:**
-```roc
-    (first, second) = pair
-```
-                    ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `first` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**type_var_multiple.md:6:6:6:11:**
-```roc
-    (first, second) = pair
-```
-     ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `second` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**type_var_multiple.md:6:13:6:19:**
-```roc
-    (first, second) = pair
-```
-            ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `second` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**type_var_multiple.md:7:6:7:12:**
-```roc
-    (second, first)
-```
-     ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `first` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**type_var_multiple.md:7:14:7:19:**
-```roc
-    (second, first)
-```
-             ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
@@ -119,11 +60,11 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 					(p-ident @5.9-5.13 (raw "pair")))
 				(e-block @5.15-8.2
 					(statements
-						(e-tuple @6.5-6.20
-							(e-ident @6.6-6.11 (raw "first"))
-							(e-ident @6.13-6.19 (raw "second")))
-						(e-malformed @6.21-6.22 (reason "expr_unexpected_token"))
-						(e-ident @6.23-6.27 (raw "pair"))
+						(s-decl @6.5-6.27
+							(p-tuple @6.5-6.20
+								(p-ident @6.6-6.11 (raw "first"))
+								(p-ident @6.13-6.19 (raw "second")))
+							(e-ident @6.23-6.27 (raw "pair")))
 						(e-tuple @7.5-7.20
 							(e-ident @7.6-7.12 (raw "second"))
 							(e-ident @7.14-7.19 (raw "first")))))))
@@ -141,9 +82,7 @@ app [main!] { pf: platform "../basic-cli/platform.roc" }
 # Multiple type variables 'a' and 'b' introduced in annotation
 swap : (a, b) -> (b, a)
 swap = |pair| {
-	(first, second)
-	
-	pair
+	(first, second) = pair
 	(second, first)
 }
 
@@ -158,18 +97,19 @@ main! = |_| {}
 			(args
 				(p-assign @5.9-5.13 (ident "pair")))
 			(e-block @5.15-8.2
-				(s-expr @6.5-6.20
-					(e-tuple @6.5-6.20
-						(elems
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-runtime-error (tag "ident_not_in_scope")))))
-				(s-expr @6.23-6.27
+				(s-let @6.5-6.27
+					(p-tuple @6.5-6.20
+						(patterns
+							(p-assign @6.6-6.11 (ident "first"))
+							(p-assign @6.13-6.19 (ident "second"))))
 					(e-lookup-local @6.23-6.27
 						(p-assign @5.9-5.13 (ident "pair"))))
 				(e-tuple @7.5-7.20
 					(elems
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "ident_not_in_scope"))))))
+						(e-lookup-local @7.6-7.12
+							(p-assign @6.13-6.19 (ident "second")))
+						(e-lookup-local @7.14-7.19
+							(p-assign @6.6-6.11 (ident "first")))))))
 		(annotation @5.1-5.5
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)
@@ -190,9 +130,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "(a, b) -> (Error, Error)"))
+		(patt @5.1-5.5 (type "(a, b) -> (b, a)"))
 		(patt @10.1-10.6 (type "_arg -> {}")))
 	(expressions
-		(expr @5.8-8.2 (type "(a, b) -> (Error, Error)"))
+		(expr @5.8-8.2 (type "(a, b) -> (b, a)"))
 		(expr @10.9-10.15 (type "_arg -> {}"))))
 ~~~
