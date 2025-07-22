@@ -99,6 +99,8 @@ main! = |_| processList(["one", "two"])
 		(e-lambda @6.9-6.39
 			(args
 				(p-underscore @6.10-6.11))
+			(captures
+				(capture (name "processList")))
 			(e-call @6.13-6.39
 				(e-lookup-local @6.13-6.24
 					(p-assign @4.1-4.12 (ident "processList")))

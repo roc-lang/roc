@@ -1852,6 +1852,9 @@ main! = |_| { # Yeah Ie
 		(e-lambda @100.9-159.2
 			(args
 				(p-underscore @100.10-100.11))
+			(captures
+				(capture (name "match_time"))
+				(capture (name "number")))
 			(e-block @100.13-159.2
 				(s-let @101.2-101.17
 					(p-assign @101.2-101.7 (ident "world"))

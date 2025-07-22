@@ -128,6 +128,8 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 		(e-lambda @6.9-6.33
 			(args
 				(p-underscore @6.10-6.11))
+			(captures
+				(capture (name "mapList")))
 			(e-call @6.13-6.33
 				(e-lookup-local @6.13-6.20
 					(p-assign @4.1-4.8 (ident "mapList")))

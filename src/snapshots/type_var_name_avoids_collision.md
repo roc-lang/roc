@@ -531,6 +531,14 @@ main! = |_| {
 		(e-lambda @55.9-65.2
 			(args
 				(p-underscore @55.10-55.11))
+			(captures
+				(capture (name "identity"))
+				(capture (name "anotherIdentity"))
+				(capture (name "combine"))
+				(capture (name "yetAnotherIdentity"))
+				(capture (name "finalIdentity"))
+				(capture (name "a"))
+				(capture (name "f")))
 			(e-block @55.13-65.2
 				(s-let @57.5-57.28
 					(p-assign @57.5-57.12 (ident "result1"))

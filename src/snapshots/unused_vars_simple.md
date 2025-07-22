@@ -206,6 +206,11 @@ main! = |_| {
 		(e-lambda @15.9-21.2
 			(args
 				(p-underscore @15.10-15.11))
+			(captures
+				(capture (name "unused_regular"))
+				(capture (name "used_underscore"))
+				(capture (name "unused_underscore"))
+				(capture (name "used_regular")))
 			(e-block @15.13-21.2
 				(s-let @16.5-16.26
 					(p-assign @16.5-16.6 (ident "a"))

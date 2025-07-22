@@ -354,6 +354,9 @@ NO CHANGE
 			(args
 				(p-assign @18.6-18.7 (ident "x"))
 				(p-assign @18.9-18.10 (ident "y")))
+			(captures
+				(capture (name "h"))
+				(capture (name "a")))
 			(e-block @18.12-31.2
 				(s-let @19.2-19.52
 					(p-assign @19.2-19.4 (ident "h1"))

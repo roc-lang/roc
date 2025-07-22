@@ -126,6 +126,8 @@ outerFunc = |_| {
 		(e-lambda @8.13-16.2
 			(args
 				(p-underscore @8.14-8.15))
+			(captures
+				(capture (name "y")))
 			(e-block @8.17-16.2
 				(s-let @9.5-9.11
 					(p-assign @9.5-9.6 (ident "x"))

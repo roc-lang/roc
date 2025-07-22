@@ -235,6 +235,8 @@ main! = |_| {
 		(e-lambda @11.9-24.2
 			(args
 				(p-underscore @11.10-11.11))
+			(captures
+				(capture (name "swap")))
 			(e-block @11.13-24.2
 				(s-let @13.5-13.34
 					(p-assign @13.5-13.12 (ident "result1"))

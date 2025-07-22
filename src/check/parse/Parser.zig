@@ -2134,34 +2134,45 @@ fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) std.mem.Allocator
     defer trace.end();
 
     var expression = e;
-    // Check for an apply...
-    if (self.peek() == .NoSpaceOpenRound) {
-        self.advance();
-        const scratch_top = self.store.scratchExprTop();
-        self.parseCollectionSpan(AST.Expr.Idx, .CloseRound, NodeStore.addScratchExpr, parseExpr) catch |err| {
-            switch (err) {
-                error.ExpectedNotFound => {
-                    self.store.clearScratchExprsFrom(scratch_top);
-                    return try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, start);
-                },
-                error.OutOfMemory => return error.OutOfMemory,
-            }
-        };
-        const args = try self.store.exprSpanFrom(scratch_top);
 
-        expression = try self.store.addExpr(.{ .apply = .{
-            .args = args,
-            .@"fn" = e,
-            .region = .{ .start = start, .end = self.pos },
-        } });
-    }
-    if (self.peek() == .NoSpaceOpQuestion) {
-        expression = try self.store.addExpr(.{ .suffix_single_question = .{
-            .expr = expression,
-            .operator = start,
-            .region = .{ .start = start, .end = self.pos },
-        } });
-        self.advance();
+    // Loop to handle multiple chained suffixes (applications, question marks, etc.)
+    while (true) {
+        if (self.peek() == .NoSpaceOpenRound) {
+            // Handle function application
+            self.advance();
+            const scratch_top = self.store.scratchExprTop();
+            self.parseCollectionSpan(AST.Expr.Idx, .CloseRound, NodeStore.addScratchExpr, parseExpr) catch |err| {
+                switch (err) {
+                    error.ExpectedNotFound => {
+                        self.store.clearScratchExprsFrom(scratch_top);
+                        return try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, start);
+                    },
+                    error.OutOfMemory => return error.OutOfMemory,
+                }
+            };
+            const args = try self.store.exprSpanFrom(scratch_top);
+
+            expression = try self.store.addExpr(.{
+                .apply = .{
+                    .args = args,
+                    .@"fn" = expression, // Use current expression as function
+                    .region = .{ .start = start, .end = self.pos },
+                },
+            });
+            // Continue loop to check for more chained applications
+        } else if (self.peek() == .NoSpaceOpQuestion) {
+            // Handle question mark suffix
+            expression = try self.store.addExpr(.{ .suffix_single_question = .{
+                .expr = expression,
+                .operator = start,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            self.advance();
+            // Continue loop to check for more suffixes
+        } else {
+            // No more suffixes to parse
+            break;
+        }
     }
     return expression;
 }

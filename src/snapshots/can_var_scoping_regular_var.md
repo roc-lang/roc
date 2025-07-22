@@ -135,6 +135,9 @@ NO CHANGE
 		(e-lambda @4.16-21.2
 			(args
 				(p-assign @4.17-4.22 (ident "items")))
+			(captures
+				(capture (name "count_"))
+				(capture (name "total_")))
 			(e-block @4.24-21.2
 				(s-var @5.2-5.16
 					(p-assign @5.2-5.16 (ident "count_"))
@@ -159,6 +162,8 @@ NO CHANGE
 					(e-lambda @13.15-17.3
 						(args
 							(p-underscore @13.16-13.17))
+						(captures
+							(capture (name "count_")))
 						(e-block @13.19-17.3
 							(s-reassign @14.3-14.9
 								(p-assign @5.2-5.16 (ident "count_"))

@@ -59,6 +59,10 @@ NO CHANGE
 							(required))
 						(record-destruct @1.28-1.33 (label "email") (ident "email")
 							(required)))))
+			(captures
+				(capture (name "name"))
+				(capture (name "age"))
+				(capture (name "email")))
 			(e-string @1.37-1.109
 				(e-literal @1.38-1.44 (string "User: "))
 				(e-lookup-local @1.46-1.50

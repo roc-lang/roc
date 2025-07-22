@@ -876,6 +876,16 @@ pub fn addTypeSlotAndTypeVarRedirect(
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
+/// Add a new capture and type variable.
+/// This function asserts that the types array and the CIR nodes are in sync.
+pub fn addCaptureAndTypeVar(self: *CIR, capture: CIR.Expr.Capture, content: types.Content, region: base.Region) std.mem.Allocator.Error!CIR.Expr.Capture.Idx {
+    const capture_idx = try self.store.addCapture(capture, region);
+    const capture_var = try self.env.types.freshFromContent(content);
+    debugAssertIdxsEql("addCaptureAndTypeVar", capture_idx, capture_var);
+    self.debugAssertArraysInSync();
+    return capture_idx;
+}
+
 /// Function that redirects an existing node to the provided var.
 /// Assert that the requested idx in in bounds
 pub fn redirectTypeTo(

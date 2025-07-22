@@ -2023,6 +2023,10 @@ expect {
 		(e-lambda @144.9-196.2
 			(args
 				(p-underscore @144.10-144.11))
+			(captures
+				(capture (name "match_time"))
+				(capture (name "number"))
+				(capture (name "add_one")))
 			(e-block @144.13-196.2
 				(s-let @145.2-145.17
 					(p-assign @145.2-145.7 (ident "world"))

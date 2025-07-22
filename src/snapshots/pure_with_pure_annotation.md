@@ -117,6 +117,8 @@ NO CHANGE
 		(e-lambda @9.10-9.23
 			(args
 				(p-assign @9.11-9.12 (ident "x")))
+			(captures
+				(capture (name "add")))
 			(e-call @9.14-9.23
 				(e-lookup-local @9.14-9.17
 					(p-assign @5.1-5.4 (ident "add")))

@@ -1575,6 +1575,9 @@ expect {
 		(e-lambda @75.5-111.2
 			(args
 				(p-underscore @75.6-75.7))
+			(captures
+				(capture (name "me"))
+				(capture (name "er")))
 			(e-block @75.9-111.2
 				(s-expr @75.11-75.12
 					(e-runtime-error (tag "ident_not_in_scope")))
