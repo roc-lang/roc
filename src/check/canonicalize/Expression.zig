@@ -797,7 +797,11 @@ pub const Expr = union(enum) {
                         const captured_var = ir.store.getCapture(captured_var_idx);
                         const capture_begin = tree.beginNode();
                         try tree.pushStaticAtom("capture");
-                        try tree.pushStringPair("name", ir.getIdentText(captured_var.name));
+
+                        const capture_region = ir.store.getPatternRegion(captured_var.pattern_idx);
+                        try ir.appendRegionInfoToSExprTreeFromRegion(tree, capture_region);
+
+                        try tree.pushStringPair("ident", ir.getIdentText(captured_var.name));
                         const capture_attrs = tree.beginNode();
                         try tree.endNode(capture_begin, capture_attrs);
                     }

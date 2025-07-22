@@ -107,7 +107,7 @@ NO CHANGE
 			(args
 				(p-underscore @8.10-8.11))
 			(captures
-				(capture (name "getUser")))
+				(capture @6.1-6.8 (ident "getUser")))
 			(e-call @8.13-8.25
 				(e-lookup-local @8.13-8.20
 					(p-assign @6.1-6.8 (ident "getUser")))

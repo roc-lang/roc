@@ -2024,9 +2024,9 @@ expect {
 			(args
 				(p-underscore @144.10-144.11))
 			(captures
-				(capture (name "match_time"))
-				(capture (name "number"))
-				(capture (name "add_one")))
+				(capture @80.1-80.11 (ident "match_time"))
+				(capture @146.2-146.18 (ident "number"))
+				(capture @68.1-68.8 (ident "add_one")))
 			(e-block @144.13-196.2
 				(s-let @145.2-145.17
 					(p-assign @145.2-145.7 (ident "world"))

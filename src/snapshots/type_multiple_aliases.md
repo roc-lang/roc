@@ -180,8 +180,8 @@ NO CHANGE
 			(args
 				(p-underscore @14.10-14.11))
 			(captures
-				(capture (name "create_user"))
-				(capture (name "get_user_name")))
+				(capture @9.1-9.12 (ident "create_user"))
+				(capture @12.1-12.14 (ident "get_user_name")))
 			(e-block @14.13-17.2
 				(s-let @15.2-15.38
 					(p-assign @15.2-15.6 (ident "user"))

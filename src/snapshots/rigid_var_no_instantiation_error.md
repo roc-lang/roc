@@ -236,7 +236,7 @@ main! = |_| {
 			(args
 				(p-underscore @11.10-11.11))
 			(captures
-				(capture (name "swap")))
+				(capture @5.1-5.5 (ident "swap")))
 			(e-block @11.13-24.2
 				(s-let @13.5-13.34
 					(p-assign @13.5-13.12 (ident "result1"))

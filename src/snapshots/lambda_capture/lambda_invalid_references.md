@@ -63,7 +63,7 @@ NO CHANGE
 		(args
 			(p-assign @1.6-1.7 (ident "y")))
 		(captures
-			(capture (name "x")))
+			(capture @1.2-1.3 (ident "x")))
 		(e-binop @1.9-1.14 (op "add")
 			(e-lookup-local @1.9-1.10
 				(p-assign @1.2-1.3 (ident "x")))

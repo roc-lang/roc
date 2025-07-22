@@ -101,7 +101,7 @@ main! = |_| getName({ name: "luke", age: 21 })
 			(args
 				(p-underscore @6.10-6.11))
 			(captures
-				(capture (name "getName")))
+				(capture @4.1-4.8 (ident "getName")))
 			(e-call @6.13-6.44
 				(e-lookup-local @6.13-6.20
 					(p-assign @4.1-4.8 (ident "getName")))

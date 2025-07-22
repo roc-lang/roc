@@ -330,7 +330,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(args
 				(p-underscore @18.10-18.11))
 			(captures
-				(capture (name "processComplex")))
+				(capture @5.1-5.15 (ident "processComplex")))
 			(e-call @18.13-18.49
 				(e-lookup-local @18.13-18.27
 					(p-assign @5.1-5.15 (ident "processComplex")))

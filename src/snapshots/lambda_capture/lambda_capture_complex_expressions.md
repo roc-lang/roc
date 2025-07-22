@@ -53,7 +53,7 @@ NO CHANGE
 				(args
 					(p-assign @1.11-1.16 (ident "inner")))
 				(captures
-					(capture (name "outer")))
+					(capture @1.3-1.8 (ident "outer")))
 				(e-if @1.18-1.57
 					(if-branches
 						(if-branch

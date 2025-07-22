@@ -1569,8 +1569,8 @@ expect {
 			(args
 				(p-underscore @75.6-75.7))
 			(captures
-				(capture (name "me"))
-				(capture (name "er")))
+				(capture @49.1-49.3 (ident "me"))
+				(capture @77.2-77.14 (ident "er")))
 			(e-block @75.9-111.2
 				(s-expr @75.11-75.12
 					(e-runtime-error (tag "ident_not_in_scope")))

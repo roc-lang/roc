@@ -201,8 +201,8 @@ main! = |_| {}
 				(args
 					(p-assign @4.19-4.20 (ident "x")))
 				(captures
-					(capture (name "f"))
-					(capture (name "g")))
+					(capture @4.12-4.13 (ident "f"))
+					(capture @4.15-4.16 (ident "g")))
 				(e-call @4.22-4.29
 					(e-lookup-local @4.22-4.23
 						(p-assign @4.12-4.13 (ident "f")))

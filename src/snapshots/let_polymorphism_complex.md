@@ -1043,7 +1043,7 @@ main = |_| {
 			(args
 				(p-underscore @105.9-105.10))
 			(captures
-				(capture (name "container1")))
+				(capture @60.1-60.11 (ident "container1")))
 			(e-block @105.12-108.2
 				(e-binop @107.5-107.26 (op "add")
 					(e-dot-access @107.5-107.21 (field "value")

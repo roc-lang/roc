@@ -118,8 +118,8 @@ NO CHANGE
 			(args
 				(p-assign @12.13-12.14 (ident "x")))
 			(captures
-				(capture (name "print_number!"))
-				(capture (name "multiply")))
+				(capture @9.1-9.14 (ident "print_number!"))
+				(capture @6.1-6.9 (ident "multiply")))
 			(e-call @12.16-12.45
 				(e-lookup-local @12.16-12.29
 					(p-assign @9.1-9.14 (ident "print_number!")))

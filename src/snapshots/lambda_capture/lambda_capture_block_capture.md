@@ -62,7 +62,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			(args
 				(p-assign @3.10-3.11 (ident "y")))
 			(captures
-				(capture (name "x")))
+				(capture @2.5-2.6 (ident "x")))
 			(e-binop @3.13-3.18 (op "add")
 				(e-lookup-local @3.13-3.14
 					(p-assign @2.5-2.6 (ident "x")))

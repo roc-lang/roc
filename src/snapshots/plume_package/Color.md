@@ -863,7 +863,7 @@ is_named_color = |str| {
 			(args
 				(p-assign @49.11-49.16 (ident "color")))
 			(captures
-				(capture (name "to_str")))
+				(capture @49.1-49.7 (ident "to_str")))
 			(e-match @49.18-54.2
 				(match @49.18-54.2
 					(cond

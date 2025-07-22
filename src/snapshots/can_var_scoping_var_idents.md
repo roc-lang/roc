@@ -72,7 +72,7 @@ NO CHANGE
 			(args
 				(p-assign @4.13-4.18 (ident "input")))
 			(captures
-				(capture (name "sum_")))
+				(capture @6.2-6.22 (ident "sum_")))
 			(e-block @4.20-10.2
 				(s-let @5.2-5.13
 					(p-assign @5.2-5.5 (ident "sum"))

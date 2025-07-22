@@ -174,7 +174,7 @@ main! = |_| {
 			(args
 				(p-underscore @8.10-8.11))
 			(captures
-				(capture (name "identity")))
+				(capture @5.1-5.9 (ident "identity")))
 			(e-block @8.13-19.2
 				(s-let @10.5-10.23
 					(p-assign @10.5-10.8 (ident "num"))

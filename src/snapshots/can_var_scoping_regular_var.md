@@ -136,8 +136,8 @@ NO CHANGE
 			(args
 				(p-assign @4.17-4.22 (ident "items")))
 			(captures
-				(capture (name "count_"))
-				(capture (name "total_")))
+				(capture @5.2-5.16 (ident "count_"))
+				(capture @6.2-6.16 (ident "total_")))
 			(e-block @4.24-21.2
 				(s-var @5.2-5.16
 					(p-assign @5.2-5.16 (ident "count_"))
@@ -163,7 +163,7 @@ NO CHANGE
 						(args
 							(p-underscore @13.16-13.17))
 						(captures
-							(capture (name "count_")))
+							(capture @5.2-5.16 (ident "count_")))
 						(e-block @13.19-17.3
 							(s-reassign @14.3-14.9
 								(p-assign @5.2-5.16 (ident "count_"))

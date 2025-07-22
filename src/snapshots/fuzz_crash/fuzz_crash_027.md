@@ -1853,8 +1853,8 @@ main! = |_| { # Yeah Ie
 			(args
 				(p-underscore @100.10-100.11))
 			(captures
-				(capture (name "match_time"))
-				(capture (name "number")))
+				(capture @60.1-60.11 (ident "match_time"))
+				(capture @102.2-102.18 (ident "number")))
 			(e-block @100.13-159.2
 				(s-let @101.2-101.17
 					(p-assign @101.2-101.7 (ident "world"))

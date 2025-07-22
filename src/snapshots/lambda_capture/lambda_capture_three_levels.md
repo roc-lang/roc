@@ -58,8 +58,8 @@ NO CHANGE
 						(args
 							(p-assign @1.20-1.25 (ident "inner")))
 						(captures
-							(capture (name "outer"))
-							(capture (name "middle")))
+							(capture @1.3-1.8 (ident "outer"))
+							(capture @1.11-1.17 (ident "middle")))
 						(e-binop @1.27-1.49 (op "add")
 							(e-lookup-local @1.27-1.32
 								(p-assign @1.3-1.8 (ident "outer")))

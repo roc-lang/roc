@@ -46,8 +46,8 @@ NO CHANGE
 				(record-destruct @1.16-1.22 (label "rest") (ident "rest")
 					(required)))))
 	(captures
-		(capture (name "first_name"))
-		(capture (name "rest")))
+		(capture @1.4-1.14 (ident "first_name"))
+		(capture @1.16-1.22 (ident "rest")))
 	(e-string @1.26-1.65
 		(e-literal @1.27-1.33 (string "Hello "))
 		(e-lookup-local @1.35-1.45
