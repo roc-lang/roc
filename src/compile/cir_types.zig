@@ -37,6 +37,12 @@ pub const ExternalDecl = struct {
     pub const Span = ExternalDeclSpan;
     /// A safe list of external declarations
     pub const SafeList = collections.SafeList(ExternalDecl);
+    
+    pub fn pushToSExprTree(self: *const ExternalDecl, cir: anytype, tree: anytype) !void {
+        _ = self;
+        _ = cir;
+        try tree.pushStaticAtom("external-decl-stub");
+    }
 };
 
 // Import store for managing module imports

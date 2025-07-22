@@ -320,6 +320,7 @@ pub const CacheModule = struct {
             .imports = compile.cir_types.Import.Store.init(),
             .module_name = "", // Will be set from cache data
             .diagnostics = null,
+            .store = undefined, // Will be set from cache data
         };
         errdefer module_env.deinit();
 
