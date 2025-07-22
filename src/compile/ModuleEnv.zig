@@ -9,6 +9,7 @@ const std = @import("std");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
+const cir_types = @import("cir_types.zig");
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
 const RegionInfo = base.RegionInfo;
@@ -35,6 +36,23 @@ line_starts: collections.SafeList(u32),
 /// The source code of this module.
 source: []const u8,
 
+// ===== CIR fields duplicated from CIR.zig =====
+// NOTE: These fields are populated during canonicalization and preserved for later use
+
+/// All the definitions in the module (populated by canonicalization)
+all_defs: cir_types.DefSpan,
+/// All the top-level statements in the module (populated by canonicalization)
+all_statements: cir_types.StatementSpan,
+/// All external declarations referenced in this module
+external_decls: cir_types.ExternalDecl.SafeList,
+/// Store for interned module imports
+imports: cir_types.Import.Store,
+/// The module's name as a string
+/// This is needed for import resolution to match import names to modules
+module_name: []const u8,
+/// Diagnostics collected during canonicalization (optional)
+diagnostics: ?[]const u8,
+
 /// Initialize the module environment.
 pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
@@ -49,6 +67,13 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .exposed_nodes = try collections.SafeStringHashMap(u16).initCapacity(gpa, 64),
         .line_starts = try collections.SafeList(u32).initCapacity(gpa, 256),
         .source = source,
+        // Initialize CIR fields with empty/default values
+        .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
+        .external_decls = try cir_types.ExternalDecl.SafeList.initCapacity(gpa, 16),
+        .imports = cir_types.Import.Store.init(),
+        .module_name = "", // Will be set later during canonicalization
+        .diagnostics = null,
     };
 }
 
@@ -61,6 +86,12 @@ pub fn deinit(self: *Self) void {
     self.line_starts.deinit(self.gpa);
     self.exposed_by_str.deinit(self.gpa);
     self.exposed_nodes.deinit(self.gpa);
+    // Clean up CIR fields
+    self.external_decls.deinit(self.gpa);
+    self.imports.deinit(self.gpa);
+    if (self.diagnostics) |diags| {
+        self.gpa.free(diags);
+    }
 }
 
 /// Calculate and store line starts from the source text

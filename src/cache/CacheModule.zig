@@ -313,6 +313,13 @@ pub const CacheModule = struct {
             .exposed_nodes = exposed_nodes,
             .line_starts = line_starts,
             .source = source,
+            // Initialize CIR fields with default values for now
+            .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
+            .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
+            .external_decls = try compile.cir_types.ExternalDecl.SafeList.initCapacity(allocator, 16),
+            .imports = compile.cir_types.Import.Store.init(),
+            .module_name = "", // Will be set from cache data
+            .diagnostics = null,
         };
         errdefer module_env.deinit();
 
