@@ -63,9 +63,6 @@ jobs:
       #TODO i386 (32-bit linux) cli tests
       #TODO verify-no-git-changes
 
-      - name: test website build script
-        run: bash www/build.sh
-
       #- name: run fuzz tests - ok to merge if this one fails # for now!
       #  run: |
       #    cargo +nightly-2024-02-03 install --locked cargo-fuzz

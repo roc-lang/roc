@@ -11,7 +11,7 @@ version.workspace = true
 # Having its own (extremely minimal) CLI means docs can be generated
 # on a build server after building this crate from source, without
 # having to install non-Rust dependencies (LLVM, Zig, wasm things, etc.)
-# It gets called in www/build.sh via `cargo run --bin roc-docs`
+# Run with `cargo run --bin roc-docs path/to/main.roc`
 [[bin]]
 name = "roc-docs"
 path = "src/main.rs"
