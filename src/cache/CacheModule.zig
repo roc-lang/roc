@@ -304,6 +304,7 @@ pub const CacheModule = struct {
         // Create ModuleEnv from deserialized components
         var module_env = base.ModuleEnv{
             .gpa = allocator,
+            .shm = allocator,
             .idents = idents,
             .ident_ids_for_slicing = ident_ids_for_slicing,
             .strings = strings,
@@ -333,6 +334,7 @@ pub const CacheModule = struct {
                 .external_decls = external_decls,
                 .imports = CIR.Import.Store.init(),
                 .module_name = module_name,
+                .shm = allocator,
             },
         };
 

@@ -93,6 +93,33 @@ pub fn processFile(
     defer trace.end();
 
     // Read the file content
+    return try processFileWithAllocators(gpa, gpa, fs, filepath, cache_manager, collect_timing);
+}
+
+/// Process a single file with separate allocators for persistent and scratch data.
+///
+/// This function allows using different allocators for data that needs to be
+/// shared (like CIR nodes and types) versus temporary scratch data.
+///
+/// Parameters:
+/// - gpa: General purpose allocator for non-shared allocations
+/// - shared_allocator: Allocator for data that needs to be shared (CIR, types)
+/// - fs: Filesystem to read from
+/// - filepath: Path to the file to process
+/// - cache_manager: Optional cache manager for caching support
+/// - collect_timing: Whether to collect timing information
+pub fn processFileWithAllocators(
+    gpa: std.mem.Allocator,
+    shared_allocator: std.mem.Allocator,
+    fs: Filesystem,
+    filepath: []const u8,
+    cache_manager: ?*CacheManager,
+    collect_timing: bool,
+) !ProcessResult {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Read the file content
     const source = fs.readFile(filepath, gpa) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
         error.AccessDenied => return error.AccessDenied,
@@ -134,9 +161,7 @@ pub fn processFile(
         }
     } else {
         // No caching
-
-        // We pass ownership of the source to processSourceInternal
-        return try processSourceInternal(gpa, source, true, filepath, config);
+        return try processSourceInternalWithAllocators(gpa, shared_allocator, source, filepath, config);
     }
 }
 
@@ -152,7 +177,7 @@ pub fn processSource(
     source: []const u8,
     filename: []const u8,
 ) !ProcessResult {
-    return try processSourceInternal(gpa, source, false, filename, .{ .collect_timing = false });
+    return try processSourceInternalWithAllocators(gpa, gpa, source, filename, .{ .collect_timing = false });
 }
 
 /// Configuration for processSourceInternal
@@ -192,6 +217,24 @@ fn processSourceInternal(
     filename: []const u8,
     config: ProcessConfig,
 ) !ProcessResult {
+    return try processSourceInternalWithAllocators(gpa, gpa, source, filename, config);
+}
+
+/// Internal helper that processes source code with separate allocators.
+///
+/// Parameters:
+/// - gpa: General purpose allocator for non-shared allocations
+/// - shared_allocator: Allocator for data that needs to be shared (CIR, types)
+/// - source: The source code to process
+/// - filename: The filename for error reporting
+/// - config: Processing configuration
+fn processSourceInternalWithAllocators(
+    gpa: std.mem.Allocator,
+    shared_allocator: std.mem.Allocator,
+    source: []const u8,
+    filename: []const u8,
+    config: ProcessConfig,
+) !ProcessResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -212,7 +255,10 @@ fn processSourceInternal(
     // Initialize the ModuleEnv (heap-allocated for ownership transfer)
     var module_env = try gpa.create(ModuleEnv);
 
-    module_env.* = try ModuleEnv.init(gpa, source);
+    // Always duplicate source since ModuleEnv owns it
+    const owned_source_for_env = try gpa.dupe(u8, source);
+
+    module_env.* = try ModuleEnv.initWithAllocators(gpa, shared_allocator, owned_source_for_env);
 
     // Calculate line starts for region info
     try module_env.*.calcLineStarts();
@@ -247,7 +293,7 @@ fn processSourceInternal(
         basename[0..dot_idx]
     else
         basename;
-    cir.* = try CIR.init(module_env, module_name);
+    cir.* = try CIR.initWithAllocator(module_env, module_name, shared_allocator, gpa);
 
     // Create scope for semantic analysis
     // Canonicalize the AST
