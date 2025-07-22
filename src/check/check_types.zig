@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const compile = @import("compile");
 const tracy = @import("../tracy.zig");
 const collections = @import("collections");
 const types_mod = @import("types");
@@ -18,7 +19,7 @@ const CIR = @import("./canonicalize/CIR.zig");
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
-const ModuleEnv = base.ModuleEnv;
+const ModuleEnv = compile.ModuleEnv;
 const Ident = base.Ident;
 const Region = base.Region;
 const Func = types_mod.Func;
@@ -1428,7 +1429,7 @@ test "minimum signed values fit in their respective types" {
 
     const gpa = std.testing.allocator;
 
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var module_env = try compile.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
     var problems = try problem.Store.initCapacity(gpa, 16);
@@ -1578,7 +1579,7 @@ test "lambda with record field access infers correct type" {
     const gpa = std.testing.allocator;
 
     // Create a minimal environment for testing
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var module_env = try compile.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
     var cir = try CIR.init(&module_env, "Test");
@@ -1683,7 +1684,7 @@ test "dot access properly unifies field types with parameters" {
     const gpa = std.testing.allocator;
 
     // Create a minimal environment for testing
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var module_env = try compile.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
     var cir = try CIR.init(&module_env, "Test");
@@ -1791,7 +1792,7 @@ test "call site unification order matters for concrete vs flexible types" {
     const gpa = std.testing.allocator;
 
     // Create a minimal environment for testing
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var module_env = try compile.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
     var cir = try CIR.init(&module_env, "Test");

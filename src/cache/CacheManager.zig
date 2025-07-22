@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const compile = @import("compile");
 const canonicalize = @import("../check/canonicalize.zig");
 const reporting = @import("../reporting.zig");
 const Filesystem = @import("../fs/Filesystem.zig");
@@ -14,7 +15,7 @@ const SERIALIZATION_ALIGNMENT = 16;
 const coordinate_simple = @import("../coordinate_simple.zig");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = base.ModuleEnv;
+const ModuleEnv = compile.ModuleEnv;
 const CIR = canonicalize.CIR;
 
 /// Cache hit result containing the process result and diagnostic counts

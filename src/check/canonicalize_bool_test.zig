@@ -2,6 +2,7 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
+const compile = @import("compile");
 const parse = @import("./parse.zig");
 const canonicalize = @import("./canonicalize.zig");
 const types = @import("types");
@@ -12,7 +13,7 @@ test "canonicalize True as Bool" {
     const source = "True";
 
     // Initialize ModuleEnv
-    var module_env = try base.ModuleEnv.init(allocator, source);
+    var module_env = try compile.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Parse
@@ -52,7 +53,7 @@ test "canonicalize False as Bool" {
     const source = "False";
 
     // Initialize ModuleEnv
-    var module_env = try base.ModuleEnv.init(allocator, source);
+    var module_env = try compile.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Parse
@@ -92,7 +93,7 @@ test "canonicalize random tag not as Bool" {
     const source = "SomeTag";
 
     // Initialize ModuleEnv
-    var module_env = try base.ModuleEnv.init(allocator, source);
+    var module_env = try compile.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Parse

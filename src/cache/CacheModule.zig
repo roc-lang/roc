@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const compile = @import("compile");
 const canonicalize = @import("../check/canonicalize.zig");
 const collections = @import("collections");
 const types = @import("types");
@@ -108,7 +109,7 @@ pub const CacheModule = struct {
     /// Create a cache by serializing ModuleEnv and CIR data
     pub fn create(
         allocator: Allocator,
-        module_env: *const base.ModuleEnv,
+        module_env: *const compile.ModuleEnv,
         cir: *const CIR,
         error_count: u32,
         warning_count: u32,
@@ -260,7 +261,7 @@ pub const CacheModule = struct {
 
     /// Restored data from cache
     pub const RestoredData = struct {
-        module_env: base.ModuleEnv,
+        module_env: compile.ModuleEnv,
         cir: CIR,
     };
 
@@ -302,7 +303,7 @@ pub const CacheModule = struct {
         errdefer exposed_nodes.deinit(allocator);
 
         // Create ModuleEnv from deserialized components
-        var module_env = base.ModuleEnv{
+        var module_env = compile.ModuleEnv{
             .gpa = allocator,
             .idents = idents,
             .ident_ids_for_slicing = ident_ids_for_slicing,
@@ -604,7 +605,7 @@ test "create and restore cache" {
     ;
 
     // Parse the source
-    var module_env = try base.ModuleEnv.init(gpa, source);
+    var module_env = try compile.ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 
     var cir = try CIR.init(&module_env, "TestModule");
@@ -680,7 +681,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     ;
 
     // Parse the source
-    var module_env = try base.ModuleEnv.init(gpa, source);
+    var module_env = try compile.ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 
     var cir = try CIR.init(&module_env, "TestModule");

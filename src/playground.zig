@@ -14,6 +14,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const compile = @import("compile");
 const parse = @import("check/parse.zig");
 const build_options = @import("build_options");
 const can = @import("check/canonicalize.zig");
@@ -25,7 +26,7 @@ const types = @import("types");
 const problem = @import("check/check_types/problem.zig");
 
 const SExprTree = base.SExprTree;
-const ModuleEnv = base.ModuleEnv;
+const ModuleEnv = compile.ModuleEnv;
 const Allocator = std.mem.Allocator;
 
 const allocator: Allocator = .{
@@ -779,7 +780,7 @@ fn findTypeInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier:
     const gpa = cir.env.gpa;
 
     // Create TypeWriter for converting types to strings
-    var type_writer = types.writers.TypeWriter.init(gpa, cir.env) catch return null;
+    var type_writer = compile.type_writers.TypeWriter.init(gpa, cir.env) catch return null;
     defer type_writer.deinit();
 
     // Iterate through all definitions to find one that contains this position

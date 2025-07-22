@@ -4,6 +4,7 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
+const compile = @import("compile");
 const serialization = @import("serialization");
 const types = @import("types");
 const collections = @import("collections");
@@ -15,7 +16,7 @@ const DataSpan = base.DataSpan;
 const Ident = base.Ident;
 const Region = base.Region;
 const ModuleImport = base.ModuleImport;
-const ModuleEnv = base.ModuleEnv;
+const ModuleEnv = compile.ModuleEnv;
 const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
 const SExprTree = base.SExprTree;
@@ -1201,7 +1202,7 @@ pub const ExposedItem = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn pushToSExprTree(self: ExposedItem, env: *base.ModuleEnv, ir: *const CIR, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: ExposedItem, env: *compile.ModuleEnv, ir: *const CIR, tree: *SExprTree) std.mem.Allocator.Error!void {
         _ = ir; // Unused in this function, but could be used for more complex logic
 
         const begin = tree.beginNode();
@@ -1822,7 +1823,7 @@ pub fn pushTypesToSExprTree(ir: *CIR, maybe_expr_idx: ?Expr.Idx, tree: *SExprTre
     const gpa = ir.env.gpa;
 
     // Create TypeWriter for converting types to strings
-    var type_writer = try types.writers.TypeWriter.init(gpa, ir.env);
+    var type_writer = try compile.type_writers.TypeWriter.init(gpa, ir.env);
     defer type_writer.deinit();
 
     if (maybe_expr_idx) |expr_idx| {

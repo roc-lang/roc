@@ -8,9 +8,10 @@
 const std = @import("std");
 const types_mod = @import("types");
 const collections = @import("collections");
-const Ident = @import("Ident.zig");
-const StringLiteral = @import("StringLiteral.zig");
-const RegionInfo = @import("RegionInfo.zig");
+const base = @import("base");
+const Ident = base.Ident;
+const StringLiteral = base.StringLiteral;
+const RegionInfo = base.RegionInfo;
 
 const Self = @This();
 

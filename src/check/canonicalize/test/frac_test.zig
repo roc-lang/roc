@@ -7,6 +7,7 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
+const compile = @import("compile");
 const parse = @import("../../parse.zig");
 const canonicalize = @import("../../../check/canonicalize.zig");
 const CIR = canonicalize.CIR;
@@ -16,14 +17,14 @@ const RocDec = @import("builtins").RocDec;
 const test_allocator = testing.allocator;
 
 fn parseAndCanonicalizeFrac(allocator: std.mem.Allocator, source: []const u8) !struct {
-    module_env: *base.ModuleEnv,
+    module_env: *compile.ModuleEnv,
     parse_ast: *parse.AST,
     cir: *CIR,
     can: *canonicalize,
     expr_idx: CIR.Expr.Idx,
 } {
-    const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(allocator, source);
+    const module_env = try allocator.create(compile.ModuleEnv);
+    module_env.* = try compile.ModuleEnv.init(allocator, source);
 
     const parse_ast = try allocator.create(parse.AST);
     parse_ast.* = try parse.parseExpr(module_env);
@@ -301,8 +302,8 @@ test "fractional literal - NaN handling" {
     // Note: NaN is not a valid numeric literal in Roc
     // The parser will fail before canonicalization
     // This test verifies that behavior
-    const module_env = try test_allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(test_allocator, "NaN");
+    const module_env = try test_allocator.create(compile.ModuleEnv);
+    module_env.* = try compile.ModuleEnv.init(test_allocator, "NaN");
     defer {
         module_env.deinit();
         test_allocator.destroy(module_env);
@@ -323,8 +324,8 @@ test "fractional literal - infinity handling" {
     // Note: Infinity is not a valid numeric literal in Roc
     // The parser will fail before canonicalization
     // This test verifies that behavior
-    const module_env = try test_allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(test_allocator, "Infinity");
+    const module_env = try test_allocator.create(compile.ModuleEnv);
+    module_env.* = try compile.ModuleEnv.init(test_allocator, "Infinity");
     defer {
         module_env.deinit();
         test_allocator.destroy(module_env);

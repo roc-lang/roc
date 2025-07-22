@@ -4,11 +4,12 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
+const compile = @import("compile");
 const parse = @import("parse.zig");
 const canonicalize = @import("canonicalize.zig");
 const check_types = @import("check_types.zig");
 const CIR = canonicalize.CIR;
-const ModuleEnv = base.ModuleEnv;
+const ModuleEnv = compile.ModuleEnv;
 
 const test_allocator = testing.allocator;
 

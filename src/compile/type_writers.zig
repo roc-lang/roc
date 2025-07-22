@@ -7,7 +7,8 @@
 
 const std = @import("std");
 const base = @import("base");
-const types = @import("types.zig");
+const types = @import("types");
+const ModuleEnv = @import("ModuleEnv.zig");
 
 const Allocator = std.mem.Allocator;
 const Desc = types.Descriptor;
@@ -32,7 +33,6 @@ const Tuple = types.Tuple;
 const Func = types.Func;
 
 // const SExpr = base.SExpr;
-const ModuleEnv = base.ModuleEnv;
 const Ident = base.Ident;
 
 const TypeContext = enum {

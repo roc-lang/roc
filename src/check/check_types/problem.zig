@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const compile = @import("compile");
 const tracy = @import("../../tracy.zig");
 const collections = @import("collections");
 const can = @import("../canonicalize.zig");
@@ -154,7 +155,7 @@ pub const ReportBuilder = struct {
 
     gpa: Allocator,
     buf: std.ArrayList(u8),
-    module_env: *const base.ModuleEnv,
+    module_env: *const compile.ModuleEnv,
     can_ir: *const can.CIR,
     snapshots: *const snapshot.Store,
     source: []const u8,
@@ -165,7 +166,7 @@ pub const ReportBuilder = struct {
     /// Only owned field is `buf`
     pub fn init(
         gpa: Allocator,
-        module_env: *const base.ModuleEnv,
+        module_env: *const compile.ModuleEnv,
         can_ir: *const can.CIR,
         snapshots: *const snapshot.Store,
         filename: []const u8,

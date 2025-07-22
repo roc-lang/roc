@@ -3,6 +3,7 @@ const std = @import("std");
 const testing = std.testing;
 const eval = @import("interpreter.zig");
 const base = @import("base");
+const compile = @import("compile");
 const parse = @import("../check/parse.zig");
 const canonicalize = @import("../check/canonicalize.zig");
 const check_types = @import("../check/check_types.zig");
@@ -15,7 +16,7 @@ const layout = @import("../layout/layout.zig");
 const test_allocator = testing.allocator;
 
 fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
-    module_env: *base.ModuleEnv,
+    module_env: *compile.ModuleEnv,
     parse_ast: *parse.AST,
     cir: *CIR,
     can: *canonicalize,
@@ -23,8 +24,8 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     expr_idx: CIR.Expr.Idx,
 } {
     // Initialize the ModuleEnv
-    const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(allocator, source);
+    const module_env = try allocator.create(compile.ModuleEnv);
+    module_env.* = try compile.ModuleEnv.init(allocator, source);
 
     // Parse the source code as an expression
     const parse_ast = try allocator.create(parse.AST);

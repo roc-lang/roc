@@ -4,6 +4,7 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
+const compile = @import("compile");
 const cache = @import("../cache/mod.zig");
 const collections = @import("collections");
 const Can = @import("../check/canonicalize.zig");
@@ -110,7 +111,7 @@ fn loadOrCompileCanIr(
         // this is temporary so we can generate error reporting and diagnostics/region info.
         // We should probably be reading the file on demand or something else. Leaving this
         // comment here so we discuss the plan and make the necessary changes.
-        var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var module_env = compile.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
         var parse_ir = parse.parse(&module_env);
         parse_ir.store.emptyScratch();
 

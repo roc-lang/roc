@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const base = @import("base");
+const compile = @import("compile");
 const tracy = @import("tracy.zig");
 const parse = @import("check/parse.zig");
 const canonicalize = @import("check/canonicalize.zig");
@@ -12,7 +13,7 @@ const types_problem_mod = @import("check/check_types/problem.zig");
 const reporting = @import("reporting.zig");
 const Filesystem = @import("fs/Filesystem.zig");
 
-const ModuleEnv = base.ModuleEnv;
+const ModuleEnv = compile.ModuleEnv;
 const CIR = canonicalize.CIR;
 const AST = parse.AST;
 const cache_mod = @import("cache/mod.zig");

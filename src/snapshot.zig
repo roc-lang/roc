@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const compile = @import("compile");
 const canonicalize = @import("check/canonicalize.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const cache = @import("cache/mod.zig");
@@ -440,7 +441,7 @@ fn generateAllReports(
     can_ir: *CIR,
     solver: *Solver,
     snapshot_path: []const u8,
-    module_env: *base.ModuleEnv,
+    module_env: *compile.ModuleEnv,
 ) !std.ArrayList(reporting.Report) {
     var reports = std.ArrayList(reporting.Report).init(allocator);
     errdefer reports.deinit();
@@ -1017,7 +1018,7 @@ fn processSnapshotContent(
     }
 
     // Process the content through the compilation pipeline
-    var module_env = try base.ModuleEnv.init(allocator, content.source);
+    var module_env = try compile.ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
 
     // Parse the source code based on node type
@@ -1842,7 +1843,7 @@ fn generateProblemsSection(output: *DualOutput, reports: *const std.ArrayList(re
 }
 
 /// Generate TOKENS section for both markdown and HTML
-pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const Content, module_env: *base.ModuleEnv) !void {
+pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const Content, module_env: *compile.ModuleEnv) !void {
     try output.begin_section("TOKENS");
     try output.begin_code_block("zig");
 
@@ -1919,7 +1920,7 @@ fn source_contains_newline_in_range(source: []const u8, start: usize, end: usize
 }
 
 /// Generate PARSE2 section using SExprTree for both markdown and HTML
-fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *base.ModuleEnv) !void {
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *compile.ModuleEnv) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
 

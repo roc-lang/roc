@@ -5,6 +5,7 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
+const compile = @import("compile");
 const types = @import("types");
 const check_types = @import("../check_types.zig");
 const instantiate = @import("instantiate.zig");
@@ -17,14 +18,14 @@ const CIR = canonicalize.CIR;
 const test_allocator = testing.allocator;
 
 const TestEnv = struct {
-    module_env: *base.ModuleEnv,
+    module_env: *compile.ModuleEnv,
     store: *TypesStore,
     regions: *base.Region.List,
 };
 
 fn setupTestEnvironment(allocator: std.mem.Allocator) !TestEnv {
-    const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(allocator, "");
+    const module_env = try allocator.create(compile.ModuleEnv);
+    module_env.* = try compile.ModuleEnv.init(allocator, "");
 
     const store = try allocator.create(TypesStore);
     store.* = try TypesStore.init(allocator);

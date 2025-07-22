@@ -80,6 +80,9 @@ pub fn build(b: *std.Build) void {
     const module_builtins = b.addModule("builtins", std.Build.Module.CreateOptions{
         .root_source_file = b.path("src/builtins/mod.zig"),
     });
+    const module_compile = b.addModule("compile", std.Build.Module.CreateOptions{
+        .root_source_file = b.path("src/compile/mod.zig"),
+    });
 
     // Configure module dependencies
     module_collections.addImport("serialization", module_serialization);
@@ -92,12 +95,17 @@ pub fn build(b: *std.Build) void {
     module_types.addImport("base", module_base);
     module_types.addImport("collections", module_collections);
 
+    module_compile.addImport("base", module_base);
+    module_compile.addImport("types", module_types);
+    module_compile.addImport("collections", module_collections);
+
     // add main roc exe
     const roc_exe = addMainExe(b, build_options, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy, module_builtins) orelse return;
     roc_exe.root_module.addImport("base", module_base);
     roc_exe.root_module.addImport("collections", module_collections);
     roc_exe.root_module.addImport("types", module_types);
     roc_exe.root_module.addImport("serialization", module_serialization);
+    roc_exe.root_module.addImport("compile", module_compile);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step);
 
     // Add snapshot tool
@@ -112,6 +120,7 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.root_module.addImport("builtins", module_builtins);
     snapshot_exe.root_module.addImport("types", module_types);
     snapshot_exe.root_module.addImport("collections", module_collections);
+    snapshot_exe.root_module.addImport("compile", module_compile);
     add_tracy(b, build_options, snapshot_exe, target, false, tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 
@@ -132,6 +141,7 @@ pub fn build(b: *std.Build) void {
     playground_exe.root_module.addOptions("build_options", build_options);
     playground_exe.root_module.addImport("types", module_types);
     playground_exe.root_module.addImport("collections", module_collections);
+    playground_exe.root_module.addImport("compile", module_compile);
 
     add_tracy(b, build_options, playground_exe, b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -154,6 +164,7 @@ pub fn build(b: *std.Build) void {
     all_tests.root_module.addImport("types", module_types);
     all_tests.root_module.addImport("collections", module_collections);
     all_tests.root_module.addImport("serialization", module_serialization);
+    all_tests.root_module.addImport("compile", module_compile);
 
     const builtins_tests = b.addTest(.{
         .root_source_file = b.path("src/builtins/main.zig"),
@@ -237,6 +248,7 @@ pub fn build(b: *std.Build) void {
             module_base,
             module_types,
             module_collections,
+            module_compile,
         );
     }
 }
@@ -256,6 +268,7 @@ fn add_fuzz_target(
     module_base: *std.Build.Module,
     module_types: *std.Build.Module,
     module_collections: *std.Build.Module,
+    module_compile: *std.Build.Module,
 ) void {
     // We always include the repro scripts (no dependencies).
     // We only include the fuzzing scripts if `-Dfuzz` is set.
@@ -271,6 +284,7 @@ fn add_fuzz_target(
     fuzz_obj.root_module.addImport("base", module_base);
     fuzz_obj.root_module.addImport("types", module_types);
     fuzz_obj.root_module.addImport("collections", module_collections);
+    fuzz_obj.root_module.addImport("compile", module_compile);
     add_tracy(b, build_options, fuzz_obj, target, false, tracy);
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
