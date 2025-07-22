@@ -266,9 +266,7 @@ pub const Repl = struct {
         parse_ast.store.emptyScratch();
 
         // Create CIR
-        var cir = CIR.init(&module_env, "repl") catch |err| {
-            return try std.fmt.allocPrint(self.allocator, "CIR init error: {}", .{err});
-        };
+        var cir = try CIR.init(self.allocator, "repl");
         defer cir.deinit();
 
         // Create canonicalizer
@@ -502,7 +500,7 @@ test "Repl - minimal interpreter integration" {
     parse_ast.store.emptyScratch();
 
     // Step 3: Create CIR
-    var cir = try CIR.init(&module_env, "test");
+    var cir = try CIR.init(allocator, "test");
     defer cir.deinit();
 
     // Step 4: Canonicalize

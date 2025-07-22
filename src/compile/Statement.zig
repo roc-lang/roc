@@ -1,5 +1,5 @@
 //! This module defines the `Statement` type, which represents all possible statement forms
-//! in the Canonical Intermediate Representation (CIR) of the Roc compiler. Statements are
+//! in the Canonical Intermediate Representation (ModuleEnv) of the Roc compiler. Statements are
 //! produced during the canonicalization phase, after parsing and semantic analysis, and
 //! serve as the structured, type-aware building blocks for Roc program logic.
 //!
@@ -7,14 +7,14 @@
 //! immutable and mutable declarations, reassignments, expressions, control flow constructs
 //! (such as `for`, `return`, and `crash`), imports, type declarations, and type annotations.
 //!
-//! The CIR `Statement` is used both at the module top level and within block expressions,
+//! The ModuleEnv `Statement` is used both at the module top level and within block expressions,
 //! and is designed to support robust error recovery and diagnostics, in line with Roc's
 //! "inform, don't block" compilation philosophy.
 
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const CIR = @import("compile").ModuleEnv;
+const ModuleEnv = @import("ModuleEnv.zig");
 
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
@@ -22,8 +22,8 @@ const Ident = base.Ident;
 const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
-const Pattern = CIR.Pattern;
-const Expr = CIR.Expr;
+const Pattern = ModuleEnv.Pattern;
+const Expr = ModuleEnv.Expr;
 
 /// A single statement - either at the top-level or within a block expression.
 pub const Statement = union(enum) {
@@ -124,25 +124,25 @@ pub const Statement = union(enum) {
         module_name_tok: Ident.Idx,
         qualifier_tok: ?Ident.Idx,
         alias_tok: ?Ident.Idx,
-        exposes: CIR.ExposedItem.Span,
+        exposes: ModuleEnv.ExposedItem.Span,
     },
     /// An alias type declaration, e.g., `Foo : Str`
     ///
     /// Only valid at the top level of a module
     s_alias_decl: struct {
-        header: CIR.TypeHeader.Idx,
-        anno: CIR.TypeAnno.Idx,
+        header: ModuleEnv.TypeHeader.Idx,
+        anno: ModuleEnv.TypeAnno.Idx,
         anno_var: types.Var,
-        where: ?CIR.WhereClause.Span,
+        where: ?ModuleEnv.WhereClause.Span,
     },
     /// A nominal type declaration, e.g., `Foo := (U64, Str)`
     ///
     /// Only valid at the top level of a module
     s_nominal_decl: struct {
-        header: CIR.TypeHeader.Idx,
-        anno: CIR.TypeAnno.Idx,
+        header: ModuleEnv.TypeHeader.Idx,
+        anno: ModuleEnv.TypeAnno.Idx,
         anno_var: types.Var,
-        where: ?CIR.WhereClause.Span,
+        where: ?ModuleEnv.WhereClause.Span,
     },
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     ///
@@ -151,14 +151,14 @@ pub const Statement = union(enum) {
     /// ```
     s_type_anno: struct {
         name: Ident.Idx,
-        anno: CIR.TypeAnno.Idx,
-        where: ?CIR.WhereClause.Span,
+        anno: ModuleEnv.TypeAnno.Idx,
+        where: ?ModuleEnv.WhereClause.Span,
     },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, stmt_idx: Statement.Idx) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, stmt_idx: Statement.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .s_decl => |d| {
                 const begin = tree.beginNode();

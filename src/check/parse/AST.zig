@@ -16,7 +16,7 @@ const base = @import("base");
 const compile = @import("compile");
 const tokenize = @import("tokenize.zig");
 const collections = @import("collections");
-const reporting = @import("../../reporting.zig");
+const reporting = @import("reporting");
 
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");

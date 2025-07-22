@@ -7,13 +7,13 @@ const tracy = @import("../../tracy.zig");
 const collections = @import("collections");
 const can = @import("../canonicalize.zig");
 const types_mod = @import("types");
-const reporting = @import("../../reporting.zig");
+const reporting = @import("reporting");
 const snapshot = @import("./snapshot.zig");
 
 const Report = reporting.Report;
 const Document = reporting.Document;
-const UnderlineRegion = @import("../../reporting/document.zig").UnderlineRegion;
-const SourceCodeDisplayRegion = @import("../../reporting/document.zig").SourceCodeDisplayRegion;
+const UnderlineRegion = reporting.UnderlineRegion;
+const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
 
 const CIR = can.CIR;
 const TypesStore = types_mod.Store;

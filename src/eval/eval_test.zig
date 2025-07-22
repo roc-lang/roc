@@ -36,7 +36,7 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
 
     // Create CIR
     const cir = try allocator.create(CIR);
-    cir.* = try CIR.init(module_env, "test");
+    cir.* = try CIR.init(allocator, "test");
 
     // Create canonicalizer
     const can = try allocator.create(canonicalize);

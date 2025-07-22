@@ -350,7 +350,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Stage 2: Canonicalization (always run, even with parse errors)
     // The canonicalizer handles malformed parse nodes and continues processing
     // Initialize CIR directly in result to ensure stable pointer
-    result.can_ir = try can.CIR.init(module_env, "main");
+    result.can_ir = try can.CIR.init(allocator, "main");
     var can_ir = &result.can_ir.?;
 
     var canonicalizer = try can.init(can_ir, &parse_ast, null);

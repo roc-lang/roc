@@ -316,10 +316,10 @@ pub const CacheModule = struct {
             // Initialize CIR fields with default values for now
             .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
             .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
-            .external_decls = try compile.cir_types.ExternalDecl.SafeList.initCapacity(allocator, 16),
-            .imports = compile.cir_types.Import.Store.init(),
+            .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(allocator, 16),
+            .imports = CIR.Import.Store.init(),
             .module_name = "", // Will be set from cache data
-            .diagnostics = null,
+            .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
             .store = undefined, // Will be set from cache data
         };
         errdefer module_env.deinit();
@@ -331,22 +331,18 @@ pub const CacheModule = struct {
         );
         errdefer external_decls.deinit(allocator);
 
-        // Create result struct
-        var result = RestoredData{
-            .module_env = module_env,
-            .cir = CIR{
-                .env = undefined, // Will be set below
-                .store = node_store,
-                .all_defs = self.header.all_defs,
-                .all_statements = self.header.all_statements,
-                .external_decls = external_decls,
-                .imports = CIR.Import.Store.init(),
-                .module_name = module_name,
-            },
-        };
+        // Update module_env with the remaining fields
+        module_env.store = node_store;
+        module_env.all_defs = self.header.all_defs;
+        module_env.all_statements = self.header.all_statements;
+        module_env.external_decls = external_decls;
+        module_env.module_name = module_name;
 
-        // Fix env pointer to point to the correct module_env location
-        result.cir.env = &result.module_env;
+        // Create result struct
+        const result = RestoredData{
+            .module_env = module_env,
+            .cir = module_env, // CIR is now just an alias for ModuleEnv
+        };
 
         return result;
     }
@@ -616,7 +612,7 @@ test "create and restore cache" {
     var module_env = try compile.ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 
-    var cir = try CIR.init(&module_env, "TestModule");
+    var cir = try CIR.init(gpa, "TestModule");
     defer cir.deinit();
 
     // Parse and canonicalize
@@ -692,7 +688,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     var module_env = try compile.ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 
-    var cir = try CIR.init(&module_env, "TestModule");
+    var cir = try CIR.init(gpa, "TestModule");
     defer cir.deinit();
 
     // Parse and canonicalize

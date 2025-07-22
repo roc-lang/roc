@@ -25,7 +25,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const CIR = @import("../check/canonicalize/CIR.zig");
+const CIR = @import("compile").ModuleEnv;
 const types = @import("types");
 const layout = @import("../layout/layout.zig");
 const build_options = @import("build_options");

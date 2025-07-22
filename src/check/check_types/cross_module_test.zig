@@ -24,7 +24,7 @@ test "cross-module type checking - monomorphic function" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     // Create a simple integer expression as a placeholder
@@ -57,7 +57,7 @@ test "cross-module type checking - monomorphic function" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Register the import of module A
@@ -114,7 +114,7 @@ test "cross-module type checking - polymorphic function" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     // Create a simple integer expression as a placeholder
@@ -143,7 +143,7 @@ test "cross-module type checking - polymorphic function" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Register the import of module A
@@ -193,7 +193,7 @@ test "cross-module type checking - record type" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     // Create a simple integer expression as a placeholder
@@ -243,7 +243,7 @@ test "cross-module type checking - record type" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Register the import of module A
@@ -301,7 +301,7 @@ test "cross-module type checking - type mismatch error" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     // Create an I32 type
@@ -320,7 +320,7 @@ test "cross-module type checking - type mismatch error" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Register the import of module A
@@ -379,7 +379,7 @@ test "cross-module type checking - polymorphic instantiation" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     // Store this as an integer literal expression (placeholder)
@@ -403,7 +403,7 @@ test "cross-module type checking - polymorphic instantiation" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Register the import of module A
@@ -472,7 +472,7 @@ test "cross-module type checking - preserves module A types" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     // Create a flex var in module A
@@ -496,7 +496,7 @@ test "cross-module type checking - preserves module A types" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Register the import of module A
@@ -556,7 +556,7 @@ test "cross-module type checking - three module chain monomorphic" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     const func_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
@@ -581,7 +581,7 @@ test "cross-module type checking - three module chain monomorphic" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Module B imports A's function
@@ -599,7 +599,7 @@ test "cross-module type checking - three module chain monomorphic" {
     var module_c_env = try compile.ModuleEnv.init(allocator, "");
     defer module_c_env.deinit();
 
-    var module_c_cir = try CIR.init(&module_c_env, "ModuleC");
+    var module_c_cir = try CIR.init(allocator, "ModuleC");
     defer module_c_cir.deinit();
 
     // Module C imports from B (not A)
@@ -666,7 +666,7 @@ test "cross-module type checking - three module chain polymorphic" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     const func_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
@@ -686,7 +686,7 @@ test "cross-module type checking - three module chain polymorphic" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Module B imports from A
@@ -703,7 +703,7 @@ test "cross-module type checking - three module chain polymorphic" {
     var module_c_env = try compile.ModuleEnv.init(allocator, "");
     defer module_c_env.deinit();
 
-    var module_c_cir = try CIR.init(&module_c_env, "ModuleC");
+    var module_c_cir = try CIR.init(allocator, "ModuleC");
     defer module_c_cir.deinit();
 
     // Module C imports from B
@@ -763,7 +763,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     const map_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
@@ -799,7 +799,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Module B imports from A
@@ -847,7 +847,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     var module_c_env = try compile.ModuleEnv.init(allocator, "");
     defer module_c_env.deinit();
 
-    var module_c_cir = try CIR.init(&module_c_env, "ModuleC");
+    var module_c_cir = try CIR.init(allocator, "ModuleC");
     defer module_c_cir.deinit();
 
     // Module C imports from B and uses the partially specialized function
@@ -944,7 +944,7 @@ test "cross-module type checking - record type chain" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     const record_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
@@ -982,7 +982,7 @@ test "cross-module type checking - record type chain" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Module B imports from A and partially specializes
@@ -999,7 +999,7 @@ test "cross-module type checking - record type chain" {
     var module_c_env = try compile.ModuleEnv.init(allocator, "");
     defer module_c_env.deinit();
 
-    var module_c_cir = try CIR.init(&module_c_env, "ModuleC");
+    var module_c_cir = try CIR.init(allocator, "ModuleC");
     defer module_c_cir.deinit();
 
     // Module C imports from B
@@ -1070,7 +1070,7 @@ test "cross-module type checking - polymorphic record chain" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     const record_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
@@ -1107,7 +1107,7 @@ test "cross-module type checking - polymorphic record chain" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Module B imports from A
@@ -1159,7 +1159,7 @@ test "cross-module type checking - polymorphic record chain" {
     var module_c_env = try compile.ModuleEnv.init(allocator, "");
     defer module_c_env.deinit();
 
-    var module_c_cir = try CIR.init(&module_c_env, "ModuleC");
+    var module_c_cir = try CIR.init(allocator, "ModuleC");
     defer module_c_cir.deinit();
 
     // Module C imports from B
@@ -1234,7 +1234,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     const compose_expr_idx = try module_a_cir.store.addExpr(.{ .e_int = .{
@@ -1271,7 +1271,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Module B imports from A and makes a new record type
@@ -1323,7 +1323,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     var module_c_env = try compile.ModuleEnv.init(allocator, "");
     defer module_c_env.deinit();
 
-    var module_c_cir = try CIR.init(&module_c_env, "ModuleC");
+    var module_c_cir = try CIR.init(allocator, "ModuleC");
     defer module_c_cir.deinit();
 
     // Module C imports from B and uses the wrapper
@@ -1458,7 +1458,7 @@ test "cross-module type checking - type mismatch with proper error message" {
     var module_a_env = try compile.ModuleEnv.init(allocator, "");
     defer module_a_env.deinit();
 
-    var module_a_cir = try CIR.init(&module_a_env, "ModuleA");
+    var module_a_cir = try CIR.init(allocator, "ModuleA");
     defer module_a_cir.deinit();
 
     // Create a string value in module A
@@ -1475,7 +1475,7 @@ test "cross-module type checking - type mismatch with proper error message" {
     var module_b_env = try compile.ModuleEnv.init(allocator, "");
     defer module_b_env.deinit();
 
-    var module_b_cir = try CIR.init(&module_b_env, "ModuleB");
+    var module_b_cir = try CIR.init(allocator, "ModuleB");
     defer module_b_cir.deinit();
 
     // Create an import expression that references module A's string

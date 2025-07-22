@@ -6,7 +6,7 @@ const compile = @import("compile");
 const parse = @import("./parse.zig");
 const canonicalize = @import("./canonicalize.zig");
 const types = @import("types");
-const CIR = @import("./canonicalize/CIR.zig");
+const CIR = @import("compile").ModuleEnv;
 
 test "canonicalize True as Bool" {
     const allocator = testing.allocator;
@@ -22,7 +22,7 @@ test "canonicalize True as Bool" {
     parse_ast.store.emptyScratch();
 
     // Create CIR
-    var cir = try CIR.init(&module_env, "test");
+    var cir = try CIR.init(allocator, "test");
     defer cir.deinit();
 
     // Canonicalize
@@ -62,7 +62,7 @@ test "canonicalize False as Bool" {
     parse_ast.store.emptyScratch();
 
     // Create CIR
-    var cir = try CIR.init(&module_env, "test");
+    var cir = try CIR.init(allocator, "test");
     defer cir.deinit();
 
     // Canonicalize
@@ -102,7 +102,7 @@ test "canonicalize random tag not as Bool" {
     parse_ast.store.emptyScratch();
 
     // Create CIR
-    var cir = try CIR.init(&module_env, "test");
+    var cir = try CIR.init(allocator, "test");
     defer cir.deinit();
 
     // Canonicalize

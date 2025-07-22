@@ -3,32 +3,22 @@
 
 const std = @import("std");
 const testing = std.testing;
-const document = @import("document.zig");
-const report = @import("report.zig");
-const renderer = @import("renderer.zig");
-const severity = @import("severity.zig");
-const config = @import("config.zig");
-const style = @import("style.zig");
+const reporting = @import("reporting");
+const document = reporting.Document;
+const report = reporting.Report;
+const severity = reporting.Severity;
+const RenderTarget = reporting.RenderTarget;
 
 const Allocator = std.mem.Allocator;
-const Document = document.Document;
-const DocumentBuilder = document.DocumentBuilder;
-const Annotation = document.Annotation;
-const DocumentElement = document.DocumentElement;
-const SourceRegion = document.SourceRegion;
-const Report = report.Report;
-const Severity = severity.Severity;
-const ReportingConfig = config.ReportingConfig;
-const ColorPalette = style.ColorPalette;
+const Document = reporting.Document;
+const Annotation = reporting.Annotation;
+const Report = reporting.Report;
+const ReportingConfig = reporting.ReportingConfig;
+const ColorPalette = reporting.ColorPalette;
 
 test {
-    // Reference all declarations in reporting modules
-    testing.refAllDeclsRecursive(@import("renderer.zig"));
-    testing.refAllDeclsRecursive(@import("report.zig"));
-    testing.refAllDeclsRecursive(@import("document.zig"));
-    testing.refAllDeclsRecursive(@import("style.zig"));
-    testing.refAllDeclsRecursive(@import("severity.zig"));
-    testing.refAllDeclsRecursive(@import("config.zig"));
+    // Reference all declarations in reporting modules  
+    testing.refAllDeclsRecursive(reporting);
 }
 
 // Test cases for canonicalize error reports
@@ -48,7 +38,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     try testing.expect(!r.document.isEmpty());
 
     // Markdown
-    try renderer.renderReportToMarkdown(&r, buffer.writer(), renderer.ReportingConfig.initMarkdown());
+    try reporting.renderReportToMarkdown(&r, buffer.writer(), ReportingConfig.initMarkdown());
 
     const expected =
         \\**SYNTAX PROBLEM**
@@ -68,7 +58,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     // HTML
     buffer.clearRetainingCapacity();
 
-    try renderer.renderReportToHtml(&r, buffer.writer(), renderer.ReportingConfig.initHtml());
+    try reporting.renderReportToHtml(&r, buffer.writer(), ReportingConfig.initHtml());
 
     const expected_html =
         \\<div class="report error">
@@ -85,7 +75,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     // Language Server Protocol
     buffer.clearRetainingCapacity();
 
-    try renderer.renderReportToLsp(&r, buffer.writer(), renderer.ReportingConfig.initLsp());
+    try reporting.renderReportToLsp(&r, buffer.writer(), ReportingConfig.initLsp());
 
     const expected_lsp =
         \\SYNTAX PROBLEM
@@ -100,7 +90,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     // Terminal (TTY)
     buffer.clearRetainingCapacity();
 
-    try renderer.renderReportToTerminal(&r, buffer.writer(), ColorPalette.ANSI, renderer.ReportingConfig.initColorTerminal());
+    try reporting.renderReportToTerminal(&r, buffer.writer(), ColorPalette.ANSI, ReportingConfig.initColorTerminal());
 
     // let's forget about comparing with ansi escape codes present... doesn't seem worth the effort.
     // we'll have to QA the old fashioned way.

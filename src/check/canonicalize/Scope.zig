@@ -3,7 +3,7 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
-const CIR = @import("CIR.zig");
+const CIR = @import("compile").ModuleEnv;
 
 const Ident = base.Ident;
 

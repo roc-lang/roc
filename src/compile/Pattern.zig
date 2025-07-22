@@ -17,9 +17,9 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const CIR = @import("compile").ModuleEnv;
+const ModuleEnv = @import("ModuleEnv.zig");
 const collections = @import("collections");
-const Diagnostic = @import("Diagnostic.zig").Diagnostic;
+const Diagnostic = ModuleEnv.Diagnostic;
 
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
@@ -28,9 +28,9 @@ const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
-const Expr = CIR.Expr;
-const IntValue = CIR.IntValue;
-const RocDec = CIR.RocDec;
+const Expr = ModuleEnv.Expr;
+const IntValue = ModuleEnv.IntValue;
+const RocDec = ModuleEnv.RocDec;
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -72,7 +72,7 @@ pub const Pattern = union(enum) {
     /// Point.(1.0)                # Values
     /// ```
     nominal: struct {
-        nominal_type_decl: CIR.Statement.Idx,
+        nominal_type_decl: ModuleEnv.Statement.Idx,
         backing_pattern: Pattern.Idx,
         backing_type: Expr.NominalBackingType,
     },
@@ -225,7 +225,7 @@ pub const Pattern = union(enum) {
             /// ```
             SubPattern: Pattern.Idx,
 
-            pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) std.mem.Allocator.Error!void {
+            pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree) std.mem.Allocator.Error!void {
                 switch (self.*) {
                     .Required => {
                         const begin = tree.beginNode();
@@ -245,7 +245,7 @@ pub const Pattern = union(enum) {
             }
         };
 
-        pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, destruct_idx: RecordDestruct.Idx) std.mem.Allocator.Error!void {
+        pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, destruct_idx: RecordDestruct.Idx) std.mem.Allocator.Error!void {
             const begin = tree.beginNode();
             try tree.pushStaticAtom("record-destruct");
             try ir.appendRegionInfoToSExprTree(tree, destruct_idx);
@@ -261,7 +261,7 @@ pub const Pattern = union(enum) {
         }
     };
 
-    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .assign => |p| {
                 const begin = tree.beginNode();

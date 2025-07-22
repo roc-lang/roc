@@ -76,7 +76,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var env = compile.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = try CIR.init(allocator, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, &module_envs);
@@ -161,7 +161,7 @@ test "import validation - no module_envs provided" {
     var env = compile.ModuleEnv.init(allocator, "");
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = try CIR.init(allocator, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -215,7 +215,7 @@ test "import interner - Import.Idx functionality" {
     var env = compile.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = try CIR.init(allocator, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -303,7 +303,7 @@ test "import interner - comprehensive usage example" {
     var env = compile.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = try CIR.init(allocator, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -400,7 +400,7 @@ test "module scopes - imports are only available in their scope" {
     var env = compile.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = try CIR.init(allocator, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -463,7 +463,7 @@ test "module-qualified lookups with e_lookup_external" {
     var env = compile.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = try CIR.init(allocator, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -559,7 +559,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     var env = compile.ModuleEnv.init(allocator, "");
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = try CIR.init(allocator, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, &module_envs);
@@ -627,7 +627,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     env2.source = try allocator.dupe(u8, source2);
     env2.owns_source = true;
     try env2.calcLineStarts(source2);
-    var cir2 = CIR.init(&env2);
+    var cir2 = try CIR.init(allocator, "Test");
     defer cir2.deinit();
 
     var canonicalizer2 = try canonicalize.init(&cir2, &ast2, &module_envs);
@@ -666,7 +666,7 @@ test "export count safety - ensures safe u16 casting" {
     // Test the diagnostic for exactly maxInt(u16) exports
     var env1 = compile.ModuleEnv.init(allocator, "");
     defer env1.deinit();
-    var cir1 = CIR.init(&env1);
+    var cir1 = try CIR.init(allocator, "Test");
     defer cir1.deinit();
 
     const diag_at_limit = CIR.Diagnostic{
@@ -689,7 +689,7 @@ test "export count safety - ensures safe u16 casting" {
     // Test the diagnostic for exceeding the limit
     var env2 = compile.ModuleEnv.init(allocator, "");
     defer env2.deinit();
-    var cir2 = CIR.init(&env2);
+    var cir2 = try CIR.init(allocator, "Test");
     defer cir2.deinit();
 
     const diag_over_limit = CIR.Diagnostic{

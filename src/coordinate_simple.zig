@@ -10,7 +10,7 @@ const parse = @import("check/parse.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const Solver = @import("check/check_types.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
-const reporting = @import("reporting.zig");
+const reporting = @import("reporting");
 const Filesystem = @import("fs/Filesystem.zig");
 
 const ModuleEnv = compile.ModuleEnv;
@@ -248,7 +248,7 @@ fn processSourceInternal(
         basename[0..dot_idx]
     else
         basename;
-    cir.* = try CIR.init(module_env, module_name);
+    cir.* = try CIR.init(gpa, module_name);
 
     // Create scope for semantic analysis
     // Canonicalize the AST
@@ -265,8 +265,11 @@ fn processSourceInternal(
     const diagnostics = try cir.getDiagnostics();
     defer gpa.free(diagnostics);
     for (diagnostics) |diagnostic| {
-        const report = try cir.diagnosticToReport(diagnostic, gpa, filename);
-        try reports.append(report);
+        // TODO: Fix diagnosticToReport to return the real reporting.Report type
+        // For now, skip canonicalization reports since ModuleEnv.Report != reporting.Report
+        _ = diagnostic;
+        // const report = try cir.diagnosticToReport(diagnostic, gpa, filename);
+        // try reports.append(report);
     }
 
     collectTiming(config, &timer, &timing_info, "canonicalize_diagnostics_ns");

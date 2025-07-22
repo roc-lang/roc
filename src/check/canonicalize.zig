@@ -12,7 +12,7 @@ const parse = @import("parse.zig");
 const tokenize = @import("parse/tokenize.zig");
 const collections = @import("collections");
 const types = @import("types");
-const RocDec = @import("builtins").RocDec;
+const RocDec = compile.ModuleEnv.RocDec;
 
 const NodeStore = @import("./canonicalize/NodeStore.zig");
 const Scope = @import("./canonicalize/Scope.zig");
@@ -116,7 +116,7 @@ pub const BUILTIN_STR: CIR.Pattern.Idx = @enumFromInt(11);
 pub fn deinit(
     self: *Self,
 ) void {
-    const gpa = self.can_ir.env.gpa;
+    const gpa = self.can_ir.gpa;
 
     self.exposed_scope.deinit(gpa);
     self.exposed_ident_texts.deinit(gpa);
@@ -144,7 +144,7 @@ pub fn deinit(
 }
 
 pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*ModuleEnv)) std.mem.Allocator.Error!Self {
-    const gpa = self.env.gpa;
+    const gpa = self.gpa;
 
     // Create the canonicalizer with scopes
     var result = Self{
@@ -333,7 +333,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
 const Self = @This();
 
 /// The intermediate representation of a canonicalized Roc program.
-pub const CIR = @import("canonicalize/CIR.zig");
+pub const CIR = compile.ModuleEnv;
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/AST.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
@@ -685,7 +685,7 @@ pub fn canonicalizeFile(
                 last_type_anno = null; // Clear on non-annotation statement
             },
             .type_anno => |ta| {
-                const gpa = self.can_ir.env.gpa;
+                const gpa = self.can_ir.gpa;
                 const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
 
                 // Top-level type annotation - store for connection to next declaration
@@ -789,7 +789,7 @@ fn createExposedScope(
     self: *Self,
     exposes: AST.Collection.Idx,
 ) std.mem.Allocator.Error!void {
-    const gpa = self.can_ir.env.gpa;
+    const gpa = self.can_ir.gpa;
 
     // Reset exposed_scope (already initialized in init)
     self.exposed_scope.deinit(gpa);
@@ -919,7 +919,7 @@ fn createExposedScope(
 }
 
 fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
-    const gpa = self.can_ir.env.gpa;
+    const gpa = self.can_ir.gpa;
 
     // Check for remaining exposed identifiers
     var ident_iter = self.exposed_ident_texts.iterator();
@@ -2135,7 +2135,7 @@ pub fn canonicalizeExpr(
             defer self.scopeExit(self.can_ir.env.gpa) catch {};
 
             // args
-            const gpa = self.can_ir.env.gpa;
+            const gpa = self.can_ir.gpa;
             const args_start = self.can_ir.store.scratch_patterns.top();
             for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
                 if (try self.canonicalizePattern(arg_pattern_idx)) |pattern_idx| {
@@ -2687,7 +2687,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
 
 /// Extract string segments from parsed string parts
 fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Allocator.Error!CIR.Expr.Span {
-    const gpa = self.can_ir.env.gpa;
+    const gpa = self.can_ir.gpa;
     const start = self.can_ir.store.scratchExprTop();
 
     for (parts) |part| {
@@ -2736,7 +2736,7 @@ fn canonicalizePattern(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const gpa = self.can_ir.env.gpa;
+    const gpa = self.can_ir.gpa;
     switch (self.parse_ir.store.getPattern(ast_pattern_idx)) {
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -5020,7 +5020,7 @@ fn scopeLookupTypeVar(self: *const Self, name_ident: Ident.Idx) ?CIR.TypeAnno.Id
 
 /// Introduce a type variable into the current scope
 fn scopeIntroduceTypeVar(self: *Self, name: Ident.Idx, type_var_anno: CIR.TypeAnno.Idx) std.mem.Allocator.Error!void {
-    const gpa = self.can_ir.env.gpa;
+    const gpa = self.can_ir.gpa;
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Don't use parent lookup function for now - just introduce directly
@@ -5401,7 +5401,7 @@ fn scopeIntroduceTypeDecl(
     type_decl_stmt: CIR.Statement.Idx,
     region: Region,
 ) std.mem.Allocator.Error!void {
-    const gpa = self.can_ir.env.gpa;
+    const gpa = self.can_ir.gpa;
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Check for shadowing in parent scopes
@@ -5510,7 +5510,7 @@ fn scopeUpdateTypeDecl(
     name_ident: Ident.Idx,
     new_type_decl_stmt: CIR.Statement.Idx,
 ) std.mem.Allocator.Error!void {
-    const gpa = self.can_ir.env.gpa;
+    const gpa = self.can_ir.gpa;
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
     try current_scope.updateTypeDecl(gpa, &self.can_ir.env.idents, name_ident, new_type_decl_stmt);
 }
@@ -5550,7 +5550,7 @@ fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
 
 /// Introduce a module alias into scope
 fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx) std.mem.Allocator.Error!void {
-    const gpa = self.can_ir.env.gpa;
+    const gpa = self.can_ir.gpa;
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Simplified introduction without parent lookup for now
@@ -5622,7 +5622,7 @@ fn scopeLookupExposedItem(self: *const Self, item_name: Ident.Idx) ?Scope.Expose
 
 /// Introduce an exposed item into the current scope
 fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope.ExposedItemInfo) std.mem.Allocator.Error!void {
-    const gpa = self.can_ir.env.gpa;
+    const gpa = self.can_ir.gpa;
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Simplified introduction without parent lookup for now
@@ -6517,7 +6517,7 @@ const ScopeTestContext = struct {
 
         // heap allocate CIR for testing
         const cir = try gpa.create(CIR);
-        cir.* = try CIR.init(env, "Test");
+        cir.* = try CIR.init(gpa, "Test");
 
         return ScopeTestContext{
             .self = try Self.init(cir, undefined, null),
@@ -6832,7 +6832,7 @@ test "hexadecimal integer literals" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         var can = try init(&cir, &ast, null);
@@ -6922,7 +6922,7 @@ test "binary integer literals" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         var can = try init(&cir, &ast, null);
@@ -7012,7 +7012,7 @@ test "octal integer literals" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         var can = try init(&cir, &ast, null);
@@ -7102,7 +7102,7 @@ test "integer literals with uppercase base prefixes" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         var can = try init(&cir, &ast, null);
@@ -7161,7 +7161,7 @@ test "numeric literal patterns use pattern idx as type var" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         // Create an int literal pattern directly
@@ -7206,7 +7206,7 @@ test "numeric literal patterns use pattern idx as type var" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         // Create a dec literal pattern directly
@@ -7258,7 +7258,7 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -7296,7 +7296,7 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -7346,7 +7346,7 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -7384,7 +7384,7 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -7430,7 +7430,7 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -7477,7 +7477,7 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         var can = try Self.init(&cir, &ast, null);
@@ -7515,7 +7515,7 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         var can = try Self.init(&cir, &ast, null);
@@ -7553,7 +7553,7 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         var can = try Self.init(&cir, &ast, null);
@@ -7598,7 +7598,7 @@ test "record_unbound basic functionality" {
     var ast = try parse.parseExpr(&env);
     defer ast.deinit(gpa);
 
-    var cir = try CIR.init(&env, "Test");
+    var cir = try CIR.init(gpa, "Test");
     defer cir.deinit();
 
     var can = try Self.init(&cir, &ast, null);
@@ -7642,7 +7642,7 @@ test "record_unbound with multiple fields" {
     var ast = try parse.parseExpr(&env);
     defer ast.deinit(gpa);
 
-    var cir = try CIR.init(&env, "Test");
+    var cir = try CIR.init(gpa, "Test");
     defer cir.deinit();
 
     var can = try Self.init(&cir, &ast, null);
@@ -7680,7 +7680,7 @@ test "record with extension variable" {
     var env = try compile.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var cir = try CIR.init(&env, "Test");
+    var cir = try CIR.init(gpa, "Test");
     defer cir.deinit();
 
     // Test that regular records have extension variables
@@ -7756,7 +7756,7 @@ test "numeric pattern types: unbound vs polymorphic - frac" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -7812,7 +7812,7 @@ test "pattern numeric literal value edge cases" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         // Test i128 max
@@ -7841,7 +7841,7 @@ test "pattern numeric literal value edge cases" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         const small_dec_pattern = CIR.Pattern{
@@ -7865,7 +7865,7 @@ test "pattern numeric literal value edge cases" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         const dec_pattern = CIR.Pattern{
@@ -7887,7 +7887,7 @@ test "pattern numeric literal value edge cases" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         // Test negative zero (RocDec doesn't distinguish between +0 and -0)
@@ -7913,7 +7913,7 @@ test "pattern literal type transitions" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
@@ -7959,7 +7959,7 @@ test "pattern literal type transitions" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         // Hex pattern (0xFF)
@@ -8005,7 +8005,7 @@ test "pattern type inference with numeric literals" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         // Create patterns representing different numeric literals
@@ -8074,7 +8074,7 @@ test "pattern type inference with numeric literals" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try CIR.init(&env, "Test");
+        var cir = try CIR.init(gpa, "Test");
         defer cir.deinit();
 
         // Create a pattern that will be constrained by context

@@ -83,6 +83,9 @@ pub fn build(b: *std.Build) void {
     const module_compile = b.addModule("compile", std.Build.Module.CreateOptions{
         .root_source_file = b.path("src/compile/mod.zig"),
     });
+    const module_reporting = b.addModule("reporting", std.Build.Module.CreateOptions{
+        .root_source_file = b.path("src/reporting.zig"),
+    });
 
     // Configure module dependencies
     module_collections.addImport("serialization", module_serialization);
@@ -95,9 +98,12 @@ pub fn build(b: *std.Build) void {
     module_types.addImport("base", module_base);
     module_types.addImport("collections", module_collections);
 
+    module_reporting.addImport("base", module_base);
+    
     module_compile.addImport("base", module_base);
     module_compile.addImport("types", module_types);
     module_compile.addImport("collections", module_collections);
+    module_compile.addImport("reporting", module_reporting);
 
     // add main roc exe
     const roc_exe = addMainExe(b, build_options, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy, module_builtins) orelse return;
@@ -106,6 +112,7 @@ pub fn build(b: *std.Build) void {
     roc_exe.root_module.addImport("types", module_types);
     roc_exe.root_module.addImport("serialization", module_serialization);
     roc_exe.root_module.addImport("compile", module_compile);
+    roc_exe.root_module.addImport("reporting", module_reporting);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step);
 
     // Add snapshot tool
@@ -121,6 +128,7 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.root_module.addImport("types", module_types);
     snapshot_exe.root_module.addImport("collections", module_collections);
     snapshot_exe.root_module.addImport("compile", module_compile);
+    snapshot_exe.root_module.addImport("reporting", module_reporting);
     add_tracy(b, build_options, snapshot_exe, target, false, tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 
@@ -165,6 +173,7 @@ pub fn build(b: *std.Build) void {
     all_tests.root_module.addImport("collections", module_collections);
     all_tests.root_module.addImport("serialization", module_serialization);
     all_tests.root_module.addImport("compile", module_compile);
+    all_tests.root_module.addImport("reporting", module_reporting);
 
     const builtins_tests = b.addTest(.{
         .root_source_file = b.path("src/builtins/main.zig"),

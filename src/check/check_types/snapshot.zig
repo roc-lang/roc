@@ -507,8 +507,8 @@ pub const SnapshotWriter = struct {
     snapshots: *const Store,
     idents: *const Ident.Store,
     current_module_name: ?[]const u8,
-    can_ir: ?*const @import("../canonicalize/CIR.zig"),
-    other_modules: ?[]const *const @import("../canonicalize/CIR.zig"),
+    can_ir: ?*const @import("compile").ModuleEnv,
+    other_modules: ?[]const *const @import("compile").ModuleEnv,
     next_name_index: u32,
     name_counters: std.EnumMap(TypeContext, u32),
 
@@ -530,8 +530,8 @@ pub const SnapshotWriter = struct {
         snapshots: *const Store,
         idents: *const Ident.Store,
         current_module_name: []const u8,
-        can_ir: *const @import("../canonicalize/CIR.zig"),
-        other_modules: []const *const @import("../canonicalize/CIR.zig"),
+        can_ir: *const @import("compile").ModuleEnv,
+        other_modules: []const *const @import("compile").ModuleEnv,
     ) Self {
         return .{
             .writer = writer,

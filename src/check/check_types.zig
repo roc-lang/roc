@@ -15,7 +15,7 @@ const problem = @import("check_types/problem.zig");
 const snapshot = @import("check_types/snapshot.zig");
 const instantiate = @import("check_types/instantiate.zig");
 const copy_import = @import("check_types/copy_import.zig");
-const CIR = @import("./canonicalize/CIR.zig");
+const CIR = compile.ModuleEnv;
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
@@ -1582,7 +1582,7 @@ test "lambda with record field access infers correct type" {
     var module_env = try compile.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
-    var cir = try CIR.init(&module_env, "Test");
+    var cir = try CIR.init(gpa, "Test");
     defer cir.deinit();
 
     const empty_modules: []const *CIR = &.{};
@@ -1687,7 +1687,7 @@ test "dot access properly unifies field types with parameters" {
     var module_env = try compile.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
-    var cir = try CIR.init(&module_env, "Test");
+    var cir = try CIR.init(gpa, "Test");
     defer cir.deinit();
 
     const empty_modules: []const *CIR = &.{};
@@ -1795,7 +1795,7 @@ test "call site unification order matters for concrete vs flexible types" {
     var module_env = try compile.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
-    var cir = try CIR.init(&module_env, "Test");
+    var cir = try CIR.init(gpa, "Test");
     defer cir.deinit();
 
     const empty_modules: []const *CIR = &.{};

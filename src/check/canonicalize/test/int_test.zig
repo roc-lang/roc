@@ -31,7 +31,7 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
     parse_ast.store.emptyScratch();
 
     const cir = try allocator.create(CIR);
-    cir.* = try CIR.init(module_env, "Test");
+    cir.* = try CIR.init(allocator, "Test");
 
     const can = try allocator.create(canonicalize);
     can.* = try canonicalize.init(cir, parse_ast, null);
