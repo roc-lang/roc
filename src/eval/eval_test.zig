@@ -120,9 +120,9 @@ test "eval runtime error - returns crash error" {
     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Check if the expression is a runtime error
+    // Check if the expression is a runtime error or crash
     const expr = resources.module_env.store.getExpr(resources.expr_idx);
-    if (expr == .e_runtime_error) {
+    if (expr == .e_runtime_error or expr == .e_crash) {
         // Create a stack for evaluation
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();

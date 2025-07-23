@@ -348,6 +348,7 @@ pub const Interpreter = struct {
         // Check for runtime errors first
         switch (expr) {
             .e_runtime_error => return error.Crash,
+            .e_crash => return error.Crash,
             else => {},
         }
 
@@ -369,7 +370,7 @@ pub const Interpreter = struct {
         // Handle different expression types
         switch (expr) {
             // Runtime errors are handled at the beginning
-            .e_runtime_error => unreachable,
+            .e_runtime_error, .e_crash => unreachable,
 
             // Numeric literals - push directly to stack
             .e_int => |int_lit| {
@@ -645,7 +646,7 @@ pub const Interpreter = struct {
             },
 
             // Not yet implemented
-            .e_str, .e_str_segment, .e_list, .e_tuple, .e_record, .e_dot_access, .e_block, .e_lookup_external, .e_match, .e_frac_dec, .e_dec_small, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
+            .e_str, .e_str_segment, .e_list, .e_tuple, .e_record, .e_dot_access, .e_block, .e_lookup_external, .e_match, .e_frac_dec, .e_dec_small, .e_dbg, .e_expect, .e_ellipsis => {
                 return error.LayoutError;
             },
 
