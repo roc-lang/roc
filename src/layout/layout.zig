@@ -104,6 +104,12 @@ pub const Idx = enum(@Type(.{
     _,
 };
 
+/// Closure layout - stores environment size
+pub const ClosureLayout = packed struct {
+    /// Size of the captured environment in bytes
+    env_size: u16,
+};
+
 /// The union portion of the Layout packed tagged union (the tag being LayoutTag).
 ///
 /// The largest variant must fit in 28 bits to leave room for the u4 tag
@@ -115,7 +121,7 @@ pub const LayoutUnion = packed union {
     list_of_zst: void,
     record: RecordLayout,
     tuple: TupleLayout,
-    closure: void,
+    closure: ClosureLayout,
 };
 
 /// Record field layout
@@ -286,7 +292,7 @@ pub const Layout = packed struct {
             .list, .list_of_zst => target_usize.alignment(),
             .record => self.data.record.alignment,
             .tuple => self.data.tuple.alignment,
-            .closure => target_usize.alignment(),
+            .closure => std.mem.Alignment.@"16", // TODO what should this be?
         };
     }
 
@@ -353,6 +359,13 @@ pub const Layout = packed struct {
     /// tuple layout with the given alignment and tuple metadata (e.g. size and field layouts)
     pub fn tuple(tuple_alignment: std.mem.Alignment, tuple_idx: TupleIdx) Layout {
         return Layout{ .data = .{ .tuple = .{ .alignment = tuple_alignment, .idx = tuple_idx } }, .tag = .tuple };
+    }
+
+    pub fn closure(env_size: u16) Layout {
+        return Layout{
+            .data = .{ .closure = .{ .env_size = env_size } },
+            .tag = .closure,
+        };
     }
 };
 
