@@ -265,7 +265,6 @@ pub const Repl = struct {
         // Empty scratch space
         parse_ast.store.emptyScratch();
 
-        // Initialize CIR fields in the existing module_env
         try module_env.initCIRFields(self.allocator, "repl");
 
         // Create canonicalizer

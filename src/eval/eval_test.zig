@@ -33,7 +33,6 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
 
-    // Initialize CIR fields in the existing module_env instead of creating separate CIR
     try module_env.initCIRFields(allocator, "test");
 
     // Create canonicalizer

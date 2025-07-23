@@ -332,7 +332,8 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
 
 const Self = @This();
 
-/// The intermediate representation of a canonicalized Roc program.
+/// Compatibility alias: The intermediate representation of a canonicalized Roc program.
+/// This points to ModuleEnv which now contains all the functionality that was previously in CIR.
 pub const CIR = compile.ModuleEnv;
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/AST.zig) is transformed into a [canonical
@@ -6524,7 +6525,6 @@ const ScopeTestContext = struct {
         const env = try gpa.create(compile.ModuleEnv);
         env.* = try compile.ModuleEnv.init(gpa, "");
 
-        // Initialize CIR fields in the existing env
         try env.initCIRFields(gpa, "Test");
 
         return ScopeTestContext{

@@ -13,7 +13,7 @@ const cir_types = @import("cir_types.zig");
 const reporting = @import("reporting");
 // const compile = @import("../compile.zig"); // Not needed for now
 
-// Type definitions moved out of CIR_Types struct
+// Type definitions for module compilation
 
 // Def type definition
 pub const Def = struct {
@@ -256,7 +256,7 @@ pub const RocDec = extern struct {
     }
 };
 
-// Diagnostic types from CIR
+// Diagnostic types for compilation errors
 pub const Diagnostic = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -484,7 +484,7 @@ types: types_mod.Store,
 /// Map of exposed items by their string representation (not interned)
 /// This is built during canonicalization and preserved for later use
 exposed_by_str: collections.SafeStringHashMap(void),
-/// Map of exposed item names to their CIR node indices (stored as u16)
+/// Map of exposed item names to their node indices (stored as u16)
 /// This is populated during canonicalization to allow cross-module lookups
 exposed_nodes: collections.SafeStringHashMap(u16),
 
@@ -496,7 +496,7 @@ line_starts: collections.SafeList(u32),
 /// The source code of this module.
 source: []const u8,
 
-// ===== CIR fields duplicated from CIR.zig =====
+// ===== Module compilation fields =====
 // NOTE: These fields are populated during canonicalization and preserved for later use
 
 /// All the definitions in the module (populated by canonicalization)
@@ -516,7 +516,7 @@ diagnostics: Diagnostic.Span,
 /// Uses an efficient data structure, and provides helpers for storing and retrieving nodes.
 store: NodeStore,
 
-/// Initialize just the CIR fields in an existing ModuleEnv
+/// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u8) !void {
     _ = gpa; // unused since we don't create new allocations
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
@@ -542,14 +542,14 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .exposed_nodes = try collections.SafeStringHashMap(u16).initCapacity(gpa, 64),
         .line_starts = try collections.SafeList(u32).initCapacity(gpa, 256),
         .source = source,
-        // Initialize CIR fields with empty/default values
+        // Initialize compilation fields with empty/default values
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = Import.Store.init(),
         .module_name = "", // Will be set later during canonicalization
         .diagnostics = Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
-        .store = try NodeStore.initCapacity(gpa, 10_000), // Using same capacity as CIR
+        .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
     };
 }
 
@@ -563,7 +563,7 @@ pub fn deinit(self: *Self) void {
     self.line_starts.deinit(self.gpa);
     self.exposed_by_str.deinit(self.gpa);
     self.exposed_nodes.deinit(self.gpa);
-    // Clean up CIR fields
+    // Clean up compilation fields
     self.external_decls.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
@@ -606,19 +606,8 @@ pub fn freezeInterners(self: *Self) void {
     self.strings.freeze();
 }
 
-// Temporary CIR struct for pushToSExprTree compatibility
-const CIR = struct {
-    env: *Self,
-    store: NodeStore,
-    diagnostics: Diagnostic.Span,
-    all_defs: Def.Span,
-    all_statements: Statement.Span,
-    external_decls: ExternalDecl.SafeList,
-    imports: Import.Store,
-    module_name: []const u8,
-};
 
-// ===== CIR functionality duplicated from CIR.zig =====
+// ===== Module compilation functionality =====
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
 pub fn pushDiagnostic(self: *Self, reason: Diagnostic) std.mem.Allocator.Error!void {
@@ -664,7 +653,7 @@ pub fn castIdx(comptime From: type, comptime To: type, idx: From) To {
     return @as(To, @enumFromInt(@intFromEnum(idx)));
 }
 
-// ===== Functions duplicated from CIR.zig =====
+// ===== Module compilation functions =====
 
 /// Retrieve all diagnostics collected during canonicalization.
 pub fn getDiagnostics(self: *Self) std.mem.Allocator.Error![]Diagnostic {
@@ -857,7 +846,7 @@ pub fn varFrom(idx: anytype) TypeVar {
     return @enumFromInt(@intFromEnum(idx));
 }
 
-/// Assert that CIR, regions and types are all in sync
+/// Assert that nodes, regions and types are all in sync
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
     if (std.debug.runtime_safety) {
         const cir_nodes = self.store.nodes.items.len;
@@ -872,7 +861,7 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
     }
 }
 
-/// Assert that CIR, regions and types are all in sync
+/// Assert that nodes, regions and types are all in sync
 inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: anytype) void {
     if (std.debug.runtime_safety) {
         if (@intFromEnum(idx1) != @intFromEnum(idx2)) {
@@ -885,7 +874,7 @@ inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: any
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addDefAndTypeVar(self: *Self, expr: Def, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Def.Idx {
     const expr_idx = try self.store.addDef(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -895,7 +884,7 @@ pub fn addDefAndTypeVar(self: *Self, expr: Def, content: types_mod.Content, regi
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addTypeHeaderAndTypeVar(self: *Self, expr: TypeHeader, content: types_mod.Content, region: Region) std.mem.Allocator.Error!TypeHeader.Idx {
     const expr_idx = try self.store.addTypeHeader(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -905,7 +894,7 @@ pub fn addTypeHeaderAndTypeVar(self: *Self, expr: TypeHeader, content: types_mod
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addStatementAndTypeVar(self: *Self, expr: Statement, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Statement.Idx {
     const expr_idx = try self.store.addStatement(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -915,7 +904,7 @@ pub fn addStatementAndTypeVar(self: *Self, expr: Statement, content: types_mod.C
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addPatternAndTypeVar(self: *Self, expr: Pattern, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Pattern.Idx {
     const expr_idx = try self.store.addPattern(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -925,7 +914,7 @@ pub fn addPatternAndTypeVar(self: *Self, expr: Pattern, content: types_mod.Conte
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addExprAndTypeVar(self: *Self, expr: Expr, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Expr.Idx {
     const expr_idx = try self.store.addExpr(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -935,7 +924,7 @@ pub fn addExprAndTypeVar(self: *Self, expr: Expr, content: types_mod.Content, re
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addRecordFieldAndTypeVar(self: *Self, expr: RecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!RecordField.Idx {
     const expr_idx = try self.store.addRecordField(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -945,7 +934,7 @@ pub fn addRecordFieldAndTypeVar(self: *Self, expr: RecordField, content: types_m
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addRecordDestructAndTypeVar(self: *Self, expr: Pattern.RecordDestruct, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Pattern.RecordDestruct.Idx {
     const expr_idx = try self.store.addRecordDestruct(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -955,7 +944,7 @@ pub fn addRecordDestructAndTypeVar(self: *Self, expr: Pattern.RecordDestruct, co
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addIfBranchAndTypeVar(self: *Self, expr: Expr.IfBranch, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Expr.IfBranch.Idx {
     const expr_idx = try self.store.addIfBranch(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -965,7 +954,7 @@ pub fn addIfBranchAndTypeVar(self: *Self, expr: Expr.IfBranch, content: types_mo
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addMatchBranchAndTypeVar(self: *Self, expr: Expr.Match.Branch, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Expr.Match.Branch.Idx {
     const expr_idx = try self.store.addMatchBranch(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -975,7 +964,7 @@ pub fn addMatchBranchAndTypeVar(self: *Self, expr: Expr.Match.Branch, content: t
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addWhereClauseAndTypeVar(self: *Self, expr: WhereClause, content: types_mod.Content, region: Region) std.mem.Allocator.Error!WhereClause.Idx {
     const expr_idx = try self.store.addWhereClause(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -985,7 +974,7 @@ pub fn addWhereClauseAndTypeVar(self: *Self, expr: WhereClause, content: types_m
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addTypeAnnoAndTypeVar(self: *Self, expr: TypeAnno, content: types_mod.Content, region: Region) std.mem.Allocator.Error!TypeAnno.Idx {
     const expr_idx = try self.store.addTypeAnno(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -995,7 +984,7 @@ pub fn addTypeAnnoAndTypeVar(self: *Self, expr: TypeAnno, content: types_mod.Con
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addAnnotationAndTypeVar(self: *Self, expr: Annotation, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Annotation.Idx {
     const expr_idx = try self.store.addAnnotation(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -1005,7 +994,7 @@ pub fn addAnnotationAndTypeVar(self: *Self, expr: Annotation, content: types_mod
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addAnnoRecordFieldAndTypeVar(self: *Self, expr: TypeAnno.RecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!TypeAnno.RecordField.Idx {
     const expr_idx = try self.store.addAnnoRecordField(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -1015,7 +1004,7 @@ pub fn addAnnoRecordFieldAndTypeVar(self: *Self, expr: TypeAnno.RecordField, con
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addExposedItemAndTypeVar(self: *Self, expr: ExposedItem, content: types_mod.Content, region: Region) std.mem.Allocator.Error!ExposedItem.Idx {
     const expr_idx = try self.store.addExposedItem(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -1025,7 +1014,7 @@ pub fn addExposedItemAndTypeVar(self: *Self, expr: ExposedItem, content: types_m
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addDiagnosticAndTypeVar(self: *Self, reason: Diagnostic, content: types_mod.Content) std.mem.Allocator.Error!Diagnostic.Idx {
     const expr_idx = try self.store.addDiagnostic(reason);
     const expr_var = try self.types.freshFromContent(content);
@@ -1035,7 +1024,7 @@ pub fn addDiagnosticAndTypeVar(self: *Self, reason: Diagnostic, content: types_m
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addMalformedAndTypeVar(self: *Self, diagnostic_idx: Diagnostic.Idx, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Node.Idx {
     const malformed_idx = try self.store.addMalformed(diagnostic_idx, region);
     const malformed_var = try self.types.freshFromContent(content);
@@ -1045,7 +1034,7 @@ pub fn addMalformedAndTypeVar(self: *Self, diagnostic_idx: Diagnostic.Idx, conte
 }
 
 /// Add a new match branch pattern and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addMatchBranchPatternAndTypeVar(self: *Self, expr: Expr.Match.BranchPattern, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Expr.Match.BranchPattern.Idx {
     const expr_idx = try self.store.addMatchBranchPattern(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -1055,7 +1044,7 @@ pub fn addMatchBranchPatternAndTypeVar(self: *Self, expr: Expr.Match.BranchPatte
 }
 
 /// Add a new pattern record field and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addPatternRecordFieldAndTypeVar(self: *Self, expr: PatternRecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!PatternRecordField.Idx {
     const expr_idx = try self.store.addPatternRecordField(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -1065,7 +1054,7 @@ pub fn addPatternRecordFieldAndTypeVar(self: *Self, expr: PatternRecordField, co
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addTypeSlotAndTypeVar(
     self: *Self,
     parent_node: Node.Idx,
@@ -1082,7 +1071,7 @@ pub fn addTypeSlotAndTypeVar(
 }
 
 /// Add a new expression and type variable.
-/// This function asserts that the types array and the CIR nodes are in sync.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addTypeSlotAndTypeVarRedirect(
     self: *Self,
     parent_node: Node.Idx,
@@ -1114,7 +1103,7 @@ pub fn redirectTypeTo(
     try self.types.setVarRedirect(var_, redirect_to);
 }
 
-/// Adds an external declaration to the CIR and returns its index
+/// Adds an external declaration and returns its index
 pub fn pushExternalDecl(self: *Self, decl: ExternalDecl) std.mem.Allocator.Error!ExternalDecl.Idx {
     const idx = @as(u32, @intCast(self.external_decls.len()));
     _ = try self.external_decls.append(self.gpa, decl);
@@ -1153,7 +1142,7 @@ fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: Pattern.Idx) SExpr 
     return node;
 }
 
-/// Helper function to generate the S-expression node for the entire Canonical IR.
+/// Helper function to generate the S-expression node for the entire module.
 /// If a single expression is provided, only that expression is returned.
 pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
     if (maybe_expr_idx) |expr_idx| {
@@ -1189,7 +1178,7 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree)
     }
 }
 
-/// Append region information to an S-expression node for a given index in the Canonical IR.
+/// Append region information to an S-expression node for a given index.
 pub fn appendRegionInfoToSexprNode(self: *const Self, node: *SExpr, idx: anytype) std.mem.Allocator.Error!void {
     const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
     try self.appendRegionInfoToSexprNodeFromRegion(node, region);
@@ -1206,7 +1195,7 @@ pub fn appendRegionInfoToSexprNodeFromRegion(self: *const Self, node: *SExpr, re
     );
 }
 
-/// Append region information to an S-expression node for a given index in the Canonical IR.
+/// Append region information to an S-expression node for a given index.
 pub fn appendRegionInfoToSExprTree(self: *const Self, tree: *SExprTree, idx: anytype) std.mem.Allocator.Error!void {
     const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
     try self.appendRegionInfoToSExprTreeFromRegion(tree, region);
@@ -1227,13 +1216,13 @@ pub fn appendRegionInfoToSExprTreeFromRegion(self: *const Self, tree: *SExprTree
     );
 }
 
-/// Get region information for a node in the Canonical IR.
+/// Get region information for a node.
 pub fn getNodeRegionInfo(self: *const Self, idx: anytype) RegionInfo {
     const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
     return self.getRegionInfo(region);
 }
 
-/// Helper function to convert type information from the Canonical IR to an SExpr node
+/// Helper function to convert type information to an SExpr node
 /// in S-expression format for snapshot testing. Implements the definition-focused
 /// format showing final types for defs, expressions, and builtins.
 pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
