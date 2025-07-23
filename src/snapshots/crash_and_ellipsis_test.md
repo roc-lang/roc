@@ -280,6 +280,10 @@ main! = |_| {
 		(e-lambda @15.9-20.2
 			(args
 				(p-underscore @15.10-15.11))
+			(captures
+				(capture @5.1-5.13 (ident "testEllipsis"))
+				(capture @9.1-9.10 (ident "testCrash"))
+				(capture @13.1-13.16 (ident "testCrashSimple")))
 			(e-block @15.13-20.2
 				(s-let @16.5-16.31
 					(p-assign @16.5-16.12 (ident "result1"))

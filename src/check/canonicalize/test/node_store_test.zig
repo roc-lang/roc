@@ -14,6 +14,23 @@ const from_raw_offsets = base.Region.from_raw_offsets;
 const Ident = base.Ident;
 const CalledVia = base.CalledVia;
 
+var rand = std.Random.DefaultPrng.init(1234);
+
+/// Generate a random index of type `T`.
+fn rand_idx(comptime T: type) T {
+    return @enumFromInt(rand.random().int(u32));
+}
+
+/// Helper to create a `DataSpan` from raw start and length positions.
+fn rand_span() base.DataSpan {
+    const start = rand.random().int(u32);
+    const len = rand.random().int(u30); // Constrain len to fit within u30 (used by ImportRhs.num_exposes)
+    return base.DataSpan{
+        .start = start,
+        .len = len,
+    };
+}
+
 test "NodeStore round trip - Statements" {
     const gpa = testing.allocator;
     var store = try NodeStore.init(gpa);
@@ -261,6 +278,7 @@ test "NodeStore round trip - Expressions" {
         .e_lambda = .{
             .args = CIR.Pattern.Span{ .span = base.DataSpan.init(17, 2) },
             .body = @enumFromInt(600),
+            .captures = CIR.Expr.Capture.Span{ .span = rand_span() },
         },
     });
     try expressions.append(CIR.Expr{

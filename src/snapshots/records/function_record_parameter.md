@@ -46,6 +46,9 @@ NO CHANGE
 					(required))
 				(record-destruct @1.10-1.13 (label "age") (ident "age")
 					(required)))))
+	(captures
+		(capture @1.4-1.8 (ident "name"))
+		(capture @1.10-1.13 (ident "age")))
 	(e-string @1.17-1.67
 		(e-literal @1.18-1.24 (string "Hello "))
 		(e-lookup-local @1.26-1.30

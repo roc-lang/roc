@@ -173,6 +173,8 @@ main! = |_| {
 		(e-lambda @8.9-19.2
 			(args
 				(p-underscore @8.10-8.11))
+			(captures
+				(capture @5.1-5.9 (ident "identity")))
 			(e-block @8.13-19.2
 				(s-let @10.5-10.23
 					(p-assign @10.5-10.8 (ident "num"))

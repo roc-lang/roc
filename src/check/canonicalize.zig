@@ -45,10 +45,14 @@ exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
 unqualified_nominal_tags: std.StringHashMapUnmanaged(CIR.Statement.Idx) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.ArrayListUnmanaged(Region),
+/// Stack of function contexts for tracking captures during canonicalization
+function_contexts: std.ArrayListUnmanaged(FunctionContext),
 /// Maps var patterns to the function region they were declared in
 var_function_regions: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region),
 /// Set of pattern indices that are vars
 var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Maps pattern indices to their function context depths for capture analysis
+pattern_function_contexts: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Map of module name strings to their ModuleEnv pointers for import validation
@@ -78,6 +82,23 @@ const CalledVia = base.CalledVia;
 
 const TypeVar = types.Var;
 const Content = types.Content;
+
+/// Context for tracking lambda captures during canonicalization
+const FunctionContext = struct {
+    depth: u32,
+    captures: std.ArrayList(CIR.Expr.Capture),
+
+    pub fn init(allocator: std.mem.Allocator, depth: u32) FunctionContext {
+        return FunctionContext{
+            .depth = depth,
+            .captures = std.ArrayList(CIR.Expr.Capture).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *FunctionContext) void {
+        self.captures.deinit();
+    }
+};
 const FlatType = types.FlatType;
 const Num = types.Num;
 const TagUnion = types.TagUnion;
@@ -129,8 +150,15 @@ pub fn deinit(
 
     self.scopes.deinit(gpa);
     self.function_regions.deinit(gpa);
+
+    // Clean up function contexts
+    for (self.function_contexts.items) |*context| {
+        context.deinit();
+    }
+    self.function_contexts.deinit(gpa);
     self.var_function_regions.deinit(gpa);
     self.var_patterns.deinit(gpa);
+    self.pattern_function_contexts.deinit(gpa);
     self.used_patterns.deinit(gpa);
     self.scratch_vars.deinit(gpa);
     self.scratch_idents.deinit(gpa);
@@ -151,8 +179,10 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
         .parse_ir = parse_ir,
         .scopes = .{},
         .function_regions = std.ArrayListUnmanaged(Region){},
+        .function_contexts = std.ArrayListUnmanaged(FunctionContext){},
         .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
+        .pattern_function_contexts = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32){},
         .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .module_envs = module_envs,
         .import_indices = std.StringHashMapUnmanaged(CIR.Import.Idx){},
@@ -1636,6 +1666,15 @@ pub fn canonicalizeExpr(
                         // Check if this is a used underscore variable
                         try self.checkUsedUnderscoreVariable(ident, region);
 
+                        // Check if this is a capture (variable from outer function context)
+                        const variable_function_context = self.getPatternFunctionContext(pattern_idx);
+                        const current_function_context = self.getCurrentFunctionDepth();
+
+                        if (variable_function_context < current_function_context) {
+                            // This is a capture! Record it for current function
+                            try self.recordCapture(ident, pattern_idx, variable_function_context);
+                        }
+
                         // We found the ident in scope, lookup to reference the pattern
                         const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{ .e_lookup_local = .{
                             .pattern_idx = pattern_idx,
@@ -2129,6 +2168,9 @@ pub fn canonicalizeExpr(
             try self.enterFunction(region);
             defer self.exitFunction();
 
+            // Enter function context for capture tracking
+            try self.enterFunctionContext();
+
             // Enter new scope for function parameters and body
             try self.scopeEnter(self.can_ir.env.gpa, true); // true = is_function_boundary
             defer self.scopeExit(self.can_ir.env.gpa) catch {};
@@ -2150,7 +2192,7 @@ pub fn canonicalizeExpr(
             }
             const args_span = try self.can_ir.store.patternSpanFrom(args_start);
 
-            // body
+            // body (this will detect and record captures)
             const body_idx = blk: {
                 if (try self.canonicalizeExpr(e.body)) |idx| {
                     break :blk idx;
@@ -2163,15 +2205,37 @@ pub fn canonicalizeExpr(
                 }
             };
 
-            // Create lambda expression with function type
+            const capture_info: CIR.Expr.Capture.Span = blk: {
+                var context = self.exitFunctionContext();
+                defer context.deinit();
+
+                const scratch_start = self.can_ir.store.scratch_captures.top();
+
+                if (context.captures.items.len > 0) {
+                    for (context.captures.items) |capture| {
+                        const capture_idx = try self.can_ir.addCaptureAndTypeVar(capture, types.Content{ .flex_var = null }, region);
+                        try self.can_ir.store.addScratchCapture(capture_idx);
+                    }
+
+                    const captured_vars = try self.can_ir.store.capturesSpanFrom(scratch_start);
+
+                    break :blk captured_vars;
+                } else {
+                    break :blk CIR.Expr.Capture.Span{ .span = base.DataSpan.empty() };
+                }
+            };
+
+            // Create lambda expression with function type and captures
             const lambda_type_content = try self.can_ir.env.types.mkFuncUnbound(
                 @ptrCast(self.can_ir.store.slicePatterns(args_span)),
                 CIR.varFrom(body_idx),
             );
+
             const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
                 .e_lambda = .{
                     .args = args_span,
                     .body = body_idx,
+                    .captures = capture_info,
                 },
             }, lambda_type_content, region);
 
@@ -2744,6 +2808,9 @@ fn canonicalizePattern(
                 const pattern_idx = try self.can_ir.addPatternAndTypeVar(CIR.Pattern{ .assign = .{
                     .ident = ident_idx,
                 } }, .{ .flex_var = null }, region);
+
+                // Record the function context depth for capture analysis
+                try self.recordPatternFunctionContext(pattern_idx);
 
                 // Introduce the identifier into scope mapping to this pattern node
                 switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true)) {
@@ -3384,6 +3451,53 @@ fn enterFunction(self: *Self, region: Region) std.mem.Allocator.Error!void {
 /// Exit a function boundary by popping from the stack
 fn exitFunction(self: *Self) void {
     _ = self.function_regions.pop();
+}
+
+/// Enter a new function context when processing lambda
+fn enterFunctionContext(self: *Self) !void {
+    const depth = self.function_contexts.items.len;
+    const context = FunctionContext.init(self.can_ir.env.gpa, @intCast(depth));
+    try self.function_contexts.append(self.can_ir.env.gpa, context);
+}
+
+/// Exit function context and return captured variables
+fn exitFunctionContext(self: *Self) FunctionContext {
+    return self.function_contexts.pop().?;
+}
+
+/// Record a captured variable in the current function context
+fn recordCapture(self: *Self, name: base.Ident.Idx, pattern_idx: CIR.Pattern.Idx, source_depth: u32) !void {
+    if (self.function_contexts.items.len == 0) return; // No function context
+
+    const current_context = &self.function_contexts.items[self.function_contexts.items.len - 1];
+
+    // Avoid duplicate captures
+    for (current_context.captures.items) |existing| {
+        if (existing.pattern_idx == pattern_idx) return;
+    }
+
+    try current_context.captures.append(CIR.Expr.Capture{
+        .name = name,
+        .pattern_idx = pattern_idx,
+        .scope_depth = source_depth,
+    });
+}
+
+/// Get current function depth for capture analysis
+fn getCurrentFunctionDepth(self: *Self) u32 {
+    return @intCast(self.function_contexts.items.len);
+}
+
+/// Get the function context depth where a pattern was defined
+fn getPatternFunctionContext(self: *Self, pattern_idx: CIR.Pattern.Idx) u32 {
+    // Look up the actual function context depth where this pattern was defined
+    return self.pattern_function_contexts.get(pattern_idx) orelse 0;
+}
+
+/// Record the function context depth when a pattern is created
+fn recordPatternFunctionContext(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
+    const current_function_context = self.getCurrentFunctionDepth();
+    try self.pattern_function_contexts.put(self.can_ir.env.gpa, pattern_idx, current_function_context);
 }
 
 /// Get the current function region (the function we're currently in)

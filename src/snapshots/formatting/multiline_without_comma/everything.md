@@ -621,6 +621,9 @@ h = |x, y| {
 			(args
 				(p-assign @60.6-60.7 (ident "x"))
 				(p-assign @60.9-60.10 (ident "y")))
+			(captures
+				(capture @60.1-60.2 (ident "h"))
+				(capture @99.5-99.6 (ident "a")))
 			(e-block @60.12-110.2
 				(s-let @61.2-68.3
 					(p-assign @61.2-61.4 (ident "h1"))

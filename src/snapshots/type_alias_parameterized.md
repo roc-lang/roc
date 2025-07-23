@@ -127,6 +127,8 @@ NO CHANGE
 		(e-lambda @8.9-8.27
 			(args
 				(p-underscore @8.10-8.11))
+			(captures
+				(capture @6.1-6.9 (ident "swapPair")))
 			(e-call @8.13-8.27
 				(e-lookup-local @8.13-8.21
 					(p-assign @6.1-6.9 (ident "swapPair")))

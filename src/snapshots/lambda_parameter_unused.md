@@ -303,6 +303,11 @@ main! = |_| {
 		(e-lambda @19.9-25.2
 			(args
 				(p-underscore @19.10-19.11))
+			(captures
+				(capture @5.1-5.4 (ident "add"))
+				(capture @9.1-9.9 (ident "multiply"))
+				(capture @13.1-13.8 (ident "process"))
+				(capture @17.1-17.7 (ident "double")))
 			(e-block @19.13-25.2
 				(s-let @20.5-20.21
 					(p-assign @20.5-20.12 (ident "result1"))

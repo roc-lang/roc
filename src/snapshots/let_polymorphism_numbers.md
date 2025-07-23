@@ -232,6 +232,9 @@ main = |_| {
 		(e-lambda @26.8-29.2
 			(args
 				(p-underscore @26.9-26.10))
+			(captures
+				(capture @12.1-12.8 (ident "int_add"))
+				(capture @13.1-13.13 (ident "int_multiply")))
 			(e-block @26.12-29.2
 				(e-binop @28.5-28.27 (op "add")
 					(e-lookup-local @28.5-28.12

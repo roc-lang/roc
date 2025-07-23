@@ -101,6 +101,8 @@ NO CHANGE
 		(e-lambda @4.17-9.2
 			(args
 				(p-underscore @4.18-4.19))
+			(captures
+				(capture @5.2-5.12 (ident "x_")))
 			(e-block @4.21-9.2
 				(s-var @5.2-5.12
 					(p-assign @5.2-5.12 (ident "x_"))

@@ -1239,17 +1239,17 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 						(e-field-access @105.55-105.85
 							(e-field-access @105.55-105.79
 								(e-field-access @105.55-105.72
-									(e-question-suffix @105.55-105.65
+									(e-question-suffix @105.55-105.66
 										(e-apply @105.55-105.65
 											(e-ident @105.55-105.59 (raw "e_fn"))
 											(e-ident @105.60-105.64 (raw "arg1"))))
-									(e-question-suffix @105.66-105.71
+									(e-question-suffix @105.66-105.72
 										(e-apply @105.66-105.71
 											(e-ident @105.66-105.69 (raw "od")))))
-								(e-question-suffix @105.72-105.78
+								(e-question-suffix @105.72-105.79
 									(e-apply @105.72-105.78
 										(e-ident @105.72-105.76 (raw "ned")))))
-							(e-question-suffix @105.79-105.84
+							(e-question-suffix @105.79-105.85
 								(e-ident @105.79-105.84 (raw "recd"))))
 						(e-apply @106.2-110.3
 							(e-tag @106.2-106.7 (raw "Stdo!"))
@@ -1568,6 +1568,9 @@ expect {
 		(e-lambda @75.5-111.2
 			(args
 				(p-underscore @75.6-75.7))
+			(captures
+				(capture @49.1-49.3 (ident "me"))
+				(capture @77.2-77.14 (ident "er")))
 			(e-block @75.9-111.2
 				(s-expr @75.11-75.12
 					(e-runtime-error (tag "ident_not_in_scope")))

@@ -39,6 +39,7 @@ scratch_anno_record_fields: base.Scratch(CIR.TypeAnno.RecordField.Idx),
 scratch_exposed_items: base.Scratch(CIR.ExposedItem.Idx),
 scratch_defs: base.Scratch(CIR.Def.Idx),
 scratch_diagnostics: base.Scratch(CIR.Diagnostic.Idx),
+scratch_captures: base.Scratch(CIR.Expr.Capture.Idx),
 
 /// Initializes the NodeStore
 pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!NodeStore {
@@ -69,6 +70,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_defs = try base.Scratch(CIR.Def.Idx).init(gpa),
         .scratch_where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(gpa),
         .scratch_diagnostics = try base.Scratch(CIR.Diagnostic.Idx).init(gpa),
+        .scratch_captures = try base.Scratch(CIR.Expr.Capture.Idx).init(gpa),
     };
 }
 
@@ -92,6 +94,7 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_defs.items.deinit(store.gpa);
     store.scratch_where_clauses.items.deinit(store.gpa);
     store.scratch_diagnostics.items.deinit(store.gpa);
+    store.scratch_captures.items.deinit(store.gpa);
 }
 
 /// Compile-time constants for union variant counts to ensure we don't miss cases
@@ -458,11 +461,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const args_start = extra_data[0];
             const args_len = extra_data[1];
             const body_idx = extra_data[2];
+            const capture_start = extra_data[3];
+            const capture_len = extra_data[4];
 
             return CIR.Expr{
                 .e_lambda = .{
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
                     .body = @enumFromInt(body_idx),
+                    .captures = .{ .span = .{ .start = capture_start, .len = capture_len } },
                 },
             };
         },
@@ -1389,15 +1395,13 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
         .e_lambda => |e| {
             node.tag = .expr_lambda;
 
-            // Store lambda data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
 
-            // Store args span start
             try store.extra_data.append(store.gpa, e.args.span.start);
-            // Store args span length
             try store.extra_data.append(store.gpa, e.args.span.len);
-            // Store body index
             try store.extra_data.append(store.gpa, @intFromEnum(e.body));
+            try store.extra_data.append(store.gpa, e.captures.span.start);
+            try store.extra_data.append(store.gpa, e.captures.span.len);
 
             node.data_1 = extra_data_start;
         },
@@ -1881,6 +1885,36 @@ pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) std.mem.Allo
     return @enumFromInt(@intFromEnum(nid));
 }
 
+/// Adds a capture to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `CIR`.
+pub fn addCapture(store: *NodeStore, capture: CIR.Expr.Capture, region: base.Region) std.mem.Allocator.Error!CIR.Expr.Capture.Idx {
+    const node = Node{
+        .data_1 = @bitCast(capture.name),
+        .data_2 = capture.scope_depth,
+        .data_3 = @intFromEnum(capture.pattern_idx),
+        .tag = .lambda_capture,
+    };
+    const nid = try store.nodes.append(store.gpa, node);
+    _ = try store.regions.append(store.gpa, region);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Retrieves a capture from the store.
+pub fn getCapture(store: *const NodeStore, capture_idx: CIR.Expr.Capture.Idx) CIR.Expr.Capture {
+    const nid: Node.Idx = @enumFromInt(@intFromEnum(capture_idx));
+    const node = store.nodes.get(nid);
+
+    std.debug.assert(node.tag == .lambda_capture);
+
+    return CIR.Expr.Capture{
+        .name = @bitCast(node.data_1),
+        .scope_depth = node.data_2,
+        .pattern_idx = @enumFromInt(node.data_3),
+    };
+}
+
 /// Retrieves a definition from the store.
 pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
@@ -1996,6 +2030,16 @@ pub fn addScratchExpr(store: *NodeStore, idx: CIR.Expr.Idx) std.mem.Allocator.Er
 /// Adds a statement index to the scratch statements list for building spans.
 pub fn addScratchStatement(store: *NodeStore, idx: CIR.Statement.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_statements", idx);
+}
+
+/// Adds a capture index to the scratch captures list for building spans.
+pub fn addScratchCapture(store: *NodeStore, idx: CIR.Expr.Capture.Idx) std.mem.Allocator.Error!void {
+    try store.addScratch("scratch_captures", idx);
+}
+
+/// Computes the span of captures starting from a given index.
+pub fn capturesSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.Expr.Capture.Span {
+    return try store.spanFrom("scratch_captures", CIR.Expr.Capture.Span, start);
 }
 
 /// Computes the span of an expression starting from a given index.
@@ -2283,6 +2327,11 @@ pub fn sliceAnnoRecordFields(store: *const NodeStore, span: CIR.TypeAnno.RecordF
 /// Returns a slice of record destruct fields from the store.
 pub fn sliceRecordDestructs(store: *const NodeStore, span: CIR.Pattern.RecordDestruct.Span) []CIR.Pattern.RecordDestruct.Idx {
     return store.sliceFromSpan(CIR.Pattern.RecordDestruct.Idx, span.span);
+}
+
+/// Returns a slice of capture fields from the store.
+pub fn sliceCaptures(store: *const NodeStore, span: CIR.Expr.Capture.Span) []CIR.Expr.Capture.Idx {
+    return store.sliceFromSpan(CIR.Expr.Capture.Idx, span.span);
 }
 
 /// Creates a diagnostic node that stores error information.
@@ -2966,5 +3015,6 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
         .scratch_defs = base.Scratch(CIR.Def.Idx){ .items = .{} },
         .scratch_diagnostics = base.Scratch(CIR.Diagnostic.Idx){ .items = .{} },
         .scratch_record_destructs = base.Scratch(CIR.Pattern.RecordDestruct.Idx){ .items = .{} },
+        .scratch_captures = base.Scratch(CIR.Expr.Capture.Idx){ .items = .{} },
     };
 }

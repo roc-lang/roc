@@ -454,6 +454,10 @@ main = |_| {
 		(e-lambda @23.8-29.2
 			(args
 				(p-underscore @23.9-23.10))
+			(captures
+				(capture @12.1-12.13 (ident "all_int_list"))
+				(capture @13.1-13.13 (ident "all_str_list"))
+				(capture @14.1-14.15 (ident "all_float_list")))
 			(e-block @23.12-29.2
 				(s-let @25.5-25.34
 					(p-assign @25.5-25.9 (ident "len1"))
