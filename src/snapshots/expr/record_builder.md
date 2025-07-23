@@ -81,9 +81,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `baz` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'baz' is not defined:
 **record_builder.md:1:3:1:14:**
 ```roc
 { Foo.Bar.baz <-
@@ -134,9 +134,9 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 	(s-expr @1.3-1.14
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-type-anno @2.5-2.9 (name "x")
-		(ty-malformed @1.1-1.1))
+		(ty-malformed @2.8-2.9))
 	(s-type-anno @3.5-3.9 (name "y")
-		(ty-malformed @1.1-1.1))
+		(ty-malformed @3.8-3.9))
 	(e-empty_record @1.1-4.2))
 ~~~
 # TYPES

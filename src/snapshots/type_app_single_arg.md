@@ -78,41 +78,36 @@ main! = |_| processList(["one", "two"])
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @4.1-4.12 (ident "processList")))
-		(expr
-			(e-lambda @4.15-4.32
-				(args
-					(p-assign @4.16-4.20 (ident "list")))
-				(e-dot-access @4.22-4.32 (field "len")
-					(receiver
-						(e-lookup-local @4.22-4.26
-							(p-assign @4.16-4.20 (ident "list"))))
-					(args))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @3.15-3.31 (effectful false)
-						(ty-apply @3.15-3.24 (symbol "List")
-							(ty @3.20-3.23 (name "Str")))
-						(ty @3.28-3.31 (name "U64")))))))
-	(def
-		(pattern
-			(p-assign @6.1-6.6 (ident "main!")))
-		(expr
-			(e-lambda @6.9-6.39
-				(args
-					(p-underscore @6.10-6.11))
-				(e-call @6.13-6.39
-					(e-lookup-local @6.13-6.24
-						(p-assign @4.1-4.12 (ident "processList")))
-					(e-list @6.25-6.38
-						(elems
-							(e-string @6.26-6.31
-								(e-literal @6.27-6.30 (string "one")))
-							(e-string @6.32-6.37
-								(e-literal @6.33-6.36 (string "two"))))))))))
+	(d-let
+		(p-assign @4.1-4.12 (ident "processList"))
+		(e-lambda @4.15-4.32
+			(args
+				(p-assign @4.16-4.20 (ident "list")))
+			(e-dot-access @4.22-4.32 (field "len")
+				(receiver
+					(e-lookup-local @4.22-4.26
+						(p-assign @4.16-4.20 (ident "list"))))
+				(args)))
+		(annotation @4.1-4.12
+			(declared-type
+				(ty-fn @3.15-3.31 (effectful false)
+					(ty-apply @3.15-3.24 (symbol "List")
+						(ty @3.20-3.23 (name "Str")))
+					(ty @3.28-3.31 (name "U64"))))))
+	(d-let
+		(p-assign @6.1-6.6 (ident "main!"))
+		(e-lambda @6.9-6.39
+			(args
+				(p-underscore @6.10-6.11))
+			(e-call @6.13-6.39
+				(e-lookup-local @6.13-6.24
+					(p-assign @4.1-4.12 (ident "processList")))
+				(e-list @6.25-6.38
+					(elems
+						(e-string @6.26-6.31
+							(e-literal @6.27-6.30 (string "one")))
+						(e-string @6.32-6.37
+							(e-literal @6.33-6.36 (string "two")))))))))
 ~~~
 # TYPES
 ~~~clojure

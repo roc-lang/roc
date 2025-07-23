@@ -44,7 +44,7 @@ pub const AST_PATTERN_NODE_COUNT = 14;
 /// Count of the type annotation nodes in the AST
 pub const AST_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the expression nodes in the AST
-pub const AST_EXPR_NODE_COUNT = 25;
+pub const AST_EXPR_NODE_COUNT = 24;
 
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens
@@ -601,11 +601,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             try store.extra_data.append(store.gpa, @intFromEnum(app.@"fn"));
             node.main_token = @as(u32, @intCast(fn_ed_idx));
         },
-        .record_updater => |ru| {
-            node.tag = .record_update;
-            node.region = ru.region;
-            node.main_token = ru.token;
-        },
+        .record_updater => |_| {},
         .field_access => |fa| {
             node.tag = .field_access;
             node.region = fa.region;
@@ -1524,12 +1520,6 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             return .{ .record_builder = .{
                 .mapper = @enumFromInt(node.data.lhs),
                 .fields = @enumFromInt(node.data.rhs),
-                .region = node.region,
-            } };
-        },
-        .record_update => {
-            return .{ .record_updater = .{
-                .token = node.main_token,
                 .region = node.region,
             } };
         },

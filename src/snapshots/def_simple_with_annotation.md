@@ -42,16 +42,13 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @4.1-4.4 (ident "foo")))
-		(expr
-			(e-string @4.7-4.12
-				(e-literal @4.8-4.11 (string "one"))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty @3.7-3.10 (name "Str")))))))
+	(d-let
+		(p-assign @4.1-4.4 (ident "foo"))
+		(e-string @4.7-4.12
+			(e-literal @4.8-4.11 (string "one")))
+		(annotation @4.1-4.4
+			(declared-type
+				(ty @3.7-3.10 (name "Str"))))))
 ~~~
 # TYPES
 ~~~clojure

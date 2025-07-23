@@ -8,7 +8,7 @@ const build_options = @import("build_options");
 const fmt = @import("fmt.zig");
 const base = @import("base");
 const collections = @import("collections");
-const reporting = @import("reporting");
+const reporting = @import("reporting.zig");
 const coordinate_simple = @import("coordinate_simple.zig");
 const tracy = @import("tracy.zig");
 

@@ -11,9 +11,9 @@ get_name!({}) ?? "Bob"
 UNDEFINED VARIABLE - double_question_binop.md:1:1:1:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `get_name!` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'get_name!' is not defined:
 **double_question_binop.md:1:1:1:10:**
 ```roc
 get_name!({}) ?? "Bob"

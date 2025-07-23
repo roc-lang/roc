@@ -26,15 +26,15 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
 TYPE MISMATCH - underscore_error_propagation.md:14:13:14:24
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
 
-**Underscore in Type Alias**
-Underscore cannot be used in a type alias declaration:
 **underscore_error_propagation.md:1:1:1:1:**
 ```roc
 module []
 ```
 
 
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -104,37 +104,31 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @8.1-8.6 (ident "value")))
-		(expr
-			(e-string @8.9-8.15
-				(e-literal @8.10-8.14 (string "test"))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty @7.9-7.19 (name "BadDerived"))))))
-	(def
-		(pattern
-			(p-assign @15.1-15.10 (ident "goodValue")))
-		(expr
-			(e-string @15.13-15.19
-				(e-literal @15.14-15.18 (string "test"))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty @14.13-14.24 (name "GoodDerived"))))))
+	(d-let
+		(p-assign @8.1-8.6 (ident "value"))
+		(e-string @8.9-8.15
+			(e-literal @8.10-8.14 (string "test")))
+		(annotation @8.1-8.6
+			(declared-type
+				(ty @7.9-7.19 (name "BadDerived")))))
+	(d-let
+		(p-assign @15.1-15.10 (ident "goodValue"))
+		(e-string @15.13-15.19
+			(e-literal @15.14-15.18 (string "test")))
+		(annotation @15.1-15.10
+			(declared-type
+				(ty @14.13-14.24 (name "GoodDerived")))))
 	(s-nominal-decl @3.1-3.13
-		(type-header (name "BadBase"))
+		(ty-header @3.1-3.8 (name "BadBase"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @5.1-5.22
-		(type-header (name "BadDerived"))
+		(ty-header @5.1-5.11 (name "BadDerived"))
 		(ty @5.15-5.22 (name "BadBase")))
 	(s-nominal-decl @10.1-10.16
-		(type-header (name "GoodBase"))
+		(ty-header @10.1-10.9 (name "GoodBase"))
 		(ty @10.13-10.16 (name "Str")))
 	(s-nominal-decl @12.1-12.24
-		(type-header (name "GoodDerived"))
+		(ty-header @12.1-12.12 (name "GoodDerived"))
 		(ty @12.16-12.24 (name "GoodBase"))))
 ~~~
 # TYPES
@@ -145,13 +139,13 @@ NO CHANGE
 		(patt @15.1-15.10 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.13 (type "Error")
-			(type-header (name "BadBase")))
+			(ty-header @3.1-3.8 (name "BadBase")))
 		(nominal @5.1-5.22 (type "Error")
-			(type-header (name "BadDerived")))
+			(ty-header @5.1-5.11 (name "BadDerived")))
 		(nominal @10.1-10.16 (type "GoodBase")
-			(type-header (name "GoodBase")))
+			(ty-header @10.1-10.9 (name "GoodBase")))
 		(nominal @12.1-12.24 (type "Error")
-			(type-header (name "GoodDerived"))))
+			(ty-header @12.1-12.12 (name "GoodDerived"))))
 	(expressions
 		(expr @8.9-8.15 (type "Error"))
 		(expr @15.13-15.19 (type "Error"))))

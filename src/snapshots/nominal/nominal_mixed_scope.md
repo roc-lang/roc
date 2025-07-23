@@ -48,9 +48,9 @@ This feature is not yet implemented: statement type in block
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
+Nothing is named `Color` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'Color' is not defined:
 **nominal_mixed_scope.md:9:12:9:17:**
 ```roc
     import Color.RGB
@@ -59,9 +59,9 @@ The variable 'Color' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `RGB` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'RGB' is not defined:
 **nominal_mixed_scope.md:12:9:12:12:**
 ```roc
         RGB.Red => LocalStatus.Pending
@@ -70,9 +70,9 @@ The variable 'RGB' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `RGB` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'RGB' is not defined:
 **nominal_mixed_scope.md:13:9:13:12:**
 ```roc
         RGB.Green => LocalStatus.Complete
@@ -81,9 +81,9 @@ The variable 'RGB' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `RGB` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'RGB' is not defined:
 **nominal_mixed_scope.md:14:9:14:12:**
 ```roc
         RGB.Blue => LocalStatus.Pending
@@ -170,51 +170,48 @@ processColor = |color| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @6.1-6.13 (ident "processColor")))
-		(expr
-			(e-lambda @6.16-16.2
-				(args
-					(p-assign @6.17-6.22 (ident "color")))
-				(e-block @6.24-16.2
-					(s-expr @9.12-9.21
-						(e-runtime-error (tag "ident_not_in_scope")))
-					(e-match @11.5-15.6
-						(match @11.5-15.6
-							(cond
-								(e-lookup-local @11.11-11.16
-									(p-assign @6.17-6.22 (ident "color"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-runtime-error @1.1-1.1 (tag "ident_not_in_scope"))))
-									(value
-										(e-nominal @12.20-12.31 (nominal "LocalStatus")
-											(e-tag @12.20-12.39 (name "Pending")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-runtime-error @1.1-1.1 (tag "ident_not_in_scope"))))
-									(value
-										(e-nominal @13.22-13.33 (nominal "LocalStatus")
-											(e-tag @13.22-13.42 (name "Complete")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-runtime-error @1.1-1.1 (tag "ident_not_in_scope"))))
-									(value
-										(e-nominal @14.21-14.32 (nominal "LocalStatus")
-											(e-tag @14.21-14.40 (name "Pending")))))))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @5.16-5.32 (effectful false)
-						(ty-underscore @1.1-1.1)
-						(ty @5.21-5.32 (name "LocalStatus")))))))
+	(d-let
+		(p-assign @6.1-6.13 (ident "processColor"))
+		(e-lambda @6.16-16.2
+			(args
+				(p-assign @6.17-6.22 (ident "color")))
+			(e-block @6.24-16.2
+				(s-expr @9.12-9.21
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(e-match @11.5-15.6
+					(match @11.5-15.6
+						(cond
+							(e-lookup-local @11.11-11.16
+								(p-assign @6.17-6.22 (ident "color"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error @12.9-12.12 (tag "ident_not_in_scope"))))
+								(value
+									(e-nominal @12.20-12.31 (nominal "LocalStatus")
+										(e-tag @12.20-12.39 (name "Pending")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error @13.9-13.12 (tag "ident_not_in_scope"))))
+								(value
+									(e-nominal @13.22-13.33 (nominal "LocalStatus")
+										(e-tag @13.22-13.42 (name "Complete")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error @14.9-14.12 (tag "ident_not_in_scope"))))
+								(value
+									(e-nominal @14.21-14.32 (nominal "LocalStatus")
+										(e-tag @14.21-14.40 (name "Pending"))))))))))
+		(annotation @6.1-6.13
+			(declared-type
+				(ty-fn @5.16-5.32 (effectful false)
+					(ty-underscore @1.1-1.1)
+					(ty @5.21-5.32 (name "LocalStatus"))))))
 	(s-nominal-decl @3.1-3.35
-		(type-header (name "LocalStatus"))
+		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-tag-union @3.16-3.35
 			(ty @3.17-3.24 (name "Pending"))
 			(ty @3.26-3.34 (name "Complete")))))
@@ -226,7 +223,7 @@ processColor = |color| {
 		(patt @6.1-6.13 (type "Error -> LocalStatus")))
 	(type_decls
 		(nominal @3.1-3.35 (type "LocalStatus")
-			(type-header (name "LocalStatus"))))
+			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
 		(expr @6.16-16.2 (type "Error -> LocalStatus"))))
 ~~~

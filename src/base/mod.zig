@@ -3,6 +3,7 @@
 pub const SExprTree = @import("SExprTree.zig");
 pub const Ident = @import("Ident.zig");
 pub const Region = @import("Region.zig");
+pub const ModuleEnv = @import("ModuleEnv.zig");
 pub const StringLiteral = @import("StringLiteral.zig");
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const Scratch = @import("Scratch.zig").Scratch;

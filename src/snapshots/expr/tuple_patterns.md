@@ -55,9 +55,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'a' is not defined:
 **tuple_patterns.md:7:7:7:8:**
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))
@@ -66,9 +66,9 @@ The variable 'a' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `b` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'b' is not defined:
 **tuple_patterns.md:7:10:7:11:**
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))
@@ -77,9 +77,9 @@ The variable 'b' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `c` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'c' is not defined:
 **tuple_patterns.md:7:15:7:16:**
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))
@@ -88,9 +88,9 @@ The variable 'c' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `d` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'd' is not defined:
 **tuple_patterns.md:7:18:7:19:**
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))

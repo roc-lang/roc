@@ -143,8 +143,8 @@ main.roc
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-3.15
-		(type-header (name "Fli"))
-		(ty-malformed @1.1-1.1)))
+		(ty-header @3.1-3.11 (name "Fli"))
+		(ty-malformed @3.14-3.15)))
 ~~~
 # TYPES
 ~~~clojure
@@ -152,6 +152,6 @@ main.roc
 	(defs)
 	(type_decls
 		(alias @3.1-3.15 (type "Error")
-			(type-header (name "Fli"))))
+			(ty-header @3.1-3.11 (name "Fli"))))
 	(expressions))
 ~~~

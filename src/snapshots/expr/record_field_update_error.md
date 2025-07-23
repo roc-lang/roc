@@ -38,9 +38,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'person' is not defined:
 **record_field_update_error.md:1:3:1:9:**
 ```roc
 { person & age: 31 }
@@ -78,7 +78,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 	(s-expr @1.3-1.9
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-type-anno @1.12-1.19 (name "age")
-		(ty-malformed @1.1-1.1))
+		(ty-malformed @1.17-1.19))
 	(e-tuple @1.12-1.19
 		(elems)))
 ~~~

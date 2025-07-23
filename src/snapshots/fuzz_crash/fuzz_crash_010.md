@@ -98,12 +98,10 @@ foo =
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @3.1-3.4 (ident "foo")))
-		(expr
-			(e-string @5.5-5.35
-				(e-literal @5.6-5.35 (string "on        (string 'onmo %')))"))))))
+	(d-let
+		(p-assign @3.1-3.4 (ident "foo"))
+		(e-string @5.5-5.35
+			(e-literal @5.6-5.35 (string "on        (string 'onmo %')))")))))
 ~~~
 # TYPES
 ~~~clojure

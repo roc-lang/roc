@@ -34,6 +34,7 @@ foo = asd.0
 ```
          ^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 # TOKENS
 ~~~zig
@@ -59,11 +60,9 @@ foo =
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @3.1-3.4 (ident "foo")))
-		(expr
-			(e-runtime-error (tag "expr_not_canonicalized")))))
+	(d-let
+		(p-assign @3.1-3.4 (ident "foo"))
+		(e-runtime-error (tag "expr_not_canonicalized"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -71,5 +70,5 @@ foo =
 	(defs
 		(patt @3.1-3.4 (type "Error")))
 	(expressions
-		(expr @1.1-1.1 (type "Error"))))
+		(expr @3.10-3.12 (type "Error"))))
 ~~~

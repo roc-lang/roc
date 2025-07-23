@@ -216,114 +216,106 @@ main = {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @8.1-8.10 (ident "swap_pair")))
-		(expr
-			(e-lambda @8.13-8.28
-				(args
-					(p-tuple @8.14-8.20
-						(patterns
-							(p-assign @8.15-8.16 (ident "x"))
-							(p-assign @8.18-8.19 (ident "y")))))
-				(e-tuple @8.22-8.28
-					(elems
-						(e-lookup-local @8.23-8.24
-							(p-assign @8.18-8.19 (ident "y")))
-						(e-lookup-local @8.26-8.27
-							(p-assign @8.15-8.16 (ident "x")))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @7.13-7.37 (effectful false)
-						(ty-apply @7.13-7.23 (symbol "Pair")
-							(ty-var @7.18-7.19 (name "a"))
-							(ty-var @7.21-7.22 (name "b")))
-						(ty-apply @7.27-7.37 (symbol "Pair")
-							(ty-var @7.32-7.33 (name "b"))
-							(ty-var @7.35-7.36 (name "a"))))))))
-	(def
-		(pattern
-			(p-assign @12.1-12.9 (ident "map_pair")))
-		(expr
-			(e-lambda @12.12-12.39
-				(args
-					(p-tuple @12.13-12.19
-						(patterns
-							(p-assign @12.14-12.15 (ident "x"))
-							(p-assign @12.17-12.18 (ident "y"))))
-					(p-assign @12.21-12.22 (ident "f"))
-					(p-assign @12.24-12.25 (ident "g")))
-				(e-tuple @12.27-12.39
-					(elems
-						(e-call @12.28-12.32
-							(e-lookup-local @12.28-12.29
-								(p-assign @12.21-12.22 (ident "f")))
-							(e-lookup-local @12.30-12.31
-								(p-assign @12.14-12.15 (ident "x"))))
-						(e-call @12.34-12.38
-							(e-lookup-local @12.34-12.35
-								(p-assign @12.24-12.25 (ident "g")))
-							(e-lookup-local @12.36-12.37
-								(p-assign @12.17-12.18 (ident "y"))))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @11.12-11.56 (effectful false)
-						(ty-apply @11.12-11.22 (symbol "Pair")
-							(ty-var @11.17-11.18 (name "a"))
-							(ty-var @11.20-11.21 (name "b")))
-						(ty-parens @11.24-11.32
-							(ty-fn @11.25-11.31 (effectful false)
-								(ty-var @11.25-11.26 (name "a"))
-								(ty-var @11.30-11.31 (name "c"))))
-						(ty-parens @11.34-11.42
-							(ty-fn @11.35-11.41 (effectful false)
-								(ty-var @11.35-11.36 (name "b"))
-								(ty-var @11.40-11.41 (name "d"))))
-						(ty-apply @11.46-11.56 (symbol "Pair")
-							(ty-var @11.51-11.52 (name "c"))
-							(ty-var @11.54-11.55 (name "d"))))))))
-	(def
-		(pattern
-			(p-assign @17.1-17.5 (ident "main")))
-		(expr
-			(e-block @17.8-26.2
-				(s-let @19.5-19.27
-					(p-assign @19.5-19.7 (ident "p1"))
-					(e-call @19.10-19.27
-						(e-lookup-local @19.10-19.19
-							(p-assign @8.1-8.10 (ident "swap_pair")))
-						(e-tuple @19.20-19.26
-							(elems
-								(e-int @19.21-19.22 (value "1"))
-								(e-int @19.24-19.25 (value "2"))))))
-				(s-let @23.5-23.50
-					(p-assign @23.5-23.7 (ident "p2"))
-					(e-call @23.10-23.50
-						(e-lookup-local @23.10-23.18
-							(p-assign @12.1-12.9 (ident "map_pair")))
-						(e-int @23.19-23.20 (value "3"))
-						(e-int @23.22-23.23 (value "4"))
-						(e-lambda @23.26-23.35
-							(args
-								(p-assign @23.27-23.28 (ident "x")))
-							(e-binop @23.30-23.35 (op "add")
-								(e-lookup-local @23.30-23.31
-									(p-assign @23.27-23.28 (ident "x")))
-								(e-int @23.34-23.35 (value "1"))))
-						(e-lambda @23.39-23.48
-							(args
-								(p-assign @23.40-23.41 (ident "y")))
-							(e-binop @23.43-23.48 (op "mul")
-								(e-lookup-local @23.43-23.44
-									(p-assign @23.40-23.41 (ident "y")))
-								(e-int @23.47-23.48 (value "2"))))))
-				(e-lookup-local @25.5-25.7
-					(p-assign @23.5-23.7 (ident "p2"))))))
-	(s-alias-decl @4.1-4.20
-		(type-header (name "Pair")
+	(d-let
+		(p-assign @8.1-8.10 (ident "swap_pair"))
+		(e-lambda @8.13-8.28
 			(args
+				(p-tuple @8.14-8.20
+					(patterns
+						(p-assign @8.15-8.16 (ident "x"))
+						(p-assign @8.18-8.19 (ident "y")))))
+			(e-tuple @8.22-8.28
+				(elems
+					(e-lookup-local @8.23-8.24
+						(p-assign @8.18-8.19 (ident "y")))
+					(e-lookup-local @8.26-8.27
+						(p-assign @8.15-8.16 (ident "x"))))))
+		(annotation @8.1-8.10
+			(declared-type
+				(ty-fn @7.13-7.37 (effectful false)
+					(ty-apply @7.13-7.23 (symbol "Pair")
+						(ty-var @7.18-7.19 (name "a"))
+						(ty-var @7.21-7.22 (name "b")))
+					(ty-apply @7.27-7.37 (symbol "Pair")
+						(ty-var @7.32-7.33 (name "b"))
+						(ty-var @7.35-7.36 (name "a")))))))
+	(d-let
+		(p-assign @12.1-12.9 (ident "map_pair"))
+		(e-lambda @12.12-12.39
+			(args
+				(p-tuple @12.13-12.19
+					(patterns
+						(p-assign @12.14-12.15 (ident "x"))
+						(p-assign @12.17-12.18 (ident "y"))))
+				(p-assign @12.21-12.22 (ident "f"))
+				(p-assign @12.24-12.25 (ident "g")))
+			(e-tuple @12.27-12.39
+				(elems
+					(e-call @12.28-12.32
+						(e-lookup-local @12.28-12.29
+							(p-assign @12.21-12.22 (ident "f")))
+						(e-lookup-local @12.30-12.31
+							(p-assign @12.14-12.15 (ident "x"))))
+					(e-call @12.34-12.38
+						(e-lookup-local @12.34-12.35
+							(p-assign @12.24-12.25 (ident "g")))
+						(e-lookup-local @12.36-12.37
+							(p-assign @12.17-12.18 (ident "y")))))))
+		(annotation @12.1-12.9
+			(declared-type
+				(ty-fn @11.12-11.56 (effectful false)
+					(ty-apply @11.12-11.22 (symbol "Pair")
+						(ty-var @11.17-11.18 (name "a"))
+						(ty-var @11.20-11.21 (name "b")))
+					(ty-parens @11.24-11.32
+						(ty-fn @11.25-11.31 (effectful false)
+							(ty-var @11.25-11.26 (name "a"))
+							(ty-var @11.30-11.31 (name "c"))))
+					(ty-parens @11.34-11.42
+						(ty-fn @11.35-11.41 (effectful false)
+							(ty-var @11.35-11.36 (name "b"))
+							(ty-var @11.40-11.41 (name "d"))))
+					(ty-apply @11.46-11.56 (symbol "Pair")
+						(ty-var @11.51-11.52 (name "c"))
+						(ty-var @11.54-11.55 (name "d")))))))
+	(d-let
+		(p-assign @17.1-17.5 (ident "main"))
+		(e-block @17.8-26.2
+			(s-let @19.5-19.27
+				(p-assign @19.5-19.7 (ident "p1"))
+				(e-call @19.10-19.27
+					(e-lookup-local @19.10-19.19
+						(p-assign @8.1-8.10 (ident "swap_pair")))
+					(e-tuple @19.20-19.26
+						(elems
+							(e-int @19.21-19.22 (value "1"))
+							(e-int @19.24-19.25 (value "2"))))))
+			(s-let @23.5-23.50
+				(p-assign @23.5-23.7 (ident "p2"))
+				(e-call @23.10-23.50
+					(e-lookup-local @23.10-23.18
+						(p-assign @12.1-12.9 (ident "map_pair")))
+					(e-int @23.19-23.20 (value "3"))
+					(e-int @23.22-23.23 (value "4"))
+					(e-lambda @23.26-23.35
+						(args
+							(p-assign @23.27-23.28 (ident "x")))
+						(e-binop @23.30-23.35 (op "add")
+							(e-lookup-local @23.30-23.31
+								(p-assign @23.27-23.28 (ident "x")))
+							(e-int @23.34-23.35 (value "1"))))
+					(e-lambda @23.39-23.48
+						(args
+							(p-assign @23.40-23.41 (ident "y")))
+						(e-binop @23.43-23.48 (op "mul")
+							(e-lookup-local @23.43-23.44
+								(p-assign @23.40-23.41 (ident "y")))
+							(e-int @23.47-23.48 (value "2"))))))
+			(e-lookup-local @25.5-25.7
+				(p-assign @23.5-23.7 (ident "p2")))))
+	(s-alias-decl @4.1-4.20
+		(ty-header @4.1-4.11 (name "Pair")
+			(ty-args
 				(ty-var @4.6-4.7 (name "a"))
 				(ty-var @4.9-4.10 (name "b"))))
 		(ty-tuple @4.14-4.20
@@ -339,8 +331,8 @@ main = {
 		(patt @17.1-17.5 (type "_e")))
 	(type_decls
 		(alias @4.1-4.20 (type "Pair(a, b)")
-			(type-header (name "Pair")
-				(args
+			(ty-header @4.1-4.11 (name "Pair")
+				(ty-args
 					(ty-var @4.6-4.7 (name "a"))
 					(ty-var @4.9-4.10 (name "b"))))))
 	(expressions

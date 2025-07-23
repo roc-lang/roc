@@ -4,7 +4,6 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
-const compile = @import("compile");
 const cache = @import("../cache/mod.zig");
 const collections = @import("collections");
 const Can = @import("../check/canonicalize.zig");
@@ -20,7 +19,7 @@ const ModuleWorkIdx = base.ModuleWorkIdx;
 
 const Self = @This();
 
-modules: std.ArrayList(ModuleWork(Can.ModuleEnv)),
+modules: std.ArrayList(ModuleWork(Can.CIR)),
 adjacencies: std.ArrayList(std.ArrayList(usize)),
 gpa: std.mem.Allocator,
 
@@ -50,7 +49,7 @@ pub fn fromPackages(
     package_store: *const Package.Store,
 ) ConstructResult {
     var graph = Self{
-        .modules = std.ArrayList(ModuleWork(Can.ModuleEnv)).init(gpa),
+        .modules = std.ArrayList(ModuleWork(Can.CIR)).init(gpa),
         .adjacencies = std.ArrayList(std.ArrayList(usize)).init(gpa),
         .gpa = gpa,
     };
@@ -59,7 +58,7 @@ pub fn fromPackages(
         const package_idx: u32 = @truncate(package_index);
         for (package.modules.items.items, 0..) |module, module_index| {
             const module_idx: u32 = @truncate(module_index);
-            const module_env = loadOrCompileModuleEnv(
+            const can_ir = loadOrCompileCanIr(
                 package.absolute_dirpath,
                 module.filepath_relative_to_package_root,
                 fs,
@@ -75,10 +74,10 @@ pub fn fromPackages(
                 } };
             };
 
-            try graph.modules.append(ModuleWork(Can.ModuleEnv)){
+            try graph.modules.append(ModuleWork(Can.CIR){
                 .package_idx = @enumFromInt(package_idx),
                 .module_idx = @enumFromInt(module_idx),
-                .work = module_env,
+                .work = can_ir,
             });
             try graph.adjacencies.append(std.ArrayList(usize).init(gpa));
         }
@@ -89,12 +88,12 @@ pub fn fromPackages(
     return .{ .success = graph };
 }
 
-fn loadOrCompileModuleEnv(
+fn loadOrCompileCanIr(
     absdir: []const u8,
     relpath: []const u8,
     fs: Filesystem,
     gpa: std.mem.Allocator,
-) !Can.ModuleEnv {
+) !Can.CIR {
     // TODO: find a way to provide the current Roc compiler version
     const current_roc_version = "";
     const abs_file_path = try std.fs.path.join(gpa, &.{ absdir, relpath });
@@ -103,28 +102,28 @@ fn loadOrCompileModuleEnv(
     // traversing the file system earlier.
     const contents = try fs.readFile(abs_file_path, gpa);
     const hash_of_contents = utils.blake3Hash(contents);
-    const cache_lookup = cache.getModuleEnvForHashAndRocVersion(&hash_of_contents, current_roc_version, fs, gpa);
+    const cache_lookup = cache.getCanIrForHashAndRocVersion(&hash_of_contents, current_roc_version, fs, gpa);
 
-    return if (cache_lookup) |env| env else blk: {
+    return if (cache_lookup) |ir| ir else blk: {
 
         // TODO we probably shouldn't be saving the contents of the file in the ModuleEnv
         // this is temporary so we can generate error reporting and diagnostics/region info.
         // We should probably be reading the file on demand or something else. Leaving this
         // comment here so we discuss the plan and make the necessary changes.
-        var module_env = compile.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
         var parse_ir = parse.parse(&module_env);
         parse_ir.store.emptyScratch();
 
-        // TODO Can we init ModuleEnv & the types store capacities based on the number
+        // TODO Can we init CIR & the types store capacities based on the number
         // of parse nodes?
 
-        var module_env = try Can.ModuleEnv.init(gpa, relpath);
-        var scope = Scope.init(module_env.gpa);
+        var can_ir = Can.CIR.init(&module_env);
+        var scope = Scope.init(can_ir.env.gpa);
         defer scope.deinit(gpa);
-        var can = Can.init(&module_env, &parse_ir, &scope);
+        var can = Can.init(&can_ir, &parse_ir, &scope);
         try can.canonicalize_file();
 
-        break :blk module_env;
+        break :blk can_ir;
     };
 }
 
@@ -196,7 +195,7 @@ pub const Sccs = struct {
 
 /// The result of an attempt to put modules in compilation order.
 pub const OrderingResult = union(enum) {
-    ordered: ModuleWork(Can.ModuleEnv).Store,
+    ordered: ModuleWork(Can.CIR).Store,
     found_cycle: std.ArrayList(ModuleWork(void)),
 };
 
@@ -210,7 +209,7 @@ pub fn putModulesInCompilationOrder(
     sccs: *const Sccs,
     gpa: std.mem.Allocator,
 ) std.mem.Allocator.Error!OrderingResult {
-    var modules = std.ArrayList(ModuleWork(Can.ModuleEnv)).init(gpa);
+    var modules = std.ArrayList(ModuleWork(Can.CIR)).init(gpa);
     errdefer modules.deinit();
 
     var group_index = sccs.groups.items.len;
@@ -226,10 +225,10 @@ pub fn putModulesInCompilationOrder(
         } else {
             var cycle = std.ArrayList(ModuleWork(void)).init(gpa);
             for (group.items) |group_item_index| {
-                const module_env = &self.modules.items[group_item_index];
+                const can_ir = &self.modules.items[group_item_index];
                 try cycle.append(ModuleWork(void){
-                    .package_idx = module_env.package_idx,
-                    .module_idx = module_env.module_idx,
+                    .package_idx = can_ir.package_idx,
+                    .module_idx = can_ir.module_idx,
                     .work = undefined,
                 });
             }
@@ -238,7 +237,7 @@ pub fn putModulesInCompilationOrder(
         }
     }
 
-    return .{ .ordered = ModuleWork(Can.ModuleEnv).Store.fromModuleEnvs(gpa, modules.items) };
+    return .{ .ordered = ModuleWork(Can.CIR).Store.fromCanIrs(gpa, modules.items) };
 }
 
 /// Find the SCCs for a [ModuleGraph] to facilitate ordering modules in a dependency-first

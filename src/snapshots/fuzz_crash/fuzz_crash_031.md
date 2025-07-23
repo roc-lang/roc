@@ -76,6 +76,7 @@ vavar t= '
 ```
          ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 # TOKENS
 ~~~zig
@@ -104,11 +105,9 @@ t =
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @4.7-4.8 (ident "t")))
-		(expr
-			(e-runtime-error (tag "expr_not_canonicalized")))))
+	(d-let
+		(p-assign @4.7-4.8 (ident "t"))
+		(e-runtime-error (tag "expr_not_canonicalized"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -116,5 +115,5 @@ t =
 	(defs
 		(patt @4.7-4.8 (type "Error")))
 	(expressions
-		(expr @1.1-1.1 (type "Error"))))
+		(expr @4.10-4.11 (type "Error"))))
 ~~~

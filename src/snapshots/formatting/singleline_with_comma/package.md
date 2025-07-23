@@ -15,26 +15,24 @@ EXPOSED BUT NOT DEFINED - package.md:1:10:1:12
 EXPOSED BUT NOT DEFINED - package.md:1:14:1:16
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
+The module header says that `a!` is exposed, but it is not defined anywhere in this module.
 
-**Exposed but Not Defined**
-'a!' is exposed in the module header but is not defined:
 **package.md:1:10:1:12:**
 ```roc
 package [a!, b!,] { a: "a", b: "b", }
 ```
          ^^
-
+You can fix this by either defining `a!` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
+The module header says that `b!` is exposed, but it is not defined anywhere in this module.
 
-**Exposed but Not Defined**
-'b!' is exposed in the module header but is not defined:
 **package.md:1:14:1:16:**
 ```roc
 package [a!, b!,] { a: "a", b: "b", }
 ```
              ^^
-
+You can fix this by either defining `b!` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig

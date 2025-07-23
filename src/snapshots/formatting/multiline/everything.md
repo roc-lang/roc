@@ -506,189 +506,184 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @60.1-60.2 (ident "h")))
-		(expr
-			(e-lambda @60.5-110.2
-				(args
-					(p-assign @60.6-60.7 (ident "x"))
-					(p-assign @60.9-60.10 (ident "y")))
-				(e-block @60.12-110.2
-					(s-let @61.2-68.3
-						(p-assign @61.2-61.4 (ident "h1"))
-						(e-record @61.7-68.3
-							(fields
-								(record-field (label "h11")
-									(value
-										(e-lookup-local @62.8-62.9
-											(p-assign @60.6-60.7 (ident "x")))))
-								(record-field (label "h12")
-									(value
-										(e-lookup-local @63.8-63.9
-											(p-assign @60.6-60.7 (ident "x")))))
-								(record-field (label "h13")
-									(value
-										(e-record @64.8-67.4
-											(fields
-												(record-field (label "h131")
-													(value
-														(e-lookup-local @65.10-65.11
-															(p-assign @60.6-60.7 (ident "x")))))
-												(record-field (label "h132")
-													(value
-														(e-lookup-local @66.10-66.11
-															(p-assign @60.9-60.10 (ident "y"))))))))))))
-					(s-let @69.2-72.3
-						(p-assign @69.2-69.4 (ident "h2"))
-						(e-call @69.7-72.3
-							(e-lookup-local @69.7-69.8
-								(p-assign @60.1-60.2 (ident "h")))
-							(e-lookup-local @70.3-70.4
-								(p-assign @60.6-60.7 (ident "x")))
-							(e-lookup-local @71.3-71.4
-								(p-assign @60.9-60.10 (ident "y")))))
-					(s-let @73.2-76.3
-						(p-assign @73.2-73.4 (ident "h3"))
-						(e-tag @73.7-73.8 (name "A")
-							(args
-								(e-lookup-local @74.3-74.4
-									(p-assign @60.6-60.7 (ident "x")))
-								(e-lookup-local @75.3-75.4
-									(p-assign @60.9-60.10 (ident "y"))))))
-					(s-let @77.2-80.3
-						(p-assign @77.2-77.4 (ident "h4"))
-						(e-list @77.7-80.3
-							(elems
-								(e-lookup-local @78.3-78.4
-									(p-assign @60.6-60.7 (ident "x")))
-								(e-lookup-local @79.3-79.4
-									(p-assign @60.9-60.10 (ident "y"))))))
-					(s-let @81.2-84.3
-						(p-assign @81.2-81.4 (ident "h5"))
-						(e-tuple @81.7-84.3
-							(elems
-								(e-lookup-local @82.3-82.4
-									(p-assign @60.6-60.7 (ident "x")))
-								(e-lookup-local @83.3-83.4
-									(p-assign @60.9-60.10 (ident "y"))))))
-					(e-match @86.2-109.3
-						(match @86.2-109.3
-							(cond
-								(e-lookup-local @86.8-86.9
-									(p-assign @60.6-60.7 (ident "x"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag @87.3-92.4)))
-									(value
-										(e-lookup-local @92.8-92.9
-											(p-assign @89.5-89.6 (ident "a")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag @93.3-96.4)))
-									(value
-										(e-lookup-local @96.8-96.9
-											(p-assign @94.4-94.5 (ident "a")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag @97.3-102.4)))
-									(value
-										(e-lookup-local @102.8-102.9
-											(p-assign @99.5-99.6 (ident "a")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag @103.3-108.4)))
-									(value
-										(e-lookup-local @108.8-108.9
-											(p-assign @105.5-105.6 (ident "a"))))))))))))
-	(s-alias-decl @14.1-23.11
-		(type-header (name "A")
+	(d-let
+		(p-assign @60.1-60.2 (ident "h"))
+		(e-lambda @60.5-110.2
 			(args
+				(p-assign @60.6-60.7 (ident "x"))
+				(p-assign @60.9-60.10 (ident "y")))
+			(e-block @60.12-110.2
+				(s-let @61.2-68.3
+					(p-assign @61.2-61.4 (ident "h1"))
+					(e-record @61.7-68.3
+						(fields
+							(field (name "h11")
+								(e-lookup-local @62.8-62.9
+									(p-assign @60.6-60.7 (ident "x"))))
+							(field (name "h12")
+								(e-lookup-local @63.8-63.9
+									(p-assign @60.6-60.7 (ident "x"))))
+							(field (name "h13")
+								(e-record @64.8-67.4
+									(fields
+										(field (name "h131")
+											(e-lookup-local @65.10-65.11
+												(p-assign @60.6-60.7 (ident "x"))))
+										(field (name "h132")
+											(e-lookup-local @66.10-66.11
+												(p-assign @60.9-60.10 (ident "y"))))))))))
+				(s-let @69.2-72.3
+					(p-assign @69.2-69.4 (ident "h2"))
+					(e-call @69.7-72.3
+						(e-lookup-local @69.7-69.8
+							(p-assign @60.1-60.2 (ident "h")))
+						(e-lookup-local @70.3-70.4
+							(p-assign @60.6-60.7 (ident "x")))
+						(e-lookup-local @71.3-71.4
+							(p-assign @60.9-60.10 (ident "y")))))
+				(s-let @73.2-76.3
+					(p-assign @73.2-73.4 (ident "h3"))
+					(e-tag @73.7-73.8 (name "A")
+						(args
+							(e-lookup-local @74.3-74.4
+								(p-assign @60.6-60.7 (ident "x")))
+							(e-lookup-local @75.3-75.4
+								(p-assign @60.9-60.10 (ident "y"))))))
+				(s-let @77.2-80.3
+					(p-assign @77.2-77.4 (ident "h4"))
+					(e-list @77.7-80.3
+						(elems
+							(e-lookup-local @78.3-78.4
+								(p-assign @60.6-60.7 (ident "x")))
+							(e-lookup-local @79.3-79.4
+								(p-assign @60.9-60.10 (ident "y"))))))
+				(s-let @81.2-84.3
+					(p-assign @81.2-81.4 (ident "h5"))
+					(e-tuple @81.7-84.3
+						(elems
+							(e-lookup-local @82.3-82.4
+								(p-assign @60.6-60.7 (ident "x")))
+							(e-lookup-local @83.3-83.4
+								(p-assign @60.9-60.10 (ident "y"))))))
+				(e-match @86.2-109.3
+					(match @86.2-109.3
+						(cond
+							(e-lookup-local @86.8-86.9
+								(p-assign @60.6-60.7 (ident "x"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @87.3-92.4)))
+								(value
+									(e-lookup-local @92.8-92.9
+										(p-assign @89.5-89.6 (ident "a")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @93.3-96.4)))
+								(value
+									(e-lookup-local @96.8-96.9
+										(p-assign @94.4-94.5 (ident "a")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @97.3-102.4)))
+								(value
+									(e-lookup-local @102.8-102.9
+										(p-assign @99.5-99.6 (ident "a")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @103.3-108.4)))
+								(value
+									(e-lookup-local @108.8-108.9
+										(p-assign @105.5-105.6 (ident "a")))))))))))
+	(s-alias-decl @14.1-23.11
+		(ty-header @14.1-14.5 (name "A")
+			(ty-args
 				(ty-var @14.3-14.4 (name "a"))))
 		(ty-var @14.8-14.9 (name "a"))
 		(where
-			(where-clause
-				(type "mod-method")
-				(var-name "a")
-				(method-name "a1"))
-			(where-clause
-				(type "mod-method")
-				(var-name "a")
-				(method-name "a2"))))
+			(method @16.3-19.11 (module-of "a") (ident "a1")
+				(args
+					(ty-tuple @16.18-19.4
+						(ty-var @17.4-17.5 (name "a"))
+						(ty-var @18.4-18.5 (name "a"))))
+				(ty @19.8-19.11 (name "Str")))
+			(method @20.3-23.11 (module-of "a") (ident "a2")
+				(args
+					(ty-tuple @20.18-23.4
+						(ty-var @21.4-21.5 (name "a"))
+						(ty-var @22.4-22.5 (name "a"))))
+				(ty @23.8-23.11 (name "Str")))))
 	(s-alias-decl @24.1-33.11
-		(type-header (name "B")
-			(args
+		(ty-header @24.1-24.5 (name "B")
+			(ty-args
 				(ty-var @24.3-24.4 (name "b"))))
 		(ty-var @24.8-24.9 (name "b"))
 		(where
-			(where-clause
-				(type "mod-method")
-				(var-name "b")
-				(method-name "b1"))
-			(where-clause
-				(type "mod-method")
-				(var-name "b")
-				(method-name "b2"))))
+			(method @26.3-29.11 (module-of "b") (ident "b1")
+				(args
+					(ty-tuple @26.18-29.4
+						(ty-var @27.4-27.5 (name "b"))
+						(ty-var @28.4-28.5 (name "b"))))
+				(ty @29.8-29.11 (name "Str")))
+			(method @30.3-33.11 (module-of "b") (ident "b2")
+				(args
+					(ty-tuple @30.18-33.4
+						(ty-var @31.4-31.5 (name "b"))
+						(ty-var @32.4-32.5 (name "b"))))
+				(ty @33.8-33.11 (name "Str")))))
 	(s-alias-decl @35.1-41.2
-		(type-header (name "C")
-			(args
+		(ty-header @35.1-38.2 (name "C")
+			(ty-args
 				(ty-var @36.2-36.3 (name "a"))
 				(ty-var @37.2-37.3 (name "b"))))
 		(ty-tuple @38.5-41.2
 			(ty-var @39.2-39.3 (name "a"))
 			(ty-var @40.2-40.3 (name "b"))))
 	(s-alias-decl @42.1-48.2
-		(type-header (name "D")
-			(args
+		(ty-header @42.1-45.2 (name "D")
+			(ty-args
 				(ty-var @43.2-43.3 (name "a"))
 				(ty-var @44.2-44.3 (name "b"))))
 		(ty-apply @45.5-48.2 (symbol "C")
 			(ty-var @46.2-46.3 (name "a"))
 			(ty-var @47.2-47.3 (name "b"))))
 	(s-alias-decl @49.1-52.2
-		(type-header (name "E"))
+		(ty-header @49.1-49.2 (name "E"))
 		(ty-record @49.5-52.2
 			(field (field "a")
 				(ty @50.6-50.9 (name "Str")))
 			(field (field "b")
 				(ty @51.6-51.9 (name "Str")))))
 	(s-alias-decl @53.1-56.2
-		(type-header (name "F"))
+		(ty-header @53.1-53.2 (name "F"))
 		(ty-tag-union @53.5-56.2
 			(ty @54.2-54.3 (name "A"))
 			(ty @55.2-55.3 (name "B"))))
 	(s-import @4.1-7.2 (module "I1")
 		(exposes
-			(exposed-item (name "I11") (is_wildcard false))
-			(exposed-item (name "I12") (is_wildcard false))))
+			(exposed (name "I11") (wildcard false))
+			(exposed (name "I12") (wildcard false))))
 	(s-import @8.1-11.2 (module "I2")
 		(exposes
-			(exposed-item (name "I21") (alias "Ias1") (is_wildcard false))
-			(exposed-item (name "I22") (alias "Ias2") (is_wildcard false))))
+			(exposed (name "I21") (alias "Ias1") (wildcard false))
+			(exposed (name "I22") (alias "Ias2") (wildcard false))))
 	(s-type-anno @58.1-58.42 (name "g")
 		(ty-fn @58.5-58.11 (effectful false)
 			(ty-var @58.5-58.6 (name "e"))
 			(ty-var @58.10-58.11 (name "e")))
 		(where
-			(where-clause
-				(type "mod-alias")
-				(var-name "e")
-				(alias-name "A"))
-			(where-clause
-				(type "mod-alias")
-				(var-name "e")
-				(alias-name "B"))))
-	(external-decl (qualified-name "module(a).a1") (module-name "module(a)") (local-name "a1") (kind "value"))
-	(external-decl (qualified-name "module(a).a2") (module-name "module(a)") (local-name "a2") (kind "value"))
-	(external-decl (qualified-name "module(b).b1") (module-name "module(b)") (local-name "b1") (kind "value"))
-	(external-decl (qualified-name "module(b).b2") (module-name "module(b)") (local-name "b2") (kind "value"))
-	(external-decl (qualified-name "module(e).A") (module-name "module(e)") (local-name "A") (kind "type"))
-	(external-decl (qualified-name "module(e).B") (module-name "module(e)") (local-name "B") (kind "type")))
+			(alias @58.18-58.29 (module-of "e") (ident "A"))
+			(alias @58.31-58.42 (module-of "e") (ident "B"))))
+	(ext-decl @16.3-19.11 (ident "module(a).a1") (kind "value"))
+	(ext-decl @20.3-23.11 (ident "module(a).a2") (kind "value"))
+	(ext-decl @26.3-29.11 (ident "module(b).b1") (kind "value"))
+	(ext-decl @30.3-33.11 (ident "module(b).b2") (kind "value"))
+	(ext-decl @58.18-58.29 (ident "module(e).A") (kind "type"))
+	(ext-decl @58.31-58.42 (ident "module(e).B") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -697,27 +692,27 @@ NO CHANGE
 		(patt @60.1-60.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
 		(alias @14.1-23.11 (type "A(a)")
-			(type-header (name "A")
-				(args
+			(ty-header @14.1-14.5 (name "A")
+				(ty-args
 					(ty-var @14.3-14.4 (name "a")))))
 		(alias @24.1-33.11 (type "B(b)")
-			(type-header (name "B")
-				(args
+			(ty-header @24.1-24.5 (name "B")
+				(ty-args
 					(ty-var @24.3-24.4 (name "b")))))
 		(alias @35.1-41.2 (type "C(a, b)")
-			(type-header (name "C")
-				(args
+			(ty-header @35.1-38.2 (name "C")
+				(ty-args
 					(ty-var @36.2-36.3 (name "a"))
 					(ty-var @37.2-37.3 (name "b")))))
 		(alias @42.1-48.2 (type "D(a, b)")
-			(type-header (name "D")
-				(args
+			(ty-header @42.1-45.2 (name "D")
+				(ty-args
 					(ty-var @43.2-43.3 (name "a"))
 					(ty-var @44.2-44.3 (name "b")))))
 		(alias @49.1-52.2 (type "E")
-			(type-header (name "E")))
+			(ty-header @49.1-49.2 (name "E")))
 		(alias @53.1-56.2 (type "F")
-			(type-header (name "F"))))
+			(ty-header @53.1-53.2 (name "F"))))
 	(expressions
 		(expr @60.5-110.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret"))))
 ~~~

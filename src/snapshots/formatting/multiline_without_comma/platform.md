@@ -32,26 +32,24 @@ EXPOSED BUT NOT DEFINED - platform.md:10:3:10:5
 EXPOSED BUT NOT DEFINED - platform.md:11:3:11:5
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
+The module header says that `E1` is exposed, but it is not defined anywhere in this module.
 
-**Exposed but Not Defined**
-'E1' is exposed in the module header but is not defined:
 **platform.md:10:3:10:5:**
 ```roc
 		E1,
 ```
   ^^
-
+You can fix this by either defining `E1` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
+The module header says that `E2` is exposed, but it is not defined anywhere in this module.
 
-**Exposed but Not Defined**
-'E2' is exposed in the module header but is not defined:
 **platform.md:11:3:11:5:**
 ```roc
 		E2
 ```
   ^^
-
+You can fix this by either defining `E2` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig

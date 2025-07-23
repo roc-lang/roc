@@ -80,7 +80,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:6),OpColon(1:6-1:7),Int(1:8-1:10),Comma(1:10
 ~~~clojure
 (e-block @1.1-1.28
 	(s-type-anno @1.3-1.10 (name "age")
-		(ty-malformed @1.1-1.1))
+		(ty-malformed @1.8-1.10))
 	(s-let @1.12-1.26
 		(p-assign @1.12-1.16 (ident "name"))
 		(e-string @1.19-1.26

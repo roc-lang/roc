@@ -23,9 +23,9 @@ UNDEFINED VARIABLE - nominal_external_fully_qualified.md:9:23:9:36
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `MyResultType` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'MyResultType' is not defined:
 **nominal_external_fully_qualified.md:8:23:8:36:**
 ```roc
         MyResultModule.MyResultType.Ok(value) => value
@@ -34,9 +34,9 @@ The variable 'MyResultType' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `MyResultType` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'MyResultType' is not defined:
 **nominal_external_fully_qualified.md:9:23:9:36:**
 ```roc
         MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
@@ -121,45 +121,42 @@ handleResult = |result| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @6.1-6.13 (ident "handleResult")))
-		(expr
-			(e-lambda @6.16-11.2
-				(args
-					(p-assign @6.17-6.23 (ident "result")))
-				(e-block @6.25-11.2
-					(e-match @7.5-10.6
-						(match @7.5-10.6
-							(cond
-								(e-lookup-local @7.11-7.17
-									(p-assign @6.17-6.23 (ident "result"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-runtime-error @1.1-1.1 (tag "ident_not_in_scope"))))
-									(value
-										(e-lookup-local @8.50-8.55
-											(p-assign @8.40-8.45 (ident "value")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-runtime-error @1.1-1.1 (tag "ident_not_in_scope"))))
-									(value
-										(e-string @9.50-9.74
-											(e-literal @9.51-9.73 (string "Error: $(code.toStr())")))))))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @5.16-5.60 (effectful false)
-						(ty-apply @5.16-5.53 (symbol "MyResultModule.MyResultType")
-							(ty @5.44-5.47 (name "Str"))
-							(ty @5.49-5.52 (name "I32")))
-						(ty @5.57-5.60 (name "Str")))))))
+	(d-let
+		(p-assign @6.1-6.13 (ident "handleResult"))
+		(e-lambda @6.16-11.2
+			(args
+				(p-assign @6.17-6.23 (ident "result")))
+			(e-block @6.25-11.2
+				(e-match @7.5-10.6
+					(match @7.5-10.6
+						(cond
+							(e-lookup-local @7.11-7.17
+								(p-assign @6.17-6.23 (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error @8.23-8.36 (tag "ident_not_in_scope"))))
+								(value
+									(e-lookup-local @8.50-8.55
+										(p-assign @8.40-8.45 (ident "value")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error @9.23-9.36 (tag "ident_not_in_scope"))))
+								(value
+									(e-string @9.50-9.74
+										(e-literal @9.51-9.73 (string "Error: $(code.toStr())"))))))))))
+		(annotation @6.1-6.13
+			(declared-type
+				(ty-fn @5.16-5.60 (effectful false)
+					(ty-apply @5.16-5.53 (symbol "MyResultModule.MyResultType")
+						(ty @5.44-5.47 (name "Str"))
+						(ty @5.49-5.52 (name "I32")))
+					(ty @5.57-5.60 (name "Str"))))))
 	(s-import @3.1-3.22 (module "MyResultModule")
 		(exposes))
-	(external-decl (qualified-name "MyResultModule.MyResultType") (module-name "MyResultModule") (local-name "MyResultType") (kind "type")))
+	(ext-decl @5.16-5.43 (ident "MyResultModule.MyResultType") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

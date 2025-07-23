@@ -19,9 +19,9 @@ INVALID IF CONDITION - if_then_else_9.md:3:11:3:11
 INCOMPATIBLE IF BRANCHES - if_then_else_9.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `bool` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'bool' is not defined:
 **if_then_else_9.md:1:4:1:8:**
 ```roc
 if bool {

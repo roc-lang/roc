@@ -36,43 +36,48 @@ pub const Def = struct {
     kind: Kind,
     
     pub const Kind = union(enum) {
+        /// A def that introduces identifiers
         let: void,
+        /// A standalone statement with an fx variable
+        stmt: TypeVar,
+        /// Ignored result, must be effectful
+        ignored: TypeVar,
         
         pub fn decode(encoded: [2]u32) Kind {
-            _ = encoded;
-            return Kind{ .let = {} };
+            if (encoded[0] == 0) {
+                return .let;
+            } else if (encoded[0] == 1) {
+                return .{ .stmt = @as(TypeVar, @enumFromInt(encoded[1])) };
+            } else {
+                return .{ .ignored = @as(TypeVar, @enumFromInt(encoded[1])) };
+            }
         }
         
         pub fn encode(self: Kind) [2]u32 {
-            _ = self;
-            return [2]u32{ 0, 0 };
+            switch (self) {
+                .let => return .{ 0, 0 },
+                .stmt => |ty_var| return .{ 1, @intFromEnum(ty_var) },
+                .ignored => |ty_var| return .{ 2, @intFromEnum(ty_var) },
+            }
         }
     };
     
     pub fn pushToSExprTree(self: *const Def, cir: anytype, tree: anytype) !void {
         const begin = tree.beginNode();
-        try tree.pushStaticAtom("def");
+        const name: []const u8 = switch (self.kind) {
+            .let => "d-let",
+            .stmt => "d-stmt",
+            .ignored => "d-ignored",
+        };
+        try tree.pushStaticAtom(name);
         
         const attrs = tree.beginNode();
         
-        const pattern_begin = tree.beginNode();
-        try tree.pushStaticAtom("pattern");
-        const pattern_attrs = tree.beginNode();
         try cir.store.getPattern(self.pattern).pushToSExprTree(cir, tree, self.pattern);
-        try tree.endNode(pattern_begin, pattern_attrs);
-        
-        const expr_begin = tree.beginNode();
-        try tree.pushStaticAtom("expr");
-        const expr_attrs = tree.beginNode();
         try cir.store.getExpr(self.expr).pushToSExprTree(cir, tree, self.expr);
-        try tree.endNode(expr_begin, expr_attrs);
         
         if (self.annotation) |annotation_idx| {
-            const annotation_begin = tree.beginNode();
-            try tree.pushStaticAtom("annotation");
-            const annotation_attrs = tree.beginNode();
             try cir.store.getAnnotation(annotation_idx).pushToSExprTree(cir, tree, annotation_idx);
-            try tree.endNode(annotation_begin, annotation_attrs);
         }
         
         try tree.endNode(begin, attrs);
@@ -425,22 +430,17 @@ pub const ExternalDecl = struct {
     
     pub fn pushToSExprTree(self: *const ExternalDecl, cir: anytype, tree: anytype) !void {
         const node = tree.beginNode();
-        try tree.pushStaticAtom("external-decl");
+        try tree.pushStaticAtom("ext-decl");
+        try cir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
         
-        const qualified_name_str = cir.idents.getText(self.qualified_name);
-        try tree.pushStringPair("qualified-name", qualified_name_str);
+        // Add fully qualified name
+        try tree.pushStringPair("ident", cir.idents.getText(self.qualified_name));
         
-        const module_name_str = cir.idents.getText(self.module_name);
-        try tree.pushStringPair("module-name", module_name_str);
-        
-        const local_name_str = cir.idents.getText(self.local_name);
-        try tree.pushStringPair("local-name", local_name_str);
-        
-        const kind_str = switch (self.kind) {
-            .value => "value",
-            .type => "type",
-        };
-        try tree.pushStringPair("kind", kind_str);
+        // Add kind
+        switch (self.kind) {
+            .value => try tree.pushStringPair("kind", "value"),
+            .type => try tree.pushStringPair("kind", "type"),
+        }
         
         const attrs = tree.beginNode();
         try tree.endNode(node, attrs);
@@ -448,25 +448,17 @@ pub const ExternalDecl = struct {
     
     pub fn pushToSExprTreeWithRegion(self: *const ExternalDecl, cir: anytype, tree: anytype, region: Region) !void {
         const node = tree.beginNode();
-        try tree.pushStaticAtom("external-decl");
-        
-        // Add region info
+        try tree.pushStaticAtom("ext-decl");
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
         
-        const qualified_name_str = cir.idents.getText(self.qualified_name);
-        try tree.pushStringPair("qualified-name", qualified_name_str);
+        // Add fully qualified name
+        try tree.pushStringPair("ident", cir.idents.getText(self.qualified_name));
         
-        const module_name_str = cir.idents.getText(self.module_name);
-        try tree.pushStringPair("module-name", module_name_str);
-        
-        const local_name_str = cir.idents.getText(self.local_name);
-        try tree.pushStringPair("local-name", local_name_str);
-        
-        const kind_str = switch (self.kind) {
-            .value => "value",
-            .type => "type",
-        };
-        try tree.pushStringPair("kind", kind_str);
+        // Add kind
+        switch (self.kind) {
+            .value => try tree.pushStringPair("kind", "value"),
+            .type => try tree.pushStringPair("kind", "type"),
+        }
         
         const attrs = tree.beginNode();
         try tree.endNode(node, attrs);

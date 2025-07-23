@@ -39,15 +39,12 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @4.1-4.2 (ident "x")))
-		(expr
-			(e-frac-dec @4.5-4.12 (value "123.456")))
-		(annotation
-			(annotation
-				(type-anno
-					(ty @3.5-3.8 (name "Dec")))))))
+	(d-let
+		(p-assign @4.1-4.2 (ident "x"))
+		(e-frac-dec @4.5-4.12 (value "123.456"))
+		(annotation @4.1-4.2
+			(declared-type
+				(ty @3.5-3.8 (name "Dec"))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -17,9 +17,9 @@ UNDEFINED VARIABLE - tuple_patterns.md:1:7:1:12
 UNUSED VARIABLE - tuple_patterns.md:5:9:5:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `coord` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'coord' is not defined:
 **tuple_patterns.md:1:7:1:12:**
 ```roc
 match coord {

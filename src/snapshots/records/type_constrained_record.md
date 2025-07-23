@@ -67,7 +67,7 @@ process_user! : { name : Str, age :  } => Str
 				(field (field "name")
 					(ty @1.26-1.29 (name "Str")))
 				(field (field "age")
-					(ty-malformed @1.1-1.1)))
+					(ty-malformed @1.37-1.45)))
 			(ty @1.51-1.54 (name "Str")))))
 ~~~
 # TYPES

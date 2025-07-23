@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const reporting = @import("reporting");
+const reporting = @import("../../reporting.zig");
 
 const Region = base.Region;
 const Ident = base.Ident;

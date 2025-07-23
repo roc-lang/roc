@@ -97,7 +97,7 @@ C : k
 ~~~clojure
 (can-ir
 	(s-alias-decl @1.9-1.12
-		(type-header (name "C"))
+		(ty-header @1.9-1.10 (name "C"))
 		(ty-var @1.11-1.12 (name "k"))))
 ~~~
 # TYPES
@@ -106,6 +106,6 @@ C : k
 	(defs)
 	(type_decls
 		(alias @1.9-1.12 (type "C")
-			(type-header (name "C"))))
+			(ty-header @1.9-1.10 (name "C"))))
 	(expressions))
 ~~~

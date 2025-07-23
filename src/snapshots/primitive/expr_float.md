@@ -36,11 +36,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @2.1-2.4 (ident "foo")))
-		(expr
-			(e-dec-small @2.7-2.12 (numerator "1234") (denominator-power-of-ten "2") (value "12.34")))))
+	(d-let
+		(p-assign @2.1-2.4 (ident "foo"))
+		(e-dec-small @2.7-2.12 (numerator "1234") (denominator-power-of-ten "2") (value "12.34"))))
 ~~~
 # TYPES
 ~~~clojure

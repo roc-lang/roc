@@ -40,9 +40,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `first` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'first' is not defined:
 **type_var_namespace.md:11:14:11:24:**
 ```roc
     result = List.first(list) |> Result.withDefault(elem)
@@ -51,9 +51,9 @@ The variable 'first' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `withDefault` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'withDefault' is not defined:
 **type_var_namespace.md:11:34:11:52:**
 ```roc
     result = List.first(list) |> Result.withDefault(elem)
@@ -147,47 +147,42 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @5.1-5.8 (ident "process")))
-		(expr
-			(e-lambda @5.11-14.2
-				(args
-					(p-assign @5.12-5.16 (ident "list")))
-				(e-block @5.18-14.2
-					(s-let @7.5-7.14
-						(p-assign @7.5-7.9 (ident "elem"))
-						(e-int @7.12-7.14 (value "42")))
-					(s-type-anno @10.5-10.18 (name "result")
-						(ty-var @10.14-10.18 (name "elem")))
-					(s-let @11.5-11.30
-						(p-assign @11.5-11.11 (ident "result"))
-						(e-call @11.14-11.30
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-lookup-local @11.25-11.29
-								(p-assign @5.12-5.16 (ident "list")))))
-					(s-expr @11.34-11.58
-						(e-call @11.34-11.58
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-lookup-local @11.53-11.57
-								(p-assign @7.5-7.9 (ident "elem")))))
-					(e-lookup-local @13.5-13.11
-						(p-assign @11.5-11.11 (ident "result"))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @4.11-4.29 (effectful false)
-						(ty-apply @4.11-4.21 (symbol "List")
-							(ty-var @4.16-4.20 (name "elem")))
-						(ty-var @4.25-4.29 (name "elem")))))))
-	(def
-		(pattern
-			(p-assign @16.1-16.6 (ident "main!")))
-		(expr
-			(e-lambda @16.9-16.15
-				(args
-					(p-underscore @16.10-16.11))
-				(e-empty_record @16.13-16.15)))))
+	(d-let
+		(p-assign @5.1-5.8 (ident "process"))
+		(e-lambda @5.11-14.2
+			(args
+				(p-assign @5.12-5.16 (ident "list")))
+			(e-block @5.18-14.2
+				(s-let @7.5-7.14
+					(p-assign @7.5-7.9 (ident "elem"))
+					(e-int @7.12-7.14 (value "42")))
+				(s-type-anno @10.5-10.18 (name "result")
+					(ty-var @10.14-10.18 (name "elem")))
+				(s-let @11.5-11.30
+					(p-assign @11.5-11.11 (ident "result"))
+					(e-call @11.14-11.30
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-lookup-local @11.25-11.29
+							(p-assign @5.12-5.16 (ident "list")))))
+				(s-expr @11.34-11.58
+					(e-call @11.34-11.58
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-lookup-local @11.53-11.57
+							(p-assign @7.5-7.9 (ident "elem")))))
+				(e-lookup-local @13.5-13.11
+					(p-assign @11.5-11.11 (ident "result")))))
+		(annotation @5.1-5.8
+			(declared-type
+				(ty-fn @4.11-4.29 (effectful false)
+					(ty-apply @4.11-4.21 (symbol "List")
+						(ty-var @4.16-4.20 (name "elem")))
+					(ty-var @4.25-4.29 (name "elem"))))))
+	(d-let
+		(p-assign @16.1-16.6 (ident "main!"))
+		(e-lambda @16.9-16.15
+			(args
+				(p-underscore @16.10-16.11))
+			(e-empty_record @16.13-16.15))))
 ~~~
 # TYPES
 ~~~clojure

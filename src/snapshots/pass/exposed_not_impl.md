@@ -30,14 +30,7 @@ The identifier `foo` is exposed multiple times in the module header.
 module [foo, bar, MyType, OtherType, foo, MyType]
 ```
                                      ^^^
-
-It was already exposed here:
-**exposed_not_impl.md:1:9:1:12:**
-```roc
-module [foo, bar, MyType, OtherType, foo, MyType]
-```
-        ^^^
-
+You can remove the duplicate entry to fix this warning.
 
 **REDUNDANT EXPOSED**
 The identifier `MyType` is exposed multiple times in the module header.
@@ -47,36 +40,27 @@ The identifier `MyType` is exposed multiple times in the module header.
 module [foo, bar, MyType, OtherType, foo, MyType]
 ```
                                           ^^^^^^
-
-It was already exposed here:
-**exposed_not_impl.md:1:19:1:25:**
-```roc
-module [foo, bar, MyType, OtherType, foo, MyType]
-```
-                  ^^^^^^
-
+You can remove the duplicate entry to fix this warning.
 
 **EXPOSED BUT NOT DEFINED**
+The module header says that `bar` is exposed, but it is not defined anywhere in this module.
 
-**Exposed but Not Defined**
-'bar' is exposed in the module header but is not defined:
 **exposed_not_impl.md:1:14:1:17:**
 ```roc
 module [foo, bar, MyType, OtherType, foo, MyType]
 ```
              ^^^
-
+You can fix this by either defining `bar` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
+The module header says that `OtherType` is exposed, but it is not defined anywhere in this module.
 
-**Exposed but Not Defined**
-'OtherType' is exposed in the module header but is not defined:
 **exposed_not_impl.md:1:27:1:36:**
 ```roc
 module [foo, bar, MyType, OtherType, foo, MyType]
 ```
                           ^^^^^^^^^
-
+You can fix this by either defining `OtherType` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -118,13 +102,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @8.1-8.4 (ident "foo")))
-		(expr
-			(e-int @8.7-8.9 (value "42"))))
+	(d-let
+		(p-assign @8.1-8.4 (ident "foo"))
+		(e-int @8.7-8.9 (value "42")))
 	(s-alias-decl @10.1-10.19
-		(type-header (name "MyType"))
+		(ty-header @10.1-10.7 (name "MyType"))
 		(ty-tag-union @10.10-10.19
 			(ty @10.11-10.12 (name "A"))
 			(ty @10.14-10.15 (name "B"))
@@ -137,7 +119,7 @@ NO CHANGE
 		(patt @8.1-8.4 (type "Num(_size)")))
 	(type_decls
 		(alias @10.1-10.19 (type "MyType")
-			(type-header (name "MyType"))))
+			(ty-header @10.1-10.7 (name "MyType"))))
 	(expressions
 		(expr @8.7-8.9 (type "Num(_size)"))))
 ~~~

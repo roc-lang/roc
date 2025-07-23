@@ -290,9 +290,9 @@ This type annotation is malformed or contains invalid syntax.
 This type annotation is malformed or contains invalid syntax.
 
 **UNDEFINED VARIABLE**
+Nothing is named `kebab` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'kebab' is not defined:
 **record_different_fields_error.md:5:5:5:10:**
 ```roc
     kebab-case: "kebab",
@@ -301,9 +301,9 @@ The variable 'kebab' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `case` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'case' is not defined:
 **record_different_fields_error.md:5:11:5:15:**
 ```roc
     kebab-case: "kebab",
@@ -312,9 +312,9 @@ The variable 'case' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `field` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'field' is not defined:
 **record_different_fields_error.md:6:5:6:10:**
 ```roc
     field$special: "dollar",
@@ -326,9 +326,9 @@ The variable 'field' is not defined:
 This type annotation is malformed or contains invalid syntax.
 
 **UNDEFINED VARIABLE**
+Nothing is named `field` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'field' is not defined:
 **record_different_fields_error.md:7:5:7:10:**
 ```roc
     field@symbol: "at symbol",
@@ -424,9 +424,9 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~clojure
 (e-block @1.1-8.2
 	(s-type-anno @2.5-2.21 (name "_privateField")
-		(ty-malformed @1.1-1.1))
+		(ty-malformed @2.20-2.21))
 	(s-type-anno @3.5-3.14 (name "field_")
-		(ty-malformed @1.1-1.1))
+		(ty-malformed @3.13-3.14))
 	(s-expr @4.5-4.15
 		(e-tag @4.5-4.15 (name "PascalCase")))
 	(s-expr @4.17-4.25
@@ -443,7 +443,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 	(s-expr @6.5-6.10
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-type-anno @6.11-6.21 (name "special")
-		(ty-malformed @1.1-1.1))
+		(ty-malformed @6.20-6.21))
 	(s-expr @7.5-7.10
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr @7.19-7.30

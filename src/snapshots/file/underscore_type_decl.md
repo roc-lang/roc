@@ -351,7 +351,7 @@ import Module exposing [Pair]
 (can-ir
 	(s-import @3.1-3.30 (module "Module")
 		(exposes
-			(exposed-item (name "Pair") (is_wildcard false)))))
+			(exposed (name "Pair") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

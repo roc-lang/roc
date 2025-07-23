@@ -11,9 +11,9 @@ person.age + 5
 UNDEFINED VARIABLE - record_access_in_expression.md:1:1:1:7
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'person' is not defined:
 **record_access_in_expression.md:1:1:1:7:**
 ```roc
 person.age + 5

@@ -15,9 +15,9 @@ UNDEFINED VARIABLE - pattern_as_nested.md:1:7:1:13
 UNUSED VARIABLE - pattern_as_nested.md:2:7:2:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'person' is not defined:
 **pattern_as_nested.md:1:7:1:13:**
 ```roc
 match person {

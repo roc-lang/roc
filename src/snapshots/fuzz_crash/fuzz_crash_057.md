@@ -58,11 +58,10 @@ u : o
 			(ty-var @1.11-1.12 (name "b"))
 			(ty-var @1.14-1.15 (name "c")))
 		(where
-			(where-clause
-				(type "mod-method")
-				(var-name "a")
-				(method-name "t"))))
-	(external-decl (qualified-name "module(a).t") (module-name "module(a)") (local-name "t") (kind "value")))
+			(method @1.22-1.35 (module-of "a") (ident "t")
+				(args)
+				(ty-var @1.34-1.35 (name "c")))))
+	(ext-decl @1.22-1.35 (ident "module(a).t") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

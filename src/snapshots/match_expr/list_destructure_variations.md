@@ -21,9 +21,9 @@ UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
 UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `list` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'list' is not defined:
 **list_destructure_variations.md:1:7:1:11:**
 ```roc
 match list {

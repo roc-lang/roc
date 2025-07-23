@@ -173,93 +173,83 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @3.1-3.9 (ident "identity")))
-		(expr
-			(e-lambda @3.12-3.17
-				(args
-					(p-assign @3.13-3.14 (ident "x")))
-				(e-lookup-local @3.16-3.17
-					(p-assign @3.13-3.14 (ident "x"))))))
-	(def
-		(pattern
-			(p-assign @7.1-7.8 (ident "combine")))
-		(expr
-			(e-lambda @7.11-7.42
-				(args
-					(p-assign @7.12-7.17 (ident "first"))
-					(p-assign @7.19-7.25 (ident "second")))
-				(e-tuple @7.27-7.42
-					(elems
-						(e-lookup-local @7.28-7.33
-							(p-assign @7.12-7.17 (ident "first")))
-						(e-lookup-local @7.35-7.41
-							(p-assign @7.19-7.25 (ident "second")))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @6.11-6.25 (effectful false)
-						(ty-var @6.11-6.12 (name "a"))
-						(ty-var @6.14-6.15 (name "b"))
-						(ty-tuple @6.19-6.25
-							(ty-var @6.20-6.21 (name "a"))
-							(ty-var @6.23-6.24 (name "b"))))))))
-	(def
-		(pattern
-			(p-assign @11.1-11.7 (ident "addOne")))
-		(expr
-			(e-lambda @11.10-11.19
-				(args
+	(d-let
+		(p-assign @3.1-3.9 (ident "identity"))
+		(e-lambda @3.12-3.17
+			(args
+				(p-assign @3.13-3.14 (ident "x")))
+			(e-lookup-local @3.16-3.17
+				(p-assign @3.13-3.14 (ident "x")))))
+	(d-let
+		(p-assign @7.1-7.8 (ident "combine"))
+		(e-lambda @7.11-7.42
+			(args
+				(p-assign @7.12-7.17 (ident "first"))
+				(p-assign @7.19-7.25 (ident "second")))
+			(e-tuple @7.27-7.42
+				(elems
+					(e-lookup-local @7.28-7.33
+						(p-assign @7.12-7.17 (ident "first")))
+					(e-lookup-local @7.35-7.41
+						(p-assign @7.19-7.25 (ident "second"))))))
+		(annotation @7.1-7.8
+			(declared-type
+				(ty-fn @6.11-6.25 (effectful false)
+					(ty-var @6.11-6.12 (name "a"))
+					(ty-var @6.14-6.15 (name "b"))
+					(ty-tuple @6.19-6.25
+						(ty-var @6.20-6.21 (name "a"))
+						(ty-var @6.23-6.24 (name "b")))))))
+	(d-let
+		(p-assign @11.1-11.7 (ident "addOne"))
+		(e-lambda @11.10-11.19
+			(args
+				(p-assign @11.11-11.12 (ident "n")))
+			(e-binop @11.14-11.19 (op "add")
+				(e-lookup-local @11.14-11.15
 					(p-assign @11.11-11.12 (ident "n")))
-				(e-binop @11.14-11.19 (op "add")
-					(e-lookup-local @11.14-11.15
-						(p-assign @11.11-11.12 (ident "n")))
-					(e-int @11.18-11.19 (value "1")))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @10.10-10.20 (effectful false)
-						(ty @10.10-10.13 (name "U64"))
-						(ty @10.17-10.20 (name "U64")))))))
-	(def
-		(pattern
-			(p-assign @13.1-13.6 (ident "main!")))
-		(expr
-			(e-lambda @13.9-25.2
-				(args
-					(p-underscore @13.10-13.11))
-				(e-block @13.13-25.2
-					(s-let @15.5-15.23
-						(p-assign @15.5-15.8 (ident "num"))
-						(e-call @15.11-15.23
-							(e-lookup-local @15.11-15.19
-								(p-assign @3.1-3.9 (ident "identity")))
-							(e-int @15.20-15.22 (value "42"))))
-					(s-let @16.5-16.29
-						(p-assign @16.5-16.9 (ident "text"))
-						(e-call @16.12-16.29
-							(e-lookup-local @16.12-16.20
-								(p-assign @3.1-3.9 (ident "identity")))
-							(e-string @16.21-16.28
-								(e-literal @16.22-16.27 (string "hello")))))
-					(s-let @19.5-19.30
-						(p-assign @19.5-19.9 (ident "pair"))
-						(e-call @19.12-19.30
-							(e-lookup-local @19.12-19.19
-								(p-assign @7.1-7.8 (ident "combine")))
-							(e-lookup-local @19.20-19.23
-								(p-assign @15.5-15.8 (ident "num")))
-							(e-lookup-local @19.25-19.29
-								(p-assign @16.5-16.9 (ident "text")))))
-					(s-let @22.5-22.23
-						(p-assign @22.5-22.11 (ident "result"))
-						(e-call @22.14-22.23
-							(e-lookup-local @22.14-22.20
-								(p-assign @11.1-11.7 (ident "addOne")))
-							(e-int @22.21-22.22 (value "5"))))
-					(e-lookup-local @24.5-24.11
-						(p-assign @22.5-22.11 (ident "result"))))))))
+				(e-int @11.18-11.19 (value "1"))))
+		(annotation @11.1-11.7
+			(declared-type
+				(ty-fn @10.10-10.20 (effectful false)
+					(ty @10.10-10.13 (name "U64"))
+					(ty @10.17-10.20 (name "U64"))))))
+	(d-let
+		(p-assign @13.1-13.6 (ident "main!"))
+		(e-lambda @13.9-25.2
+			(args
+				(p-underscore @13.10-13.11))
+			(e-block @13.13-25.2
+				(s-let @15.5-15.23
+					(p-assign @15.5-15.8 (ident "num"))
+					(e-call @15.11-15.23
+						(e-lookup-local @15.11-15.19
+							(p-assign @3.1-3.9 (ident "identity")))
+						(e-int @15.20-15.22 (value "42"))))
+				(s-let @16.5-16.29
+					(p-assign @16.5-16.9 (ident "text"))
+					(e-call @16.12-16.29
+						(e-lookup-local @16.12-16.20
+							(p-assign @3.1-3.9 (ident "identity")))
+						(e-string @16.21-16.28
+							(e-literal @16.22-16.27 (string "hello")))))
+				(s-let @19.5-19.30
+					(p-assign @19.5-19.9 (ident "pair"))
+					(e-call @19.12-19.30
+						(e-lookup-local @19.12-19.19
+							(p-assign @7.1-7.8 (ident "combine")))
+						(e-lookup-local @19.20-19.23
+							(p-assign @15.5-15.8 (ident "num")))
+						(e-lookup-local @19.25-19.29
+							(p-assign @16.5-16.9 (ident "text")))))
+				(s-let @22.5-22.23
+					(p-assign @22.5-22.11 (ident "result"))
+					(e-call @22.14-22.23
+						(e-lookup-local @22.14-22.20
+							(p-assign @11.1-11.7 (ident "addOne")))
+						(e-int @22.21-22.22 (value "5"))))
+				(e-lookup-local @24.5-24.11
+					(p-assign @22.5-22.11 (ident "result")))))))
 ~~~
 # TYPES
 ~~~clojure

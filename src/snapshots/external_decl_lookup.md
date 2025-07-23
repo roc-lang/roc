@@ -80,28 +80,26 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @6.1-6.6 (ident "main!")))
-		(expr
-			(e-lambda @6.9-10.2
-				(args
-					(p-underscore @6.10-6.11))
-				(e-block @6.13-10.2
-					(s-let @8.5-8.54
-						(p-assign @8.5-8.11 (ident "result"))
-						(e-call @8.14-8.54
-							(e-lookup-external @8.14-8.23
-								(module-idx "1")
-								(target-node-idx "0"))
-							(e-string @8.24-8.53
-								(e-literal @8.25-8.52 (string "Hello from external module!")))))
-					(e-call @9.5-9.25
-						(e-lookup-external @9.5-9.17
-							(module-idx "0")
+	(d-let
+		(p-assign @6.1-6.6 (ident "main!"))
+		(e-lambda @6.9-10.2
+			(args
+				(p-underscore @6.10-6.11))
+			(e-block @6.13-10.2
+				(s-let @8.5-8.54
+					(p-assign @8.5-8.11 (ident "result"))
+					(e-call @8.14-8.54
+						(e-lookup-external @8.14-8.23
+							(module-idx "1")
 							(target-node-idx "0"))
-						(e-lookup-local @9.18-9.24
-							(p-assign @8.5-8.11 (ident "result"))))))))
+						(e-string @8.24-8.53
+							(e-literal @8.25-8.52 (string "Hello from external module!")))))
+				(e-call @9.5-9.25
+					(e-lookup-external @9.5-9.17
+						(module-idx "0")
+						(target-node-idx "0"))
+					(e-lookup-local @9.18-9.24
+						(p-assign @8.5-8.11 (ident "result")))))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes))
 	(s-import @4.1-4.17 (module "json.Json") (qualifier "json")

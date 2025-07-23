@@ -112,30 +112,27 @@ AnotherType : SomeModule.MissingType
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @6.1-6.13 (ident "processValue")))
-		(expr
-			(e-lambda @6.16-8.2
-				(args
-					(p-assign @6.17-6.22 (ident "value")))
-				(e-block @6.24-8.2
-					(e-string @7.5-7.16
-						(e-literal @7.6-7.15 (string "processed"))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @5.16-5.39 (effectful false)
-						(ty @5.16-5.32 (name "UndeclaredResult"))
-						(ty @5.36-5.39 (name "Str")))))))
+	(d-let
+		(p-assign @6.1-6.13 (ident "processValue"))
+		(e-lambda @6.16-8.2
+			(args
+				(p-assign @6.17-6.22 (ident "value")))
+			(e-block @6.24-8.2
+				(e-string @7.5-7.16
+					(e-literal @7.6-7.15 (string "processed")))))
+		(annotation @6.1-6.13
+			(declared-type
+				(ty-fn @5.16-5.39 (effectful false)
+					(ty @5.16-5.32 (name "UndeclaredResult"))
+					(ty @5.36-5.39 (name "Str"))))))
 	(s-alias-decl @3.1-3.21
-		(type-header (name "MyType"))
+		(ty-header @3.1-3.7 (name "MyType"))
 		(ty @3.10-3.21 (name "UnknownType")))
 	(s-alias-decl @10.1-10.37
-		(type-header (name "AnotherType"))
+		(ty-header @10.1-10.12 (name "AnotherType"))
 		(ty-lookup-external @10.15-10.37
-			(external-decl @10.15-10.37 (qualified-name "SomeModule.MissingType") (module-name "SomeModule") (local-name "MissingType") (kind "type"))))
-	(external-decl (qualified-name "SomeModule.MissingType") (module-name "SomeModule") (local-name "MissingType") (kind "type")))
+			(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type"))))
+	(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -144,9 +141,9 @@ AnotherType : SomeModule.MissingType
 		(patt @6.1-6.13 (type "Error -> Str")))
 	(type_decls
 		(alias @3.1-3.21 (type "Error")
-			(type-header (name "MyType")))
+			(ty-header @3.1-3.7 (name "MyType")))
 		(alias @10.1-10.37 (type "AnotherType")
-			(type-header (name "AnotherType"))))
+			(ty-header @10.1-10.12 (name "AnotherType"))))
 	(expressions
 		(expr @6.16-8.2 (type "Error -> Str"))))
 ~~~

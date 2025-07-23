@@ -61,9 +61,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `items` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'items' is not defined:
 **list_rest_invalid.md:1:7:1:12:**
 ```roc
 match items {

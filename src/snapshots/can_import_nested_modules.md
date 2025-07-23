@@ -240,9 +240,9 @@ import utils.String.Format exposing [padLeft]
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `toString` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'toString' is not defined:
 **can_import_nested_modules.md:9:26:9:41:**
 ```roc
 parseConfig = |settings| Config.toString(settings)
@@ -251,9 +251,9 @@ parseConfig = |settings| Config.toString(settings)
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `login` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'login' is not defined:
 **can_import_nested_modules.md:13:29:13:43:**
 ```roc
 authenticate = |user, pass| HttpAuth.login(user, pass)
@@ -262,9 +262,9 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `parseWith` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'parseWith' is not defined:
 **can_import_nested_modules.md:18:5:18:37:**
 ```roc
     Config.Parser.Advanced.parseWith(advancedConfig, input)
@@ -273,9 +273,9 @@ The variable 'parseWith' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `padLeft` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'padLeft' is not defined:
 **can_import_nested_modules.md:22:23:22:30:**
 ```roc
 formatOutput = |text| padLeft(text, Config.defaultPadding)
@@ -284,9 +284,9 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `defaultPadding` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'defaultPadding' is not defined:
 **can_import_nested_modules.md:22:37:22:58:**
 ```roc
 formatOutput = |text| padLeft(text, Config.defaultPadding)
@@ -295,9 +295,9 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `validate` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'validate' is not defined:
 **can_import_nested_modules.md:26:24:26:41:**
 ```roc
 validateAuth = |creds| HttpAuth.validate(creds)
@@ -449,122 +449,107 @@ validateAuth = |creds| HttpAuth.validate(creds)
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @9.1-9.12 (ident "parseConfig")))
-		(expr
-			(e-lambda @9.15-9.51
-				(args
-					(p-assign @9.16-9.24 (ident "settings")))
-				(e-call @9.26-9.51
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local @9.42-9.50
-						(p-assign @9.16-9.24 (ident "settings"))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @8.15-8.37 (effectful false)
-						(ty-lookup-external @8.15-8.30
-							(external-decl @8.15-8.30 (qualified-name "Config.Settings") (module-name "Config") (local-name "Settings") (kind "type")))
-						(ty @8.34-8.37 (name "Str")))))))
-	(def
-		(pattern
-			(p-assign @13.1-13.13 (ident "authenticate")))
-		(expr
-			(e-lambda @13.16-13.55
-				(args
-					(p-assign @13.17-13.21 (ident "user"))
-					(p-assign @13.23-13.27 (ident "pass")))
-				(e-call @13.29-13.55
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local @13.44-13.48
-						(p-assign @13.17-13.21 (ident "user")))
-					(e-lookup-local @13.50-13.54
-						(p-assign @13.23-13.27 (ident "pass"))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @12.16-12.42 (effectful false)
-						(ty @12.16-12.19 (name "Str"))
-						(ty @12.21-12.24 (name "Str"))
-						(ty-lookup-external @12.28-12.42
-							(external-decl @12.28-12.42 (qualified-name "HttpAuth.Token") (module-name "HttpAuth") (local-name "Token") (kind "type"))))))))
-	(def
-		(pattern
-			(p-assign @17.1-17.12 (ident "processData")))
-		(expr
-			(e-lambda @17.15-18.60
-				(args
-					(p-assign @17.16-17.30 (ident "advancedConfig"))
-					(p-assign @17.32-17.37 (ident "input")))
-				(e-call @18.5-18.60
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local @18.38-18.52
-						(p-assign @17.16-17.30 (ident "advancedConfig")))
-					(e-lookup-local @18.54-18.59
-						(p-assign @17.32-17.37 (ident "input"))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @16.15-16.78 (effectful false)
-						(ty-lookup-external @16.15-16.37
-							(external-decl @16.15-16.37 (qualified-name "Config.Parser.Advanced") (module-name "Config.Parser") (local-name "Advanced") (kind "type")))
-						(ty @16.39-16.42 (name "Str"))
-						(ty-apply @16.46-16.78 (symbol "Result")
-							(ty @16.53-16.56 (name "Str"))
-							(ty-lookup-external @16.58-16.77
-								(external-decl @16.58-16.77 (qualified-name "Config.Parser.Error") (module-name "Config.Parser") (local-name "Error") (kind "type")))))))))
-	(def
-		(pattern
-			(p-assign @22.1-22.13 (ident "formatOutput")))
-		(expr
-			(e-lambda @22.16-22.59
-				(args
+	(d-let
+		(p-assign @9.1-9.12 (ident "parseConfig"))
+		(e-lambda @9.15-9.51
+			(args
+				(p-assign @9.16-9.24 (ident "settings")))
+			(e-call @9.26-9.51
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local @9.42-9.50
+					(p-assign @9.16-9.24 (ident "settings")))))
+		(annotation @9.1-9.12
+			(declared-type
+				(ty-fn @8.15-8.37 (effectful false)
+					(ty-lookup-external @8.15-8.30
+						(ext-decl @8.15-8.30 (ident "Config.Settings") (kind "type")))
+					(ty @8.34-8.37 (name "Str"))))))
+	(d-let
+		(p-assign @13.1-13.13 (ident "authenticate"))
+		(e-lambda @13.16-13.55
+			(args
+				(p-assign @13.17-13.21 (ident "user"))
+				(p-assign @13.23-13.27 (ident "pass")))
+			(e-call @13.29-13.55
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local @13.44-13.48
+					(p-assign @13.17-13.21 (ident "user")))
+				(e-lookup-local @13.50-13.54
+					(p-assign @13.23-13.27 (ident "pass")))))
+		(annotation @13.1-13.13
+			(declared-type
+				(ty-fn @12.16-12.42 (effectful false)
+					(ty @12.16-12.19 (name "Str"))
+					(ty @12.21-12.24 (name "Str"))
+					(ty-lookup-external @12.28-12.42
+						(ext-decl @12.28-12.42 (ident "HttpAuth.Token") (kind "type")))))))
+	(d-let
+		(p-assign @17.1-17.12 (ident "processData"))
+		(e-lambda @17.15-18.60
+			(args
+				(p-assign @17.16-17.30 (ident "advancedConfig"))
+				(p-assign @17.32-17.37 (ident "input")))
+			(e-call @18.5-18.60
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local @18.38-18.52
+					(p-assign @17.16-17.30 (ident "advancedConfig")))
+				(e-lookup-local @18.54-18.59
+					(p-assign @17.32-17.37 (ident "input")))))
+		(annotation @17.1-17.12
+			(declared-type
+				(ty-fn @16.15-16.78 (effectful false)
+					(ty-lookup-external @16.15-16.37
+						(ext-decl @16.15-16.37 (ident "Config.Parser.Advanced") (kind "type")))
+					(ty @16.39-16.42 (name "Str"))
+					(ty-apply @16.46-16.78 (symbol "Result")
+						(ty @16.53-16.56 (name "Str"))
+						(ty-lookup-external @16.58-16.77
+							(ext-decl @16.58-16.77 (ident "Config.Parser.Error") (kind "type"))))))))
+	(d-let
+		(p-assign @22.1-22.13 (ident "formatOutput"))
+		(e-lambda @22.16-22.59
+			(args
+				(p-assign @22.17-22.21 (ident "text")))
+			(e-call @22.23-22.59
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local @22.31-22.35
 					(p-assign @22.17-22.21 (ident "text")))
-				(e-call @22.23-22.59
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local @22.31-22.35
-						(p-assign @22.17-22.21 (ident "text")))
-					(e-runtime-error (tag "ident_not_in_scope")))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @21.16-21.26 (effectful false)
-						(ty @21.16-21.19 (name "Str"))
-						(ty @21.23-21.26 (name "Str")))))))
-	(def
-		(pattern
-			(p-assign @26.1-26.13 (ident "validateAuth")))
-		(expr
-			(e-lambda @26.16-26.48
-				(args
-					(p-assign @26.17-26.22 (ident "creds")))
-				(e-call @26.24-26.48
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local @26.42-26.47
-						(p-assign @26.17-26.22 (ident "creds"))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @25.16-25.78 (effectful false)
-						(ty-lookup-external @25.16-25.36
-							(external-decl @25.16-25.36 (qualified-name "HttpAuth.Credentials") (module-name "HttpAuth") (local-name "Credentials") (kind "type")))
-						(ty-apply @25.40-25.78 (symbol "Result")
-							(ty-lookup-external @25.47-25.61
-								(external-decl @25.47-25.61 (qualified-name "HttpAuth.Token") (module-name "HttpAuth") (local-name "Token") (kind "type")))
-							(ty-lookup-external @25.63-25.77
-								(external-decl @25.63-25.77 (qualified-name "HttpAuth.Error") (module-name "HttpAuth") (local-name "Error") (kind "type")))))))))
+				(e-runtime-error (tag "ident_not_in_scope"))))
+		(annotation @22.1-22.13
+			(declared-type
+				(ty-fn @21.16-21.26 (effectful false)
+					(ty @21.16-21.19 (name "Str"))
+					(ty @21.23-21.26 (name "Str"))))))
+	(d-let
+		(p-assign @26.1-26.13 (ident "validateAuth"))
+		(e-lambda @26.16-26.48
+			(args
+				(p-assign @26.17-26.22 (ident "creds")))
+			(e-call @26.24-26.48
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local @26.42-26.47
+					(p-assign @26.17-26.22 (ident "creds")))))
+		(annotation @26.1-26.13
+			(declared-type
+				(ty-fn @25.16-25.78 (effectful false)
+					(ty-lookup-external @25.16-25.36
+						(ext-decl @25.16-25.36 (ident "HttpAuth.Credentials") (kind "type")))
+					(ty-apply @25.40-25.78 (symbol "Result")
+						(ty-lookup-external @25.47-25.61
+							(ext-decl @25.47-25.61 (ident "HttpAuth.Token") (kind "type")))
+						(ty-lookup-external @25.63-25.77
+							(ext-decl @25.63-25.77 (ident "HttpAuth.Error") (kind "type"))))))))
 	(s-import @3.1-3.19 (module "json.Parser") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.19 (module "http.Client") (qualifier "http")
 		(exposes))
-	(external-decl (qualified-name "Config.Settings") (module-name "Config") (local-name "Settings") (kind "type"))
-	(external-decl (qualified-name "HttpAuth.Token") (module-name "HttpAuth") (local-name "Token") (kind "type"))
-	(external-decl (qualified-name "Config.Parser.Advanced") (module-name "Config.Parser") (local-name "Advanced") (kind "type"))
-	(external-decl (qualified-name "Config.Parser.Error") (module-name "Config.Parser") (local-name "Error") (kind "type"))
-	(external-decl (qualified-name "HttpAuth.Credentials") (module-name "HttpAuth") (local-name "Credentials") (kind "type"))
-	(external-decl (qualified-name "HttpAuth.Token") (module-name "HttpAuth") (local-name "Token") (kind "type"))
-	(external-decl (qualified-name "HttpAuth.Error") (module-name "HttpAuth") (local-name "Error") (kind "type")))
+	(ext-decl @8.15-8.30 (ident "Config.Settings") (kind "type"))
+	(ext-decl @12.28-12.42 (ident "HttpAuth.Token") (kind "type"))
+	(ext-decl @16.15-16.37 (ident "Config.Parser.Advanced") (kind "type"))
+	(ext-decl @16.58-16.77 (ident "Config.Parser.Error") (kind "type"))
+	(ext-decl @25.16-25.36 (ident "HttpAuth.Credentials") (kind "type"))
+	(ext-decl @25.47-25.61 (ident "HttpAuth.Token") (kind "type"))
+	(ext-decl @25.63-25.77 (ident "HttpAuth.Error") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

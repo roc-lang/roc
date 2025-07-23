@@ -95,33 +95,28 @@ main =
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @6.1-6.14 (ident "expectsPerson")))
-		(expr
-			(e-lambda @6.17-6.35
-				(args
-					(p-assign @6.18-6.19 (ident "p")))
-				(e-string @6.21-6.35
-					(e-literal @6.22-6.34 (string "Got a person")))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @5.17-5.30 (effectful false)
-						(ty @5.17-5.23 (name "Person"))
-						(ty @5.27-5.30 (name "Str")))))))
-	(def
-		(pattern
-			(p-assign @8.1-8.5 (ident "main")))
-		(expr
-			(e-call @10.5-10.34
-				(e-lookup-local @10.5-10.18
-					(p-assign @6.1-6.14 (ident "expectsPerson")))
-				(e-string @10.19-10.33
-					(e-literal @10.20-10.32 (string "not a person"))))))
+	(d-let
+		(p-assign @6.1-6.14 (ident "expectsPerson"))
+		(e-lambda @6.17-6.35
+			(args
+				(p-assign @6.18-6.19 (ident "p")))
+			(e-string @6.21-6.35
+				(e-literal @6.22-6.34 (string "Got a person"))))
+		(annotation @6.1-6.14
+			(declared-type
+				(ty-fn @5.17-5.30 (effectful false)
+					(ty @5.17-5.23 (name "Person"))
+					(ty @5.27-5.30 (name "Str"))))))
+	(d-let
+		(p-assign @8.1-8.5 (ident "main"))
+		(e-call @10.5-10.34
+			(e-lookup-local @10.5-10.18
+				(p-assign @6.1-6.14 (ident "expectsPerson")))
+			(e-string @10.19-10.33
+				(e-literal @10.20-10.32 (string "not a person")))))
 	(s-import @3.1-3.30 (module "Data")
 		(exposes
-			(exposed-item (name "Person") (is_wildcard false)))))
+			(exposed (name "Person") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

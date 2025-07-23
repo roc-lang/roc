@@ -16,9 +16,9 @@ main! = |_| processDict(Dict.empty().insert("one", 1))
 UNDEFINED VARIABLE - type_app_multiple_args.md:6:25:6:35
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `empty` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'empty' is not defined:
 **type_app_multiple_args.md:6:25:6:35:**
 ```roc
 main! = |_| processDict(Dict.empty().insert("one", 1))
@@ -86,41 +86,36 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @4.1-4.12 (ident "processDict")))
-		(expr
-			(e-lambda @4.15-4.25
-				(args
-					(p-assign @4.16-4.21 (ident "_dict")))
-				(e-empty_list @4.23-4.25)))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @3.15-3.42 (effectful false)
-						(ty-apply @3.15-3.29 (symbol "Dict")
-							(ty @3.20-3.23 (name "Str"))
-							(ty @3.25-3.28 (name "U64")))
-						(ty-apply @3.33-3.42 (symbol "List")
-							(ty @3.38-3.41 (name "Str"))))))))
-	(def
-		(pattern
-			(p-assign @6.1-6.6 (ident "main!")))
-		(expr
-			(e-lambda @6.9-6.55
-				(args
-					(p-underscore @6.10-6.11))
-				(e-call @6.13-6.55
-					(e-lookup-local @6.13-6.24
-						(p-assign @4.1-4.12 (ident "processDict")))
-					(e-dot-access @6.25-6.54 (field "insert")
-						(receiver
-							(e-call @6.25-6.37
-								(e-runtime-error (tag "ident_not_in_scope"))))
-						(args
-							(e-string @6.45-6.50
-								(e-literal @6.46-6.49 (string "one")))
-							(e-int @6.52-6.53 (value "1")))))))))
+	(d-let
+		(p-assign @4.1-4.12 (ident "processDict"))
+		(e-lambda @4.15-4.25
+			(args
+				(p-assign @4.16-4.21 (ident "_dict")))
+			(e-empty_list @4.23-4.25))
+		(annotation @4.1-4.12
+			(declared-type
+				(ty-fn @3.15-3.42 (effectful false)
+					(ty-apply @3.15-3.29 (symbol "Dict")
+						(ty @3.20-3.23 (name "Str"))
+						(ty @3.25-3.28 (name "U64")))
+					(ty-apply @3.33-3.42 (symbol "List")
+						(ty @3.38-3.41 (name "Str")))))))
+	(d-let
+		(p-assign @6.1-6.6 (ident "main!"))
+		(e-lambda @6.9-6.55
+			(args
+				(p-underscore @6.10-6.11))
+			(e-call @6.13-6.55
+				(e-lookup-local @6.13-6.24
+					(p-assign @4.1-4.12 (ident "processDict")))
+				(e-dot-access @6.25-6.54 (field "insert")
+					(receiver
+						(e-call @6.25-6.37
+							(e-runtime-error (tag "ident_not_in_scope"))))
+					(args
+						(e-string @6.45-6.50
+							(e-literal @6.46-6.49 (string "one")))
+						(e-int @6.52-6.53 (value "1"))))))))
 ~~~
 # TYPES
 ~~~clojure

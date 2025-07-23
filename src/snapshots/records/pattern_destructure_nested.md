@@ -14,9 +14,9 @@ UNDEFINED VARIABLE - pattern_destructure_nested.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_nested.md:2:38:2:45
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'person' is not defined:
 **pattern_destructure_nested.md:1:7:1:13:**
 ```roc
 match person {

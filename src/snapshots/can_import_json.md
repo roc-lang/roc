@@ -39,13 +39,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @5.1-5.5 (ident "main")))
-		(expr
-			(e-lookup-external @5.8-5.17
-				(module-idx "0")
-				(target-node-idx "0"))))
+	(d-let
+		(p-assign @5.1-5.5 (ident "main"))
+		(e-lookup-external @5.8-5.17
+			(module-idx "0")
+			(target-node-idx "0")))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes)))
 ~~~

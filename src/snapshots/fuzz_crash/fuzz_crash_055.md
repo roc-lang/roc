@@ -55,11 +55,10 @@ r : a
 	(s-type-anno @1.9-2.14 (name "r")
 		(ty-var @1.11-1.12 (name "a"))
 		(where
-			(where-clause
-				(type "mod-method")
-				(var-name "a")
-				(method-name "h"))))
-	(external-decl (qualified-name "module(a).h") (module-name "module(a)") (local-name "h") (kind "value")))
+			(method @2.1-2.14 (module-of "a") (ident "h")
+				(args)
+				(ty-var @2.13-2.14 (name "s")))))
+	(ext-decl @2.1-2.14 (ident "module(a).h") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

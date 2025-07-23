@@ -16,9 +16,9 @@ UNDEFINED VARIABLE - wildcard_patterns.md:1:7:1:12
 UNUSED VARIABLE - wildcard_patterns.md:4:5:4:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `value` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'value' is not defined:
 **wildcard_patterns.md:1:7:1:12:**
 ```roc
 match value {

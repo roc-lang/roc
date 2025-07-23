@@ -11,9 +11,9 @@ Json.utf8
 UNDEFINED VARIABLE - external_lookup_expr.md:1:1:1:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `utf8` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'utf8' is not defined:
 **external_lookup_expr.md:1:1:1:10:**
 ```roc
 Json.utf8
@@ -39,5 +39,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-1.10 (type "Error"))
 ~~~

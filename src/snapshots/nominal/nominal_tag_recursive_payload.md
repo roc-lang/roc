@@ -59,20 +59,17 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @6.1-6.6 (ident "empty")))
-		(expr
-			(e-nominal @6.9-6.17 (nominal "ConsList")
-				(e-tag @6.9-6.21 (name "Nil"))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-apply @5.9-5.21 (symbol "ConsList")
-						(ty-var @5.18-5.20 (name "_a")))))))
+	(d-let
+		(p-assign @6.1-6.6 (ident "empty"))
+		(e-nominal @6.9-6.17 (nominal "ConsList")
+			(e-tag @6.9-6.21 (name "Nil")))
+		(annotation @6.1-6.6
+			(declared-type
+				(ty-apply @5.9-5.21 (symbol "ConsList")
+					(ty-var @5.18-5.20 (name "_a"))))))
 	(s-nominal-decl @3.1-3.40
-		(type-header (name "ConsList")
-			(args
+		(ty-header @3.1-3.12 (name "ConsList")
+			(ty-args
 				(ty-var @3.10-3.11 (name "a"))))
 		(ty-tag-union @3.16-3.40
 			(ty @3.17-3.20 (name "Nil"))
@@ -87,8 +84,8 @@ NO CHANGE
 		(patt @6.1-6.6 (type "ConsList(a)")))
 	(type_decls
 		(nominal @3.1-3.40 (type "ConsList(a)")
-			(type-header (name "ConsList")
-				(args
+			(ty-header @3.1-3.12 (name "ConsList")
+				(ty-args
 					(ty-var @3.10-3.11 (name "a"))))))
 	(expressions
 		(expr @6.9-6.17 (type "ConsList(a)"))))

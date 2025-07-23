@@ -18,15 +18,15 @@ value = "test"
 UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
 
-**Underscore in Type Alias**
-Underscore cannot be used in a type alias declaration:
 **test_error_propagation.md:1:1:1:1:**
 ```roc
 module []
 ```
 
 
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 # TOKENS
 ~~~zig
@@ -64,21 +64,18 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @8.1-8.6 (ident "value")))
-		(expr
-			(e-string @8.9-8.15
-				(e-literal @8.10-8.14 (string "test"))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty @7.9-7.18 (name "GoodAlias"))))))
+	(d-let
+		(p-assign @8.1-8.6 (ident "value"))
+		(e-string @8.9-8.15
+			(e-literal @8.10-8.14 (string "test")))
+		(annotation @8.1-8.6
+			(declared-type
+				(ty @7.9-7.18 (name "GoodAlias")))))
 	(s-nominal-decl @3.1-3.13
-		(type-header (name "BadBase"))
+		(ty-header @3.1-3.8 (name "BadBase"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @5.1-5.21
-		(type-header (name "GoodAlias"))
+		(ty-header @5.1-5.10 (name "GoodAlias"))
 		(ty @5.14-5.21 (name "BadBase"))))
 ~~~
 # TYPES
@@ -88,9 +85,9 @@ NO CHANGE
 		(patt @8.1-8.6 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.13 (type "Error")
-			(type-header (name "BadBase")))
+			(ty-header @3.1-3.8 (name "BadBase")))
 		(nominal @5.1-5.21 (type "Error")
-			(type-header (name "GoodAlias"))))
+			(ty-header @5.1-5.10 (name "GoodAlias"))))
 	(expressions
 		(expr @8.9-8.15 (type "Error"))))
 ~~~

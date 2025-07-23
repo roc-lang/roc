@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const compile = @import("compile");
 const tracy = @import("tracy.zig");
 const fmt = @import("fmt.zig");
 const collections = @import("collections");
@@ -61,7 +60,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
     std.debug.print("Total: {} bytes, {} lines\n", .{ metrics.total_bytes, metrics.total_lines });
 
     // Create a module environment for tokenization (reused for tokenizer, created per-iteration for parser)
-    var env: ?compile.ModuleEnv = if (!is_parse) try compile.ModuleEnv.init(gpa, "") else null;
+    var env: ?base.ModuleEnv = if (!is_parse) try base.ModuleEnv.init(gpa, "") else null;
     defer if (env) |*e| e.deinit();
 
     // Benchmark parameters
@@ -84,7 +83,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
 
                 // ModuleEnv takes ownership of the source code, so we need to dupe it each iteration
                 const source_copy = try gpa.dupe(u8, roc_file.content);
-                var parse_env = try compile.ModuleEnv.init(gpa, source_copy);
+                var parse_env = try base.ModuleEnv.init(gpa, source_copy);
 
                 var ir = try parse.parse(&parse_env);
                 iteration_tokens += ir.tokens.tokens.len;

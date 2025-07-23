@@ -8,7 +8,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const compile = @import("compile");
 const canonicalize = @import("check/canonicalize.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const cache = @import("cache/mod.zig");
@@ -17,14 +16,14 @@ const Solver = @import("check/check_types.zig");
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
 const types = @import("types");
-const reporting = @import("reporting");
+const reporting = @import("reporting.zig");
 const tokenize = @import("check/parse/tokenize.zig");
 const repl = @import("repl/eval.zig");
 
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const parallel = base.parallel;
-const ModuleEnv = compile.ModuleEnv;
+const CIR = canonicalize.CIR;
 const AST = parse.AST;
 const Report = reporting.Report;
 
@@ -112,11 +111,13 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
         return null;
     }
 
-    const problem_type = std.mem.trim(u8, potential_type, " \t\r\n");
+    var problem_type = std.mem.trim(u8, potential_type, " \t\r\n");
 
-    // Note: We no longer handle compound error types here since problem headers
-    // may contain " - " followed by location information. The location will be
-    // parsed separately from the header line.
+    // Handle compound error types like "NOT IMPLEMENTED - UNDEFINED VARIABLE"
+    // We only want the last part after the last " - "
+    if (std.mem.lastIndexOf(u8, problem_type, " - ")) |dash_idx| {
+        problem_type = std.mem.trim(u8, problem_type[dash_idx + 3 ..], " \t\r\n");
+    }
 
     // Skip past the closing ** of the problem type
     var current_idx = type_end + 2;
@@ -436,9 +437,10 @@ fn problemsEqual(a: ProblemEntry, b: ProblemEntry) bool {
 fn generateAllReports(
     allocator: std.mem.Allocator,
     parse_ast: *AST,
-    module_env: *ModuleEnv,
+    can_ir: *CIR,
     solver: *Solver,
     snapshot_path: []const u8,
+    module_env: *base.ModuleEnv,
 ) !std.ArrayList(reporting.Report) {
     var reports = std.ArrayList(reporting.Report).init(allocator);
     errdefer reports.deinit();
@@ -460,12 +462,9 @@ fn generateAllReports(
     }
 
     // Generate canonicalization reports
-    const diagnostics = try module_env.getDiagnostics();
-    defer allocator.free(diagnostics);
-    // Extract just the filename from the full path for consistent formatting
-    const snapshot_filename = std.fs.path.basename(snapshot_path);
+    const diagnostics = try can_ir.getDiagnostics();
     for (diagnostics) |diagnostic| {
-        const report = module_env.diagnosticToReport(diagnostic, allocator, snapshot_filename) catch |err| {
+        const report = can_ir.diagnosticToReport(diagnostic, allocator, snapshot_path) catch |err| {
             std.debug.panic("Failed to create canonicalization report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
         };
         try reports.append(report);
@@ -475,11 +474,11 @@ fn generateAllReports(
     var problems_itr = solver.problems.problems.iterIndices();
     while (problems_itr.next()) |problem_idx| {
         const problem = solver.problems.problems.get(problem_idx);
-        const empty_modules: []const *ModuleEnv = &.{};
+        const empty_modules: []const *CIR = &.{};
         var report_builder = types_problem_mod.ReportBuilder.init(
             allocator,
             module_env,
-            module_env,
+            can_ir,
             &solver.snapshots,
             snapshot_path,
             empty_modules,
@@ -1018,7 +1017,7 @@ fn processSnapshotContent(
     }
 
     // Process the content through the compilation pipeline
-    var module_env = try compile.ModuleEnv.init(allocator, content.source);
+    var module_env = try base.ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
 
     // Parse the source code based on node type
@@ -1042,13 +1041,13 @@ fn processSnapshotContent(
         basename[0..dot_idx]
     else
         basename;
-    // Initialize the CIR fields in the existing module_env instead of creating a new one
-    try module_env.initCIRFields(allocator, module_name);
+    var can_ir = try CIR.init(&module_env, module_name);
+    defer can_ir.deinit();
 
-    var can = try canonicalize.init(&module_env, &parse_ast, null);
+    var can = try canonicalize.init(&can_ir, &parse_ast, null);
     defer can.deinit();
 
-    var maybe_expr_idx: ?ModuleEnv.Expr.Idx = null;
+    var maybe_expr_idx: ?CIR.Expr.Idx = null;
 
     switch (content.meta.node_type) {
         .file => try can.canonicalizeFile(),
@@ -1062,9 +1061,9 @@ fn processSnapshotContent(
         .statement => {
             // Manually track scratch statements because we aren't using the file entrypoint
             const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-            const scratch_statements_start = module_env.store.scratch_statements.top();
+            const scratch_statements_start = can_ir.store.scratch_statements.top();
             _ = try can.canonicalizeStatement(stmt_idx);
-            module_env.all_statements = try module_env.store.statementSpanFrom(scratch_statements_start);
+            can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
         },
         .package => try can.canonicalizeFile(),
         .platform => try can.canonicalizeFile(),
@@ -1073,16 +1072,16 @@ fn processSnapshotContent(
     }
 
     // Assert that everything is in-sync
-    module_env.debugAssertArraysInSync();
+    can_ir.debugAssertArraysInSync();
 
     // Types
-    const empty_modules: []const *ModuleEnv = &.{};
+    const empty_modules: []const *CIR = &.{};
     var solver = try Solver.init(
         allocator,
-        &module_env.types,
-        &module_env,
+        &can_ir.env.types,
+        &can_ir,
         empty_modules,
-        &module_env.store.regions,
+        &can_ir.store.regions,
     );
     defer solver.deinit();
 
@@ -1100,27 +1099,30 @@ fn processSnapshotContent(
         // Generate original S-expression for comparison
         var original_tree = SExprTree.init(allocator);
         defer original_tree.deinit();
-        try module_env.pushToSExprTree(null, &original_tree);
+        try CIR.pushToSExprTree(&can_ir, null, &original_tree);
 
         var original_sexpr = std.ArrayList(u8).init(allocator);
         defer original_sexpr.deinit();
         try original_tree.toStringPretty(original_sexpr.writer().any());
 
         // Create and serialize MmapCache
-        const cache_data = try cache.CacheModule.create(allocator, &module_env, 0, 0);
+        const cache_data = try cache.CacheModule.create(allocator, &module_env, &can_ir, 0, 0);
         defer allocator.free(cache_data);
 
         // Deserialize back
         var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
 
-        // Restore ModuleEnv
+        // Restore ModuleEnv and CIR
         var restored = try loaded_cache.restore(allocator, module_name, content.source);
         defer restored.module_env.deinit();
+        defer restored.cir.deinit();
 
-        // Generate S-expression from restored ModuleEnv
+        restored.cir.env = &restored.module_env;
+
+        // Generate S-expression from restored CIR
         var restored_tree = SExprTree.init(allocator);
         defer restored_tree.deinit();
-        try restored.module_env.pushToSExprTree(null, &restored_tree);
+        try CIR.pushToSExprTree(&restored.cir, null, &restored_tree);
 
         var restored_sexpr = std.ArrayList(u8).init(allocator);
         defer restored_sexpr.deinit();
@@ -1150,7 +1152,7 @@ fn processSnapshotContent(
     try generateHtmlWrapper(&output, &content);
 
     // Generate reports once and use for both EXPECTED and PROBLEMS sections
-    var generated_reports = try generateAllReports(allocator, &parse_ast, &module_env, &solver, output_path);
+    var generated_reports = try generateAllReports(allocator, &parse_ast, &can_ir, &solver, output_path, &module_env);
     defer {
         for (generated_reports.items) |*report| {
             report.deinit();
@@ -1166,8 +1168,8 @@ fn processSnapshotContent(
     try generateTokensSection(&output, &parse_ast, &content, &module_env);
     try generateParseSection(&output, &content, &parse_ast, &module_env);
     try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, &module_env, maybe_expr_idx);
-    try generateTypesSection(&output, &module_env, maybe_expr_idx);
+    try generateCanonicalizeSection(&output, &can_ir, maybe_expr_idx);
+    try generateTypesSection(&output, &can_ir, maybe_expr_idx);
 
     try generateHtmlClosing(&output);
 
@@ -1840,8 +1842,7 @@ fn generateProblemsSection(output: *DualOutput, reports: *const std.ArrayList(re
 }
 
 /// Generate TOKENS section for both markdown and HTML
-pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const Content, module_env: *compile.ModuleEnv) !void {
-    _ = content; // unused
+pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const Content, module_env: *base.ModuleEnv) !void {
     try output.begin_section("TOKENS");
     try output.begin_code_block("zig");
 
@@ -1859,7 +1860,7 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *con
     const tokens = tokenizedBuffer.tokens.items(.tag);
     for (tokens, 0..) |tok, i| {
         const region = tokenizedBuffer.resolve(@intCast(i));
-        const info = module_env.calcRegionInfo(region);
+        const info = try module_env.calcRegionInfo(content.source, region.start.offset, region.end.offset);
 
         // Markdown token output
         try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
@@ -1918,7 +1919,7 @@ fn source_contains_newline_in_range(source: []const u8, start: usize, end: usize
 }
 
 /// Generate PARSE2 section using SExprTree for both markdown and HTML
-fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *compile.ModuleEnv) !void {
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *base.ModuleEnv) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
 
@@ -2048,10 +2049,10 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 }
 
 /// Generate CANONICALIZE section for both markdown and HTML
-fn generateCanonicalizeSection(output: *DualOutput, module_env: *ModuleEnv, maybe_expr_idx: ?ModuleEnv.Expr.Idx) !void {
+fn generateCanonicalizeSection(output: *DualOutput, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
-    try module_env.pushToSExprTree(maybe_expr_idx, &tree);
+    try can_ir.pushToSExprTree(maybe_expr_idx, &tree);
 
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
@@ -2075,10 +2076,10 @@ fn generateCanonicalizeSection(output: *DualOutput, module_env: *ModuleEnv, mayb
 }
 
 /// Generate TYPES section for both markdown and HTML
-fn generateTypesSection(output: *DualOutput, module_env: *ModuleEnv, maybe_expr_idx: ?ModuleEnv.Expr.Idx) !void {
+fn generateTypesSection(output: *DualOutput, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
-    try module_env.pushTypesToSExprTree(maybe_expr_idx, &tree);
+    try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree);
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
@@ -2102,11 +2103,11 @@ fn generateTypesSection(output: *DualOutput, module_env: *ModuleEnv, maybe_expr_
 
 /// Generate TYPES section displaying types store for both markdown and HTML
 /// This is used for debugging.
-fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, module_env: *ModuleEnv) !void {
+fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *CIR) !void {
     var solved = std.ArrayList(u8).init(output.gpa);
     defer solved.deinit();
 
-    try types.writers.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, module_env);
+    try types.writers.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, can_ir.env);
 
     // Markdown TYPES section
     try output.md_writer.writeAll(Section.TYPES);

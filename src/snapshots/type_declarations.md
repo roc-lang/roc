@@ -74,26 +74,24 @@ Some(a) : { foo : Ok(a), bar : Something }
 
 
 **EXPOSED BUT NOT DEFINED**
+The module header says that `main!` is exposed, but it is not defined anywhere in this module.
 
-**Exposed but Not Defined**
-'main!' is exposed in the module header but is not defined:
 **type_declarations.md:1:51:1:56:**
 ```roc
 module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
 ```
                                                   ^^^^^
-
+You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
+The module header says that `add_one` is exposed, but it is not defined anywhere in this module.
 
-**Exposed but Not Defined**
-'add_one' is exposed in the module header but is not defined:
 **type_declarations.md:1:42:1:49:**
 ```roc
 module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
 ```
                                          ^^^^^^^
-
+You can fix this by either defining `add_one` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -192,8 +190,8 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-3.41
-		(type-header (name "Map")
-			(args
+		(ty-header @3.1-3.10 (name "Map")
+			(ty-args
 				(ty-var @3.5-3.6 (name "a"))
 				(ty-var @3.8-3.9 (name "b"))))
 		(ty-fn @3.13-3.41 (effectful false)
@@ -206,13 +204,13 @@ NO CHANGE
 			(ty-apply @3.34-3.41 (symbol "List")
 				(ty-var @3.39-3.40 (name "b")))))
 	(s-alias-decl @5.1-5.17
-		(type-header (name "Foo"))
+		(ty-header @5.1-5.4 (name "Foo"))
 		(ty-tuple @5.7-5.17
 			(ty @5.8-5.11 (name "Bar"))
 			(ty @5.13-5.16 (name "Baz"))))
 	(s-alias-decl @7.1-7.43
-		(type-header (name "Some")
-			(args
+		(ty-header @7.1-7.8 (name "Some")
+			(ty-args
 				(ty-var @7.6-7.7 (name "a"))))
 		(ty-record @7.11-7.43
 			(field (field "foo")
@@ -221,16 +219,16 @@ NO CHANGE
 			(field (field "bar")
 				(ty @7.32-7.41 (name "Something")))))
 	(s-alias-decl @9.1-9.27
-		(type-header (name "Maybe")
-			(args
+		(ty-header @9.1-9.9 (name "Maybe")
+			(ty-args
 				(ty-var @9.7-9.8 (name "a"))))
 		(ty-tag-union @9.12-9.27
 			(ty-apply @9.13-9.20 (symbol "Some")
 				(ty-var @9.18-9.19 (name "a")))
 			(ty @9.22-9.26 (name "None"))))
 	(s-alias-decl @11.1-11.38
-		(type-header (name "SomeFunc")
-			(args
+		(ty-header @11.1-11.12 (name "SomeFunc")
+			(ty-args
 				(ty-var @11.10-11.11 (name "a"))))
 		(ty-fn @11.15-11.38 (effectful false)
 			(ty-apply @11.15-11.23 (symbol "Maybe")
@@ -239,13 +237,13 @@ NO CHANGE
 			(ty-apply @11.30-11.38 (symbol "Maybe")
 				(ty-var @11.36-11.37 (name "a")))))
 	(s-alias-decl @13.1-13.13
-		(type-header (name "MyType"))
+		(ty-header @13.1-13.7 (name "MyType"))
 		(ty @13.10-13.13 (name "U64")))
 	(s-alias-decl @15.1-15.24
-		(type-header (name "MyType2"))
+		(ty-header @15.1-15.8 (name "MyType2"))
 		(ty-lookup-external @15.11-15.24
-			(external-decl @15.11-15.24 (qualified-name "Module.Thingy") (module-name "Module") (local-name "Thingy") (kind "type"))))
-	(external-decl (qualified-name "Module.Thingy") (module-name "Module") (local-name "Thingy") (kind "type")))
+			(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type"))))
+	(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -253,27 +251,27 @@ NO CHANGE
 	(defs)
 	(type_decls
 		(alias @3.1-3.41 (type "Map(a, b)")
-			(type-header (name "Map")
-				(args
+			(ty-header @3.1-3.10 (name "Map")
+				(ty-args
 					(ty-var @3.5-3.6 (name "a"))
 					(ty-var @3.8-3.9 (name "b")))))
 		(alias @5.1-5.17 (type "Foo")
-			(type-header (name "Foo")))
+			(ty-header @5.1-5.4 (name "Foo")))
 		(alias @7.1-7.43 (type "Some(a)")
-			(type-header (name "Some")
-				(args
+			(ty-header @7.1-7.8 (name "Some")
+				(ty-args
 					(ty-var @7.6-7.7 (name "a")))))
 		(alias @9.1-9.27 (type "Maybe(a)")
-			(type-header (name "Maybe")
-				(args
+			(ty-header @9.1-9.9 (name "Maybe")
+				(ty-args
 					(ty-var @9.7-9.8 (name "a")))))
 		(alias @11.1-11.38 (type "SomeFunc(a)")
-			(type-header (name "SomeFunc")
-				(args
+			(ty-header @11.1-11.12 (name "SomeFunc")
+				(ty-args
 					(ty-var @11.10-11.11 (name "a")))))
 		(alias @13.1-13.13 (type "MyType")
-			(type-header (name "MyType")))
+			(ty-header @13.1-13.7 (name "MyType")))
 		(alias @15.1-15.24 (type "MyType2")
-			(type-header (name "MyType2"))))
+			(ty-header @15.1-15.8 (name "MyType2"))))
 	(expressions))
 ~~~

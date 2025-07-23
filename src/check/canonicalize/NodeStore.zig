@@ -5,8 +5,8 @@ const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
 const Node = @import("Node.zig");
-const ModuleEnv = @import("compile").ModuleEnv;
-const RocDec = ModuleEnv.RocDec;
+const CIR = @import("CIR.zig");
+const RocDec = @import("builtins").RocDec;
 
 const SERIALIZATION_ALIGNMENT = 16;
 
@@ -24,21 +24,21 @@ gpa: std.mem.Allocator,
 nodes: Node.List,
 regions: Region.List,
 extra_data: std.ArrayListUnmanaged(u32),
-scratch_statements: base.Scratch(ModuleEnv.Statement.Idx),
-scratch_exprs: base.Scratch(ModuleEnv.Expr.Idx),
-scratch_record_fields: base.Scratch(ModuleEnv.RecordField.Idx),
-scratch_match_branches: base.Scratch(ModuleEnv.Expr.Match.Branch.Idx),
-scratch_match_branch_patterns: base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx),
-scratch_if_branches: base.Scratch(ModuleEnv.Expr.IfBranch.Idx),
-scratch_where_clauses: base.Scratch(ModuleEnv.WhereClause.Idx),
-scratch_patterns: base.Scratch(ModuleEnv.Pattern.Idx),
-scratch_pattern_record_fields: base.Scratch(ModuleEnv.PatternRecordField.Idx),
-scratch_record_destructs: base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx),
-scratch_type_annos: base.Scratch(ModuleEnv.TypeAnno.Idx),
-scratch_anno_record_fields: base.Scratch(ModuleEnv.TypeAnno.RecordField.Idx),
-scratch_exposed_items: base.Scratch(ModuleEnv.ExposedItem.Idx),
-scratch_defs: base.Scratch(ModuleEnv.Def.Idx),
-scratch_diagnostics: base.Scratch(ModuleEnv.Diagnostic.Idx),
+scratch_statements: base.Scratch(CIR.Statement.Idx),
+scratch_exprs: base.Scratch(CIR.Expr.Idx),
+scratch_record_fields: base.Scratch(CIR.RecordField.Idx),
+scratch_match_branches: base.Scratch(CIR.Expr.Match.Branch.Idx),
+scratch_match_branch_patterns: base.Scratch(CIR.Expr.Match.BranchPattern.Idx),
+scratch_if_branches: base.Scratch(CIR.Expr.IfBranch.Idx),
+scratch_where_clauses: base.Scratch(CIR.WhereClause.Idx),
+scratch_patterns: base.Scratch(CIR.Pattern.Idx),
+scratch_pattern_record_fields: base.Scratch(CIR.PatternRecordField.Idx),
+scratch_record_destructs: base.Scratch(CIR.Pattern.RecordDestruct.Idx),
+scratch_type_annos: base.Scratch(CIR.TypeAnno.Idx),
+scratch_anno_record_fields: base.Scratch(CIR.TypeAnno.RecordField.Idx),
+scratch_exposed_items: base.Scratch(CIR.ExposedItem.Idx),
+scratch_defs: base.Scratch(CIR.Def.Idx),
+scratch_diagnostics: base.Scratch(CIR.Diagnostic.Idx),
 
 /// Initializes the NodeStore
 pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!NodeStore {
@@ -54,21 +54,21 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .nodes = try Node.List.initCapacity(gpa, capacity),
         .regions = try Region.List.initCapacity(gpa, capacity),
         .extra_data = try std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2),
-        .scratch_statements = try base.Scratch(ModuleEnv.Statement.Idx).init(gpa),
-        .scratch_exprs = try base.Scratch(ModuleEnv.Expr.Idx).init(gpa),
-        .scratch_patterns = try base.Scratch(ModuleEnv.Pattern.Idx).init(gpa),
-        .scratch_record_fields = try base.Scratch(ModuleEnv.RecordField.Idx).init(gpa),
-        .scratch_pattern_record_fields = try base.Scratch(ModuleEnv.PatternRecordField.Idx).init(gpa),
-        .scratch_record_destructs = try base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx).init(gpa),
-        .scratch_match_branches = try base.Scratch(ModuleEnv.Expr.Match.Branch.Idx).init(gpa),
-        .scratch_match_branch_patterns = try base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx).init(gpa),
-        .scratch_if_branches = try base.Scratch(ModuleEnv.Expr.IfBranch.Idx).init(gpa),
-        .scratch_type_annos = try base.Scratch(ModuleEnv.TypeAnno.Idx).init(gpa),
-        .scratch_anno_record_fields = try base.Scratch(ModuleEnv.TypeAnno.RecordField.Idx).init(gpa),
-        .scratch_exposed_items = try base.Scratch(ModuleEnv.ExposedItem.Idx).init(gpa),
-        .scratch_defs = try base.Scratch(ModuleEnv.Def.Idx).init(gpa),
-        .scratch_where_clauses = try base.Scratch(ModuleEnv.WhereClause.Idx).init(gpa),
-        .scratch_diagnostics = try base.Scratch(ModuleEnv.Diagnostic.Idx).init(gpa),
+        .scratch_statements = try base.Scratch(CIR.Statement.Idx).init(gpa),
+        .scratch_exprs = try base.Scratch(CIR.Expr.Idx).init(gpa),
+        .scratch_patterns = try base.Scratch(CIR.Pattern.Idx).init(gpa),
+        .scratch_record_fields = try base.Scratch(CIR.RecordField.Idx).init(gpa),
+        .scratch_pattern_record_fields = try base.Scratch(CIR.PatternRecordField.Idx).init(gpa),
+        .scratch_record_destructs = try base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(gpa),
+        .scratch_match_branches = try base.Scratch(CIR.Expr.Match.Branch.Idx).init(gpa),
+        .scratch_match_branch_patterns = try base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(gpa),
+        .scratch_if_branches = try base.Scratch(CIR.Expr.IfBranch.Idx).init(gpa),
+        .scratch_type_annos = try base.Scratch(CIR.TypeAnno.Idx).init(gpa),
+        .scratch_anno_record_fields = try base.Scratch(CIR.TypeAnno.RecordField.Idx).init(gpa),
+        .scratch_exposed_items = try base.Scratch(CIR.ExposedItem.Idx).init(gpa),
+        .scratch_defs = try base.Scratch(CIR.Def.Idx).init(gpa),
+        .scratch_where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(gpa),
+        .scratch_diagnostics = try base.Scratch(CIR.Diagnostic.Idx).init(gpa),
     };
 }
 
@@ -95,47 +95,47 @@ pub fn deinit(store: *NodeStore) void {
 }
 
 /// Compile-time constants for union variant counts to ensure we don't miss cases
-/// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
+/// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
-/// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULE_ENV_DIAGNOSTIC_NODE_COUNT = 44;
-/// Count of the expression nodes in the ModuleEnv
-pub const MODULE_ENV_EXPR_NODE_COUNT = 29;
-/// Count of the statement nodes in the ModuleEnv
-pub const MODULE_ENV_STATEMENT_NODE_COUNT = 13;
-/// Count of the type annotation nodes in the ModuleEnv
-pub const MODULE_ENV_TYPE_ANNO_NODE_COUNT = 11;
-/// Count of the pattern nodes in the ModuleEnv
-pub const MODULE_ENV_PATTERN_NODE_COUNT = 13;
+/// Count of the diagnostic nodes in the CIR
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 44;
+/// Count of the expression nodes in the CIR
+pub const CIR_EXPR_NODE_COUNT = 29;
+/// Count of the statement nodes in the CIR
+pub const CIR_STATEMENT_NODE_COUNT = 13;
+/// Count of the type annotation nodes in the CIR
+pub const CIR_TYPE_ANNO_NODE_COUNT = 11;
+/// Count of the pattern nodes in the CIR
+pub const CIR_PATTERN_NODE_COUNT = 13;
 
 comptime {
-    // Check the number of ModuleEnv.Diagnostic nodes
-    const diagnostic_fields = @typeInfo(ModuleEnv.Diagnostic).@"union".fields;
-    std.debug.assert(diagnostic_fields.len == MODULE_ENV_DIAGNOSTIC_NODE_COUNT);
+    // Check the number of CIR.Diagnostic nodes
+    const diagnostic_fields = @typeInfo(CIR.Diagnostic).@"union".fields;
+    std.debug.assert(diagnostic_fields.len == CIR_DIAGNOSTIC_NODE_COUNT);
 }
 
 comptime {
-    // Check the number of ModuleEnv.Expr nodes
-    const expr_fields = @typeInfo(ModuleEnv.Expr).@"union".fields;
-    std.debug.assert(expr_fields.len == MODULE_ENV_EXPR_NODE_COUNT);
+    // Check the number of CIR.Expr nodes
+    const expr_fields = @typeInfo(CIR.Expr).@"union".fields;
+    std.debug.assert(expr_fields.len == CIR_EXPR_NODE_COUNT);
 }
 
 comptime {
-    // Check the number of ModuleEnv.Statement nodes
-    const statement_fields = @typeInfo(ModuleEnv.Statement).@"union".fields;
-    std.debug.assert(statement_fields.len == MODULE_ENV_STATEMENT_NODE_COUNT);
+    // Check the number of CIR.Statement nodes
+    const statement_fields = @typeInfo(CIR.Statement).@"union".fields;
+    std.debug.assert(statement_fields.len == CIR_STATEMENT_NODE_COUNT);
 }
 
 comptime {
-    // Check the number of ModuleEnv.TypeAnno nodes
-    const type_anno_fields = @typeInfo(ModuleEnv.TypeAnno).@"union".fields;
-    std.debug.assert(type_anno_fields.len == MODULE_ENV_TYPE_ANNO_NODE_COUNT);
+    // Check the number of CIR.TypeAnno nodes
+    const type_anno_fields = @typeInfo(CIR.TypeAnno).@"union".fields;
+    std.debug.assert(type_anno_fields.len == CIR_TYPE_ANNO_NODE_COUNT);
 }
 
 comptime {
-    // Check the number of ModuleEnv.Pattern nodes
-    const pattern_fields = @typeInfo(ModuleEnv.Pattern).@"union".fields;
-    std.debug.assert(pattern_fields.len == MODULE_ENV_PATTERN_NODE_COUNT);
+    // Check the number of CIR.Pattern nodes
+    const pattern_fields = @typeInfo(CIR.Pattern).@"union".fields;
+    std.debug.assert(pattern_fields.len == CIR_PATTERN_NODE_COUNT);
 }
 
 /// Helper function to get a region by node index, handling the type conversion
@@ -145,25 +145,25 @@ pub fn getRegionAt(store: *const NodeStore, node_idx: Node.Idx) Region {
 }
 
 /// Helper function to get a region by pattern index
-pub fn getPatternRegion(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) Region {
+pub fn getPatternRegion(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) Region {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
     return store.getRegionAt(node_idx);
 }
 
 /// Helper function to get a region by expression index
-pub fn getExprRegion(store: *const NodeStore, expr_idx: ModuleEnv.Expr.Idx) Region {
+pub fn getExprRegion(store: *const NodeStore, expr_idx: CIR.Expr.Idx) Region {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
     return store.getRegionAt(node_idx);
 }
 
 /// Helper function to get a region by statement index
-pub fn getStatementRegion(store: *const NodeStore, stmt_idx: ModuleEnv.Statement.Idx) Region {
+pub fn getStatementRegion(store: *const NodeStore, stmt_idx: CIR.Statement.Idx) Region {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(stmt_idx));
     return store.getRegionAt(node_idx);
 }
 
 /// Helper function to get a region by type annotation index
-pub fn getTypeAnnoRegion(store: *const NodeStore, type_anno_idx: ModuleEnv.TypeAnno.Idx) Region {
+pub fn getTypeAnnoRegion(store: *const NodeStore, type_anno_idx: CIR.TypeAnno.Idx) Region {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(type_anno_idx));
     return store.getRegionAt(node_idx);
 }
@@ -174,41 +174,41 @@ pub fn getNodeRegion(store: *const NodeStore, node_idx: Node.Idx) Region {
 }
 
 /// Retrieves a statement node from the store.
-pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx) ModuleEnv.Statement {
+pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.Statement {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(statement));
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
-        .statement_decl => return ModuleEnv.Statement{ .s_decl = .{
+        .statement_decl => return CIR.Statement{ .s_decl = .{
             .pattern = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
         } },
-        .statement_var => return ModuleEnv.Statement{ .s_var = .{
+        .statement_var => return CIR.Statement{ .s_var = .{
             .pattern_idx = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
         } },
-        .statement_reassign => return ModuleEnv.Statement{ .s_reassign = .{
+        .statement_reassign => return CIR.Statement{ .s_reassign = .{
             .pattern_idx = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
         } },
-        .statement_crash => return ModuleEnv.Statement{ .s_crash = .{
+        .statement_crash => return CIR.Statement{ .s_crash = .{
             .msg = @enumFromInt(node.data_1),
         } },
-        .statement_dbg => return ModuleEnv.Statement{ .s_dbg = .{
+        .statement_dbg => return CIR.Statement{ .s_dbg = .{
             .expr = @enumFromInt(node.data_1),
         } },
         .statement_expr => return .{ .s_expr = .{
             .expr = @enumFromInt(node.data_1),
         } },
-        .statement_expect => return ModuleEnv.Statement{ .s_expect = .{
+        .statement_expect => return CIR.Statement{ .s_expect = .{
             .body = @enumFromInt(node.data_1),
         } },
-        .statement_for => return ModuleEnv.Statement{ .s_for = .{
+        .statement_for => return CIR.Statement{ .s_for = .{
             .patt = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
             .body = @enumFromInt(node.data_3),
         } },
-        .statement_return => return ModuleEnv.Statement{ .s_return = .{
+        .statement_return => return CIR.Statement{ .s_return = .{
             .expr = @enumFromInt(node.data_1),
         } },
         .statement_import => {
@@ -224,12 +224,12 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
             const alias_tok = if (flags & 1 != 0) @as(?Ident.Idx, @bitCast(alias_data)) else null;
             const qualifier_tok = if (flags & 2 != 0) @as(?Ident.Idx, @bitCast(qualifier_data)) else null;
 
-            return ModuleEnv.Statement{
+            return CIR.Statement{
                 .s_import = .{
                     .module_name_tok = @bitCast(node.data_1),
                     .qualifier_tok = qualifier_tok,
                     .alias_tok = alias_tok,
-                    .exposes = DataSpan.init(exposes_start, exposes_len).as(ModuleEnv.ExposedItem.Span),
+                    .exposes = DataSpan.init(exposes_start, exposes_len).as(CIR.ExposedItem.Span),
                 },
             };
         },
@@ -237,18 +237,18 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
             const extra_start = node.data_1;
             const extra_data = store.extra_data.items[extra_start..];
 
-            const anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[0]));
+            const anno = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[0]));
             const anno_var = @as(types.Var, @enumFromInt(extra_data[1]));
-            const header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(extra_data[2]));
+            const header = @as(CIR.TypeHeader.Idx, @enumFromInt(extra_data[2]));
             const has_where = extra_data[3] != 0;
 
             const where_clause = if (has_where) blk: {
                 const where_start = extra_data[4];
                 const where_len = extra_data[5];
-                break :blk ModuleEnv.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
+                break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
             } else null;
 
-            return ModuleEnv.Statement{
+            return CIR.Statement{
                 .s_alias_decl = .{
                     .header = header,
                     .anno = anno,
@@ -261,18 +261,18 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
             const extra_start = node.data_1;
             const extra_data = store.extra_data.items[extra_start..];
 
-            const anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[0]));
+            const anno = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[0]));
             const anno_var = @as(types.Var, @enumFromInt(extra_data[1]));
-            const header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(extra_data[2]));
+            const header = @as(CIR.TypeHeader.Idx, @enumFromInt(extra_data[2]));
             const has_where = extra_data[3] != 0;
 
             const where_clause = if (has_where) blk: {
                 const where_start = extra_data[4];
                 const where_len = extra_data[5];
-                break :blk ModuleEnv.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
+                break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
             } else null;
 
-            return ModuleEnv.Statement{
+            return CIR.Statement{
                 .s_nominal_decl = .{
                     .header = header,
                     .anno = anno,
@@ -285,17 +285,17 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
             const extra_start = node.data_1;
             const extra_data = store.extra_data.items[extra_start..];
 
-            const anno: ModuleEnv.TypeAnno.Idx = @enumFromInt(extra_data[0]);
+            const anno: CIR.TypeAnno.Idx = @enumFromInt(extra_data[0]);
             const name: Ident.Idx = @bitCast(extra_data[1]);
             const where_flag = extra_data[2];
 
             const where_clause = if (where_flag == 1) blk: {
                 const where_start = extra_data[3];
                 const where_len = extra_data[4];
-                break :blk ModuleEnv.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
+                break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
             } else null;
 
-            return ModuleEnv.Statement{
+            return CIR.Statement{
                 .s_type_anno = .{
                     .name = name,
                     .anno = anno,
@@ -310,13 +310,13 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
 }
 
 /// Retrieves an expression node from the store.
-pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr {
+pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr));
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
         .expr_var => {
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_lookup_local = .{
                     .pattern_idx = @enumFromInt(node.data_1),
                 },
@@ -324,7 +324,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         },
         .expr_external_lookup => {
             // Handle external lookups
-            return ModuleEnv.Expr{ .e_lookup_external = .{
+            return CIR.Expr{ .e_lookup_external = .{
                 .module_idx = @enumFromInt(node.data_1),
                 .target_node_idx = @intCast(node.data_2),
                 .region = store.getRegionAt(node_idx),
@@ -335,14 +335,14 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const value_as_u32s = store.extra_data.items[node.data_1..][0..4];
 
             // Retrieve type variable from data_2 and requirements from data_3
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_int = .{
                     .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = .i128 },
                 },
             };
         },
         .expr_list => {
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_list = .{
                     .elem_var = @enumFromInt(node.data_3),
                     .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
@@ -350,7 +350,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             };
         },
         .expr_tuple => {
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_tuple = .{
                     .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                 },
@@ -364,7 +364,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const args_start = extra_data[0];
             const args_len = extra_data[1];
 
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_call = .{
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
                     .called_via = @enumFromInt(node.data_2),
@@ -378,7 +378,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const value_as_u64: u64 = @bitCast(value_as_u32s.*);
             const value: f64 = @bitCast(value_as_u64);
 
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_frac_f64 = .{
                     .value = value,
                 },
@@ -390,7 +390,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_frac_dec = .{
                     .value = RocDec{ .num = value_as_i128 },
                 },
@@ -403,25 +403,25 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const numerator = @as(i16, @intCast(@as(i32, @bitCast(node.data_1))));
             const denominator_power_of_ten = @as(u8, @truncate(node.data_3));
 
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_dec_small = .{
                     .numerator = numerator,
                     .denominator_power_of_ten = denominator_power_of_ten,
                 },
             };
         },
-        .expr_string_segment => return ModuleEnv.Expr.initStrSegment(
+        .expr_string_segment => return CIR.Expr.initStrSegment(
             @enumFromInt(node.data_1),
         ),
-        .expr_string => return ModuleEnv.Expr.initStr(
-            DataSpan.init(node.data_1, node.data_2).as(ModuleEnv.Expr.Span),
+        .expr_string => return CIR.Expr.initStr(
+            DataSpan.init(node.data_1, node.data_2).as(CIR.Expr.Span),
         ),
         .expr_tag => {
             const name = @as(Ident.Idx, @bitCast(node.data_1));
             const args_start = node.data_2;
             const args_len = node.data_3;
 
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_tag = .{
                     .name = name,
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
@@ -429,11 +429,11 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             };
         },
         .expr_nominal => {
-            const nominal_type_decl: ModuleEnv.Statement.Idx = @enumFromInt(node.data_1);
-            const backing_expr: ModuleEnv.Expr.Idx = @enumFromInt(node.data_2);
-            const backing_type: ModuleEnv.Expr.NominalBackingType = @enumFromInt(node.data_3);
+            const nominal_type_decl: CIR.Statement.Idx = @enumFromInt(node.data_1);
+            const backing_expr: CIR.Expr.Idx = @enumFromInt(node.data_2);
+            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(node.data_3);
 
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_nominal = .{
                     .nominal_type_decl = nominal_type_decl,
                     .backing_expr = backing_expr,
@@ -442,8 +442,8 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             };
         },
         .expr_bin_op => {
-            return ModuleEnv.Expr{
-                .e_binop = ModuleEnv.Expr.Binop.init(
+            return CIR.Expr{
+                .e_binop = CIR.Expr.Binop.init(
                     @enumFromInt(node.data_1),
                     @enumFromInt(node.data_2),
                     @enumFromInt(node.data_3),
@@ -459,7 +459,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const args_len = extra_data[1];
             const body_idx = extra_data[2];
 
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_lambda = .{
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
                     .body = @enumFromInt(body_idx),
@@ -467,7 +467,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             };
         },
         .expr_block => {
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_block = .{
                     .stmts = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                     .final_expr = @enumFromInt(node.data_3),
@@ -475,10 +475,10 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             };
         },
         .expr_empty_record => {
-            return ModuleEnv.Expr{ .e_empty_record = .{} };
+            return CIR.Expr{ .e_empty_record = .{} };
         },
         .expr_empty_list => {
-            return ModuleEnv.Expr{ .e_empty_list = .{} };
+            return CIR.Expr{ .e_empty_list = .{} };
         },
         .expr_record => {
             const extra_start = node.data_1;
@@ -488,9 +488,9 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const fields_len = extra_data[1];
             const ext_value = extra_data[2];
 
-            const ext = if (ext_value == 0) null else @as(ModuleEnv.Expr.Idx, @enumFromInt(ext_value));
+            const ext = if (ext_value == 0) null else @as(CIR.Expr.Idx, @enumFromInt(ext_value));
 
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_record = .{
                     .fields = .{ .span = .{ .start = fields_start, .len = fields_len } },
                     .ext = ext,
@@ -501,13 +501,13 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const extra_start = node.data_1;
             const extra_data = store.extra_data.items[extra_start..];
 
-            const cond = @as(ModuleEnv.Expr.Idx, @enumFromInt(extra_data[0]));
+            const cond = @as(CIR.Expr.Idx, @enumFromInt(extra_data[0]));
             const branches_start = extra_data[1];
             const branches_len = extra_data[2];
             const exhaustive = @as(types.Var, @enumFromInt(extra_data[3]));
 
-            return ModuleEnv.Expr{
-                .e_match = ModuleEnv.Expr.Match{
+            return CIR.Expr{
+                .e_match = CIR.Expr.Match{
                     .cond = cond,
                     .branches = .{ .span = .{ .start = branches_start, .len = branches_len } },
                     .exhaustive = exhaustive,
@@ -523,7 +523,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const ext_var = @as(types.Var, @enumFromInt(extra_data[2]));
             const name = @as(Ident.Idx, @bitCast(extra_data[3]));
 
-            return ModuleEnv.Expr{
+            return CIR.Expr{
                 .e_zero_argument_tag = .{
                     .closure_name = closure_name,
                     .variant_var = variant_var,
@@ -533,17 +533,17 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             };
         },
         .expr_crash => {
-            return ModuleEnv.Expr{ .e_crash = .{
+            return CIR.Expr{ .e_crash = .{
                 .msg = @enumFromInt(node.data_1),
             } };
         },
         .expr_dbg => {
-            return ModuleEnv.Expr{ .e_dbg = .{
+            return CIR.Expr{ .e_dbg = .{
                 .expr = @enumFromInt(node.data_1),
             } };
         },
         .expr_unary_minus => {
-            return ModuleEnv.Expr{ .e_unary_minus = .{
+            return CIR.Expr{ .e_unary_minus = .{
                 .expr = @enumFromInt(node.data_1),
             } };
         },
@@ -553,15 +553,15 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         .expr_suffix_single_question,
         .expr_record_builder,
         => {
-            return ModuleEnv.Expr{ .e_runtime_error = .{
+            return CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = @enumFromInt(0),
             } };
         },
         .expr_ellipsis => {
-            return ModuleEnv.Expr{ .e_ellipsis = .{} };
+            return CIR.Expr{ .e_ellipsis = .{} };
         },
         .expr_expect => {
-            return ModuleEnv.Expr{ .e_expect = .{
+            return CIR.Expr{ .e_expect = .{
                 .body = @enumFromInt(node.data_1),
             } };
         },
@@ -571,15 +571,15 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
 
             const branches_span_start: u32 = extra_data[0];
             const branches_span_end: u32 = extra_data[1];
-            const final_else: ModuleEnv.Expr.Idx = @enumFromInt(extra_data[2]);
+            const final_else: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
 
             // Reconstruct the if expression from node data
-            const branches_span = ModuleEnv.Expr.IfBranch.Span{ .span = .{
+            const branches_span = CIR.Expr.IfBranch.Span{ .span = .{
                 .start = branches_span_start,
                 .len = branches_span_end,
             } };
 
-            return ModuleEnv.Expr{ .e_if = .{
+            return CIR.Expr{ .e_if = .{
                 .branches = branches_span,
                 .final_else = final_else,
             } };
@@ -588,17 +588,17 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const args_span = if (node.data_3 != 0) blk: {
                 const packed_span = FunctionArgs.fromU32(node.data_3);
                 const data_span = packed_span.toDataSpan();
-                break :blk ModuleEnv.Expr.Span{ .span = data_span };
+                break :blk CIR.Expr.Span{ .span = data_span };
             } else null;
 
-            return ModuleEnv.Expr{ .e_dot_access = .{
+            return CIR.Expr{ .e_dot_access = .{
                 .receiver = @enumFromInt(node.data_1),
                 .field_name = @bitCast(node.data_2),
                 .args = args_span,
             } };
         },
         .malformed => {
-            return ModuleEnv.Expr{ .e_runtime_error = .{
+            return CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = @enumFromInt(node.data_1),
             } };
         },
@@ -606,7 +606,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         // NOTE: Diagnostic tags should NEVER appear in getExpr().
         // If compilation errors occur, use pushMalformed() to create .malformed nodes
         // that reference diagnostic indices. The .malformed case above handles
-        // converting these to runtime_error nodes in the ModuleEnv.
+        // converting these to runtime_error nodes in the CIR.
         else => {
             @panic("unreachable, node is not an expression tag");
         },
@@ -621,7 +621,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
 /// understand.
 ///
 /// But for most exprs, this just returns the same expr idx provided.
-pub fn getExprSpecific(store: *const NodeStore, expr_idx: ModuleEnv.Expr.Idx) ModuleEnv.Expr.Idx {
+pub fn getExprSpecific(store: *const NodeStore, expr_idx: CIR.Expr.Idx) CIR.Expr.Idx {
     const expr = store.getExpr(expr_idx);
     switch (expr) {
         .e_block => |block| return block.final_expr,
@@ -630,7 +630,7 @@ pub fn getExprSpecific(store: *const NodeStore, expr_idx: ModuleEnv.Expr.Idx) Mo
 }
 
 /// Retrieves a 'when' branch from the store.
-pub fn getMatchBranch(store: *const NodeStore, branch: ModuleEnv.Expr.Match.Branch.Idx) ModuleEnv.Expr.Match.Branch {
+pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx) CIR.Expr.Match.Branch {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch));
     const node = store.nodes.get(node_idx);
 
@@ -640,12 +640,12 @@ pub fn getMatchBranch(store: *const NodeStore, branch: ModuleEnv.Expr.Match.Bran
     const extra_start = node.data_1;
     const extra_data = store.extra_data.items[extra_start..];
 
-    const patterns: ModuleEnv.Expr.Match.BranchPattern.Span = .{ .span = .{ .start = extra_data[0], .len = extra_data[1] } };
-    const value_idx: ModuleEnv.Expr.Idx = @enumFromInt(extra_data[2]);
-    const guard_idx: ?ModuleEnv.Expr.Idx = if (extra_data[3] == 0) null else @enumFromInt(extra_data[3]);
+    const patterns: CIR.Expr.Match.BranchPattern.Span = .{ .span = .{ .start = extra_data[0], .len = extra_data[1] } };
+    const value_idx: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
+    const guard_idx: ?CIR.Expr.Idx = if (extra_data[3] == 0) null else @enumFromInt(extra_data[3]);
     const redundant: types.Var = @enumFromInt(extra_data[4]);
 
-    return ModuleEnv.Expr.Match.Branch{
+    return CIR.Expr.Match.Branch{
         .patterns = patterns,
         .value = value_idx,
         .guard = guard_idx,
@@ -654,27 +654,27 @@ pub fn getMatchBranch(store: *const NodeStore, branch: ModuleEnv.Expr.Match.Bran
 }
 
 /// Retrieves a pattern of a 'match' branch from the store.
-pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: ModuleEnv.Expr.Match.BranchPattern.Idx) ModuleEnv.Expr.Match.BranchPattern {
+pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match.BranchPattern.Idx) CIR.Expr.Match.BranchPattern {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch_pat));
     const node = store.nodes.get(node_idx);
 
     std.debug.assert(node.tag == .match_branch_pattern);
 
-    return ModuleEnv.Expr.Match.BranchPattern{
+    return CIR.Expr.Match.BranchPattern{
         .pattern = @enumFromInt(node.data_1),
         .degenerate = node.data_2 != 0,
     };
 }
 
 /// Returns a slice of match branches from the given span.
-pub fn matchBranchSlice(store: *const NodeStore, span: ModuleEnv.Expr.Match.Branch.Span) []ModuleEnv.Expr.Match.Branch.Idx {
+pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Expr.Match.Branch.Span) []CIR.Expr.Match.Branch.Idx {
     const slice = store.extra_data.items[span.span.start..(span.span.start + span.span.len)];
-    const result: []ModuleEnv.Expr.Match.Branch.Idx = @ptrCast(@alignCast(slice));
+    const result: []CIR.Expr.Match.Branch.Idx = @ptrCast(@alignCast(slice));
     return result;
 }
 
 /// Retrieves a 'where' clause from the store.
-pub fn getWhereClause(store: *const NodeStore, whereClause: ModuleEnv.WhereClause.Idx) ModuleEnv.WhereClause {
+pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx) CIR.WhereClause {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(whereClause));
     const node = store.nodes.get(node_idx);
 
@@ -692,10 +692,10 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: ModuleEnv.WhereClaus
             const method_name = @as(Ident.Idx, @bitCast(extra_data[2]));
             const args_start = extra_data[3];
             const args_len = extra_data[4];
-            const ret_anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[5]));
-            const external_decl = @as(ModuleEnv.ExternalDecl.Idx, @enumFromInt(extra_data[6]));
+            const ret_anno = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[5]));
+            const external_decl = @as(CIR.ExternalDecl.Idx, @enumFromInt(extra_data[6]));
 
-            return ModuleEnv.WhereClause{
+            return CIR.WhereClause{
                 .mod_method = .{
                     .var_name = var_name,
                     .method_name = method_name,
@@ -708,9 +708,9 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: ModuleEnv.WhereClaus
         1 => { // mod_alias
             const var_name = @as(Ident.Idx, @bitCast(extra_data[1]));
             const alias_name = @as(Ident.Idx, @bitCast(extra_data[2]));
-            const external_decl = @as(ModuleEnv.ExternalDecl.Idx, @enumFromInt(extra_data[3]));
+            const external_decl = @as(CIR.ExternalDecl.Idx, @enumFromInt(extra_data[3]));
 
-            return ModuleEnv.WhereClause{
+            return CIR.WhereClause{
                 .mod_alias = .{
                     .var_name = var_name,
                     .alias_name = alias_name,
@@ -719,9 +719,9 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: ModuleEnv.WhereClaus
             };
         },
         2 => { // malformed
-            const diagnostic = @as(ModuleEnv.Diagnostic.Idx, @enumFromInt(extra_data[1]));
+            const diagnostic = @as(CIR.Diagnostic.Idx, @enumFromInt(extra_data[1]));
 
-            return ModuleEnv.WhereClause{
+            return CIR.WhereClause{
                 .malformed = .{
                     .diagnostic = diagnostic,
                 },
@@ -732,17 +732,17 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: ModuleEnv.WhereClaus
 }
 
 /// Retrieves a pattern from the store.
-pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) ModuleEnv.Pattern {
+pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
-        .pattern_identifier => return ModuleEnv.Pattern{
+        .pattern_identifier => return CIR.Pattern{
             .assign = .{
                 .ident = @bitCast(node.data_1),
             },
         },
-        .pattern_as => return ModuleEnv.Pattern{
+        .pattern_as => return CIR.Pattern{
             .as = .{
                 .ident = @bitCast(node.data_1),
                 .pattern = @enumFromInt(node.data_2),
@@ -752,18 +752,18 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
             const arguments_start = node.data_1;
             const arguments_len = node.data_2;
             const tag_name = @as(Ident.Idx, @bitCast(node.data_3));
-            return ModuleEnv.Pattern{
+            return CIR.Pattern{
                 .applied_tag = .{
-                    .args = DataSpan.init(arguments_start, arguments_len).as(ModuleEnv.Pattern.Span),
+                    .args = DataSpan.init(arguments_start, arguments_len).as(CIR.Pattern.Span),
                     .name = tag_name,
                 },
             };
         },
         .pattern_nominal => {
-            const nominal_type_decl: ModuleEnv.Statement.Idx = @enumFromInt(node.data_1);
-            const backing_pattern: ModuleEnv.Pattern.Idx = @enumFromInt(node.data_2);
-            const backing_type: ModuleEnv.Expr.NominalBackingType = @enumFromInt(node.data_3);
-            return ModuleEnv.Pattern{
+            const nominal_type_decl: CIR.Statement.Idx = @enumFromInt(node.data_1);
+            const backing_pattern: CIR.Pattern.Idx = @enumFromInt(node.data_2);
+            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(node.data_3);
+            return CIR.Pattern{
                 .nominal = .{
                     .nominal_type_decl = nominal_type_decl,
                     .backing_pattern = backing_pattern,
@@ -780,9 +780,9 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
             const ext_var = @as(types.Var, @enumFromInt(extra_data[2]));
             const whole_var = @as(types.Var, @enumFromInt(extra_data[3]));
 
-            return ModuleEnv.Pattern{
+            return CIR.Pattern{
                 .record_destructure = .{
-                    .destructs = DataSpan.init(destructs_start, destructs_len).as(ModuleEnv.Pattern.RecordDestruct.Span),
+                    .destructs = DataSpan.init(destructs_start, destructs_len).as(CIR.Pattern.RecordDestruct.Span),
                     .ext_var = ext_var,
                     .whole_var = whole_var,
                 },
@@ -803,27 +803,27 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
                 const rest_index = extra_data[5];
                 const has_pattern = extra_data[6] != 0;
                 const rest_pattern = if (has_pattern)
-                    @as(ModuleEnv.Pattern.Idx, @enumFromInt(extra_data[7]))
+                    @as(CIR.Pattern.Idx, @enumFromInt(extra_data[7]))
                 else
                     null;
-                break :blk @as(@TypeOf(@as(ModuleEnv.Pattern, undefined).list.rest_info), .{
+                break :blk @as(@TypeOf(@as(CIR.Pattern, undefined).list.rest_info), .{
                     .index = rest_index,
                     .pattern = rest_pattern,
                 });
             } else null;
 
-            return ModuleEnv.Pattern{
+            return CIR.Pattern{
                 .list = .{
-                    .patterns = DataSpan.init(patterns_start, patterns_len).as(ModuleEnv.Pattern.Span),
+                    .patterns = DataSpan.init(patterns_start, patterns_len).as(CIR.Pattern.Span),
                     .elem_var = elem_var,
                     .list_var = list_var,
                     .rest_info = rest_info,
                 },
             };
         },
-        .pattern_tuple => return ModuleEnv.Pattern{
+        .pattern_tuple => return CIR.Pattern{
             .tuple = .{
-                .patterns = DataSpan.init(node.data_1, node.data_2).as(ModuleEnv.Pattern.Span),
+                .patterns = DataSpan.init(node.data_1, node.data_2).as(CIR.Pattern.Span),
             },
         },
         .pattern_num_literal => {
@@ -831,7 +831,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
             const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
-            return ModuleEnv.Pattern{
+            return CIR.Pattern{
                 .int_literal = .{
                     .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
                 },
@@ -842,7 +842,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
             const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
-            return ModuleEnv.Pattern{
+            return CIR.Pattern{
                 .int_literal = .{
                     .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
                 },
@@ -853,7 +853,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
             const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
-            return ModuleEnv.Pattern{
+            return CIR.Pattern{
                 .dec_literal = .{
                     .value = RocDec{ .num = value_as_i128 },
                 },
@@ -866,20 +866,20 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
             const numerator: i16 = @intCast(@as(i32, @bitCast(node.data_1)));
             const denominator_power_of_ten: u8 = @intCast(node.data_3 & 0xFF);
 
-            return ModuleEnv.Pattern{
+            return CIR.Pattern{
                 .small_dec_literal = .{
                     .numerator = numerator,
                     .denominator_power_of_ten = denominator_power_of_ten,
                 },
             };
         },
-        .pattern_str_literal => return ModuleEnv.Pattern{ .str_literal = .{
+        .pattern_str_literal => return CIR.Pattern{ .str_literal = .{
             .literal = @enumFromInt(node.data_1),
         } },
 
-        .pattern_underscore => return ModuleEnv.Pattern{ .underscore = {} },
+        .pattern_underscore => return CIR.Pattern{ .underscore = {} },
         .malformed => {
-            return ModuleEnv.Pattern{ .runtime_error = .{
+            return CIR.Pattern{ .runtime_error = .{
                 .diagnostic = @enumFromInt(node.data_1),
             } };
         },
@@ -890,62 +890,62 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
 }
 
 /// Retrieves a pattern record field from the store.
-pub fn getPatternRecordField(store: *NodeStore, patternRecordField: ModuleEnv.PatternRecordField.Idx) ModuleEnv.PatternRecordField {
+pub fn getPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternRecordField.Idx) CIR.PatternRecordField {
     _ = store;
     _ = patternRecordField;
     // Return empty placeholder since PatternRecordField has no fields yet
-    return ModuleEnv.PatternRecordField{};
+    return CIR.PatternRecordField{};
 }
 
 /// Retrieves a type annotation from the store.
-pub fn getTypeAnno(store: *const NodeStore, typeAnno: ModuleEnv.TypeAnno.Idx) ModuleEnv.TypeAnno {
+pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.TypeAnno {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(typeAnno));
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
-        .ty_apply => return ModuleEnv.TypeAnno{ .apply = .{
+        .ty_apply => return CIR.TypeAnno{ .apply = .{
             .symbol = @bitCast(node.data_1),
             .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
         } },
-        .ty_var => return ModuleEnv.TypeAnno{ .ty_var = .{
+        .ty_var => return CIR.TypeAnno{ .ty_var = .{
             .name = @bitCast(node.data_1),
         } },
-        .ty_underscore => return ModuleEnv.TypeAnno{ .underscore = {} },
-        .ty_ident => return ModuleEnv.TypeAnno{ .ty = .{
+        .ty_underscore => return CIR.TypeAnno{ .underscore = {} },
+        .ty_ident => return CIR.TypeAnno{ .ty = .{
             .symbol = @bitCast(node.data_1),
         } },
-        .ty_tag_union => return ModuleEnv.TypeAnno{ .tag_union = .{
+        .ty_tag_union => return CIR.TypeAnno{ .tag_union = .{
             .tags = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
             .ext = if (node.data_3 != 0) @enumFromInt(node.data_3) else null,
         } },
-        .ty_tuple => return ModuleEnv.TypeAnno{ .tuple = .{
+        .ty_tuple => return CIR.TypeAnno{ .tuple = .{
             .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
         } },
-        .ty_record => return ModuleEnv.TypeAnno{ .record = .{
+        .ty_record => return CIR.TypeAnno{ .record = .{
             .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
         } },
         .ty_fn => {
             const ret_and_effectful = node.data_3;
-            const ret: ModuleEnv.TypeAnno.Idx = @enumFromInt(ret_and_effectful & 0x7FFFFFFF);
+            const ret: CIR.TypeAnno.Idx = @enumFromInt(ret_and_effectful & 0x7FFFFFFF);
             const effectful = (ret_and_effectful & (1 << 31)) != 0;
-            return ModuleEnv.TypeAnno{ .@"fn" = .{
+            return CIR.TypeAnno{ .@"fn" = .{
                 .args = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                 .ret = ret,
                 .effectful = effectful,
             } };
         },
-        .ty_parens => return ModuleEnv.TypeAnno{ .parens = .{
+        .ty_parens => return CIR.TypeAnno{ .parens = .{
             .anno = @enumFromInt(node.data_1),
         } },
-        .ty_lookup_external => return ModuleEnv.TypeAnno{
+        .ty_lookup_external => return CIR.TypeAnno{
             .ty_lookup_external = .{
                 .external_decl = @enumFromInt(node.data_1),
             },
         },
-        .ty_malformed => return ModuleEnv.TypeAnno{ .malformed = .{
+        .ty_malformed => return CIR.TypeAnno{ .malformed = .{
             .diagnostic = @enumFromInt(node.data_1),
         } },
-        .malformed => return ModuleEnv.TypeAnno{ .malformed = .{
+        .malformed => return CIR.TypeAnno{ .malformed = .{
             .diagnostic = @enumFromInt(node.data_1),
         } },
         else => {
@@ -955,20 +955,20 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: ModuleEnv.TypeAnno.Idx) Mo
 }
 
 /// Retrieves a type header from the store.
-pub fn getTypeHeader(store: *const NodeStore, typeHeader: ModuleEnv.TypeHeader.Idx) ModuleEnv.TypeHeader {
+pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CIR.TypeHeader {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(typeHeader));
     const node = store.nodes.get(node_idx);
 
     std.debug.assert(node.tag == .type_header);
 
-    return ModuleEnv.TypeHeader{
+    return CIR.TypeHeader{
         .name = @bitCast(node.data_1),
         .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
     };
 }
 
 /// Retrieves an annotation record field from the store.
-pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: ModuleEnv.TypeAnno.RecordField.Idx) ModuleEnv.TypeAnno.RecordField {
+pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.TypeAnno.RecordField.Idx) CIR.TypeAnno.RecordField {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annoRecordField));
     const node = store.nodes.get(node_idx);
     return .{
@@ -978,26 +978,26 @@ pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: ModuleEnv.Ty
 }
 
 /// Retrieves an annotation from the store.
-pub fn getAnnotation(store: *const NodeStore, annotation: ModuleEnv.Annotation.Idx) ModuleEnv.Annotation {
+pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CIR.Annotation {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annotation));
     const node = store.nodes.get(node_idx);
 
     std.debug.assert(node.tag == .annotation);
 
-    return ModuleEnv.Annotation{
+    return CIR.Annotation{
         .type_anno = @enumFromInt(node.data_2),
         .signature = @enumFromInt(node.data_1),
     };
 }
 
 /// Retrieves an exposed item from the store.
-pub fn getExposedItem(store: *const NodeStore, exposedItem: ModuleEnv.ExposedItem.Idx) ModuleEnv.ExposedItem {
+pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx) CIR.ExposedItem {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(exposedItem));
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
         .exposed_item => {
-            return ModuleEnv.ExposedItem{
+            return CIR.ExposedItem{
                 .name = @bitCast(node.data_1),
                 .alias = if (node.data_2 == 0) null else @bitCast(node.data_2),
                 .is_wildcard = node.data_3 != 0,
@@ -1010,8 +1010,8 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: ModuleEnv.ExposedIte
 /// Adds a statement to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Statement.Idx {
+/// corresponding function in `CIR`.
+pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Region) std.mem.Allocator.Error!CIR.Statement.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1177,8 +1177,8 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
 /// Adds an expression node to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Expr.Idx {
+/// corresponding function in `CIR`.
+pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.Allocator.Error!CIR.Expr.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1436,8 +1436,8 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
 /// Adds a record field to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addRecordField(store: *NodeStore, recordField: ModuleEnv.RecordField, region: base.Region) std.mem.Allocator.Error!ModuleEnv.RecordField.Idx {
+/// corresponding function in `CIR`.
+pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: base.Region) std.mem.Allocator.Error!CIR.RecordField.Idx {
     const node = Node{
         .data_1 = @bitCast(recordField.name),
         .data_2 = @intFromEnum(recordField.value),
@@ -1453,8 +1453,8 @@ pub fn addRecordField(store: *NodeStore, recordField: ModuleEnv.RecordField, reg
 /// Adds a record destructuring to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addRecordDestruct(store: *NodeStore, record_destruct: ModuleEnv.Pattern.RecordDestruct, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Pattern.RecordDestruct.Idx {
+/// corresponding function in `CIR`.
+pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordDestruct, region: base.Region) std.mem.Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
     var node = Node{
         .data_1 = @bitCast(record_destruct.label),
         .data_2 = @bitCast(record_destruct.ident),
@@ -1462,9 +1462,9 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: ModuleEnv.Pattern.R
         .tag = .record_destruct,
     };
 
-    // Store kind in extra_data if it's not Requenved
+    // Store kind in extra_data if it's not Required
     switch (record_destruct.kind) {
-        .Requenved => {
+        .Required => {
             // No extra data needed
         },
 
@@ -1488,8 +1488,8 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: ModuleEnv.Pattern.R
 /// Adds a 'match' branch to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addMatchBranch(store: *NodeStore, branch: ModuleEnv.Expr.Match.Branch, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Expr.Match.Branch.Idx {
+/// corresponding function in `CIR`.
+pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: base.Region) std.mem.Allocator.Error!CIR.Expr.Match.Branch.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1515,8 +1515,8 @@ pub fn addMatchBranch(store: *NodeStore, branch: ModuleEnv.Expr.Match.Branch, re
 /// Adds a 'match' branch to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: ModuleEnv.Expr.Match.BranchPattern, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Expr.Match.BranchPattern.Idx {
+/// corresponding function in `CIR`.
+pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.BranchPattern, region: base.Region) std.mem.Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
     const node = Node{
         .data_1 = @intFromEnum(branchPattern.pattern),
         .data_2 = @as(u32, @intFromBool(branchPattern.degenerate)),
@@ -1531,8 +1531,8 @@ pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: ModuleEnv.Expr.Ma
 /// Adds a 'where' clause to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addWhereClause(store: *NodeStore, whereClause: ModuleEnv.WhereClause, region: base.Region) std.mem.Allocator.Error!ModuleEnv.WhereClause.Idx {
+/// corresponding function in `CIR`.
+pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: base.Region) std.mem.Allocator.Error!CIR.WhereClause.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1578,8 +1578,8 @@ pub fn addWhereClause(store: *NodeStore, whereClause: ModuleEnv.WhereClause, reg
 /// Adds a pattern to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addPattern(store: *NodeStore, pattern: ModuleEnv.Pattern, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Pattern.Idx {
+/// corresponding function in `CIR`.
+pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) std.mem.Allocator.Error!CIR.Pattern.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1699,7 +1699,7 @@ pub fn addPattern(store: *NodeStore, pattern: ModuleEnv.Pattern, region: base.Re
 }
 
 /// Adds a pattern record field to the store.
-pub fn addPatternRecordField(store: *NodeStore, patternRecordField: ModuleEnv.PatternRecordField) std.mem.Allocator.Error!ModuleEnv.PatternRecordField.Idx {
+pub fn addPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternRecordField) std.mem.Allocator.Error!CIR.PatternRecordField.Idx {
     _ = store;
     _ = patternRecordField;
 
@@ -1709,8 +1709,8 @@ pub fn addPatternRecordField(store: *NodeStore, patternRecordField: ModuleEnv.Pa
 /// Adds a type annotation to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addTypeAnno(store: *NodeStore, typeAnno: ModuleEnv.TypeAnno, region: base.Region) std.mem.Allocator.Error!ModuleEnv.TypeAnno.Idx {
+/// corresponding function in `CIR`.
+pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Region) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1780,8 +1780,8 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: ModuleEnv.TypeAnno, region: base
 /// Adds a type header to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addTypeHeader(store: *NodeStore, typeHeader: ModuleEnv.TypeHeader, region: base.Region) std.mem.Allocator.Error!ModuleEnv.TypeHeader.Idx {
+/// corresponding function in `CIR`.
+pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base.Region) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
     const node = Node{
         .data_1 = @bitCast(typeHeader.name),
         .data_2 = typeHeader.args.span.start,
@@ -1797,8 +1797,8 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: ModuleEnv.TypeHeader, region
 /// Adds an annotation record field to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: ModuleEnv.TypeAnno.RecordField, region: base.Region) std.mem.Allocator.Error!ModuleEnv.TypeAnno.RecordField.Idx {
+/// corresponding function in `CIR`.
+pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.RecordField, region: base.Region) std.mem.Allocator.Error!CIR.TypeAnno.RecordField.Idx {
     const node = Node{
         .data_1 = @bitCast(annoRecordField.name),
         .data_2 = @intFromEnum(annoRecordField.ty),
@@ -1814,8 +1814,8 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: ModuleEnv.TypeAnno
 /// Adds an annotation to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addAnnotation(store: *NodeStore, annotation: ModuleEnv.Annotation, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Annotation.Idx {
+/// corresponding function in `CIR`.
+pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base.Region) std.mem.Allocator.Error!CIR.Annotation.Idx {
     const node = Node{
         .data_1 = @intFromEnum(annotation.signature),
         .data_2 = @intFromEnum(annotation.type_anno),
@@ -1831,8 +1831,8 @@ pub fn addAnnotation(store: *NodeStore, annotation: ModuleEnv.Annotation, region
 /// Adds an exposed item to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addExposedItem(store: *NodeStore, exposedItem: ModuleEnv.ExposedItem, region: base.Region) std.mem.Allocator.Error!ModuleEnv.ExposedItem.Idx {
+/// corresponding function in `CIR`.
+pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: base.Region) std.mem.Allocator.Error!CIR.ExposedItem.Idx {
     const node = Node{
         .data_1 = @bitCast(exposedItem.name),
         .data_2 = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
@@ -1848,8 +1848,8 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: ModuleEnv.ExposedItem, reg
 /// Adds a definition to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addDef(store: *NodeStore, def: ModuleEnv.Def, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Def.Idx {
+/// corresponding function in `CIR`.
+pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) std.mem.Allocator.Error!CIR.Def.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1882,7 +1882,7 @@ pub fn addDef(store: *NodeStore, def: ModuleEnv.Def, region: base.Region) std.me
 }
 
 /// Retrieves a definition from the store.
-pub fn getDef(store: *const NodeStore, def_idx: ModuleEnv.Def.Idx) ModuleEnv.Def {
+pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
     const node = store.nodes.get(nid);
 
@@ -1891,14 +1891,14 @@ pub fn getDef(store: *const NodeStore, def_idx: ModuleEnv.Def.Idx) ModuleEnv.Def
     const extra_start = node.data_1;
     const extra_data = store.extra_data.items[extra_start..];
 
-    const pattern: ModuleEnv.Pattern.Idx = @enumFromInt(extra_data[0]);
-    const expr: ModuleEnv.Expr.Idx = @enumFromInt(extra_data[1]);
+    const pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
+    const expr: CIR.Expr.Idx = @enumFromInt(extra_data[1]);
     const kind_encoded = [_]u32{ extra_data[2], extra_data[3] };
-    const kind = ModuleEnv.Def.Kind.decode(kind_encoded);
+    const kind = CIR.Def.Kind.decode(kind_encoded);
     const anno_idx = extra_data[4];
-    const annotation = if (anno_idx == 0) null else @as(ModuleEnv.Annotation.Idx, @enumFromInt(anno_idx));
+    const annotation = if (anno_idx == 0) null else @as(CIR.Annotation.Idx, @enumFromInt(anno_idx));
 
-    return ModuleEnv.Def{
+    return CIR.Def{
         .pattern = pattern,
         .expr = expr,
         .annotation = annotation,
@@ -1907,16 +1907,16 @@ pub fn getDef(store: *const NodeStore, def_idx: ModuleEnv.Def.Idx) ModuleEnv.Def
 }
 
 /// Retrieves a record field from the store.
-pub fn getRecordField(store: *const NodeStore, idx: ModuleEnv.RecordField.Idx) ModuleEnv.RecordField {
+pub fn getRecordField(store: *const NodeStore, idx: CIR.RecordField.Idx) CIR.RecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
-    return ModuleEnv.RecordField{
+    return CIR.RecordField{
         .name = @bitCast(node.data_1),
         .value = @enumFromInt(node.data_2),
     };
 }
 
 /// Retrieves a record destructure from the store.
-pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordDestruct.Idx) ModuleEnv.Pattern.RecordDestruct {
+pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruct.Idx) CIR.Pattern.RecordDestruct {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
     const node = store.nodes.get(node_idx);
 
@@ -1927,13 +1927,13 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
         const kind_tag = extra_data[0];
 
         break :blk switch (kind_tag) {
-            0 => ModuleEnv.Pattern.RecordDestruct.Kind.Requenved,
-            1 => ModuleEnv.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
+            0 => CIR.Pattern.RecordDestruct.Kind.Required,
+            1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
             else => unreachable,
         };
-    } else ModuleEnv.Pattern.RecordDestruct.Kind.Requenved;
+    } else CIR.Pattern.RecordDestruct.Kind.Required;
 
-    return ModuleEnv.Pattern.RecordDestruct{
+    return CIR.Pattern.RecordDestruct{
         .label = @bitCast(node.data_1),
         .ident = @bitCast(node.data_2),
         .kind = kind,
@@ -1941,13 +1941,13 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
 }
 
 /// Retrieves an if branch from the store.
-pub fn getIfBranch(store: *const NodeStore, if_branch_idx: ModuleEnv.Expr.IfBranch.Idx) ModuleEnv.Expr.IfBranch {
+pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx) CIR.Expr.IfBranch {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(if_branch_idx));
     const node = store.nodes.get(nid);
 
     std.debug.assert(node.tag == .if_branch);
 
-    return ModuleEnv.Expr.IfBranch{
+    return CIR.Expr.IfBranch{
         .cond = @enumFromInt(node.data_1),
         .body = @enumFromInt(node.data_2),
     };
@@ -1989,23 +1989,23 @@ pub fn scratchExprTop(store: *NodeStore) u32 {
 }
 
 /// Adds a scratch expression to temporary storage.
-pub fn addScratchExpr(store: *NodeStore, idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Error!void {
+pub fn addScratchExpr(store: *NodeStore, idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_exprs", idx);
 }
 
 /// Adds a statement index to the scratch statements list for building spans.
-pub fn addScratchStatement(store: *NodeStore, idx: ModuleEnv.Statement.Idx) std.mem.Allocator.Error!void {
+pub fn addScratchStatement(store: *NodeStore, idx: CIR.Statement.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_statements", idx);
 }
 
 /// Computes the span of an expression starting from a given index.
-pub fn exprSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.Expr.Span {
-    return try store.spanFrom("scratch_exprs", ModuleEnv.Expr.Span, start);
+pub fn exprSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.Expr.Span {
+    return try store.spanFrom("scratch_exprs", CIR.Expr.Span, start);
 }
 
 /// Creates a statement span from the given start position to the current top of scratch statements.
-pub fn statementSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.Statement.Span {
-    return try store.spanFrom("scratch_statements", ModuleEnv.Statement.Span, start);
+pub fn statementSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.Statement.Span {
+    return try store.spanFrom("scratch_statements", CIR.Statement.Span, start);
 }
 
 /// Clears scratch expressions starting from a specified index.
@@ -2014,8 +2014,8 @@ pub fn clearScratchExprsFrom(store: *NodeStore, start: u32) void {
 }
 
 /// Returns a slice of expressions from the scratch space.
-pub fn exprSlice(store: *const NodeStore, span: ModuleEnv.Expr.Span) []ModuleEnv.Expr.Idx {
-    return store.sliceFromSpan(ModuleEnv.Expr.Idx, span.span);
+pub fn exprSlice(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
+    return store.sliceFromSpan(CIR.Expr.Idx, span.span);
 }
 
 /// Returns the top index for scratch definitions.
@@ -2024,17 +2024,17 @@ pub fn scratchDefTop(store: *NodeStore) u32 {
 }
 
 /// Adds a scratch definition to temporary storage.
-pub fn addScratchDef(store: *NodeStore, idx: ModuleEnv.Def.Idx) std.mem.Allocator.Error!void {
+pub fn addScratchDef(store: *NodeStore, idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_defs", idx);
 }
 
 /// Adds a type annotation to the scratch buffer.
-pub fn addScratchTypeAnno(store: *NodeStore, idx: ModuleEnv.TypeAnno.Idx) std.mem.Allocator.Error!void {
+pub fn addScratchTypeAnno(store: *NodeStore, idx: CIR.TypeAnno.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_type_annos", idx);
 }
 
 /// Adds a where clause to the scratch buffer.
-pub fn addScratchWhereClause(store: *NodeStore, idx: ModuleEnv.WhereClause.Idx) std.mem.Allocator.Error!void {
+pub fn addScratchWhereClause(store: *NodeStore, idx: CIR.WhereClause.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_where_clauses", idx);
 }
 
@@ -2059,23 +2059,23 @@ pub fn clearScratchWhereClausesFrom(store: *NodeStore, from: u32) void {
 }
 
 /// Creates a span from the scratch type annotations starting at the given index.
-pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.TypeAnno.Span {
-    return try store.spanFrom("scratch_type_annos", ModuleEnv.TypeAnno.Span, start);
+pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.TypeAnno.Span {
+    return try store.spanFrom("scratch_type_annos", CIR.TypeAnno.Span, start);
 }
 
 /// Returns a span from the scratch anno record fields starting at the given index.
-pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.TypeAnno.RecordField.Span {
-    return try store.spanFrom("scratch_anno_record_fields", ModuleEnv.TypeAnno.RecordField.Span, start);
+pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.TypeAnno.RecordField.Span {
+    return try store.spanFrom("scratch_anno_record_fields", CIR.TypeAnno.RecordField.Span, start);
 }
 
 /// Returns a span from the scratch record fields starting at the given index.
-pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.RecordField.Span {
-    return try store.spanFrom("scratch_record_fields", ModuleEnv.RecordField.Span, start);
+pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.RecordField.Span {
+    return try store.spanFrom("scratch_record_fields", CIR.RecordField.Span, start);
 }
 
 /// Returns a span from the scratch where clauses starting at the given index.
-pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.WhereClause.Span {
-    return try store.spanFrom("scratch_where_clauses", ModuleEnv.WhereClause.Span, start);
+pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.WhereClause.Span {
+    return try store.spanFrom("scratch_where_clauses", CIR.WhereClause.Span, start);
 }
 
 /// Returns the current top of the scratch exposed items buffer.
@@ -2084,13 +2084,13 @@ pub fn scratchExposedItemTop(store: *NodeStore) u32 {
 }
 
 /// Adds an exposed item to the scratch buffer.
-pub fn addScratchExposedItem(store: *NodeStore, idx: ModuleEnv.ExposedItem.Idx) std.mem.Allocator.Error!void {
+pub fn addScratchExposedItem(store: *NodeStore, idx: CIR.ExposedItem.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_exposed_items", idx);
 }
 
 /// Creates a span from the scratch exposed items starting at the given index.
-pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.ExposedItem.Span {
-    return try store.spanFrom("scratch_exposed_items", ModuleEnv.ExposedItem.Span, start);
+pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.ExposedItem.Span {
+    return try store.spanFrom("scratch_exposed_items", CIR.ExposedItem.Span, start);
 }
 
 /// Clears scratch exposed items from the given index.
@@ -2103,8 +2103,8 @@ pub fn scratchAnnoRecordFieldTop(store: *NodeStore) u32 {
     return store.scratchTop("scratch_anno_record_fields");
 }
 
-/// Places a new ModuleEnv.TypeAnno.RecordField.Idx in the scratch. Will panic on OOM.
-pub fn addScratchAnnoRecordField(store: *NodeStore, idx: ModuleEnv.TypeAnno.RecordField.Idx) std.mem.Allocator.Error!void {
+/// Places a new CIR.TypeAnno.RecordField.Idx in the scratch. Will panic on OOM.
+pub fn addScratchAnnoRecordField(store: *NodeStore, idx: CIR.TypeAnno.RecordField.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_anno_record_fields", idx);
 }
 
@@ -2115,18 +2115,18 @@ pub fn clearScratchAnnoRecordFieldsFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new AnnoRecordField slice so that the caller can iterate through
 /// all items in the span.
-pub fn annoRecordFieldSlice(store: *NodeStore, span: ModuleEnv.TypeAnno.RecordField.Span) []ModuleEnv.TypeAnno.RecordField.Idx {
-    return store.sliceFromSpan(ModuleEnv.TypeAnno.RecordField.Idx, span.span);
+pub fn annoRecordFieldSlice(store: *NodeStore, span: CIR.TypeAnno.RecordField.Span) []CIR.TypeAnno.RecordField.Idx {
+    return store.sliceFromSpan(CIR.TypeAnno.RecordField.Idx, span.span);
 }
 
 /// Computes the span of a definition starting from a given index.
-pub fn defSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.Def.Span {
-    return try store.spanFrom("scratch_defs", ModuleEnv.Def.Span, start);
+pub fn defSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.Def.Span {
+    return try store.spanFrom("scratch_defs", CIR.Def.Span, start);
 }
 
 /// Retrieves a slice of record destructures from the store.
-pub fn recordDestructSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.Pattern.RecordDestruct.Span {
-    return try store.spanFrom("scratch_record_destructs", ModuleEnv.Pattern.RecordDestruct.Span, start);
+pub fn recordDestructSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.Pattern.RecordDestruct.Span {
+    return try store.spanFrom("scratch_record_destructs", CIR.Pattern.RecordDestruct.Span, start);
 }
 
 /// Returns the current top of the scratch patterns buffer.
@@ -2135,7 +2135,7 @@ pub fn scratchPatternTop(store: *NodeStore) u32 {
 }
 
 /// Adds a pattern to the scratch patterns list for building spans.
-pub fn addScratchPattern(store: *NodeStore, idx: ModuleEnv.Pattern.Idx) std.mem.Allocator.Error!void {
+pub fn addScratchPattern(store: *NodeStore, idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_patterns", idx);
 }
 
@@ -2145,13 +2145,13 @@ pub fn scratchRecordDestructTop(store: *NodeStore) u32 {
 }
 
 /// Adds a record destructure to the scratch record destructures list for building spans.
-pub fn addScratchRecordDestruct(store: *NodeStore, idx: ModuleEnv.Pattern.RecordDestruct.Idx) std.mem.Allocator.Error!void {
+pub fn addScratchRecordDestruct(store: *NodeStore, idx: CIR.Pattern.RecordDestruct.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_record_destructs", idx);
 }
 
 /// Creates a pattern span from the given start position to the current top of scratch patterns.
-pub fn patternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.Pattern.Span {
-    return try store.spanFrom("scratch_patterns", ModuleEnv.Pattern.Span, start);
+pub fn patternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.Pattern.Span {
+    return try store.spanFrom("scratch_patterns", CIR.Pattern.Span, start);
 }
 
 /// Clears scratch definitions starting from a specified index.
@@ -2165,43 +2165,43 @@ pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataS
 }
 
 /// Returns a slice of definitions from the store.
-pub fn sliceDefs(store: *const NodeStore, span: ModuleEnv.Def.Span) []ModuleEnv.Def.Idx {
-    return store.sliceFromSpan(ModuleEnv.Def.Idx, span.span);
+pub fn sliceDefs(store: *const NodeStore, span: CIR.Def.Span) []CIR.Def.Idx {
+    return store.sliceFromSpan(CIR.Def.Idx, span.span);
 }
 
 /// Returns a slice of expressions from the store.
-pub fn sliceExpr(store: *const NodeStore, span: ModuleEnv.Expr.Span) []ModuleEnv.Expr.Idx {
-    return store.sliceFromSpan(ModuleEnv.Expr.Idx, span.span);
+pub fn sliceExpr(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
+    return store.sliceFromSpan(CIR.Expr.Idx, span.span);
 }
 
 /// Returns a slice of `CanIR.Pattern.Idx`
-pub fn slicePatterns(store: *const NodeStore, span: ModuleEnv.Pattern.Span) []ModuleEnv.Pattern.Idx {
-    return store.sliceFromSpan(ModuleEnv.Pattern.Idx, span.span);
+pub fn slicePatterns(store: *const NodeStore, span: CIR.Pattern.Span) []CIR.Pattern.Idx {
+    return store.sliceFromSpan(CIR.Pattern.Idx, span.span);
 }
 
 /// Returns a slice of statements from the store.
-pub fn sliceStatements(store: *const NodeStore, span: ModuleEnv.Statement.Span) []ModuleEnv.Statement.Idx {
-    return store.sliceFromSpan(ModuleEnv.Statement.Idx, span.span);
+pub fn sliceStatements(store: *const NodeStore, span: CIR.Statement.Span) []CIR.Statement.Idx {
+    return store.sliceFromSpan(CIR.Statement.Idx, span.span);
 }
 
 /// Returns a slice of record fields from the store.
-pub fn sliceRecordFields(store: *const NodeStore, span: ModuleEnv.RecordField.Span) []ModuleEnv.RecordField.Idx {
-    return store.sliceFromSpan(ModuleEnv.RecordField.Idx, span.span);
+pub fn sliceRecordFields(store: *const NodeStore, span: CIR.RecordField.Span) []CIR.RecordField.Idx {
+    return store.sliceFromSpan(CIR.RecordField.Idx, span.span);
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
-pub fn sliceIfBranches(store: *const NodeStore, span: ModuleEnv.Expr.IfBranch.Span) []ModuleEnv.Expr.IfBranch.Idx {
-    return store.sliceFromSpan(ModuleEnv.Expr.IfBranch.Idx, span.span);
+pub fn sliceIfBranches(store: *const NodeStore, span: CIR.Expr.IfBranch.Span) []CIR.Expr.IfBranch.Idx {
+    return store.sliceFromSpan(CIR.Expr.IfBranch.Idx, span.span);
 }
 
 /// Retrieve a slice of Match.Branch Idx's from a span
-pub fn sliceMatchBranches(store: *const NodeStore, span: ModuleEnv.Expr.Match.Branch.Span) []ModuleEnv.Expr.Match.Branch.Idx {
-    return store.sliceFromSpan(ModuleEnv.Expr.Match.Branch.Idx, span.span);
+pub fn sliceMatchBranches(store: *const NodeStore, span: CIR.Expr.Match.Branch.Span) []CIR.Expr.Match.Branch.Idx {
+    return store.sliceFromSpan(CIR.Expr.Match.Branch.Idx, span.span);
 }
 
 /// Retrieve a slice of Match.BranchPattern Idx's from a span
-pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: ModuleEnv.Expr.Match.BranchPattern.Span) []ModuleEnv.Expr.Match.BranchPattern.Idx {
-    return store.sliceFromSpan(ModuleEnv.Expr.Match.BranchPattern.Idx, span.span);
+pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: CIR.Expr.Match.BranchPattern.Span) []CIR.Expr.Match.BranchPattern.Idx {
+    return store.sliceFromSpan(CIR.Expr.Match.BranchPattern.Idx, span.span);
 }
 
 /// Creates a slice corresponding to a span.
@@ -2215,13 +2215,13 @@ pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSp
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
-pub fn firstFromIfBranches(store: *const NodeStore, span: ModuleEnv.Expr.IfBranch.Span) ModuleEnv.Expr.IfBranch.Idx {
-    return store.firstFromSpan(ModuleEnv.Expr.IfBranch.Idx, span.span);
+pub fn firstFromIfBranches(store: *const NodeStore, span: CIR.Expr.IfBranch.Span) CIR.Expr.IfBranch.Idx {
+    return store.firstFromSpan(CIR.Expr.IfBranch.Idx, span.span);
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
-pub fn lastFromStatements(store: *const NodeStore, span: ModuleEnv.Statement.Span) ModuleEnv.Statement.Idx {
-    return store.lastFromSpan(ModuleEnv.Statement.Idx, span.span);
+pub fn lastFromStatements(store: *const NodeStore, span: CIR.Statement.Span) CIR.Statement.Idx {
+    return store.lastFromSpan(CIR.Statement.Idx, span.span);
 }
 
 /// Returns a slice of if branches from the store.
@@ -2230,20 +2230,20 @@ pub fn scratchIfBranchTop(store: *NodeStore) u32 {
 }
 
 /// Adds an if branch to the scratch if branches list for building spans.
-pub fn addScratchIfBranch(store: *NodeStore, if_branch_idx: ModuleEnv.Expr.IfBranch.Idx) std.mem.Allocator.Error!void {
+pub fn addScratchIfBranch(store: *NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_if_branches", if_branch_idx);
 }
 
 /// Creates an if branch span from the given start position to the current top of scratch if branches.
-pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.Expr.IfBranch.Span {
-    return try store.spanFrom("scratch_if_branches", ModuleEnv.Expr.IfBranch.Span, start);
+pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.Expr.IfBranch.Span {
+    return try store.spanFrom("scratch_if_branches", CIR.Expr.IfBranch.Span, start);
 }
 
 /// Adds an if branch to the store and returns its index.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addIfBranch(store: *NodeStore, if_branch: ModuleEnv.Expr.IfBranch, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Expr.IfBranch.Idx {
+/// corresponding function in `CIR`.
+pub fn addIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch, region: base.Region) std.mem.Allocator.Error!CIR.Expr.IfBranch.Idx {
     const node = Node{
         .data_1 = @intFromEnum(if_branch.cond),
         .data_2 = @intFromEnum(if_branch.body),
@@ -2256,33 +2256,33 @@ pub fn addIfBranch(store: *NodeStore, if_branch: ModuleEnv.Expr.IfBranch, region
 }
 
 /// Returns a slice of diagnostics from the store.
-pub fn sliceDiagnostics(store: *const NodeStore, span: ModuleEnv.Diagnostic.Span) []ModuleEnv.Diagnostic.Idx {
-    return store.sliceFromSpan(ModuleEnv.Diagnostic.Idx, span.span);
+pub fn sliceDiagnostics(store: *const NodeStore, span: CIR.Diagnostic.Span) []CIR.Diagnostic.Idx {
+    return store.sliceFromSpan(CIR.Diagnostic.Idx, span.span);
 }
 
 /// Returns a slice of type annotations from the store.
-pub fn sliceTypeAnnos(store: *const NodeStore, span: ModuleEnv.TypeAnno.Span) []ModuleEnv.TypeAnno.Idx {
-    return store.sliceFromSpan(ModuleEnv.TypeAnno.Idx, span.span);
+pub fn sliceTypeAnnos(store: *const NodeStore, span: CIR.TypeAnno.Span) []CIR.TypeAnno.Idx {
+    return store.sliceFromSpan(CIR.TypeAnno.Idx, span.span);
 }
 
 /// Returns a slice of exposed items from the store.
-pub fn sliceExposedItems(store: *const NodeStore, span: ModuleEnv.ExposedItem.Span) []ModuleEnv.ExposedItem.Idx {
-    return store.sliceFromSpan(ModuleEnv.ExposedItem.Idx, span.span);
+pub fn sliceExposedItems(store: *const NodeStore, span: CIR.ExposedItem.Span) []CIR.ExposedItem.Idx {
+    return store.sliceFromSpan(CIR.ExposedItem.Idx, span.span);
 }
 
 /// Returns a slice of where clauses from the store.
-pub fn sliceWhereClauses(store: *const NodeStore, span: ModuleEnv.WhereClause.Span) []ModuleEnv.WhereClause.Idx {
-    return store.sliceFromSpan(ModuleEnv.WhereClause.Idx, span.span);
+pub fn sliceWhereClauses(store: *const NodeStore, span: CIR.WhereClause.Span) []CIR.WhereClause.Idx {
+    return store.sliceFromSpan(CIR.WhereClause.Idx, span.span);
 }
 
 /// Returns a slice of annotation record fields from the store.
-pub fn sliceAnnoRecordFields(store: *const NodeStore, span: ModuleEnv.TypeAnno.RecordField.Span) []ModuleEnv.TypeAnno.RecordField.Idx {
-    return store.sliceFromSpan(ModuleEnv.TypeAnno.RecordField.Idx, span.span);
+pub fn sliceAnnoRecordFields(store: *const NodeStore, span: CIR.TypeAnno.RecordField.Span) []CIR.TypeAnno.RecordField.Idx {
+    return store.sliceFromSpan(CIR.TypeAnno.RecordField.Idx, span.span);
 }
 
 /// Returns a slice of record destruct fields from the store.
-pub fn sliceRecordDestructs(store: *const NodeStore, span: ModuleEnv.Pattern.RecordDestruct.Span) []ModuleEnv.Pattern.RecordDestruct.Idx {
-    return store.sliceFromSpan(ModuleEnv.Pattern.RecordDestruct.Idx, span.span);
+pub fn sliceRecordDestructs(store: *const NodeStore, span: CIR.Pattern.RecordDestruct.Span) []CIR.Pattern.RecordDestruct.Idx {
+    return store.sliceFromSpan(CIR.Pattern.RecordDestruct.Idx, span.span);
 }
 
 /// Creates a diagnostic node that stores error information.
@@ -2296,8 +2296,8 @@ pub fn sliceRecordDestructs(store: *const NodeStore, span: ModuleEnv.Pattern.Rec
 /// Returns: Index to the created diagnostic node
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Allocator.Error!ModuleEnv.Diagnostic.Idx {
+/// corresponding function in `CIR`.
+pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocator.Error!CIR.Diagnostic.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -2540,7 +2540,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
     _ = try store.regions.append(store.gpa, region);
 
     // append to our scratch so we can get a span later of all our diagnostics
-    try store.addScratch("scratch_diagnostics", @as(ModuleEnv.Diagnostic.Idx, @enumFromInt(nid)));
+    try store.addScratch("scratch_diagnostics", @as(CIR.Diagnostic.Idx, @enumFromInt(nid)));
 
     return @enumFromInt(nid);
 }
@@ -2556,12 +2556,12 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
 /// 2. Creates a malformed node (.malformed tag) that references the diagnostic
 /// 3. Returns an index of the requested type that points to the malformed node
 ///
-/// The malformed node will generate a runtime_error in the ModuleEnv that properly
+/// The malformed node will generate a runtime_error in the CIR that properly
 /// references the diagnostic index.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addMalformed(store: *NodeStore, diagnostic_idx: ModuleEnv.Diagnostic.Idx, region: Region) std.mem.Allocator.Error!ModuleEnv.Node.Idx {
+/// corresponding function in `CIR`.
+pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) std.mem.Allocator.Error!CIR.Node.Idx {
     const malformed_node = Node{
         .data_1 = @intFromEnum(diagnostic_idx),
         .data_2 = 0,
@@ -2576,30 +2576,30 @@ pub fn addMalformed(store: *NodeStore, diagnostic_idx: ModuleEnv.Diagnostic.Idx,
 /// Retrieves diagnostic information from a diagnostic node.
 ///
 /// This function extracts the stored diagnostic data from nodes with .diag_* tags.
-/// It reconstructs the original ModuleEnv.Diagnostic from the node's stored data.
-pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.Idx) ModuleEnv.Diagnostic {
+/// It reconstructs the original CIR.Diagnostic from the node's stored data.
+pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CIR.Diagnostic {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(diagnostic));
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
-        .diag_not_implemented => return ModuleEnv.Diagnostic{ .not_implemented = .{
+        .diag_not_implemented => return CIR.Diagnostic{ .not_implemented = .{
             .feature = @enumFromInt(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_invalid_num_literal => return ModuleEnv.Diagnostic{ .invalid_num_literal = .{
+        .diag_invalid_num_literal => return CIR.Diagnostic{ .invalid_num_literal = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_invalid_single_quote => return ModuleEnv.Diagnostic{ .invalid_single_quote = .{
+        .diag_invalid_single_quote => return CIR.Diagnostic{ .invalid_single_quote = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_empty_tuple => return ModuleEnv.Diagnostic{ .empty_tuple = .{
+        .diag_empty_tuple => return CIR.Diagnostic{ .empty_tuple = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_ident_already_in_scope => return ModuleEnv.Diagnostic{ .ident_already_in_scope = .{
+        .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
-        .diagnostic_exposed_but_not_implemented => return ModuleEnv.Diagnostic{ .exposed_but_not_implemented = .{
+        .diagnostic_exposed_but_not_implemented => return CIR.Diagnostic{ .exposed_but_not_implemented = .{
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
@@ -2607,7 +2607,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             const extra_data = store.extra_data.items[node.data_2..];
             const original_start = extra_data[0];
             const original_end = extra_data[1];
-            return ModuleEnv.Diagnostic{ .redundant_exposed = .{
+            return CIR.Diagnostic{ .redundant_exposed = .{
                 .ident = @bitCast(node.data_1),
                 .region = store.getRegionAt(node_idx),
                 .original_region = Region{
@@ -2616,45 +2616,45 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
                 },
             } };
         },
-        .diag_ident_not_in_scope => return ModuleEnv.Diagnostic{ .ident_not_in_scope = .{
+        .diag_ident_not_in_scope => return CIR.Diagnostic{ .ident_not_in_scope = .{
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_invalid_top_level_statement => return ModuleEnv.Diagnostic{ .invalid_top_level_statement = .{
+        .diag_invalid_top_level_statement => return CIR.Diagnostic{ .invalid_top_level_statement = .{
             .stmt = @enumFromInt(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_expr_not_canonicalized => return ModuleEnv.Diagnostic{ .expr_not_canonicalized = .{
+        .diag_expr_not_canonicalized => return CIR.Diagnostic{ .expr_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_invalid_string_interpolation => return ModuleEnv.Diagnostic{ .invalid_string_interpolation = .{
+        .diag_invalid_string_interpolation => return CIR.Diagnostic{ .invalid_string_interpolation = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_pattern_arg_invalid => return ModuleEnv.Diagnostic{ .pattern_arg_invalid = .{
+        .diag_pattern_arg_invalid => return CIR.Diagnostic{ .pattern_arg_invalid = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_pattern_not_canonicalized => return ModuleEnv.Diagnostic{ .pattern_not_canonicalized = .{
+        .diag_pattern_not_canonicalized => return CIR.Diagnostic{ .pattern_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_can_lambda_not_implemented => return ModuleEnv.Diagnostic{ .can_lambda_not_implemented = .{
+        .diag_can_lambda_not_implemented => return CIR.Diagnostic{ .can_lambda_not_implemented = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_lambda_body_not_canonicalized => return ModuleEnv.Diagnostic{ .lambda_body_not_canonicalized = .{
+        .diag_lambda_body_not_canonicalized => return CIR.Diagnostic{ .lambda_body_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_if_condition_not_canonicalized => return ModuleEnv.Diagnostic{ .if_condition_not_canonicalized = .{
+        .diag_if_condition_not_canonicalized => return CIR.Diagnostic{ .if_condition_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_if_then_not_canonicalized => return ModuleEnv.Diagnostic{ .if_then_not_canonicalized = .{
+        .diag_if_then_not_canonicalized => return CIR.Diagnostic{ .if_then_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_if_else_not_canonicalized => return ModuleEnv.Diagnostic{ .if_else_not_canonicalized = .{
+        .diag_if_else_not_canonicalized => return CIR.Diagnostic{ .if_else_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_var_across_function_boundary => return ModuleEnv.Diagnostic{ .var_across_function_boundary = .{
+        .diag_var_across_function_boundary => return CIR.Diagnostic{ .var_across_function_boundary = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_shadowing_warning => return ModuleEnv.Diagnostic{ .shadowing_warning = .{
+        .diag_shadowing_warning => return CIR.Diagnostic{ .shadowing_warning = .{
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
             .original_region = .{
@@ -2662,7 +2662,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
                 .end = .{ .offset = node.data_3 },
             },
         } },
-        .diag_type_redeclared => return ModuleEnv.Diagnostic{ .type_redeclared = .{
+        .diag_type_redeclared => return CIR.Diagnostic{ .type_redeclared = .{
             .name = @bitCast(node.data_1),
             .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
@@ -2670,46 +2670,46 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
                 .end = .{ .offset = node.data_3 },
             },
         } },
-        .diag_undeclared_type => return ModuleEnv.Diagnostic{ .undeclared_type = .{
+        .diag_undeclared_type => return CIR.Diagnostic{ .undeclared_type = .{
             .name = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_tuple_elem_not_canonicalized => return ModuleEnv.Diagnostic{ .tuple_elem_not_canonicalized = .{
+        .diag_tuple_elem_not_canonicalized => return CIR.Diagnostic{ .tuple_elem_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_module_not_found => return ModuleEnv.Diagnostic{ .module_not_found = .{
+        .diag_module_not_found => return CIR.Diagnostic{ .module_not_found = .{
             .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_value_not_exposed => return ModuleEnv.Diagnostic{ .value_not_exposed = .{
+        .diag_value_not_exposed => return CIR.Diagnostic{ .value_not_exposed = .{
             .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
             .value_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_type_not_exposed => return ModuleEnv.Diagnostic{ .type_not_exposed = .{
+        .diag_type_not_exposed => return CIR.Diagnostic{ .type_not_exposed = .{
             .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
             .type_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_module_not_imported => return ModuleEnv.Diagnostic{ .module_not_imported = .{
+        .diag_module_not_imported => return CIR.Diagnostic{ .module_not_imported = .{
             .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_too_many_exports => return ModuleEnv.Diagnostic{ .too_many_exports = .{
+        .diag_too_many_exports => return CIR.Diagnostic{ .too_many_exports = .{
             .count = node.data_1,
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_undeclared_type_var => return ModuleEnv.Diagnostic{ .undeclared_type_var = .{
+        .diag_undeclared_type_var => return CIR.Diagnostic{ .undeclared_type_var = .{
             .name = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_malformed_type_annotation => return ModuleEnv.Diagnostic{ .malformed_type_annotation = .{
+        .diag_malformed_type_annotation => return CIR.Diagnostic{ .malformed_type_annotation = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_malformed_where_clause => return ModuleEnv.Diagnostic{ .malformed_where_clause = .{
+        .diag_malformed_where_clause => return CIR.Diagnostic{ .malformed_where_clause = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_type_alias_redeclared => return ModuleEnv.Diagnostic{ .type_alias_redeclared = .{
+        .diag_type_alias_redeclared => return CIR.Diagnostic{ .type_alias_redeclared = .{
             .name = @bitCast(node.data_1),
             .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
@@ -2717,7 +2717,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
                 .end = .{ .offset = @intCast(node.data_3) },
             },
         } },
-        .diag_nominal_type_redeclared => return ModuleEnv.Diagnostic{ .nominal_type_redeclared = .{
+        .diag_nominal_type_redeclared => return CIR.Diagnostic{ .nominal_type_redeclared = .{
             .name = @bitCast(node.data_1),
             .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
@@ -2725,7 +2725,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
                 .end = .{ .offset = @intCast(node.data_3 & 0x7FFFFFFF) },
             },
         } },
-        .diag_type_shadowed_warning => return ModuleEnv.Diagnostic{ .type_shadowed_warning = .{
+        .diag_type_shadowed_warning => return CIR.Diagnostic{ .type_shadowed_warning = .{
             .name = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
             .original_region = .{
@@ -2734,7 +2734,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             },
             .cross_scope = (node.data_3 & 0x80000000) != 0,
         } },
-        .diag_type_parameter_conflict => return ModuleEnv.Diagnostic{ .type_parameter_conflict = .{
+        .diag_type_parameter_conflict => return CIR.Diagnostic{ .type_parameter_conflict = .{
             .name = @bitCast(node.data_1),
             .parameter_name = @bitCast(node.data_2),
             .region = store.getRegionAt(node_idx),
@@ -2743,15 +2743,15 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
                 .end = .{ .offset = @intCast(node.data_3) },
             },
         } },
-        .diag_unused_variable => return ModuleEnv.Diagnostic{ .unused_variable = .{
+        .diag_unused_variable => return CIR.Diagnostic{ .unused_variable = .{
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_used_underscore_variable => return ModuleEnv.Diagnostic{ .used_underscore_variable = .{
+        .diag_used_underscore_variable => return CIR.Diagnostic{ .used_underscore_variable = .{
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_duplicate_record_field => return ModuleEnv.Diagnostic{ .duplicate_record_field = .{
+        .diag_duplicate_record_field => return CIR.Diagnostic{ .duplicate_record_field = .{
             .field_name = @bitCast(node.data_1),
             .duplicate_region = store.getRegionAt(node_idx),
             .original_region = .{
@@ -2759,28 +2759,28 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
                 .end = .{ .offset = @intCast(node.data_3) },
             },
         } },
-        .diag_crash_expects_string => return ModuleEnv.Diagnostic{ .crash_expects_string = .{
+        .diag_crash_expects_string => return CIR.Diagnostic{ .crash_expects_string = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_f64_pattern_literal => return ModuleEnv.Diagnostic{ .f64_pattern_literal = .{
+        .diag_f64_pattern_literal => return CIR.Diagnostic{ .f64_pattern_literal = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_unused_type_var_name => return ModuleEnv.Diagnostic{ .unused_type_var_name = .{
+        .diag_unused_type_var_name => return CIR.Diagnostic{ .unused_type_var_name = .{
             .name = @bitCast(node.data_1),
             .suggested_name = @bitCast(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_type_var_marked_unused => return ModuleEnv.Diagnostic{ .type_var_marked_unused = .{
+        .diag_type_var_marked_unused => return CIR.Diagnostic{ .type_var_marked_unused = .{
             .name = @bitCast(node.data_1),
             .suggested_name = @bitCast(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_type_var_ending_in_underscore => return ModuleEnv.Diagnostic{ .type_var_ending_in_underscore = .{
+        .diag_type_var_ending_in_underscore => return CIR.Diagnostic{ .type_var_ending_in_underscore = .{
             .name = @bitCast(node.data_1),
             .suggested_name = @bitCast(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_underscore_in_type_declaration => return ModuleEnv.Diagnostic{ .underscore_in_type_declaration = .{
+        .diag_underscore_in_type_declaration => return CIR.Diagnostic{ .underscore_in_type_declaration = .{
             .is_alias = node.data_1 != 0,
             .region = store.getRegionAt(node_idx),
         } },
@@ -2791,8 +2791,8 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
 }
 
 /// Computes the span of a diagnostic starting from a given index.
-pub fn diagnosticSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.Diagnostic.Span {
-    return try store.spanFrom("scratch_diagnostics", ModuleEnv.Diagnostic.Span, start);
+pub fn diagnosticSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.Diagnostic.Span {
+    return try store.spanFrom("scratch_diagnostics", CIR.Diagnostic.Span, start);
 }
 
 /// Ensure the node store has capacity for at least the requested number of
@@ -2807,7 +2807,7 @@ pub fn predictNodeIndex(store: *NodeStore, count: u32) std.mem.Allocator.Error!N
 /// Adds an type variable slot to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
+/// corresponding function in `CIR`.
 pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base.Region) std.mem.Allocator.Error!Node.Idx {
     const nid = try store.nodes.append(store.gpa, .{
         .tag = .type_var_slot,
@@ -2843,13 +2843,13 @@ pub fn scratchMatchBranchTop(store: *NodeStore) u32 {
 }
 
 /// Add a match branch index to the scratch buffer.
-pub fn addScratchMatchBranch(store: *NodeStore, branch_idx: ModuleEnv.Expr.Match.Branch.Idx) std.mem.Allocator.Error!void {
+pub fn addScratchMatchBranch(store: *NodeStore, branch_idx: CIR.Expr.Match.Branch.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_match_branches", branch_idx);
 }
 
 /// Create a span from the scratch match branches starting at the given index.
-pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.Expr.Match.Branch.Span {
-    return try store.spanFrom("scratch_match_branches", ModuleEnv.Expr.Match.Branch.Span, start);
+pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.Expr.Match.Branch.Span {
+    return try store.spanFrom("scratch_match_branches", CIR.Expr.Match.Branch.Span, start);
 }
 
 /// Return the current top index for scratch match branch patterns.
@@ -2858,13 +2858,13 @@ pub fn scratchMatchBranchPatternTop(store: *NodeStore) u32 {
 }
 
 /// Add a match branch pattern index to the scratch buffer.
-pub fn addScratchMatchBranchPattern(store: *NodeStore, pattern_idx: ModuleEnv.Expr.Match.BranchPattern.Idx) std.mem.Allocator.Error!void {
+pub fn addScratchMatchBranchPattern(store: *NodeStore, pattern_idx: CIR.Expr.Match.BranchPattern.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_match_branch_patterns", pattern_idx);
 }
 
 /// Create a span from the scratch match branch patterns starting at the given index.
-pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.Expr.Match.BranchPattern.Span {
-    return try store.spanFrom("scratch_match_branch_patterns", ModuleEnv.Expr.Match.BranchPattern.Span, start);
+pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.Expr.Match.BranchPattern.Span {
+    return try store.spanFrom("scratch_match_branch_patterns", CIR.Expr.Match.BranchPattern.Span, start);
 }
 
 /// Calculate the size needed to serialize this NodeStore
@@ -2951,20 +2951,20 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
         .regions = regions,
         .extra_data = extra_data,
         // All scratch arrays start empty
-        .scratch_statements = base.Scratch(ModuleEnv.Statement.Idx){ .items = .{} },
-        .scratch_exprs = base.Scratch(ModuleEnv.Expr.Idx){ .items = .{} },
-        .scratch_record_fields = base.Scratch(ModuleEnv.RecordField.Idx){ .items = .{} },
-        .scratch_match_branches = base.Scratch(ModuleEnv.Expr.Match.Branch.Idx){ .items = .{} },
-        .scratch_match_branch_patterns = base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx){ .items = .{} },
-        .scratch_if_branches = base.Scratch(ModuleEnv.Expr.IfBranch.Idx){ .items = .{} },
-        .scratch_where_clauses = base.Scratch(ModuleEnv.WhereClause.Idx){ .items = .{} },
-        .scratch_patterns = base.Scratch(ModuleEnv.Pattern.Idx){ .items = .{} },
-        .scratch_pattern_record_fields = base.Scratch(ModuleEnv.PatternRecordField.Idx){ .items = .{} },
-        .scratch_type_annos = base.Scratch(ModuleEnv.TypeAnno.Idx){ .items = .{} },
-        .scratch_anno_record_fields = base.Scratch(ModuleEnv.TypeAnno.RecordField.Idx){ .items = .{} },
-        .scratch_exposed_items = base.Scratch(ModuleEnv.ExposedItem.Idx){ .items = .{} },
-        .scratch_defs = base.Scratch(ModuleEnv.Def.Idx){ .items = .{} },
-        .scratch_diagnostics = base.Scratch(ModuleEnv.Diagnostic.Idx){ .items = .{} },
-        .scratch_record_destructs = base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx){ .items = .{} },
+        .scratch_statements = base.Scratch(CIR.Statement.Idx){ .items = .{} },
+        .scratch_exprs = base.Scratch(CIR.Expr.Idx){ .items = .{} },
+        .scratch_record_fields = base.Scratch(CIR.RecordField.Idx){ .items = .{} },
+        .scratch_match_branches = base.Scratch(CIR.Expr.Match.Branch.Idx){ .items = .{} },
+        .scratch_match_branch_patterns = base.Scratch(CIR.Expr.Match.BranchPattern.Idx){ .items = .{} },
+        .scratch_if_branches = base.Scratch(CIR.Expr.IfBranch.Idx){ .items = .{} },
+        .scratch_where_clauses = base.Scratch(CIR.WhereClause.Idx){ .items = .{} },
+        .scratch_patterns = base.Scratch(CIR.Pattern.Idx){ .items = .{} },
+        .scratch_pattern_record_fields = base.Scratch(CIR.PatternRecordField.Idx){ .items = .{} },
+        .scratch_type_annos = base.Scratch(CIR.TypeAnno.Idx){ .items = .{} },
+        .scratch_anno_record_fields = base.Scratch(CIR.TypeAnno.RecordField.Idx){ .items = .{} },
+        .scratch_exposed_items = base.Scratch(CIR.ExposedItem.Idx){ .items = .{} },
+        .scratch_defs = base.Scratch(CIR.Def.Idx){ .items = .{} },
+        .scratch_diagnostics = base.Scratch(CIR.Diagnostic.Idx){ .items = .{} },
+        .scratch_record_destructs = base.Scratch(CIR.Pattern.RecordDestruct.Idx){ .items = .{} },
     };
 }

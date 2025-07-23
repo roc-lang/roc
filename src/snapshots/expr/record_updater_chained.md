@@ -78,64 +78,49 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @3.1-3.7 (ident "person")))
-		(expr
-			(e-record @3.10-3.52
-				(fields
-					(record-field (label "name")
-						(value
-							(e-string @3.18-3.25
-								(e-literal @3.19-3.24 (string "Alice")))))
-					(record-field (label "age")
-						(value
-							(e-int @3.32-3.34 (value "30"))))
-					(record-field (label "city")
-						(value
-							(e-string @3.42-3.50
-								(e-literal @3.43-3.49 (string "Boston")))))))))
-	(def
-		(pattern
-			(p-assign @4.1-4.12 (ident "updated_one")))
-		(expr
-			(e-record @4.15-4.36
-				(ext
-					(e-lookup-local @4.19-4.25
-						(p-assign @3.1-3.7 (ident "person"))))
-				(fields
-					(record-field (label "age")
-						(value
-							(e-int @4.32-4.34 (value "31"))))))))
-	(def
-		(pattern
-			(p-assign @5.1-5.9 (ident "updated2")))
-		(expr
-			(e-record @5.12-5.47
-				(ext
-					(e-lookup-local @5.16-5.27
-						(p-assign @4.1-4.12 (ident "updated_one"))))
-				(fields
-					(record-field (label "city")
-						(value
-							(e-string @5.35-5.45
-								(e-literal @5.36-5.44 (string "New York")))))))))
-	(def
-		(pattern
-			(p-assign @6.1-6.6 (ident "final")))
-		(expr
-			(e-record @6.9-6.53
-				(ext
-					(e-lookup-local @6.13-6.21
-						(p-assign @5.1-5.9 (ident "updated2"))))
-				(fields
-					(record-field (label "name")
-						(value
-							(e-string @6.29-6.42
-								(e-literal @6.30-6.41 (string "Alice Smith")))))
-					(record-field (label "age")
-						(value
-							(e-int @6.49-6.51 (value "32")))))))))
+	(d-let
+		(p-assign @3.1-3.7 (ident "person"))
+		(e-record @3.10-3.52
+			(fields
+				(field (name "name")
+					(e-string @3.18-3.25
+						(e-literal @3.19-3.24 (string "Alice"))))
+				(field (name "age")
+					(e-int @3.32-3.34 (value "30")))
+				(field (name "city")
+					(e-string @3.42-3.50
+						(e-literal @3.43-3.49 (string "Boston")))))))
+	(d-let
+		(p-assign @4.1-4.12 (ident "updated_one"))
+		(e-record @4.15-4.36
+			(ext
+				(e-lookup-local @4.19-4.25
+					(p-assign @3.1-3.7 (ident "person"))))
+			(fields
+				(field (name "age")
+					(e-int @4.32-4.34 (value "31"))))))
+	(d-let
+		(p-assign @5.1-5.9 (ident "updated2"))
+		(e-record @5.12-5.47
+			(ext
+				(e-lookup-local @5.16-5.27
+					(p-assign @4.1-4.12 (ident "updated_one"))))
+			(fields
+				(field (name "city")
+					(e-string @5.35-5.45
+						(e-literal @5.36-5.44 (string "New York")))))))
+	(d-let
+		(p-assign @6.1-6.6 (ident "final"))
+		(e-record @6.9-6.53
+			(ext
+				(e-lookup-local @6.13-6.21
+					(p-assign @5.1-5.9 (ident "updated2"))))
+			(fields
+				(field (name "name")
+					(e-string @6.29-6.42
+						(e-literal @6.30-6.41 (string "Alice Smith"))))
+				(field (name "age")
+					(e-int @6.49-6.51 (value "32")))))))
 ~~~
 # TYPES
 ~~~clojure

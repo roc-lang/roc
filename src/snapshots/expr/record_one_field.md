@@ -30,10 +30,9 @@ NO CHANGE
 ~~~clojure
 (e-record @1.1-1.18
 	(fields
-		(record-field (label "name")
-			(value
-				(e-string @1.9-1.16
-					(e-literal @1.10-1.15 (string "Alice")))))))
+		(field (name "name")
+			(e-string @1.9-1.16
+				(e-literal @1.10-1.15 (string "Alice"))))))
 ~~~
 # TYPES
 ~~~clojure

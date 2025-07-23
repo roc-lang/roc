@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const compile = @import("compile");
 const types = @import("types");
 const layout_ = @import("./layout.zig");
 const collections = @import("collections");
@@ -40,7 +39,7 @@ pub const LayoutError = error{
 pub const Store = struct {
     const Self = @This();
 
-    env: *compile.ModuleEnv,
+    env: *base.ModuleEnv,
     types_store: *const types_store.Store,
     layouts: collections.SafeMultiList(Layout),
     tuple_elems: collections.SafeList(Idx),
@@ -97,7 +96,7 @@ pub const Store = struct {
     }
 
     pub fn init(
-        env: *compile.ModuleEnv,
+        env: *base.ModuleEnv,
         type_store: *const types_store.Store,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
@@ -342,7 +341,7 @@ pub const Store = struct {
         // Sort fields by alignment (descending) first, then by name (ascending)
         const AlignmentSortCtx = struct {
             store: *Self,
-            env: *compile.ModuleEnv,
+            env: *base.ModuleEnv,
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout);

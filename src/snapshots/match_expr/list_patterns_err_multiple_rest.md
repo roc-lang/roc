@@ -15,9 +15,9 @@ INVALID PATTERN - :0:0:0:0
 UNUSED VARIABLE - list_patterns_err_multiple_rest.md:2:10:2:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `numbers` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'numbers' is not defined:
 **list_patterns_err_multiple_rest.md:1:7:1:14:**
 ```roc
 match numbers {

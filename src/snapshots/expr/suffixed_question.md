@@ -25,9 +25,9 @@ Stdout.line???
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `line` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'line' is not defined:
 **suffixed_question.md:1:1:1:12:**
 ```roc
 Stdout.line???
@@ -44,6 +44,7 @@ Stdout.line???
 ```
 ^^^^^^^^^^^^^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 # TOKENS
 ~~~zig

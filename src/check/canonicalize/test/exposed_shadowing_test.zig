@@ -7,8 +7,8 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
-const compile = @import("compile");
 const AST = @import("../../parse/AST.zig");
+const CIR = @import("../CIR.zig");
 const canonicalize = @import("../../canonicalize.zig");
 const parse = @import("../../parse.zig");
 const tokenize = @import("../../parse/tokenize.zig");
@@ -22,27 +22,28 @@ test "exposed but not implemented - values" {
         \\foo = 42
     ;
 
-    var env = try compile.ModuleEnv.init(allocator, source);
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    try env.initCIRFields(allocator, "Test");
+    var cir = try CIR.init(&env, "Test");
+    defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
 
     // Check that we have an "exposed but not implemented" diagnostic for 'bar'
     var found_bar_error = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
+    for (0..cir.store.scratch_diagnostics.top()) |i| {
+        const diag_idx = cir.store.scratch_diagnostics.items.items[i];
+        const diag = cir.store.getDiagnostic(diag_idx);
         switch (diag) {
             .exposed_but_not_implemented => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = cir.env.idents.getText(d.ident);
                 if (std.mem.eql(u8, ident_text, "bar")) {
                     found_bar_error = true;
                 }
@@ -62,27 +63,28 @@ test "exposed but not implemented - types" {
         \\MyType : [A, B]
     ;
 
-    var env = try compile.ModuleEnv.init(allocator, source);
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    try env.initCIRFields(allocator, "Test");
+    var cir = try CIR.init(&env, "Test");
+    defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
 
     // Check that we have an "exposed but not implemented" diagnostic for 'OtherType'
     var found_other_type_error = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
+    for (0..cir.store.scratch_diagnostics.top()) |i| {
+        const diag_idx = cir.store.scratch_diagnostics.items.items[i];
+        const diag = cir.store.getDiagnostic(diag_idx);
         switch (diag) {
             .exposed_but_not_implemented => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = cir.env.idents.getText(d.ident);
                 if (std.mem.eql(u8, ident_text, "OtherType")) {
                     found_other_type_error = true;
                 }
@@ -104,15 +106,16 @@ test "redundant exposed entries" {
         \\MyType : [A, B]
     ;
 
-    var env = try compile.ModuleEnv.init(allocator, source);
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    try env.initCIRFields(allocator, "Test");
+    var cir = try CIR.init(&env, "Test");
+    defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -120,12 +123,12 @@ test "redundant exposed entries" {
     // Check that we have redundant exposed warnings
     var found_foo_redundant = false;
     var found_bar_redundant = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
+    for (0..cir.store.scratch_diagnostics.top()) |i| {
+        const diag_idx = cir.store.scratch_diagnostics.items.items[i];
+        const diag = cir.store.getDiagnostic(diag_idx);
         switch (diag) {
             .redundant_exposed => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = cir.env.idents.getText(d.ident);
                 if (std.mem.eql(u8, ident_text, "foo")) {
                     found_foo_redundant = true;
                 } else if (std.mem.eql(u8, ident_text, "bar")) {
@@ -152,24 +155,25 @@ test "shadowing with exposed items" {
         \\y = "second"
     ;
 
-    var env = try compile.ModuleEnv.init(allocator, source);
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    try env.initCIRFields(allocator, "Test");
+    var cir = try CIR.init(&env, "Test");
+    defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
 
     // Check that we have shadowing warnings
     var shadowing_count: usize = 0;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
+    for (0..cir.store.scratch_diagnostics.top()) |i| {
+        const diag_idx = cir.store.scratch_diagnostics.items.items[i];
+        const diag = cir.store.getDiagnostic(diag_idx);
         switch (diag) {
             .shadowing_warning => shadowing_count += 1,
             else => {},
@@ -190,27 +194,28 @@ test "shadowing non-exposed items" {
         \\# Shadowing is allowed for non-exposed items
     ;
 
-    var env = try compile.ModuleEnv.init(allocator, source);
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    try env.initCIRFields(allocator, "Test");
+    var cir = try CIR.init(&env, "Test");
+    defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
 
     // Check that we still get shadowing warnings for non-exposed items
     var found_shadowing = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
+    for (0..cir.store.scratch_diagnostics.top()) |i| {
+        const diag_idx = cir.store.scratch_diagnostics.items.items[i];
+        const diag = cir.store.getDiagnostic(diag_idx);
         switch (diag) {
             .shadowing_warning => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = cir.env.idents.getText(d.ident);
                 if (std.mem.eql(u8, ident_text, "notExposed")) {
                     found_shadowing = true;
                 }
@@ -235,15 +240,16 @@ test "exposed items correctly tracked across shadowing" {
         \\# z is exposed but never defined
     ;
 
-    var env = try compile.ModuleEnv.init(allocator, source);
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    try env.initCIRFields(allocator, "Test");
+    var cir = try CIR.init(&env, "Test");
+    defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -258,18 +264,18 @@ test "exposed items correctly tracked across shadowing" {
     var found_z_not_implemented = false;
     var found_unexpected_not_implemented = false;
 
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
+    for (0..cir.store.scratch_diagnostics.top()) |i| {
+        const diag_idx = cir.store.scratch_diagnostics.items.items[i];
+        const diag = cir.store.getDiagnostic(diag_idx);
         switch (diag) {
             .shadowing_warning => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = cir.env.idents.getText(d.ident);
                 if (std.mem.eql(u8, ident_text, "x")) {
                     found_x_shadowing = true;
                 }
             },
             .exposed_but_not_implemented => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = cir.env.idents.getText(d.ident);
                 if (std.mem.eql(u8, ident_text, "z")) {
                     found_z_not_implemented = true;
                 } else if (std.mem.eql(u8, ident_text, "x") or std.mem.eql(u8, ident_text, "y")) {
@@ -299,15 +305,16 @@ test "complex case with redundant, shadowing, and not implemented" {
         \\c = 100
     ;
 
-    var env = try compile.ModuleEnv.init(allocator, source);
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    try env.initCIRFields(allocator, "Test");
+    var cir = try CIR.init(&env, "Test");
+    defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -316,24 +323,24 @@ test "complex case with redundant, shadowing, and not implemented" {
     var found_a_shadowing = false;
     var found_not_implemented = false;
 
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
+    for (0..cir.store.scratch_diagnostics.top()) |i| {
+        const diag_idx = cir.store.scratch_diagnostics.items.items[i];
+        const diag = cir.store.getDiagnostic(diag_idx);
         switch (diag) {
             .redundant_exposed => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = cir.env.idents.getText(d.ident);
                 if (std.mem.eql(u8, ident_text, "a")) {
                     found_a_redundant = true;
                 }
             },
             .shadowing_warning => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = cir.env.idents.getText(d.ident);
                 if (std.mem.eql(u8, ident_text, "a")) {
                     found_a_shadowing = true;
                 }
             },
             .exposed_but_not_implemented => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = cir.env.idents.getText(d.ident);
                 if (std.mem.eql(u8, ident_text, "NotImplemented")) {
                     found_not_implemented = true;
                 }
@@ -358,15 +365,16 @@ test "exposed_by_str is populated correctly" {
         \\MyType : [A, B]
     ;
 
-    var env = try compile.ModuleEnv.init(allocator, source);
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    try env.initCIRFields(allocator, "Test");
+    var cir = try CIR.init(&env, "Test");
+    defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -391,15 +399,16 @@ test "exposed_by_str persists after canonicalization" {
         \\# z is not defined
     ;
 
-    var env = try compile.ModuleEnv.init(allocator, source);
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    try env.initCIRFields(allocator, "Test");
+    var cir = try CIR.init(&env, "Test");
+    defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -424,15 +433,16 @@ test "exposed_by_str never has entries removed" {
         \\baz = 3.14
     ;
 
-    var env = try compile.ModuleEnv.init(allocator, source);
+    var env = try base.ModuleEnv.init(allocator, source);
     defer env.deinit();
 
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    try env.initCIRFields(allocator, "Test");
+    var cir = try CIR.init(&env, "Test");
+    defer cir.deinit();
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
+    var canonicalizer = try canonicalize.init(&cir, &ast, null);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();

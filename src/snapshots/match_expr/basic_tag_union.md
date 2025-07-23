@@ -16,9 +16,9 @@ UNDEFINED VARIABLE - basic_tag_union.md:1:7:1:12
 INCOMPATIBLE MATCH BRANCHES - basic_tag_union.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `color` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'color' is not defined:
 **basic_tag_union.md:1:7:1:12:**
 ```roc
 match color {

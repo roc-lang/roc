@@ -16,9 +16,9 @@ match result {
 UNDEFINED VARIABLE - branch_scoping.md:1:7:1:13
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `result` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'result' is not defined:
 **branch_scoping.md:1:7:1:13:**
 ```roc
 match result {

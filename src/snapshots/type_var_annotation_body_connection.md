@@ -86,36 +86,31 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @4.1-4.9 (ident "identity")))
-		(expr
-			(e-lambda @4.12-8.2
-				(args
-					(p-assign @4.13-4.14 (ident "x")))
-				(e-block @4.16-8.2
-					(s-type-anno @5.5-5.14 (name "thing")
-						(ty-var @5.13-5.14 (name "a")))
-					(s-let @6.5-6.14
-						(p-assign @6.5-6.10 (ident "thing"))
-						(e-lookup-local @6.13-6.14
-							(p-assign @4.13-4.14 (ident "x"))))
-					(e-lookup-local @7.5-7.10
-						(p-assign @6.5-6.10 (ident "thing"))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @3.12-3.18 (effectful false)
-						(ty-var @3.12-3.13 (name "a"))
-						(ty-var @3.17-3.18 (name "a")))))))
-	(def
-		(pattern
-			(p-assign @10.1-10.6 (ident "main!")))
-		(expr
-			(e-lambda @10.9-10.15
-				(args
-					(p-underscore @10.10-10.11))
-				(e-empty_record @10.13-10.15)))))
+	(d-let
+		(p-assign @4.1-4.9 (ident "identity"))
+		(e-lambda @4.12-8.2
+			(args
+				(p-assign @4.13-4.14 (ident "x")))
+			(e-block @4.16-8.2
+				(s-type-anno @5.5-5.14 (name "thing")
+					(ty-var @5.13-5.14 (name "a")))
+				(s-let @6.5-6.14
+					(p-assign @6.5-6.10 (ident "thing"))
+					(e-lookup-local @6.13-6.14
+						(p-assign @4.13-4.14 (ident "x"))))
+				(e-lookup-local @7.5-7.10
+					(p-assign @6.5-6.10 (ident "thing")))))
+		(annotation @4.1-4.9
+			(declared-type
+				(ty-fn @3.12-3.18 (effectful false)
+					(ty-var @3.12-3.13 (name "a"))
+					(ty-var @3.17-3.18 (name "a"))))))
+	(d-let
+		(p-assign @10.1-10.6 (ident "main!"))
+		(e-lambda @10.9-10.15
+			(args
+				(p-underscore @10.10-10.11))
+			(e-empty_record @10.13-10.15))))
 ~~~
 # TYPES
 ~~~clojure

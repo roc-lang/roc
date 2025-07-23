@@ -15,9 +15,9 @@ UNDEFINED VARIABLE - pattern_destructure_with_rest.md:2:33:2:40
 UNDEFINED VARIABLE - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'person' is not defined:
 **pattern_destructure_with_rest.md:1:7:1:13:**
 ```roc
 match person {
@@ -26,9 +26,9 @@ match person {
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `len` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'len' is not defined:
 **pattern_destructure_with_rest.md:2:33:2:40:**
 ```roc
     { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
@@ -37,9 +37,9 @@ The variable 'len' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `len` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'len' is not defined:
 **pattern_destructure_with_rest.md:2:55:2:62:**
 ```roc
     { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)

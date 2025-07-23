@@ -11,9 +11,9 @@ type=expr
 UNDEFINED VARIABLE - unary_negation.md:1:2:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'foo' is not defined:
 **unary_negation.md:1:2:1:5:**
 ```roc
 -foo

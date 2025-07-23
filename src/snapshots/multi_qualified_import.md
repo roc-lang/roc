@@ -143,9 +143,9 @@ json_encoder : Encoder
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `defaultEncoder` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'defaultEncoder' is not defined:
 **multi_qualified_import.md:6:16:6:45:**
 ```roc
 json_encoder = Json.Core.Utf8.defaultEncoder
@@ -166,9 +166,9 @@ process = |encoder| "processing"
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `json` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'json' is not defined:
 **multi_qualified_import.md:14:8:14:12:**
 ```roc
 data = json.Core.Utf8.encode("hello")
@@ -294,45 +294,36 @@ data = json
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @6.1-6.13 (ident "json_encoder")))
-		(expr
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(annotation
-			(annotation
-				(type-anno
-					(ty @5.16-5.23 (name "Encoder"))))))
-	(def
-		(pattern
-			(p-assign @10.1-10.8 (ident "process")))
-		(expr
-			(e-lambda @10.11-10.33
-				(args
-					(p-assign @10.12-10.19 (ident "encoder")))
-				(e-string @10.21-10.33
-					(e-literal @10.22-10.32 (string "processing")))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @9.11-9.40 (effectful false)
-						(ty-lookup-external @9.11-9.33
-							(external-decl @9.11-9.33 (qualified-name "json.Core.Utf8.Encoder") (module-name "json.Core.Utf8") (local-name "Encoder") (kind "type")))
-						(ty @9.37-9.40 (name "Str")))))))
-	(def
-		(pattern
-			(p-assign @14.1-14.5 (ident "data")))
-		(expr
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-lookup-external @13.8-13.34
-						(external-decl @13.8-13.34 (qualified-name "json.Core.Utf8.EncodedData") (module-name "json.Core.Utf8") (local-name "EncodedData") (kind "type")))))))
+	(d-let
+		(p-assign @6.1-6.13 (ident "json_encoder"))
+		(e-runtime-error (tag "ident_not_in_scope"))
+		(annotation @6.1-6.13
+			(declared-type
+				(ty @5.16-5.23 (name "Encoder")))))
+	(d-let
+		(p-assign @10.1-10.8 (ident "process"))
+		(e-lambda @10.11-10.33
+			(args
+				(p-assign @10.12-10.19 (ident "encoder")))
+			(e-string @10.21-10.33
+				(e-literal @10.22-10.32 (string "processing"))))
+		(annotation @10.1-10.8
+			(declared-type
+				(ty-fn @9.11-9.40 (effectful false)
+					(ty-lookup-external @9.11-9.33
+						(ext-decl @9.11-9.33 (ident "json.Core.Utf8.Encoder") (kind "type")))
+					(ty @9.37-9.40 (name "Str"))))))
+	(d-let
+		(p-assign @14.1-14.5 (ident "data"))
+		(e-runtime-error (tag "ident_not_in_scope"))
+		(annotation @14.1-14.5
+			(declared-type
+				(ty-lookup-external @13.8-13.34
+					(ext-decl @13.8-13.34 (ident "json.Core.Utf8.EncodedData") (kind "type"))))))
 	(s-import @3.1-3.17 (module "json.Core") (qualifier "json")
 		(exposes))
-	(external-decl (qualified-name "json.Core.Utf8.Encoder") (module-name "json.Core.Utf8") (local-name "Encoder") (kind "type"))
-	(external-decl (qualified-name "json.Core.Utf8.EncodedData") (module-name "json.Core.Utf8") (local-name "EncodedData") (kind "type")))
+	(ext-decl @9.11-9.33 (ident "json.Core.Utf8.Encoder") (kind "type"))
+	(ext-decl @13.8-13.34 (ident "json.Core.Utf8.EncodedData") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -342,7 +333,7 @@ data = json
 		(patt @10.1-10.8 (type "json.Core.Utf8.Encoder -> Str"))
 		(patt @14.1-14.5 (type "Error")))
 	(expressions
-		(expr @1.1-1.1 (type "Error"))
+		(expr @6.16-6.45 (type "Error"))
 		(expr @10.11-10.33 (type "json.Core.Utf8.Encoder -> Str"))
-		(expr @1.1-1.1 (type "Error"))))
+		(expr @14.8-14.12 (type "Error"))))
 ~~~

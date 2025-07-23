@@ -15,9 +15,9 @@ UNDEFINED VARIABLE - can_list_rest_types.md:1:7:1:14
 UNUSED VARIABLE - can_list_rest_types.md:2:6:2:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `numbers` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'numbers' is not defined:
 **can_list_rest_types.md:1:7:1:14:**
 ```roc
 match numbers {

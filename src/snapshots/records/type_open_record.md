@@ -69,7 +69,7 @@ process_user! :
 ~~~clojure
 (can-ir
 	(s-type-anno @1.1-1.49 (name "process_user!")
-		(ty-malformed @1.1-1.1)))
+		(ty-malformed @1.47-1.49)))
 ~~~
 # TYPES
 ~~~clojure

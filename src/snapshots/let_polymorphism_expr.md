@@ -63,27 +63,24 @@ match [] {
 				(value
 					(e-record @2.14-2.70
 						(fields
-							(record-field (label "ints")
-								(value
-									(e-list @2.22-2.31
-										(elems
-											(e-int @2.23-2.24 (value "1"))
-											(e-int @2.26-2.27 (value "2"))
-											(e-int @2.29-2.30 (value "3"))))))
-							(record-field (label "strs")
-								(value
-									(e-list @2.39-2.54
-										(elems
-											(e-string @2.40-2.43
-												(e-literal @2.41-2.42 (string "a")))
-											(e-string @2.45-2.48
-												(e-literal @2.46-2.47 (string "b")))
-											(e-string @2.50-2.53
-												(e-literal @2.51-2.52 (string "c")))))))
-							(record-field (label "empty")
-								(value
-									(e-lookup-local @2.63-2.68
-										(p-assign @2.5-2.10 (ident "empty"))))))))))))
+							(field (name "ints")
+								(e-list @2.22-2.31
+									(elems
+										(e-int @2.23-2.24 (value "1"))
+										(e-int @2.26-2.27 (value "2"))
+										(e-int @2.29-2.30 (value "3")))))
+							(field (name "strs")
+								(e-list @2.39-2.54
+									(elems
+										(e-string @2.40-2.43
+											(e-literal @2.41-2.42 (string "a")))
+										(e-string @2.45-2.48
+											(e-literal @2.46-2.47 (string "b")))
+										(e-string @2.50-2.53
+											(e-literal @2.51-2.52 (string "c"))))))
+							(field (name "empty")
+								(e-lookup-local @2.63-2.68
+									(p-assign @2.5-2.10 (ident "empty")))))))))))
 ~~~
 # TYPES
 ~~~clojure

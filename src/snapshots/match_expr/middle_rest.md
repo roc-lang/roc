@@ -17,9 +17,9 @@ UNDEFINED VARIABLE - middle_rest.md:1:7:1:12
 UNUSED VARIABLE - middle_rest.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `items` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'items' is not defined:
 **middle_rest.md:1:7:1:12:**
 ```roc
 match items {

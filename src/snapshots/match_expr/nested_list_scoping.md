@@ -15,9 +15,9 @@ match nestedList {
 UNDEFINED VARIABLE - nested_list_scoping.md:1:7:1:17
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `nestedList` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'nestedList' is not defined:
 **nested_list_scoping.md:1:7:1:17:**
 ```roc
 match nestedList {

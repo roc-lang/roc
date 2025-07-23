@@ -51,18 +51,15 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @6.1-6.6 (ident "value")))
-		(expr
-			(e-nominal @6.9-6.15 (nominal "MyType")
-				(e-tag @6.9-6.20 (name "TagA"))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty @5.9-5.15 (name "MyType"))))))
+	(d-let
+		(p-assign @6.1-6.6 (ident "value"))
+		(e-nominal @6.9-6.15 (nominal "MyType")
+			(e-tag @6.9-6.20 (name "TagA")))
+		(annotation @6.1-6.6
+			(declared-type
+				(ty @5.9-5.15 (name "MyType")))))
 	(s-nominal-decl @3.1-3.23
-		(type-header (name "MyType"))
+		(ty-header @3.1-3.7 (name "MyType"))
 		(ty-tag-union @3.11-3.23
 			(ty @3.12-3.16 (name "TagA"))
 			(ty @3.18-3.22 (name "TagB")))))
@@ -74,7 +71,7 @@ NO CHANGE
 		(patt @6.1-6.6 (type "MyType")))
 	(type_decls
 		(nominal @3.1-3.23 (type "MyType")
-			(type-header (name "MyType"))))
+			(ty-header @3.1-3.7 (name "MyType"))))
 	(expressions
 		(expr @6.9-6.15 (type "MyType"))))
 ~~~

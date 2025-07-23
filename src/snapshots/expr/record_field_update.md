@@ -11,9 +11,9 @@ type=expr
 UNDEFINED VARIABLE - record_field_update.md:1:5:1:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'person' is not defined:
 **record_field_update.md:1:5:1:11:**
 ```roc
 { ..person, age: 31 }
@@ -43,9 +43,8 @@ NO CHANGE
 	(ext
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(fields
-		(record-field (label "age")
-			(value
-				(e-int @1.18-1.20 (value "31"))))))
+		(field (name "age")
+			(e-int @1.18-1.20 (value "31")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -46,14 +46,12 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @5.1-5.5 (ident "test")))
-		(expr
-			(e-nominal @5.8-5.13 (nominal "Color")
-				(e-tag @5.8-5.17 (name "Red")))))
+	(d-let
+		(p-assign @5.1-5.5 (ident "test"))
+		(e-nominal @5.8-5.13 (nominal "Color")
+			(e-tag @5.8-5.17 (name "Red"))))
 	(s-nominal-decl @3.1-3.21
-		(type-header (name "Color"))
+		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.10-3.21
 			(ty @3.11-3.14 (name "Red"))
 			(ty @3.16-3.20 (name "Blue")))))
@@ -65,7 +63,7 @@ NO CHANGE
 		(patt @5.1-5.5 (type "Color")))
 	(type_decls
 		(nominal @3.1-3.21 (type "Color")
-			(type-header (name "Color"))))
+			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions
 		(expr @5.8-5.13 (type "Color"))))
 ~~~

@@ -56,16 +56,12 @@ b = 'a'
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @6.1-6.2 (ident "a")))
-		(expr
-			(e-int @6.5-6.8 (value "97"))))
-	(def
-		(pattern
-			(p-assign @7.1-7.2 (ident "b")))
-		(expr
-			(e-int @7.5-7.8 (value "97")))))
+	(d-let
+		(p-assign @6.1-6.2 (ident "a"))
+		(e-int @6.5-6.8 (value "97")))
+	(d-let
+		(p-assign @7.1-7.2 (ident "b"))
+		(e-int @7.5-7.8 (value "97"))))
 ~~~
 # TYPES
 ~~~clojure

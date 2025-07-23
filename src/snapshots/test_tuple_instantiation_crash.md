@@ -86,41 +86,36 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @5.1-5.5 (ident "swap")))
-		(expr
-			(e-lambda @5.8-5.23
-				(args
-					(p-tuple @5.9-5.15
-						(patterns
-							(p-assign @5.10-5.11 (ident "x"))
-							(p-assign @5.13-5.14 (ident "y")))))
-				(e-tuple @5.17-5.23
-					(elems
-						(e-lookup-local @5.18-5.19
-							(p-assign @5.13-5.14 (ident "y")))
-						(e-lookup-local @5.21-5.22
-							(p-assign @5.10-5.11 (ident "x")))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @4.8-4.24 (effectful false)
-						(ty-tuple @4.8-4.14
-							(ty-var @4.9-4.10 (name "a"))
-							(ty-var @4.12-4.13 (name "b")))
-						(ty-tuple @4.18-4.24
-							(ty-var @4.19-4.20 (name "b"))
-							(ty-var @4.22-4.23 (name "a"))))))))
-	(def
-		(pattern
-			(p-assign @9.1-9.5 (ident "main")))
-		(expr
-			(e-call @9.8-9.18
-				(e-lookup-local @9.8-9.12
-					(p-assign @5.1-5.5 (ident "swap")))
-				(e-int @9.13-9.14 (value "1"))
-				(e-int @9.16-9.17 (value "2"))))))
+	(d-let
+		(p-assign @5.1-5.5 (ident "swap"))
+		(e-lambda @5.8-5.23
+			(args
+				(p-tuple @5.9-5.15
+					(patterns
+						(p-assign @5.10-5.11 (ident "x"))
+						(p-assign @5.13-5.14 (ident "y")))))
+			(e-tuple @5.17-5.23
+				(elems
+					(e-lookup-local @5.18-5.19
+						(p-assign @5.13-5.14 (ident "y")))
+					(e-lookup-local @5.21-5.22
+						(p-assign @5.10-5.11 (ident "x"))))))
+		(annotation @5.1-5.5
+			(declared-type
+				(ty-fn @4.8-4.24 (effectful false)
+					(ty-tuple @4.8-4.14
+						(ty-var @4.9-4.10 (name "a"))
+						(ty-var @4.12-4.13 (name "b")))
+					(ty-tuple @4.18-4.24
+						(ty-var @4.19-4.20 (name "b"))
+						(ty-var @4.22-4.23 (name "a")))))))
+	(d-let
+		(p-assign @9.1-9.5 (ident "main"))
+		(e-call @9.8-9.18
+			(e-lookup-local @9.8-9.12
+				(p-assign @5.1-5.5 (ident "swap")))
+			(e-int @9.13-9.14 (value "1"))
+			(e-int @9.16-9.17 (value "2")))))
 ~~~
 # TYPES
 ~~~clojure

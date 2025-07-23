@@ -3,7 +3,6 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
-const compile = @import("compile");
 const parse = @import("../../parse.zig");
 const canonicalize = @import("../../canonicalize.zig");
 const check_types = @import("../../check_types.zig");
@@ -39,7 +38,7 @@ const test_allocator = testing.allocator;
 //         \\    myColor.describe()
 //     ;
 //
-//     var module_env = compile.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
+//     var module_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
 //     defer module_env.deinit();
 //
 //     // Parse the source
@@ -73,7 +72,7 @@ const test_allocator = testing.allocator;
 //         const pattern = can_ir.store.getPattern(def.pattern);
 //         if (pattern == .assign) {
 //             const ident_idx = pattern.assign.ident;
-//             const ident_text = can_ir.idents.getText(ident_idx);
+//             const ident_text = can_ir.env.idents.getText(ident_idx);
 //
 //             if (std.mem.eql(u8, ident_text, "main")) {
 //                 main_expr_idx = def.expr;
@@ -108,14 +107,14 @@ const test_allocator = testing.allocator;
 
 // test "static dispatch - method call on imported nominal type" {
 //     // Create module environments
-//     var data_env = compile.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
+//     var data_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
 //     defer data_env.deinit();
 //
-//     var main_env = compile.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
+//     var main_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
 //     defer main_env.deinit();
 //
 //     // Create module envs map
-//     var module_envs = std.StringHashMap(*compile.ModuleEnv).init(test_allocator);
+//     var module_envs = std.StringHashMap(*base.ModuleEnv).init(test_allocator);
 //     defer module_envs.deinit();
 //     try module_envs.put("Data", &data_env);
 //
@@ -188,7 +187,7 @@ const test_allocator = testing.allocator;
 //         const pattern = main_can_ir.store.getPattern(def.pattern);
 //         if (pattern == .assign) {
 //             const ident_idx = pattern.assign.ident;
-//             const ident_text = main_can_ir.idents.getText(ident_idx);
+//             const ident_text = main_can_ir.env.idents.getText(ident_idx);
 //             if (std.mem.eql(u8, ident_text, "main")) {
 //                 main_expr_idx = def.expr;
 //                 break;
@@ -237,7 +236,7 @@ const test_allocator = testing.allocator;
 //         \\    origin.distance(point)
 //     ;
 //
-//     var module_env = compile.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
+//     var module_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
 //     defer module_env.deinit();
 //
 //     // Parse the source
@@ -270,7 +269,7 @@ const test_allocator = testing.allocator;
 //         const pattern = can_ir.store.getPattern(def.pattern);
 //         if (pattern == .assign) {
 //             const ident_idx = pattern.assign.ident;
-//             const ident_text = can_ir.idents.getText(ident_idx);
+//             const ident_text = can_ir.env.idents.getText(ident_idx);
 //             if (std.mem.eql(u8, ident_text, "main")) {
 //                 main_expr_idx = def.expr;
 //                 break;
@@ -320,7 +319,7 @@ const test_allocator = testing.allocator;
 //         \\    alice.nonExistentMethod()
 //     ;
 //
-//     var module_env = compile.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
+//     var module_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
 //     defer module_env.deinit();
 //
 //     // Parse the source
@@ -351,7 +350,7 @@ const test_allocator = testing.allocator;
 //         const pattern = can_ir.store.getPattern(def.pattern);
 //         if (pattern == .assign) {
 //             const ident_idx = pattern.assign.ident;
-//             const ident_text = can_ir.idents.getText(ident_idx);
+//             const ident_text = can_ir.env.idents.getText(ident_idx);
 //             if (std.mem.eql(u8, ident_text, "main")) {
 //                 main_expr_idx = def.expr;
 //                 break;

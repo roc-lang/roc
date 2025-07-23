@@ -30,9 +30,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `numbers` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'numbers' is not defined:
 **list_patterns.md:1:7:1:14:**
 ```roc
 match numbers {
@@ -41,9 +41,9 @@ match numbers {
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `acc` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'acc' is not defined:
 **list_patterns.md:2:11:2:14:**
 ```roc
     [] => acc

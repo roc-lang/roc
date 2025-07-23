@@ -93,16 +93,16 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-alias-decl @4.1-4.10
-		(type-header (name "Foo"))
+		(ty-header @4.1-4.4 (name "Foo"))
 		(ty @4.7-4.10 (name "U64")))
 	(s-alias-decl @7.1-7.10
-		(type-header (name "Foo"))
+		(ty-header @7.1-7.4 (name "Foo"))
 		(ty @7.7-7.10 (name "Str")))
 	(s-alias-decl @10.1-10.25
-		(type-header (name "Bar"))
+		(ty-header @10.1-10.4 (name "Bar"))
 		(ty @10.7-10.25 (name "SomeUndeclaredType")))
 	(s-alias-decl @13.1-13.10
-		(type-header (name "Baz"))
+		(ty-header @13.1-13.4 (name "Baz"))
 		(ty @13.7-13.10 (name "Foo"))))
 ~~~
 # TYPES
@@ -111,12 +111,12 @@ NO CHANGE
 	(defs)
 	(type_decls
 		(alias @4.1-4.10 (type "Foo")
-			(type-header (name "Foo")))
+			(ty-header @4.1-4.4 (name "Foo")))
 		(alias @7.1-7.10 (type "Foo")
-			(type-header (name "Foo")))
+			(ty-header @7.1-7.4 (name "Foo")))
 		(alias @10.1-10.25 (type "Error")
-			(type-header (name "Bar")))
+			(ty-header @10.1-10.4 (name "Bar")))
 		(alias @13.1-13.10 (type "Baz")
-			(type-header (name "Baz"))))
+			(ty-header @13.1-13.4 (name "Baz"))))
 	(expressions))
 ~~~

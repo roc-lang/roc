@@ -4,7 +4,7 @@
 //! State Machine:
 //! 1. START: Initialize module, return compiler version
 //! 2. READY: Receive Roc source, compile through all stages, return "LOADED" with diagnostics
-//! 3. LOADED: Handle queries for tokens, AST, MODULE_ENV, types, etc. Handle reset to go back to READY
+//! 3. LOADED: Handle queries for tokens, AST, CIR, types, etc. Handle reset to go back to READY
 //!
 //! Compilation Strategy:
 //! The playground uses Roc's "keep going" approach - all compiler stages run even when there
@@ -14,7 +14,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const compile = @import("compile");
 const parse = @import("check/parse.zig");
 const build_options = @import("build_options");
 const can = @import("check/canonicalize.zig");
@@ -26,7 +25,7 @@ const types = @import("types");
 const problem = @import("check/check_types/problem.zig");
 
 const SExprTree = base.SExprTree;
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = base.ModuleEnv;
 const Allocator = std.mem.Allocator;
 
 const allocator: Allocator = .{
@@ -46,7 +45,7 @@ const MessageType = enum {
     LOAD_SOURCE,
     QUERY_TOKENS,
     QUERY_AST,
-    QUERY_MODULE_ENV,
+    QUERY_CIR,
     QUERY_TYPES,
     GET_TYPE_INFO,
     RESET,
@@ -56,7 +55,7 @@ const MessageType = enum {
         if (std.mem.eql(u8, str, "LOAD_SOURCE")) return .LOAD_SOURCE;
         if (std.mem.eql(u8, str, "QUERY_TOKENS")) return .QUERY_TOKENS;
         if (std.mem.eql(u8, str, "QUERY_AST")) return .QUERY_AST;
-        if (std.mem.eql(u8, str, "QUERY_MODULE_ENV")) return .QUERY_MODULE_ENV;
+        if (std.mem.eql(u8, str, "QUERY_CIR")) return .QUERY_CIR;
         if (std.mem.eql(u8, str, "QUERY_TYPES")) return .QUERY_TYPES;
         if (std.mem.eql(u8, str, "GET_TYPE_INFO")) return .GET_TYPE_INFO;
         if (std.mem.eql(u8, str, "RESET")) return .RESET;
@@ -102,7 +101,7 @@ const Diagnostic = struct {
 const CompilerStageData = struct {
     module_env: *ModuleEnv,
     parse_ast: ?parse.AST = null,
-    can_ir: ?can.MODULE_ENV = null,
+    can_ir: ?can.CIR = null,
     solver: ?check_types = null,
 
     // Diagnostic reports from each stage
@@ -265,7 +264,7 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
         .QUERY_AST => {
             return writeParseAstResponse(response_buffer, data);
         },
-        .QUERY_MODULE_ENV => {
+        .QUERY_CIR => {
             return writeCanCirResponse(response_buffer, data);
         },
         .QUERY_TYPES => {
@@ -349,8 +348,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Stage 2: Canonicalization (always run, even with parse errors)
     // The canonicalizer handles malformed parse nodes and continues processing
-    // Initialize MODULE_ENV directly in result to ensure stable pointer
-    result.can_ir = try can.MODULE_ENV.init(allocator, "main");
+    // Initialize CIR directly in result to ensure stable pointer
+    result.can_ir = try can.CIR.init(module_env, "main");
     var can_ir = &result.can_ir.?;
 
     var canonicalizer = try can.init(can_ir, &parse_ast, null);
@@ -371,11 +370,11 @@ fn compileSource(source: []const u8) !CompilerStageData {
         result.can_reports.append(report) catch continue;
     }
 
-    // Stage 3: Type checking (always run if we have MODULE_ENV, even with canonicalization errors)
+    // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)
     // The type checker works with malformed canonical nodes to provide partial type information
     if (result.can_ir) |*type_can_ir| {
-        const empty_modules: []const *can.MODULE_ENV = &.{};
-        // Use pointer to the stored MODULE_ENV to ensure solver references valid memory
+        const empty_modules: []const *can.CIR = &.{};
+        // Use pointer to the stored CIR to ensure solver references valid memory
         var solver = try check_types.init(allocator, &module_env.types, type_can_ir, empty_modules, &type_can_ir.store.regions);
         result.solver = solver;
 
@@ -649,11 +648,11 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) usize {
     return stream.getWritten().len;
 }
 
-/// Write canonicalized MODULE_ENV response in S-expression format
+/// Write canonicalized CIR response in S-expression format
 fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) usize {
     // Check for error conditions first
     if (data.can_ir == null) {
-        // MODULE_ENV is only created if parsing succeeded, so if it's null, there were parse errors
+        // CIR is only created if parsing succeeded, so if it's null, there were parse errors
         if (data.parse_reports.items.len > 0) {
             return writeErrorResponse(response_buffer, .ERROR, "Canonicalization skipped due to parsing errors.");
         } else {
@@ -661,7 +660,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) usize {
         }
     }
 
-    // We have MODULE_ENV data, proceed with generation
+    // We have CIR data, proceed with generation
     const cir = data.can_ir.?;
 
     // Create a new arena for this query
@@ -691,7 +690,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) usize {
     }
 
     const mutable_cir = @constCast(&cir);
-    can.MODULE_ENV.pushToSExprTree(mutable_cir, null, &tree) catch {};
+    can.CIR.pushToSExprTree(mutable_cir, null, &tree) catch {};
     tree.toHtml(sexpr_writer) catch {};
 
     // Success case - write the response
@@ -777,10 +776,10 @@ fn writeTypeInfoResponse(response_buffer: []u8, data: CompilerStageData, message
 /// Find type information for an identifier at a specific byte position
 fn findTypeInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier: []const u8) !?[]const u8 {
     const cir = data.can_ir.?;
-    const gpa = cir.gpa;
+    const gpa = cir.env.gpa;
 
     // Create TypeWriter for converting types to strings
-    var type_writer = compile.type_writers.TypeWriter.init(gpa, cir.env) catch return null;
+    var type_writer = types.writers.TypeWriter.init(gpa, cir.env) catch return null;
     defer type_writer.deinit();
 
     // Iterate through all definitions to find one that contains this position
@@ -799,7 +798,7 @@ fn findTypeInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier:
             switch (pattern) {
                 .assign => |assign| {
                     // Get the identifier text
-                    const ident_text = cir.idents.getText(assign.ident);
+                    const ident_text = cir.env.idents.getText(assign.ident);
 
                     // Check if this matches our target identifier
                     if (std.mem.eql(u8, ident_text, identifier)) {
@@ -837,7 +836,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) usize {
         return writeErrorResponse(response_buffer, .ERROR, "Type checking not completed.");
     }
 
-    // We have both MODULE_ENV and solver data, proceed with type generation
+    // We have both CIR and solver data, proceed with type generation
     const cir = data.can_ir.?;
 
     // Create a new arena for this query to avoid allocation issues

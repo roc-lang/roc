@@ -2,9 +2,8 @@
 
 const std = @import("std");
 const base = @import("base");
-const compile = @import("compile");
 const canonicalize = @import("../check/canonicalize.zig");
-const reporting = @import("reporting");
+const reporting = @import("../reporting.zig");
 const Filesystem = @import("../fs/Filesystem.zig");
 const cache_mod = @import("mod.zig");
 const Cache = cache_mod.CacheModule;
@@ -15,7 +14,7 @@ const SERIALIZATION_ALIGNMENT = 16;
 const coordinate_simple = @import("../coordinate_simple.zig");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = base.ModuleEnv;
 const CIR = canonicalize.CIR;
 
 /// Cache hit result containing the process result and diagnostic counts
@@ -132,7 +131,7 @@ pub const CacheManager = struct {
             return;
         };
 
-        const cache_data = Cache.create(self.allocator, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
+        const cache_data = Cache.create(self.allocator, process_result.cir.env, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }
@@ -276,8 +275,16 @@ pub const CacheManager = struct {
         const module_env = try self.allocator.create(ModuleEnv);
         module_env.* = restored.module_env;
 
+        const cir = try self.allocator.create(CIR);
+
+        // Copy CIR but don't copy the invalid env pointer
+        cir.* = restored.cir;
+        // Immediately fix env pointer to point to our heap-allocated module_env
+        cir.env = module_env;
+
+        // Create ProcessResult with proper ownership
         const process_result = coordinate_simple.ProcessResult{
-            .cir = module_env,
+            .cir = cir,
             .source = source,
             .own_source = true,
             .reports = reports,

@@ -3,10 +3,10 @@ const std = @import("std");
 const testing = std.testing;
 const eval = @import("interpreter.zig");
 const base = @import("base");
-const compile = @import("compile");
 const parse = @import("../check/parse.zig");
 const canonicalize = @import("../check/canonicalize.zig");
 const check_types = @import("../check/check_types.zig");
+const CIR = canonicalize.CIR;
 const types = @import("types");
 const stack = @import("stack.zig");
 const layout_store = @import("../layout/store.zig");
@@ -15,15 +15,16 @@ const layout = @import("../layout/layout.zig");
 const test_allocator = testing.allocator;
 
 fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
-    module_env: *compile.ModuleEnv,
+    module_env: *base.ModuleEnv,
     parse_ast: *parse.AST,
+    cir: *CIR,
     can: *canonicalize,
     checker: *check_types,
-    expr_idx: compile.ModuleEnv.Expr.Idx,
+    expr_idx: CIR.Expr.Idx,
 } {
     // Initialize the ModuleEnv
-    const module_env = try allocator.create(compile.ModuleEnv);
-    module_env.* = try compile.ModuleEnv.init(allocator, source);
+    const module_env = try allocator.create(base.ModuleEnv);
+    module_env.* = try base.ModuleEnv.init(allocator, source);
 
     // Parse the source code as an expression
     const parse_ast = try allocator.create(parse.AST);
@@ -32,29 +33,31 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
 
-    try module_env.initCIRFields(allocator, "test");
+    // Create CIR
+    const cir = try allocator.create(CIR);
+    cir.* = try CIR.init(module_env, "test");
 
     // Create canonicalizer
     const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(module_env, parse_ast, null);
+    can.* = try canonicalize.init(cir, parse_ast, null);
 
     // Canonicalize the expression
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
         // If canonicalization fails, create a runtime error
-        const diagnostic_idx = try module_env.store.addDiagnostic(.{ .not_implemented = .{
-            .feature = try module_env.strings.insert(allocator, "canonicalization failed"),
+        const diagnostic_idx = try cir.store.addDiagnostic(.{ .not_implemented = .{
+            .feature = try cir.env.strings.insert(allocator, "canonicalization failed"),
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(check_types);
-        const empty_modules: []const *compile.ModuleEnv = &.{};
-        checker.* = try check_types.init(allocator, &module_env.types, module_env, empty_modules, &module_env.store.regions);
+        checker.* = try check_types.init(allocator, &module_env.types, cir, &.{}, &cir.store.regions);
         return .{
             .module_env = module_env,
             .parse_ast = parse_ast,
+            .cir = cir,
             .can = can,
             .checker = checker,
-            .expr_idx = try module_env.store.addExpr(.{ .e_runtime_error = .{
+            .expr_idx = try cir.store.addExpr(.{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
             } }, base.Region.zero()),
         };
@@ -62,15 +65,14 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
 
     // Create type checker
     const checker = try allocator.create(check_types);
-    const empty_modules: []const *compile.ModuleEnv = &.{};
-    checker.* = try check_types.init(allocator, &module_env.types, module_env, empty_modules, &module_env.store.regions);
+    checker.* = try check_types.init(allocator, &module_env.types, cir, &.{}, &cir.store.regions);
 
     // Type check the expression
     _ = try checker.checkExpr(canonical_expr_idx);
 
     // WORKAROUND: The type checker doesn't set types for binop expressions yet.
     // For numeric binops, manually set the type to match the operands.
-    const expr = module_env.store.getExpr(canonical_expr_idx);
+    const expr = cir.store.getExpr(canonical_expr_idx);
     if (expr == .e_binop) {
         const binop = expr.e_binop;
         // For arithmetic ops, use the type of the left operand
@@ -94,6 +96,7 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     return .{
         .module_env = module_env,
         .parse_ast = parse_ast,
+        .cir = cir,
         .can = can,
         .checker = checker,
         .expr_idx = canonical_expr_idx,
@@ -103,11 +106,13 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
 fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype) void {
     resources.checker.deinit();
     resources.can.deinit();
+    resources.cir.deinit();
     resources.parse_ast.deinit(allocator);
     // module_env.source is freed by module_env.deinit()
     resources.module_env.deinit();
     allocator.destroy(resources.checker);
     allocator.destroy(resources.can);
+    allocator.destroy(resources.cir);
     allocator.destroy(resources.parse_ast);
     allocator.destroy(resources.module_env);
 }
@@ -118,9 +123,9 @@ test "eval runtime error - returns crash error" {
     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Check if the expression is a runtime error or crash
-    const expr = resources.module_env.store.getExpr(resources.expr_idx);
-    if (expr == .e_runtime_error or expr == .e_crash) {
+    // Check if the expression is a runtime error
+    const expr = resources.cir.store.getExpr(resources.expr_idx);
+    if (expr == .e_runtime_error) {
         // Create a stack for evaluation
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
@@ -130,7 +135,7 @@ test "eval runtime error - returns crash error" {
         defer layout_cache.deinit();
 
         // Evaluating a runtime error should return an error
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
         const result = interpreter.eval(resources.expr_idx);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -160,7 +165,7 @@ test "eval binop - basic implementation" {
     defer layout_cache.deinit();
 
     // Evaluate the binop expression
-    var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+    var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
     defer interpreter.deinit();
     const result = try interpreter.eval(resources.expr_idx);
 
@@ -201,7 +206,7 @@ test "eval if expression with boolean tags" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
         const result = try interpreter.eval(resources.expr_idx);
 
@@ -231,7 +236,7 @@ test "eval if expression with comparison condition" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
         const result = try interpreter.eval(resources.expr_idx);
 
@@ -262,7 +267,7 @@ test "eval nested if expressions" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
         const result = try interpreter.eval(resources.expr_idx);
 
@@ -312,7 +317,7 @@ test "eval if-else if-else chains" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
         const result = try interpreter.eval(resources.expr_idx);
 
@@ -342,7 +347,7 @@ test "eval if expression with arithmetic in branches" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
         const result = try interpreter.eval(resources.expr_idx);
 
@@ -366,7 +371,7 @@ test "eval if expression with non-boolean condition" {
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
-    var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+    var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
     defer interpreter.deinit();
     const result = interpreter.eval(resources.expr_idx);
 
@@ -389,7 +394,7 @@ test "eval simple number" {
     defer layout_cache.deinit();
 
     // Evaluate the number
-    var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+    var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
     defer interpreter.deinit();
     const result = try interpreter.eval(resources.expr_idx);
 
@@ -430,7 +435,7 @@ test "eval negative number" {
     defer layout_cache.deinit();
 
     // Evaluate the number
-    var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+    var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
     defer interpreter.deinit();
     const result = try interpreter.eval(resources.expr_idx);
 
@@ -471,7 +476,7 @@ test "eval list literal" {
     defer layout_cache.deinit();
 
     // List literals are not yet implemented
-    var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+    var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
     defer interpreter.deinit();
     const result = interpreter.eval(resources.expr_idx);
     try testing.expectError(eval.EvalError.LayoutError, result);
@@ -484,14 +489,14 @@ test "eval record literal" {
     defer cleanupParseAndCanonical(test_allocator, resources);
 
     // Check if this resulted in a runtime error due to failed canonicalization
-    const expr = resources.module_env.store.getExpr(resources.expr_idx);
+    const expr = resources.cir.store.getExpr(resources.expr_idx);
     if (expr == .e_runtime_error) {
         // Expected - canonicalization of records may not be fully implemented
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
         const result = interpreter.eval(resources.expr_idx);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -501,7 +506,7 @@ test "eval record literal" {
         defer eval_stack.deinit();
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
         const result = interpreter.eval(resources.expr_idx);
         try testing.expectError(eval.EvalError.LayoutError, result);
@@ -515,14 +520,14 @@ test "eval empty record" {
     defer cleanupParseAndCanonical(test_allocator, resources);
 
     // Check if this resulted in a runtime error due to incomplete canonicalization
-    const expr = resources.module_env.store.getExpr(resources.expr_idx);
+    const expr = resources.cir.store.getExpr(resources.expr_idx);
     if (expr == .e_runtime_error) {
         // Expected - canonicalization of empty records may not be fully implemented
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
         const result = interpreter.eval(resources.expr_idx);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -539,7 +544,7 @@ test "eval empty record" {
         defer layout_cache.deinit();
 
         // Empty records are zero-sized types, which should return an error
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
         const result = interpreter.eval(resources.expr_idx);
         try testing.expectError(eval.EvalError.ZeroSizedType, result);
@@ -577,7 +582,7 @@ test "interpreter reuse across multiple evaluations" {
         defer layout_cache.deinit();
 
         // Create interpreter for this evaluation
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
 
         // Verify work stack is empty before eval
@@ -655,7 +660,7 @@ test "lambda expressions comprehensive" {
         defer layout_cache.deinit();
 
         // Evaluate the function call
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
 
         const result = interpreter.eval(resources.expr_idx) catch |err| {
@@ -701,7 +706,7 @@ test "lambda memory management" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+        var interpreter = try eval.Interpreter.init(test_allocator, resources.cir, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
 
         const result = try interpreter.eval(resources.expr_idx);

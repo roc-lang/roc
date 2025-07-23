@@ -54,11 +54,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @6.1-6.4 (ident "foo")))
-		(expr
-			(e-not-implemented @1.1-1.1))))
+	(d-let
+		(p-assign @6.1-6.4 (ident "foo"))
+		(e-not-implemented @1.1-1.1)))
 ~~~
 # TYPES
 ~~~clojure

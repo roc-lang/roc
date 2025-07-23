@@ -15,15 +15,15 @@ match x {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - pattern_f64_overflow.md:1:7:1:8
-F64 NOT ALLOWED IN PATTERN - pattern_f64_overflow.md:2:5:2:10
-F64 NOT ALLOWED IN PATTERN - pattern_f64_overflow.md:3:5:3:10
-F64 NOT ALLOWED IN PATTERN - pattern_f64_overflow.md:4:5:4:27
+F64 NOT ALLOWED IN PATTERN - :0:0:0:0
+F64 NOT ALLOWED IN PATTERN - :0:0:0:0
+F64 NOT ALLOWED IN PATTERN - :0:0:0:0
 UNUSED VARIABLE - pattern_f64_overflow.md:6:5:6:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'x' is not defined:
 **pattern_f64_overflow.md:1:7:1:8:**
 ```roc
 match x {
@@ -32,34 +32,49 @@ match x {
 
 
 **F64 NOT ALLOWED IN PATTERN**
-I am in the middle of parsing a pattern, and I found a floating-point literal:
-**pattern_f64_overflow.md:2:5:2:10:**
-```roc
-    1e100 => "very large number"
-```
-    ^^^^^
+This floating-point literal cannot be used in a pattern match: `1e100`
 
-Floating-point numbers are not allowed in patterns. You can use an if-guard or a when expression with comparisons instead.
+This number exceeds the precision range of Roc's `Dec` type and would require F64 representation. Floating-point numbers (F64) cannot be used in patterns because they don't have reliable equality comparison.
 
-**F64 NOT ALLOWED IN PATTERN**
-I am in the middle of parsing a pattern, and I found a floating-point literal:
-**pattern_f64_overflow.md:3:5:3:10:**
-```roc
-    1e-40 => "very small number"
-```
-    ^^^^^
+Consider one of these alternatives:
+• Use a guard condition with a range check
+• Use a smaller number that fits in Dec's precision
+• Restructure your code to avoid pattern matching on this value
 
-Floating-point numbers are not allowed in patterns. You can use an if-guard or a when expression with comparisons instead.
+For example, instead of:
+`1e100 => ...`
+Use a guard:
+`n if n > 1e99 => ...`
 
 **F64 NOT ALLOWED IN PATTERN**
-I am in the middle of parsing a pattern, and I found a floating-point literal:
-**pattern_f64_overflow.md:4:5:4:27:**
-```roc
-    1.7976931348623157e308 => "near f64 max"
-```
-    ^^^^^^^^^^^^^^^^^^^^^^
+This floating-point literal cannot be used in a pattern match: `1e-40`
 
-Floating-point numbers are not allowed in patterns. You can use an if-guard or a when expression with comparisons instead.
+This number exceeds the precision range of Roc's `Dec` type and would require F64 representation. Floating-point numbers (F64) cannot be used in patterns because they don't have reliable equality comparison.
+
+Consider one of these alternatives:
+• Use a guard condition with a range check
+• Use a smaller number that fits in Dec's precision
+• Restructure your code to avoid pattern matching on this value
+
+For example, instead of:
+`1e100 => ...`
+Use a guard:
+`n if n > 1e99 => ...`
+
+**F64 NOT ALLOWED IN PATTERN**
+This floating-point literal cannot be used in a pattern match: `1.7976931348623157e308`
+
+This number exceeds the precision range of Roc's `Dec` type and would require F64 representation. Floating-point numbers (F64) cannot be used in patterns because they don't have reliable equality comparison.
+
+Consider one of these alternatives:
+• Use a guard condition with a range check
+• Use a smaller number that fits in Dec's precision
+• Restructure your code to avoid pattern matching on this value
+
+For example, instead of:
+`1e100 => ...`
+Use a guard:
+`n if n > 1e99 => ...`
 
 **UNUSED VARIABLE**
 Variable `value` is not used anywhere in your code.
@@ -129,21 +144,21 @@ match x {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "f64_pattern_literal"))))
+						(p-runtime-error @2.5-2.10 (tag "f64_pattern_literal"))))
 				(value
 					(e-string @2.14-2.33
 						(e-literal @2.15-2.32 (string "very large number")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "f64_pattern_literal"))))
+						(p-runtime-error @3.5-3.10 (tag "f64_pattern_literal"))))
 				(value
 					(e-string @3.14-3.33
 						(e-literal @3.15-3.32 (string "very small number")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "f64_pattern_literal"))))
+						(p-runtime-error @4.5-4.27 (tag "f64_pattern_literal"))))
 				(value
 					(e-string @4.31-4.45
 						(e-literal @4.32-4.44 (string "near f64 max")))))

@@ -67,24 +67,21 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @5.1-5.12 (ident "deserialize")))
-		(expr
-			(e-lambda @5.15-5.22
-				(args
-					(p-underscore @5.16-5.17))
-				(e-not-implemented @1.1-1.1)))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @3.15-3.49 (effectful false)
-						(ty-apply @3.15-3.23 (symbol "List")
-							(ty @3.20-3.22 (name "U8")))
-						(ty-apply @3.27-3.49 (symbol "Result")
-							(ty-var @3.34-3.35 (name "a"))
-							(ty-tag-union @3.37-3.48
-								(ty @3.38-3.47 (name "DecodeErr")))))))))
+	(d-let
+		(p-assign @5.1-5.12 (ident "deserialize"))
+		(e-lambda @5.15-5.22
+			(args
+				(p-underscore @5.16-5.17))
+			(e-not-implemented @1.1-1.1))
+		(annotation @5.1-5.12
+			(declared-type
+				(ty-fn @3.15-3.49 (effectful false)
+					(ty-apply @3.15-3.23 (symbol "List")
+						(ty @3.20-3.22 (name "U8")))
+					(ty-apply @3.27-3.49 (symbol "Result")
+						(ty-var @3.34-3.35 (name "a"))
+						(ty-tag-union @3.37-3.48
+							(ty @3.38-3.47 (name "DecodeErr"))))))))
 	(s-type-anno @3.1-4.61 (name "deserialize")
 		(ty-fn @3.15-3.49 (effectful false)
 			(ty-apply @3.15-3.23 (symbol "List")
@@ -94,11 +91,15 @@ NO CHANGE
 				(ty-tag-union @3.37-3.48
 					(ty @3.38-3.47 (name "DecodeErr")))))
 		(where
-			(where-clause
-				(type "mod-method")
-				(var-name "a")
-				(method-name "decode"))))
-	(external-decl (qualified-name "module(a).decode") (module-name "module(a)") (local-name "decode") (kind "value")))
+			(method @4.8-4.61 (module-of "a") (ident "decode")
+				(args
+					(ty-apply @4.27-4.35 (symbol "List")
+						(ty @4.32-4.34 (name "U8"))))
+				(ty-apply @4.39-4.61 (symbol "Result")
+					(ty-var @4.46-4.47 (name "a"))
+					(ty-tag-union @4.49-4.60
+						(ty @4.50-4.59 (name "DecodeErr")))))))
+	(ext-decl @4.8-4.61 (ident "module(a).decode") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

@@ -11,9 +11,9 @@ List.map
 UNDEFINED VARIABLE - simple_external_lookup.md:1:1:1:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `map` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'map' is not defined:
 **simple_external_lookup.md:1:1:1:9:**
 ```roc
 List.map
@@ -39,5 +39,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-1.9 (type "Error"))
 ~~~

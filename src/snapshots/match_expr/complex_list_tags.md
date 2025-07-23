@@ -875,9 +875,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `events` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'events' is not defined:
 **complex_list_tags.md:1:7:1:13:**
 ```roc
 match events {
@@ -894,6 +894,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
 Variable `y` is not used anywhere in your code.
@@ -931,14 +932,15 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                      ^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
+Nothing is named `toStr` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'toStr' is not defined:
 **complex_list_tags.md:3:58:3:67:**
 ```roc
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
@@ -955,6 +957,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                     ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
 Variable `y` is not used anywhere in your code.
@@ -980,6 +983,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                       ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -990,6 +994,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
 Variable `key` is not used anywhere in your code.
@@ -1016,9 +1021,9 @@ match events {
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `rest` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'rest' is not defined:
 **complex_list_tags.md:4:79:4:83:**
 ```roc
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
@@ -1050,6 +1055,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                                    ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -1063,6 +1069,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                                                 ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -1073,6 +1080,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                     ^^^^^^^^^^^^^^^^^^^^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
 Variable `others` is not used anywhere in your code.
@@ -1146,14 +1154,15 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                           ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
+Nothing is named `toStr` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'toStr' is not defined:
 **complex_list_tags.md:5:78:5:87:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1170,6 +1179,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                                          ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
 Variable `dy` is not used anywhere in your code.
@@ -1195,11 +1205,12 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                                                 ^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNDEFINED VARIABLE**
+Nothing is named `dx2` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'dx2' is not defined:
 **complex_list_tags.md:5:109:5:112:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1231,14 +1242,15 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                                                                 ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
+Nothing is named `toStr` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'toStr' is not defined:
 **complex_list_tags.md:5:116:5:125:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1255,6 +1267,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                                                                                 ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
 Variable `dy2` is not used anywhere in your code.
@@ -1280,6 +1293,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                                                                                  ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -1290,6 +1304,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
 Variable `remaining` is not used anywhere in your code.
@@ -1351,14 +1366,15 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                                  ^^^^^^^^^^^^^^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
+Nothing is named `toStr` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'toStr' is not defined:
 **complex_list_tags.md:6:99:6:108:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -1375,6 +1391,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                                                              ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
@@ -1400,11 +1417,12 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                                                                ^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNDEFINED VARIABLE**
+Nothing is named `y` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'y' is not defined:
 **complex_list_tags.md:6:124:6:125:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -1436,6 +1454,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                                                                              
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -1449,6 +1468,7 @@ This looks like an operator, but it's not one I recognize!
 ```
     ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -1639,13 +1659,13 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.53-3.54 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.56-3.58 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
@@ -1657,7 +1677,7 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.70-3.71 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -1679,13 +1699,13 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @4.83-4.84 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @4.85-4.97 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -1702,13 +1722,13 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @5.74-5.75 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @5.76-5.78 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
@@ -1720,7 +1740,7 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @5.91-5.97 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -1732,13 +1752,13 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @5.112-5.113 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @5.114-5.116 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
@@ -1750,7 +1770,7 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @5.130-5.130 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -1767,13 +1787,13 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @6.81-6.82 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @6.97-6.99 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
@@ -1785,7 +1805,7 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @6.111-6.112 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -1797,19 +1817,19 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @6.125-6.126 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @6.126-6.127 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @7.7-7.9 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-string @7.10-7.31
 						(e-literal @7.11-7.30 (string "other event pattern"))))))))

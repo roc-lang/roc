@@ -359,9 +359,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `value` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'value' is not defined:
 **guards_1.md:1:7:1:12:**
 ```roc
 match value {
@@ -378,6 +378,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                   ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
@@ -403,11 +404,12 @@ This looks like an operator, but it's not one I recognize!
 ```
                              ^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'x' is not defined:
 **guards_1.md:2:42:2:43:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -439,14 +441,15 @@ This looks like an operator, but it's not one I recognize!
 ```
                                            
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'x' is not defined:
 **guards_1.md:3:5:3:6:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -458,9 +461,9 @@ The variable 'x' is not defined:
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'x' is not defined:
 **guards_1.md:3:10:3:11:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -480,6 +483,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                   ^^^^^^^^^^^^^^^^^^^^^^^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -493,6 +497,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                            
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -506,6 +511,7 @@ This looks like an operator, but it's not one I recognize!
 ```
     ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -590,7 +596,7 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @2.20-2.30 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -602,19 +608,19 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @2.43-2.44 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @2.44-2.45 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.7-3.9 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-binop @3.10-3.15 (op "lt")
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -622,25 +628,25 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.16-3.18 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.43-3.44 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.44-3.45 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @4.7-4.9 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-string @4.10-4.17
 						(e-literal @4.11-4.16 (string "other"))))))))

@@ -141,15 +141,12 @@ red = ... # not implemented
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @6.1-6.4 (ident "red")))
-		(expr
-			(e-not-implemented @1.1-1.1))
-		(annotation
-			(annotation
-				(type-anno
-					(ty @5.7-5.9 (name "CE"))))))
+	(d-let
+		(p-assign @6.1-6.4 (ident "red"))
+		(e-not-implemented @1.1-1.1)
+		(annotation @6.1-6.4
+			(declared-type
+				(ty @5.7-5.9 (name "CE")))))
 	(s-import @3.1-3.21 (module "design.Styles") (qualifier "design")
 		(exposes)))
 ~~~

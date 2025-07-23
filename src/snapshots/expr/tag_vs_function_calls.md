@@ -20,9 +20,9 @@ type=expr
 UNDEFINED VARIABLE - tag_vs_function_calls.md:7:13:7:19
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `addOne` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'addOne' is not defined:
 **tag_vs_function_calls.md:7:13:7:19:**
 ```roc
     result: addOne(5),
@@ -111,63 +111,55 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~clojure
 (e-record @1.1-10.2
 	(fields
-		(record-field (label "someTag")
-			(value
-				(e-tag @2.14-2.18 (name "Some")
-					(args
-						(e-int @2.19-2.21 (value "42"))))))
-		(record-field (label "noneTag")
-			(value
-				(e-tag @3.14-3.18 (name "None"))))
-		(record-field (label "okTag")
-			(value
-				(e-tag @4.12-4.14 (name "Ok")
-					(args
-						(e-string @4.15-4.22
-							(e-literal @4.16-4.21 (string "hello")))))))
-		(record-field (label "errTag")
-			(value
-				(e-tag @5.13-5.16 (name "Err")
-					(args
-						(e-string @5.17-5.23
-							(e-literal @5.18-5.22 (string "oops")))))))
-		(record-field (label "addOne")
-			(value
-				(e-lambda @6.13-6.22
-					(args
+		(field (name "someTag")
+			(e-tag @2.14-2.18 (name "Some")
+				(args
+					(e-int @2.19-2.21 (value "42")))))
+		(field (name "noneTag")
+			(e-tag @3.14-3.18 (name "None")))
+		(field (name "okTag")
+			(e-tag @4.12-4.14 (name "Ok")
+				(args
+					(e-string @4.15-4.22
+						(e-literal @4.16-4.21 (string "hello"))))))
+		(field (name "errTag")
+			(e-tag @5.13-5.16 (name "Err")
+				(args
+					(e-string @5.17-5.23
+						(e-literal @5.18-5.22 (string "oops"))))))
+		(field (name "addOne")
+			(e-lambda @6.13-6.22
+				(args
+					(p-assign @6.14-6.15 (ident "x")))
+				(e-binop @6.17-6.22 (op "add")
+					(e-lookup-local @6.17-6.18
 						(p-assign @6.14-6.15 (ident "x")))
-					(e-binop @6.17-6.22 (op "add")
-						(e-lookup-local @6.17-6.18
-							(p-assign @6.14-6.15 (ident "x")))
-						(e-int @6.21-6.22 (value "1"))))))
-		(record-field (label "result")
-			(value
-				(e-call @7.13-7.22
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-int @7.20-7.21 (value "5")))))
-		(record-field (label "nested")
-			(value
-				(e-tag @8.13-8.17 (name "Some")
-					(args
-						(e-tag @8.18-8.20 (name "Ok")
-							(args
-								(e-tag @8.21-8.25 (name "Just")
-									(args
-										(e-int @8.26-8.28 (value "42"))))))))))
-		(record-field (label "tagList")
-			(value
-				(e-list @9.14-9.47
-					(elems
-						(e-tag @9.15-9.19 (name "Some")
-							(args
-								(e-int @9.20-9.21 (value "1"))))
-						(e-tag @9.24-9.28 (name "Some")
-							(args
-								(e-int @9.29-9.30 (value "2"))))
-						(e-tag @9.33-9.37 (name "None"))
-						(e-tag @9.39-9.43 (name "Some")
-							(args
-								(e-int @9.44-9.45 (value "3"))))))))))
+					(e-int @6.21-6.22 (value "1")))))
+		(field (name "result")
+			(e-call @7.13-7.22
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-int @7.20-7.21 (value "5"))))
+		(field (name "nested")
+			(e-tag @8.13-8.17 (name "Some")
+				(args
+					(e-tag @8.18-8.20 (name "Ok")
+						(args
+							(e-tag @8.21-8.25 (name "Just")
+								(args
+									(e-int @8.26-8.28 (value "42")))))))))
+		(field (name "tagList")
+			(e-list @9.14-9.47
+				(elems
+					(e-tag @9.15-9.19 (name "Some")
+						(args
+							(e-int @9.20-9.21 (value "1"))))
+					(e-tag @9.24-9.28 (name "Some")
+						(args
+							(e-int @9.29-9.30 (value "2"))))
+					(e-tag @9.33-9.37 (name "None"))
+					(e-tag @9.39-9.43 (name "Some")
+						(args
+							(e-int @9.44-9.45 (value "3")))))))))
 ~~~
 # TYPES
 ~~~clojure

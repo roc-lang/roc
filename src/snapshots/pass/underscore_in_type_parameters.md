@@ -31,70 +31,70 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:16:11:16:12
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:16:14:16:15
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
 
-**Underscore in Type Alias**
-Underscore cannot be used in a type alias declaration:
 **underscore_in_type_parameters.md:4:8:4:9:**
 ```roc
 MyType(_) : Str
 ```
        ^
 
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
 
-**Underscore in Type Alias**
-Underscore cannot be used in a type alias declaration:
 **underscore_in_type_parameters.md:7:9:7:10:**
 ```roc
 MyType2(_, b) : b
 ```
         ^
 
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
 
-**Underscore in Type Alias**
-Underscore cannot be used in a type alias declaration:
 **underscore_in_type_parameters.md:10:12:10:13:**
 ```roc
 MyType3(a, _) : a
 ```
            ^
 
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
 
-**Underscore in Type Alias**
-Underscore cannot be used in a type alias declaration:
 **underscore_in_type_parameters.md:13:13:13:14:**
 ```roc
 ComplexType(_, b) : { field: b }
 ```
             ^
 
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
 
-**Underscore in Type Alias**
-Underscore cannot be used in a type alias declaration:
 **underscore_in_type_parameters.md:16:11:16:12:**
 ```roc
 MultiType(_, _, c) : c
 ```
           ^
 
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
 
-**Underscore in Type Alias**
-Underscore cannot be used in a type alias declaration:
 **underscore_in_type_parameters.md:16:14:16:15:**
 ```roc
 MultiType(_, _, c) : c
 ```
              ^
 
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 # TOKENS
 ~~~zig
@@ -167,33 +167,33 @@ MultiType(_, _, c) : c
 ~~~clojure
 (can-ir
 	(s-alias-decl @4.1-4.16
-		(type-header (name "MyType")
-			(args
+		(ty-header @4.1-4.10 (name "MyType")
+			(ty-args
 				(ty-underscore @4.8-4.9)))
 		(ty @4.13-4.16 (name "Str")))
 	(s-alias-decl @7.1-7.18
-		(type-header (name "MyType2")
-			(args
+		(ty-header @7.1-7.14 (name "MyType2")
+			(ty-args
 				(ty-underscore @7.9-7.10)
 				(ty-var @7.12-7.13 (name "b"))))
 		(ty-var @7.17-7.18 (name "b")))
 	(s-alias-decl @10.1-10.18
-		(type-header (name "MyType3")
-			(args
+		(ty-header @10.1-10.14 (name "MyType3")
+			(ty-args
 				(ty-var @10.9-10.10 (name "a"))
 				(ty-underscore @10.12-10.13)))
 		(ty-var @10.17-10.18 (name "a")))
 	(s-alias-decl @13.1-13.33
-		(type-header (name "ComplexType")
-			(args
+		(ty-header @13.1-13.18 (name "ComplexType")
+			(ty-args
 				(ty-underscore @13.13-13.14)
 				(ty-var @13.16-13.17 (name "b"))))
 		(ty-record @13.21-13.33
 			(field (field "field")
 				(ty-var @13.30-13.31 (name "b")))))
 	(s-alias-decl @16.1-16.23
-		(type-header (name "MultiType")
-			(args
+		(ty-header @16.1-16.19 (name "MultiType")
+			(ty-args
 				(ty-underscore @16.11-16.12)
 				(ty-underscore @16.14-16.15)
 				(ty-var @16.17-16.18 (name "c"))))
@@ -205,27 +205,27 @@ MultiType(_, _, c) : c
 	(defs)
 	(type_decls
 		(alias @4.1-4.16 (type "MyType(Error)")
-			(type-header (name "MyType")
-				(args
+			(ty-header @4.1-4.10 (name "MyType")
+				(ty-args
 					(ty-underscore @4.8-4.9))))
 		(alias @7.1-7.18 (type "MyType2(Error, b)")
-			(type-header (name "MyType2")
-				(args
+			(ty-header @7.1-7.14 (name "MyType2")
+				(ty-args
 					(ty-underscore @7.9-7.10)
 					(ty-var @7.12-7.13 (name "b")))))
 		(alias @10.1-10.18 (type "MyType3(a, Error)")
-			(type-header (name "MyType3")
-				(args
+			(ty-header @10.1-10.14 (name "MyType3")
+				(ty-args
 					(ty-var @10.9-10.10 (name "a"))
 					(ty-underscore @10.12-10.13))))
 		(alias @13.1-13.33 (type "ComplexType(Error, b)")
-			(type-header (name "ComplexType")
-				(args
+			(ty-header @13.1-13.18 (name "ComplexType")
+				(ty-args
 					(ty-underscore @13.13-13.14)
 					(ty-var @13.16-13.17 (name "b")))))
 		(alias @16.1-16.23 (type "MultiType(Error, Error, c)")
-			(type-header (name "MultiType")
-				(args
+			(ty-header @16.1-16.19 (name "MultiType")
+				(ty-args
 					(ty-underscore @16.11-16.12)
 					(ty-underscore @16.14-16.15)
 					(ty-var @16.17-16.18 (name "c"))))))

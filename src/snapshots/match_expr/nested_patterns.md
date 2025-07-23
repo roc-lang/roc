@@ -17,9 +17,9 @@ UNDEFINED VARIABLE - nested_patterns.md:1:7:1:11
 UNDEFINED VARIABLE - nested_patterns.md:2:57:2:65
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `data` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'data' is not defined:
 **nested_patterns.md:1:7:1:11:**
 ```roc
 match data {
@@ -28,9 +28,9 @@ match data {
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `len` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'len' is not defined:
 **nested_patterns.md:2:57:2:65:**
 ```roc
     Container({ items: [First(x), .. as rest] }) => x + List.len(rest)

@@ -172,106 +172,95 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @4.1-4.8 (ident "process")))
-		(expr
-			(e-lambda @4.11-4.27
-				(args
-					(p-assign @4.12-4.17 (ident "maybe")))
-				(e-string @4.19-4.27
-					(e-literal @4.20-4.26 (string "result")))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @3.11-3.35 (effectful false)
-						(ty-tag-union @3.11-3.28
-							(ty-apply @3.12-3.21 (symbol "Some")
-								(ty @3.17-3.20 (name "Str")))
-							(ty @3.23-3.27 (name "None")))
-						(ty @3.32-3.35 (name "Str")))))))
-	(def
-		(pattern
-			(p-assign @7.1-7.27 (ident "is_ok_ret_unqualified_bool")))
-		(expr
-			(e-lambda @7.30-10.2
-				(args
-					(p-assign @7.31-7.37 (ident "result")))
-				(e-match @7.39-10.2
-					(match @7.39-10.2
-						(cond
-							(e-lookup-local @7.45-7.51
-								(p-assign @7.31-7.37 (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @8.5-8.10)))
-								(value
-									(e-nominal @8.14-8.18 (nominal "Bool")
-										(e-tag @8.14-8.18 (name "True")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @9.5-9.11)))
-								(value
-									(e-nominal @9.15-9.20 (nominal "Bool")
-										(e-tag @9.15-9.20 (name "False"))))))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @6.30-6.58 (effectful false)
-						(ty-tag-union @6.30-6.50
-							(ty-apply @6.31-6.38 (symbol "Ok")
-								(ty-var @6.34-6.37 (name "_ok")))
-							(ty-apply @6.40-6.49 (symbol "Err")
-								(ty-var @6.44-6.48 (name "_err"))))
-						(ty @6.54-6.58 (name "Bool")))))))
-	(def
-		(pattern
-			(p-assign @13.1-13.15 (ident "is_ok_ret_bool")))
-		(expr
-			(e-lambda @13.18-16.2
-				(args
-					(p-assign @13.19-13.25 (ident "result")))
-				(e-match @13.27-16.2
-					(match @13.27-16.2
-						(cond
-							(e-lookup-local @13.33-13.39
-								(p-assign @13.19-13.25 (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @14.5-14.10)))
-								(value
-									(e-nominal @14.14-14.18 (nominal "Bool")
-										(e-tag @14.14-14.23 (name "True")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @15.5-15.11)))
-								(value
-									(e-nominal @15.15-15.19 (nominal "Bool")
-										(e-tag @15.15-15.25 (name "False"))))))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @12.18-12.48 (effectful false)
-						(ty-tag-union @12.18-12.40
-							(ty-apply @12.19-12.27 (symbol "Ok")
-								(ty-var @12.22-12.26 (name "_ok2")))
-							(ty-apply @12.29-12.39 (symbol "Err")
-								(ty-var @12.33-12.38 (name "_err2"))))
-						(ty @12.44-12.48 (name "Bool")))))))
-	(def
-		(pattern
-			(p-assign @18.1-18.6 (ident "main!")))
-		(expr
-			(e-lambda @18.9-18.15
-				(args
-					(p-underscore @18.10-18.11))
-				(e-empty_record @18.13-18.15)))))
+	(d-let
+		(p-assign @4.1-4.8 (ident "process"))
+		(e-lambda @4.11-4.27
+			(args
+				(p-assign @4.12-4.17 (ident "maybe")))
+			(e-string @4.19-4.27
+				(e-literal @4.20-4.26 (string "result"))))
+		(annotation @4.1-4.8
+			(declared-type
+				(ty-fn @3.11-3.35 (effectful false)
+					(ty-tag-union @3.11-3.28
+						(ty-apply @3.12-3.21 (symbol "Some")
+							(ty @3.17-3.20 (name "Str")))
+						(ty @3.23-3.27 (name "None")))
+					(ty @3.32-3.35 (name "Str"))))))
+	(d-let
+		(p-assign @7.1-7.27 (ident "is_ok_ret_unqualified_bool"))
+		(e-lambda @7.30-10.2
+			(args
+				(p-assign @7.31-7.37 (ident "result")))
+			(e-match @7.39-10.2
+				(match @7.39-10.2
+					(cond
+						(e-lookup-local @7.45-7.51
+							(p-assign @7.31-7.37 (ident "result"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag @8.5-8.10)))
+							(value
+								(e-nominal @8.14-8.18 (nominal "Bool")
+									(e-tag @8.14-8.18 (name "True")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag @9.5-9.11)))
+							(value
+								(e-nominal @9.15-9.20 (nominal "Bool")
+									(e-tag @9.15-9.20 (name "False")))))))))
+		(annotation @7.1-7.27
+			(declared-type
+				(ty-fn @6.30-6.58 (effectful false)
+					(ty-tag-union @6.30-6.50
+						(ty-apply @6.31-6.38 (symbol "Ok")
+							(ty-var @6.34-6.37 (name "_ok")))
+						(ty-apply @6.40-6.49 (symbol "Err")
+							(ty-var @6.44-6.48 (name "_err"))))
+					(ty @6.54-6.58 (name "Bool"))))))
+	(d-let
+		(p-assign @13.1-13.15 (ident "is_ok_ret_bool"))
+		(e-lambda @13.18-16.2
+			(args
+				(p-assign @13.19-13.25 (ident "result")))
+			(e-match @13.27-16.2
+				(match @13.27-16.2
+					(cond
+						(e-lookup-local @13.33-13.39
+							(p-assign @13.19-13.25 (ident "result"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag @14.5-14.10)))
+							(value
+								(e-nominal @14.14-14.18 (nominal "Bool")
+									(e-tag @14.14-14.23 (name "True")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag @15.5-15.11)))
+							(value
+								(e-nominal @15.15-15.19 (nominal "Bool")
+									(e-tag @15.15-15.25 (name "False")))))))))
+		(annotation @13.1-13.15
+			(declared-type
+				(ty-fn @12.18-12.48 (effectful false)
+					(ty-tag-union @12.18-12.40
+						(ty-apply @12.19-12.27 (symbol "Ok")
+							(ty-var @12.22-12.26 (name "_ok2")))
+						(ty-apply @12.29-12.39 (symbol "Err")
+							(ty-var @12.33-12.38 (name "_err2"))))
+					(ty @12.44-12.48 (name "Bool"))))))
+	(d-let
+		(p-assign @18.1-18.6 (ident "main!"))
+		(e-lambda @18.9-18.15
+			(args
+				(p-underscore @18.10-18.11))
+			(e-empty_record @18.13-18.15))))
 ~~~
 # TYPES
 ~~~clojure

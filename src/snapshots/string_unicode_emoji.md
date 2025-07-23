@@ -49,18 +49,14 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @4.1-4.8 (ident "message")))
-		(expr
-			(e-string @4.11-4.56
-				(e-literal @4.12-4.55 (string "Hello! Here are some emojis: 👻 🎉 🚀")))))
-	(def
-		(pattern
-			(p-assign @7.1-7.6 (ident "greet")))
-		(expr
-			(e-string @7.9-7.85
-				(e-literal @7.10-7.84 (string "Welcome! café résumé naïve 你好 こんにちは α β γ ∑ ∫ ∞"))))))
+	(d-let
+		(p-assign @4.1-4.8 (ident "message"))
+		(e-string @4.11-4.56
+			(e-literal @4.12-4.55 (string "Hello! Here are some emojis: 👻 🎉 🚀"))))
+	(d-let
+		(p-assign @7.1-7.6 (ident "greet"))
+		(e-string @7.9-7.85
+			(e-literal @7.10-7.84 (string "Welcome! café résumé naïve 你好 こんにちは α β γ ∑ ∫ ∞")))))
 ~~~
 # TYPES
 ~~~clojure

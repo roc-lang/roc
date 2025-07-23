@@ -12,26 +12,26 @@ INVALID NUMBER - can_list_number_doesnt_fit.md:1:2:1:5
 INVALID NUMBER - can_list_number_doesnt_fit.md:1:7:1:10
 # PROBLEMS
 **INVALID NUMBER**
+This number literal is not valid: `1u8`
 
-**Invalid Number**
-The number literal is invalid or too large to represent:
 **can_list_number_doesnt_fit.md:1:2:1:5:**
 ```roc
 [1u8, 2u8, 300]
 ```
  ^^^
 
+Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
 **INVALID NUMBER**
+This number literal is not valid: `2u8`
 
-**Invalid Number**
-The number literal is invalid or too large to represent:
 **can_list_number_doesnt_fit.md:1:7:1:10:**
 ```roc
 [1u8, 2u8, 300]
 ```
       ^^^
 
+Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
 # TOKENS
 ~~~zig

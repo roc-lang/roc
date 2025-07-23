@@ -15,9 +15,9 @@ match color {
 UNDEFINED VARIABLE - multi_pattern_branch.md:1:7:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `color` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'color' is not defined:
 **multi_pattern_branch.md:1:7:1:12:**
 ```roc
 match color {

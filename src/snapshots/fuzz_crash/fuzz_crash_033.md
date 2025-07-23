@@ -28,9 +28,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `i` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'i' is not defined:
 **fuzz_crash_033.md:1:3:1:4:**
 ```roc
 { i, Complete]
@@ -56,9 +56,8 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:4),Comma(1:4-1:5),UpperIdent(1:6-1:14),Close
 ~~~clojure
 (e-record @1.1-1.15
 	(fields
-		(record-field (label "i")
-			(value
-				(e-runtime-error (tag "ident_not_in_scope"))))))
+		(field (name "i")
+			(e-runtime-error (tag "ident_not_in_scope")))))
 ~~~
 # TYPES
 ~~~clojure

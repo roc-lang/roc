@@ -250,9 +250,9 @@ This feature is not yet implemented: statement type in block
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
+Nothing is named `true` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'true' is not defined:
 **record_different_fields_reserved_error.md:6:10:6:19:**
 ```roc
     and: Bool.true,
@@ -261,9 +261,9 @@ The variable 'true' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `false` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'false' is not defined:
 **record_different_fields_reserved_error.md:7:9:7:19:**
 ```roc
     or: Bool.false,
@@ -340,7 +340,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~clojure
 (e-block @1.1-8.2
 	(s-type-anno @3.5-3.12 (name "when")
-		(ty-malformed @1.1-1.1))
+		(ty-malformed @3.11-3.12))
 	(s-expr @4.13-4.29
 		(e-string @4.13-4.29
 			(e-literal @4.14-4.28 (string "test assertion"))))

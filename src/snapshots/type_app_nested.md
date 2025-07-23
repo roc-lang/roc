@@ -90,40 +90,35 @@ main! = |_| processNested([])
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @4.1-4.14 (ident "processNested")))
-		(expr
-			(e-lambda @4.17-4.38
-				(args
-					(p-assign @4.18-4.23 (ident "_list")))
-				(e-list @4.25-4.38
-					(elems
-						(e-string @4.26-4.31
-							(e-literal @4.27-4.30 (string "one")))
-						(e-string @4.32-4.37
-							(e-literal @4.33-4.36 (string "two")))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @3.17-3.52 (effectful false)
-						(ty-apply @3.17-3.39 (symbol "List")
-							(ty-apply @3.22-3.38 (symbol "Result")
-								(ty @3.29-3.32 (name "Str"))
-								(ty @3.34-3.37 (name "Err"))))
-						(ty-apply @3.43-3.52 (symbol "List")
-							(ty @3.48-3.51 (name "Str"))))))))
-	(def
-		(pattern
-			(p-assign @6.1-6.6 (ident "main!")))
-		(expr
-			(e-lambda @6.9-6.30
-				(args
-					(p-underscore @6.10-6.11))
-				(e-call @6.13-6.30
-					(e-lookup-local @6.13-6.26
-						(p-assign @4.1-4.14 (ident "processNested")))
-					(e-empty_list @6.27-6.29))))))
+	(d-let
+		(p-assign @4.1-4.14 (ident "processNested"))
+		(e-lambda @4.17-4.38
+			(args
+				(p-assign @4.18-4.23 (ident "_list")))
+			(e-list @4.25-4.38
+				(elems
+					(e-string @4.26-4.31
+						(e-literal @4.27-4.30 (string "one")))
+					(e-string @4.32-4.37
+						(e-literal @4.33-4.36 (string "two"))))))
+		(annotation @4.1-4.14
+			(declared-type
+				(ty-fn @3.17-3.52 (effectful false)
+					(ty-apply @3.17-3.39 (symbol "List")
+						(ty-apply @3.22-3.38 (symbol "Result")
+							(ty @3.29-3.32 (name "Str"))
+							(ty @3.34-3.37 (name "Err"))))
+					(ty-apply @3.43-3.52 (symbol "List")
+						(ty @3.48-3.51 (name "Str")))))))
+	(d-let
+		(p-assign @6.1-6.6 (ident "main!"))
+		(e-lambda @6.9-6.30
+			(args
+				(p-underscore @6.10-6.11))
+			(e-call @6.13-6.30
+				(e-lookup-local @6.13-6.26
+					(p-assign @4.1-4.14 (ident "processNested")))
+				(e-empty_list @6.27-6.29)))))
 ~~~
 # TYPES
 ~~~clojure

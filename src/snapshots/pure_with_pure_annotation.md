@@ -90,62 +90,52 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @5.1-5.4 (ident "add")))
-		(expr
-			(e-lambda @5.7-5.30
-				(args
-					(p-assign @5.8-5.9 (ident "x"))
-					(p-assign @5.11-5.12 (ident "y")))
-				(e-dot-access @5.14-5.30 (field "x")
-					(receiver
-						(e-record @5.14-5.28
-							(fields
-								(record-field (label "x")
-									(value
-										(e-lookup-local @5.19-5.20
-											(p-assign @5.8-5.9 (ident "x")))))
-								(record-field (label "y")
-									(value
-										(e-lookup-local @5.25-5.26
-											(p-assign @5.11-5.12 (ident "y")))))))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @4.7-4.22 (effectful false)
-						(ty @4.7-4.10 (name "I32"))
-						(ty @4.12-4.15 (name "I32"))
-						(ty @4.19-4.22 (name "I32")))))))
-	(def
-		(pattern
-			(p-assign @9.1-9.7 (ident "double")))
-		(expr
-			(e-lambda @9.10-9.23
-				(args
-					(p-assign @9.11-9.12 (ident "x")))
-				(e-call @9.14-9.23
-					(e-lookup-local @9.14-9.17
-						(p-assign @5.1-5.4 (ident "add")))
-					(e-lookup-local @9.18-9.19
-						(p-assign @9.11-9.12 (ident "x")))
-					(e-lookup-local @9.21-9.22
-						(p-assign @9.11-9.12 (ident "x"))))))
-		(annotation
-			(annotation
-				(type-anno
-					(ty-fn @8.10-8.20 (effectful false)
-						(ty @8.10-8.13 (name "I32"))
-						(ty @8.17-8.20 (name "I32")))))))
-	(def
-		(pattern
-			(p-assign @11.1-11.6 (ident "main!")))
-		(expr
-			(e-call @11.9-11.18
-				(e-lookup-local @11.9-11.12
+	(d-let
+		(p-assign @5.1-5.4 (ident "add"))
+		(e-lambda @5.7-5.30
+			(args
+				(p-assign @5.8-5.9 (ident "x"))
+				(p-assign @5.11-5.12 (ident "y")))
+			(e-dot-access @5.14-5.30 (field "x")
+				(receiver
+					(e-record @5.14-5.28
+						(fields
+							(field (name "x")
+								(e-lookup-local @5.19-5.20
+									(p-assign @5.8-5.9 (ident "x"))))
+							(field (name "y")
+								(e-lookup-local @5.25-5.26
+									(p-assign @5.11-5.12 (ident "y")))))))))
+		(annotation @5.1-5.4
+			(declared-type
+				(ty-fn @4.7-4.22 (effectful false)
+					(ty @4.7-4.10 (name "I32"))
+					(ty @4.12-4.15 (name "I32"))
+					(ty @4.19-4.22 (name "I32"))))))
+	(d-let
+		(p-assign @9.1-9.7 (ident "double"))
+		(e-lambda @9.10-9.23
+			(args
+				(p-assign @9.11-9.12 (ident "x")))
+			(e-call @9.14-9.23
+				(e-lookup-local @9.14-9.17
 					(p-assign @5.1-5.4 (ident "add")))
-				(e-int @11.13-11.14 (value "1"))
-				(e-int @11.16-11.17 (value "2"))))))
+				(e-lookup-local @9.18-9.19
+					(p-assign @9.11-9.12 (ident "x")))
+				(e-lookup-local @9.21-9.22
+					(p-assign @9.11-9.12 (ident "x")))))
+		(annotation @9.1-9.7
+			(declared-type
+				(ty-fn @8.10-8.20 (effectful false)
+					(ty @8.10-8.13 (name "I32"))
+					(ty @8.17-8.20 (name "I32"))))))
+	(d-let
+		(p-assign @11.1-11.6 (ident "main!"))
+		(e-call @11.9-11.18
+			(e-lookup-local @11.9-11.12
+				(p-assign @5.1-5.4 (ident "add")))
+			(e-int @11.13-11.14 (value "1"))
+			(e-int @11.16-11.17 (value "2")))))
 ~~~
 # TYPES
 ~~~clojure

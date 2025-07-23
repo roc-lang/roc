@@ -141,33 +141,24 @@ green = Green
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @6.1-6.4 (ident "red")))
-		(expr
-			(e-tag @6.7-6.10 (name "Red")))
-		(annotation
-			(annotation
-				(type-anno
-					(ty @5.7-5.12 (name "Color"))))))
-	(def
-		(pattern
-			(p-assign @9.1-9.5 (ident "blue")))
-		(expr
-			(e-tag @9.8-9.12 (name "Blue")))
-		(annotation
-			(annotation
-				(type-anno
-					(ty @8.8-8.13 (name "Color"))))))
-	(def
-		(pattern
-			(p-assign @12.1-12.6 (ident "green")))
-		(expr
-			(e-tag @12.9-12.14 (name "Green")))
-		(annotation
-			(annotation
-				(type-anno
-					(ty @11.9-11.14 (name "Color"))))))
+	(d-let
+		(p-assign @6.1-6.4 (ident "red"))
+		(e-tag @6.7-6.10 (name "Red"))
+		(annotation @6.1-6.4
+			(declared-type
+				(ty @5.7-5.12 (name "Color")))))
+	(d-let
+		(p-assign @9.1-9.5 (ident "blue"))
+		(e-tag @9.8-9.12 (name "Blue"))
+		(annotation @9.1-9.5
+			(declared-type
+				(ty @8.8-8.13 (name "Color")))))
+	(d-let
+		(p-assign @12.1-12.6 (ident "green"))
+		(e-tag @12.9-12.14 (name "Green"))
+		(annotation @12.1-12.6
+			(declared-type
+				(ty @11.9-11.14 (name "Color")))))
 	(s-import @3.1-3.13 (module "Color")
 		(exposes)))
 ~~~

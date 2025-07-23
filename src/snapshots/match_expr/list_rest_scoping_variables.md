@@ -72,9 +72,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `data` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'data' is not defined:
 **list_rest_scoping_variables.md:1:7:1:11:**
 ```roc
 match data {

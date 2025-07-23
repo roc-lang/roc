@@ -38,9 +38,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `l` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'l' is not defined:
 **wrong_arrow.md:1:7:1:8:**
 ```roc
 match l {

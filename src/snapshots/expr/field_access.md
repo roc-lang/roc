@@ -11,9 +11,9 @@ person.name
 UNDEFINED VARIABLE - field_access.md:1:1:1:7
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'person' is not defined:
 **field_access.md:1:1:1:7:**
 ```roc
 person.name

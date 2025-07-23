@@ -81,24 +81,22 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(def
-		(pattern
-			(p-assign @8.1-8.6 (ident "main!")))
-		(expr
-			(e-lambda @8.9-12.2
-				(args
-					(p-underscore @8.10-8.11))
-				(e-block @8.13-12.2
-					(s-let @9.2-9.17
-						(p-assign @9.2-9.7 (ident "world"))
-						(e-string @9.10-9.17
-							(e-literal @9.11-9.16 (string "World"))))
-					(e-call @11.2-11.31
-						(e-lookup-external @11.2-11.14
-							(module-idx "0")
-							(target-node-idx "0"))
-						(e-string @11.15-11.30
-							(e-literal @11.16-11.29 (string "Hello, world!"))))))))
+	(d-let
+		(p-assign @8.1-8.6 (ident "main!"))
+		(e-lambda @8.9-12.2
+			(args
+				(p-underscore @8.10-8.11))
+			(e-block @8.13-12.2
+				(s-let @9.2-9.17
+					(p-assign @9.2-9.7 (ident "world"))
+					(e-string @9.10-9.17
+						(e-literal @9.11-9.16 (string "World"))))
+				(e-call @11.2-11.31
+					(e-lookup-external @11.2-11.14
+						(module-idx "0")
+						(target-node-idx "0"))
+					(e-string @11.15-11.30
+						(e-literal @11.16-11.29 (string "Hello, world!")))))))
 	(s-import @6.1-6.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))
 ~~~

@@ -61,15 +61,15 @@ Here is the problematic code:
 
 
 **MALFORMED WHERE CLAUSE**
-
-**Malformed Where Clause**
 This where clause could not be parsed correctly.
+
 **where_clauses_error_cases.md:6:5:6:24:**
 ```roc
     module(a).method -> b
 ```
     ^^^^^^^^^^^^^^^^^^^
 
+Check the syntax of your where clause.
 
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
@@ -83,15 +83,15 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 
 **MALFORMED WHERE CLAUSE**
-
-**Malformed Where Clause**
 This where clause could not be parsed correctly.
+
 **where_clauses_error_cases.md:10:3:10:8:**
 ```roc
   where
 ```
   ^^^^^
 
+Check the syntax of your where clause.
 
 **UNDECLARED TYPE VARIABLE**
 The type variable _c_ is not declared in this scope.
@@ -120,37 +120,34 @@ This type variable is referenced here:
 
 
 **EXPOSED BUT NOT DEFINED**
+The module header says that `broken_fn1` is exposed, but it is not defined anywhere in this module.
 
-**Exposed but Not Defined**
-'broken_fn1' is exposed in the module header but is not defined:
 **where_clauses_error_cases.md:1:9:1:19:**
 ```roc
 module [broken_fn1, broken_fn2, broken_fn3]
 ```
         ^^^^^^^^^^
-
+You can fix this by either defining `broken_fn1` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
+The module header says that `broken_fn2` is exposed, but it is not defined anywhere in this module.
 
-**Exposed but Not Defined**
-'broken_fn2' is exposed in the module header but is not defined:
 **where_clauses_error_cases.md:1:21:1:31:**
 ```roc
 module [broken_fn1, broken_fn2, broken_fn3]
 ```
                     ^^^^^^^^^^
-
+You can fix this by either defining `broken_fn2` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
+The module header says that `broken_fn3` is exposed, but it is not defined anywhere in this module.
 
-**Exposed but Not Defined**
-'broken_fn3' is exposed in the module header but is not defined:
 **where_clauses_error_cases.md:1:33:1:43:**
 ```roc
 module [broken_fn1, broken_fn2, broken_fn3]
 ```
                                 ^^^^^^^^^^
-
+You can fix this by either defining `broken_fn3` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -227,25 +224,23 @@ broken_fn3 : a -> b
 			(ty-var @4.14-4.15 (name "a"))
 			(ty-var @4.19-4.20 (name "b")))
 		(where
-			(where-clause
-				(type "malformed"))))
+			(malformed @6.5-6.24)))
 	(s-type-anno @9.1-10.8 (name "broken_fn2")
 		(ty-fn @9.14-9.20 (effectful false)
 			(ty-var @9.14-9.15 (name "a"))
 			(ty-var @9.19-9.20 (name "b")))
 		(where
-			(where-clause
-				(type "malformed"))))
+			(malformed @10.3-10.8)))
 	(s-type-anno @13.1-15.30 (name "broken_fn3")
 		(ty-fn @13.14-13.20 (effectful false)
 			(ty-var @13.14-13.15 (name "a"))
 			(ty-var @13.19-13.20 (name "b")))
 		(where
-			(where-clause
-				(type "mod-method")
-				(var-name "c")
-				(method-name "method"))))
-	(external-decl (qualified-name "module(c).method") (module-name "module(c)") (local-name "method") (kind "value")))
+			(method @15.5-15.30 (module-of "c") (ident "method")
+				(args
+					(ty-var @15.24-15.25 (name "c")))
+				(ty-var @15.29-15.30 (name "d")))))
+	(ext-decl @15.5-15.30 (ident "module(c).method") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

@@ -17,9 +17,9 @@ if # Comment after if
 UNDEFINED VARIABLE - if_then_else_multi_comments.md:2:2:2:6
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `bool` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'bool' is not defined:
 **if_then_else_multi_comments.md:2:2:2:6:**
 ```roc
 	bool # Comment after cond

@@ -44,9 +44,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'x' is not defined:
 **f64_pattern_literal_error.md:1:7:1:8:**
 ```roc
 match x {
@@ -116,14 +116,14 @@ match x {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @2.5-2.12 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-string @2.16-2.20
 						(e-literal @2.17-2.19 (string "pi")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.5-3.11 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-string @3.15-3.21
 						(e-literal @3.16-3.20 (string "zero")))))

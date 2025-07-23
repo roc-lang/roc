@@ -362,9 +362,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `value` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'value' is not defined:
 **guards_2.md:1:7:1:12:**
 ```roc
 match value {
@@ -381,6 +381,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                  ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
 Variable `first` is not used anywhere in your code.
@@ -418,11 +419,12 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                           ^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNDEFINED VARIABLE**
+Nothing is named `first` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'first' is not defined:
 **guards_2.md:2:87:2:92:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -454,14 +456,15 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                                                             
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'x' is not defined:
 **guards_2.md:3:6:3:7:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -470,9 +473,9 @@ The variable 'x' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `y` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'y' is not defined:
 **guards_2.md:3:9:3:10:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -484,9 +487,9 @@ The variable 'y' is not defined:
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'x' is not defined:
 **guards_2.md:3:15:3:16:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -495,9 +498,9 @@ The variable 'x' is not defined:
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `y` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**Undefined Variable**
-The variable 'y' is not defined:
 **guards_2.md:3:20:3:21:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -517,6 +520,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -530,6 +534,7 @@ This looks like an operator, but it's not one I recognize!
 ```
                                                              
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -543,6 +548,7 @@ This looks like an operator, but it's not one I recognize!
 ```
     ^
 
+Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -635,7 +641,7 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @2.51-2.75 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -647,13 +653,13 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @2.92-2.93 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @2.93-2.94 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-list @3.5-3.11
 						(elems
@@ -662,7 +668,7 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.12-3.14 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-binop @3.15-3.21 (op "eq")
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -670,25 +676,25 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.22-3.24 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.61-3.62 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @3.62-3.63 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @4.7-4.9 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-string @4.10-4.17
 						(e-literal @4.11-4.16 (string "other"))))))))

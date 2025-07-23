@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const compile = @import("compile");
 const parse = @import("check/parse.zig");
 const collections = @import("collections");
 const Filesystem = @import("fs/Filesystem.zig");
@@ -161,7 +160,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
         }
     };
 
-    var module_env = try compile.ModuleEnv.init(gpa, contents);
+    var module_env = try base.ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
     var parse_ast: AST = try parse.parse(&module_env);
@@ -194,7 +193,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 pub fn formatStdin(gpa: std.mem.Allocator) !void {
     const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
     // ModuleEnv takes ownership of contents
-    var module_env = try compile.ModuleEnv.init(gpa, contents);
+    var module_env = try base.ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
     var parse_ast: AST = try parse.parse(&module_env);
@@ -2043,7 +2042,7 @@ const Formatter = struct {
 fn moduleFmtsSame(source: []const u8) !void {
     const gpa = std.testing.allocator;
 
-    var env = try compile.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
     var parse_ast = parse(&env, source);
@@ -2072,7 +2071,7 @@ fn exprFmtsSame(source: []const u8, flags: FormatFlags) !void {
 fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !void {
     const gpa = std.testing.allocator;
 
-    var env = try compile.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
     var messages: [1]tokenize.Diagnostic = undefined;
@@ -2142,7 +2141,7 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = try compile.ModuleEnv.init(gpa, try gpa.dupe(u8, input));
+    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, input));
     defer module_env.deinit();
 
     var parse_ast = try parse.parse(&module_env);

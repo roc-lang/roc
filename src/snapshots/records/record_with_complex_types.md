@@ -145,107 +145,91 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~clojure
 (e-record @1.1-15.2
 	(fields
-		(record-field (label "name")
-			(value
-				(e-string @2.11-2.18
-					(e-literal @2.12-2.17 (string "Alice")))))
-		(record-field (label "scores")
-			(value
-				(e-list @3.13-3.29
-					(elems
-						(e-int @3.14-3.16 (value "95"))
-						(e-int @3.18-3.20 (value "87"))
-						(e-int @3.22-3.24 (value "92"))
-						(e-int @3.26-3.28 (value "78"))))))
-		(record-field (label "status")
-			(value
-				(e-tag @4.13-4.19 (name "Active")
-					(args
-						(e-record @4.20-4.43
-							(fields
-								(record-field (label "since")
-									(value
-										(e-string @4.29-4.41
-											(e-literal @4.30-4.40 (string "2023-01-15")))))))))))
-		(record-field (label "preferences")
-			(value
-				(e-record @5.18-5.76
-					(fields
-						(record-field (label "theme")
-							(value
-								(e-tag @5.27-5.31 (name "Dark"))))
-						(record-field (label "notifications")
-							(value
-								(e-tag @5.48-5.53 (name "Email")
-									(args
-										(e-string @5.54-5.73
-											(e-literal @5.55-5.72 (string "alice@example.com")))))))))))
-		(record-field (label "metadata")
-			(value
-				(e-tag @6.15-6.17 (name "Ok")
-					(args
-						(e-record @6.18-9.6
-							(fields
-								(record-field (label "tags")
-									(value
-										(e-list @7.15-7.51
-											(elems
-												(e-string @7.16-7.27
-													(e-literal @7.17-7.26 (string "developer")))
-												(e-string @7.29-7.37
-													(e-literal @7.30-7.36 (string "senior")))
-												(e-string @7.39-7.50
-													(e-literal @7.40-7.49 (string "fullstack")))))))
-								(record-field (label "permissions")
-									(value
-										(e-list @8.22-8.42
-											(elems
-												(e-tag @8.23-8.27 (name "Read"))
-												(e-tag @8.29-8.34 (name "Write"))
-												(e-tag @8.36-8.41 (name "Admin"))))))))))))
-		(record-field (label "callback")
-			(value
-				(e-lambda @10.15-10.24
-					(args
-						(p-assign @10.16-10.17 (ident "x")))
-					(e-binop @10.19-10.24 (op "add")
-						(e-lookup-local @10.19-10.20
-							(p-assign @10.16-10.17 (ident "x")))
-						(e-int @10.23-10.24 (value "1"))))))
-		(record-field (label "nested")
-			(value
-				(e-record @11.13-14.6
-					(fields
-						(record-field (label "items")
-							(value
-								(e-list @12.16-12.52
+		(field (name "name")
+			(e-string @2.11-2.18
+				(e-literal @2.12-2.17 (string "Alice"))))
+		(field (name "scores")
+			(e-list @3.13-3.29
+				(elems
+					(e-int @3.14-3.16 (value "95"))
+					(e-int @3.18-3.20 (value "87"))
+					(e-int @3.22-3.24 (value "92"))
+					(e-int @3.26-3.28 (value "78")))))
+		(field (name "status")
+			(e-tag @4.13-4.19 (name "Active")
+				(args
+					(e-record @4.20-4.43
+						(fields
+							(field (name "since")
+								(e-string @4.29-4.41
+									(e-literal @4.30-4.40 (string "2023-01-15")))))))))
+		(field (name "preferences")
+			(e-record @5.18-5.76
+				(fields
+					(field (name "theme")
+						(e-tag @5.27-5.31 (name "Dark")))
+					(field (name "notifications")
+						(e-tag @5.48-5.53 (name "Email")
+							(args
+								(e-string @5.54-5.73
+									(e-literal @5.55-5.72 (string "alice@example.com")))))))))
+		(field (name "metadata")
+			(e-tag @6.15-6.17 (name "Ok")
+				(args
+					(e-record @6.18-9.6
+						(fields
+							(field (name "tags")
+								(e-list @7.15-7.51
 									(elems
-										(e-tag @12.17-12.21 (name "Some")
-											(args
-												(e-string @12.22-12.29
-													(e-literal @12.23-12.28 (string "first")))))
-										(e-tag @12.32-12.36 (name "None"))
-										(e-tag @12.38-12.42 (name "Some")
-											(args
-												(e-string @12.43-12.50
-													(e-literal @12.44-12.49 (string "third")))))))))
-						(record-field (label "result")
-							(value
-								(e-tag @13.17-13.24 (name "Success")
+										(e-string @7.16-7.27
+											(e-literal @7.17-7.26 (string "developer")))
+										(e-string @7.29-7.37
+											(e-literal @7.30-7.36 (string "senior")))
+										(e-string @7.39-7.50
+											(e-literal @7.40-7.49 (string "fullstack"))))))
+							(field (name "permissions")
+								(e-list @8.22-8.42
+									(elems
+										(e-tag @8.23-8.27 (name "Read"))
+										(e-tag @8.29-8.34 (name "Write"))
+										(e-tag @8.36-8.41 (name "Admin"))))))))))
+		(field (name "callback")
+			(e-lambda @10.15-10.24
+				(args
+					(p-assign @10.16-10.17 (ident "x")))
+				(e-binop @10.19-10.24 (op "add")
+					(e-lookup-local @10.19-10.20
+						(p-assign @10.16-10.17 (ident "x")))
+					(e-int @10.23-10.24 (value "1")))))
+		(field (name "nested")
+			(e-record @11.13-14.6
+				(fields
+					(field (name "items")
+						(e-list @12.16-12.52
+							(elems
+								(e-tag @12.17-12.21 (name "Some")
 									(args
-										(e-record @13.25-13.69
-											(fields
-												(record-field (label "data")
-													(value
-														(e-list @13.33-13.42
-															(elems
-																(e-int @13.34-13.35 (value "1"))
-																(e-int @13.37-13.38 (value "2"))
-																(e-int @13.40-13.41 (value "3"))))))
-												(record-field (label "timestamp")
-													(value
-														(e-string @13.55-13.67
-															(e-literal @13.56-13.66 (string "2024-01-01")))))))))))))))))
+										(e-string @12.22-12.29
+											(e-literal @12.23-12.28 (string "first")))))
+								(e-tag @12.32-12.36 (name "None"))
+								(e-tag @12.38-12.42 (name "Some")
+									(args
+										(e-string @12.43-12.50
+											(e-literal @12.44-12.49 (string "third"))))))))
+					(field (name "result")
+						(e-tag @13.17-13.24 (name "Success")
+							(args
+								(e-record @13.25-13.69
+									(fields
+										(field (name "data")
+											(e-list @13.33-13.42
+												(elems
+													(e-int @13.34-13.35 (value "1"))
+													(e-int @13.37-13.38 (value "2"))
+													(e-int @13.40-13.41 (value "3")))))
+										(field (name "timestamp")
+											(e-string @13.55-13.67
+												(e-literal @13.56-13.66 (string "2024-01-01"))))))))))))))
 ~~~
 # TYPES
 ~~~clojure
