@@ -8,20 +8,44 @@ type=expr
 { name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - error_duplicate_fields.md:0:0:0:0
-COMPILER DIAGNOSTIC - error_duplicate_fields.md:0:0:0:0
+DUPLICATE RECORD FIELD - error_duplicate_fields.md:1:27:1:31
+DUPLICATE RECORD FIELD - error_duplicate_fields.md:1:68:1:71
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**DUPLICATE RECORD FIELD**
+The record field `name` appears more than once in this record.
 
-**Compiler Diagnostic**
-Diagnostic type 'duplicate_record_field' is not yet handled in report generation.
-**error_duplicate_fields.md:0:0:0:0**
+This field is duplicated here:
+**error_duplicate_fields.md:1:27:1:31:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+                          ^^^^
 
-**COMPILER DIAGNOSTIC**
+The field `name` was first defined here:
+**error_duplicate_fields.md:1:3:1:7:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+  ^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'duplicate_record_field' is not yet handled in report generation.
-**error_duplicate_fields.md:0:0:0:0**
+
+**DUPLICATE RECORD FIELD**
+The record field `age` appears more than once in this record.
+
+This field is duplicated here:
+**error_duplicate_fields.md:1:68:1:71:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+                                                                   ^^^
+
+The field `age` was first defined here:
+**error_duplicate_fields.md:1:18:1:21:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+                 ^^^
+
 
 # TOKENS
 ~~~zig

@@ -17,22 +17,44 @@ foo = 42
 MyType : [A, B, C]
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - exposed_not_impl.md:0:0:0:0
-COMPILER DIAGNOSTIC - exposed_not_impl.md:0:0:0:0
+REDUNDANT EXPOSED - exposed_not_impl.md:1:38:1:41
+REDUNDANT EXPOSED - exposed_not_impl.md:1:43:1:49
 EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:14:1:17
 EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:27:1:36
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**REDUNDANT EXPOSED**
+The identifier `foo` is exposed multiple times in the module header.
 
-**Compiler Diagnostic**
-Diagnostic type 'redundant_exposed' is not yet handled in report generation.
-**exposed_not_impl.md:0:0:0:0**
+**exposed_not_impl.md:1:38:1:41:**
+```roc
+module [foo, bar, MyType, OtherType, foo, MyType]
+```
+                                     ^^^
 
-**COMPILER DIAGNOSTIC**
+It was already exposed here:
+**exposed_not_impl.md:1:9:1:12:**
+```roc
+module [foo, bar, MyType, OtherType, foo, MyType]
+```
+        ^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'redundant_exposed' is not yet handled in report generation.
-**exposed_not_impl.md:0:0:0:0**
+
+**REDUNDANT EXPOSED**
+The identifier `MyType` is exposed multiple times in the module header.
+
+**exposed_not_impl.md:1:43:1:49:**
+```roc
+module [foo, bar, MyType, OtherType, foo, MyType]
+```
+                                          ^^^^^^
+
+It was already exposed here:
+**exposed_not_impl.md:1:19:1:25:**
+```roc
+module [foo, bar, MyType, OtherType, foo, MyType]
+```
+                  ^^^^^^
+
 
 **EXPOSED BUT NOT DEFINED**
 

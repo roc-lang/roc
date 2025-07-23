@@ -46,15 +46,27 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - type_alias_decl.md:0:0:0:0
+TYPE REDECLARED - type_alias_decl.md:7:1:7:37
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:10
 UNUSED VARIABLE - type_alias_decl.md:33:5:33:11
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**TYPE REDECLARED**
+The type _Result_ is being redeclared.
 
-**Compiler Diagnostic**
-Diagnostic type 'type_redeclared' is not yet handled in report generation.
-**type_alias_decl.md:0:0:0:0**
+The redeclaration is here:
+**type_alias_decl.md:7:1:7:37:**
+```roc
+Result(ok, err) : [Ok(ok), Err(err)]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+But _Result_ was already declared here:
+**type_alias_decl.md:1:1:1:1:**
+```roc
+app [main!] { pf: platform "../basic-cli/main.roc" }
+```
+
+
 
 **UNUSED VARIABLE**
 Variable `color` is not used anywhere in your code.

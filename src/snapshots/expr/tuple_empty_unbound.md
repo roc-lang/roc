@@ -8,13 +8,17 @@ type=expr
 ()
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - tuple_empty_unbound.md:0:0:0:0
+EMPTY TUPLE NOT ALLOWED - tuple_empty_unbound.md:1:1:1:3
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**EMPTY TUPLE NOT ALLOWED**
+I am part way through parsing this tuple, but it is empty:
+**tuple_empty_unbound.md:1:1:1:3:**
+```roc
+()
+```
+^^
 
-**Compiler Diagnostic**
-Diagnostic type 'empty_tuple' is not yet handled in report generation.
-**tuple_empty_unbound.md:0:0:0:0**
+If you want to represent nothing, try using an empty record: `{}`.
 
 # TOKENS
 ~~~zig

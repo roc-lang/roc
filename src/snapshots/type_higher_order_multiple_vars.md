@@ -18,10 +18,10 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:32:3:34
 PARSE ERROR - type_higher_order_multiple_vars.md:3:39:3:40
 PARSE ERROR - type_higher_order_multiple_vars.md:3:46:3:48
 UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:48:3:49
-COMPILER DIAGNOSTIC - type_higher_order_multiple_vars.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_higher_order_multiple_vars.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_higher_order_multiple_vars.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_higher_order_multiple_vars.md:0:0:0:0
+INVALID STATEMENT - type_higher_order_multiple_vars.md:3:22:3:24
+INVALID STATEMENT - type_higher_order_multiple_vars.md:3:25:3:40
+INVALID STATEMENT - type_higher_order_multiple_vars.md:3:40:3:48
+INVALID STATEMENT - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **->** is not expected in an expression.
@@ -83,29 +83,49 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
                                                ^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**type_higher_order_multiple_vars.md:0:0:0:0**
+**type_higher_order_multiple_vars.md:3:22:3:24:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                     ^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**type_higher_order_multiple_vars.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**type_higher_order_multiple_vars.md:3:25:3:40:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                        ^^^^^^^^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**type_higher_order_multiple_vars.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**type_higher_order_multiple_vars.md:0:0:0:0**
+**type_higher_order_multiple_vars.md:3:40:3:48:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                       ^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**type_higher_order_multiple_vars.md:3:48:3:49:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                               ^
+
 
 # TOKENS
 ~~~zig

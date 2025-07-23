@@ -15,9 +15,9 @@ match x {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - pattern_f64_overflow.md:1:7:1:8
-COMPILER DIAGNOSTIC - pattern_f64_overflow.md:0:0:0:0
-COMPILER DIAGNOSTIC - pattern_f64_overflow.md:0:0:0:0
-COMPILER DIAGNOSTIC - pattern_f64_overflow.md:0:0:0:0
+F64 NOT ALLOWED IN PATTERN - pattern_f64_overflow.md:2:5:2:10
+F64 NOT ALLOWED IN PATTERN - pattern_f64_overflow.md:3:5:3:10
+F64 NOT ALLOWED IN PATTERN - pattern_f64_overflow.md:4:5:4:27
 UNUSED VARIABLE - pattern_f64_overflow.md:6:5:6:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
@@ -31,23 +31,35 @@ match x {
       ^
 
 
-**COMPILER DIAGNOSTIC**
+**F64 NOT ALLOWED IN PATTERN**
+I am in the middle of parsing a pattern, and I found a floating-point literal:
+**pattern_f64_overflow.md:2:5:2:10:**
+```roc
+    1e100 => "very large number"
+```
+    ^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'f64_pattern_literal' is not yet handled in report generation.
-**pattern_f64_overflow.md:0:0:0:0**
+Floating-point numbers are not allowed in patterns. You can use an if-guard or a when expression with comparisons instead.
 
-**COMPILER DIAGNOSTIC**
+**F64 NOT ALLOWED IN PATTERN**
+I am in the middle of parsing a pattern, and I found a floating-point literal:
+**pattern_f64_overflow.md:3:5:3:10:**
+```roc
+    1e-40 => "very small number"
+```
+    ^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'f64_pattern_literal' is not yet handled in report generation.
-**pattern_f64_overflow.md:0:0:0:0**
+Floating-point numbers are not allowed in patterns. You can use an if-guard or a when expression with comparisons instead.
 
-**COMPILER DIAGNOSTIC**
+**F64 NOT ALLOWED IN PATTERN**
+I am in the middle of parsing a pattern, and I found a floating-point literal:
+**pattern_f64_overflow.md:4:5:4:27:**
+```roc
+    1.7976931348623157e308 => "near f64 max"
+```
+    ^^^^^^^^^^^^^^^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'f64_pattern_literal' is not yet handled in report generation.
-**pattern_f64_overflow.md:0:0:0:0**
+Floating-point numbers are not allowed in patterns. You can use an if-guard or a when expression with comparisons instead.
 
 **UNUSED VARIABLE**
 Variable `value` is not used anywhere in your code.

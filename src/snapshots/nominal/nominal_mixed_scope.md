@@ -24,7 +24,7 @@ processColor = |color| {
 ~~~
 # EXPECTED
 IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:9:5:9:11
-COMPILER DIAGNOSTIC - nominal_mixed_scope.md:0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - nominal_mixed_scope.md:9:12:9:17
 UNDEFINED VARIABLE - nominal_mixed_scope.md:12:9:12:12
 UNDEFINED VARIABLE - nominal_mixed_scope.md:13:9:13:12
@@ -42,11 +42,10 @@ Here is the problematic code:
     ^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: statement type in block
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**nominal_mixed_scope.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 

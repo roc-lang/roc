@@ -39,12 +39,12 @@ main = |_| {
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:12:26:12:27
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:27
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:31
-COMPILER DIAGNOSTIC - let_polymorphism_lists.md:0:0:0:0
-COMPILER DIAGNOSTIC - let_polymorphism_lists.md:0:0:0:0
-COMPILER DIAGNOSTIC - let_polymorphism_lists.md:0:0:0:0
-COMPILER DIAGNOSTIC - let_polymorphism_lists.md:0:0:0:0
-COMPILER DIAGNOSTIC - let_polymorphism_lists.md:0:0:0:0
-COMPILER DIAGNOSTIC - let_polymorphism_lists.md:0:0:0:0
+UNKNOWN OPERATOR - let_polymorphism_lists.md:12:16:12:27
+INVALID STATEMENT - let_polymorphism_lists.md:12:28:12:41
+UNKNOWN OPERATOR - let_polymorphism_lists.md:13:16:13:27
+INVALID STATEMENT - let_polymorphism_lists.md:13:28:13:41
+UNKNOWN OPERATOR - let_polymorphism_lists.md:14:18:14:31
+INVALID STATEMENT - let_polymorphism_lists.md:14:32:14:45
 UNDEFINED VARIABLE - let_polymorphism_lists.md:25:12:25:20
 UNDEFINED VARIABLE - let_polymorphism_lists.md:26:12:26:20
 UNDEFINED VARIABLE - let_polymorphism_lists.md:27:12:27:20
@@ -88,41 +88,68 @@ all_float_list = float_list ++ my_empty_list
                              ^
 
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**let_polymorphism_lists.md:0:0:0:0**
+**let_polymorphism_lists.md:12:16:12:27:**
+```roc
+all_int_list = int_list ++ my_empty_list
+```
+               ^^^^^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**let_polymorphism_lists.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**let_polymorphism_lists.md:12:28:12:41:**
+```roc
+all_int_list = int_list ++ my_empty_list
+```
+                           ^^^^^^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**let_polymorphism_lists.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**let_polymorphism_lists.md:0:0:0:0**
+**let_polymorphism_lists.md:13:16:13:27:**
+```roc
+all_str_list = str_list ++ my_empty_list
+```
+               ^^^^^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**let_polymorphism_lists.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**let_polymorphism_lists.md:13:28:13:41:**
+```roc
+all_str_list = str_list ++ my_empty_list
+```
+                           ^^^^^^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**let_polymorphism_lists.md:0:0:0:0**
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+
+**let_polymorphism_lists.md:14:18:14:31:**
+```roc
+all_float_list = float_list ++ my_empty_list
+```
+                 ^^^^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**let_polymorphism_lists.md:14:32:14:45:**
+```roc
+all_float_list = float_list ++ my_empty_list
+```
+                               ^^^^^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 

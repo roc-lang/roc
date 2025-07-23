@@ -9,13 +9,20 @@ module[]r:a	where
 module(a).h:s
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - fuzz_crash_055.md:0:0:0:0
+UNDECLARED TYPE VARIABLE - fuzz_crash_055.md:2:13:2:14
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE VARIABLE**
+The type variable _s_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type_var' is not yet handled in report generation.
-**fuzz_crash_055.md:0:0:0:0**
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+**fuzz_crash_055.md:2:13:2:14:**
+```roc
+module(a).h:s
+```
+            ^
+
 
 # TOKENS
 ~~~zig

@@ -8,13 +8,12 @@ type=expr
 some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - static_dispatch_super_test.md:0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: canonicalize suffix_single_question expression
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**static_dispatch_super_test.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 # TOKENS
 ~~~zig

@@ -224,8 +224,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
         .invalid_num_literal => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
             
-            var report = Report.init(allocator, "INVALID NUMBER LITERAL", .runtime_error);
-            try report.addHeader("Invalid Number Literal");
+            var report = Report.init(allocator, "INVALID NUMBER", .runtime_error);
+            try report.addHeader("Invalid Number");
             
             try report.document.addText("The number literal is invalid or too large to represent:");
             try report.document.addLineBreak();
@@ -358,6 +358,421 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 self.source,
                 self.line_starts.items.items,
             );
+            
+            break :blk report;
+        },
+        .type_redeclared => |data| blk: {
+            const type_name = self.idents.getText(data.name);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
+            
+            var report = Report.init(allocator, "TYPE REDECLARED", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
+            try report.document.addReflowingText("The type ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" is being redeclared.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            
+            // Show where the redeclaration is
+            try report.document.addReflowingText("The redeclaration is here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                redeclared_region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("But ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" was already declared here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                original_region_info,
+                .dimmed,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            
+            break :blk report;
+        },
+        .invalid_top_level_statement => |data| blk: {
+            const stmt_name = self.strings.get(data.stmt);
+            const region_info = self.calcRegionInfo(data.region);
+            
+            var report = Report.init(allocator, "INVALID STATEMENT", .runtime_error);
+            const owned_stmt = try report.addOwnedString(stmt_name);
+            try report.document.addReflowingText("The statement ");
+            try report.document.addInlineCode(owned_stmt);
+            try report.document.addReflowingText(" is not allowed at the top level.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            
+            break :blk report;
+        },
+        .used_underscore_variable => |data| blk: {
+            const ident_name = self.idents.getText(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            
+            var report = Report.init(allocator, "UNDERSCORE VARIABLE USED", .warning);
+            const owned_ident = try report.addOwnedString(ident_name);
+            
+            try report.document.addReflowingText("Variable ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is prefixed with an underscore but is actually used.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            
+            try report.document.addReflowingText("Variables prefixed with an underscore are supposed to be ignored. But ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is used here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            
+            break :blk report;
+        },
+        .expr_not_canonicalized => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            
+            var report = Report.init(allocator, "UNKNOWN OPERATOR", .runtime_error);
+            try report.document.addReflowingText("This looks like an operator, but it's not one I recognize!");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            
+            break :blk report;
+        },
+        .crash_expects_string => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            
+            var report = Report.init(allocator, "CRASH EXPECTS STRING", .runtime_error);
+            try report.document.addReflowingText("The ");
+            try report.document.addAnnotated("crash", .inline_code);
+            try report.document.addReflowingText(" keyword expects a string literal as its argument.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("For example: ");
+            try report.document.addAnnotated("crash \"Something went wrong\"", .inline_code);
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            
+            break :blk report;
+        },
+        .duplicate_record_field => |data| blk: {
+            const field_name = self.idents.getText(data.field_name);
+            const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            
+            var report = Report.init(allocator, "DUPLICATE RECORD FIELD", .runtime_error);
+            const owned_field_name = try report.addOwnedString(field_name);
+            
+            try report.document.addReflowingText("The record field ");
+            try report.document.addRecordField(owned_field_name);
+            try report.document.addReflowingText(" appears more than once in this record.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            
+            // Show where the duplicate field is
+            try report.document.addReflowingText("This field is duplicated here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                duplicate_region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("The field ");
+            try report.document.addRecordField(owned_field_name);
+            try report.document.addReflowingText(" was first defined here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                original_region_info,
+                .dimmed,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            
+            break :blk report;
+        },
+        .redundant_exposed => |data| blk: {
+            const ident_name = self.idents.getText(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            
+            var report = Report.init(allocator, "REDUNDANT EXPOSED", .warning);
+            const owned_ident = try report.addOwnedString(ident_name);
+            
+            try report.document.addReflowingText("The identifier ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is exposed multiple times in the module header.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("It was already exposed here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                original_region_info,
+                .dimmed,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            
+            break :blk report;
+        },
+        .undeclared_type_var => |data| blk: {
+            const type_var_name = self.idents.getText(data.name);
+            const region_info = self.calcRegionInfo(data.region);
+            
+            var report = Report.init(allocator, "UNDECLARED TYPE VARIABLE", .runtime_error);
+            const owned_type_var_name = try report.addOwnedString(type_var_name);
+            try report.document.addReflowingText("The type variable ");
+            try report.document.addType(owned_type_var_name);
+            try report.document.addReflowingText(" is not declared in this scope.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Type variables must be introduced in a type annotation before they can be used.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("This type variable is referenced here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            
+            break :blk report;
+        },
+        .not_implemented => |data| blk: {
+            const feature = self.strings.get(data.feature);
+            var report = Report.init(allocator, "NOT IMPLEMENTED", .fatal);
+            const owned_feature = try report.addOwnedString(feature);
+            try report.document.addReflowingText("This feature is not yet implemented: ");
+            try report.document.addAnnotatedText(owned_feature, .emphasized);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!");
+            break :blk report;
+        },
+        .malformed_type_annotation => |_| blk: {
+            var report = Report.init(allocator, "MALFORMED TYPE", .runtime_error);
+            try report.document.addReflowingText("This type annotation is malformed or contains invalid syntax.");
+            break :blk report;
+        },
+        .if_condition_not_canonicalized => |_| blk: {
+            var report = Report.init(allocator, "INVALID IF CONDITION", .runtime_error);
+            try report.document.addReflowingText("The condition in this ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" expression could not be processed.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("The condition must be a valid expression that evaluates to a ");
+            try report.document.addKeyword("Bool");
+            try report.document.addReflowingText(" value (");
+            try report.document.addKeyword("Bool.true");
+            try report.document.addReflowingText(" or ");
+            try report.document.addKeyword("Bool.false");
+            try report.document.addReflowingText(").");
+            break :blk report;
+        },
+        .if_else_not_canonicalized => |_| blk: {
+            var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
+            try report.document.addReflowingText("The ");
+            try report.document.addKeyword("else");
+            try report.document.addReflowingText(" branch of this ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" expression could not be processed.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("The ");
+            try report.document.addKeyword("else");
+            try report.document.addReflowingText(" branch must contain a valid expression. Check for syntax errors or missing values.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Note: Every ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" expression in Roc must have an ");
+            try report.document.addKeyword("else");
+            try report.document.addReflowingText(" branch, and both branches must have the same type.");
+            break :blk report;
+        },
+        .pattern_not_canonicalized => |_| blk: {
+            var report = Report.init(allocator, "INVALID PATTERN", .runtime_error);
+            try report.document.addReflowingText("This pattern contains invalid syntax or uses unsupported features.");
+            break :blk report;
+        },
+        .shadowing_warning => |data| blk: {
+            const ident_name = self.idents.getText(data.ident);
+            const new_region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            
+            var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("The name ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is being redeclared in this scope.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            // Show where the new declaration is
+            try report.document.addReflowingText("The redeclaration is here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                new_region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("But ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" was already defined here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                original_region_info,
+                .dimmed,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            break :blk report;
+        },
+        .empty_tuple => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            
+            var report = Report.init(allocator, "EMPTY TUPLE NOT ALLOWED", .runtime_error);
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addReflowingText("I am part way through parsing this tuple, but it is empty:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("If you want to represent nothing, try using an empty record: ");
+            try report.document.addAnnotated("{}", .inline_code);
+            try report.document.addReflowingText(".");
+            
+            break :blk report;
+        },
+        .lambda_body_not_canonicalized => |data| blk: {
+            _ = data;
+            
+            var report = Report.init(allocator, "INVALID LAMBDA", .runtime_error);
+            try report.document.addReflowingText("The body of this lambda expression is not valid.");
+            
+            break :blk report;
+        },
+        .malformed_where_clause => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            
+            var report = Report.init(allocator, "MALFORMED WHERE CLAUSE", .runtime_error);
+            try report.addHeader("Malformed Where Clause");
+            try report.document.addReflowingText("This where clause could not be parsed correctly.");
+            try report.document.addLineBreak();
+            
+            // Add source context with location
+            const owned_filename = try report.addOwnedString(filename);
+            try report.addSourceContext(region_info, owned_filename, self.source, self.line_starts.items.items);
+            
+            break :blk report;
+        },
+        .var_across_function_boundary => |data| blk: {
+            _ = data;
+            
+            var report = Report.init(allocator, "VAR REASSIGNMENT ERROR", .runtime_error);
+            try report.document.addReflowingText("Variables cannot be reassigned across function boundaries.");
+            
+            break :blk report;
+        },
+        .tuple_elem_not_canonicalized => |data| blk: {
+            _ = data;
+            
+            var report = Report.init(allocator, "INVALID TUPLE ELEMENT", .runtime_error);
+            try report.document.addReflowingText("This tuple element is malformed or contains invalid syntax.");
+            
+            break :blk report;
+        },
+        .f64_pattern_literal => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            
+            var report = Report.init(allocator, "F64 NOT ALLOWED IN PATTERN", .runtime_error);
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addReflowingText("I am in the middle of parsing a pattern, and I found a floating-point literal:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Floating-point numbers are not allowed in patterns. ");
+            try report.document.addReflowingText("You can use an if-guard or a when expression with comparisons instead.");
             
             break :blk report;
         },

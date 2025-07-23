@@ -38,25 +38,25 @@ UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:4:5:4:6
 UNEXPECTED TOKEN IN PATTERN - guards_1.md:4:7:4:9
 PARSE ERROR - guards_1.md:4:10:4:10
 UNDEFINED VARIABLE - guards_1.md:1:7:1:12
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
+UNKNOWN OPERATOR - guards_1.md:2:19:2:20
 UNUSED VARIABLE - guards_1.md:2:5:2:6
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - guards_1.md:2:30:2:32
 UNDEFINED VARIABLE - guards_1.md:2:42:2:43
 UNUSED VARIABLE - guards_1.md:2:32:2:41
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - guards_1.md:2:44:2:44
+INVALID PATTERN - :0:0:0:0
 UNDEFINED VARIABLE - guards_1.md:3:5:3:6
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
 UNDEFINED VARIABLE - guards_1.md:3:10:3:11
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
-COMPILER DIAGNOSTIC - guards_1.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - guards_1.md:3:19:3:43
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - guards_1.md:3:44:3:44
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - guards_1.md:4:5:4:6
+INVALID PATTERN - :0:0:0:0
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -369,11 +369,15 @@ match value {
       ^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
+**guards_1.md:2:19:2:20:**
+```roc
+    x if x > 0 => "positive: ${Num.toStr x}"
+```
+                  ^
+
 
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
@@ -387,17 +391,18 @@ The unused variable is declared here:
     ^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**guards_1.md:2:30:2:32:**
+```roc
+    x if x > 0 => "positive: ${Num.toStr x}"
+```
+                             ^^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
 
@@ -422,23 +427,21 @@ The unused variable is declared here:
                                ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**guards_1.md:2:44:2:44:**
+```roc
+    x if x > 0 => "positive: ${Num.toStr x}"
+```
+                                           
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
 
@@ -451,11 +454,8 @@ The variable 'x' is not defined:
     ^
 
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
 
@@ -468,47 +468,47 @@ The variable 'x' is not defined:
          ^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**guards_1.md:3:19:3:43:**
+```roc
+    x if x < 0 => "negative: ${Num.toStr x}"
+```
+                  ^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**guards_1.md:3:44:3:44:**
+```roc
+    x if x < 0 => "negative: ${Num.toStr x}"
+```
+                                           
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**guards_1.md:4:5:4:6:**
+```roc
+    _ => "other"
+```
+    ^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**guards_1.md:0:0:0:0**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
 # TOKENS
 ~~~zig

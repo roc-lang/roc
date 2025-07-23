@@ -45,16 +45,28 @@ Complex : {
 }
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - type_comprehensive_scope.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_comprehensive_scope.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_comprehensive_scope.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_comprehensive_scope.md:0:0:0:0
+TYPE REDECLARED - type_comprehensive_scope.md:12:1:12:37
+UNDECLARED TYPE - type_comprehensive_scope.md:15:19:15:23
+TYPE REDECLARED - type_comprehensive_scope.md:24:1:24:13
+UNDECLARED TYPE - type_comprehensive_scope.md:27:11:27:29
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**TYPE REDECLARED**
+The type _Result_ is being redeclared.
 
-**Compiler Diagnostic**
-Diagnostic type 'type_redeclared' is not yet handled in report generation.
-**type_comprehensive_scope.md:0:0:0:0**
+The redeclaration is here:
+**type_comprehensive_scope.md:12:1:12:37:**
+```roc
+Result(ok, err) : [Ok(ok), Err(err)]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+But _Result_ was already declared here:
+**type_comprehensive_scope.md:1:1:1:1:**
+```roc
+module [MyU64, Person, Result, Tree, Node]
+```
+
+
 
 **UNDECLARED TYPE**
 The type _Node_ is not declared in this scope.
@@ -67,11 +79,23 @@ Tree(a) : [Branch(Node(a)), Leaf(a)]
                   ^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**TYPE REDECLARED**
+The type _Person_ is being redeclared.
 
-**Compiler Diagnostic**
-Diagnostic type 'type_redeclared' is not yet handled in report generation.
-**type_comprehensive_scope.md:0:0:0:0**
+The redeclaration is here:
+**type_comprehensive_scope.md:24:1:24:13:**
+```roc
+Person : U64
+```
+^^^^^^^^^^^^
+
+But _Person_ was already declared here:
+**type_comprehensive_scope.md:9:1:9:33:**
+```roc
+Person : { name: Str, age: U64 }
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 **UNDECLARED TYPE**
 The type _SomeUndeclaredType_ is not declared in this scope.

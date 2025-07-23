@@ -55,9 +55,9 @@ PARSE ERROR - qualified_type_canonicalization.md:8:1:8:7
 PARSE ERROR - qualified_type_canonicalization.md:8:14:8:21
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:15:10:23
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:24:10:32
-COMPILER DIAGNOSTIC - qualified_type_canonicalization.md:0:0:0:0
-COMPILER DIAGNOSTIC - qualified_type_canonicalization.md:0:0:0:0
-COMPILER DIAGNOSTIC - qualified_type_canonicalization.md:0:0:0:0
+INVALID STATEMENT - qualified_type_canonicalization.md:10:15:10:23
+INVALID STATEMENT - qualified_type_canonicalization.md:10:24:10:32
+INVALID STATEMENT - qualified_type_canonicalization.md:10:33:10:40
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:15:19:15:24
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:19:26:19:35
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
@@ -127,23 +127,38 @@ import ModuleA.ModuleB exposing [TypeC]
                        ^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**qualified_type_canonicalization.md:0:0:0:0**
+**qualified_type_canonicalization.md:10:15:10:23:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+```
+              ^^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**qualified_type_canonicalization.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**qualified_type_canonicalization.md:10:24:10:32:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+```
+                       ^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**qualified_type_canonicalization.md:0:0:0:0**
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:10:33:10:40:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+```
+                                ^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 

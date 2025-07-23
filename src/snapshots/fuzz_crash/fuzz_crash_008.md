@@ -11,7 +11,7 @@ type=file
 ASCII CONTROL CHARACTER - :0:0:0:0
 MISSING HEADER - fuzz_crash_008.md:1:1:1:2
 PARSE ERROR - fuzz_crash_008.md:1:5:1:5
-COMPILER DIAGNOSTIC - fuzz_crash_008.md:0:0:0:0
+INVALID STATEMENT - fuzz_crash_008.md:1:3:1:5
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -44,11 +44,16 @@ Here is the problematic code:
     
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_008.md:0:0:0:0**
+**fuzz_crash_008.md:1:3:1:5:**
+```roc
+||1
+```
+  ^^
+
 
 # TOKENS
 ~~~zig

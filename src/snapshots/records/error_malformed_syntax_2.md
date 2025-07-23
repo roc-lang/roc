@@ -10,7 +10,7 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - error_malformed_syntax_2.md:1:8:1:10
 UNEXPECTED TOKEN IN EXPRESSION - error_malformed_syntax_2.md:1:10:1:11
-COMPILER DIAGNOSTIC - error_malformed_syntax_2.md:0:0:0:0
+MALFORMED TYPE - :0:0:0:0
 UNUSED VARIABLE - error_malformed_syntax_2.md:1:12:1:16
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -37,11 +37,8 @@ Here is the problematic code:
          ^
 
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
-**error_malformed_syntax_2.md:0:0:0:0**
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
 
 **UNUSED VARIABLE**
 Variable `name` is not used anywhere in your code.

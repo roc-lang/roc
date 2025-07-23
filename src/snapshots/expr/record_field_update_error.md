@@ -11,7 +11,7 @@ type=expr
 UNEXPECTED TOKEN IN EXPRESSION - record_field_update_error.md:1:10:1:11
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_field_update_error.md:1:17:1:19
 UNDEFINED VARIABLE - record_field_update_error.md:1:3:1:9
-COMPILER DIAGNOSTIC - record_field_update_error.md:0:0:0:0
+MALFORMED TYPE - :0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&** is not expected in an expression.
@@ -48,11 +48,8 @@ The variable 'person' is not defined:
   ^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
-**record_field_update_error.md:0:0:0:0**
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig

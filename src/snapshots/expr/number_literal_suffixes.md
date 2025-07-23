@@ -41,42 +41,42 @@ type=expr
 }
 ~~~
 # EXPECTED
-INVALID NUMBER LITERAL - number_literal_suffixes.md:2:9:2:14
-INVALID NUMBER LITERAL - number_literal_suffixes.md:3:9:3:15
-INVALID NUMBER LITERAL - number_literal_suffixes.md:4:9:4:15
-INVALID NUMBER LITERAL - number_literal_suffixes.md:5:9:5:15
-INVALID NUMBER LITERAL - number_literal_suffixes.md:6:9:6:16
-INVALID NUMBER LITERAL - number_literal_suffixes.md:7:9:7:14
-INVALID NUMBER LITERAL - number_literal_suffixes.md:8:9:8:15
-INVALID NUMBER LITERAL - number_literal_suffixes.md:9:9:9:15
-INVALID NUMBER LITERAL - number_literal_suffixes.md:10:9:10:15
-INVALID NUMBER LITERAL - number_literal_suffixes.md:11:9:11:16
-INVALID NUMBER LITERAL - number_literal_suffixes.md:12:9:12:15
-INVALID NUMBER LITERAL - number_literal_suffixes.md:13:12:13:18
-INVALID NUMBER LITERAL - number_literal_suffixes.md:14:12:14:19
-INVALID NUMBER LITERAL - number_literal_suffixes.md:15:12:15:19
-INVALID NUMBER LITERAL - number_literal_suffixes.md:16:12:16:19
-INVALID NUMBER LITERAL - number_literal_suffixes.md:17:12:17:20
-INVALID NUMBER LITERAL - number_literal_suffixes.md:18:12:18:18
-INVALID NUMBER LITERAL - number_literal_suffixes.md:19:12:19:19
-INVALID NUMBER LITERAL - number_literal_suffixes.md:20:12:20:19
-INVALID NUMBER LITERAL - number_literal_suffixes.md:21:12:21:19
-INVALID NUMBER LITERAL - number_literal_suffixes.md:22:12:22:20
-INVALID NUMBER LITERAL - number_literal_suffixes.md:23:12:23:19
-INVALID NUMBER LITERAL - number_literal_suffixes.md:24:12:24:19
-INVALID NUMBER LITERAL - number_literal_suffixes.md:25:12:25:20
-INVALID NUMBER LITERAL - number_literal_suffixes.md:26:12:26:20
-INVALID NUMBER LITERAL - number_literal_suffixes.md:27:12:27:20
-INVALID NUMBER LITERAL - number_literal_suffixes.md:28:12:28:21
-INVALID NUMBER LITERAL - number_literal_suffixes.md:29:12:29:19
-INVALID NUMBER LITERAL - number_literal_suffixes.md:30:12:30:20
-INVALID NUMBER LITERAL - number_literal_suffixes.md:31:12:31:20
-INVALID NUMBER LITERAL - number_literal_suffixes.md:32:12:32:20
-INVALID NUMBER LITERAL - number_literal_suffixes.md:33:12:33:21
+INVALID NUMBER - number_literal_suffixes.md:2:9:2:14
+INVALID NUMBER - number_literal_suffixes.md:3:9:3:15
+INVALID NUMBER - number_literal_suffixes.md:4:9:4:15
+INVALID NUMBER - number_literal_suffixes.md:5:9:5:15
+INVALID NUMBER - number_literal_suffixes.md:6:9:6:16
+INVALID NUMBER - number_literal_suffixes.md:7:9:7:14
+INVALID NUMBER - number_literal_suffixes.md:8:9:8:15
+INVALID NUMBER - number_literal_suffixes.md:9:9:9:15
+INVALID NUMBER - number_literal_suffixes.md:10:9:10:15
+INVALID NUMBER - number_literal_suffixes.md:11:9:11:16
+INVALID NUMBER - number_literal_suffixes.md:12:9:12:15
+INVALID NUMBER - number_literal_suffixes.md:13:12:13:18
+INVALID NUMBER - number_literal_suffixes.md:14:12:14:19
+INVALID NUMBER - number_literal_suffixes.md:15:12:15:19
+INVALID NUMBER - number_literal_suffixes.md:16:12:16:19
+INVALID NUMBER - number_literal_suffixes.md:17:12:17:20
+INVALID NUMBER - number_literal_suffixes.md:18:12:18:18
+INVALID NUMBER - number_literal_suffixes.md:19:12:19:19
+INVALID NUMBER - number_literal_suffixes.md:20:12:20:19
+INVALID NUMBER - number_literal_suffixes.md:21:12:21:19
+INVALID NUMBER - number_literal_suffixes.md:22:12:22:20
+INVALID NUMBER - number_literal_suffixes.md:23:12:23:19
+INVALID NUMBER - number_literal_suffixes.md:24:12:24:19
+INVALID NUMBER - number_literal_suffixes.md:25:12:25:20
+INVALID NUMBER - number_literal_suffixes.md:26:12:26:20
+INVALID NUMBER - number_literal_suffixes.md:27:12:27:20
+INVALID NUMBER - number_literal_suffixes.md:28:12:28:21
+INVALID NUMBER - number_literal_suffixes.md:29:12:29:19
+INVALID NUMBER - number_literal_suffixes.md:30:12:30:20
+INVALID NUMBER - number_literal_suffixes.md:31:12:31:20
+INVALID NUMBER - number_literal_suffixes.md:32:12:32:20
+INVALID NUMBER - number_literal_suffixes.md:33:12:33:21
 # PROBLEMS
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:2:9:2:14:**
 ```roc
@@ -85,9 +85,9 @@ The number literal is invalid or too large to represent:
         ^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:3:9:3:15:**
 ```roc
@@ -96,9 +96,9 @@ The number literal is invalid or too large to represent:
         ^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:4:9:4:15:**
 ```roc
@@ -107,9 +107,9 @@ The number literal is invalid or too large to represent:
         ^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:5:9:5:15:**
 ```roc
@@ -118,9 +118,9 @@ The number literal is invalid or too large to represent:
         ^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:6:9:6:16:**
 ```roc
@@ -129,9 +129,9 @@ The number literal is invalid or too large to represent:
         ^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:7:9:7:14:**
 ```roc
@@ -140,9 +140,9 @@ The number literal is invalid or too large to represent:
         ^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:8:9:8:15:**
 ```roc
@@ -151,9 +151,9 @@ The number literal is invalid or too large to represent:
         ^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:9:9:9:15:**
 ```roc
@@ -162,9 +162,9 @@ The number literal is invalid or too large to represent:
         ^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:10:9:10:15:**
 ```roc
@@ -173,9 +173,9 @@ The number literal is invalid or too large to represent:
         ^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:11:9:11:16:**
 ```roc
@@ -184,9 +184,9 @@ The number literal is invalid or too large to represent:
         ^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:12:9:12:15:**
 ```roc
@@ -195,9 +195,9 @@ The number literal is invalid or too large to represent:
         ^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:13:12:13:18:**
 ```roc
@@ -206,9 +206,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:14:12:14:19:**
 ```roc
@@ -217,9 +217,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:15:12:15:19:**
 ```roc
@@ -228,9 +228,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:16:12:16:19:**
 ```roc
@@ -239,9 +239,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:17:12:17:20:**
 ```roc
@@ -250,9 +250,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:18:12:18:18:**
 ```roc
@@ -261,9 +261,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:19:12:19:19:**
 ```roc
@@ -272,9 +272,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:20:12:20:19:**
 ```roc
@@ -283,9 +283,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:21:12:21:19:**
 ```roc
@@ -294,9 +294,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:22:12:22:20:**
 ```roc
@@ -305,9 +305,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:23:12:23:19:**
 ```roc
@@ -316,9 +316,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:24:12:24:19:**
 ```roc
@@ -327,9 +327,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:25:12:25:20:**
 ```roc
@@ -338,9 +338,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:26:12:26:20:**
 ```roc
@@ -349,9 +349,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:27:12:27:20:**
 ```roc
@@ -360,9 +360,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:28:12:28:21:**
 ```roc
@@ -371,9 +371,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:29:12:29:19:**
 ```roc
@@ -382,9 +382,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:30:12:30:20:**
 ```roc
@@ -393,9 +393,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:31:12:31:20:**
 ```roc
@@ -404,9 +404,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:32:12:32:20:**
 ```roc
@@ -415,9 +415,9 @@ The number literal is invalid or too large to represent:
            ^^^^^^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:33:12:33:21:**
 ```roc

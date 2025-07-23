@@ -39,11 +39,11 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:11:3:11:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:14:48:14:49
 PARSE ERROR - fuzz_crash_025.md:15:1:15:2
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:15:3:15:4
-COMPILER DIAGNOSTIC - fuzz_crash_025.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_025.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_025.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_025.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_025.md:0:0:0:0
+INVALID STATEMENT - fuzz_crash_025.md:11:3:11:4
+INVALID STATEMENT - fuzz_crash_025.md:11:5:11:25
+INVALID STATEMENT - fuzz_crash_025.md:14:48:14:49
+INVALID STATEMENT - fuzz_crash_025.md:15:3:15:4
+INVALID STATEMENT - fuzz_crash_025.md:15:4:15:5
 TYPE MISMATCH - fuzz_crash_025.md:13:5:13:9
 # PROBLEMS
 **PARSE ERROR**
@@ -130,35 +130,60 @@ f =8
   ^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_025.md:0:0:0:0**
+**fuzz_crash_025.md:11:3:11:4:**
+```roc
+d = 18446744073709551615
+```
+  ^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_025.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**fuzz_crash_025.md:11:5:11:25:**
+```roc
+d = 18446744073709551615
+```
+    ^^^^^^^^^^^^^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_025.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_025.md:0:0:0:0**
+**fuzz_crash_025.md:14:48:14:49:**
+```roc
+e = 3402823669209384634633746074317682114553.14: I8
+```
+                                               ^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_025.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_025.md:15:3:15:4:**
+```roc
+f =8
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_025.md:15:4:15:5:**
+```roc
+f =8
+```
+   ^
+
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

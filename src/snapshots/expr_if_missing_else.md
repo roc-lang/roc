@@ -11,7 +11,7 @@ foo = if tru 0
 ~~~
 # EXPECTED
 PARSE ERROR - expr_if_missing_else.md:3:15:3:15
-COMPILER DIAGNOSTIC - expr_if_missing_else.md:0:0:0:0
+UNKNOWN OPERATOR - expr_if_missing_else.md:3:15:3:15
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`
@@ -25,11 +25,15 @@ foo = if tru 0
               
 
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**expr_if_missing_else.md:0:0:0:0**
+**expr_if_missing_else.md:3:15:3:15:**
+```roc
+foo = if tru 0
+```
+              
+
 
 # TOKENS
 ~~~zig

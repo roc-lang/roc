@@ -11,7 +11,7 @@ match numbers {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - list_patterns_err_multiple_rest.md:1:7:1:14
-COMPILER DIAGNOSTIC - list_patterns_err_multiple_rest.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
 UNUSED VARIABLE - list_patterns_err_multiple_rest.md:2:10:2:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
@@ -25,11 +25,8 @@ match numbers {
       ^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**list_patterns_err_multiple_rest.md:0:0:0:0**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
 **UNUSED VARIABLE**
 Variable `middle` is not used anywhere in your code.

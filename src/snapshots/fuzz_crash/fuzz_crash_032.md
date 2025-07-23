@@ -23,13 +23,13 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_032.md:3:24:3:25
 IMPORT MUST BE TOP LEVEL - fuzz_crash_032.md:6:18:6:24
 UNEXPECTED TOKEN IN PATTERN - fuzz_crash_032.md:9:21:9:22
 PARSE ERROR - fuzz_crash_032.md:9:22:9:22
-COMPILER DIAGNOSTIC - fuzz_crash_032.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_032.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_032.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_032.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_032.md:0:0:0:0
+UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:17
+UNDECLARED TYPE - fuzz_crash_032.md:3:21:3:24
+INVALID STATEMENT - fuzz_crash_032.md:3:24:3:25
+INVALID STATEMENT - fuzz_crash_032.md:3:26:3:45
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_032.md:6:25:6:30
-COMPILER DIAGNOSTIC - fuzz_crash_032.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_032.md:10:3:10:4
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
@@ -82,11 +82,18 @@ Green => LocalStatus-Complete
                      
 
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE VARIABLE**
+The type variable _lue_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type_var' is not yet handled in report generation.
-**fuzz_crash_032.md:0:0:0:0**
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+**fuzz_crash_032.md:3:14:3:17:**
+```roc
+LocalStatus :lue => Loc= [Pending, Complete]
+```
+             ^^^
+
 
 **UNDECLARED TYPE**
 The type _Loc_ is not declared in this scope.
@@ -99,23 +106,32 @@ LocalStatus :lue => Loc= [Pending, Complete]
                     ^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_032.md:0:0:0:0**
+**fuzz_crash_032.md:3:24:3:25:**
+```roc
+LocalStatus :lue => Loc= [Pending, Complete]
+```
+                       ^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_032.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**fuzz_crash_032.md:3:26:3:45:**
+```roc
+LocalStatus :lue => Loc= [Pending, Complete]
+```
+                         ^^^^^^^^^^^^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_032.md:0:0:0:0**
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: statement type in block
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 
@@ -128,11 +144,8 @@ olor = |color| { import Color.RGB
                         ^^^^^
 
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**fuzz_crash_032.md:0:0:0:0**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
 

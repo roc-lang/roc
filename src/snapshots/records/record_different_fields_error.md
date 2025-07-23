@@ -35,12 +35,12 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:6:29
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:10:7:17
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:17:7:18
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:7:31
-COMPILER DIAGNOSTIC - record_different_fields_error.md:0:0:0:0
-COMPILER DIAGNOSTIC - record_different_fields_error.md:0:0:0:0
+MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - :0:0:0:0
 UNDEFINED VARIABLE - record_different_fields_error.md:5:5:5:10
 UNDEFINED VARIABLE - record_different_fields_error.md:5:11:5:15
 UNDEFINED VARIABLE - record_different_fields_error.md:6:5:6:10
-COMPILER DIAGNOSTIC - record_different_fields_error.md:0:0:0:0
+MALFORMED TYPE - :0:0:0:0
 UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -283,17 +283,11 @@ Here is the problematic code:
                              ^
 
 
-**COMPILER DIAGNOSTIC**
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
 
-**Compiler Diagnostic**
-Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
-**record_different_fields_error.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
-**record_different_fields_error.md:0:0:0:0**
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
 
 **UNDEFINED VARIABLE**
 
@@ -328,11 +322,8 @@ The variable 'field' is not defined:
     ^^^^^
 
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
-**record_different_fields_error.md:0:0:0:0**
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
 
 **UNDEFINED VARIABLE**
 

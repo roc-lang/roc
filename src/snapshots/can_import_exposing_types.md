@@ -61,26 +61,26 @@ combineResults = |jsonResult, httpStatus|
     }
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+UNDECLARED TYPE - can_import_exposing_types.md:31:18:31:24
+UNDECLARED TYPE - can_import_exposing_types.md:32:18:32:24
+UNDECLARED TYPE - can_import_exposing_types.md:33:23:33:31
+UNDECLARED TYPE - can_import_exposing_types.md:8:27:8:32
+UNDECLARED TYPE - can_import_exposing_types.md:8:34:8:39
+UNDECLARED TYPE - can_import_exposing_types.md:12:17:12:24
+UNDECLARED TYPE - can_import_exposing_types.md:12:28:12:36
+UNDECLARED TYPE - can_import_exposing_types.md:22:15:22:21
+UNDECLARED TYPE - can_import_exposing_types.md:22:28:22:33
+UNDECLARED TYPE - can_import_exposing_types.md:22:50:22:55
+UNDECLARED TYPE - can_import_exposing_types.md:22:58:22:63
 UNDEFINED VARIABLE - can_import_exposing_types.md:24:5:24:16
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+UNDECLARED TYPE - can_import_exposing_types.md:37:16:37:22
+UNDECLARED TYPE - can_import_exposing_types.md:41:18:41:26
 UNDEFINED VARIABLE - can_import_exposing_types.md:45:23:45:37
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+UNDECLARED TYPE - can_import_exposing_types.md:49:25:49:30
+UNDECLARED TYPE - can_import_exposing_types.md:49:32:49:37
+UNDECLARED TYPE - can_import_exposing_types.md:49:40:49:46
+UNDECLARED TYPE - can_import_exposing_types.md:49:57:49:65
+UNDECLARED TYPE - can_import_exposing_types.md:49:67:49:72
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Config_ is not declared in this scope.

@@ -26,14 +26,14 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_app_complex_nested.md:13:18:13:23
-COMPILER DIAGNOSTIC - type_app_complex_nested.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_app_complex_nested.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_app_complex_nested.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_app_complex_nested.md:0:0:0:0
+UNDECLARED TYPE - type_app_complex_nested.md:16:33:16:38
+UNDECLARED TYPE - type_app_complex_nested.md:16:54:16:59
+UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
+UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
-COMPILER DIAGNOSTIC - type_app_complex_nested.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_app_complex_nested.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_app_complex_nested.md:0:0:0:0
+UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
+INVALID LAMBDA - :0:0:0:0
+INVALID STATEMENT - type_app_complex_nested.md:13:24:13:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **crash** is not expected in an expression.
@@ -114,17 +114,19 @@ deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
              ^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID LAMBDA**
+The body of this lambda expression is not valid.
 
-**Compiler Diagnostic**
-Diagnostic type 'lambda_body_not_canonicalized' is not yet handled in report generation.
-**type_app_complex_nested.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**type_app_complex_nested.md:13:24:13:41:**
+```roc
+deepNested = |_| crash "not implemented"
+```
+                       ^^^^^^^^^^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**type_app_complex_nested.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

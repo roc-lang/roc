@@ -40,14 +40,14 @@ PARSE ERROR - can_import_nested_modules.md:5:1:5:7
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:13:5:20
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:20:5:27
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:28:5:36
-COMPILER DIAGNOSTIC - can_import_nested_modules.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_nested_modules.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_nested_modules.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_nested_modules.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_nested_modules.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_nested_modules.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_nested_modules.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_nested_modules.md:0:0:0:0
+INVALID STATEMENT - can_import_nested_modules.md:3:19:3:26
+INVALID STATEMENT - can_import_nested_modules.md:4:19:4:24
+INVALID STATEMENT - can_import_nested_modules.md:4:25:4:27
+INVALID STATEMENT - can_import_nested_modules.md:5:8:5:13
+INVALID STATEMENT - can_import_nested_modules.md:5:13:5:20
+INVALID STATEMENT - can_import_nested_modules.md:5:20:5:27
+INVALID STATEMENT - can_import_nested_modules.md:5:28:5:36
+INVALID STATEMENT - can_import_nested_modules.md:5:37:5:46
 UNDEFINED VARIABLE - can_import_nested_modules.md:9:26:9:41
 UNDEFINED VARIABLE - can_import_nested_modules.md:13:29:13:43
 UNDEFINED VARIABLE - can_import_nested_modules.md:18:5:18:37
@@ -151,53 +151,93 @@ import utils.String.Format exposing [padLeft]
                            ^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**can_import_nested_modules.md:0:0:0:0**
+**can_import_nested_modules.md:3:19:3:26:**
+```roc
+import json.Parser.Config
+```
+                  ^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**can_import_nested_modules.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**can_import_nested_modules.md:4:19:4:24:**
+```roc
+import http.Client.Auth as HttpAuth
+```
+                  ^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**can_import_nested_modules.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**can_import_nested_modules.md:0:0:0:0**
+**can_import_nested_modules.md:4:25:4:27:**
+```roc
+import http.Client.Auth as HttpAuth
+```
+                        ^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**can_import_nested_modules.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**can_import_nested_modules.md:5:8:5:13:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+       ^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**can_import_nested_modules.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**can_import_nested_modules.md:0:0:0:0**
+**can_import_nested_modules.md:5:13:5:20:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+            ^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**can_import_nested_modules.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**can_import_nested_modules.md:5:20:5:27:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+                   ^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**can_import_nested_modules.md:5:28:5:36:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+                           ^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**can_import_nested_modules.md:5:37:5:46:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+                                    ^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 

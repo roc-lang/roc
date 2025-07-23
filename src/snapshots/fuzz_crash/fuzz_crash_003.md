@@ -11,7 +11,7 @@ type=file
 UNCLOSED STRING - :0:0:0:0
 MISSING HEADER - fuzz_crash_003.md:1:1:1:2
 PARSE ERROR - fuzz_crash_003.md:1:6:1:6
-COMPILER DIAGNOSTIC - fuzz_crash_003.md:0:0:0:0
+INVALID STATEMENT - fuzz_crash_003.md:1:3:1:6
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -44,11 +44,16 @@ Here is the problematic code:
      
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_003.md:0:0:0:0**
+**fuzz_crash_003.md:1:3:1:6:**
+```roc
+= "te
+```
+  ^^^
+
 
 # TOKENS
 ~~~zig

@@ -44,11 +44,11 @@ PARSE ERROR - underscore_in_regular_annotations.md:26:28:26:32
 UNEXPECTED TOKEN IN EXPRESSION - underscore_in_regular_annotations.md:27:5:27:6
 UNEXPECTED TOKEN IN EXPRESSION - underscore_in_regular_annotations.md:30:22:30:24
 UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
-COMPILER DIAGNOSTIC - underscore_in_regular_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - underscore_in_regular_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - underscore_in_regular_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - underscore_in_regular_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - underscore_in_regular_annotations.md:0:0:0:0
+INVALID STATEMENT - underscore_in_regular_annotations.md:26:15:26:16
+INVALID STATEMENT - underscore_in_regular_annotations.md:27:5:27:6
+INVALID STATEMENT - underscore_in_regular_annotations.md:27:7:27:16
+INVALID STATEMENT - underscore_in_regular_annotations.md:30:22:30:24
+INVALID STATEMENT - underscore_in_regular_annotations.md:30:25:30:27
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **,** is not expected in an expression.
@@ -146,35 +146,60 @@ process = |list| "processed"
            ^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**underscore_in_regular_annotations.md:0:0:0:0**
+**underscore_in_regular_annotations.md:26:15:26:16:**
+```roc
+map : (a -> b), List(a) -> List(b)
+```
+              ^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**underscore_in_regular_annotations.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**underscore_in_regular_annotations.md:27:5:27:6:**
+```roc
+map = |_, _| []
+```
+    ^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**underscore_in_regular_annotations.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**underscore_in_regular_annotations.md:0:0:0:0**
+**underscore_in_regular_annotations.md:27:7:27:16:**
+```roc
+map = |_, _| []
+```
+      ^^^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**underscore_in_regular_annotations.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**underscore_in_regular_annotations.md:30:22:30:24:**
+```roc
+transform : _a -> _b -> _b
+```
+                     ^^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**underscore_in_regular_annotations.md:30:25:30:27:**
+```roc
+transform : _a -> _b -> _b
+```
+                        ^^
+
 
 # TOKENS
 ~~~zig

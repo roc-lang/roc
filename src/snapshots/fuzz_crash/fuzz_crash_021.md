@@ -15,10 +15,10 @@ MISSING HEADER - fuzz_crash_021.md:1:1:1:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_021.md:1:4:1:5
 PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 PARSE ERROR - fuzz_crash_021.md:3:15:3:15
-COMPILER DIAGNOSTIC - fuzz_crash_021.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_021.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_021.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_021.md:0:0:0:0
+MALFORMED TYPE - :0:0:0:0
+INVALID STATEMENT - fuzz_crash_021.md:1:4:1:5
+INVALID STATEMENT - fuzz_crash_021.md:1:5:1:13
+INVALID STATEMENT - fuzz_crash_021.md:1:13:1:16
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -75,29 +75,41 @@ Pair(a, b+ : (
               
 
 
-**COMPILER DIAGNOSTIC**
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
 
-**Compiler Diagnostic**
-Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
-**fuzz_crash_021.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**fuzz_crash_021.md:1:4:1:5:**
+```roc
+Fli/main.roc" }
+```
+   ^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_021.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_021.md:0:0:0:0**
+**fuzz_crash_021.md:1:5:1:13:**
+```roc
+Fli/main.roc" }
+```
+    ^^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_021.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_021.md:1:13:1:16:**
+```roc
+Fli/main.roc" }
+```
+            ^^^
+
 
 # TOKENS
 ~~~zig

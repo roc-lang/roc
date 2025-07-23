@@ -23,11 +23,11 @@ PARSE ERROR - type_shadowing_across_scopes.md:11:5:11:11
 PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:31
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:11:32
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:12:1:12:2
-COMPILER DIAGNOSTIC - type_shadowing_across_scopes.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_shadowing_across_scopes.md:0:0:0:0
+TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
+MALFORMED TYPE - :0:0:0:0
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
-COMPILER DIAGNOSTIC - type_shadowing_across_scopes.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_shadowing_across_scopes.md:0:0:0:0
+INVALID STATEMENT - type_shadowing_across_scopes.md:11:31:11:32
+INVALID STATEMENT - type_shadowing_across_scopes.md:12:1:12:2
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_type_field_name`
@@ -77,17 +77,26 @@ Here is the problematic code:
 ^
 
 
-**COMPILER DIAGNOSTIC**
+**TYPE REDECLARED**
+The type _Result_ is being redeclared.
 
-**Compiler Diagnostic**
-Diagnostic type 'type_redeclared' is not yet handled in report generation.
-**type_shadowing_across_scopes.md:0:0:0:0**
+The redeclaration is here:
+**type_shadowing_across_scopes.md:3:1:3:31:**
+```roc
+Result(a, b) : [Ok(a), Err(b)]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**COMPILER DIAGNOSTIC**
+But _Result_ was already declared here:
+**type_shadowing_across_scopes.md:1:1:1:1:**
+```roc
+module [Result, processData]
+```
 
-**Compiler Diagnostic**
-Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
-**type_shadowing_across_scopes.md:0:0:0:0**
+
+
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
 
 **UNUSED VARIABLE**
 Variable `data` is not used anywhere in your code.
@@ -101,17 +110,27 @@ processData = |data|
                ^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**type_shadowing_across_scopes.md:0:0:0:0**
+**type_shadowing_across_scopes.md:11:31:11:32:**
+```roc
+    Result : [Success, Failure]
+```
+                              ^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**type_shadowing_across_scopes.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**type_shadowing_across_scopes.md:12:1:12:2:**
+```roc
+}
+```
+^
+
 
 # TOKENS
 ~~~zig

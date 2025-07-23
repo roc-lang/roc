@@ -16,8 +16,8 @@ main! = |_| {}
 UNEXPECTED TOKEN IN EXPRESSION - type_function_multi_arg.md:3:24:3:26
 PARSE ERROR - type_function_multi_arg.md:3:34:3:36
 PARSE ERROR - type_function_multi_arg.md:3:42:3:43
-COMPILER DIAGNOSTIC - type_function_multi_arg.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_function_multi_arg.md:0:0:0:0
+INVALID STATEMENT - type_function_multi_arg.md:3:24:3:26
+INVALID STATEMENT - type_function_multi_arg.md:3:27:3:43
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **->** is not expected in an expression.
@@ -55,17 +55,27 @@ curry : (_a, _b -> _c) -> (_a -> _b -> _c)
                                          ^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**type_function_multi_arg.md:0:0:0:0**
+**type_function_multi_arg.md:3:24:3:26:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+                       ^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**type_function_multi_arg.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**type_function_multi_arg.md:3:27:3:43:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+                          ^^^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

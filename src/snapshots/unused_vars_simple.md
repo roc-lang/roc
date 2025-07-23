@@ -29,7 +29,7 @@ main! = |_| {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
-COMPILER DIAGNOSTIC - unused_vars_simple.md:0:0:0:0
+UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
@@ -43,11 +43,16 @@ unused_regular = |x| 42
                   ^
 
 
-**COMPILER DIAGNOSTIC**
+**UNDERSCORE VARIABLE USED**
+Variable `_value` is prefixed with an underscore but is actually used.
 
-**Compiler Diagnostic**
-Diagnostic type 'used_underscore_variable' is not yet handled in report generation.
-**unused_vars_simple.md:0:0:0:0**
+Variables prefixed with an underscore are supposed to be ignored. But `_value` is used here:
+**unused_vars_simple.md:7:28:7:34:**
+```roc
+used_underscore = |_value| _value
+```
+                           ^^^^^^
+
 
 # TOKENS
 ~~~zig

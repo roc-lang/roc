@@ -15,9 +15,9 @@ main! : List(String) -> Result({}, _)
 tag_tuple : Value((_a, _b, _c))
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - type_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_annotations.md:0:0:0:0
+UNDECLARED TYPE - type_annotations.md:4:7:4:12
+UNDECLARED TYPE - type_annotations.md:7:14:7:20
+UNDECLARED TYPE - type_annotations.md:8:13:8:18
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Thing_ is not declared in this scope.

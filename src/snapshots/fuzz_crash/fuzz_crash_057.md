@@ -8,13 +8,18 @@ type=file
 module[]s:b->c where module(a).t:c,u:o...
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - fuzz_crash_057.md:0:0:0:0
+INVALID STATEMENT - fuzz_crash_057.md:1:39:1:42
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_057.md:0:0:0:0**
+**fuzz_crash_057.md:1:39:1:42:**
+```roc
+module[]s:b->c where module(a).t:c,u:o...
+```
+                                      ^^^
+
 
 # TOKENS
 ~~~zig

@@ -135,12 +135,12 @@ PARSE ERROR - fuzz_crash_020.md:60:16:60:16
 PARSE ERROR - fuzz_crash_020.md:62:5:62:5
 PARSE ERROR - fuzz_crash_020.md:63:7:63:7
 PARSE ERROR - fuzz_crash_020.md:66:12:66:12
-COMPILER DIAGNOSTIC - fuzz_crash_020.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_020.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_020.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_020.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_020.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_020.md:0:0:0:0
+UNDECLARED TYPE - fuzz_crash_020.md:13:13:13:16
+UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:13:19:13:21
+UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:19:4:19:6
+UNDECLARED TYPE - fuzz_crash_020.md:24:15:24:16
+UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:24:24:24:25
+UNDECLARED TYPE - fuzz_crash_020.md:37:7:37:9
 UNDEFINED VARIABLE - fuzz_crash_020.md:40:5:40:8
 UNDEFINED VARIABLE - fuzz_crash_020.md:42:4:42:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:42:6:42:10
@@ -152,18 +152,18 @@ UNUSED VARIABLE - fuzz_crash_020.md:57:2:57:4
 UNDEFINED VARIABLE - fuzz_crash_020.md:59:3:59:7
 UNUSED VARIABLE - fuzz_crash_020.md:60:12:60:15
 UNDEFINED VARIABLE - fuzz_crash_020.md:72:2:72:4
-COMPILER DIAGNOSTIC - fuzz_crash_020.md:0:0:0:0
+UNDECLARED TYPE - fuzz_crash_020.md:74:9:74:15
 UNDEFINED VARIABLE - fuzz_crash_020.md:75:11:75:12
 UNDEFINED VARIABLE - fuzz_crash_020.md:78:9:78:14
 UNDEFINED VARIABLE - fuzz_crash_020.md:80:3:80:6
-COMPILER DIAGNOSTIC - fuzz_crash_020.md:0:0:0:0
+CRASH EXPECTS STRING - fuzz_crash_020.md:86:3:86:11
 UNDEFINED VARIABLE - fuzz_crash_020.md:87:11:87:12
 UNDEFINED VARIABLE - fuzz_crash_020.md:89:3:89:6
-COMPILER DIAGNOSTIC - fuzz_crash_020.md:0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:34:96:37
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:47:96:52
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:54:96:57
-COMPILER DIAGNOSTIC - fuzz_crash_020.md:0:0:0:0
+DUPLICATE DEFINITION - fuzz_crash_020.md:97:2:97:3
 UNDEFINED VARIABLE - fuzz_crash_020.md:97:21:97:24
 UNDEFINED VARIABLE - fuzz_crash_020.md:97:30:97:32
 UNDEFINED VARIABLE - fuzz_crash_020.md:98:2:98:3
@@ -171,14 +171,14 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:100:11:100:14
 UNDEFINED VARIABLE - fuzz_crash_020.md:102:4:102:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:102:8:102:13
 UNDEFINED VARIABLE - fuzz_crash_020.md:105:2:105:3
-COMPILER DIAGNOSTIC - fuzz_crash_020.md:0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_020.md:108:4:108:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:108:6:108:8
 UNUSED VARIABLE - fuzz_crash_020.md:88:1:88:2
 UNUSED VARIABLE - fuzz_crash_020.md:96:2:96:4
 UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
 UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
-COMPILER DIAGNOSTIC - fuzz_crash_020.md:0:0:0:0
+UNDECLARED TYPE - fuzz_crash_020.md:116:5:116:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:119:2:119:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
@@ -279,17 +279,31 @@ Map(a, b) : Lis, (ab) -> List(b)
             ^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE VARIABLE**
+The type variable _ab_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type_var' is not yet handled in report generation.
-**fuzz_crash_020.md:0:0:0:0**
+Type variables must be introduced in a type annotation before they can be used.
 
-**COMPILER DIAGNOSTIC**
+This type variable is referenced here:
+**fuzz_crash_020.md:13:19:13:21:**
+```roc
+Map(a, b) : Lis, (ab) -> List(b)
+```
+                  ^^
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type_var' is not yet handled in report generation.
-**fuzz_crash_020.md:0:0:0:0**
+
+**UNDECLARED TYPE VARIABLE**
+The type variable _ab_ is not declared in this scope.
+
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+**fuzz_crash_020.md:19:4:19:6:**
+```roc
+		(ab) -> # row
+```
+   ^^
+
 
 **UNDECLARED TYPE**
 The type _O_ is not declared in this scope.
@@ -302,11 +316,18 @@ Som : { foo : O, bar : g }
               ^
 
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE VARIABLE**
+The type variable _g_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type_var' is not yet handled in report generation.
-**fuzz_crash_020.md:0:0:0:0**
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+**fuzz_crash_020.md:24:24:24:25:**
+```roc
+Som : { foo : O, bar : g }
+```
+                       ^
+
 
 **UNDECLARED TYPE**
 The type _U6_ is not declared in this scope.
@@ -487,11 +508,15 @@ The variable 'tag' is not defined:
   ^^^
 
 
-**COMPILER DIAGNOSTIC**
+**CRASH EXPECTS STRING**
+The `crash` keyword expects a string literal as its argument.
+For example: `crash "Something went wrong"`
+**fuzz_crash_020.md:86:3:86:11:**
+```roc
+	)crash ke"Unr!" #)
+```
+  ^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'crash_expects_string' is not yet handled in report generation.
-**fuzz_crash_020.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
 
@@ -515,11 +540,10 @@ The variable 'one' is not defined:
   ^^^
 
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: statement type in block
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_020.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 
@@ -554,11 +578,23 @@ The variable 'ned' is not defined:
                                                      ^^^
 
 
-**COMPILER DIAGNOSTIC**
+**DUPLICATE DEFINITION**
+The name `t` is being redeclared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'shadowing_warning' is not yet handled in report generation.
-**fuzz_crash_020.md:0:0:0:0**
+The redeclaration is here:
+**fuzz_crash_020.md:97:2:97:3:**
+```roc
+	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+```
+ ^
+
+But `t` was already defined here:
+**fuzz_crash_020.md:88:1:88:2:**
+```roc
+t = [
+```
+^
+
 
 **UNDEFINED VARIABLE**
 
@@ -637,11 +673,10 @@ The variable 'b' is not defined:
  ^
 
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: canonicalize suffix_single_question expression
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_020.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 

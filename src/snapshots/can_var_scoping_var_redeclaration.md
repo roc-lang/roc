@@ -18,14 +18,26 @@ redeclareTest = |_| {
 result = redeclareTest({})
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - can_var_scoping_var_redeclaration.md:0:0:0:0
+DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:6:2:6:13
 UNUSED VARIABLE - can_var_scoping_var_redeclaration.md:6:2:6:13
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**DUPLICATE DEFINITION**
+The name `x_` is being redeclared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'shadowing_warning' is not yet handled in report generation.
-**can_var_scoping_var_redeclaration.md:0:0:0:0**
+The redeclaration is here:
+**can_var_scoping_var_redeclaration.md:6:2:6:13:**
+```roc
+	var x_ = 10 # Redeclare var - should warn but proceed
+```
+ ^^^^^^^^^^^
+
+But `x_` was already defined here:
+**can_var_scoping_var_redeclaration.md:5:2:5:12:**
+```roc
+	var x_ = 5
+```
+ ^^^^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable `x_` is not used anywhere in your code.

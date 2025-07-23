@@ -15,8 +15,8 @@ match x {
 UNEXPECTED TOKEN IN PATTERN - f64_pattern_literal_error.md:2:5:2:12
 UNEXPECTED TOKEN IN PATTERN - f64_pattern_literal_error.md:3:5:3:11
 UNDEFINED VARIABLE - f64_pattern_literal_error.md:1:7:1:8
-COMPILER DIAGNOSTIC - f64_pattern_literal_error.md:0:0:0:0
-COMPILER DIAGNOSTIC - f64_pattern_literal_error.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+INVALID PATTERN - :0:0:0:0
 UNUSED VARIABLE - f64_pattern_literal_error.md:4:5:4:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN PATTERN**
@@ -54,17 +54,11 @@ match x {
       ^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**f64_pattern_literal_error.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**f64_pattern_literal_error.md:0:0:0:0**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
 **UNUSED VARIABLE**
 Variable `value` is not used anywhere in your code.

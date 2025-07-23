@@ -11,13 +11,12 @@ some_fn(arg1)? # Comment 1
 	.record_field?
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - record_access_multiline_formatting_4.md:0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: canonicalize suffix_single_question expression
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**record_access_multiline_formatting_4.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 # TOKENS
 ~~~zig

@@ -26,17 +26,17 @@ UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:3:23:3:31
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:12:14:17
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:17:14:22
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:22:14:29
-COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
-COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
-COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
-COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
+INVALID STATEMENT - multi_qualified_import.md:3:17:3:22
+INVALID STATEMENT - multi_qualified_import.md:3:23:3:31
+INVALID STATEMENT - multi_qualified_import.md:3:32:3:41
+UNDECLARED TYPE - multi_qualified_import.md:5:16:5:23
 UNDEFINED VARIABLE - multi_qualified_import.md:6:16:6:45
 UNUSED VARIABLE - multi_qualified_import.md:10:12:10:19
 UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
-COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
-COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
-COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
-COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
+INVALID STATEMENT - multi_qualified_import.md:14:12:14:17
+INVALID STATEMENT - multi_qualified_import.md:14:17:14:22
+INVALID STATEMENT - multi_qualified_import.md:14:22:14:29
+INVALID STATEMENT - multi_qualified_import.md:14:29:14:38
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.Utf8** is not expected in an expression.
@@ -98,23 +98,38 @@ data = json.Core.Utf8.encode("hello")
                      ^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**multi_qualified_import.md:0:0:0:0**
+**multi_qualified_import.md:3:17:3:22:**
+```roc
+import json.Core.Utf8 exposing [Encoder]
+```
+                ^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**multi_qualified_import.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**multi_qualified_import.md:3:23:3:31:**
+```roc
+import json.Core.Utf8 exposing [Encoder]
+```
+                      ^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**multi_qualified_import.md:0:0:0:0**
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**multi_qualified_import.md:3:32:3:41:**
+```roc
+import json.Core.Utf8 exposing [Encoder]
+```
+                               ^^^^^^^^^
+
 
 **UNDECLARED TYPE**
 The type _Encoder_ is not declared in this scope.
@@ -161,29 +176,49 @@ data = json.Core.Utf8.encode("hello")
        ^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**multi_qualified_import.md:0:0:0:0**
+**multi_qualified_import.md:14:12:14:17:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+           ^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**multi_qualified_import.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**multi_qualified_import.md:14:17:14:22:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+                ^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**multi_qualified_import.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**multi_qualified_import.md:0:0:0:0**
+**multi_qualified_import.md:14:22:14:29:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+                     ^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**multi_qualified_import.md:14:29:14:38:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+                            ^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

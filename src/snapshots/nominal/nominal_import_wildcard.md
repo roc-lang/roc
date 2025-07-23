@@ -20,10 +20,10 @@ green = Green
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - nominal_import_wildcard.md:3:13:3:15
-COMPILER DIAGNOSTIC - nominal_import_wildcard.md:0:0:0:0
-COMPILER DIAGNOSTIC - nominal_import_wildcard.md:0:0:0:0
-COMPILER DIAGNOSTIC - nominal_import_wildcard.md:0:0:0:0
-COMPILER DIAGNOSTIC - nominal_import_wildcard.md:0:0:0:0
+INVALID STATEMENT - nominal_import_wildcard.md:3:13:3:15
+UNDECLARED TYPE - nominal_import_wildcard.md:5:7:5:12
+UNDECLARED TYPE - nominal_import_wildcard.md:8:8:8:13
+UNDECLARED TYPE - nominal_import_wildcard.md:11:9:11:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.*** is not expected in an expression.
@@ -37,11 +37,16 @@ import Color.*
             ^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**nominal_import_wildcard.md:0:0:0:0**
+**nominal_import_wildcard.md:3:13:3:15:**
+```roc
+import Color.*
+```
+            ^^
+
 
 **UNDECLARED TYPE**
 The type _Color_ is not declared in this scope.

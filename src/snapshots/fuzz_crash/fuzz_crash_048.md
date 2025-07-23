@@ -17,9 +17,9 @@ tag_tuple : Value((a, b, c))
 ~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_048.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_048.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_048.md:0:0:0:0
+UNDECLARED TYPE - fuzz_crash_048.md:4:7:4:12
+UNDECLARED TYPE - fuzz_crash_048.md:8:14:8:20
+UNDECLARED TYPE - fuzz_crash_048.md:9:13:9:18
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.

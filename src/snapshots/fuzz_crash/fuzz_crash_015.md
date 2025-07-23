@@ -15,10 +15,10 @@ LEADING ZERO - :0:0:0:0
 MISSING HEADER - fuzz_crash_015.md:1:1:1:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_015.md:1:4:1:6
 PARSE ERROR - fuzz_crash_015.md:3:4:3:6
-COMPILER DIAGNOSTIC - fuzz_crash_015.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_015.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_015.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_015.md:0:0:0:0
+INVALID STATEMENT - fuzz_crash_015.md:1:4:1:6
+INVALID STATEMENT - fuzz_crash_015.md:2:1:2:4
+INVALID STATEMENT - fuzz_crash_015.md:3:1:3:6
+INVALID STATEMENT - fuzz_crash_015.md:4:1:4:3
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -63,29 +63,49 @@ Here is the problematic code:
    ^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_015.md:0:0:0:0**
+**fuzz_crash_015.md:1:4:1:6:**
+```roc
+0o0.0
+```
+   ^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_015.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**fuzz_crash_015.md:2:1:2:4:**
+```roc
+0_0
+```
+^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_015.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_015.md:0:0:0:0**
+**fuzz_crash_015.md:3:1:3:6:**
+```roc
+0u8.0
+```
+^^^^^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_015.md:4:1:4:3:**
+```roc
+0_
+```
+^^
+
 
 # TOKENS
 ~~~zig

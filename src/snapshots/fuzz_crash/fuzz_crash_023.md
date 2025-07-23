@@ -219,45 +219,45 @@ PARSE ERROR - fuzz_crash_023.md:178:38:178:40
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:40:178:41
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:45:178:46
 PARSE ERROR - fuzz_crash_023.md:178:52:178:54
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
+UNDECLARED TYPE - fuzz_crash_023.md:36:8:36:11
+UNDECLARED TYPE - fuzz_crash_023.md:36:13:36:16
+UNDECLARED TYPE - fuzz_crash_023.md:39:2:39:5
+UNDECLARED TYPE - fuzz_crash_023.md:40:2:40:5
+UNDECLARED TYPE - fuzz_crash_023.md:43:19:43:21
+UNDECLARED TYPE - fuzz_crash_023.md:43:32:43:41
+UNDECLARED TYPE - fuzz_crash_023.md:45:8:45:10
+UNDECLARED TYPE - fuzz_crash_023.md:46:8:46:17
+UNDECLARED TYPE - fuzz_crash_023.md:52:4:52:6
+UNDECLARED TYPE - fuzz_crash_023.md:53:8:53:17
+NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_023.md:72:4:72:13
 UNUSED VARIABLE - fuzz_crash_023.md:97:3:97:8
 UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_023.md:121:21:121:27
 UNUSED VARIABLE - fuzz_crash_023.md:127:4:128:9
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_023.md:82:2:82:3
 UNDEFINED VARIABLE - fuzz_crash_023.md:141:2:141:6
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
+UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
 UNDEFINED VARIABLE - fuzz_crash_023.md:147:9:147:13
 UNDEFINED VARIABLE - fuzz_crash_023.md:158:2:158:11
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
+MALFORMED TYPE - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_023.md:179:42:179:48
 UNDEFINED VARIABLE - fuzz_crash_023.md:183:3:183:7
 UNDEFINED VARIABLE - fuzz_crash_023.md:185:4:185:10
 UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_023.md:193:4:193:13
 UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
 UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
@@ -266,7 +266,7 @@ UNUSED VARIABLE - fuzz_crash_023.md:166:2:166:6
 UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
 UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
-COMPILER DIAGNOSTIC - fuzz_crash_023.md:0:0:0:0
+UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 TYPE MISMATCH - fuzz_crash_023.md:67:11:67:14
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
 TYPE MISMATCH - fuzz_crash_023.md:155:2:155:12
@@ -441,23 +441,20 @@ This type is referenced here:
        ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: malformed import module name contains invalid control characters
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: Exposed item 'line!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 
@@ -494,29 +491,10 @@ The unused variable is declared here:
 
 
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: alternatives pattern outside match expression
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
-
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:1:1:1:1:**
-```roc
-# This is a module comment!
-```
-
-
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
@@ -530,17 +508,32 @@ The unused variable is declared here:
 
 
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: alternatives pattern outside match expression
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**COMPILER DIAGNOSTIC**
+**UNUSED VARIABLE**
+Variable `rest` is not used anywhere in your code.
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:1:1:1:1:**
+```roc
+# This is a module comment!
+```
+
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: alternatives pattern outside match expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: canonicalize local_dispatch expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
@@ -566,17 +559,15 @@ The unused variable is declared here:
 ```
 
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: alternatives pattern outside match expression
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: alternatives pattern outside match expression
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
@@ -634,17 +625,13 @@ The variable 'some_func' is not defined:
  ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: statement type in block
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
 
 **UNDEFINED VARIABLE**
 
@@ -690,17 +677,15 @@ The variable 'foo' is not defined:
                      ^^^
 
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: canonicalize suffix_single_question expression
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**COMPILER DIAGNOSTIC**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: canonicalize suffix_single_question expression
 
-**Compiler Diagnostic**
-Diagnostic type 'not_implemented' is not yet handled in report generation.
-**fuzz_crash_023.md:0:0:0:0**
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 

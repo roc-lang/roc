@@ -13,13 +13,18 @@ dbg "foo"
 foo = ...
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - dbg_stmt_not_permitted_top_level.md:0:0:0:0
+INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:4:1:4:10
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `dbg` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**dbg_stmt_not_permitted_top_level.md:0:0:0:0**
+**dbg_stmt_not_permitted_top_level.md:4:1:4:10:**
+```roc
+dbg "foo"
+```
+^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

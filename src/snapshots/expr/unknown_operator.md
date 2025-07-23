@@ -9,7 +9,7 @@ type=expr
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:5
-COMPILER DIAGNOSTIC - unknown_operator.md:0:0:0:0
+UNKNOWN OPERATOR - unknown_operator.md:1:1:1:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+** is not expected in an expression.
@@ -23,11 +23,15 @@ Here is the problematic code:
    ^
 
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**unknown_operator.md:0:0:0:0**
+**unknown_operator.md:1:1:1:5:**
+```roc
+1 ++ 2
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

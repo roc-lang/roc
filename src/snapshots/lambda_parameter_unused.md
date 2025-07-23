@@ -33,7 +33,7 @@ main! = |_| {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
-COMPILER DIAGNOSTIC - lambda_parameter_unused.md:0:0:0:0
+UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 TYPE MISMATCH - lambda_parameter_unused.md:24:25:24:42
 TYPE MISMATCH - lambda_parameter_unused.md:24:15:24:42
 TYPE MISMATCH - lambda_parameter_unused.md:24:5:24:42
@@ -50,11 +50,16 @@ add = |unused| 42
        ^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNDERSCORE VARIABLE USED**
+Variable `_factor` is prefixed with an underscore but is actually used.
 
-**Compiler Diagnostic**
-Diagnostic type 'used_underscore_variable' is not yet handled in report generation.
-**lambda_parameter_unused.md:0:0:0:0**
+Variables prefixed with an underscore are supposed to be ignored. But `_factor` is used here:
+**lambda_parameter_unused.md:9:22:9:29:**
+```roc
+multiply = |_factor| _factor * 2
+```
+                     ^^^^^^^
+
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

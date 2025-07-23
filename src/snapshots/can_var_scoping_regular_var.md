@@ -28,21 +28,15 @@ processItems = |items| {
 }
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - can_var_scoping_regular_var.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_var_scoping_regular_var.md:0:0:0:0
+VAR REASSIGNMENT ERROR - :0:0:0:0
+VAR REASSIGNMENT ERROR - :0:0:0:0
 UNUSED VARIABLE - can_var_scoping_regular_var.md:4:17:4:22
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**VAR REASSIGNMENT ERROR**
+Variables cannot be reassigned across function boundaries.
 
-**Compiler Diagnostic**
-Diagnostic type 'var_across_function_boundary' is not yet handled in report generation.
-**can_var_scoping_regular_var.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'var_across_function_boundary' is not yet handled in report generation.
-**can_var_scoping_regular_var.md:0:0:0:0**
+**VAR REASSIGNMENT ERROR**
+Variables cannot be reassigned across function boundaries.
 
 **UNUSED VARIABLE**
 Variable `items` is not used anywhere in your code.

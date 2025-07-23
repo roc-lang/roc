@@ -31,13 +31,25 @@ handleResponse = |_response| "handled"
 main! = |_| {}
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - type_tag_union_complex.md:0:0:0:0
+TYPE REDECLARED - type_tag_union_complex.md:7:1:7:55
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**TYPE REDECLARED**
+The type _Result_ is being redeclared.
 
-**Compiler Diagnostic**
-Diagnostic type 'type_redeclared' is not yet handled in report generation.
-**type_tag_union_complex.md:0:0:0:0**
+The redeclaration is here:
+**type_tag_union_complex.md:7:1:7:55:**
+```roc
+Result : [Success(Str), Error(Str), Warning(Str, I32)]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+But _Result_ was already declared here:
+**type_tag_union_complex.md:1:1:1:1:**
+```roc
+app [main!] { pf: platform "../basic-cli/main.roc" }
+```
+
+
 
 # TOKENS
 ~~~zig

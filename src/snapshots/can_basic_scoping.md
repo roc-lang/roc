@@ -23,13 +23,25 @@ outerFunc = |_| {
 }
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - can_basic_scoping.md:0:0:0:0
+DUPLICATE DEFINITION - can_basic_scoping.md:9:5:9:6
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**DUPLICATE DEFINITION**
+The name `x` is being redeclared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'shadowing_warning' is not yet handled in report generation.
-**can_basic_scoping.md:0:0:0:0**
+The redeclaration is here:
+**can_basic_scoping.md:9:5:9:6:**
+```roc
+    x = 20  # Should shadow top-level x
+```
+    ^
+
+But `x` was already defined here:
+**can_basic_scoping.md:4:1:4:2:**
+```roc
+x = 5
+```
+^
+
 
 # TOKENS
 ~~~zig

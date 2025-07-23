@@ -8,12 +8,12 @@ type=expr
 [1u8, 2u8, 300]
 ~~~
 # EXPECTED
-INVALID NUMBER LITERAL - can_list_number_doesnt_fit.md:1:2:1:5
-INVALID NUMBER LITERAL - can_list_number_doesnt_fit.md:1:7:1:10
+INVALID NUMBER - can_list_number_doesnt_fit.md:1:2:1:5
+INVALID NUMBER - can_list_number_doesnt_fit.md:1:7:1:10
 # PROBLEMS
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **can_list_number_doesnt_fit.md:1:2:1:5:**
 ```roc
@@ -22,9 +22,9 @@ The number literal is invalid or too large to represent:
  ^^^
 
 
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **can_list_number_doesnt_fit.md:1:7:1:10:**
 ```roc

@@ -19,8 +19,8 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:8:5:8:7
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:9:5:9:11
-COMPILER DIAGNOSTIC - unicode_single_quotes.md:0:0:0:0
-COMPILER DIAGNOSTIC - unicode_single_quotes.md:0:0:0:0
+INVALID TUPLE ELEMENT - :0:0:0:0
+INVALID TUPLE ELEMENT - :0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **''** is not expected in an expression.
@@ -46,17 +46,11 @@ Here is the problematic code:
     ^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID TUPLE ELEMENT**
+This tuple element is malformed or contains invalid syntax.
 
-**Compiler Diagnostic**
-Diagnostic type 'tuple_elem_not_canonicalized' is not yet handled in report generation.
-**unicode_single_quotes.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'tuple_elem_not_canonicalized' is not yet handled in report generation.
-**unicode_single_quotes.md:0:0:0:0**
+**INVALID TUPLE ELEMENT**
+This tuple element is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig

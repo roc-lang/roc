@@ -10,7 +10,7 @@ Stdout.line???
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
 UNDEFINED VARIABLE - suffixed_question.md:1:1:1:12
-COMPILER DIAGNOSTIC - suffixed_question.md:0:0:0:0
+UNKNOWN OPERATOR - suffixed_question.md:1:1:1:15
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **?** is not expected in an expression.
@@ -35,11 +35,15 @@ Stdout.line???
 ^^^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**suffixed_question.md:0:0:0:0**
+**suffixed_question.md:1:1:1:15:**
+```roc
+Stdout.line???
+```
+^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

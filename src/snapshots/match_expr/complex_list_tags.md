@@ -77,70 +77,70 @@ UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:7:5:7:6
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:7:7:7:9
 PARSE ERROR - complex_list_tags.md:7:10:7:10
 UNDEFINED VARIABLE - complex_list_tags.md:1:7:1:13
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:3:22:3:53
 UNUSED VARIABLE - complex_list_tags.md:3:15:3:16
 UNUSED VARIABLE - complex_list_tags.md:3:12:3:13
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:3:54:3:56
+INVALID PATTERN - :0:0:0:0
 UNDEFINED VARIABLE - complex_list_tags.md:3:58:3:67
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:3:69:3:70
 UNUSED VARIABLE - complex_list_tags.md:3:68:3:69
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:3:71:3:72
+UNKNOWN OPERATOR - complex_list_tags.md:4:36:4:70
 UNUSED VARIABLE - complex_list_tags.md:4:15:4:18
 UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
 UNDEFINED VARIABLE - complex_list_tags.md:4:79:4:83
 UNUSED VARIABLE - complex_list_tags.md:4:70:4:78
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:4:84:4:85
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:4:97:4:98
+UNKNOWN OPERATOR - complex_list_tags.md:5:53:5:74
 UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
 UNUSED VARIABLE - complex_list_tags.md:5:30:5:33
 UNUSED VARIABLE - complex_list_tags.md:5:25:5:28
 UNUSED VARIABLE - complex_list_tags.md:5:11:5:13
 UNUSED VARIABLE - complex_list_tags.md:5:15:5:17
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:5:75:5:76
+INVALID PATTERN - :0:0:0:0
 UNDEFINED VARIABLE - complex_list_tags.md:5:78:5:87
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:5:90:5:91
 UNUSED VARIABLE - complex_list_tags.md:5:88:5:90
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:5:97:5:99
 UNDEFINED VARIABLE - complex_list_tags.md:5:109:5:112
 UNUSED VARIABLE - complex_list_tags.md:5:99:5:108
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:5:113:5:114
+INVALID PATTERN - :0:0:0:0
 UNDEFINED VARIABLE - complex_list_tags.md:5:116:5:125
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:5:129:5:130
 UNUSED VARIABLE - complex_list_tags.md:5:126:5:129
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:5:130:5:131
+UNKNOWN OPERATOR - complex_list_tags.md:6:55:6:81
 UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
 UNUSED VARIABLE - complex_list_tags.md:6:13:6:19
 UNUSED VARIABLE - complex_list_tags.md:6:31:6:32
 UNUSED VARIABLE - complex_list_tags.md:6:28:6:29
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:6:82:6:97
+INVALID PATTERN - :0:0:0:0
 UNDEFINED VARIABLE - complex_list_tags.md:6:99:6:108
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:6:110:6:111
 UNUSED VARIABLE - complex_list_tags.md:6:109:6:110
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:6:112:6:114
 UNDEFINED VARIABLE - complex_list_tags.md:6:124:6:125
 UNUSED VARIABLE - complex_list_tags.md:6:114:6:123
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
-COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:6:126:6:126
+INVALID PATTERN - :0:0:0:0
+UNKNOWN OPERATOR - complex_list_tags.md:7:5:7:6
+INVALID PATTERN - :0:0:0:0
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `string_expected_close_interpolation`
@@ -885,11 +885,15 @@ match events {
       ^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**complex_list_tags.md:3:22:3:53:**
+```roc
+    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+```
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable `y` is not used anywhere in your code.
@@ -915,23 +919,21 @@ The unused variable is declared here:
            ^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**complex_list_tags.md:3:54:3:56:**
+```roc
+    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+```
+                                                     ^^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
 
@@ -944,11 +946,15 @@ The variable 'toStr' is not defined:
                                                          ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**complex_list_tags.md:3:69:3:70:**
+```roc
+    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+```
+                                                                    ^
+
 
 **UNUSED VARIABLE**
 Variable `y` is not used anywhere in your code.
@@ -962,23 +968,28 @@ The unused variable is declared here:
                                                                    ^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**complex_list_tags.md:3:71:3:72:**
+```roc
+    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+```
+                                                                      ^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**complex_list_tags.md:4:36:4:70:**
+```roc
+    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
+```
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable `key` is not used anywhere in your code.
@@ -1027,35 +1038,41 @@ The unused variable is declared here:
                                                                      ^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**complex_list_tags.md:4:84:4:85:**
+```roc
+    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
+```
+                                                                                   ^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**complex_list_tags.md:4:97:4:98:**
+```roc
+    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
+```
+                                                                                                ^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**complex_list_tags.md:5:53:5:74:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                    ^^^^^^^^^^^^^^^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable `others` is not used anywhere in your code.
@@ -1117,23 +1134,21 @@ The unused variable is declared here:
               ^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**complex_list_tags.md:5:75:5:76:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                          ^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
 
@@ -1146,11 +1161,15 @@ The variable 'toStr' is not defined:
                                                                              ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**complex_list_tags.md:5:90:5:91:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                         ^
+
 
 **UNUSED VARIABLE**
 Variable `dy` is not used anywhere in your code.
@@ -1164,17 +1183,18 @@ The unused variable is declared here:
                                                                                        ^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**complex_list_tags.md:5:97:5:99:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                ^^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
 
@@ -1199,23 +1219,21 @@ The unused variable is declared here:
                                                                                                   ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**complex_list_tags.md:5:113:5:114:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                                ^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
 
@@ -1228,11 +1246,15 @@ The variable 'toStr' is not defined:
                                                                                                                    ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**complex_list_tags.md:5:129:5:130:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                                                ^
+
 
 **UNUSED VARIABLE**
 Variable `dy2` is not used anywhere in your code.
@@ -1246,23 +1268,28 @@ The unused variable is declared here:
                                                                                                                              ^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**complex_list_tags.md:5:130:5:131:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                                                 ^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**complex_list_tags.md:6:55:6:81:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable `remaining` is not used anywhere in your code.
@@ -1312,23 +1339,21 @@ The unused variable is declared here:
                            ^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**complex_list_tags.md:6:82:6:97:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                 ^^^^^^^^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
 
@@ -1341,11 +1366,15 @@ The variable 'toStr' is not defined:
                                                                                                   ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**complex_list_tags.md:6:110:6:111:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                                             ^
+
 
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
@@ -1359,17 +1388,18 @@ The unused variable is declared here:
                                                                                                             ^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**complex_list_tags.md:6:112:6:114:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                                               ^^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
 
@@ -1394,35 +1424,34 @@ The unused variable is declared here:
                                                                                                                  ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**complex_list_tags.md:6:126:6:126:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                                                             
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
 
-**COMPILER DIAGNOSTIC**
+**complex_list_tags.md:7:5:7:6:**
+```roc
+    _ => "other event pattern"
+```
+    ^
 
-**Compiler Diagnostic**
-Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
-**complex_list_tags.md:0:0:0:0**
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
 
 # TOKENS
 ~~~zig

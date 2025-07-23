@@ -30,13 +30,13 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:12:12:13
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:13:12:14
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:17:12:18
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:13:2:13:10
-COMPILER DIAGNOSTIC - fuzz_crash_030.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_030.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_030.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_030.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_030.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_030.md:0:0:0:0
-COMPILER DIAGNOSTIC - fuzz_crash_030.md:0:0:0:0
+INVALID STATEMENT - fuzz_crash_030.md:12:9:12:12
+INVALID STATEMENT - fuzz_crash_030.md:12:12:12:13
+INVALID STATEMENT - fuzz_crash_030.md:12:13:12:14
+INVALID STATEMENT - fuzz_crash_030.md:12:15:12:17
+INVALID STATEMENT - fuzz_crash_030.md:12:17:12:18
+INVALID STATEMENT - fuzz_crash_030.md:13:2:13:10
+INVALID STATEMENT - fuzz_crash_030.md:14:3:16:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `exposed_item_unexpected_token`
@@ -122,47 +122,83 @@ Here is the problematic code:
  ^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_030.md:0:0:0:0**
+**fuzz_crash_030.md:12:9:12:12:**
+```roc
+pkg: 77"..c", mm} #
+```
+        ^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_030.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**fuzz_crash_030.md:12:12:12:13:**
+```roc
+pkg: 77"..c", mm} #
+```
+           ^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_030.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_030.md:0:0:0:0**
+**fuzz_crash_030.md:12:13:12:14:**
+```roc
+pkg: 77"..c", mm} #
+```
+            ^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_030.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**fuzz_crash_030.md:12:15:12:17:**
+```roc
+pkg: 77"..c", mm} #
+```
+              ^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_030.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_030.md:0:0:0:0**
+**fuzz_crash_030.md:12:17:12:18:**
+```roc
+pkg: 77"..c", mm} #
+```
+                ^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_030.md:13:2:13:10:**
+```roc
+	provides # Cd
+```
+ ^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_030.md:14:3:16:4:**
+```roc
+		[ # pen
+ar,
+		]
+```
+
 
 # TOKENS
 ~~~zig

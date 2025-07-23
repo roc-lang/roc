@@ -8,11 +8,11 @@ type=expr
 99999999999999999999999999999999999999999
 ~~~
 # EXPECTED
-INVALID NUMBER LITERAL - expr_int_invalid.md:1:1:1:42
+INVALID NUMBER - expr_int_invalid.md:1:1:1:42
 # PROBLEMS
-**INVALID NUMBER LITERAL**
+**INVALID NUMBER**
 
-**Invalid Number Literal**
+**Invalid Number**
 The number literal is invalid or too large to represent:
 **expr_int_invalid.md:1:1:1:42:**
 ```roc

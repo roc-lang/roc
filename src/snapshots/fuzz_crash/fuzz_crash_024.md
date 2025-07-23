@@ -20,7 +20,7 @@ PARSE ERROR - fuzz_crash_024.md:1:9:1:15
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_024.md:1:24:1:32
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:9
 PARSE ERROR - fuzz_crash_024.md:7:9:7:9
-COMPILER DIAGNOSTIC - fuzz_crash_024.md:0:0:0:0
+INVALID STATEMENT - fuzz_crash_024.md:1:18:7:9
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -76,11 +76,21 @@ var t= 0
         
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**fuzz_crash_024.md:0:0:0:0**
+**fuzz_crash_024.md:1:18:7:9:**
+```roc
+module [module ] { pf: platform ".-/main._]where # A
+
+#el
+var t= ]
+
+#el
+var t= 0
+```
+
 
 # TOKENS
 ~~~zig

@@ -46,8 +46,8 @@ combineResults = |result1, result2|
     }
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - can_import_type_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - can_import_type_annotations.md:0:0:0:0
+UNDECLARED TYPE - can_import_type_annotations.md:7:18:7:25
+UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
 UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
 # PROBLEMS
 **UNDECLARED TYPE**

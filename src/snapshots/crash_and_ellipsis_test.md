@@ -29,10 +29,10 @@ main! = |_| {
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:9:17:9:22
 UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:13:23:13:28
-COMPILER DIAGNOSTIC - crash_and_ellipsis_test.md:0:0:0:0
-COMPILER DIAGNOSTIC - crash_and_ellipsis_test.md:0:0:0:0
-COMPILER DIAGNOSTIC - crash_and_ellipsis_test.md:0:0:0:0
-COMPILER DIAGNOSTIC - crash_and_ellipsis_test.md:0:0:0:0
+INVALID LAMBDA - :0:0:0:0
+INVALID STATEMENT - crash_and_ellipsis_test.md:9:23:9:48
+INVALID LAMBDA - :0:0:0:0
+INVALID STATEMENT - crash_and_ellipsis_test.md:13:29:13:35
 UNUSED VARIABLE - crash_and_ellipsis_test.md:16:5:16:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:17:5:17:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:18:5:18:12
@@ -61,29 +61,33 @@ testCrashSimple = |_| crash "oops"
                       ^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**INVALID LAMBDA**
+The body of this lambda expression is not valid.
 
-**Compiler Diagnostic**
-Diagnostic type 'lambda_body_not_canonicalized' is not yet handled in report generation.
-**crash_and_ellipsis_test.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**crash_and_ellipsis_test.md:9:23:9:48:**
+```roc
+testCrash = |_| crash "This is a crash message"
+```
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**crash_and_ellipsis_test.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**INVALID LAMBDA**
+The body of this lambda expression is not valid.
 
-**Compiler Diagnostic**
-Diagnostic type 'lambda_body_not_canonicalized' is not yet handled in report generation.
-**crash_and_ellipsis_test.md:0:0:0:0**
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**COMPILER DIAGNOSTIC**
+**crash_and_ellipsis_test.md:13:29:13:35:**
+```roc
+testCrashSimple = |_| crash "oops"
+```
+                            ^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
-**crash_and_ellipsis_test.md:0:0:0:0**
 
 **UNUSED VARIABLE**
 Variable `result1` is not used anywhere in your code.
