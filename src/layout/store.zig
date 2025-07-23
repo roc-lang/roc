@@ -39,7 +39,7 @@ pub const LayoutError = error{
 pub const Store = struct {
     const Self = @This();
 
-    env: *base.ModuleEnv,
+    env: *@import("../compile/ModuleEnv.zig"),
     types_store: *const types_store.Store,
     layouts: collections.SafeMultiList(Layout),
     tuple_elems: collections.SafeList(Idx),
@@ -96,7 +96,7 @@ pub const Store = struct {
     }
 
     pub fn init(
-        env: *base.ModuleEnv,
+        env: *@import("../compile/ModuleEnv.zig"),
         type_store: *const types_store.Store,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
@@ -341,7 +341,7 @@ pub const Store = struct {
         // Sort fields by alignment (descending) first, then by name (ascending)
         const AlignmentSortCtx = struct {
             store: *Self,
-            env: *base.ModuleEnv,
+            env: *@import("../compile/ModuleEnv.zig"),
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout);

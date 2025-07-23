@@ -8,8 +8,9 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const AST = @import("../../parse/AST.zig");
-const CIR = @import("../CIR.zig");
+const ModuleEnv = base.ModuleEnv;
 const canonicalize = @import("../../canonicalize.zig");
+const CIR = canonicalize.CIR;
 const parse = @import("../../parse.zig");
 const tokenize = @import("../../parse/tokenize.zig");
 

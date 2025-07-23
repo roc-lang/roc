@@ -440,7 +440,7 @@ fn generateAllReports(
     can_ir: *CIR,
     solver: *Solver,
     snapshot_path: []const u8,
-    module_env: *base.ModuleEnv,
+    module_env: *@import("compile/ModuleEnv.zig"),
 ) !std.ArrayList(reporting.Report) {
     var reports = std.ArrayList(reporting.Report).init(allocator);
     errdefer reports.deinit();
@@ -1017,7 +1017,7 @@ fn processSnapshotContent(
     }
 
     // Process the content through the compilation pipeline
-    var module_env = try base.ModuleEnv.init(allocator, content.source);
+    var module_env = try @import("compile/ModuleEnv.zig").init(allocator, content.source);
     defer module_env.deinit();
 
     // Parse the source code based on node type
@@ -1041,10 +1041,10 @@ fn processSnapshotContent(
         basename[0..dot_idx]
     else
         basename;
-    var can_ir = try CIR.init(&module_env, module_name);
-    defer can_ir.deinit();
+    const can_ir = &module_env; // CIR is now just ModuleEnv
+    try can_ir.initCIRFields(allocator, module_name);
 
-    var can = try canonicalize.init(&can_ir, &parse_ast, null);
+    var can = try canonicalize.init(can_ir, &parse_ast, null);
     defer can.deinit();
 
     var maybe_expr_idx: ?CIR.Expr.Idx = null;
@@ -1078,8 +1078,8 @@ fn processSnapshotContent(
     const empty_modules: []const *CIR = &.{};
     var solver = try Solver.init(
         allocator,
-        &can_ir.env.types,
-        &can_ir,
+        &can_ir.types,
+        can_ir,
         empty_modules,
         &can_ir.store.regions,
     );
@@ -1099,14 +1099,14 @@ fn processSnapshotContent(
         // Generate original S-expression for comparison
         var original_tree = SExprTree.init(allocator);
         defer original_tree.deinit();
-        try CIR.pushToSExprTree(&can_ir, null, &original_tree);
+        try CIR.pushToSExprTree(can_ir, null, &original_tree);
 
         var original_sexpr = std.ArrayList(u8).init(allocator);
         defer original_sexpr.deinit();
         try original_tree.toStringPretty(original_sexpr.writer().any());
 
         // Create and serialize MmapCache
-        const cache_data = try cache.CacheModule.create(allocator, &module_env, &can_ir, 0, 0);
+        const cache_data = try cache.CacheModule.create(allocator, &module_env, can_ir, 0, 0);
         defer allocator.free(cache_data);
 
         // Deserialize back
@@ -1115,14 +1115,12 @@ fn processSnapshotContent(
         // Restore ModuleEnv and CIR
         var restored = try loaded_cache.restore(allocator, module_name, content.source);
         defer restored.module_env.deinit();
-        defer restored.cir.deinit();
-
-        restored.cir.env = &restored.module_env;
+        // CIR is now just an alias for ModuleEnv, no need to deinit separately
 
         // Generate S-expression from restored CIR
         var restored_tree = SExprTree.init(allocator);
         defer restored_tree.deinit();
-        try CIR.pushToSExprTree(&restored.cir, null, &restored_tree);
+        try CIR.pushToSExprTree(&restored.module_env, null, &restored_tree);
 
         var restored_sexpr = std.ArrayList(u8).init(allocator);
         defer restored_sexpr.deinit();
@@ -1152,7 +1150,7 @@ fn processSnapshotContent(
     try generateHtmlWrapper(&output, &content);
 
     // Generate reports once and use for both EXPECTED and PROBLEMS sections
-    var generated_reports = try generateAllReports(allocator, &parse_ast, &can_ir, &solver, output_path, &module_env);
+    var generated_reports = try generateAllReports(allocator, &parse_ast, can_ir, &solver, output_path, &module_env);
     defer {
         for (generated_reports.items) |*report| {
             report.deinit();
@@ -1168,8 +1166,8 @@ fn processSnapshotContent(
     try generateTokensSection(&output, &parse_ast, &content, &module_env);
     try generateParseSection(&output, &content, &parse_ast, &module_env);
     try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, &can_ir, maybe_expr_idx);
-    try generateTypesSection(&output, &can_ir, maybe_expr_idx);
+    try generateCanonicalizeSection(&output, can_ir, maybe_expr_idx);
+    try generateTypesSection(&output, can_ir, maybe_expr_idx);
 
     try generateHtmlClosing(&output);
 
@@ -1842,7 +1840,7 @@ fn generateProblemsSection(output: *DualOutput, reports: *const std.ArrayList(re
 }
 
 /// Generate TOKENS section for both markdown and HTML
-pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const Content, module_env: *base.ModuleEnv) !void {
+pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Content, module_env: *@import("compile/ModuleEnv.zig")) !void {
     try output.begin_section("TOKENS");
     try output.begin_code_block("zig");
 
@@ -1860,7 +1858,7 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *con
     const tokens = tokenizedBuffer.tokens.items(.tag);
     for (tokens, 0..) |tok, i| {
         const region = tokenizedBuffer.resolve(@intCast(i));
-        const info = try module_env.calcRegionInfo(content.source, region.start.offset, region.end.offset);
+        const info = module_env.calcRegionInfo(region);
 
         // Markdown token output
         try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
@@ -1919,7 +1917,7 @@ fn source_contains_newline_in_range(source: []const u8, start: usize, end: usize
 }
 
 /// Generate PARSE2 section using SExprTree for both markdown and HTML
-fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *base.ModuleEnv) !void {
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *@import("compile/ModuleEnv.zig")) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
 

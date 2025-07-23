@@ -15,7 +15,7 @@ const layout = @import("../layout/layout.zig");
 const test_allocator = testing.allocator;
 
 fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
-    module_env: *base.ModuleEnv,
+    module_env: *@import("../compile/ModuleEnv.zig"),
     parse_ast: *parse.AST,
     cir: *CIR,
     can: *canonicalize,
@@ -23,8 +23,8 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     expr_idx: CIR.Expr.Idx,
 } {
     // Initialize the ModuleEnv
-    const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(allocator, source);
+    const module_env = try allocator.create(@import("../compile/ModuleEnv.zig"));
+    module_env.* = try @import("../compile/ModuleEnv.zig").init(allocator, source);
 
     // Parse the source code as an expression
     const parse_ast = try allocator.create(parse.AST);
@@ -33,9 +33,9 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
 
-    // Create CIR
-    const cir = try allocator.create(CIR);
-    cir.* = try CIR.init(module_env, "test");
+    // Create CIR - CIR is just an alias for ModuleEnv now
+    const cir = module_env; // Use the existing module_env directly
+    try cir.initCIRFields(allocator, "test");
 
     // Create canonicalizer
     const can = try allocator.create(canonicalize);
@@ -46,7 +46,7 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
         // If canonicalization fails, create a runtime error
         const diagnostic_idx = try cir.store.addDiagnostic(.{ .not_implemented = .{
-            .feature = try cir.env.strings.insert(allocator, "canonicalization failed"),
+            .feature = try cir.strings.insert(allocator, "canonicalization failed"),
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(check_types);
@@ -106,13 +106,13 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
 fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype) void {
     resources.checker.deinit();
     resources.can.deinit();
-    resources.cir.deinit();
+    // cir is just an alias to module_env now, no need to deinit separately
     resources.parse_ast.deinit(allocator);
     // module_env.source is freed by module_env.deinit()
     resources.module_env.deinit();
     allocator.destroy(resources.checker);
     allocator.destroy(resources.can);
-    allocator.destroy(resources.cir);
+    // cir is just an alias to module_env now, no need to destroy separately
     allocator.destroy(resources.parse_ast);
     allocator.destroy(resources.module_env);
 }

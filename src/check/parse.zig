@@ -23,7 +23,7 @@ test {
     _ = @import("parse/test/ast_node_store_test.zig");
 }
 
-fn runParse(env: *base.ModuleEnv, parserCall: *const fn (*Parser) std.mem.Allocator.Error!u32) std.mem.Allocator.Error!AST {
+fn runParse(env: *@import("../compile/ModuleEnv.zig"), parserCall: *const fn (*Parser) std.mem.Allocator.Error!u32) std.mem.Allocator.Error!AST {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -57,7 +57,7 @@ fn runParse(env: *base.ModuleEnv, parserCall: *const fn (*Parser) std.mem.Alloca
 
 /// Parses a single Roc file.  The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parse(env: *base.ModuleEnv) std.mem.Allocator.Error!AST {
+pub fn parse(env: *@import("../compile/ModuleEnv.zig")) std.mem.Allocator.Error!AST {
     return try runParse(env, parseFileAndReturnIdx);
 }
 
@@ -73,7 +73,7 @@ fn parseExprAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
 
 /// Parses a Roc expression - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseExpr(env: *base.ModuleEnv) std.mem.Allocator.Error!AST {
+pub fn parseExpr(env: *@import("../compile/ModuleEnv.zig")) std.mem.Allocator.Error!AST {
     return try runParse(env, parseExprAndReturnIdx);
 }
 
@@ -84,7 +84,7 @@ fn parseHeaderAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
 
 /// Parses a Roc Header - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseHeader(env: *base.ModuleEnv) std.mem.Allocator.Error!AST {
+pub fn parseHeader(env: *@import("../compile/ModuleEnv.zig")) std.mem.Allocator.Error!AST {
     return try runParse(env, parseHeaderAndReturnIdx);
 }
 
@@ -98,6 +98,6 @@ fn parseStatementAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
 
 /// Parses a single Roc statement for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseStatement(env: *base.ModuleEnv) std.mem.Allocator.Error!AST {
+pub fn parseStatement(env: *@import("../compile/ModuleEnv.zig")) std.mem.Allocator.Error!AST {
     return try runParse(env, parseStatementAndReturnIdx);
 }

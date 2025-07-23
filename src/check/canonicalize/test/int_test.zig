@@ -8,7 +8,8 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("../../parse.zig");
-const canonicalize = @import("../../../check/canonicalize.zig");
+const ModuleEnv = base.ModuleEnv;
+const canonicalize = @import("../../canonicalize.zig");
 const CIR = canonicalize.CIR;
 const types = @import("types");
 
@@ -17,7 +18,7 @@ const test_allocator = testing.allocator;
 fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !struct {
     module_env: *base.ModuleEnv,
     parse_ast: *parse.AST,
-    cir: *CIR,
+    cir: *CIR.CIR,
     can: *canonicalize,
     expr_idx: CIR.Expr.Idx,
 } {
@@ -29,16 +30,16 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
 
     parse_ast.store.emptyScratch();
 
-    const cir = try allocator.create(CIR);
-    cir.* = try CIR.init(module_env, "Test");
+    const cir = try allocator.create(CIR.CIR);
+    cir.* = try CIR.CIR.init(module_env, "Test");
 
     const can = try allocator.create(canonicalize);
     can.* = try canonicalize.init(cir, parse_ast, null);
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-        const diagnostic_idx = try cir.store.addDiagnostic(.{ .not_implemented = .{
-            .feature = try cir.env.strings.insert(allocator, "canonicalization failed"),
+        const diagnostic_idx = try module_env.addDiagnostic(.{ .not_implemented = .{
+            .feature = try module_env.strings.insert(allocator, "canonicalization failed"),
             .region = base.Region.zero(),
         } });
         return .{
@@ -46,9 +47,9 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
             .parse_ast = parse_ast,
             .cir = cir,
             .can = can,
-            .expr_idx = try cir.store.addExpr(CIR.Expr{ .e_runtime_error = .{
+            .expr_idx = try module_env.addExprAndTypeVar(CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
-            } }, base.Region.zero()),
+            } }, types.Content{ .error_unknown = {} }, base.Region.zero()),
         };
     };
 
@@ -72,9 +73,9 @@ fn cleanup(allocator: std.mem.Allocator, resources: anytype) void {
     allocator.destroy(resources.module_env);
 }
 
-fn getIntValue(cir: *CIR, expr_idx: CIR.Expr.Idx) !i128 {
-    const expr = cir.store.getExpr(expr_idx);
-    switch (expr) {
+fn getIntValue(cir: *CIR.CIR, expr_idx: CIR.Expr.Idx) !i128 {
+    const expr = cir.module_env.getExpr(expr_idx);
+    switch (expr.*) {
         .e_int => |int_expr| {
             return @bitCast(int_expr.value.bytes);
         },
@@ -227,7 +228,7 @@ test "canonicalize integer literal creates correct type variables" {
     const resources = try parseAndCanonicalizeInt(test_allocator, source);
     defer cleanup(test_allocator, resources);
 
-    const expr = resources.cir.store.getExpr(resources.expr_idx);
+    const expr = resources.cir.module_env.getExpr(resources.expr_idx).*;
     switch (expr) {
         .e_int => {
             // Type variables are now the expression index itself
@@ -246,7 +247,7 @@ test "canonicalize invalid integer literal" {
     {
         const resources = try parseAndCanonicalizeInt(test_allocator, "12abc");
         defer cleanup(test_allocator, resources);
-        const expr = resources.cir.store.getExpr(resources.expr_idx);
+        const expr = resources.cir.module_env.getExpr(resources.expr_idx).*;
         try testing.expect(expr == .e_runtime_error);
     }
 
@@ -254,7 +255,7 @@ test "canonicalize invalid integer literal" {
     {
         const resources = try parseAndCanonicalizeInt(test_allocator, "0123");
         defer cleanup(test_allocator, resources);
-        const expr = resources.cir.store.getExpr(resources.expr_idx);
+        const expr = resources.cir.module_env.getExpr(resources.expr_idx).*;
         // This might actually parse as 123, so let's check if it's a valid integer
         if (expr != .e_runtime_error) {
             const value = try getIntValue(resources.cir, resources.expr_idx);
@@ -384,7 +385,7 @@ test "canonicalize integer literals outside supported range" {
         const resources = try parseAndCanonicalizeInt(test_allocator, source);
         defer cleanup(test_allocator, resources);
 
-        const expr = resources.cir.store.getExpr(resources.expr_idx);
+        const expr = resources.cir.module_env.getExpr(resources.expr_idx).*;
         try testing.expect(expr == .e_runtime_error);
     }
 }
@@ -406,7 +407,7 @@ test "invalid number literal - too large for u128" {
     }
 
     // Should have produced a runtime error
-    const expr = resources.cir.store.getExpr(resources.expr_idx);
+    const expr = resources.cir.module_env.getExpr(resources.expr_idx).*;
     try testing.expect(expr == .e_runtime_error);
 
     // Check that we have an invalid_num_literal diagnostic
@@ -473,7 +474,7 @@ test "invalid number literal - negative too large for i128" {
     }
 
     // Should have produced a runtime error
-    const expr = resources.cir.store.getExpr(resources.expr_idx);
+    const expr = resources.cir.module_env.getExpr(resources.expr_idx).*;
     try testing.expect(expr == .e_runtime_error);
 
     // Check that we have an invalid_num_literal diagnostic

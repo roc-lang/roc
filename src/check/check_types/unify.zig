@@ -42,6 +42,7 @@
 const std = @import("std");
 
 const base = @import("base");
+const can = @import("../canonicalize.zig");
 const tracy = @import("../../tracy.zig");
 const collections = @import("collections");
 const types_mod = @import("types");
@@ -117,7 +118,7 @@ pub const Result = union(enum) {
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
 pub fn unify(
-    module_env: *const base.ModuleEnv,
+    module_env: *const can.ModuleEnv,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
@@ -305,7 +306,7 @@ fn Unifier(comptime StoreTypeB: type) type {
     return struct {
         const Self = @This();
 
-        module_env: *const base.ModuleEnv,
+        module_env: *const can.ModuleEnv,
         types_store_a: *types_mod.Store,
         types_store_b: StoreTypeB,
         scratch: *Scratch,
@@ -315,7 +316,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
         /// Init unifier
         pub fn init(
-            module_env: *const base.ModuleEnv,
+            module_env: *const can.ModuleEnv,
             types_store: *types_mod.Store,
             scratch: *Scratch,
             occurs_scratch: *occurs.Scratch,
@@ -2791,7 +2792,7 @@ const RootModule = @This();
 const TestEnv = struct {
     const Self = @This();
 
-    module_env: *base.ModuleEnv,
+    module_env: *can.ModuleEnv,
     snapshots: snapshot_mod.Store,
     problems: problem_mod.Store,
     scratch: Scratch,
@@ -2804,8 +2805,9 @@ const TestEnv = struct {
     /// could pull module_env's initialization out of here, but this results in
     /// slight more verbose setup for each test
     fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
-        const module_env = try gpa.create(base.ModuleEnv);
-        module_env.* = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        const module_env = try gpa.create(can.ModuleEnv);
+        module_env.* = try can.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        try module_env.initCIRFields(gpa, "Test");
         return .{
             .module_env = module_env,
             .snapshots = try snapshot_mod.Store.initCapacity(gpa, 16),

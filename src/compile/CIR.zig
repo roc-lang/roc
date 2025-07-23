@@ -5,7 +5,7 @@ const std = @import("std");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
-const reporting = @import("reporting");
+const reporting = @import("../reporting.zig");
 
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;

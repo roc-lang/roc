@@ -9,6 +9,7 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("../../parse.zig");
+const ModuleEnv = base.ModuleEnv;
 const canonicalize = @import("../../canonicalize.zig");
 const CIR = canonicalize.CIR;
 const expectEqual = testing.expectEqual;
