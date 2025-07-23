@@ -24,7 +24,6 @@ const repl = @import("repl/eval.zig");
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const parallel = base.parallel;
-const CIR = compile.CIR;
 const ModuleEnv = compile.ModuleEnv;
 const AST = parse.AST;
 const Report = reporting.Report;
@@ -1049,7 +1048,7 @@ fn processSnapshotContent(
     var can = try canonicalize.init(&module_env, &parse_ast, null);
     defer can.deinit();
 
-    var maybe_expr_idx: ?CIR.Expr.Idx = null;
+    var maybe_expr_idx: ?ModuleEnv.Expr.Idx = null;
 
     switch (content.meta.node_type) {
         .file => try can.canonicalizeFile(),

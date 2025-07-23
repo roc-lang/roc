@@ -262,11 +262,8 @@ fn processSourceInternal(
     const diagnostics = try module_env.*.getDiagnostics();
     defer gpa.free(diagnostics);
     for (diagnostics) |diagnostic| {
-        // TODO: Fix diagnosticToReport to return the real reporting.Report type
-        // For now, skip canonicalization reports since ModuleEnv.Report != reporting.Report
-        _ = diagnostic;
-        // const report = try cir.diagnosticToReport(diagnostic, gpa, filename);
-        // try reports.append(report);
+        const report = try module_env.*.diagnosticToReport(diagnostic, gpa, filename);
+        try reports.append(report);
     }
 
     collectTiming(config, &timer, &timing_info, "canonicalize_diagnostics_ns");

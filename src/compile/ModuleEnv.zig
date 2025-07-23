@@ -278,21 +278,42 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
         },
         .unused_variable => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            
-            var report = Report.init(allocator, "UNUSED VARIABLE", .warning);
-            try report.addHeader("Unused Variable");
-            
             const ident_name = self.idents.getText(data.ident);
             
-            const message = try std.fmt.allocPrint(allocator, "The variable '{s}' is defined but never used:", .{ident_name});
-            defer allocator.free(message);
-            const owned_message = try report.addOwnedString(message);
-            try report.document.addText(owned_message);
+            var report = Report.init(allocator, "UNUSED VARIABLE", .warning);
+            const owned_ident = try report.addOwnedString(ident_name);
+            
+            try report.document.addReflowingText("Variable ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is not used anywhere in your code.");
+            try report.document.addLineBreak();
             try report.document.addLineBreak();
             
-            // Add source context with location
+            const MAX_IDENT_FIXED_BUFFER = 100;
+            if (owned_ident.len > MAX_IDENT_FIXED_BUFFER - 1) {
+                try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore to suppress this warning.");
+            } else {
+                // format the identifier with an underscore
+                try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
+                var buf: [MAX_IDENT_FIXED_BUFFER]u8 = undefined;
+                const owned_ident_with_underscore = try std.fmt.bufPrint(&buf, "_{s}", .{owned_ident});
+                
+                try report.document.addUnqualifiedSymbol(owned_ident_with_underscore);
+                try report.document.addReflowingText(" to suppress this warning.");
+            }
+            
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("The unused variable is declared here:");
+            try report.document.addLineBreak();
+            
             const owned_filename = try report.addOwnedString(filename);
-            try report.addSourceContext(region_info, owned_filename, self.source, self.line_starts.items.items);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
             
             break :blk report;
         },
@@ -312,6 +333,31 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             // Add source context with location
             const owned_filename = try report.addOwnedString(filename);
             try report.addSourceContext(region_info, owned_filename, self.source, self.line_starts.items.items);
+            
+            break :blk report;
+        },
+        .undeclared_type => |data| blk: {
+            const type_name = self.idents.getText(data.name);
+            const region_info = self.calcRegionInfo(data.region);
+            
+            var report = Report.init(allocator, "UNDECLARED TYPE", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
+            try report.document.addReflowingText("The type ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" is not declared in this scope.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            
+            try report.document.addReflowingText("This type is referenced here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
             
             break :blk report;
         },

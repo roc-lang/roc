@@ -3,7 +3,6 @@
 pub const ModuleEnv = @import("ModuleEnv.zig");
 pub const type_writers = @import("type_writers.zig");
 pub const cir_types = @import("cir_types.zig");
-pub const CIR = @import("../check/CIR.zig");
 
 // Re-export CIR types from ModuleEnv
 pub const Node = ModuleEnv.Node;
