@@ -14,9 +14,9 @@ match l {
 UNDEFINED VARIABLE - empty_list_before_rest_pattern.md:1:7:1:8
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `l` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'l' is not defined:
 **empty_list_before_rest_pattern.md:1:7:1:8:**
 ```roc
 match l {

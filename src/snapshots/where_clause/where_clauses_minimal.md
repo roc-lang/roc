@@ -52,24 +52,27 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.11 (ident "convert_me"))
-		(e-not-implemented @1.1-1.1)
-		(annotation @6.1-6.11
-			(declared-type
-				(ty-fn @3.14-3.20 (effectful false)
-					(ty-var @3.14-3.15 (name "a"))
-					(ty-var @3.19-3.20 (name "b"))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.11 (ident "convert_me")))
+		(expr
+			(e-not-implemented @1.1-1.1))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @3.14-3.20 (effectful false)
+						(ty-var @3.14-3.15 (name "a"))
+						(ty-var @3.19-3.20 (name "b")))))))
 	(s-type-anno @3.1-5.29 (name "convert_me")
 		(ty-fn @3.14-3.20 (effectful false)
 			(ty-var @3.14-3.15 (name "a"))
 			(ty-var @3.19-3.20 (name "b")))
 		(where
-			(method @5.3-5.29 (module-of "a") (ident "convert")
-				(args
-					(ty-var @5.23-5.24 (name "a")))
-				(ty-var @5.28-5.29 (name "b")))))
-	(ext-decl @5.3-5.29 (ident "module(a).convert") (kind "value")))
+			(where-clause
+				(type "mod-method")
+				(var-name "a")
+				(method-name "convert"))))
+	(external-decl (qualified-name "module(a).convert") (module-name "module(a)") (local-name "convert") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

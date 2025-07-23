@@ -73,30 +73,35 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.9 (ident "get_name"))
-		(e-lambda @4.12-4.32
-			(args
-				(p-assign @4.13-4.19 (ident "person")))
-			(e-dot-access @4.21-4.32 (field "name")
-				(receiver
-					(e-lookup-local @4.21-4.27
-						(p-assign @4.13-4.19 (ident "person"))))))
-		(annotation @4.1-4.9
-			(declared-type
-				(ty-fn @3.12-3.42 (effectful false)
-					(ty-record @3.12-3.35
-						(field (field "name")
-							(ty @3.20-3.23 (name "Str")))
-						(field (field "age")
-							(ty @3.30-3.33 (name "U64"))))
-					(ty @3.39-3.42 (name "Str"))))))
-	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.15
-			(args
-				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+	(def
+		(pattern
+			(p-assign @4.1-4.9 (ident "get_name")))
+		(expr
+			(e-lambda @4.12-4.32
+				(args
+					(p-assign @4.13-4.19 (ident "person")))
+				(e-dot-access @4.21-4.32 (field "name")
+					(receiver
+						(e-lookup-local @4.21-4.27
+							(p-assign @4.13-4.19 (ident "person")))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @3.12-3.42 (effectful false)
+						(ty-record @3.12-3.35
+							(field (field "name")
+								(ty @3.20-3.23 (name "Str")))
+							(field (field "age")
+								(ty @3.30-3.33 (name "U64"))))
+						(ty @3.39-3.42 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.6 (ident "main!")))
+		(expr
+			(e-lambda @6.9-6.15
+				(args
+					(p-underscore @6.10-6.11))
+				(e-empty_record @6.13-6.15)))))
 ~~~
 # TYPES
 ~~~clojure

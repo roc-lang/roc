@@ -99,47 +99,57 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.6 (ident "some1"))
-		(e-lambda @6.9-6.26
-			(args
-				(p-assign @6.10-6.11 (ident "a")))
-			(e-nominal @6.13-6.18 (nominal "Maybe")
-				(e-tag @6.13-6.23 (name "Some")
-					(args
-						(e-lookup-local @6.24-6.25
-							(p-assign @6.10-6.11 (ident "a")))))))
-		(annotation @6.1-6.6
-			(declared-type
-				(ty-fn @5.9-5.22 (effectful false)
-					(ty-var @5.9-5.10 (name "a"))
-					(ty-apply @5.14-5.22 (symbol "Maybe")
-						(ty-var @5.20-5.21 (name "a")))))))
-	(d-let
-		(p-assign @9.1-9.6 (ident "none1"))
-		(e-nominal @9.9-9.14 (nominal "Maybe")
-			(e-tag @9.9-9.19 (name "None")))
-		(annotation @9.1-9.6
-			(declared-type
-				(ty-apply @8.9-8.18 (symbol "Maybe")
-					(ty-var @8.15-8.17 (name "_a"))))))
-	(d-let
-		(p-assign @11.1-11.6 (ident "some2"))
-		(e-lambda @11.9-11.26
-			(args
-				(p-assign @11.10-11.11 (ident "a")))
-			(e-nominal @11.13-11.18 (nominal "Maybe")
-				(e-tag @11.13-11.23 (name "Some")
-					(args
-						(e-lookup-local @11.24-11.25
-							(p-assign @11.10-11.11 (ident "a"))))))))
-	(d-let
-		(p-assign @13.1-13.6 (ident "none2"))
-		(e-nominal @13.9-13.14 (nominal "Maybe")
-			(e-tag @13.9-13.19 (name "None"))))
+	(def
+		(pattern
+			(p-assign @6.1-6.6 (ident "some1")))
+		(expr
+			(e-lambda @6.9-6.26
+				(args
+					(p-assign @6.10-6.11 (ident "a")))
+				(e-nominal @6.13-6.18 (nominal "Maybe")
+					(e-tag @6.13-6.23 (name "Some")
+						(args
+							(e-lookup-local @6.24-6.25
+								(p-assign @6.10-6.11 (ident "a"))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @5.9-5.22 (effectful false)
+						(ty-var @5.9-5.10 (name "a"))
+						(ty-apply @5.14-5.22 (symbol "Maybe")
+							(ty-var @5.20-5.21 (name "a"))))))))
+	(def
+		(pattern
+			(p-assign @9.1-9.6 (ident "none1")))
+		(expr
+			(e-nominal @9.9-9.14 (nominal "Maybe")
+				(e-tag @9.9-9.19 (name "None"))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-apply @8.9-8.18 (symbol "Maybe")
+						(ty-var @8.15-8.17 (name "_a")))))))
+	(def
+		(pattern
+			(p-assign @11.1-11.6 (ident "some2")))
+		(expr
+			(e-lambda @11.9-11.26
+				(args
+					(p-assign @11.10-11.11 (ident "a")))
+				(e-nominal @11.13-11.18 (nominal "Maybe")
+					(e-tag @11.13-11.23 (name "Some")
+						(args
+							(e-lookup-local @11.24-11.25
+								(p-assign @11.10-11.11 (ident "a")))))))))
+	(def
+		(pattern
+			(p-assign @13.1-13.6 (ident "none2")))
+		(expr
+			(e-nominal @13.9-13.14 (nominal "Maybe")
+				(e-tag @13.9-13.19 (name "None")))))
 	(s-nominal-decl @3.1-3.28
-		(ty-header @3.1-3.9 (name "Maybe")
-			(ty-args
+		(type-header (name "Maybe")
+			(args
 				(ty-var @3.7-3.8 (name "a"))))
 		(ty-tag-union @3.13-3.28
 			(ty-apply @3.14-3.21 (symbol "Some")
@@ -156,8 +166,8 @@ NO CHANGE
 		(patt @13.1-13.6 (type "Maybe(a)")))
 	(type_decls
 		(nominal @3.1-3.28 (type "Maybe(a)")
-			(ty-header @3.1-3.9 (name "Maybe")
-				(ty-args
+			(type-header (name "Maybe")
+				(args
 					(ty-var @3.7-3.8 (name "a"))))))
 	(expressions
 		(expr @6.9-6.26 (type "a -> Maybe(a)"))

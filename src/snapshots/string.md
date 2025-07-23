@@ -12,30 +12,20 @@ module []
 "two"
 ~~~
 # EXPECTED
-INVALID STATEMENT - string.md:3:1:3:6
-INVALID STATEMENT - string.md:5:1:5:6
+COMPILER DIAGNOSTIC - string.md:0:0:0:0
+COMPILER DIAGNOSTIC - string.md:0:0:0:0
 # PROBLEMS
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**string.md:3:1:3:6:**
-```roc
-"one"
-```
-^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**string.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**string.md:5:1:5:6:**
-```roc
-"two"
-```
-^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**string.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

@@ -17,9 +17,9 @@ UNDEFINED VARIABLE - tuple_patterns.md:1:7:1:12
 UNUSED VARIABLE - tuple_patterns.md:5:9:5:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `coord` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'coord' is not defined:
 **tuple_patterns.md:1:7:1:12:**
 ```roc
 match coord {
@@ -28,10 +28,9 @@ match coord {
 
 
 **UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'y' is defined but never used:
 **tuple_patterns.md:5:9:5:10:**
 ```roc
     (x, y) => x

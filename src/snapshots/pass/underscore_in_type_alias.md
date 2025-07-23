@@ -32,92 +32,92 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:15:13:15
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
+**Underscore in Type Alias**
+Underscore cannot be used in a type alias declaration:
 **underscore_in_type_alias.md:1:1:1:1:**
 ```roc
 module []
 ```
 
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
+**Underscore in Type Alias**
+Underscore cannot be used in a type alias declaration:
 **underscore_in_type_alias.md:1:1:1:1:**
 ```roc
 module []
 ```
 
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
+**Underscore in Type Alias**
+Underscore cannot be used in a type alias declaration:
 **underscore_in_type_alias.md:7:21:7:21:**
 ```roc
 ComplexType := List(_)
 ```
                     
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
+**Underscore in Type Alias**
+Underscore cannot be used in a type alias declaration:
 **underscore_in_type_alias.md:1:1:1:1:**
 ```roc
 module []
 ```
 
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
+**Underscore in Type Alias**
+Underscore cannot be used in a type alias declaration:
 **underscore_in_type_alias.md:1:1:1:1:**
 ```roc
 module []
 ```
 
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
+**Underscore in Type Alias**
+Underscore cannot be used in a type alias declaration:
 **underscore_in_type_alias.md:1:1:1:1:**
 ```roc
 module []
 ```
 
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
+**Underscore in Type Alias**
+Underscore cannot be used in a type alias declaration:
 **underscore_in_type_alias.md:13:15:13:15:**
 ```roc
 TupleType := (_, U32, _)
 ```
               
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
+**Underscore in Type Alias**
+Underscore cannot be used in a type alias declaration:
 **underscore_in_type_alias.md:1:1:1:1:**
 ```roc
 module []
 ```
 
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 # TOKENS
 ~~~zig
@@ -203,35 +203,35 @@ TagType := [Some(_), None]
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-3.11
-		(ty-header @3.1-3.7 (name "MyType"))
+		(type-header (name "MyType"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @5.1-5.15
-		(ty-header @5.1-5.10 (name "OtherType"))
+		(type-header (name "OtherType"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @7.1-7.23
-		(ty-header @7.1-7.12 (name "ComplexType"))
+		(type-header (name "ComplexType"))
 		(ty-apply @7.16-7.23 (symbol "List")
 			(ty-underscore @7.21-7.21)))
 	(s-nominal-decl @9.1-9.39
-		(ty-header @9.1-9.11 (name "RecordType"))
+		(type-header (name "RecordType"))
 		(ty-record @9.15-9.39
 			(field (field "field")
 				(ty-underscore @1.1-1.1))
 			(field (field "other")
 				(ty @9.34-9.37 (name "U32")))))
 	(s-nominal-decl @11.1-11.23
-		(ty-header @11.1-11.13 (name "FunctionType"))
+		(type-header (name "FunctionType"))
 		(ty-fn @11.17-11.23 (effectful false)
 			(ty-underscore @1.1-1.1)
 			(ty-underscore @1.1-1.1)))
 	(s-nominal-decl @13.1-13.25
-		(ty-header @13.1-13.10 (name "TupleType"))
+		(type-header (name "TupleType"))
 		(ty-tuple @13.14-13.25
 			(ty-underscore @13.15-13.15)
 			(ty @13.18-13.21 (name "U32"))
 			(ty-underscore @1.1-1.1)))
 	(s-nominal-decl @15.1-15.27
-		(ty-header @15.1-15.8 (name "TagType"))
+		(type-header (name "TagType"))
 		(ty-tag-union @15.12-15.27
 			(ty-apply @15.13-15.20 (symbol "Some")
 				(ty-underscore @15.18-15.18))
@@ -243,18 +243,18 @@ TagType := [Some(_), None]
 	(defs)
 	(type_decls
 		(alias @3.1-3.11 (type "Error")
-			(ty-header @3.1-3.7 (name "MyType")))
+			(type-header (name "MyType")))
 		(nominal @5.1-5.15 (type "Error")
-			(ty-header @5.1-5.10 (name "OtherType")))
+			(type-header (name "OtherType")))
 		(nominal @7.1-7.23 (type "Error")
-			(ty-header @7.1-7.12 (name "ComplexType")))
+			(type-header (name "ComplexType")))
 		(nominal @9.1-9.39 (type "RecordType")
-			(ty-header @9.1-9.11 (name "RecordType")))
+			(type-header (name "RecordType")))
 		(nominal @11.1-11.23 (type "FunctionType")
-			(ty-header @11.1-11.13 (name "FunctionType")))
+			(type-header (name "FunctionType")))
 		(nominal @13.1-13.25 (type "TupleType")
-			(ty-header @13.1-13.10 (name "TupleType")))
+			(type-header (name "TupleType")))
 		(nominal @15.1-15.27 (type "TagType")
-			(ty-header @15.1-15.8 (name "TagType"))))
+			(type-header (name "TagType"))))
 	(expressions))
 ~~~

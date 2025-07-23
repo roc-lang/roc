@@ -405,7 +405,7 @@ pub const Interpreter = struct {
                 };
 
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-                const tag_name = self.cir.env.idents.getText(tag.name);
+                const tag_name = self.cir.idents.getText(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
                     tag_ptr.* = 1;
                 } else if (std.mem.eql(u8, tag_name, "False")) {
@@ -556,7 +556,7 @@ pub const Interpreter = struct {
 
                 // For now, handle boolean tags (True/False) as u8
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-                const tag_name = self.cir.env.idents.getText(tag.name);
+                const tag_name = self.cir.idents.getText(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
                     tag_ptr.* = 1;
                 } else if (std.mem.eql(u8, tag_name, "False")) {

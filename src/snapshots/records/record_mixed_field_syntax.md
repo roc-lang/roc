@@ -13,9 +13,9 @@ UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:18:1:23
 UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:43:1:50
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `name` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'name' is not defined:
 **record_mixed_field_syntax.md:1:3:1:7:**
 ```roc
 { name, age: 30, email, status: "active", balance }
@@ -24,9 +24,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `email` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'email' is not defined:
 **record_mixed_field_syntax.md:1:18:1:23:**
 ```roc
 { name, age: 30, email, status: "active", balance }
@@ -35,9 +35,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `balance` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'balance' is not defined:
 **record_mixed_field_syntax.md:1:43:1:50:**
 ```roc
 { name, age: 30, email, status: "active", balance }
@@ -69,17 +69,22 @@ NO CHANGE
 ~~~clojure
 (e-record @1.1-1.52
 	(fields
-		(field (name "name")
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(field (name "age")
-			(e-int @1.14-1.16 (value "30")))
-		(field (name "email")
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(field (name "status")
-			(e-string @1.33-1.41
-				(e-literal @1.34-1.40 (string "active"))))
-		(field (name "balance")
-			(e-runtime-error (tag "ident_not_in_scope")))))
+		(record-field (label "name")
+			(value
+				(e-runtime-error (tag "ident_not_in_scope"))))
+		(record-field (label "age")
+			(value
+				(e-int @1.14-1.16 (value "30"))))
+		(record-field (label "email")
+			(value
+				(e-runtime-error (tag "ident_not_in_scope"))))
+		(record-field (label "status")
+			(value
+				(e-string @1.33-1.41
+					(e-literal @1.34-1.40 (string "active")))))
+		(record-field (label "balance")
+			(value
+				(e-runtime-error (tag "ident_not_in_scope"))))))
 ~~~
 # TYPES
 ~~~clojure

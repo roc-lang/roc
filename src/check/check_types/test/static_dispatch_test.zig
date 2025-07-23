@@ -73,7 +73,7 @@ const test_allocator = testing.allocator;
 //         const pattern = can_ir.store.getPattern(def.pattern);
 //         if (pattern == .assign) {
 //             const ident_idx = pattern.assign.ident;
-//             const ident_text = can_ir.env.idents.getText(ident_idx);
+//             const ident_text = can_ir.idents.getText(ident_idx);
 //
 //             if (std.mem.eql(u8, ident_text, "main")) {
 //                 main_expr_idx = def.expr;
@@ -188,7 +188,7 @@ const test_allocator = testing.allocator;
 //         const pattern = main_can_ir.store.getPattern(def.pattern);
 //         if (pattern == .assign) {
 //             const ident_idx = pattern.assign.ident;
-//             const ident_text = main_can_ir.env.idents.getText(ident_idx);
+//             const ident_text = main_can_ir.idents.getText(ident_idx);
 //             if (std.mem.eql(u8, ident_text, "main")) {
 //                 main_expr_idx = def.expr;
 //                 break;
@@ -270,7 +270,7 @@ const test_allocator = testing.allocator;
 //         const pattern = can_ir.store.getPattern(def.pattern);
 //         if (pattern == .assign) {
 //             const ident_idx = pattern.assign.ident;
-//             const ident_text = can_ir.env.idents.getText(ident_idx);
+//             const ident_text = can_ir.idents.getText(ident_idx);
 //             if (std.mem.eql(u8, ident_text, "main")) {
 //                 main_expr_idx = def.expr;
 //                 break;
@@ -351,7 +351,7 @@ const test_allocator = testing.allocator;
 //         const pattern = can_ir.store.getPattern(def.pattern);
 //         if (pattern == .assign) {
 //             const ident_idx = pattern.assign.ident;
-//             const ident_text = can_ir.env.idents.getText(ident_idx);
+//             const ident_text = can_ir.idents.getText(ident_idx);
 //             if (std.mem.eql(u8, ident_text, "main")) {
 //                 main_expr_idx = def.expr;
 //                 break;

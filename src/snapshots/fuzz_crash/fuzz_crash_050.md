@@ -40,9 +40,11 @@ _0 = {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @1.9-1.11 (ident "_0"))
-		(e-empty_record @1.12-2.2)))
+	(def
+		(pattern
+			(p-assign @1.9-1.11 (ident "_0")))
+		(expr
+			(e-empty_record @1.12-2.2))))
 ~~~
 # TYPES
 ~~~clojure

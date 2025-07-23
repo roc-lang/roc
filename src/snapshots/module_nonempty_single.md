@@ -12,24 +12,26 @@ EXPOSED BUT NOT DEFINED - module_nonempty_single.md:1:9:1:18
 EXPOSED BUT NOT DEFINED - module_nonempty_single.md:1:20:1:28
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
-The module header says that `something` is exposed, but it is not defined anywhere in this module.
 
+**Exposed but Not Defined**
+'something' is exposed in the module header but is not defined:
 **module_nonempty_single.md:1:9:1:18:**
 ```roc
 module [something, SomeType]
 ```
         ^^^^^^^^^
-You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
+
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
 
+**Exposed but Not Defined**
+'SomeType' is exposed in the module header but is not defined:
 **module_nonempty_single.md:1:20:1:28:**
 ```roc
 module [something, SomeType]
 ```
                    ^^^^^^^^
-You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
+
 
 # TOKENS
 ~~~zig

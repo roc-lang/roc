@@ -14,7 +14,6 @@ const reporting = @import("reporting");
 const Filesystem = @import("fs/Filesystem.zig");
 
 const ModuleEnv = compile.ModuleEnv;
-const CIR = canonicalize.CIR;
 const AST = parse.AST;
 const cache_mod = @import("cache/mod.zig");
 const CacheManager = cache_mod.CacheManager;
@@ -45,7 +44,7 @@ pub const TimingInfo = struct {
 /// The reports contain references to the source text, so ProcessResult
 /// must outlive any usage of the reports.
 pub const ProcessResult = struct {
-    cir: *CIR,
+    cir: *ModuleEnv,
     source: []const u8,
     own_source: bool, // Whether we own the source text (true if processed from file)
     reports: []reporting.Report,
@@ -62,8 +61,7 @@ pub const ProcessResult = struct {
 
         // Clean up the heap-allocated ModuleEnv (only when loaded from cache)
         if (self.was_cached) {
-            self.cir.env.deinit();
-            gpa.destroy(self.cir.env);
+            // Additional cleanup for cached results is handled below
         }
 
         self.cir.deinit();
@@ -211,7 +209,7 @@ fn processSourceInternal(
     }
 
     // Initialize the ModuleEnv (heap-allocated for ownership transfer)
-    var module_env = try gpa.create(ModuleEnv);
+    const module_env = try gpa.create(ModuleEnv);
 
     module_env.* = try ModuleEnv.init(gpa, source);
 
@@ -240,29 +238,28 @@ fn processSourceInternal(
 
     collectTiming(config, &timer, &timing_info, "tokenize_parse_ns");
 
-    // Initialize the Can IR (heap-allocated)
-    var cir = try gpa.create(CIR);
+    // Initialize the CIR fields in the existing module_env instead of creating a new CIR
     // Extract module name from filename (remove path and extension)
     const basename = std.fs.path.basename(filename);
     const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
         basename[0..dot_idx]
     else
         basename;
-    cir.* = try CIR.init(gpa, module_name);
+    try module_env.*.initCIRFields(gpa, module_name);
 
     // Create scope for semantic analysis
     // Canonicalize the AST
-    var canonicalizer = try canonicalize.init(cir, &parse_ast, null);
+    var canonicalizer = try canonicalize.init(module_env, &parse_ast, null);
     defer canonicalizer.deinit();
     try canonicalizer.canonicalizeFile();
 
     collectTiming(config, &timer, &timing_info, "canonicalize_ns");
 
     // Assert that everything is in-sync
-    cir.debugAssertArraysInSync();
+    module_env.*.debugAssertArraysInSync();
 
     // Get diagnostic Reports from CIR
-    const diagnostics = try cir.getDiagnostics();
+    const diagnostics = try module_env.*.getDiagnostics();
     defer gpa.free(diagnostics);
     for (diagnostics) |diagnostic| {
         // TODO: Fix diagnosticToReport to return the real reporting.Report type
@@ -275,8 +272,8 @@ fn processSourceInternal(
     collectTiming(config, &timer, &timing_info, "canonicalize_diagnostics_ns");
 
     // Type checking
-    const empty_modules: []const *CIR = &.{};
-    var solver = try Solver.init(gpa, &module_env.types, cir, empty_modules, &cir.store.regions);
+    const empty_modules: []const *ModuleEnv = &.{};
+    var solver = try Solver.init(gpa, &module_env.*.types, module_env, empty_modules, &module_env.*.store.regions);
     defer solver.deinit();
 
     // Check for type errors
@@ -291,7 +288,7 @@ fn processSourceInternal(
     var report_builder = types_problem_mod.ReportBuilder.init(
         gpa,
         module_env,
-        cir,
+        module_env,
         &solver.snapshots,
         filename,
         empty_modules,
@@ -321,7 +318,7 @@ fn processSourceInternal(
     }
 
     return ProcessResult{
-        .cir = cir,
+        .cir = module_env,
         .source = source,
         .own_source = own_source,
         .reports = final_reports,

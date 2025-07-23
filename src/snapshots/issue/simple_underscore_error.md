@@ -16,15 +16,15 @@ foo = 42
 UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
+**Underscore in Type Alias**
+Underscore cannot be used in a type alias declaration:
 **simple_underscore_error.md:1:1:1:1:**
 ```roc
 module []
 ```
 
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 # TOKENS
 ~~~zig
@@ -56,14 +56,17 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.4 (ident "foo"))
-		(e-int @6.7-6.9 (value "42"))
-		(annotation @6.1-6.4
-			(declared-type
-				(ty @5.7-5.14 (name "BadType")))))
+	(def
+		(pattern
+			(p-assign @6.1-6.4 (ident "foo")))
+		(expr
+			(e-int @6.7-6.9 (value "42")))
+		(annotation
+			(annotation
+				(type-anno
+					(ty @5.7-5.14 (name "BadType"))))))
 	(s-nominal-decl @3.1-3.13
-		(ty-header @3.1-3.8 (name "BadType"))
+		(type-header (name "BadType"))
 		(ty-underscore @1.1-1.1)))
 ~~~
 # TYPES
@@ -73,7 +76,7 @@ NO CHANGE
 		(patt @6.1-6.4 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.13 (type "Error")
-			(ty-header @3.1-3.8 (name "BadType"))))
+			(type-header (name "BadType"))))
 	(expressions
 		(expr @6.7-6.9 (type "Error"))))
 ~~~

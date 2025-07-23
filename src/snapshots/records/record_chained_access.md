@@ -11,9 +11,9 @@ person.address.street
 UNDEFINED VARIABLE - record_chained_access.md:1:1:1:7
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'person' is not defined:
 **record_chained_access.md:1:1:1:7:**
 ```roc
 person.address.street

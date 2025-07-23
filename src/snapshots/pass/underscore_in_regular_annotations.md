@@ -44,11 +44,11 @@ PARSE ERROR - underscore_in_regular_annotations.md:26:28:26:32
 UNEXPECTED TOKEN IN EXPRESSION - underscore_in_regular_annotations.md:27:5:27:6
 UNEXPECTED TOKEN IN EXPRESSION - underscore_in_regular_annotations.md:30:22:30:24
 UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
-INVALID STATEMENT - underscore_in_regular_annotations.md:26:15:26:16
-INVALID STATEMENT - underscore_in_regular_annotations.md:27:5:27:6
-INVALID STATEMENT - underscore_in_regular_annotations.md:27:7:27:16
-INVALID STATEMENT - underscore_in_regular_annotations.md:30:22:30:24
-INVALID STATEMENT - underscore_in_regular_annotations.md:30:25:30:27
+COMPILER DIAGNOSTIC - underscore_in_regular_annotations.md:0:0:0:0
+COMPILER DIAGNOSTIC - underscore_in_regular_annotations.md:0:0:0:0
+COMPILER DIAGNOSTIC - underscore_in_regular_annotations.md:0:0:0:0
+COMPILER DIAGNOSTIC - underscore_in_regular_annotations.md:0:0:0:0
+COMPILER DIAGNOSTIC - underscore_in_regular_annotations.md:0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **,** is not expected in an expression.
@@ -135,10 +135,9 @@ transform : _a -> _b -> _b
 
 
 **UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'list' is defined but never used:
 **underscore_in_regular_annotations.md:11:12:11:16:**
 ```roc
 process = |list| "processed"
@@ -146,60 +145,35 @@ process = |list| "processed"
            ^^^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**underscore_in_regular_annotations.md:26:15:26:16:**
-```roc
-map : (a -> b), List(a) -> List(b)
-```
-              ^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**underscore_in_regular_annotations.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**underscore_in_regular_annotations.md:0:0:0:0**
 
-**underscore_in_regular_annotations.md:27:5:27:6:**
-```roc
-map = |_, _| []
-```
-    ^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**underscore_in_regular_annotations.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**underscore_in_regular_annotations.md:27:7:27:16:**
-```roc
-map = |_, _| []
-```
-      ^^^^^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**underscore_in_regular_annotations.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_in_regular_annotations.md:30:22:30:24:**
-```roc
-transform : _a -> _b -> _b
-```
-                     ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_in_regular_annotations.md:30:25:30:27:**
-```roc
-transform : _a -> _b -> _b
-```
-                        ^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**underscore_in_regular_annotations.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -367,101 +341,118 @@ transform = |_, b| b
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.5 (ident "main"))
-		(e-lambda @4.8-4.13
-			(args
-				(p-assign @4.9-4.10 (ident "x")))
-			(e-lookup-local @4.12-4.13
-				(p-assign @4.9-4.10 (ident "x"))))
-		(annotation @4.1-4.5
-			(declared-type
-				(ty-fn @3.8-3.14 (effectful false)
-					(ty-underscore @1.1-1.1)
-					(ty-underscore @1.1-1.1)))))
-	(d-let
-		(p-assign @7.1-7.9 (ident "identity"))
-		(e-lambda @7.12-7.17
-			(args
-				(p-assign @7.13-7.14 (ident "x")))
-			(e-lookup-local @7.16-7.17
-				(p-assign @7.13-7.14 (ident "x"))))
-		(annotation @7.1-7.9
-			(declared-type
-				(ty-fn @6.12-6.18 (effectful false)
-					(ty-var @6.12-6.13 (name "a"))
-					(ty-var @6.17-6.18 (name "a"))))))
-	(d-let
-		(p-assign @11.1-11.8 (ident "process"))
-		(e-lambda @11.11-11.29
-			(args
-				(p-assign @11.12-11.16 (ident "list")))
-			(e-string @11.18-11.29
-				(e-literal @11.19-11.28 (string "processed"))))
-		(annotation @11.1-11.8
-			(declared-type
-				(ty-fn @10.11-10.25 (effectful false)
-					(ty-apply @10.11-10.18 (symbol "List")
-						(ty-underscore @10.16-10.16))
-					(ty @10.22-10.25 (name "Str"))))))
-	(d-let
-		(p-assign @15.1-15.9 (ident "get_data"))
-		(e-lambda @15.12-15.33
-			(args
-				(p-assign @15.13-15.19 (ident "record")))
-			(e-dot-access @15.21-15.33 (field "other")
-				(receiver
-					(e-lookup-local @15.21-15.27
-						(p-assign @15.13-15.19 (ident "record"))))))
-		(annotation @15.1-15.9
-			(declared-type
-				(ty-fn @14.12-14.43 (effectful false)
-					(ty-record @14.12-14.36
-						(field (field "field")
-							(ty-underscore @1.1-1.1))
-						(field (field "other")
-							(ty @14.31-14.34 (name "U32"))))
-					(ty @14.40-14.43 (name "U32"))))))
-	(d-let
-		(p-assign @19.1-19.14 (ident "handle_result"))
-		(e-lambda @19.17-23.6
-			(args
-				(p-assign @19.18-19.24 (ident "result")))
-			(e-match @20.5-23.6
-				(match @20.5-23.6
-					(cond
-						(e-lookup-local @20.11-20.17
-							(p-assign @19.18-19.24 (ident "result"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @21.9-21.14)))
-							(value
-								(e-string @21.18-21.27
-									(e-literal @21.19-21.26 (string "success")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @22.9-22.17)))
-							(value
-								(e-lookup-local @22.21-22.24
-									(p-assign @22.13-22.16 (ident "msg")))))))))
-		(annotation @19.1-19.14
-			(declared-type
-				(ty-fn @18.17-18.38 (effectful false)
-					(ty-apply @18.17-18.31 (symbol "Result")
-						(ty-underscore @18.24-18.24)
-						(ty @18.27-18.30 (name "Str")))
-					(ty @18.35-18.38 (name "Str"))))))
-	(d-let
-		(p-assign @31.1-31.10 (ident "transform"))
-		(e-lambda @31.13-31.21
-			(args
-				(p-underscore @31.14-31.15)
-				(p-assign @31.17-31.18 (ident "b")))
-			(e-lookup-local @31.20-31.21
-				(p-assign @31.17-31.18 (ident "b"))))))
+	(def
+		(pattern
+			(p-assign @4.1-4.5 (ident "main")))
+		(expr
+			(e-lambda @4.8-4.13
+				(args
+					(p-assign @4.9-4.10 (ident "x")))
+				(e-lookup-local @4.12-4.13
+					(p-assign @4.9-4.10 (ident "x")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @3.8-3.14 (effectful false)
+						(ty-underscore @1.1-1.1)
+						(ty-underscore @1.1-1.1))))))
+	(def
+		(pattern
+			(p-assign @7.1-7.9 (ident "identity")))
+		(expr
+			(e-lambda @7.12-7.17
+				(args
+					(p-assign @7.13-7.14 (ident "x")))
+				(e-lookup-local @7.16-7.17
+					(p-assign @7.13-7.14 (ident "x")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @6.12-6.18 (effectful false)
+						(ty-var @6.12-6.13 (name "a"))
+						(ty-var @6.17-6.18 (name "a")))))))
+	(def
+		(pattern
+			(p-assign @11.1-11.8 (ident "process")))
+		(expr
+			(e-lambda @11.11-11.29
+				(args
+					(p-assign @11.12-11.16 (ident "list")))
+				(e-string @11.18-11.29
+					(e-literal @11.19-11.28 (string "processed")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @10.11-10.25 (effectful false)
+						(ty-apply @10.11-10.18 (symbol "List")
+							(ty-underscore @10.16-10.16))
+						(ty @10.22-10.25 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @15.1-15.9 (ident "get_data")))
+		(expr
+			(e-lambda @15.12-15.33
+				(args
+					(p-assign @15.13-15.19 (ident "record")))
+				(e-dot-access @15.21-15.33 (field "other")
+					(receiver
+						(e-lookup-local @15.21-15.27
+							(p-assign @15.13-15.19 (ident "record")))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @14.12-14.43 (effectful false)
+						(ty-record @14.12-14.36
+							(field (field "field")
+								(ty-underscore @1.1-1.1))
+							(field (field "other")
+								(ty @14.31-14.34 (name "U32"))))
+						(ty @14.40-14.43 (name "U32")))))))
+	(def
+		(pattern
+			(p-assign @19.1-19.14 (ident "handle_result")))
+		(expr
+			(e-lambda @19.17-23.6
+				(args
+					(p-assign @19.18-19.24 (ident "result")))
+				(e-match @20.5-23.6
+					(match @20.5-23.6
+						(cond
+							(e-lookup-local @20.11-20.17
+								(p-assign @19.18-19.24 (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @21.9-21.14)))
+								(value
+									(e-string @21.18-21.27
+										(e-literal @21.19-21.26 (string "success")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @22.9-22.17)))
+								(value
+									(e-lookup-local @22.21-22.24
+										(p-assign @22.13-22.16 (ident "msg"))))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @18.17-18.38 (effectful false)
+						(ty-apply @18.17-18.31 (symbol "Result")
+							(ty-underscore @18.24-18.24)
+							(ty @18.27-18.30 (name "Str")))
+						(ty @18.35-18.38 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @31.1-31.10 (ident "transform")))
+		(expr
+			(e-lambda @31.13-31.21
+				(args
+					(p-underscore @31.14-31.15)
+					(p-assign @31.17-31.18 (ident "b")))
+				(e-lookup-local @31.20-31.21
+					(p-assign @31.17-31.18 (ident "b")))))))
 ~~~
 # TYPES
 ~~~clojure

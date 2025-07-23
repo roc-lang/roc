@@ -17,9 +17,9 @@ const SERIALIZATION_ALIGNMENT = 16;
 
 const Allocator = std.mem.Allocator;
 const TypeStore = types.Store;
-const CIR = canonicalize.CIR;
-const Node = CIR.Node;
-const NodeStore = CIR.NodeStore;
+const ModuleEnv = compile.ModuleEnv;
+const Node = ModuleEnv.Node;
+const NodeStore = ModuleEnv.NodeStore;
 const SafeList = collections.SafeList;
 const SafeStringHashMap = collections.SafeStringHashMap;
 
@@ -60,8 +60,8 @@ pub const Header = struct {
     external_decls: ComponentInfo,
 
     /// Spans can be stored directly since they're small
-    all_defs: CIR.Def.Span,
-    all_statements: CIR.Statement.Span,
+    all_defs: ModuleEnv.Def.Span,
+    all_statements: ModuleEnv.Statement.Span,
 
     /// Diagnostic counts for accurate reporting when loading from cache
     error_count: u32,
@@ -106,16 +106,15 @@ pub const CacheModule = struct {
     header: *const Header,
     data: []align(SERIALIZATION_ALIGNMENT) const u8,
 
-    /// Create a cache by serializing ModuleEnv and CIR data
+    /// Create a cache by serializing ModuleEnv data
     pub fn create(
         allocator: Allocator,
         module_env: *const compile.ModuleEnv,
-        cir: *const CIR,
         error_count: u32,
         warning_count: u32,
     ) ![]align(SERIALIZATION_ALIGNMENT) u8 {
         // Calculate component sizes
-        const node_store_size = cir.store.serializedSize();
+        const node_store_size = module_env.store.serializedSize();
         const string_store_size = module_env.strings.serializedSize();
         const ident_ids_size = module_env.ident_ids_for_slicing.serializedSize();
         const ident_store_size = module_env.idents.serializedSize();
@@ -123,7 +122,7 @@ pub const CacheModule = struct {
         const types_store_size = module_env.types.serializedSize();
         const exposed_by_str_size = module_env.exposed_by_str.serializedSize();
         const exposed_nodes_size = module_env.exposed_nodes.serializedSize();
-        const external_decls_size = cir.external_decls.serializedSize();
+        const external_decls_size = module_env.external_decls.serializedSize();
 
         // Calculate aligned offsets
         var offset: u32 = 0;
@@ -191,8 +190,8 @@ pub const CacheModule = struct {
             .exposed_by_str = .{ .offset = exposed_by_str_offset, .length = @intCast(exposed_by_str_size) },
             .exposed_nodes = .{ .offset = exposed_nodes_offset, .length = @intCast(exposed_nodes_size) },
             .external_decls = .{ .offset = external_decls_offset, .length = @intCast(external_decls_size) },
-            .all_defs = cir.all_defs,
-            .all_statements = cir.all_statements,
+            .all_defs = module_env.all_defs,
+            .all_statements = module_env.all_statements,
             .error_count = error_count,
             .warning_count = warning_count,
         };
@@ -213,7 +212,7 @@ pub const CacheModule = struct {
 
         // Serialize each component
         // Since we've ensured all offsets are aligned, we can safely alignCast the slices
-        _ = try cir.store.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[node_store_offset .. node_store_offset + node_store_size])));
+        _ = try module_env.store.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[node_store_offset .. node_store_offset + node_store_size])));
         _ = try module_env.strings.serializeInto(data_section[string_store_offset .. string_store_offset + string_store_size]);
         _ = try module_env.ident_ids_for_slicing.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[ident_ids_offset .. ident_ids_offset + ident_ids_size])));
         _ = try module_env.idents.serializeInto(data_section[ident_store_offset .. ident_store_offset + ident_store_size], allocator);
@@ -221,7 +220,7 @@ pub const CacheModule = struct {
         _ = try module_env.types.serializeInto(data_section[types_store_offset .. types_store_offset + types_store_size], allocator);
         _ = try module_env.exposed_by_str.serializeInto(data_section[exposed_by_str_offset .. exposed_by_str_offset + exposed_by_str_size]);
         _ = try module_env.exposed_nodes.serializeInto(data_section[exposed_nodes_offset .. exposed_nodes_offset + exposed_nodes_size]);
-        _ = try cir.external_decls.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[external_decls_offset .. external_decls_offset + external_decls_size])));
+        _ = try module_env.external_decls.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[external_decls_offset .. external_decls_offset + external_decls_size])));
 
         // TODO Calculate and store checksum
         // header.checksum = std.hash.Crc32.hash(data_section[0..total_data_size]);
@@ -262,10 +261,9 @@ pub const CacheModule = struct {
     /// Restored data from cache
     pub const RestoredData = struct {
         module_env: compile.ModuleEnv,
-        cir: CIR,
     };
 
-    /// Restore ModuleEnv and CIR from the cached data
+    /// Restore ModuleEnv from the cached data
     /// IMPORTANT: This expects source to remain valid for the lifetime of the restored ModuleEnv.
     pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) !RestoredData {
         // Deserialize each component
@@ -313,20 +311,20 @@ pub const CacheModule = struct {
             .exposed_nodes = exposed_nodes,
             .line_starts = line_starts,
             .source = source,
-            // Initialize CIR fields with default values for now
+            // Initialize ModuleEnv fields with default values for now
             .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
             .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
-            .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(allocator, 16),
-            .imports = CIR.Import.Store.init(),
+            .external_decls = undefined, // Will be set from deserialized data
+            .imports = ModuleEnv.Import.Store.init(),
             .module_name = "", // Will be set from cache data
-            .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
+            .diagnostics = ModuleEnv.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
             .store = undefined, // Will be set from cache data
         };
         errdefer module_env.deinit();
 
         // Deserialize external_decls
-        var external_decls = try CIR.ExternalDecl.SafeList.deserializeFrom(
-            @as([]align(@alignOf(CIR.ExternalDecl)) const u8, @alignCast(self.getComponentData(.external_decls))),
+        var external_decls = try ModuleEnv.ExternalDecl.SafeList.deserializeFrom(
+            @as([]align(@alignOf(ModuleEnv.ExternalDecl)) const u8, @alignCast(self.getComponentData(.external_decls))),
             allocator,
         );
         errdefer external_decls.deinit(allocator);
@@ -341,7 +339,6 @@ pub const CacheModule = struct {
         // Create result struct
         const result = RestoredData{
             .module_env = module_env,
-            .cir = module_env, // CIR is now just an alias for ModuleEnv
         };
 
         return result;
@@ -612,28 +609,25 @@ test "create and restore cache" {
     var module_env = try compile.ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 
-    var cir = try CIR.init(gpa, "TestModule");
-    defer cir.deinit();
-
     // Parse and canonicalize
     var ast = try parse(&module_env);
     defer ast.deinit(gpa);
 
-    var canonicalizer = try canonicalize.init(&cir, &ast, null);
+    var canonicalizer = try canonicalize.init(&module_env, &ast, null);
     defer canonicalizer.deinit();
     try canonicalizer.canonicalizeFile();
 
     // Generate original S-expression for comparison
     var original_tree = SExprTree.init(gpa);
     defer original_tree.deinit();
-    try CIR.pushToSExprTree(&cir, null, &original_tree);
+    try module_env.pushToSExprTree(null, &original_tree);
 
     var original_sexpr = std.ArrayList(u8).init(gpa);
     defer original_sexpr.deinit();
     try original_tree.toStringPretty(original_sexpr.writer().any());
 
     // Create cache from real data
-    const cache_data = try CacheModule.create(gpa, &module_env, &cir, 0, 0);
+    const cache_data = try CacheModule.create(gpa, &module_env, 0, 0);
     defer gpa.free(cache_data);
 
     // Load cache
@@ -648,17 +642,11 @@ test "create and restore cache" {
 
     var restored_module_env = restored.module_env;
     defer restored_module_env.deinit();
-    var restored_cir = restored.cir;
-    defer restored_cir.deinit();
-
-    // Fix env pointer after struct move
-    restored_cir.env = &restored_module_env;
-
-    // Generate S-expression from restored CIR
+    // Generate S-expression from restored ModuleEnv
     var restored_tree = SExprTree.init(gpa);
     defer restored_tree.deinit();
 
-    try CIR.pushToSExprTree(&restored_cir, null, &restored_tree);
+    try restored_module_env.pushToSExprTree(null, &restored_tree);
 
     var restored_sexpr = std.ArrayList(u8).init(gpa);
     defer restored_sexpr.deinit();
@@ -688,28 +676,25 @@ test "cache filesystem roundtrip with in-memory storage" {
     var module_env = try compile.ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 
-    var cir = try CIR.init(gpa, "TestModule");
-    defer cir.deinit();
-
     // Parse and canonicalize
     var ast = try parse(&module_env);
     defer ast.deinit(gpa);
 
-    var canonicalizer = try canonicalize.init(&cir, &ast, null);
+    var canonicalizer = try canonicalize.init(&module_env, &ast, null);
     defer canonicalizer.deinit();
     try canonicalizer.canonicalizeFile();
 
     // Generate original S-expression for comparison
     var original_tree = SExprTree.init(gpa);
     defer original_tree.deinit();
-    try CIR.pushToSExprTree(&cir, null, &original_tree);
+    try module_env.pushToSExprTree(null, &original_tree);
 
     var original_sexpr = std.ArrayList(u8).init(gpa);
     defer original_sexpr.deinit();
     try original_tree.toStringPretty(original_sexpr.writer().any());
 
     // Create cache from real data
-    const cache_data = try CacheModule.create(gpa, &module_env, &cir, 0, 0);
+    const cache_data = try CacheModule.create(gpa, &module_env, 0, 0);
     defer gpa.free(cache_data);
 
     // In-memory file storage for comprehensive mock filesystem
@@ -790,17 +775,11 @@ test "cache filesystem roundtrip with in-memory storage" {
 
     var restored_module_env = restored.module_env;
     defer restored_module_env.deinit();
-    var restored_cir = restored.cir;
-    defer restored_cir.deinit();
-
-    // Fix env pointer after struct move
-    restored_cir.env = &restored_module_env;
-
-    // Generate S-expression from restored CIR
+    // Generate S-expression from restored ModuleEnv
     var restored_tree = SExprTree.init(gpa);
     defer restored_tree.deinit();
 
-    try CIR.pushToSExprTree(&restored_cir, null, &restored_tree);
+    try restored_module_env.pushToSExprTree(null, &restored_tree);
 
     var restored_sexpr = std.ArrayList(u8).init(gpa);
     defer restored_sexpr.deinit();

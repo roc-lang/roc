@@ -45,17 +45,21 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @2.1-2.5 (ident "name"))
-		(e-string @2.8-2.13
-			(e-literal @2.9-2.12 (string "luc"))))
-	(d-let
-		(p-assign @3.1-3.4 (ident "foo"))
-		(e-string @3.7-3.22
-			(e-literal @3.8-3.14 (string "hello "))
-			(e-lookup-local @3.16-3.20
-				(p-assign @2.1-2.5 (ident "name")))
-			(e-literal @3.21-3.21 (string "")))))
+	(def
+		(pattern
+			(p-assign @2.1-2.5 (ident "name")))
+		(expr
+			(e-string @2.8-2.13
+				(e-literal @2.9-2.12 (string "luc")))))
+	(def
+		(pattern
+			(p-assign @3.1-3.4 (ident "foo")))
+		(expr
+			(e-string @3.7-3.22
+				(e-literal @3.8-3.14 (string "hello "))
+				(e-lookup-local @3.16-3.20
+					(p-assign @2.1-2.5 (ident "name")))
+				(e-literal @3.21-3.21 (string ""))))))
 ~~~
 # TYPES
 ~~~clojure

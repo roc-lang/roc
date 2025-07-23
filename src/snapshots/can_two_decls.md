@@ -51,15 +51,19 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @3.1-3.2 (ident "a"))
-		(e-int @3.5-3.6 (value "5")))
-	(d-let
-		(p-assign @4.1-4.2 (ident "b"))
-		(e-binop @4.5-4.10 (op "add")
-			(e-lookup-local @4.5-4.6
-				(p-assign @3.1-3.2 (ident "a")))
-			(e-int @4.9-4.10 (value "1")))))
+	(def
+		(pattern
+			(p-assign @3.1-3.2 (ident "a")))
+		(expr
+			(e-int @3.5-3.6 (value "5"))))
+	(def
+		(pattern
+			(p-assign @4.1-4.2 (ident "b")))
+		(expr
+			(e-binop @4.5-4.10 (op "add")
+				(e-lookup-local @4.5-4.6
+					(p-assign @3.1-3.2 (ident "a")))
+				(e-int @4.9-4.10 (value "1"))))))
 ~~~
 # TYPES
 ~~~clojure

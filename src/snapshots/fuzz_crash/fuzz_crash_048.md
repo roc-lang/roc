@@ -17,45 +17,30 @@ tag_tuple : Value((a, b, c))
 ~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
-UNDECLARED TYPE - fuzz_crash_048.md:4:7:4:12
-UNDECLARED TYPE - fuzz_crash_048.md:8:14:8:20
-UNDECLARED TYPE - fuzz_crash_048.md:9:13:9:18
+COMPILER DIAGNOSTIC - fuzz_crash_048.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_048.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_048.md:0:0:0:0
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
 
-**UNDECLARED TYPE**
-The type _Thing_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**fuzz_crash_048.md:4:7:4:12:**
-```roc
-bar : Thing(a, b, _)
-```
-      ^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**fuzz_crash_048.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**UNDECLARED TYPE**
-The type _String_ is not declared in this scope.
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**fuzz_crash_048.md:0:0:0:0**
 
-This type is referenced here:
-**fuzz_crash_048.md:8:14:8:20:**
-```roc
-main! : List(String) -> Result({}, _)
-```
-             ^^^^^^
+**COMPILER DIAGNOSTIC**
 
-
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_048.md:9:13:9:18:**
-```roc
-tag_tuple : Value((a, b, c))
-```
-            ^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**fuzz_crash_048.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

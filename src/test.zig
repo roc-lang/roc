@@ -33,7 +33,7 @@ test {
     // These seem to be broken:
     // testing.refAllDeclsRecursive(@import("check/canonicalize/test/int_test.zig"));
     // testing.refAllDeclsRecursive(@import("check/canonicalize/test/node_store_test.zig"));
-    // testing.refAllDeclsRecursive(@import("check/canonicalize/test/frac_test.zig"));
+    testing.refAllDeclsRecursive(@import("check/canonicalize/test/frac_test.zig"));
     // testing.refAllDeclsRecursive(@import("check/canonicalize/test/import_validation_test.zig"));
     // testing.refAllDeclsRecursive(@import("check/canonicalize/test/exposed_shadowing_test.zig"));
     testing.refAllDeclsRecursive(@import("snapshot.zig"));

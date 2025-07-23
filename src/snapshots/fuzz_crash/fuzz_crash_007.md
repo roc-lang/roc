@@ -11,8 +11,8 @@ ff8.8.d
 MISSING HEADER - fuzz_crash_007.md:1:1:1:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_007.md:1:4:1:6
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_007.md:1:6:1:8
-INVALID STATEMENT - fuzz_crash_007.md:1:4:1:6
-INVALID STATEMENT - fuzz_crash_007.md:1:6:1:8
+COMPILER DIAGNOSTIC - fuzz_crash_007.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_007.md:0:0:0:0
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -54,27 +54,17 @@ ff8.8.d
      ^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_007.md:1:4:1:6:**
-```roc
-ff8.8.d
-```
-   ^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_007.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_007.md:1:6:1:8:**
-```roc
-ff8.8.d
-```
-     ^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_007.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

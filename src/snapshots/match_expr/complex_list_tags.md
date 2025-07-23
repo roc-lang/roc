@@ -77,70 +77,70 @@ UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:7:5:7:6
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:7:7:7:9
 PARSE ERROR - complex_list_tags.md:7:10:7:10
 UNDEFINED VARIABLE - complex_list_tags.md:1:7:1:13
-UNKNOWN OPERATOR - complex_list_tags.md:3:22:3:53
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNUSED VARIABLE - complex_list_tags.md:3:15:3:16
 UNUSED VARIABLE - complex_list_tags.md:3:12:3:13
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - complex_list_tags.md:3:54:3:56
-INVALID PATTERN - :0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNDEFINED VARIABLE - complex_list_tags.md:3:58:3:67
-UNKNOWN OPERATOR - complex_list_tags.md:3:69:3:70
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNUSED VARIABLE - complex_list_tags.md:3:68:3:69
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - complex_list_tags.md:3:71:3:72
-UNKNOWN OPERATOR - complex_list_tags.md:4:36:4:70
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNUSED VARIABLE - complex_list_tags.md:4:15:4:18
 UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
 UNDEFINED VARIABLE - complex_list_tags.md:4:79:4:83
 UNUSED VARIABLE - complex_list_tags.md:4:70:4:78
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - complex_list_tags.md:4:84:4:85
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - complex_list_tags.md:4:97:4:98
-UNKNOWN OPERATOR - complex_list_tags.md:5:53:5:74
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
 UNUSED VARIABLE - complex_list_tags.md:5:30:5:33
 UNUSED VARIABLE - complex_list_tags.md:5:25:5:28
 UNUSED VARIABLE - complex_list_tags.md:5:11:5:13
 UNUSED VARIABLE - complex_list_tags.md:5:15:5:17
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - complex_list_tags.md:5:75:5:76
-INVALID PATTERN - :0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNDEFINED VARIABLE - complex_list_tags.md:5:78:5:87
-UNKNOWN OPERATOR - complex_list_tags.md:5:90:5:91
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNUSED VARIABLE - complex_list_tags.md:5:88:5:90
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - complex_list_tags.md:5:97:5:99
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNDEFINED VARIABLE - complex_list_tags.md:5:109:5:112
 UNUSED VARIABLE - complex_list_tags.md:5:99:5:108
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - complex_list_tags.md:5:113:5:114
-INVALID PATTERN - :0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNDEFINED VARIABLE - complex_list_tags.md:5:116:5:125
-UNKNOWN OPERATOR - complex_list_tags.md:5:129:5:130
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNUSED VARIABLE - complex_list_tags.md:5:126:5:129
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - complex_list_tags.md:5:130:5:131
-UNKNOWN OPERATOR - complex_list_tags.md:6:55:6:81
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
 UNUSED VARIABLE - complex_list_tags.md:6:13:6:19
 UNUSED VARIABLE - complex_list_tags.md:6:31:6:32
 UNUSED VARIABLE - complex_list_tags.md:6:28:6:29
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - complex_list_tags.md:6:82:6:97
-INVALID PATTERN - :0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNDEFINED VARIABLE - complex_list_tags.md:6:99:6:108
-UNKNOWN OPERATOR - complex_list_tags.md:6:110:6:111
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNUSED VARIABLE - complex_list_tags.md:6:109:6:110
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - complex_list_tags.md:6:112:6:114
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 UNDEFINED VARIABLE - complex_list_tags.md:6:124:6:125
 UNUSED VARIABLE - complex_list_tags.md:6:114:6:123
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - complex_list_tags.md:6:126:6:126
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - complex_list_tags.md:7:5:7:6
-INVALID PATTERN - :0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
+COMPILER DIAGNOSTIC - complex_list_tags.md:0:0:0:0
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `string_expected_close_interpolation`
@@ -875,9 +875,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `events` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'events' is not defined:
 **complex_list_tags.md:1:7:1:13:**
 ```roc
 match events {
@@ -885,22 +885,16 @@ match events {
       ^^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**COMPILER DIAGNOSTIC**
 
-**complex_list_tags.md:3:22:3:53:**
-```roc
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-```
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'y' is defined but never used:
 **complex_list_tags.md:3:15:3:16:**
 ```roc
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
@@ -909,10 +903,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'x' is defined but never used:
 **complex_list_tags.md:3:12:3:13:**
 ```roc
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
@@ -920,27 +913,28 @@ The unused variable is declared here:
            ^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**complex_list_tags.md:3:54:3:56:**
-```roc
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-```
-                                                     ^^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'toStr' is not defined:
 **complex_list_tags.md:3:58:3:67:**
 ```roc
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
@@ -948,22 +942,16 @@ Is there an `import` or `exposing` missing up-top?
                                                          ^^^^^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**COMPILER DIAGNOSTIC**
 
-**complex_list_tags.md:3:69:3:70:**
-```roc
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-```
-                                                                    ^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'y' is defined but never used:
 **complex_list_tags.md:3:68:3:69:**
 ```roc
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
@@ -971,36 +959,28 @@ The unused variable is declared here:
                                                                    ^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**complex_list_tags.md:3:71:3:72:**
-```roc
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-```
-                                                                      ^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**COMPILER DIAGNOSTIC**
 
-**complex_list_tags.md:4:36:4:70:**
-```roc
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-```
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `key` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_key` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'key' is defined but never used:
 **complex_list_tags.md:4:15:4:18:**
 ```roc
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
@@ -1009,10 +989,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'rest' is defined but never used:
 **complex_list_tags.md:1:1:1:1:**
 ```roc
 match events {
@@ -1021,9 +1000,9 @@ match events {
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `rest` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'rest' is not defined:
 **complex_list_tags.md:4:79:4:83:**
 ```roc
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
@@ -1032,10 +1011,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `len` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_len` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'len' is defined but never used:
 **complex_list_tags.md:4:70:4:78:**
 ```roc
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
@@ -1043,50 +1021,40 @@ The unused variable is declared here:
                                                                      ^^^^^^^^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**complex_list_tags.md:4:84:4:85:**
-```roc
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-```
-                                                                                   ^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**complex_list_tags.md:4:97:4:98:**
-```roc
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-```
-                                                                                                ^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**COMPILER DIAGNOSTIC**
 
-**complex_list_tags.md:5:53:5:74:**
-```roc
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-```
-                                                    ^^^^^^^^^^^^^^^^^^^^^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `others` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_others` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'others' is defined but never used:
 **complex_list_tags.md:1:1:1:1:**
 ```roc
 match events {
@@ -1095,10 +1063,9 @@ match events {
 
 
 **UNUSED VARIABLE**
-Variable `dy2` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dy2` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'dy2' is defined but never used:
 **complex_list_tags.md:5:30:5:33:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1107,10 +1074,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `dx2` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dx2` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'dx2' is defined but never used:
 **complex_list_tags.md:5:25:5:28:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1119,10 +1085,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `dx` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dx` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'dx' is defined but never used:
 **complex_list_tags.md:5:11:5:13:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1131,10 +1096,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `dy` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dy` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'dy' is defined but never used:
 **complex_list_tags.md:5:15:5:17:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1142,27 +1106,28 @@ The unused variable is declared here:
               ^^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**complex_list_tags.md:5:75:5:76:**
-```roc
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-```
-                                                                          ^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'toStr' is not defined:
 **complex_list_tags.md:5:78:5:87:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1170,22 +1135,16 @@ Is there an `import` or `exposing` missing up-top?
                                                                              ^^^^^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**COMPILER DIAGNOSTIC**
 
-**complex_list_tags.md:5:90:5:91:**
-```roc
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-```
-                                                                                         ^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `dy` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dy` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'dy' is defined but never used:
 **complex_list_tags.md:5:88:5:90:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1193,24 +1152,22 @@ The unused variable is declared here:
                                                                                        ^^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**complex_list_tags.md:5:97:5:99:**
-```roc
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-```
-                                                                                                ^^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `dx2` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'dx2' is not defined:
 **complex_list_tags.md:5:109:5:112:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1219,10 +1176,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `toStr` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'toStr' is defined but never used:
 **complex_list_tags.md:5:99:5:108:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1230,27 +1186,28 @@ The unused variable is declared here:
                                                                                                   ^^^^^^^^^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**complex_list_tags.md:5:113:5:114:**
-```roc
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-```
-                                                                                                                ^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'toStr' is not defined:
 **complex_list_tags.md:5:116:5:125:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1258,22 +1215,16 @@ Is there an `import` or `exposing` missing up-top?
                                                                                                                    ^^^^^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**COMPILER DIAGNOSTIC**
 
-**complex_list_tags.md:5:129:5:130:**
-```roc
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-```
-                                                                                                                                ^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `dy2` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dy2` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'dy2' is defined but never used:
 **complex_list_tags.md:5:126:5:129:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
@@ -1281,36 +1232,28 @@ The unused variable is declared here:
                                                                                                                              ^^^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**complex_list_tags.md:5:130:5:131:**
-```roc
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-```
-                                                                                                                                 ^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**COMPILER DIAGNOSTIC**
 
-**complex_list_tags.md:6:55:6:81:**
-```roc
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-```
-                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `remaining` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_remaining` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'remaining' is defined but never used:
 **complex_list_tags.md:1:1:1:1:**
 ```roc
 match events {
@@ -1319,10 +1262,9 @@ match events {
 
 
 **UNUSED VARIABLE**
-Variable `amount` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_amount` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'amount' is defined but never used:
 **complex_list_tags.md:6:13:6:19:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -1331,10 +1273,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'y' is defined but never used:
 **complex_list_tags.md:6:31:6:32:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -1343,10 +1284,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'x' is defined but never used:
 **complex_list_tags.md:6:28:6:29:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -1354,27 +1294,28 @@ The unused variable is declared here:
                            ^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**complex_list_tags.md:6:82:6:97:**
-```roc
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-```
-                                                                                 ^^^^^^^^^^^^^^^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'toStr' is not defined:
 **complex_list_tags.md:6:99:6:108:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -1382,22 +1323,16 @@ Is there an `import` or `exposing` missing up-top?
                                                                                                   ^^^^^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**COMPILER DIAGNOSTIC**
 
-**complex_list_tags.md:6:110:6:111:**
-```roc
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-```
-                                                                                                             ^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'x' is defined but never used:
 **complex_list_tags.md:6:109:6:110:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -1405,24 +1340,22 @@ The unused variable is declared here:
                                                                                                             ^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**complex_list_tags.md:6:112:6:114:**
-```roc
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-```
-                                                                                                               ^^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'y' is not defined:
 **complex_list_tags.md:6:124:6:125:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -1431,10 +1364,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `toStr` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'toStr' is defined but never used:
 **complex_list_tags.md:6:114:6:123:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
@@ -1442,36 +1374,35 @@ The unused variable is declared here:
                                                                                                                  ^^^^^^^^^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**complex_list_tags.md:6:126:6:126:**
-```roc
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-```
-                                                                                                                             
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**complex_list_tags.md:7:5:7:6:**
-```roc
-    _ => "other event pattern"
-```
-    ^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**complex_list_tags.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -1659,13 +1590,13 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @3.53-3.54 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @3.56-3.58 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
@@ -1677,7 +1608,7 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @3.70-3.71 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -1699,13 +1630,13 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @4.83-4.84 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @4.85-4.97 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -1722,13 +1653,13 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @5.74-5.75 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @5.76-5.78 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
@@ -1740,7 +1671,7 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @5.91-5.97 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -1752,13 +1683,13 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @5.112-5.113 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @5.114-5.116 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
@@ -1770,7 +1701,7 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @5.130-5.130 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -1787,13 +1718,13 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @6.81-6.82 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @6.97-6.99 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
@@ -1805,7 +1736,7 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @6.111-6.112 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -1817,19 +1748,19 @@ match events {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @6.125-6.126 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @6.126-6.127 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @7.7-7.9 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-string @7.10-7.31
 						(e-literal @7.11-7.30 (string "other event pattern"))))))))

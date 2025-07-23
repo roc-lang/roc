@@ -8,17 +8,13 @@ type=expr
 ()
 ~~~
 # EXPECTED
-EMPTY TUPLE NOT ALLOWED - tuple_empty_unbound.md:1:1:1:3
+COMPILER DIAGNOSTIC - tuple_empty_unbound.md:0:0:0:0
 # PROBLEMS
-**EMPTY TUPLE NOT ALLOWED**
-I am part way through parsing this tuple, but it is empty:
-**tuple_empty_unbound.md:1:1:1:3:**
-```roc
-()
-```
-^^
+**COMPILER DIAGNOSTIC**
 
-If you want to represent nothing, try using an empty record: `{}`.
+**Compiler Diagnostic**
+Diagnostic type 'empty_tuple' is not yet handled in report generation.
+**tuple_empty_unbound.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -38,5 +34,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.3 (type "Error"))
+(expr @1.1-1.1 (type "Error"))
 ~~~

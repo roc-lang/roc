@@ -18,32 +18,19 @@ redeclareTest = |_| {
 result = redeclareTest({})
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:6:2:6:13
+COMPILER DIAGNOSTIC - can_var_scoping_var_redeclaration.md:0:0:0:0
 UNUSED VARIABLE - can_var_scoping_var_redeclaration.md:6:2:6:13
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `x_` is being redeclared in this scope.
+**COMPILER DIAGNOSTIC**
 
-The redeclaration is here:
-**can_var_scoping_var_redeclaration.md:6:2:6:13:**
-```roc
-	var x_ = 10 # Redeclare var - should warn but proceed
-```
- ^^^^^^^^^^^
-
-But `x_` was already defined here:
-**can_var_scoping_var_redeclaration.md:5:2:5:12:**
-```roc
-	var x_ = 5
-```
- ^^^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'shadowing_warning' is not yet handled in report generation.
+**can_var_scoping_var_redeclaration.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `x_` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x_` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'x_' is defined but never used:
 **can_var_scoping_var_redeclaration.md:6:2:6:13:**
 ```roc
 	var x_ = 10 # Redeclare var - should warn but proceed
@@ -96,29 +83,33 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.14 (ident "redeclareTest"))
-		(e-lambda @4.17-9.2
-			(args
-				(p-underscore @4.18-4.19))
-			(e-block @4.21-9.2
-				(s-var @5.2-5.12
-					(p-assign @5.2-5.12 (ident "x_"))
-					(e-int @5.11-5.12 (value "5")))
-				(s-var @6.2-6.13
-					(p-assign @6.2-6.13 (ident "x_"))
-					(e-int @6.11-6.13 (value "10")))
-				(s-reassign @7.2-7.4
-					(p-assign @5.2-5.12 (ident "x_"))
-					(e-int @7.7-7.9 (value "15")))
-				(e-lookup-local @8.2-8.4
-					(p-assign @5.2-5.12 (ident "x_"))))))
-	(d-let
-		(p-assign @11.1-11.7 (ident "result"))
-		(e-call @11.10-11.27
-			(e-lookup-local @11.10-11.23
-				(p-assign @4.1-4.14 (ident "redeclareTest")))
-			(e-empty_record @11.24-11.26))))
+	(def
+		(pattern
+			(p-assign @4.1-4.14 (ident "redeclareTest")))
+		(expr
+			(e-lambda @4.17-9.2
+				(args
+					(p-underscore @4.18-4.19))
+				(e-block @4.21-9.2
+					(s-var @5.2-5.12
+						(p-assign @5.2-5.12 (ident "x_"))
+						(e-int @5.11-5.12 (value "5")))
+					(s-var @6.2-6.13
+						(p-assign @6.2-6.13 (ident "x_"))
+						(e-int @6.11-6.13 (value "10")))
+					(s-reassign @7.2-7.4
+						(p-assign @5.2-5.12 (ident "x_"))
+						(e-int @7.7-7.9 (value "15")))
+					(e-lookup-local @8.2-8.4
+						(p-assign @5.2-5.12 (ident "x_")))))))
+	(def
+		(pattern
+			(p-assign @11.1-11.7 (ident "result")))
+		(expr
+			(e-call @11.10-11.27
+				(e-lookup-local @11.10-11.23
+					(p-assign @4.1-4.14 (ident "redeclareTest")))
+				(e-empty_record @11.24-11.26)))))
 ~~~
 # TYPES
 ~~~clojure

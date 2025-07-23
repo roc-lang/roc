@@ -29,13 +29,12 @@ main! = |_| {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
-UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
+COMPILER DIAGNOSTIC - unused_vars_simple.md:0:0:0:0
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'x' is defined but never used:
 **unused_vars_simple.md:4:19:4:20:**
 ```roc
 unused_regular = |x| 42
@@ -43,17 +42,11 @@ unused_regular = |x| 42
                   ^
 
 
-**UNDERSCORE VARIABLE USED**
-Variable `_value` is prefixed with an underscore but is actually used.
+**COMPILER DIAGNOSTIC**
 
-Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: `value`.
-
-**unused_vars_simple.md:7:28:7:34:**
-```roc
-used_underscore = |_value| _value
-```
-                           ^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'used_underscore_variable' is not yet handled in report generation.
+**unused_vars_simple.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -173,75 +166,85 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.15 (ident "unused_regular"))
-		(e-lambda @4.18-4.24
-			(args
-				(p-assign @4.19-4.20 (ident "x")))
-			(e-int @4.22-4.24 (value "42"))))
-	(d-let
-		(p-assign @7.1-7.16 (ident "used_underscore"))
-		(e-lambda @7.19-7.34
-			(args
-				(p-assign @7.20-7.26 (ident "_value")))
-			(e-lookup-local @7.28-7.34
-				(p-assign @7.20-7.26 (ident "_value")))))
-	(d-let
-		(p-assign @10.1-10.18 (ident "unused_underscore"))
-		(e-lambda @10.21-10.35
-			(args
-				(p-assign @10.22-10.30 (ident "_ignored")))
-			(e-int @10.32-10.35 (value "100"))))
-	(d-let
-		(p-assign @13.1-13.13 (ident "used_regular"))
-		(e-lambda @13.16-13.35
-			(args
-				(p-assign @13.17-13.23 (ident "number")))
-			(e-binop @13.25-13.35 (op "add")
-				(e-lookup-local @13.25-13.31
+	(def
+		(pattern
+			(p-assign @4.1-4.15 (ident "unused_regular")))
+		(expr
+			(e-lambda @4.18-4.24
+				(args
+					(p-assign @4.19-4.20 (ident "x")))
+				(e-int @4.22-4.24 (value "42")))))
+	(def
+		(pattern
+			(p-assign @7.1-7.16 (ident "used_underscore")))
+		(expr
+			(e-lambda @7.19-7.34
+				(args
+					(p-assign @7.20-7.26 (ident "_value")))
+				(e-lookup-local @7.28-7.34
+					(p-assign @7.20-7.26 (ident "_value"))))))
+	(def
+		(pattern
+			(p-assign @10.1-10.18 (ident "unused_underscore")))
+		(expr
+			(e-lambda @10.21-10.35
+				(args
+					(p-assign @10.22-10.30 (ident "_ignored")))
+				(e-int @10.32-10.35 (value "100")))))
+	(def
+		(pattern
+			(p-assign @13.1-13.13 (ident "used_regular")))
+		(expr
+			(e-lambda @13.16-13.35
+				(args
 					(p-assign @13.17-13.23 (ident "number")))
-				(e-int @13.34-13.35 (value "1")))))
-	(d-let
-		(p-assign @15.1-15.6 (ident "main!"))
-		(e-lambda @15.9-21.2
-			(args
-				(p-underscore @15.10-15.11))
-			(e-block @15.13-21.2
-				(s-let @16.5-16.26
-					(p-assign @16.5-16.6 (ident "a"))
-					(e-call @16.9-16.26
-						(e-lookup-local @16.9-16.23
-							(p-assign @4.1-4.15 (ident "unused_regular")))
-						(e-int @16.24-16.25 (value "5"))))
-				(s-let @17.5-17.28
-					(p-assign @17.5-17.6 (ident "b"))
-					(e-call @17.9-17.28
-						(e-lookup-local @17.9-17.24
-							(p-assign @7.1-7.16 (ident "used_underscore")))
-						(e-int @17.25-17.27 (value "10"))))
-				(s-let @18.5-18.30
-					(p-assign @18.5-18.6 (ident "c"))
-					(e-call @18.9-18.30
-						(e-lookup-local @18.9-18.26
-							(p-assign @10.1-10.18 (ident "unused_underscore")))
-						(e-int @18.27-18.29 (value "15"))))
-				(s-let @19.5-19.25
-					(p-assign @19.5-19.6 (ident "d"))
-					(e-call @19.9-19.25
-						(e-lookup-local @19.9-19.21
-							(p-assign @13.1-13.13 (ident "used_regular")))
-						(e-int @19.22-19.24 (value "20"))))
-				(e-binop @20.5-20.18 (op "add")
-					(e-lookup-local @20.5-20.6
-						(p-assign @16.5-16.6 (ident "a")))
-					(e-binop @20.9-20.18 (op "add")
-						(e-lookup-local @20.9-20.10
-							(p-assign @17.5-17.6 (ident "b")))
-						(e-binop @20.13-20.18 (op "add")
-							(e-lookup-local @20.13-20.14
-								(p-assign @18.5-18.6 (ident "c")))
-							(e-lookup-local @20.17-20.18
-								(p-assign @19.5-19.6 (ident "d"))))))))))
+				(e-binop @13.25-13.35 (op "add")
+					(e-lookup-local @13.25-13.31
+						(p-assign @13.17-13.23 (ident "number")))
+					(e-int @13.34-13.35 (value "1"))))))
+	(def
+		(pattern
+			(p-assign @15.1-15.6 (ident "main!")))
+		(expr
+			(e-lambda @15.9-21.2
+				(args
+					(p-underscore @15.10-15.11))
+				(e-block @15.13-21.2
+					(s-let @16.5-16.26
+						(p-assign @16.5-16.6 (ident "a"))
+						(e-call @16.9-16.26
+							(e-lookup-local @16.9-16.23
+								(p-assign @4.1-4.15 (ident "unused_regular")))
+							(e-int @16.24-16.25 (value "5"))))
+					(s-let @17.5-17.28
+						(p-assign @17.5-17.6 (ident "b"))
+						(e-call @17.9-17.28
+							(e-lookup-local @17.9-17.24
+								(p-assign @7.1-7.16 (ident "used_underscore")))
+							(e-int @17.25-17.27 (value "10"))))
+					(s-let @18.5-18.30
+						(p-assign @18.5-18.6 (ident "c"))
+						(e-call @18.9-18.30
+							(e-lookup-local @18.9-18.26
+								(p-assign @10.1-10.18 (ident "unused_underscore")))
+							(e-int @18.27-18.29 (value "15"))))
+					(s-let @19.5-19.25
+						(p-assign @19.5-19.6 (ident "d"))
+						(e-call @19.9-19.25
+							(e-lookup-local @19.9-19.21
+								(p-assign @13.1-13.13 (ident "used_regular")))
+							(e-int @19.22-19.24 (value "20"))))
+					(e-binop @20.5-20.18 (op "add")
+						(e-lookup-local @20.5-20.6
+							(p-assign @16.5-16.6 (ident "a")))
+						(e-binop @20.9-20.18 (op "add")
+							(e-lookup-local @20.9-20.10
+								(p-assign @17.5-17.6 (ident "b")))
+							(e-binop @20.13-20.18 (op "add")
+								(e-lookup-local @20.13-20.14
+									(p-assign @18.5-18.6 (ident "c")))
+								(e-lookup-local @20.17-20.18
+									(p-assign @19.5-19.6 (ident "d")))))))))))
 ~~~
 # TYPES
 ~~~clojure

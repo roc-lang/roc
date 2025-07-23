@@ -628,6 +628,12 @@ test "NodeStore round trip - Expr" {
             .statements = AST.Statement.Span{ .span = rand_span() },
         },
     });
+    try expressions.append(AST.Expr{
+        .record_updater = .{
+            .token = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
 
     // We don't include .malformed variant
     expected_test_count -= 1;

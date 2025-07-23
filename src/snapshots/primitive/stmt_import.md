@@ -10,18 +10,13 @@ module []
 import json.Json [foo, BAR]
 ~~~
 # EXPECTED
-INVALID STATEMENT - stmt_import.md:3:18:3:28
+COMPILER DIAGNOSTIC - stmt_import.md:0:0:0:0
 # PROBLEMS
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**stmt_import.md:3:18:3:28:**
-```roc
-import json.Json [foo, BAR]
-```
-                 ^^^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**stmt_import.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

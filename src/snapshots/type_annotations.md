@@ -15,42 +15,27 @@ main! : List(String) -> Result({}, _)
 tag_tuple : Value((_a, _b, _c))
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_annotations.md:4:7:4:12
-UNDECLARED TYPE - type_annotations.md:7:14:7:20
-UNDECLARED TYPE - type_annotations.md:8:13:8:18
+COMPILER DIAGNOSTIC - type_annotations.md:0:0:0:0
+COMPILER DIAGNOSTIC - type_annotations.md:0:0:0:0
+COMPILER DIAGNOSTIC - type_annotations.md:0:0:0:0
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Thing_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**type_annotations.md:4:7:4:12:**
-```roc
-bar : Thing(_a, _b, _)
-```
-      ^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**type_annotations.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**UNDECLARED TYPE**
-The type _String_ is not declared in this scope.
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**type_annotations.md:0:0:0:0**
 
-This type is referenced here:
-**type_annotations.md:7:14:7:20:**
-```roc
-main! : List(String) -> Result({}, _)
-```
-             ^^^^^^
+**COMPILER DIAGNOSTIC**
 
-
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
-
-This type is referenced here:
-**type_annotations.md:8:13:8:18:**
-```roc
-tag_tuple : Value((_a, _b, _c))
-```
-            ^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**type_annotations.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

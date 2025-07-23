@@ -49,10 +49,9 @@ UNUSED VARIABLE - everything.md:23:2:23:4
 UNUSED VARIABLE - everything.md:19:2:19:4
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'b' is defined but never used:
 **everything.md:26:10:26:11:**
 ```roc
 		Z1((a, b)) => a
@@ -61,10 +60,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'b' is defined but never used:
 **everything.md:27:9:27:10:**
 ```roc
 		Z2(a, b) => a
@@ -73,10 +71,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'b' is defined but never used:
 **everything.md:28:11:28:12:**
 ```roc
 		Z3({ a, b }) => a
@@ -85,10 +82,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'b' is defined but never used:
 **everything.md:29:10:29:11:**
 ```roc
 		Z4([a, b]) => a
@@ -97,10 +93,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h3` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'h3' is defined but never used:
 **everything.md:21:2:21:4:**
 ```roc
 	h3 = A(x, y)
@@ -109,10 +104,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h4` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'h4' is defined but never used:
 **everything.md:22:2:22:4:**
 ```roc
 	h4 = [x, y]
@@ -121,10 +115,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h2` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'h2' is defined but never used:
 **everything.md:20:2:20:4:**
 ```roc
 	h2 = h(x, y)
@@ -133,10 +126,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h5` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'h5' is defined but never used:
 **everything.md:23:2:23:4:**
 ```roc
 	h5 = (x, y)
@@ -145,10 +137,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h1` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'h1' is defined but never used:
 **everything.md:19:2:19:4:**
 ```roc
 	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
@@ -348,184 +339,189 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @18.1-18.2 (ident "h"))
-		(e-lambda @18.5-31.2
-			(args
-				(p-assign @18.6-18.7 (ident "x"))
-				(p-assign @18.9-18.10 (ident "y")))
-			(e-block @18.12-31.2
-				(s-let @19.2-19.52
-					(p-assign @19.2-19.4 (ident "h1"))
-					(e-record @19.7-19.52
-						(fields
-							(field (name "h11")
-								(e-lookup-local @19.14-19.15
+	(def
+		(pattern
+			(p-assign @18.1-18.2 (ident "h")))
+		(expr
+			(e-lambda @18.5-31.2
+				(args
+					(p-assign @18.6-18.7 (ident "x"))
+					(p-assign @18.9-18.10 (ident "y")))
+				(e-block @18.12-31.2
+					(s-let @19.2-19.52
+						(p-assign @19.2-19.4 (ident "h1"))
+						(e-record @19.7-19.52
+							(fields
+								(record-field (label "h11")
+									(value
+										(e-lookup-local @19.14-19.15
+											(p-assign @18.6-18.7 (ident "x")))))
+								(record-field (label "h12")
+									(value
+										(e-lookup-local @19.22-19.23
+											(p-assign @18.6-18.7 (ident "x")))))
+								(record-field (label "h13")
+									(value
+										(e-record @19.30-19.50
+											(fields
+												(record-field (label "h131")
+													(value
+														(e-lookup-local @19.38-19.39
+															(p-assign @18.6-18.7 (ident "x")))))
+												(record-field (label "h132")
+													(value
+														(e-lookup-local @19.47-19.48
+															(p-assign @18.9-18.10 (ident "y"))))))))))))
+					(s-let @20.2-20.14
+						(p-assign @20.2-20.4 (ident "h2"))
+						(e-call @20.7-20.14
+							(e-lookup-local @20.7-20.8
+								(p-assign @18.1-18.2 (ident "h")))
+							(e-lookup-local @20.9-20.10
+								(p-assign @18.6-18.7 (ident "x")))
+							(e-lookup-local @20.12-20.13
+								(p-assign @18.9-18.10 (ident "y")))))
+					(s-let @21.2-21.14
+						(p-assign @21.2-21.4 (ident "h3"))
+						(e-tag @21.7-21.8 (name "A")
+							(args
+								(e-lookup-local @21.9-21.10
+									(p-assign @18.6-18.7 (ident "x")))
+								(e-lookup-local @21.12-21.13
+									(p-assign @18.9-18.10 (ident "y"))))))
+					(s-let @22.2-22.13
+						(p-assign @22.2-22.4 (ident "h4"))
+						(e-list @22.7-22.13
+							(elems
+								(e-lookup-local @22.8-22.9
+									(p-assign @18.6-18.7 (ident "x")))
+								(e-lookup-local @22.11-22.12
+									(p-assign @18.9-18.10 (ident "y"))))))
+					(s-let @23.2-23.13
+						(p-assign @23.2-23.4 (ident "h5"))
+						(e-tuple @23.7-23.13
+							(elems
+								(e-lookup-local @23.8-23.9
+									(p-assign @18.6-18.7 (ident "x")))
+								(e-lookup-local @23.11-23.12
+									(p-assign @18.9-18.10 (ident "y"))))))
+					(e-match @25.2-30.3
+						(match @25.2-30.3
+							(cond
+								(e-lookup-local @25.8-25.9
 									(p-assign @18.6-18.7 (ident "x"))))
-							(field (name "h12")
-								(e-lookup-local @19.22-19.23
-									(p-assign @18.6-18.7 (ident "x"))))
-							(field (name "h13")
-								(e-record @19.30-19.50
-									(fields
-										(field (name "h131")
-											(e-lookup-local @19.38-19.39
-												(p-assign @18.6-18.7 (ident "x"))))
-										(field (name "h132")
-											(e-lookup-local @19.47-19.48
-												(p-assign @18.9-18.10 (ident "y"))))))))))
-				(s-let @20.2-20.14
-					(p-assign @20.2-20.4 (ident "h2"))
-					(e-call @20.7-20.14
-						(e-lookup-local @20.7-20.8
-							(p-assign @18.1-18.2 (ident "h")))
-						(e-lookup-local @20.9-20.10
-							(p-assign @18.6-18.7 (ident "x")))
-						(e-lookup-local @20.12-20.13
-							(p-assign @18.9-18.10 (ident "y")))))
-				(s-let @21.2-21.14
-					(p-assign @21.2-21.4 (ident "h3"))
-					(e-tag @21.7-21.8 (name "A")
-						(args
-							(e-lookup-local @21.9-21.10
-								(p-assign @18.6-18.7 (ident "x")))
-							(e-lookup-local @21.12-21.13
-								(p-assign @18.9-18.10 (ident "y"))))))
-				(s-let @22.2-22.13
-					(p-assign @22.2-22.4 (ident "h4"))
-					(e-list @22.7-22.13
-						(elems
-							(e-lookup-local @22.8-22.9
-								(p-assign @18.6-18.7 (ident "x")))
-							(e-lookup-local @22.11-22.12
-								(p-assign @18.9-18.10 (ident "y"))))))
-				(s-let @23.2-23.13
-					(p-assign @23.2-23.4 (ident "h5"))
-					(e-tuple @23.7-23.13
-						(elems
-							(e-lookup-local @23.8-23.9
-								(p-assign @18.6-18.7 (ident "x")))
-							(e-lookup-local @23.11-23.12
-								(p-assign @18.9-18.10 (ident "y"))))))
-				(e-match @25.2-30.3
-					(match @25.2-30.3
-						(cond
-							(e-lookup-local @25.8-25.9
-								(p-assign @18.6-18.7 (ident "x"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @26.3-26.13)))
-								(value
-									(e-lookup-local @26.17-26.18
-										(p-assign @26.7-26.8 (ident "a")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @27.3-27.11)))
-								(value
-									(e-lookup-local @27.15-27.16
-										(p-assign @27.6-27.7 (ident "a")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @28.3-28.15)))
-								(value
-									(e-lookup-local @28.19-28.20
-										(p-assign @28.8-28.9 (ident "a")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @29.3-29.13)))
-								(value
-									(e-lookup-local @29.17-29.18
-										(p-assign @29.7-29.8 (ident "a")))))))))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @26.3-26.13)))
+									(value
+										(e-lookup-local @26.17-26.18
+											(p-assign @26.7-26.8 (ident "a")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @27.3-27.11)))
+									(value
+										(e-lookup-local @27.15-27.16
+											(p-assign @27.6-27.7 (ident "a")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @28.3-28.15)))
+									(value
+										(e-lookup-local @28.19-28.20
+											(p-assign @28.8-28.9 (ident "a")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @29.3-29.13)))
+									(value
+										(e-lookup-local @29.17-29.18
+											(p-assign @29.7-29.8 (ident "a"))))))))))))
 	(s-alias-decl @8.1-8.74
-		(ty-header @8.1-8.5 (name "A")
-			(ty-args
+		(type-header (name "A")
+			(args
 				(ty-var @8.3-8.4 (name "a"))))
 		(ty-var @8.8-8.9 (name "a"))
 		(where
-			(method @8.16-8.44 (module-of "a") (ident "a1")
-				(args
-					(ty-tuple @8.31-8.37
-						(ty-var @8.32-8.33 (name "a"))
-						(ty-var @8.35-8.36 (name "a"))))
-				(ty @8.41-8.44 (name "Str")))
-			(method @8.46-8.74 (module-of "a") (ident "a2")
-				(args
-					(ty-tuple @8.61-8.67
-						(ty-var @8.62-8.63 (name "a"))
-						(ty-var @8.65-8.66 (name "a"))))
-				(ty @8.71-8.74 (name "Str")))))
+			(where-clause
+				(type "mod-method")
+				(var-name "a")
+				(method-name "a1"))
+			(where-clause
+				(type "mod-method")
+				(var-name "a")
+				(method-name "a2"))))
 	(s-alias-decl @9.1-9.74
-		(ty-header @9.1-9.5 (name "B")
-			(ty-args
+		(type-header (name "B")
+			(args
 				(ty-var @9.3-9.4 (name "b"))))
 		(ty-var @9.8-9.9 (name "b"))
 		(where
-			(method @9.16-9.44 (module-of "b") (ident "b1")
-				(args
-					(ty-tuple @9.31-9.37
-						(ty-var @9.32-9.33 (name "b"))
-						(ty-var @9.35-9.36 (name "b"))))
-				(ty @9.41-9.44 (name "Str")))
-			(method @9.46-9.74 (module-of "b") (ident "b2")
-				(args
-					(ty-tuple @9.61-9.67
-						(ty-var @9.62-9.63 (name "b"))
-						(ty-var @9.65-9.66 (name "b"))))
-				(ty @9.71-9.74 (name "Str")))))
+			(where-clause
+				(type "mod-method")
+				(var-name "b")
+				(method-name "b1"))
+			(where-clause
+				(type "mod-method")
+				(var-name "b")
+				(method-name "b2"))))
 	(s-alias-decl @11.1-11.17
-		(ty-header @11.1-11.8 (name "C")
-			(ty-args
+		(type-header (name "C")
+			(args
 				(ty-var @11.3-11.4 (name "a"))
 				(ty-var @11.6-11.7 (name "b"))))
 		(ty-tuple @11.11-11.17
 			(ty-var @11.12-11.13 (name "a"))
 			(ty-var @11.15-11.16 (name "b"))))
 	(s-alias-decl @12.1-12.18
-		(ty-header @12.1-12.8 (name "D")
-			(ty-args
+		(type-header (name "D")
+			(args
 				(ty-var @12.3-12.4 (name "a"))
 				(ty-var @12.6-12.7 (name "b"))))
 		(ty-apply @12.11-12.18 (symbol "C")
 			(ty-var @12.13-12.14 (name "a"))
 			(ty-var @12.16-12.17 (name "b"))))
 	(s-alias-decl @13.1-13.25
-		(ty-header @13.1-13.2 (name "E"))
+		(type-header (name "E"))
 		(ty-record @13.5-13.25
 			(field (field "a")
 				(ty @13.11-13.14 (name "Str")))
 			(field (field "b")
 				(ty @13.20-13.23 (name "Str")))))
 	(s-alias-decl @14.1-14.11
-		(ty-header @14.1-14.2 (name "F"))
+		(type-header (name "F"))
 		(ty-tag-union @14.5-14.11
 			(ty @14.6-14.7 (name "A"))
 			(ty @14.9-14.10 (name "B"))))
 	(s-import @4.1-4.30 (module "I1")
 		(exposes
-			(exposed (name "I11") (wildcard false))
-			(exposed (name "I12") (wildcard false))))
+			(exposed-item (name "I11") (is_wildcard false))
+			(exposed-item (name "I12") (is_wildcard false))))
 	(s-import @5.1-5.46 (module "I2")
 		(exposes
-			(exposed (name "I21") (alias "Ias1") (wildcard false))
-			(exposed (name "I22") (alias "Ias2") (wildcard false))))
+			(exposed-item (name "I21") (alias "Ias1") (is_wildcard false))
+			(exposed-item (name "I22") (alias "Ias2") (is_wildcard false))))
 	(s-type-anno @16.1-16.42 (name "g")
 		(ty-fn @16.5-16.11 (effectful false)
 			(ty-var @16.5-16.6 (name "e"))
 			(ty-var @16.10-16.11 (name "e")))
 		(where
-			(alias @16.18-16.29 (module-of "e") (ident "A"))
-			(alias @16.31-16.42 (module-of "e") (ident "B"))))
-	(ext-decl @8.16-8.44 (ident "module(a).a1") (kind "value"))
-	(ext-decl @8.46-8.74 (ident "module(a).a2") (kind "value"))
-	(ext-decl @9.16-9.44 (ident "module(b).b1") (kind "value"))
-	(ext-decl @9.46-9.74 (ident "module(b).b2") (kind "value"))
-	(ext-decl @16.18-16.29 (ident "module(e).A") (kind "type"))
-	(ext-decl @16.31-16.42 (ident "module(e).B") (kind "type")))
+			(where-clause
+				(type "mod-alias")
+				(var-name "e")
+				(alias-name "A"))
+			(where-clause
+				(type "mod-alias")
+				(var-name "e")
+				(alias-name "B"))))
+	(external-decl (qualified-name "module(a).a1") (module-name "module(a)") (local-name "a1") (kind "value"))
+	(external-decl (qualified-name "module(a).a2") (module-name "module(a)") (local-name "a2") (kind "value"))
+	(external-decl (qualified-name "module(b).b1") (module-name "module(b)") (local-name "b1") (kind "value"))
+	(external-decl (qualified-name "module(b).b2") (module-name "module(b)") (local-name "b2") (kind "value"))
+	(external-decl (qualified-name "module(e).A") (module-name "module(e)") (local-name "A") (kind "type"))
+	(external-decl (qualified-name "module(e).B") (module-name "module(e)") (local-name "B") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -534,27 +530,27 @@ NO CHANGE
 		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
 		(alias @8.1-8.74 (type "A(a)")
-			(ty-header @8.1-8.5 (name "A")
-				(ty-args
+			(type-header (name "A")
+				(args
 					(ty-var @8.3-8.4 (name "a")))))
 		(alias @9.1-9.74 (type "B(b)")
-			(ty-header @9.1-9.5 (name "B")
-				(ty-args
+			(type-header (name "B")
+				(args
 					(ty-var @9.3-9.4 (name "b")))))
 		(alias @11.1-11.17 (type "C(a, b)")
-			(ty-header @11.1-11.8 (name "C")
-				(ty-args
+			(type-header (name "C")
+				(args
 					(ty-var @11.3-11.4 (name "a"))
 					(ty-var @11.6-11.7 (name "b")))))
 		(alias @12.1-12.18 (type "D(a, b)")
-			(ty-header @12.1-12.8 (name "D")
-				(ty-args
+			(type-header (name "D")
+				(args
 					(ty-var @12.3-12.4 (name "a"))
 					(ty-var @12.6-12.7 (name "b")))))
 		(alias @13.1-13.25 (type "E")
-			(ty-header @13.1-13.2 (name "E")))
+			(type-header (name "E")))
 		(alias @14.1-14.11 (type "F")
-			(ty-header @14.1-14.2 (name "F"))))
+			(type-header (name "F"))))
 	(expressions
 		(expr @18.5-31.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret"))))
 ~~~

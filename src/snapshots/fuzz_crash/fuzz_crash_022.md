@@ -20,14 +20,14 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:27
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:1:33
 PARSE ERROR - fuzz_crash_022.md:6:27:6:28
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:7:8:8
-MALFORMED TYPE - :0:0:0:0
-INVALID STATEMENT - fuzz_crash_022.md:1:28:1:31
-INVALID STATEMENT - fuzz_crash_022.md:1:32:1:33
-INVALID IF CONDITION - :0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_022.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_022.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_022.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_022.md:0:0:0:0
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
-INVALID STATEMENT - fuzz_crash_022.md:8:1:8:6
-INVALID STATEMENT - fuzz_crash_022.md:8:7:8:8
-INVALID STATEMENT - fuzz_crash_022.md:8:9:8:25
+COMPILER DIAGNOSTIC - fuzz_crash_022.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_022.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_022.md:0:0:0:0
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_package_or_platform_name`
@@ -89,41 +89,34 @@ Here is the problematic code:
       ^
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
+**fuzz_crash_022.md:0:0:0:0**
 
-**fuzz_crash_022.md:1:28:1:31:**
-```roc
-app [main!] { |f: platform "c" }
-```
-                           ^^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_022.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_022.md:1:32:1:33:**
-```roc
-app [main!] { |f: platform "c" }
-```
-                               ^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_022.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID IF CONDITION**
-The condition in this `if` expression could not be processed.
-
-The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
+**Compiler Diagnostic**
+Diagnostic type 'if_condition_not_canonicalized' is not yet handled in report generation.
+**fuzz_crash_022.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `id` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'id' is defined but never used:
 **fuzz_crash_022.md:6:12:6:14:**
 ```roc
 getUser = |id| if (id > 1!) "big" else "l"
@@ -131,38 +124,23 @@ getUser = |id| if (id > 1!) "big" else "l"
            ^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_022.md:8:1:8:6:**
-```roc
--ain! = |_| getUser(900)
-```
-^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_022.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_022.md:0:0:0:0**
 
-**fuzz_crash_022.md:8:7:8:8:**
-```roc
--ain! = |_| getUser(900)
-```
-      ^
+**COMPILER DIAGNOSTIC**
 
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_022.md:8:9:8:25:**
-```roc
--ain! = |_| getUser(900)
-```
-        ^^^^^^^^^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_022.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -228,22 +206,24 @@ getUser = |id| if  "big" else "l"
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.8 (ident "getUser"))
-		(e-lambda @6.11-6.43
-			(args
-				(p-assign @6.12-6.14 (ident "id")))
-			(e-if @6.16-6.43
-				(if-branches
-					(if-branch
-						(e-runtime-error (tag "if_condition_not_canonicalized"))
-						(e-string @6.29-6.34
-							(e-literal @6.30-6.33 (string "big")))))
-				(if-else
-					(e-string @6.40-6.43
-						(e-literal @6.41-6.42 (string "l")))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.8 (ident "getUser")))
+		(expr
+			(e-lambda @6.11-6.43
+				(args
+					(p-assign @6.12-6.14 (ident "id")))
+				(e-if @6.16-6.43
+					(if-branches
+						(if-branch
+							(e-runtime-error (tag "if_condition_not_canonicalized"))
+							(e-string @6.29-6.34
+								(e-literal @6.30-6.33 (string "big")))))
+					(if-else
+						(e-string @6.40-6.43
+							(e-literal @6.41-6.42 (string "l"))))))))
 	(s-alias-decl @3.1-3.13
-		(ty-header @3.1-3.7 (name "UserId"))
+		(type-header (name "UserId"))
 		(ty @3.10-3.13 (name "U64"))))
 ~~~
 # TYPES
@@ -253,7 +233,7 @@ getUser = |id| if  "big" else "l"
 		(patt @6.1-6.8 (type "_arg -> Str")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
-			(ty-header @3.1-3.7 (name "UserId"))))
+			(type-header (name "UserId"))))
 	(expressions
 		(expr @6.11-6.43 (type "_arg -> Str"))))
 ~~~

@@ -11,9 +11,9 @@ foo
 UNDEFINED VARIABLE - expr_ident_simple.md:1:1:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'foo' is not defined:
 **expr_ident_simple.md:1:1:1:4:**
 ```roc
 foo
@@ -39,5 +39,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.4 (type "Error"))
+(expr @1.1-1.1 (type "Error"))
 ~~~

@@ -13,9 +13,9 @@ module []
 UNDEFINED VARIABLE - statement_record_destructure.md:3:24:3:30
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'person' is not defined:
 **statement_record_destructure.md:3:24:3:30:**
 ```roc
 { name, age, email } = person
@@ -48,21 +48,23 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-record-destructure @3.1-3.21
-			(destructs
-				(record-destruct @3.3-3.7 (label "name") (ident "name")
-					(required))
-				(record-destruct @3.9-3.12 (label "age") (ident "age")
-					(required))
-				(record-destruct @3.14-3.19 (label "email") (ident "email")
-					(required))))
-		(e-runtime-error (tag "ident_not_in_scope"))))
+	(def
+		(pattern
+			(p-record-destructure @3.1-3.21
+				(destructs
+					(record-destruct @3.3-3.7 (label "name") (ident "name")
+						(required))
+					(record-destruct @3.9-3.12 (label "age") (ident "age")
+						(required))
+					(record-destruct @3.14-3.19 (label "email") (ident "email")
+						(required)))))
+		(expr
+			(e-runtime-error (tag "ident_not_in_scope")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(expressions
-		(expr @3.24-3.30 (type "Error"))))
+		(expr @1.1-1.1 (type "Error"))))
 ~~~

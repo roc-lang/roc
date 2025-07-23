@@ -11,13 +11,13 @@ match numbers {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - list_patterns_err_multiple_rest.md:1:7:1:14
-INVALID PATTERN - :0:0:0:0
+COMPILER DIAGNOSTIC - list_patterns_err_multiple_rest.md:0:0:0:0
 UNUSED VARIABLE - list_patterns_err_multiple_rest.md:2:10:2:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `numbers` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'numbers' is not defined:
 **list_patterns_err_multiple_rest.md:1:7:1:14:**
 ```roc
 match numbers {
@@ -25,14 +25,16 @@ match numbers {
       ^^^^^^^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**list_patterns_err_multiple_rest.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `middle` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_middle` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'middle' is defined but never used:
 **list_patterns_err_multiple_rest.md:2:10:2:16:**
 ```roc
     [.., middle, ..] => ... # error, multiple rest patterns not allowed

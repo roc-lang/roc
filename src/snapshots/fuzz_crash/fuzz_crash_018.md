@@ -11,8 +11,8 @@ type=file
 # EXPECTED
 MISSING HEADER - fuzz_crash_018.md:1:1:1:2
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_018.md:2:1:2:3
-UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
-INVALID STATEMENT - fuzz_crash_018.md:2:1:2:3
+COMPILER DIAGNOSTIC - fuzz_crash_018.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_018.md:0:0:0:0
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -42,27 +42,17 @@ Here is the problematic code:
 ^^
 
 
-**UNDECLARED TYPE**
-The type _S_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**fuzz_crash_018.md:1:5:1:6:**
-```roc
-0 b:S
-```
-    ^
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**fuzz_crash_018.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_018.md:2:1:2:3:**
-```roc
-.R
-```
-^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_018.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

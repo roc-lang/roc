@@ -16,10 +16,9 @@ type=expr
 UNUSED VARIABLE - block_pattern_unify.md:3:5:3:8
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable `str` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'str' is defined but never used:
 **block_pattern_unify.md:3:5:3:8:**
 ```roc
     str = "hello"

@@ -14,9 +14,9 @@ MISSING HEADER - fuzz_crash_014.md:1:1:1:3
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:1:3:1:5
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:2:1:2:6
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:3:1:3:5
-INVALID STATEMENT - fuzz_crash_014.md:1:3:1:5
-INVALID STATEMENT - fuzz_crash_014.md:2:1:2:6
-INVALID STATEMENT - fuzz_crash_014.md:3:1:3:5
+COMPILER DIAGNOSTIC - fuzz_crash_014.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_014.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_014.md:0:0:0:0
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -70,38 +70,23 @@ Here is the problematic code:
 ^^^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_014.md:1:3:1:5:**
-```roc
-0b.0
-```
-  ^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_014.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_014.md:0:0:0:0**
 
-**fuzz_crash_014.md:2:1:2:6:**
-```roc
-0bu22
-```
-^^^^^
+**COMPILER DIAGNOSTIC**
 
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_014.md:3:1:3:5:**
-```roc
-0u22
-```
-^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_014.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

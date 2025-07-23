@@ -11,7 +11,7 @@ foo = if tru 0
 ~~~
 # EXPECTED
 PARSE ERROR - expr_if_missing_else.md:3:15:3:15
-UNKNOWN OPERATOR - expr_if_missing_else.md:3:15:3:15
+COMPILER DIAGNOSTIC - expr_if_missing_else.md:0:0:0:0
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`
@@ -25,16 +25,11 @@ foo = if tru 0
               
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**COMPILER DIAGNOSTIC**
 
-**expr_if_missing_else.md:3:15:3:15:**
-```roc
-foo = if tru 0
-```
-              
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**expr_if_missing_else.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -60,9 +55,11 @@ foo =
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @3.1-3.4 (ident "foo"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+	(def
+		(pattern
+			(p-assign @3.1-3.4 (ident "foo")))
+		(expr
+			(e-runtime-error (tag "expr_not_canonicalized")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -70,5 +67,5 @@ foo =
 	(defs
 		(patt @3.1-3.4 (type "Error")))
 	(expressions
-		(expr @3.15-3.15 (type "Error"))))
+		(expr @1.1-1.1 (type "Error"))))
 ~~~

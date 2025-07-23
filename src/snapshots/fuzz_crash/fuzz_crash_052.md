@@ -10,18 +10,13 @@ S
 0
 ~~~
 # EXPECTED
-INVALID STATEMENT - fuzz_crash_052.md:3:1:3:2
+COMPILER DIAGNOSTIC - fuzz_crash_052.md:0:0:0:0
 # PROBLEMS
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_052.md:3:1:3:2:**
-```roc
-0
-```
-^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_052.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

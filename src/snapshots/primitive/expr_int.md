@@ -36,9 +36,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @2.1-2.4 (ident "foo"))
-		(e-int @2.7-2.9 (value "42"))))
+	(def
+		(pattern
+			(p-assign @2.1-2.4 (ident "foo")))
+		(expr
+			(e-int @2.7-2.9 (value "42")))))
 ~~~
 # TYPES
 ~~~clojure

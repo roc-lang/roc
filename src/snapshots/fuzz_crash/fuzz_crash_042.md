@@ -40,7 +40,7 @@ g : r -> R.a.E
 (can-ir
 	(s-import @1.9-1.19 (module "u.R") (qualifier "u")
 		(exposes))
-	(ext-decl @1.25-1.30 (ident "R.a.E") (kind "type")))
+	(external-decl (qualified-name "R.a.E") (module-name "R.a") (local-name "E") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

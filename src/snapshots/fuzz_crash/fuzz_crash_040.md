@@ -10,21 +10,16 @@ o:0)
 ~~~
 # EXPECTED
 MISMATCHED BRACE - :0:0:0:0
-INVALID STATEMENT - fuzz_crash_040.md:1:20:2:5
+COMPILER DIAGNOSTIC - fuzz_crash_040.md:0:0:0:0
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_040.md:1:20:2:5:**
-```roc
-app[]{f:platform""}{
-o:0)
-```
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_040.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

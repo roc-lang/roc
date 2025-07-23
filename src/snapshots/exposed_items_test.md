@@ -46,13 +46,15 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @5.1-5.5 (ident "main"))
-		(e-int @5.8-5.10 (value "42")))
+	(def
+		(pattern
+			(p-assign @5.1-5.5 (ident "main")))
+		(expr
+			(e-int @5.8-5.10 (value "42"))))
 	(s-import @3.1-3.42 (module "pf.Stdout") (qualifier "pf")
 		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "write!") (wildcard false)))))
+			(exposed-item (name "line!") (is_wildcard false))
+			(exposed-item (name "write!") (is_wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

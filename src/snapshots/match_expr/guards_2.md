@@ -38,28 +38,28 @@ UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:4:5:4:6
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:4:7:4:9
 PARSE ERROR - guards_2.md:4:10:4:10
 UNDEFINED VARIABLE - guards_2.md:1:7:1:12
-UNKNOWN OPERATOR - guards_2.md:2:50:2:51
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
 UNUSED VARIABLE - guards_2.md:2:6:2:11
 UNUSED VARIABLE - guards_2.md:1:1:1:1
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - guards_2.md:2:75:2:77
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
 UNDEFINED VARIABLE - guards_2.md:2:87:2:92
 UNUSED VARIABLE - guards_2.md:2:77:2:86
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - guards_2.md:2:93:2:93
-INVALID PATTERN - :0:0:0:0
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
 UNDEFINED VARIABLE - guards_2.md:3:6:3:7
 UNDEFINED VARIABLE - guards_2.md:3:9:3:10
-INVALID PATTERN - :0:0:0:0
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
 UNDEFINED VARIABLE - guards_2.md:3:15:3:16
 UNDEFINED VARIABLE - guards_2.md:3:20:3:21
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - guards_2.md:3:25:3:61
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - guards_2.md:3:62:3:62
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - guards_2.md:4:5:4:6
-INVALID PATTERN - :0:0:0:0
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
+COMPILER DIAGNOSTIC - guards_2.md:0:0:0:0
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -362,9 +362,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `value` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'value' is not defined:
 **guards_2.md:1:7:1:12:**
 ```roc
 match value {
@@ -372,22 +372,16 @@ match value {
       ^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**COMPILER DIAGNOSTIC**
 
-**guards_2.md:2:50:2:51:**
-```roc
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-```
-                                                 ^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `first` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'first' is defined but never used:
 **guards_2.md:2:6:2:11:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -396,10 +390,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'rest' is defined but never used:
 **guards_2.md:1:1:1:1:**
 ```roc
 match value {
@@ -407,24 +400,22 @@ match value {
 
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
-**guards_2.md:2:75:2:77:**
-```roc
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-```
-                                                                          ^^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `first` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'first' is not defined:
 **guards_2.md:2:87:2:92:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -433,10 +424,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `toStr` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'toStr' is defined but never used:
 **guards_2.md:2:77:2:86:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -444,27 +434,28 @@ The unused variable is declared here:
                                                                             ^^^^^^^^^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
-**guards_2.md:2:93:2:93:**
-```roc
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-```
-                                                                                            
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'x' is not defined:
 **guards_2.md:3:6:3:7:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -473,9 +464,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'y' is not defined:
 **guards_2.md:3:9:3:10:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -483,13 +474,16 @@ Is there an `import` or `exposing` missing up-top?
         ^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'x' is not defined:
 **guards_2.md:3:15:3:16:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -498,9 +492,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'y' is not defined:
 **guards_2.md:3:20:3:21:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -508,50 +502,47 @@ Is there an `import` or `exposing` missing up-top?
                    ^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
-**guards_2.md:3:25:3:61:**
-```roc
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
-```
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
-**guards_2.md:3:62:3:62:**
-```roc
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
-```
-                                                             
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
-**guards_2.md:4:5:4:6:**
-```roc
-    _ => "other"
-```
-    ^
+**COMPILER DIAGNOSTIC**
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**guards_2.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -641,7 +632,7 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @2.51-2.75 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -653,13 +644,13 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @2.92-2.93 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @2.93-2.94 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-list @3.5-3.11
 						(elems
@@ -668,7 +659,7 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @3.12-3.14 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-binop @3.15-3.21 (op "eq")
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -676,25 +667,25 @@ match value {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @3.22-3.24 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @3.61-3.62 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @3.62-3.63 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @4.7-4.9 (tag "pattern_not_canonicalized"))))
+						(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
 				(value
 					(e-string @4.10-4.17
 						(e-literal @4.11-4.16 (string "other"))))))))

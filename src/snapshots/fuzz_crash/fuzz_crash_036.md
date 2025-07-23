@@ -9,7 +9,7 @@ module[]{B
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_036.md:1:11:1:11
-INVALID STATEMENT - fuzz_crash_036.md:1:9:1:11
+COMPILER DIAGNOSTIC - fuzz_crash_036.md:0:0:0:0
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_curly`
@@ -23,16 +23,11 @@ module[]{B
           
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_036.md:1:9:1:11:**
-```roc
-module[]{B
-```
-        ^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_036.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

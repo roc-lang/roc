@@ -119,7 +119,7 @@ fn loadOrCompileCanIr(
         // of parse nodes?
 
         var can_ir = try Can.CIR.init(gpa, relpath);
-        var scope = Scope.init(can_ir.env.gpa);
+        var scope = Scope.init(can_ir.gpa);
         defer scope.deinit(gpa);
         var can = Can.init(&can_ir, &parse_ir, &scope);
         try can.canonicalize_file();

@@ -10,7 +10,7 @@ module[]"\
 # EXPECTED
 UNCLOSED STRING - :0:0:0:0
 PARSE ERROR - fuzz_crash_037.md:1:11:1:11
-INVALID STATEMENT - fuzz_crash_037.md:1:9:1:11
+COMPILER DIAGNOSTIC - fuzz_crash_037.md:0:0:0:0
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -27,16 +27,11 @@ module[]"\
           
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_037.md:1:9:1:11:**
-```roc
-module[]"\
-```
-        ^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_037.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

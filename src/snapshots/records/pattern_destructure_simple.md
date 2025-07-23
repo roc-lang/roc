@@ -14,9 +14,9 @@ UNDEFINED VARIABLE - pattern_destructure_simple.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_simple.md:2:13:2:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'person' is not defined:
 **pattern_destructure_simple.md:1:7:1:13:**
 ```roc
 match person {
@@ -25,10 +25,9 @@ match person {
 
 
 **UNUSED VARIABLE**
-Variable `age` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'age' is defined but never used:
 **pattern_destructure_simple.md:2:13:2:16:**
 ```roc
     { name, age } => name

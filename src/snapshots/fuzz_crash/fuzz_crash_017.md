@@ -12,9 +12,9 @@ foo = "hello ${namF
 MISSING HEADER - fuzz_crash_017.md:1:1:1:3
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_017.md:1:4:1:5
 PARSE ERROR - fuzz_crash_017.md:2:7:2:8
-INVALID STATEMENT - fuzz_crash_017.md:1:4:1:5
-INVALID STATEMENT - fuzz_crash_017.md:1:6:1:11
-UNKNOWN OPERATOR - fuzz_crash_017.md:2:7:2:20
+COMPILER DIAGNOSTIC - fuzz_crash_017.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_017.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_017.md:0:0:0:0
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -56,38 +56,23 @@ foo = "hello ${namF
       ^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_017.md:1:4:1:5:**
-```roc
-me = "luc"
-```
-   ^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_017.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_017.md:0:0:0:0**
 
-**fuzz_crash_017.md:1:6:1:11:**
-```roc
-me = "luc"
-```
-     ^^^^^
+**COMPILER DIAGNOSTIC**
 
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-
-**fuzz_crash_017.md:2:7:2:20:**
-```roc
-foo = "hello ${namF
-```
-      ^^^^^^^^^^^^^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**fuzz_crash_017.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -114,9 +99,11 @@ foo =
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @2.1-2.4 (ident "foo"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+	(def
+		(pattern
+			(p-assign @2.1-2.4 (ident "foo")))
+		(expr
+			(e-runtime-error (tag "expr_not_canonicalized")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -124,5 +111,5 @@ foo =
 	(defs
 		(patt @2.1-2.4 (type "Error")))
 	(expressions
-		(expr @2.7-2.20 (type "Error"))))
+		(expr @1.1-1.1 (type "Error"))))
 ~~~

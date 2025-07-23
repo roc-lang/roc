@@ -68,31 +68,33 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-6.24
-		(ty-header @3.1-3.16 (name "Hash")
-			(ty-args
+		(type-header (name "Hash")
+			(args
 				(ty-var @3.6-3.7 (name "a"))
 				(ty-var @3.9-3.15 (name "hasher"))))
 		(ty-var @3.19-3.20 (name "a"))
 		(where
-			(method @5.3-5.36 (module-of "a") (ident "hash")
-				(args
-					(ty-var @5.20-5.26 (name "hasher")))
-				(ty-var @5.30-5.36 (name "hasher")))
-			(alias @6.3-6.24 (module-of "hasher") (ident "Hasher"))))
+			(where-clause
+				(type "mod-method")
+				(var-name "a")
+				(method-name "hash"))
+			(where-clause
+				(type "mod-alias")
+				(var-name "hasher")
+				(alias-name "Hasher"))))
 	(s-alias-decl @8.1-8.53
-		(ty-header @8.1-8.10 (name "Decode")
-			(ty-args
+		(type-header (name "Decode")
+			(args
 				(ty-var @8.8-8.9 (name "a"))))
 		(ty-var @8.13-8.14 (name "a"))
 		(where
-			(method @8.21-8.53 (module-of "a") (ident "decode")
-				(args
-					(ty-apply @8.40-8.48 (symbol "List")
-						(ty @8.45-8.47 (name "U8"))))
-				(ty-var @8.52-8.53 (name "a")))))
-	(ext-decl @5.3-5.36 (ident "module(a).hash") (kind "value"))
-	(ext-decl @6.3-6.24 (ident "module(hasher).Hasher") (kind "type"))
-	(ext-decl @8.21-8.53 (ident "module(a).decode") (kind "value")))
+			(where-clause
+				(type "mod-method")
+				(var-name "a")
+				(method-name "decode"))))
+	(external-decl (qualified-name "module(a).hash") (module-name "module(a)") (local-name "hash") (kind "value"))
+	(external-decl (qualified-name "module(hasher).Hasher") (module-name "module(hasher)") (local-name "Hasher") (kind "type"))
+	(external-decl (qualified-name "module(a).decode") (module-name "module(a)") (local-name "decode") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
@@ -100,13 +102,13 @@ NO CHANGE
 	(defs)
 	(type_decls
 		(alias @3.1-6.24 (type "Hash(a, hasher)")
-			(ty-header @3.1-3.16 (name "Hash")
-				(ty-args
+			(type-header (name "Hash")
+				(args
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.15 (name "hasher")))))
 		(alias @8.1-8.53 (type "Decode(a)")
-			(ty-header @8.1-8.10 (name "Decode")
-				(ty-args
+			(type-header (name "Decode")
+				(args
 					(ty-var @8.8-8.9 (name "a"))))))
 	(expressions))
 ~~~

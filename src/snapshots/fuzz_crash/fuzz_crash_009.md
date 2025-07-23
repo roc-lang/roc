@@ -17,7 +17,7 @@ MISMATCHED BRACE - :0:0:0:0
 UNCLOSED STRING - :0:0:0:0
 MISSING HEADER - fuzz_crash_009.md:1:2:1:3
 PARSE ERROR - fuzz_crash_009.md:6:12:6:12
-INVALID STATEMENT - fuzz_crash_009.md:1:3:2:7
+COMPILER DIAGNOSTIC - fuzz_crash_009.md:0:0:0:0
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.
@@ -53,16 +53,11 @@ Here is the problematic code:
            
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_009.md:1:3:2:7:**
-```roc
- f{o,
-     ]
-```
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_009.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -96,10 +91,12 @@ foo =
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.4 (ident "foo"))
-		(e-string @6.5-6.12
-			(e-literal @6.6-6.12 (string "onmo %")))))
+	(def
+		(pattern
+			(p-assign @4.1-4.4 (ident "foo")))
+		(expr
+			(e-string @6.5-6.12
+				(e-literal @6.6-6.12 (string "onmo %"))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -38,14 +38,15 @@ nums : List U8
 
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `nums` is exposed, but it is not defined anywhere in this module.
 
+**Exposed but Not Defined**
+'nums' is exposed in the module header but is not defined:
 **type_annotation_missing_parens.md:1:9:1:13:**
 ```roc
 module [nums]
 ```
         ^^^^
-You can fix this by either defining `nums` in this module, or by removing it from the list of exposed values.
+
 
 # TOKENS
 ~~~zig

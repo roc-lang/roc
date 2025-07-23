@@ -50,18 +50,22 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @3.1-3.7 (ident "hello!"))
-		(e-call @3.10-3.31
-			(e-lookup-external @3.10-3.22
-				(module-idx "0")
-				(target-node-idx "0"))
-			(e-string @3.23-3.30
-				(e-literal @3.24-3.29 (string "Hello")))))
-	(d-let
-		(p-assign @4.1-4.6 (ident "world"))
-		(e-string @4.9-4.16
-			(e-literal @4.10-4.15 (string "World"))))
+	(def
+		(pattern
+			(p-assign @3.1-3.7 (ident "hello!")))
+		(expr
+			(e-call @3.10-3.31
+				(e-lookup-external @3.10-3.22
+					(module-idx "0")
+					(target-node-idx "0"))
+				(e-string @3.23-3.30
+					(e-literal @3.24-3.29 (string "Hello"))))))
+	(def
+		(pattern
+			(p-assign @4.1-4.6 (ident "world")))
+		(expr
+			(e-string @4.9-4.16
+				(e-literal @4.10-4.15 (string "World")))))
 	(s-import @2.1-2.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))
 ~~~

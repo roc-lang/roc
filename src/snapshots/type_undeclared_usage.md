@@ -17,37 +17,26 @@ processValue = |value| {
 AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_undeclared_usage.md:3:10:3:21
-UNDECLARED TYPE - type_undeclared_usage.md:5:16:5:32
+COMPILER DIAGNOSTIC - type_undeclared_usage.md:0:0:0:0
+COMPILER DIAGNOSTIC - type_undeclared_usage.md:0:0:0:0
 UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _UnknownType_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**type_undeclared_usage.md:3:10:3:21:**
-```roc
-MyType : UnknownType
-```
-         ^^^^^^^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**type_undeclared_usage.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**UNDECLARED TYPE**
-The type _UndeclaredResult_ is not declared in this scope.
-
-This type is referenced here:
-**type_undeclared_usage.md:5:16:5:32:**
-```roc
-processValue : UndeclaredResult -> Str
-```
-               ^^^^^^^^^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**type_undeclared_usage.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `value` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'value' is defined but never used:
 **type_undeclared_usage.md:6:17:6:22:**
 ```roc
 processValue = |value| {
@@ -112,27 +101,30 @@ AnotherType : SomeModule.MissingType
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.13 (ident "processValue"))
-		(e-lambda @6.16-8.2
-			(args
-				(p-assign @6.17-6.22 (ident "value")))
-			(e-block @6.24-8.2
-				(e-string @7.5-7.16
-					(e-literal @7.6-7.15 (string "processed")))))
-		(annotation @6.1-6.13
-			(declared-type
-				(ty-fn @5.16-5.39 (effectful false)
-					(ty @5.16-5.32 (name "UndeclaredResult"))
-					(ty @5.36-5.39 (name "Str"))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.13 (ident "processValue")))
+		(expr
+			(e-lambda @6.16-8.2
+				(args
+					(p-assign @6.17-6.22 (ident "value")))
+				(e-block @6.24-8.2
+					(e-string @7.5-7.16
+						(e-literal @7.6-7.15 (string "processed"))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @5.16-5.39 (effectful false)
+						(ty @5.16-5.32 (name "UndeclaredResult"))
+						(ty @5.36-5.39 (name "Str")))))))
 	(s-alias-decl @3.1-3.21
-		(ty-header @3.1-3.7 (name "MyType"))
+		(type-header (name "MyType"))
 		(ty @3.10-3.21 (name "UnknownType")))
 	(s-alias-decl @10.1-10.37
-		(ty-header @10.1-10.12 (name "AnotherType"))
+		(type-header (name "AnotherType"))
 		(ty-lookup-external @10.15-10.37
-			(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type"))))
-	(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type")))
+			(external-decl @10.15-10.37 (qualified-name "SomeModule.MissingType") (module-name "SomeModule") (local-name "MissingType") (kind "type"))))
+	(external-decl (qualified-name "SomeModule.MissingType") (module-name "SomeModule") (local-name "MissingType") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -141,9 +133,9 @@ AnotherType : SomeModule.MissingType
 		(patt @6.1-6.13 (type "Error -> Str")))
 	(type_decls
 		(alias @3.1-3.21 (type "Error")
-			(ty-header @3.1-3.7 (name "MyType")))
+			(type-header (name "MyType")))
 		(alias @10.1-10.37 (type "AnotherType")
-			(ty-header @10.1-10.12 (name "AnotherType"))))
+			(type-header (name "AnotherType"))))
 	(expressions
 		(expr @6.16-8.2 (type "Error -> Str"))))
 ~~~

@@ -54,31 +54,34 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.10 (ident "stringify"))
-		(e-lambda @4.13-4.35
-			(args
-				(p-assign @4.14-4.19 (ident "value")))
-			(e-dot-access @4.21-4.35 (field "to_str")
-				(receiver
-					(e-lookup-local @4.21-4.26
-						(p-assign @4.14-4.19 (ident "value"))))
-				(args)))
-		(annotation @4.1-4.10
-			(declared-type
-				(ty-fn @3.13-3.21 (effectful false)
-					(ty-var @3.13-3.14 (name "a"))
-					(ty @3.18-3.21 (name "Str"))))))
+	(def
+		(pattern
+			(p-assign @4.1-4.10 (ident "stringify")))
+		(expr
+			(e-lambda @4.13-4.35
+				(args
+					(p-assign @4.14-4.19 (ident "value")))
+				(e-dot-access @4.21-4.35 (field "to_str")
+					(receiver
+						(e-lookup-local @4.21-4.26
+							(p-assign @4.14-4.19 (ident "value"))))
+					(args))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @3.13-3.21 (effectful false)
+						(ty-var @3.13-3.14 (name "a"))
+						(ty @3.18-3.21 (name "Str")))))))
 	(s-type-anno @3.1-3.55 (name "stringify")
 		(ty-fn @3.13-3.21 (effectful false)
 			(ty-var @3.13-3.14 (name "a"))
 			(ty @3.18-3.21 (name "Str")))
 		(where
-			(method @3.28-3.55 (module-of "a") (ident "to_str")
-				(args
-					(ty-var @3.47-3.48 (name "a")))
-				(ty @3.52-3.55 (name "Str")))))
-	(ext-decl @3.28-3.55 (ident "module(a).to_str") (kind "value")))
+			(where-clause
+				(type "mod-method")
+				(var-name "a")
+				(method-name "to_str"))))
+	(external-decl (qualified-name "module(a).to_str") (module-name "module(a)") (local-name "to_str") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

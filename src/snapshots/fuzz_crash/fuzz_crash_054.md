@@ -48,7 +48,7 @@ import S exposing [
 (can-ir
 	(s-import @1.20-2.3 (module "S")
 		(exposes
-			(exposed (name "c") (alias "f") (wildcard false)))))
+			(exposed-item (name "c") (alias "f") (is_wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

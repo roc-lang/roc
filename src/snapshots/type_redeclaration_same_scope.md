@@ -11,25 +11,13 @@ Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_redeclaration_same_scope.md:4:1:4:24
+COMPILER DIAGNOSTIC - type_redeclaration_same_scope.md:0:0:0:0
 # PROBLEMS
-**TYPE REDECLARED**
-The type _Maybe_ is being redeclared.
+**COMPILER DIAGNOSTIC**
 
-The redeclaration is here:
-**type_redeclaration_same_scope.md:4:1:4:24:**
-```roc
-Maybe(a) : [Ok(a), Err]
-```
-^^^^^^^^^^^^^^^^^^^^^^^
-
-But _Maybe_ was already declared here:
-**type_redeclaration_same_scope.md:3:1:3:27:**
-```roc
-Maybe(a) : [Some(a), None]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'type_redeclared' is not yet handled in report generation.
+**type_redeclaration_same_scope.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -73,16 +61,16 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-3.27
-		(ty-header @3.1-3.9 (name "Maybe")
-			(ty-args
+		(type-header (name "Maybe")
+			(args
 				(ty-var @3.7-3.8 (name "a"))))
 		(ty-tag-union @3.12-3.27
 			(ty-apply @3.13-3.20 (symbol "Some")
 				(ty-var @3.18-3.19 (name "a")))
 			(ty @3.22-3.26 (name "None"))))
 	(s-alias-decl @4.1-4.24
-		(ty-header @4.1-4.9 (name "Maybe")
-			(ty-args
+		(type-header (name "Maybe")
+			(args
 				(ty-var @4.7-4.8 (name "a"))))
 		(ty-tag-union @4.12-4.24
 			(ty-apply @4.13-4.18 (symbol "Ok")
@@ -95,12 +83,12 @@ NO CHANGE
 	(defs)
 	(type_decls
 		(alias @3.1-3.27 (type "Maybe(a)")
-			(ty-header @3.1-3.9 (name "Maybe")
-				(ty-args
+			(type-header (name "Maybe")
+				(args
 					(ty-var @3.7-3.8 (name "a")))))
 		(alias @4.1-4.24 (type "Maybe(a)")
-			(ty-header @4.1-4.9 (name "Maybe")
-				(ty-args
+			(type-header (name "Maybe")
+				(args
 					(ty-var @4.7-4.8 (name "a"))))))
 	(expressions))
 ~~~

@@ -17,9 +17,9 @@ UNDEFINED VARIABLE - middle_rest.md:1:7:1:12
 UNUSED VARIABLE - middle_rest.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `items` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'items' is not defined:
 **middle_rest.md:1:7:1:12:**
 ```roc
 match items {
@@ -28,10 +28,9 @@ match items {
 
 
 **UNUSED VARIABLE**
-Variable `middle` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_middle` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'middle' is defined but never used:
 **middle_rest.md:1:1:1:1:**
 ```roc
 match items {

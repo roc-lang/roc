@@ -57,35 +57,38 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.8 (ident "process"))
-		(e-lambda @4.11-4.21
-			(args
-				(p-underscore @4.12-4.13)
-				(p-underscore @4.15-4.16))
-			(e-not-implemented @1.1-1.1))
-		(annotation @4.1-4.8
-			(declared-type
-				(ty-fn @3.11-3.20 (effectful false)
-					(ty-var @3.11-3.12 (name "a"))
-					(ty-var @3.14-3.15 (name "b"))
-					(ty-var @3.19-3.20 (name "c"))))))
+	(def
+		(pattern
+			(p-assign @4.1-4.8 (ident "process")))
+		(expr
+			(e-lambda @4.11-4.21
+				(args
+					(p-underscore @4.12-4.13)
+					(p-underscore @4.15-4.16))
+				(e-not-implemented @1.1-1.1)))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @3.11-3.20 (effectful false)
+						(ty-var @3.11-3.12 (name "a"))
+						(ty-var @3.14-3.15 (name "b"))
+						(ty-var @3.19-3.20 (name "c")))))))
 	(s-type-anno @3.1-3.83 (name "process")
 		(ty-fn @3.11-3.20 (effectful false)
 			(ty-var @3.11-3.12 (name "a"))
 			(ty-var @3.14-3.15 (name "b"))
 			(ty-var @3.19-3.20 (name "c")))
 		(where
-			(method @3.27-3.53 (module-of "a") (ident "convert")
-				(args
-					(ty-var @3.47-3.48 (name "a")))
-				(ty-var @3.52-3.53 (name "c")))
-			(method @3.55-3.83 (module-of "b") (ident "transform")
-				(args
-					(ty-var @3.77-3.78 (name "b")))
-				(ty-var @3.82-3.83 (name "c")))))
-	(ext-decl @3.27-3.53 (ident "module(a).convert") (kind "value"))
-	(ext-decl @3.55-3.83 (ident "module(b).transform") (kind "value")))
+			(where-clause
+				(type "mod-method")
+				(var-name "a")
+				(method-name "convert"))
+			(where-clause
+				(type "mod-method")
+				(var-name "b")
+				(method-name "transform"))))
+	(external-decl (qualified-name "module(a).convert") (module-name "module(a)") (local-name "convert") (kind "value"))
+	(external-decl (qualified-name "module(b).transform") (module-name "module(b)") (local-name "transform") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

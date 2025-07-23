@@ -41,390 +41,390 @@ type=expr
 }
 ~~~
 # EXPECTED
-INVALID NUMBER - number_literal_suffixes.md:2:9:2:14
-INVALID NUMBER - number_literal_suffixes.md:3:9:3:15
-INVALID NUMBER - number_literal_suffixes.md:4:9:4:15
-INVALID NUMBER - number_literal_suffixes.md:5:9:5:15
-INVALID NUMBER - number_literal_suffixes.md:6:9:6:16
-INVALID NUMBER - number_literal_suffixes.md:7:9:7:14
-INVALID NUMBER - number_literal_suffixes.md:8:9:8:15
-INVALID NUMBER - number_literal_suffixes.md:9:9:9:15
-INVALID NUMBER - number_literal_suffixes.md:10:9:10:15
-INVALID NUMBER - number_literal_suffixes.md:11:9:11:16
-INVALID NUMBER - number_literal_suffixes.md:12:9:12:15
-INVALID NUMBER - number_literal_suffixes.md:13:12:13:18
-INVALID NUMBER - number_literal_suffixes.md:14:12:14:19
-INVALID NUMBER - number_literal_suffixes.md:15:12:15:19
-INVALID NUMBER - number_literal_suffixes.md:16:12:16:19
-INVALID NUMBER - number_literal_suffixes.md:17:12:17:20
-INVALID NUMBER - number_literal_suffixes.md:18:12:18:18
-INVALID NUMBER - number_literal_suffixes.md:19:12:19:19
-INVALID NUMBER - number_literal_suffixes.md:20:12:20:19
-INVALID NUMBER - number_literal_suffixes.md:21:12:21:19
-INVALID NUMBER - number_literal_suffixes.md:22:12:22:20
-INVALID NUMBER - number_literal_suffixes.md:23:12:23:19
-INVALID NUMBER - number_literal_suffixes.md:24:12:24:19
-INVALID NUMBER - number_literal_suffixes.md:25:12:25:20
-INVALID NUMBER - number_literal_suffixes.md:26:12:26:20
-INVALID NUMBER - number_literal_suffixes.md:27:12:27:20
-INVALID NUMBER - number_literal_suffixes.md:28:12:28:21
-INVALID NUMBER - number_literal_suffixes.md:29:12:29:19
-INVALID NUMBER - number_literal_suffixes.md:30:12:30:20
-INVALID NUMBER - number_literal_suffixes.md:31:12:31:20
-INVALID NUMBER - number_literal_suffixes.md:32:12:32:20
-INVALID NUMBER - number_literal_suffixes.md:33:12:33:21
+INVALID NUMBER LITERAL - number_literal_suffixes.md:2:9:2:14
+INVALID NUMBER LITERAL - number_literal_suffixes.md:3:9:3:15
+INVALID NUMBER LITERAL - number_literal_suffixes.md:4:9:4:15
+INVALID NUMBER LITERAL - number_literal_suffixes.md:5:9:5:15
+INVALID NUMBER LITERAL - number_literal_suffixes.md:6:9:6:16
+INVALID NUMBER LITERAL - number_literal_suffixes.md:7:9:7:14
+INVALID NUMBER LITERAL - number_literal_suffixes.md:8:9:8:15
+INVALID NUMBER LITERAL - number_literal_suffixes.md:9:9:9:15
+INVALID NUMBER LITERAL - number_literal_suffixes.md:10:9:10:15
+INVALID NUMBER LITERAL - number_literal_suffixes.md:11:9:11:16
+INVALID NUMBER LITERAL - number_literal_suffixes.md:12:9:12:15
+INVALID NUMBER LITERAL - number_literal_suffixes.md:13:12:13:18
+INVALID NUMBER LITERAL - number_literal_suffixes.md:14:12:14:19
+INVALID NUMBER LITERAL - number_literal_suffixes.md:15:12:15:19
+INVALID NUMBER LITERAL - number_literal_suffixes.md:16:12:16:19
+INVALID NUMBER LITERAL - number_literal_suffixes.md:17:12:17:20
+INVALID NUMBER LITERAL - number_literal_suffixes.md:18:12:18:18
+INVALID NUMBER LITERAL - number_literal_suffixes.md:19:12:19:19
+INVALID NUMBER LITERAL - number_literal_suffixes.md:20:12:20:19
+INVALID NUMBER LITERAL - number_literal_suffixes.md:21:12:21:19
+INVALID NUMBER LITERAL - number_literal_suffixes.md:22:12:22:20
+INVALID NUMBER LITERAL - number_literal_suffixes.md:23:12:23:19
+INVALID NUMBER LITERAL - number_literal_suffixes.md:24:12:24:19
+INVALID NUMBER LITERAL - number_literal_suffixes.md:25:12:25:20
+INVALID NUMBER LITERAL - number_literal_suffixes.md:26:12:26:20
+INVALID NUMBER LITERAL - number_literal_suffixes.md:27:12:27:20
+INVALID NUMBER LITERAL - number_literal_suffixes.md:28:12:28:21
+INVALID NUMBER LITERAL - number_literal_suffixes.md:29:12:29:19
+INVALID NUMBER LITERAL - number_literal_suffixes.md:30:12:30:20
+INVALID NUMBER LITERAL - number_literal_suffixes.md:31:12:31:20
+INVALID NUMBER LITERAL - number_literal_suffixes.md:32:12:32:20
+INVALID NUMBER LITERAL - number_literal_suffixes.md:33:12:33:21
 # PROBLEMS
-**INVALID NUMBER**
-This number literal is not valid: `123u8`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:2:9:2:14:**
 ```roc
   u8:   123u8,
 ```
         ^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `123u16`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:3:9:3:15:**
 ```roc
   u16:  123u16,
 ```
         ^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `123u32`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:4:9:4:15:**
 ```roc
   u32:  123u32,
 ```
         ^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `123u64`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:5:9:5:15:**
 ```roc
   u64:  123u64,
 ```
         ^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `123u128`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:6:9:6:16:**
 ```roc
   u128: 123u128,
 ```
         ^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `123i8`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:7:9:7:14:**
 ```roc
   i8:   123i8,
 ```
         ^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `123i16`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:8:9:8:15:**
 ```roc
   i16:  123i16,
 ```
         ^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `123i32`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:9:9:9:15:**
 ```roc
   i32:  123i32,
 ```
         ^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `123i64`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:10:9:10:15:**
 ```roc
   i64:  123i64,
 ```
         ^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `123i128`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:11:9:11:16:**
 ```roc
   i128: 123i128,
 ```
         ^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `123dec`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:12:9:12:15:**
 ```roc
   dec:  123dec,
 ```
         ^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `-123u8`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:13:12:13:18:**
 ```roc
   u8Neg:   -123u8,
 ```
            ^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `-123u16`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:14:12:14:19:**
 ```roc
   u16Neg:  -123u16,
 ```
            ^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `-123u32`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:15:12:15:19:**
 ```roc
   u32Neg:  -123u32,
 ```
            ^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `-123u64`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:16:12:16:19:**
 ```roc
   u64Neg:  -123u64,
 ```
            ^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `-123u128`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:17:12:17:20:**
 ```roc
   u128Neg: -123u128,
 ```
            ^^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `-123i8`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:18:12:18:18:**
 ```roc
   i8Neg:   -123i8,
 ```
            ^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `-123i16`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:19:12:19:19:**
 ```roc
   i16Neg:  -123i16,
 ```
            ^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `-123i32`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:20:12:20:19:**
 ```roc
   i32Neg:  -123i32,
 ```
            ^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `-123i64`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:21:12:21:19:**
 ```roc
   i64Neg:  -123i64,
 ```
            ^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `-123i128`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:22:12:22:20:**
 ```roc
   i128Neg: -123i128,
 ```
            ^^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `-123dec`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:23:12:23:19:**
 ```roc
   decNeg:  -123dec,
 ```
            ^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `0b101u8`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:24:12:24:19:**
 ```roc
   u8Bin:   0b101u8,
 ```
            ^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `0b101u16`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:25:12:25:20:**
 ```roc
   u16Bin:  0b101u16,
 ```
            ^^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `0b101u32`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:26:12:26:20:**
 ```roc
   u32Bin:  0b101u32,
 ```
            ^^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `0b101u64`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:27:12:27:20:**
 ```roc
   u64Bin:  0b101u64,
 ```
            ^^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `0b101u128`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:28:12:28:21:**
 ```roc
   u128Bin: 0b101u128,
 ```
            ^^^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `0b101i8`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:29:12:29:19:**
 ```roc
   i8Bin:   0b101i8,
 ```
            ^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `0b101i16`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:30:12:30:20:**
 ```roc
   i16Bin:  0b101i16,
 ```
            ^^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `0b101i32`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:31:12:31:20:**
 ```roc
   i32Bin:  0b101i32,
 ```
            ^^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `0b101i64`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:32:12:32:20:**
 ```roc
   i64Bin:  0b101i64,
 ```
            ^^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
-**INVALID NUMBER**
-This number literal is not valid: `0b101i128`
+**INVALID NUMBER LITERAL**
 
+**Invalid Number Literal**
+The number literal is invalid or too large to represent:
 **number_literal_suffixes.md:33:12:33:21:**
 ```roc
   i128Bin: 0b101i128,
 ```
            ^^^^^^^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
 
 # TOKENS
 ~~~zig
@@ -572,70 +572,102 @@ CloseCurly(34:1-34:2),EndOfFile(34:2-34:2),
 ~~~clojure
 (e-record @1.1-34.2
 	(fields
-		(field (name "u8")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u16")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u32")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u64")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u128")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i8")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i16")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i32")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i64")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i128")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "dec")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u8Neg")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u16Neg")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u32Neg")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u64Neg")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u128Neg")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i8Neg")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i16Neg")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i32Neg")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i64Neg")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i128Neg")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "decNeg")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u8Bin")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u16Bin")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u32Bin")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u64Bin")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "u128Bin")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i8Bin")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i16Bin")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i32Bin")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i64Bin")
-			(e-runtime-error (tag "invalid_num_literal")))
-		(field (name "i128Bin")
-			(e-runtime-error (tag "invalid_num_literal")))))
+		(record-field (label "u8")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u16")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u32")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u64")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u128")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i8")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i16")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i32")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i64")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i128")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "dec")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u8Neg")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u16Neg")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u32Neg")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u64Neg")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u128Neg")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i8Neg")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i16Neg")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i32Neg")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i64Neg")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i128Neg")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "decNeg")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u8Bin")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u16Bin")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u32Bin")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u64Bin")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "u128Bin")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i8Bin")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i16Bin")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i32Bin")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i64Bin")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))
+		(record-field (label "i128Bin")
+			(value
+				(e-runtime-error (tag "invalid_num_literal"))))))
 ~~~
 # TYPES
 ~~~clojure

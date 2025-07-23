@@ -13,9 +13,9 @@ if bool { # Comment after then open
 UNDEFINED VARIABLE - if_then_else_simple_comments_formatting.md:1:4:1:8
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `bool` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'bool' is not defined:
 **if_then_else_simple_comments_formatting.md:1:4:1:8:**
 ```roc
 if bool { # Comment after then open

@@ -59,24 +59,33 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.2 (ident "a"))
-		(e-dec-small @4.5-4.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
-		(annotation @4.1-4.2
-			(declared-type
-				(ty @3.5-3.8 (name "F32")))))
-	(d-let
-		(p-assign @7.1-7.2 (ident "b"))
-		(e-frac-dec @7.5-7.12 (value "2.71828"))
-		(annotation @7.1-7.2
-			(declared-type
-				(ty @6.5-6.8 (name "F64")))))
-	(d-let
-		(p-assign @10.1-10.2 (ident "c"))
-		(e-frac-dec @10.5-10.12 (value "123.456"))
-		(annotation @10.1-10.2
-			(declared-type
-				(ty @9.5-9.8 (name "Dec"))))))
+	(def
+		(pattern
+			(p-assign @4.1-4.2 (ident "a")))
+		(expr
+			(e-dec-small @4.5-4.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
+		(annotation
+			(annotation
+				(type-anno
+					(ty @3.5-3.8 (name "F32"))))))
+	(def
+		(pattern
+			(p-assign @7.1-7.2 (ident "b")))
+		(expr
+			(e-frac-dec @7.5-7.12 (value "2.71828")))
+		(annotation
+			(annotation
+				(type-anno
+					(ty @6.5-6.8 (name "F64"))))))
+	(def
+		(pattern
+			(p-assign @10.1-10.2 (ident "c")))
+		(expr
+			(e-frac-dec @10.5-10.12 (value "123.456")))
+		(annotation
+			(annotation
+				(type-anno
+					(ty @9.5-9.8 (name "Dec")))))))
 ~~~
 # TYPES
 ~~~clojure

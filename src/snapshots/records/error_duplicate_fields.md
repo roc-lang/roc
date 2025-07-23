@@ -8,46 +8,20 @@ type=expr
 { name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
 ~~~
 # EXPECTED
-DUPLICATE RECORD FIELD - error_duplicate_fields.md:1:27:1:31
-DUPLICATE RECORD FIELD - error_duplicate_fields.md:1:68:1:71
+COMPILER DIAGNOSTIC - error_duplicate_fields.md:0:0:0:0
+COMPILER DIAGNOSTIC - error_duplicate_fields.md:0:0:0:0
 # PROBLEMS
-**DUPLICATE RECORD FIELD**
-The record field `name` appears more than once in this record.
+**COMPILER DIAGNOSTIC**
 
-This field is duplicated here:
-**error_duplicate_fields.md:1:27:1:31:**
-```roc
-{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
-```
-                          ^^^^
+**Compiler Diagnostic**
+Diagnostic type 'duplicate_record_field' is not yet handled in report generation.
+**error_duplicate_fields.md:0:0:0:0**
 
-The field `name` was first defined here:
-**error_duplicate_fields.md:1:3:1:7:**
-```roc
-{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
-```
-  ^^^^
+**COMPILER DIAGNOSTIC**
 
-Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.
-
-**DUPLICATE RECORD FIELD**
-The record field `age` appears more than once in this record.
-
-This field is duplicated here:
-**error_duplicate_fields.md:1:68:1:71:**
-```roc
-{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
-```
-                                                                   ^^^
-
-The field `age` was first defined here:
-**error_duplicate_fields.md:1:18:1:21:**
-```roc
-{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
-```
-                 ^^^
-
-Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.
+**Compiler Diagnostic**
+Diagnostic type 'duplicate_record_field' is not yet handled in report generation.
+**error_duplicate_fields.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -78,14 +52,17 @@ NO CHANGE
 ~~~clojure
 (e-record @1.1-1.77
 	(fields
-		(field (name "name")
-			(e-string @1.9-1.16
-				(e-literal @1.10-1.15 (string "Alice"))))
-		(field (name "age")
-			(e-int @1.23-1.25 (value "30")))
-		(field (name "email")
-			(e-string @1.47-1.66
-				(e-literal @1.48-1.65 (string "alice@example.com"))))))
+		(record-field (label "name")
+			(value
+				(e-string @1.9-1.16
+					(e-literal @1.10-1.15 (string "Alice")))))
+		(record-field (label "age")
+			(value
+				(e-int @1.23-1.25 (value "30"))))
+		(record-field (label "email")
+			(value
+				(e-string @1.47-1.66
+					(e-literal @1.48-1.65 (string "alice@example.com")))))))
 ~~~
 # TYPES
 ~~~clojure

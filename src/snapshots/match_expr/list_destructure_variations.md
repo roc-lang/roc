@@ -21,9 +21,9 @@ UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
 UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `list` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'list' is not defined:
 **list_destructure_variations.md:1:7:1:11:**
 ```roc
 match list {
@@ -32,10 +32,9 @@ match list {
 
 
 **UNUSED VARIABLE**
-Variable `tail` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_tail` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'tail' is defined but never used:
 **list_destructure_variations.md:1:1:1:1:**
 ```roc
 match list {
@@ -44,10 +43,9 @@ match list {
 
 
 **UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'rest' is defined but never used:
 **list_destructure_variations.md:1:1:1:1:**
 ```roc
 match list {
@@ -56,10 +54,9 @@ match list {
 
 
 **UNUSED VARIABLE**
-Variable `more` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_more` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'more' is defined but never used:
 **list_destructure_variations.md:1:1:1:1:**
 ```roc
 match list {

@@ -16,8 +16,8 @@ main! = |_| {}
 UNEXPECTED TOKEN IN EXPRESSION - type_function_multi_arg.md:3:24:3:26
 PARSE ERROR - type_function_multi_arg.md:3:34:3:36
 PARSE ERROR - type_function_multi_arg.md:3:42:3:43
-INVALID STATEMENT - type_function_multi_arg.md:3:24:3:26
-INVALID STATEMENT - type_function_multi_arg.md:3:27:3:43
+COMPILER DIAGNOSTIC - type_function_multi_arg.md:0:0:0:0
+COMPILER DIAGNOSTIC - type_function_multi_arg.md:0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **->** is not expected in an expression.
@@ -55,27 +55,17 @@ curry : (_a, _b -> _c) -> (_a -> _b -> _c)
                                          ^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**type_function_multi_arg.md:3:24:3:26:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                       ^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**type_function_multi_arg.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_function_multi_arg.md:3:27:3:43:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                          ^^^^^^^^^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**type_function_multi_arg.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -141,30 +131,34 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.6 (ident "curry"))
-		(e-lambda @4.9-4.30
-			(args
-				(p-assign @4.10-4.12 (ident "fn")))
-			(e-lambda @4.14-4.30
+	(def
+		(pattern
+			(p-assign @4.1-4.6 (ident "curry")))
+		(expr
+			(e-lambda @4.9-4.30
 				(args
-					(p-assign @4.15-4.16 (ident "x")))
-				(e-lambda @4.18-4.30
+					(p-assign @4.10-4.12 (ident "fn")))
+				(e-lambda @4.14-4.30
 					(args
-						(p-assign @4.19-4.20 (ident "y")))
-					(e-call @4.22-4.30
-						(e-lookup-local @4.22-4.24
-							(p-assign @4.10-4.12 (ident "fn")))
-						(e-lookup-local @4.25-4.26
-							(p-assign @4.15-4.16 (ident "x")))
-						(e-lookup-local @4.28-4.29
-							(p-assign @4.19-4.20 (ident "y"))))))))
-	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.15
-			(args
-				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+						(p-assign @4.15-4.16 (ident "x")))
+					(e-lambda @4.18-4.30
+						(args
+							(p-assign @4.19-4.20 (ident "y")))
+						(e-call @4.22-4.30
+							(e-lookup-local @4.22-4.24
+								(p-assign @4.10-4.12 (ident "fn")))
+							(e-lookup-local @4.25-4.26
+								(p-assign @4.15-4.16 (ident "x")))
+							(e-lookup-local @4.28-4.29
+								(p-assign @4.19-4.20 (ident "y")))))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.6 (ident "main!")))
+		(expr
+			(e-lambda @6.9-6.15
+				(args
+					(p-underscore @6.10-6.11))
+				(e-empty_record @6.13-6.15)))))
 ~~~
 # TYPES
 ~~~clojure

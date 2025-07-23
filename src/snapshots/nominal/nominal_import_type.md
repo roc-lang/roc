@@ -16,9 +16,9 @@ red = Color.RGB.Red
 UNDEFINED VARIABLE - nominal_import_type.md:6:12:6:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `RGB` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'RGB' is not defined:
 **nominal_import_type.md:6:12:6:16:**
 ```roc
 red = Color.RGB.Red
@@ -55,16 +55,19 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.4 (ident "red"))
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(annotation @6.1-6.4
-			(declared-type
-				(ty-lookup-external @5.7-5.16
-					(ext-decl @5.7-5.16 (ident "Color.RGB") (kind "type"))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.4 (ident "red")))
+		(expr
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-lookup-external @5.7-5.16
+						(external-decl @5.7-5.16 (qualified-name "Color.RGB") (module-name "Color") (local-name "RGB") (kind "type")))))))
 	(s-import @3.1-3.13 (module "Color")
 		(exposes))
-	(ext-decl @5.7-5.16 (ident "Color.RGB") (kind "type")))
+	(external-decl (qualified-name "Color.RGB") (module-name "Color") (local-name "RGB") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -72,5 +75,5 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.4 (type "Error")))
 	(expressions
-		(expr @6.12-6.16 (type "Error"))))
+		(expr @1.1-1.1 (type "Error"))))
 ~~~

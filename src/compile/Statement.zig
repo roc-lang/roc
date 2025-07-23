@@ -201,7 +201,7 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-crash");
                 const region = ir.store.getStatementRegion(stmt_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("msg", ir.env.strings.get(c.msg));
+                try tree.pushStringPair("msg", ir.strings.get(c.msg));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -267,7 +267,7 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-import");
                 const region = ir.store.getStatementRegion(stmt_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("module", ir.env.idents.getText(s.module_name_tok));
+                try tree.pushStringPair("module", ir.idents.getText(s.module_name_tok));
 
                 if (s.qualifier_tok) |qualifier| {
                     try tree.pushStringPair("qualifier", ir.getIdentText(qualifier));
@@ -284,7 +284,7 @@ pub const Statement = union(enum) {
                 const exposes_attrs = tree.beginNode();
                 const exposes_slice = ir.store.sliceExposedItems(s.exposes);
                 for (exposes_slice) |exposed_idx| {
-                    try ir.store.getExposedItem(exposed_idx).pushToSExprTree(ir.env, ir, tree);
+                    try ir.store.getExposedItem(exposed_idx).pushToSExprTree(undefined, ir, tree);
                 }
                 try tree.endNode(exposes_begin, exposes_attrs);
 

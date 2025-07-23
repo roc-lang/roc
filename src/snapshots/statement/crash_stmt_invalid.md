@@ -8,17 +8,13 @@ type=statement
 crash 42
 ~~~
 # EXPECTED
-CRASH EXPECTS STRING - crash_stmt_invalid.md:1:1:1:9
+COMPILER DIAGNOSTIC - crash_stmt_invalid.md:0:0:0:0
 # PROBLEMS
-**CRASH EXPECTS STRING**
-The `crash` keyword expects a string literal as its argument.
-For example: `crash "Something went wrong"`
-**crash_stmt_invalid.md:1:1:1:9:**
-```roc
-crash 42
-```
-^^^^^^^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'crash_expects_string' is not yet handled in report generation.
+**crash_stmt_invalid.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

@@ -55,9 +55,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'a' is not defined:
 **tuple_patterns.md:7:7:7:8:**
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))
@@ -66,9 +66,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'b' is not defined:
 **tuple_patterns.md:7:10:7:11:**
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))
@@ -77,9 +77,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `c` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'c' is not defined:
 **tuple_patterns.md:7:15:7:16:**
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))
@@ -88,9 +88,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `d` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'd' is not defined:
 **tuple_patterns.md:7:18:7:19:**
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))
@@ -99,10 +99,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `boolean` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_boolean` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'boolean' is defined but never used:
 **tuple_patterns.md:13:20:13:27:**
 ```roc
     (name, string, boolean) = ("Alice", "fixed", True)
@@ -111,10 +110,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'list' is defined but never used:
 **tuple_patterns.md:16:6:16:10:**
 ```roc
     (list, hello) = ([1, 2, 3], "hello")
@@ -123,10 +121,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'x' is defined but never used:
 **tuple_patterns.md:4:6:4:7:**
 ```roc
     (x, y) = (1, 2)
@@ -135,10 +132,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `first` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'first' is defined but never used:
 **tuple_patterns.md:10:6:10:11:**
 ```roc
     (first, second, third) = (100, 42, 200)
@@ -147,10 +143,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'y' is defined but never used:
 **tuple_patterns.md:4:9:4:10:**
 ```roc
     (x, y) = (1, 2)
@@ -159,10 +154,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `name` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'name' is defined but never used:
 **tuple_patterns.md:13:6:13:10:**
 ```roc
     (name, string, boolean) = ("Alice", "fixed", True)
@@ -171,10 +165,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `string` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_string` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'string' is defined but never used:
 **tuple_patterns.md:13:12:13:18:**
 ```roc
     (name, string, boolean) = ("Alice", "fixed", True)
@@ -183,10 +176,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `second` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_second` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'second' is defined but never used:
 **tuple_patterns.md:10:13:10:19:**
 ```roc
     (first, second, third) = (100, 42, 200)
@@ -195,10 +187,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `hello` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_hello` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'hello' is defined but never used:
 **tuple_patterns.md:16:12:16:17:**
 ```roc
     (list, hello) = ([1, 2, 3], "hello")
@@ -207,10 +198,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `third` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_third` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'third' is defined but never used:
 **tuple_patterns.md:10:21:10:26:**
 ```roc
     (first, second, third) = (100, 42, 200)

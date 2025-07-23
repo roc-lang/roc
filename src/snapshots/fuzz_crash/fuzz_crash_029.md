@@ -35,16 +35,16 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:10:2:10:10
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:14:2:14:10
 PARSE ERROR - fuzz_crash_029.md:17:3:17:4
 LIST NOT CLOSED - fuzz_crash_029.md:17:4:17:4
-INVALID STATEMENT - fuzz_crash_029.md:5:22:5:24
-INVALID STATEMENT - fuzz_crash_029.md:5:24:5:25
-INVALID STATEMENT - fuzz_crash_029.md:6:4:6:5
-INVALID STATEMENT - fuzz_crash_029.md:7:2:7:9
-INVALID STATEMENT - fuzz_crash_029.md:8:3:9:4
-INVALID STATEMENT - fuzz_crash_029.md:10:2:10:10
-INVALID STATEMENT - fuzz_crash_029.md:11:3:11:8
-INVALID STATEMENT - fuzz_crash_029.md:12:3:13:20
-INVALID STATEMENT - fuzz_crash_029.md:14:2:14:10
-INVALID STATEMENT - fuzz_crash_029.md:15:3:17:4
+COMPILER DIAGNOSTIC - fuzz_crash_029.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_029.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_029.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_029.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_029.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_029.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_029.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_029.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_029.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_029.md:0:0:0:0
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.
@@ -182,116 +182,65 @@ Here is the problematic code:
    
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_029.md:5:22:5:24:**
-```roc
-			n! : List(Str) => {}, # ure
-```
-                     ^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_029.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_029.md:0:0:0:0**
 
-**fuzz_crash_029.md:5:24:5:25:**
-```roc
-			n! : List(Str) => {}, # ure
-```
-                       ^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_029.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_029.md:6:4:6:5:**
-```roc
-			} #Ce
-```
-   ^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_029.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_029.md:0:0:0:0**
 
-**fuzz_crash_029.md:7:2:7:9:**
-```roc
-	exposes #rd
-```
- ^^^^^^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_029.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_029.md:8:3:9:4:**
-```roc
-		[ #
-		] # Cse
-```
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_029.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_029.md:0:0:0:0**
 
-**fuzz_crash_029.md:10:2:10:10:**
-```roc
-	packages # Cd
-```
- ^^^^^^^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_029.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_029.md:11:3:11:8:**
-```roc
-		vides # Cd
-```
-  ^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_029.md:12:3:13:20:**
-```roc
-		{ # pen
-pkg: "..l", mmen		} # Cose
-```
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_029.md:14:2:14:10:**
-```roc
-	provides # Cd
-```
- ^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_029.md:15:3:17:4:**
-```roc
-		[ Ok(world), (n # pen
-ar,
-		]
-```
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_029.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

@@ -71,31 +71,29 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @7.1-7.5 (ident "sort"))
-		(e-not-implemented @1.1-1.1)
-		(annotation @7.1-7.5
-			(declared-type
-				(ty-fn @6.8-6.32 (effectful false)
-					(ty-apply @6.8-6.18 (symbol "List")
-						(ty-var @6.13-6.17 (name "elem")))
-					(ty-apply @6.22-6.32 (symbol "List")
-						(ty-var @6.27-6.31 (name "elem")))))))
+	(def
+		(pattern
+			(p-assign @7.1-7.5 (ident "sort")))
+		(expr
+			(e-not-implemented @1.1-1.1))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @6.8-6.32 (effectful false)
+						(ty-apply @6.8-6.18 (symbol "List")
+							(ty-var @6.13-6.17 (name "elem")))
+						(ty-apply @6.22-6.32 (symbol "List")
+							(ty-var @6.27-6.31 (name "elem"))))))))
 	(s-alias-decl @3.1-4.48
-		(ty-header @3.1-3.8 (name "Sort")
-			(ty-args
+		(type-header (name "Sort")
+			(args
 				(ty-var @3.6-3.7 (name "a"))))
 		(ty-var @3.11-3.12 (name "a"))
 		(where
-			(method @4.8-4.48 (module-of "a") (ident "order")
-				(args
-					(ty-tuple @4.26-4.32
-						(ty-var @4.27-4.28 (name "a"))
-						(ty-var @4.30-4.31 (name "a"))))
-				(ty-tag-union @4.36-4.48
-					(ty @4.37-4.39 (name "LT"))
-					(ty @4.41-4.43 (name "EQ"))
-					(ty @4.45-4.47 (name "GT"))))))
+			(where-clause
+				(type "mod-method")
+				(var-name "a")
+				(method-name "order"))))
 	(s-type-anno @6.1-6.56 (name "sort")
 		(ty-fn @6.8-6.32 (effectful false)
 			(ty-apply @6.8-6.18 (symbol "List")
@@ -103,9 +101,12 @@ NO CHANGE
 			(ty-apply @6.22-6.32 (symbol "List")
 				(ty-var @6.27-6.31 (name "elem"))))
 		(where
-			(alias @6.39-6.56 (module-of "elem") (ident "Sort"))))
-	(ext-decl @4.8-4.48 (ident "module(a).order") (kind "value"))
-	(ext-decl @6.39-6.56 (ident "module(elem).Sort") (kind "type")))
+			(where-clause
+				(type "mod-alias")
+				(var-name "elem")
+				(alias-name "Sort"))))
+	(external-decl (qualified-name "module(a).order") (module-name "module(a)") (local-name "order") (kind "value"))
+	(external-decl (qualified-name "module(elem).Sort") (module-name "module(elem)") (local-name "Sort") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -114,8 +115,8 @@ NO CHANGE
 		(patt @7.1-7.5 (type "Error -> Error")))
 	(type_decls
 		(alias @3.1-4.48 (type "Sort(a)")
-			(ty-header @3.1-3.8 (name "Sort")
-				(ty-args
+			(type-header (name "Sort")
+				(args
 					(ty-var @3.6-3.7 (name "a"))))))
 	(expressions
 		(expr @1.1-1.1 (type "Error -> Error"))))

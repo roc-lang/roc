@@ -13,18 +13,13 @@ dbg "foo"
 foo = ...
 ~~~
 # EXPECTED
-INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:4:1:4:10
+COMPILER DIAGNOSTIC - dbg_stmt_not_permitted_top_level.md:0:0:0:0
 # PROBLEMS
-**INVALID STATEMENT**
-The statement `dbg` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**dbg_stmt_not_permitted_top_level.md:4:1:4:10:**
-```roc
-dbg "foo"
-```
-^^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**dbg_stmt_not_permitted_top_level.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -54,9 +49,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.4 (ident "foo"))
-		(e-not-implemented @1.1-1.1)))
+	(def
+		(pattern
+			(p-assign @6.1-6.4 (ident "foo")))
+		(expr
+			(e-not-implemented @1.1-1.1))))
 ~~~
 # TYPES
 ~~~clojure

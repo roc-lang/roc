@@ -60,19 +60,21 @@ main = {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @3.1-3.5 (ident "main"))
-		(e-block @3.8-7.2
-			(s-let @4.5-4.11
-				(p-assign @4.5-4.6 (ident "x"))
-				(e-int @4.9-4.11 (value "42")))
-			(s-dbg @5.5-5.10
-				(e-lookup-local @5.9-5.10
-					(p-assign @4.5-4.6 (ident "x"))))
-			(e-binop @6.5-6.10 (op "add")
-				(e-lookup-local @6.5-6.6
-					(p-assign @4.5-4.6 (ident "x")))
-				(e-int @6.9-6.10 (value "1"))))))
+	(def
+		(pattern
+			(p-assign @3.1-3.5 (ident "main")))
+		(expr
+			(e-block @3.8-7.2
+				(s-let @4.5-4.11
+					(p-assign @4.5-4.6 (ident "x"))
+					(e-int @4.9-4.11 (value "42")))
+				(s-dbg @5.5-5.10
+					(e-lookup-local @5.9-5.10
+						(p-assign @4.5-4.6 (ident "x"))))
+				(e-binop @6.5-6.10 (op "add")
+					(e-lookup-local @6.5-6.6
+						(p-assign @4.5-4.6 (ident "x")))
+					(e-int @6.9-6.10 (value "1")))))))
 ~~~
 # TYPES
 ~~~clojure

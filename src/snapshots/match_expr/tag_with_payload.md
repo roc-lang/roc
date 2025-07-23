@@ -15,9 +15,9 @@ match shape {
 UNDEFINED VARIABLE - tag_with_payload.md:1:7:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `shape` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'shape' is not defined:
 **tag_with_payload.md:1:7:1:12:**
 ```roc
 match shape {

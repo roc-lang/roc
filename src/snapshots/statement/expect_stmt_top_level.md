@@ -44,10 +44,12 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @3.1-3.4 (ident "foo"))
-		(e-nominal @3.7-3.11 (nominal "Bool")
-			(e-tag @3.7-3.16 (name "True"))))
+	(def
+		(pattern
+			(p-assign @3.1-3.4 (ident "foo")))
+		(expr
+			(e-nominal @3.7-3.11 (nominal "Bool")
+				(e-tag @3.7-3.16 (name "True")))))
 	(s-expect @5.1-5.25
 		(e-binop @5.8-5.25 (op "ne")
 			(e-lookup-local @5.8-5.11

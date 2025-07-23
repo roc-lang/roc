@@ -128,73 +128,86 @@ answer = composed([42])
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.12 (ident "make_record"))
-		(e-lambda @6.15-6.44
-			(args
-				(p-assign @6.16-6.17 (ident "x")))
-			(e-record @6.19-6.44
-				(fields
-					(field (name "value")
-						(e-lookup-local @6.28-6.29
-							(p-assign @6.16-6.17 (ident "x"))))
-					(field (name "tag")
-						(e-string @6.36-6.42
-							(e-literal @6.37-6.41 (string "data")))))))
-		(annotation @6.1-6.12
-			(declared-type
-				(ty-fn @5.15-5.42 (effectful false)
-					(ty-var @5.15-5.16 (name "a"))
-					(ty-record @5.20-5.42
-						(field (field "value")
-							(ty-var @5.29-5.30 (name "a")))
-						(field (field "tag")
-							(ty @5.37-5.40 (name "Str"))))))))
-	(d-let
-		(p-assign @9.1-9.10 (ident "get_value"))
-		(e-lambda @9.13-9.24
-			(args
-				(p-assign @9.14-9.15 (ident "r")))
-			(e-dot-access @9.17-9.24 (field "value")
-				(receiver
-					(e-lookup-local @9.17-9.18
-						(p-assign @9.14-9.15 (ident "r"))))))
-		(annotation @9.1-9.10
-			(declared-type
-				(ty-fn @8.13-8.40 (effectful false)
-					(ty-record @8.13-8.35
-						(field (field "value")
-							(ty-var @8.22-8.23 (name "a")))
-						(field (field "tag")
-							(ty @8.30-8.33 (name "Str"))))
-					(ty-var @8.39-8.40 (name "a"))))))
-	(d-let
-		(p-assign @12.1-12.9 (ident "composed"))
-		(e-lambda @12.12-12.41
-			(args
-				(p-assign @12.13-12.14 (ident "n")))
-			(e-call @12.16-12.41
-				(e-lookup-local @12.16-12.25
-					(p-assign @9.1-9.10 (ident "get_value")))
-				(e-call @12.26-12.40
-					(e-lookup-local @12.26-12.37
-						(p-assign @6.1-6.12 (ident "make_record")))
-					(e-lookup-local @12.38-12.39
-						(p-assign @12.13-12.14 (ident "n"))))))
-		(annotation @12.1-12.9
-			(declared-type
-				(ty-fn @11.12-11.26 (effectful false)
-					(ty-apply @11.12-11.19 (symbol "List")
-						(ty-var @11.17-11.18 (name "a")))
-					(ty @11.23-11.26 (name "Str"))))))
-	(d-let
-		(p-assign @14.1-14.7 (ident "answer"))
-		(e-call @14.10-14.24
-			(e-lookup-local @14.10-14.18
-				(p-assign @12.1-12.9 (ident "composed")))
-			(e-list @14.19-14.23
-				(elems
-					(e-int @14.20-14.22 (value "42")))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.12 (ident "make_record")))
+		(expr
+			(e-lambda @6.15-6.44
+				(args
+					(p-assign @6.16-6.17 (ident "x")))
+				(e-record @6.19-6.44
+					(fields
+						(record-field (label "value")
+							(value
+								(e-lookup-local @6.28-6.29
+									(p-assign @6.16-6.17 (ident "x")))))
+						(record-field (label "tag")
+							(value
+								(e-string @6.36-6.42
+									(e-literal @6.37-6.41 (string "data")))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @5.15-5.42 (effectful false)
+						(ty-var @5.15-5.16 (name "a"))
+						(ty-record @5.20-5.42
+							(field (field "value")
+								(ty-var @5.29-5.30 (name "a")))
+							(field (field "tag")
+								(ty @5.37-5.40 (name "Str")))))))))
+	(def
+		(pattern
+			(p-assign @9.1-9.10 (ident "get_value")))
+		(expr
+			(e-lambda @9.13-9.24
+				(args
+					(p-assign @9.14-9.15 (ident "r")))
+				(e-dot-access @9.17-9.24 (field "value")
+					(receiver
+						(e-lookup-local @9.17-9.18
+							(p-assign @9.14-9.15 (ident "r")))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @8.13-8.40 (effectful false)
+						(ty-record @8.13-8.35
+							(field (field "value")
+								(ty-var @8.22-8.23 (name "a")))
+							(field (field "tag")
+								(ty @8.30-8.33 (name "Str"))))
+						(ty-var @8.39-8.40 (name "a")))))))
+	(def
+		(pattern
+			(p-assign @12.1-12.9 (ident "composed")))
+		(expr
+			(e-lambda @12.12-12.41
+				(args
+					(p-assign @12.13-12.14 (ident "n")))
+				(e-call @12.16-12.41
+					(e-lookup-local @12.16-12.25
+						(p-assign @9.1-9.10 (ident "get_value")))
+					(e-call @12.26-12.40
+						(e-lookup-local @12.26-12.37
+							(p-assign @6.1-6.12 (ident "make_record")))
+						(e-lookup-local @12.38-12.39
+							(p-assign @12.13-12.14 (ident "n")))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @11.12-11.26 (effectful false)
+						(ty-apply @11.12-11.19 (symbol "List")
+							(ty-var @11.17-11.18 (name "a")))
+						(ty @11.23-11.26 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @14.1-14.7 (ident "answer")))
+		(expr
+			(e-call @14.10-14.24
+				(e-lookup-local @14.10-14.18
+					(p-assign @12.1-12.9 (ident "composed")))
+				(e-list @14.19-14.23
+					(elems
+						(e-int @14.20-14.22 (value "42"))))))))
 ~~~
 # TYPES
 ~~~clojure

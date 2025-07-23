@@ -16,9 +16,9 @@ UNDEFINED VARIABLE - wildcard_patterns.md:1:7:1:12
 UNUSED VARIABLE - wildcard_patterns.md:4:5:4:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `value` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'value' is not defined:
 **wildcard_patterns.md:1:7:1:12:**
 ```roc
 match value {
@@ -27,10 +27,9 @@ match value {
 
 
 **UNUSED VARIABLE**
-Variable `other` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_other` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'other' is defined but never used:
 **wildcard_patterns.md:4:5:4:10:**
 ```roc
     other => "something else"

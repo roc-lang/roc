@@ -92,17 +92,19 @@ foo = if 1 A
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @3.1-3.4 (ident "foo"))
-		(e-if @3.7-7.6
-			(if-branches
-				(if-branch
-					(e-int @3.10-3.11 (value "1"))
-					(e-tag @3.12-3.13 (name "A"))))
-			(if-else
-				(e-block @5.10-7.6
-					(e-string @6.2-6.9
-						(e-literal @6.3-6.8 (string "hello"))))))))
+	(def
+		(pattern
+			(p-assign @3.1-3.4 (ident "foo")))
+		(expr
+			(e-if @3.7-7.6
+				(if-branches
+					(if-branch
+						(e-int @3.10-3.11 (value "1"))
+						(e-tag @3.12-3.13 (name "A"))))
+				(if-else
+					(e-block @5.10-7.6
+						(e-string @6.2-6.9
+							(e-literal @6.3-6.8 (string "hello")))))))))
 ~~~
 # TYPES
 ~~~clojure

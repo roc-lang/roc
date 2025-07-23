@@ -30,9 +30,9 @@ Here is the problematic code:
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `numbers` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'numbers' is not defined:
 **list_patterns.md:1:7:1:14:**
 ```roc
 match numbers {
@@ -41,9 +41,9 @@ match numbers {
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `acc` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'acc' is not defined:
 **list_patterns.md:2:11:2:14:**
 ```roc
     [] => acc
@@ -52,10 +52,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'rest' is defined but never used:
 **list_patterns.md:3:15:3:15:**
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error
@@ -64,10 +63,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `first` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'first' is defined but never used:
 **list_patterns.md:3:6:3:11:**
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error

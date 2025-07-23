@@ -11,7 +11,7 @@ process_user! : { name : Str, age : U32, .. } => Str
 UNEXPECTED TOKEN IN TYPE ANNOTATION - type_open_record.md:1:42:1:44
 PARSE ERROR - type_open_record.md:1:37:1:40
 PARSE ERROR - type_open_record.md:1:47:1:49
-MALFORMED TYPE - :0:0:0:0
+COMPILER DIAGNOSTIC - type_open_record.md:0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **..** is not expected in a type annotation.
@@ -49,8 +49,11 @@ process_user! : { name : Str, age : U32, .. } => Str
                                               ^^
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
+**type_open_record.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -69,7 +72,7 @@ process_user! :
 ~~~clojure
 (can-ir
 	(s-type-anno @1.1-1.49 (name "process_user!")
-		(ty-malformed @1.47-1.49)))
+		(ty-malformed @1.1-1.1)))
 ~~~
 # TYPES
 ~~~clojure

@@ -8,18 +8,13 @@ type=file
 module[]s:b->c where module(a).t:c,u:o...
 ~~~
 # EXPECTED
-INVALID STATEMENT - fuzz_crash_057.md:1:39:1:42
+COMPILER DIAGNOSTIC - fuzz_crash_057.md:0:0:0:0
 # PROBLEMS
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_057.md:1:39:1:42:**
-```roc
-module[]s:b->c where module(a).t:c,u:o...
-```
-                                      ^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_057.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -58,10 +53,11 @@ u : o
 			(ty-var @1.11-1.12 (name "b"))
 			(ty-var @1.14-1.15 (name "c")))
 		(where
-			(method @1.22-1.35 (module-of "a") (ident "t")
-				(args)
-				(ty-var @1.34-1.35 (name "c")))))
-	(ext-decl @1.22-1.35 (ident "module(a).t") (kind "value")))
+			(where-clause
+				(type "mod-method")
+				(var-name "a")
+				(method-name "t"))))
+	(external-decl (qualified-name "module(a).t") (module-name "module(a)") (local-name "t") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

@@ -11,30 +11,20 @@ app[]{f:platform""}{{0
 ""
 ~~~
 # EXPECTED
-INVALID STATEMENT - fuzz_crash_044.md:1:20:2:3
-INVALID STATEMENT - fuzz_crash_044.md:4:1:4:3
+COMPILER DIAGNOSTIC - fuzz_crash_044.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_044.md:0:0:0:0
 # PROBLEMS
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_044.md:1:20:2:3:**
-```roc
-app[]{f:platform""}{{0
-}}
-```
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_044.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_044.md:4:1:4:3:**
-```roc
-""
-```
-^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_044.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

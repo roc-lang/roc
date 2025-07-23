@@ -18,6 +18,9 @@ const RegionInfo = @This();
 
 /// Finds the line index for a given position in the source
 fn lineIdx(line_starts: []const u32, pos: u32) u32 {
+    if (line_starts.len <= 1) {
+        return 0;
+    }
     for (line_starts[1..], 0..) |n, i| {
         if (pos < n) {
             return @intCast(i);
@@ -28,6 +31,9 @@ fn lineIdx(line_starts: []const u32, pos: u32) u32 {
 
 /// Gets the column index for a position on a given line
 fn columnIdx(line_starts: []const u32, line: u32, pos: u32) !u32 {
+    if (line >= line_starts.len) {
+        return 0;
+    }
     const line_start: u32 = @intCast(line_starts[line]);
     if (pos < line_start) {
         return error.InvalidPosition;

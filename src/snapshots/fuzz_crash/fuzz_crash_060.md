@@ -12,8 +12,8 @@ module[]C:k||match 0{0|#
 # EXPECTED
 UNCLOSED STRING - :0:0:0:0
 PARSE ERROR - fuzz_crash_060.md:2:2:2:2
-UNDECLARED TYPE VARIABLE - fuzz_crash_060.md:1:11:1:12
-INVALID STATEMENT - fuzz_crash_060.md:1:12:3:2
+COMPILER DIAGNOSTIC - fuzz_crash_060.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_060.md:0:0:0:0
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -30,30 +30,17 @@ Here is the problematic code:
  
 
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _k_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-Type variables must be introduced in a type annotation before they can be used.
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type_var' is not yet handled in report generation.
+**fuzz_crash_060.md:0:0:0:0**
 
-This type variable is referenced here:
-**fuzz_crash_060.md:1:11:1:12:**
-```roc
-module[]C:k||match 0{0|#
-```
-          ^
+**COMPILER DIAGNOSTIC**
 
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_060.md:1:12:3:2:**
-```roc
-module[]C:k||match 0{0|#
-0"
-}
-```
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_060.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -97,7 +84,7 @@ C : k
 ~~~clojure
 (can-ir
 	(s-alias-decl @1.9-1.12
-		(ty-header @1.9-1.10 (name "C"))
+		(type-header (name "C"))
 		(ty-var @1.11-1.12 (name "k"))))
 ~~~
 # TYPES
@@ -106,6 +93,6 @@ C : k
 	(defs)
 	(type_decls
 		(alias @1.9-1.12 (type "C")
-			(ty-header @1.9-1.10 (name "C"))))
+			(type-header (name "C"))))
 	(expressions))
 ~~~

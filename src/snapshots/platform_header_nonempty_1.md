@@ -31,14 +31,15 @@ platform # Comment after platform keyword
 EXPOSED BUT NOT DEFINED - platform_header_nonempty_1.md:12:4:12:7
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
-The module header says that `foo` is exposed, but it is not defined anywhere in this module.
 
+**Exposed but Not Defined**
+'foo' is exposed in the module header but is not defined:
 **platform_header_nonempty_1.md:12:4:12:7:**
 ```roc
 			foo, # Comment after exposed item
 ```
    ^^^
-You can fix this by either defining `foo` in this module, or by removing it from the list of exposed values.
+
 
 # TOKENS
 ~~~zig

@@ -11,9 +11,9 @@ foo(42, "hello")
 UNDEFINED VARIABLE - apply_function.md:1:1:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'foo' is not defined:
 **apply_function.md:1:1:1:4:**
 ```roc
 foo(42, "hello")

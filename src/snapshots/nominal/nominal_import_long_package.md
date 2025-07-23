@@ -16,10 +16,10 @@ red = ... # not implemented
 UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:21:3:27
 UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:28:3:36
 LIST NOT CLOSED - nominal_import_long_package.md:3:51:3:52
-INVALID STATEMENT - nominal_import_long_package.md:3:21:3:27
-INVALID STATEMENT - nominal_import_long_package.md:3:28:3:36
-INVALID STATEMENT - nominal_import_long_package.md:3:37:3:52
-UNDECLARED TYPE - nominal_import_long_package.md:5:7:5:9
+COMPILER DIAGNOSTIC - nominal_import_long_package.md:0:0:0:0
+COMPILER DIAGNOSTIC - nominal_import_long_package.md:0:0:0:0
+COMPILER DIAGNOSTIC - nominal_import_long_package.md:0:0:0:0
+COMPILER DIAGNOSTIC - nominal_import_long_package.md:0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.Color** is not expected in an expression.
@@ -58,49 +58,29 @@ import design.Styles.Color exposing [Encoder as CE]
                                                   ^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**nominal_import_long_package.md:3:21:3:27:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-                    ^^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**nominal_import_long_package.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**nominal_import_long_package.md:0:0:0:0**
 
-**nominal_import_long_package.md:3:28:3:36:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-                           ^^^^^^^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**nominal_import_long_package.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**nominal_import_long_package.md:3:37:3:52:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-                                    ^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _CE_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_import_long_package.md:5:7:5:9:**
-```roc
-red : CE
-```
-      ^^
-
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**nominal_import_long_package.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -141,12 +121,15 @@ red = ... # not implemented
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.4 (ident "red"))
-		(e-not-implemented @1.1-1.1)
-		(annotation @6.1-6.4
-			(declared-type
-				(ty @5.7-5.9 (name "CE")))))
+	(def
+		(pattern
+			(p-assign @6.1-6.4 (ident "red")))
+		(expr
+			(e-not-implemented @1.1-1.1))
+		(annotation
+			(annotation
+				(type-anno
+					(ty @5.7-5.9 (name "CE"))))))
 	(s-import @3.1-3.21 (module "design.Styles") (qualifier "design")
 		(exposes)))
 ~~~

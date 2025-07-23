@@ -23,13 +23,13 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_032.md:3:24:3:25
 IMPORT MUST BE TOP LEVEL - fuzz_crash_032.md:6:18:6:24
 UNEXPECTED TOKEN IN PATTERN - fuzz_crash_032.md:9:21:9:22
 PARSE ERROR - fuzz_crash_032.md:9:22:9:22
-UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:17
-UNDECLARED TYPE - fuzz_crash_032.md:3:21:3:24
-INVALID STATEMENT - fuzz_crash_032.md:3:24:3:25
-INVALID STATEMENT - fuzz_crash_032.md:3:26:3:45
-NOT IMPLEMENTED - :0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_032.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_032.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_032.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_032.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_032.md:0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_032.md:6:25:6:30
-INVALID PATTERN - :0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_032.md:0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_032.md:10:3:10:4
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
@@ -82,61 +82,40 @@ Green => LocalStatus-Complete
                      
 
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _lue_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-Type variables must be introduced in a type annotation before they can be used.
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type_var' is not yet handled in report generation.
+**fuzz_crash_032.md:0:0:0:0**
 
-This type variable is referenced here:
-**fuzz_crash_032.md:3:14:3:17:**
-```roc
-LocalStatus :lue => Loc= [Pending, Complete]
-```
-             ^^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**fuzz_crash_032.md:0:0:0:0**
 
-**UNDECLARED TYPE**
-The type _Loc_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**fuzz_crash_032.md:3:21:3:24:**
-```roc
-LocalStatus :lue => Loc= [Pending, Complete]
-```
-                    ^^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_032.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_032.md:0:0:0:0**
 
-**fuzz_crash_032.md:3:24:3:25:**
-```roc
-LocalStatus :lue => Loc= [Pending, Complete]
-```
-                       ^
+**COMPILER DIAGNOSTIC**
 
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_032.md:3:26:3:45:**
-```roc
-LocalStatus :lue => Loc= [Pending, Complete]
-```
-                         ^^^^^^^^^^^^^^^^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**Compiler Diagnostic**
+Diagnostic type 'not_implemented' is not yet handled in report generation.
+**fuzz_crash_032.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'Color' is not defined:
 **fuzz_crash_032.md:6:25:6:30:**
 ```roc
 olor = |color| { import Color.RGB
@@ -144,13 +123,16 @@ olor = |color| { import Color.RGB
                         ^^^^^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generation.
+**fuzz_crash_032.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `B` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'B' is not defined:
 **fuzz_crash_032.md:10:3:10:4:**
 ```roc
   B.Blue => LocalStatus.Pending
@@ -159,24 +141,26 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `r` is exposed, but it is not defined anywhere in this module.
 
+**Exposed but Not Defined**
+'r' is exposed in the module header but is not defined:
 **fuzz_crash_032.md:1:13:1:14:**
 ```roc
 module [tus,r]
 ```
             ^
-You can fix this by either defining `r` in this module, or by removing it from the list of exposed values.
+
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `tus` is exposed, but it is not defined anywhere in this module.
 
+**Exposed but Not Defined**
+'tus' is exposed in the module header but is not defined:
 **fuzz_crash_032.md:1:9:1:12:**
 ```roc
 module [tus,r]
 ```
         ^^^
-You can fix this by either defining `tus` in this module, or by removing it from the list of exposed values.
+
 
 # TOKENS
 ~~~zig
@@ -262,53 +246,56 @@ olor = |color| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.5 (ident "olor"))
-		(e-lambda @6.8-12.2
-			(args
-				(p-assign @6.9-6.14 (ident "color")))
-			(e-block @6.16-12.2
-				(s-expr @6.25-6.34
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(e-match @8.5-11.6
-					(match @8.5-11.6
-						(cond
-							(e-lookup-local @8.11-8.16
-								(p-assign @6.9-6.14 (ident "color"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @8.19-8.22)))
-								(value
-									(e-nominal @8.26-8.37 (nominal "<malformed>")
-										(e-tag @8.26-8.45 (name "Pending")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @9.1-9.6)))
-								(value
-									(e-tag @9.10-9.21 (name "LocalStatus"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error @9.21-9.22 (tag "pattern_not_canonicalized"))))
-								(value
-									(e-tag @9.22-9.30 (name "Complete"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error @10.3-10.4 (tag "ident_not_in_scope"))))
-								(value
-									(e-nominal @10.13-10.24 (nominal "<malformed>")
-										(e-tag @10.13-10.32 (name "Pending"))))))))))
-		(annotation @6.1-6.5
-			(declared-type
-				(ty-fn @5.8-5.16 (effectful false)
-					(ty-underscore @1.1-1.1)
-					(ty-var @5.13-5.16 (name "tus"))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.5 (ident "olor")))
+		(expr
+			(e-lambda @6.8-12.2
+				(args
+					(p-assign @6.9-6.14 (ident "color")))
+				(e-block @6.16-12.2
+					(s-expr @6.25-6.34
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(e-match @8.5-11.6
+						(match @8.5-11.6
+							(cond
+								(e-lookup-local @8.11-8.16
+									(p-assign @6.9-6.14 (ident "color"))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @8.19-8.22)))
+									(value
+										(e-nominal @8.26-8.37 (nominal "<malformed>")
+											(e-tag @8.26-8.45 (name "Pending")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @9.1-9.6)))
+									(value
+										(e-tag @9.10-9.21 (name "LocalStatus"))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized"))))
+									(value
+										(e-tag @9.22-9.30 (name "Complete"))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-runtime-error @1.1-1.1 (tag "ident_not_in_scope"))))
+									(value
+										(e-nominal @10.13-10.24 (nominal "<malformed>")
+											(e-tag @10.13-10.32 (name "Pending")))))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @5.8-5.16 (effectful false)
+						(ty-underscore @1.1-1.1)
+						(ty-var @5.13-5.16 (name "tus")))))))
 	(s-alias-decl @3.1-3.24
-		(ty-header @3.1-3.12 (name "LocalStatus"))
+		(type-header (name "LocalStatus"))
 		(ty-fn @3.14-3.24 (effectful true)
 			(ty-var @3.14-3.17 (name "lue"))
 			(ty @3.21-3.24 (name "Loc")))))
@@ -320,7 +307,7 @@ olor = |color| {
 		(patt @6.1-6.5 (type "Error -> Error")))
 	(type_decls
 		(alias @3.1-3.24 (type "LocalStatus")
-			(ty-header @3.1-3.12 (name "LocalStatus"))))
+			(type-header (name "LocalStatus"))))
 	(expressions
 		(expr @6.8-12.2 (type "Error -> Error"))))
 ~~~

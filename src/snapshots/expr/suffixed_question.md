@@ -10,7 +10,7 @@ Stdout.line???
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
 UNDEFINED VARIABLE - suffixed_question.md:1:1:1:12
-UNKNOWN OPERATOR - suffixed_question.md:1:1:1:15
+COMPILER DIAGNOSTIC - suffixed_question.md:0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **?** is not expected in an expression.
@@ -25,9 +25,9 @@ Stdout.line???
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `line` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'line' is not defined:
 **suffixed_question.md:1:1:1:12:**
 ```roc
 Stdout.line???
@@ -35,16 +35,11 @@ Stdout.line???
 ^^^^^^^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**COMPILER DIAGNOSTIC**
 
-**suffixed_question.md:1:1:1:15:**
-```roc
-Stdout.line???
-```
-^^^^^^^^^^^^^^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**suffixed_question.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

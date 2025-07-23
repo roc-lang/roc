@@ -32,8 +32,8 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:7
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:8
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:20
-MALFORMED TYPE - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
+COMPILER DIAGNOSTIC - record_different_fields_reserved_error.md:0:0:0:0
+COMPILER DIAGNOSTIC - record_different_fields_reserved_error.md:0:0:0:0
 UNDEFINED VARIABLE - record_different_fields_reserved_error.md:6:10:6:19
 UNDEFINED VARIABLE - record_different_fields_reserved_error.md:7:9:7:19
 # PROBLEMS
@@ -241,18 +241,22 @@ Here is the problematic code:
                   ^
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+**COMPILER DIAGNOSTIC**
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+**Compiler Diagnostic**
+Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
+**record_different_fields_reserved_error.md:0:0:0:0**
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'not_implemented' is not yet handled in report generation.
+**record_different_fields_reserved_error.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `true` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'true' is not defined:
 **record_different_fields_reserved_error.md:6:10:6:19:**
 ```roc
     and: Bool.true,
@@ -261,9 +265,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `false` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'false' is not defined:
 **record_different_fields_reserved_error.md:7:9:7:19:**
 ```roc
     or: Bool.false,
@@ -340,7 +344,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~clojure
 (e-block @1.1-8.2
 	(s-type-anno @3.5-3.12 (name "when")
-		(ty-malformed @3.11-3.12))
+		(ty-malformed @1.1-1.1))
 	(s-expr @4.13-4.29
 		(e-string @4.13-4.29
 			(e-literal @4.14-4.28 (string "test assertion"))))

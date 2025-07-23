@@ -66,21 +66,23 @@ foo = |num| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @3.1-3.4 (ident "foo"))
-		(e-lambda @3.7-9.2
-			(args
-				(p-assign @3.8-3.11 (ident "num")))
-			(e-block @3.13-9.2
-				(s-dbg @5.5-5.21
-					(e-dot-access @5.9-5.21 (field "to_str")
-						(receiver
-							(e-lookup-local @5.9-5.12
-								(p-assign @3.8-3.11 (ident "num"))))
-						(args)))
-				(e-dbg @8.5-8.13
-					(e-lookup-local @8.9-8.12
-						(p-assign @3.8-3.11 (ident "num"))))))))
+	(def
+		(pattern
+			(p-assign @3.1-3.4 (ident "foo")))
+		(expr
+			(e-lambda @3.7-9.2
+				(args
+					(p-assign @3.8-3.11 (ident "num")))
+				(e-block @3.13-9.2
+					(s-dbg @5.5-5.21
+						(e-dot-access @5.9-5.21 (field "to_str")
+							(receiver
+								(e-lookup-local @5.9-5.12
+									(p-assign @3.8-3.11 (ident "num"))))
+							(args)))
+					(e-dbg @8.5-8.13
+						(e-lookup-local @8.9-8.12
+							(p-assign @3.8-3.11 (ident "num")))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -15,8 +15,8 @@ main! = |_| {}
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_function_basic.md:3:20:3:22
 PARSE ERROR - type_function_basic.md:3:29:3:31
-INVALID STATEMENT - type_function_basic.md:3:20:3:22
-INVALID STATEMENT - type_function_basic.md:3:23:3:31
+COMPILER DIAGNOSTIC - type_function_basic.md:0:0:0:0
+COMPILER DIAGNOSTIC - type_function_basic.md:0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **->** is not expected in an expression.
@@ -42,27 +42,17 @@ apply : (_a -> _b) -> _a -> _b
                             ^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**type_function_basic.md:3:20:3:22:**
-```roc
-apply : (_a -> _b) -> _a -> _b
-```
-                   ^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**type_function_basic.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_function_basic.md:3:23:3:31:**
-```roc
-apply : (_a -> _b) -> _a -> _b
-```
-                      ^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**type_function_basic.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -121,23 +111,27 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.6 (ident "apply"))
-		(e-lambda @4.9-4.22
-			(args
-				(p-assign @4.10-4.12 (ident "fn"))
-				(p-assign @4.14-4.15 (ident "x")))
-			(e-call @4.17-4.22
-				(e-lookup-local @4.17-4.19
-					(p-assign @4.10-4.12 (ident "fn")))
-				(e-lookup-local @4.20-4.21
-					(p-assign @4.14-4.15 (ident "x"))))))
-	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.15
-			(args
-				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+	(def
+		(pattern
+			(p-assign @4.1-4.6 (ident "apply")))
+		(expr
+			(e-lambda @4.9-4.22
+				(args
+					(p-assign @4.10-4.12 (ident "fn"))
+					(p-assign @4.14-4.15 (ident "x")))
+				(e-call @4.17-4.22
+					(e-lookup-local @4.17-4.19
+						(p-assign @4.10-4.12 (ident "fn")))
+					(e-lookup-local @4.20-4.21
+						(p-assign @4.14-4.15 (ident "x")))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.6 (ident "main!")))
+		(expr
+			(e-lambda @6.9-6.15
+				(args
+					(p-underscore @6.10-6.11))
+				(e-empty_record @6.13-6.15)))))
 ~~~
 # TYPES
 ~~~clojure

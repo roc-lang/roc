@@ -13,9 +13,9 @@ when x is
 UNDEFINED VARIABLE - when_with_numbers.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `when` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'when' is not defined:
 **when_with_numbers.md:1:1:1:5:**
 ```roc
 when x is
@@ -43,5 +43,5 @@ when
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.5 (type "Error"))
+(expr @1.1-1.1 (type "Error"))
 ~~~

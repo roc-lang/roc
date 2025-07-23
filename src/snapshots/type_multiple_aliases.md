@@ -135,76 +135,87 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @9.1-9.12 (ident "create_user"))
-		(e-lambda @9.15-9.48
-			(args
-				(p-assign @9.16-9.18 (ident "id"))
-				(p-assign @9.20-9.24 (ident "name"))
-				(p-assign @9.26-9.29 (ident "age")))
-			(e-record @9.31-9.48
-				(fields
-					(field (name "id")
-						(e-lookup-local @9.33-9.35
-							(p-assign @9.16-9.18 (ident "id"))))
-					(field (name "name")
-						(e-lookup-local @9.37-9.41
-							(p-assign @9.20-9.24 (ident "name"))))
-					(field (name "age")
-						(e-lookup-local @9.43-9.46
-							(p-assign @9.26-9.29 (ident "age")))))))
-		(annotation @9.1-9.12
-			(declared-type
-				(ty-fn @8.15-8.48 (effectful false)
-					(ty @8.15-8.21 (name "UserId"))
-					(ty @8.23-8.31 (name "UserName"))
-					(ty @8.33-8.40 (name "UserAge"))
-					(ty @8.44-8.48 (name "User"))))))
-	(d-let
-		(p-assign @12.1-12.14 (ident "get_user_name"))
-		(e-lambda @12.17-12.33
-			(args
-				(p-assign @12.18-12.22 (ident "user")))
-			(e-dot-access @12.24-12.33 (field "name")
-				(receiver
-					(e-lookup-local @12.24-12.28
-						(p-assign @12.18-12.22 (ident "user"))))))
-		(annotation @12.1-12.14
-			(declared-type
-				(ty-fn @11.17-11.33 (effectful false)
-					(ty @11.17-11.21 (name "User"))
-					(ty @11.25-11.33 (name "UserName"))))))
-	(d-let
-		(p-assign @14.1-14.6 (ident "main!"))
-		(e-lambda @14.9-17.2
-			(args
-				(p-underscore @14.10-14.11))
-			(e-block @14.13-17.2
-				(s-let @15.2-15.38
-					(p-assign @15.2-15.6 (ident "user"))
-					(e-call @15.9-15.38
-						(e-lookup-local @15.9-15.20
-							(p-assign @9.1-9.12 (ident "create_user")))
-						(e-int @15.21-15.24 (value "123"))
-						(e-string @15.26-15.33
-							(e-literal @15.27-15.32 (string "Alice")))
-						(e-int @15.35-15.37 (value "25"))))
-				(e-call @16.2-16.21
-					(e-lookup-local @16.2-16.15
-						(p-assign @12.1-12.14 (ident "get_user_name")))
-					(e-lookup-local @16.16-16.20
-						(p-assign @15.2-15.6 (ident "user")))))))
+	(def
+		(pattern
+			(p-assign @9.1-9.12 (ident "create_user")))
+		(expr
+			(e-lambda @9.15-9.48
+				(args
+					(p-assign @9.16-9.18 (ident "id"))
+					(p-assign @9.20-9.24 (ident "name"))
+					(p-assign @9.26-9.29 (ident "age")))
+				(e-record @9.31-9.48
+					(fields
+						(record-field (label "id")
+							(value
+								(e-lookup-local @9.33-9.35
+									(p-assign @9.16-9.18 (ident "id")))))
+						(record-field (label "name")
+							(value
+								(e-lookup-local @9.37-9.41
+									(p-assign @9.20-9.24 (ident "name")))))
+						(record-field (label "age")
+							(value
+								(e-lookup-local @9.43-9.46
+									(p-assign @9.26-9.29 (ident "age")))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @8.15-8.48 (effectful false)
+						(ty @8.15-8.21 (name "UserId"))
+						(ty @8.23-8.31 (name "UserName"))
+						(ty @8.33-8.40 (name "UserAge"))
+						(ty @8.44-8.48 (name "User")))))))
+	(def
+		(pattern
+			(p-assign @12.1-12.14 (ident "get_user_name")))
+		(expr
+			(e-lambda @12.17-12.33
+				(args
+					(p-assign @12.18-12.22 (ident "user")))
+				(e-dot-access @12.24-12.33 (field "name")
+					(receiver
+						(e-lookup-local @12.24-12.28
+							(p-assign @12.18-12.22 (ident "user")))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @11.17-11.33 (effectful false)
+						(ty @11.17-11.21 (name "User"))
+						(ty @11.25-11.33 (name "UserName")))))))
+	(def
+		(pattern
+			(p-assign @14.1-14.6 (ident "main!")))
+		(expr
+			(e-lambda @14.9-17.2
+				(args
+					(p-underscore @14.10-14.11))
+				(e-block @14.13-17.2
+					(s-let @15.2-15.38
+						(p-assign @15.2-15.6 (ident "user"))
+						(e-call @15.9-15.38
+							(e-lookup-local @15.9-15.20
+								(p-assign @9.1-9.12 (ident "create_user")))
+							(e-int @15.21-15.24 (value "123"))
+							(e-string @15.26-15.33
+								(e-literal @15.27-15.32 (string "Alice")))
+							(e-int @15.35-15.37 (value "25"))))
+					(e-call @16.2-16.21
+						(e-lookup-local @16.2-16.15
+							(p-assign @12.1-12.14 (ident "get_user_name")))
+						(e-lookup-local @16.16-16.20
+							(p-assign @15.2-15.6 (ident "user"))))))))
 	(s-alias-decl @3.1-3.13
-		(ty-header @3.1-3.7 (name "UserId"))
+		(type-header (name "UserId"))
 		(ty @3.10-3.13 (name "U64")))
 	(s-alias-decl @4.1-4.15
-		(ty-header @4.1-4.9 (name "UserName"))
+		(type-header (name "UserName"))
 		(ty @4.12-4.15 (name "Str")))
 	(s-alias-decl @5.1-5.13
-		(ty-header @5.1-5.8 (name "UserAge"))
+		(type-header (name "UserAge"))
 		(ty @5.11-5.13 (name "U8")))
 	(s-alias-decl @6.1-6.55
-		(ty-header @6.1-6.5 (name "User"))
+		(type-header (name "User"))
 		(ty-record @6.8-6.55
 			(field (field "id")
 				(ty @6.15-6.21 (name "UserId")))
@@ -222,13 +233,13 @@ NO CHANGE
 		(patt @14.1-14.6 (type "_arg -> UserName")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
-			(ty-header @3.1-3.7 (name "UserId")))
+			(type-header (name "UserId")))
 		(alias @4.1-4.15 (type "UserName")
-			(ty-header @4.1-4.9 (name "UserName")))
+			(type-header (name "UserName")))
 		(alias @5.1-5.13 (type "UserAge")
-			(ty-header @5.1-5.8 (name "UserAge")))
+			(type-header (name "UserAge")))
 		(alias @6.1-6.55 (type "User")
-			(ty-header @6.1-6.5 (name "User"))))
+			(type-header (name "User"))))
 	(expressions
 		(expr @9.15-9.48 (type "UserId, UserName, UserAge -> User"))
 		(expr @12.17-12.33 (type "User -> UserName"))

@@ -51,13 +51,13 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-3.16
-		(ty-header @3.1-3.10 (name "FirstType"))
+		(type-header (name "FirstType"))
 		(ty @3.13-3.16 (name "U64")))
 	(s-alias-decl @4.1-4.17
-		(ty-header @4.1-4.11 (name "SecondType"))
+		(type-header (name "SecondType"))
 		(ty @4.14-4.17 (name "Str")))
 	(s-alias-decl @5.1-5.21
-		(ty-header @5.1-5.10 (name "ThirdType"))
+		(type-header (name "ThirdType"))
 		(ty-apply @5.13-5.21 (symbol "List")
 			(ty @5.18-5.20 (name "U8")))))
 ~~~
@@ -67,10 +67,10 @@ NO CHANGE
 	(defs)
 	(type_decls
 		(alias @3.1-3.16 (type "FirstType")
-			(ty-header @3.1-3.10 (name "FirstType")))
+			(type-header (name "FirstType")))
 		(alias @4.1-4.17 (type "SecondType")
-			(ty-header @4.1-4.11 (name "SecondType")))
+			(type-header (name "SecondType")))
 		(alias @5.1-5.21 (type "Error")
-			(ty-header @5.1-5.10 (name "ThirdType"))))
+			(type-header (name "ThirdType"))))
 	(expressions))
 ~~~

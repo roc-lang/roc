@@ -23,11 +23,11 @@ PARSE ERROR - type_shadowing_across_scopes.md:11:5:11:11
 PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:31
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:11:32
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:12:1:12:2
-TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
-MALFORMED TYPE - :0:0:0:0
+COMPILER DIAGNOSTIC - type_shadowing_across_scopes.md:0:0:0:0
+COMPILER DIAGNOSTIC - type_shadowing_across_scopes.md:0:0:0:0
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
-INVALID STATEMENT - type_shadowing_across_scopes.md:11:31:11:32
-INVALID STATEMENT - type_shadowing_across_scopes.md:12:1:12:2
+COMPILER DIAGNOSTIC - type_shadowing_across_scopes.md:0:0:0:0
+COMPILER DIAGNOSTIC - type_shadowing_across_scopes.md:0:0:0:0
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_type_field_name`
@@ -77,32 +77,22 @@ Here is the problematic code:
 ^
 
 
-**TYPE REDECLARED**
-The type _Result_ is being redeclared.
+**COMPILER DIAGNOSTIC**
 
-The redeclaration is here:
-**type_shadowing_across_scopes.md:3:1:3:31:**
-```roc
-Result(a, b) : [Ok(a), Err(b)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'type_redeclared' is not yet handled in report generation.
+**type_shadowing_across_scopes.md:0:0:0:0**
 
-But _Result_ was already declared here:
-**type_shadowing_across_scopes.md:1:1:1:1:**
-```roc
-module [Result, processData]
-```
+**COMPILER DIAGNOSTIC**
 
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+**Compiler Diagnostic**
+Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
+**type_shadowing_across_scopes.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `data` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'data' is defined but never used:
 **type_shadowing_across_scopes.md:6:16:6:20:**
 ```roc
 processData = |data|
@@ -110,27 +100,17 @@ processData = |data|
                ^^^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**type_shadowing_across_scopes.md:11:31:11:32:**
-```roc
-    Result : [Success, Failure]
-```
-                              ^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**type_shadowing_across_scopes.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_shadowing_across_scopes.md:12:1:12:2:**
-```roc
-}
-```
-^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**type_shadowing_across_scopes.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -201,21 +181,24 @@ InnerModule :
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.12 (ident "processData"))
-		(e-lambda @6.15-7.16
-			(args
-				(p-assign @6.16-6.20 (ident "data")))
-			(e-string @7.5-7.16
-				(e-literal @7.6-7.15 (string "processed"))))
-		(annotation @6.1-6.12
-			(declared-type
-				(ty-fn @5.15-5.25 (effectful false)
-					(ty @5.15-5.18 (name "Str"))
-					(ty @5.22-5.25 (name "Str"))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.12 (ident "processData")))
+		(expr
+			(e-lambda @6.15-7.16
+				(args
+					(p-assign @6.16-6.20 (ident "data")))
+				(e-string @7.5-7.16
+					(e-literal @7.6-7.15 (string "processed")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @5.15-5.25 (effectful false)
+						(ty @5.15-5.18 (name "Str"))
+						(ty @5.22-5.25 (name "Str")))))))
 	(s-alias-decl @3.1-3.31
-		(ty-header @3.1-3.13 (name "Result")
-			(ty-args
+		(type-header (name "Result")
+			(args
 				(ty-var @3.8-3.9 (name "a"))
 				(ty-var @3.11-3.12 (name "b"))))
 		(ty-tag-union @3.16-3.31
@@ -224,8 +207,8 @@ InnerModule :
 			(ty-apply @3.24-3.30 (symbol "Err")
 				(ty-var @3.28-3.29 (name "b")))))
 	(s-alias-decl @10.1-11.31
-		(ty-header @10.1-10.12 (name "InnerModule"))
-		(ty-malformed @11.24-11.31)))
+		(type-header (name "InnerModule"))
+		(ty-malformed @1.1-1.1)))
 ~~~
 # TYPES
 ~~~clojure
@@ -234,12 +217,12 @@ InnerModule :
 		(patt @6.1-6.12 (type "Str -> Str")))
 	(type_decls
 		(alias @3.1-3.31 (type "Result(a, b)")
-			(ty-header @3.1-3.13 (name "Result")
-				(ty-args
+			(type-header (name "Result")
+				(args
 					(ty-var @3.8-3.9 (name "a"))
 					(ty-var @3.11-3.12 (name "b")))))
 		(alias @10.1-11.31 (type "Error")
-			(ty-header @10.1-10.12 (name "InnerModule"))))
+			(type-header (name "InnerModule"))))
 	(expressions
 		(expr @6.15-7.16 (type "Str -> Str"))))
 ~~~

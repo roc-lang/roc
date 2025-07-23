@@ -250,8 +250,8 @@ pub const Pattern = union(enum) {
             try tree.pushStaticAtom("record-destruct");
             try ir.appendRegionInfoToSExprTree(tree, destruct_idx);
 
-            const label_text = ir.env.idents.getText(self.label);
-            const ident_text = ir.env.idents.getText(self.ident);
+            const label_text = ir.idents.getText(self.label);
+            const ident_text = ir.idents.getText(self.ident);
             try tree.pushStringPair("label", label_text);
             try tree.pushStringPair("ident", ident_text);
 
@@ -400,7 +400,7 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-str");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                const text = ir.env.strings.get(p.literal);
+                const text = ir.strings.get(p.literal);
                 try tree.pushStringPair("text", text);
 
                 const attrs = tree.beginNode();

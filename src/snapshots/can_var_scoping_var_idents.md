@@ -66,34 +66,36 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.9 (ident "testFunc"))
-		(e-lambda @4.12-10.2
-			(args
-				(p-assign @4.13-4.18 (ident "input")))
-			(e-block @4.20-10.2
-				(s-let @5.2-5.13
-					(p-assign @5.2-5.5 (ident "sum"))
-					(e-lookup-local @5.8-5.13
-						(p-assign @4.13-4.18 (ident "input"))))
-				(s-var @6.2-6.22
-					(p-assign @6.2-6.22 (ident "sum_"))
-					(e-binop @6.13-6.22 (op "mul")
-						(e-lookup-local @6.13-6.18
-							(p-assign @4.13-4.18 (ident "input")))
-						(e-int @6.21-6.22 (value "2"))))
-				(s-reassign @8.2-8.6
-					(p-assign @6.2-6.22 (ident "sum_"))
-					(e-binop @8.9-8.19 (op "add")
-						(e-lookup-local @8.9-8.13
-							(p-assign @6.2-6.22 (ident "sum_")))
-						(e-lookup-local @8.16-8.19
-							(p-assign @5.2-5.5 (ident "sum")))))
-				(e-binop @9.2-9.12 (op "add")
-					(e-lookup-local @9.2-9.5
-						(p-assign @5.2-5.5 (ident "sum")))
-					(e-lookup-local @9.8-9.12
-						(p-assign @6.2-6.22 (ident "sum_"))))))))
+	(def
+		(pattern
+			(p-assign @4.1-4.9 (ident "testFunc")))
+		(expr
+			(e-lambda @4.12-10.2
+				(args
+					(p-assign @4.13-4.18 (ident "input")))
+				(e-block @4.20-10.2
+					(s-let @5.2-5.13
+						(p-assign @5.2-5.5 (ident "sum"))
+						(e-lookup-local @5.8-5.13
+							(p-assign @4.13-4.18 (ident "input"))))
+					(s-var @6.2-6.22
+						(p-assign @6.2-6.22 (ident "sum_"))
+						(e-binop @6.13-6.22 (op "mul")
+							(e-lookup-local @6.13-6.18
+								(p-assign @4.13-4.18 (ident "input")))
+							(e-int @6.21-6.22 (value "2"))))
+					(s-reassign @8.2-8.6
+						(p-assign @6.2-6.22 (ident "sum_"))
+						(e-binop @8.9-8.19 (op "add")
+							(e-lookup-local @8.9-8.13
+								(p-assign @6.2-6.22 (ident "sum_")))
+							(e-lookup-local @8.16-8.19
+								(p-assign @5.2-5.5 (ident "sum")))))
+					(e-binop @9.2-9.12 (op "add")
+						(e-lookup-local @9.2-9.5
+							(p-assign @5.2-5.5 (ident "sum")))
+						(e-lookup-local @9.8-9.12
+							(p-assign @6.2-6.22 (ident "sum_")))))))))
 ~~~
 # TYPES
 ~~~clojure

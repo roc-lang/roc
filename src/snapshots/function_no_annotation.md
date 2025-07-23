@@ -90,48 +90,56 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.9 (ident "multiply"))
-		(e-lambda @6.12-6.24
-			(args
-				(p-assign @6.13-6.14 (ident "x"))
-				(p-assign @6.16-6.17 (ident "y")))
-			(e-binop @6.19-6.24 (op "mul")
-				(e-lookup-local @6.19-6.20
-					(p-assign @6.13-6.14 (ident "x")))
-				(e-lookup-local @6.23-6.24
-					(p-assign @6.16-6.17 (ident "y"))))))
-	(d-let
-		(p-assign @9.1-9.14 (ident "print_number!"))
-		(e-lambda @9.17-9.36
-			(args
-				(p-assign @9.18-9.19 (ident "n")))
-			(e-call @9.21-9.36
-				(e-lookup-external @9.21-9.33
-					(module-idx "0")
-					(target-node-idx "0"))
-				(e-lookup-local @9.34-9.35
-					(p-assign @9.18-9.19 (ident "n"))))))
-	(d-let
-		(p-assign @12.1-12.9 (ident "process!"))
-		(e-lambda @12.12-12.45
-			(args
-				(p-assign @12.13-12.14 (ident "x")))
-			(e-call @12.16-12.45
-				(e-lookup-local @12.16-12.29
-					(p-assign @9.1-9.14 (ident "print_number!")))
-				(e-call @12.30-12.44
-					(e-lookup-local @12.30-12.38
-						(p-assign @6.1-6.9 (ident "multiply")))
-					(e-lookup-local @12.39-12.40
-						(p-assign @12.13-12.14 (ident "x")))
-					(e-int @12.42-12.43 (value "2"))))))
-	(d-let
-		(p-assign @14.1-14.6 (ident "main!"))
-		(e-call @14.9-14.21
-			(e-lookup-local @14.9-14.17
-				(p-assign @12.1-12.9 (ident "process!")))
-			(e-int @14.18-14.20 (value "42"))))
+	(def
+		(pattern
+			(p-assign @6.1-6.9 (ident "multiply")))
+		(expr
+			(e-lambda @6.12-6.24
+				(args
+					(p-assign @6.13-6.14 (ident "x"))
+					(p-assign @6.16-6.17 (ident "y")))
+				(e-binop @6.19-6.24 (op "mul")
+					(e-lookup-local @6.19-6.20
+						(p-assign @6.13-6.14 (ident "x")))
+					(e-lookup-local @6.23-6.24
+						(p-assign @6.16-6.17 (ident "y")))))))
+	(def
+		(pattern
+			(p-assign @9.1-9.14 (ident "print_number!")))
+		(expr
+			(e-lambda @9.17-9.36
+				(args
+					(p-assign @9.18-9.19 (ident "n")))
+				(e-call @9.21-9.36
+					(e-lookup-external @9.21-9.33
+						(module-idx "0")
+						(target-node-idx "0"))
+					(e-lookup-local @9.34-9.35
+						(p-assign @9.18-9.19 (ident "n")))))))
+	(def
+		(pattern
+			(p-assign @12.1-12.9 (ident "process!")))
+		(expr
+			(e-lambda @12.12-12.45
+				(args
+					(p-assign @12.13-12.14 (ident "x")))
+				(e-call @12.16-12.45
+					(e-lookup-local @12.16-12.29
+						(p-assign @9.1-9.14 (ident "print_number!")))
+					(e-call @12.30-12.44
+						(e-lookup-local @12.30-12.38
+							(p-assign @6.1-6.9 (ident "multiply")))
+						(e-lookup-local @12.39-12.40
+							(p-assign @12.13-12.14 (ident "x")))
+						(e-int @12.42-12.43 (value "2")))))))
+	(def
+		(pattern
+			(p-assign @14.1-14.6 (ident "main!")))
+		(expr
+			(e-call @14.9-14.21
+				(e-lookup-local @14.9-14.17
+					(p-assign @12.1-12.9 (ident "process!")))
+				(e-int @14.18-14.20 (value "42")))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))
 ~~~

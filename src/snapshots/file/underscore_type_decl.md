@@ -29,10 +29,10 @@ UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:7:13:7:14
 PARSE ERROR - underscore_type_decl.md:7:20:7:21
 PARSE ERROR - underscore_type_decl.md:7:23:7:24
 PARSE ERROR - underscore_type_decl.md:7:15:7:19
-INVALID STATEMENT - underscore_type_decl.md:6:6:6:12
-INVALID STATEMENT - underscore_type_decl.md:6:13:6:14
-INVALID STATEMENT - underscore_type_decl.md:7:6:7:12
-INVALID STATEMENT - underscore_type_decl.md:7:13:7:14
+COMPILER DIAGNOSTIC - underscore_type_decl.md:0:0:0:0
+COMPILER DIAGNOSTIC - underscore_type_decl.md:0:0:0:0
+COMPILER DIAGNOSTIC - underscore_type_decl.md:0:0:0:0
+COMPILER DIAGNOSTIC - underscore_type_decl.md:0:0:0:0
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -262,49 +262,29 @@ Pair3(_, _) = Pair(0, 1)
               ^^^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**underscore_type_decl.md:6:6:6:12:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-     ^^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**underscore_type_decl.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**underscore_type_decl.md:0:0:0:0**
 
-**underscore_type_decl.md:6:13:6:14:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-            ^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**underscore_type_decl.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**underscore_type_decl.md:7:6:7:12:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-     ^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_type_decl.md:7:13:7:14:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-            ^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**underscore_type_decl.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -351,7 +331,7 @@ import Module exposing [Pair]
 (can-ir
 	(s-import @3.1-3.30 (module "Module")
 		(exposes
-			(exposed (name "Pair") (wildcard false)))))
+			(exposed-item (name "Pair") (is_wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

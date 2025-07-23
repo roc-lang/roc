@@ -640,415 +640,528 @@ main = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.4 (ident "num"))
-		(e-int @4.7-4.9 (value "42")))
-	(d-let
-		(p-assign @5.1-5.5 (ident "frac"))
-		(e-dec-small @5.8-5.11 (numerator "42") (denominator-power-of-ten "1") (value "4.2")))
-	(d-let
-		(p-assign @6.1-6.4 (ident "str"))
-		(e-string @6.7-6.14
-			(e-literal @6.8-6.13 (string "hello"))))
-	(d-let
-		(p-assign @7.1-7.5 (ident "bool"))
-		(e-nominal @7.8-7.12 (nominal "Bool")
-			(e-tag @7.8-7.12 (name "True"))))
-	(d-let
-		(p-assign @10.1-10.11 (ident "empty_list"))
-		(e-empty_list @10.14-10.16))
-	(d-let
-		(p-assign @11.1-11.13 (ident "empty_record"))
-		(e-empty_record @11.16-11.18))
-	(d-let
-		(p-assign @14.1-14.9 (ident "int_list"))
-		(e-list @14.12-14.21
-			(elems
-				(e-int @14.13-14.14 (value "1"))
-				(e-int @14.16-14.17 (value "2"))
-				(e-int @14.19-14.20 (value "3")))))
-	(d-let
-		(p-assign @15.1-15.9 (ident "str_list"))
-		(e-list @15.12-15.27
-			(elems
-				(e-string @15.13-15.16
-					(e-literal @15.14-15.15 (string "a")))
-				(e-string @15.18-15.21
-					(e-literal @15.19-15.20 (string "b")))
-				(e-string @15.23-15.26
-					(e-literal @15.24-15.25 (string "c"))))))
-	(d-let
-		(p-assign @16.1-16.10 (ident "bool_list"))
-		(e-list @16.13-16.26
-			(elems
-				(e-nominal @16.14-16.18 (nominal "Bool")
-					(e-tag @16.14-16.18 (name "True")))
-				(e-nominal @16.20-16.25 (nominal "Bool")
-					(e-tag @16.20-16.25 (name "False"))))))
-	(d-let
-		(p-assign @19.1-19.13 (ident "nested_empty"))
-		(e-list @19.16-19.52
-			(elems
-				(e-lookup-local @19.17-19.27
-					(p-assign @10.1-10.11 (ident "empty_list")))
-				(e-lookup-local @19.29-19.39
-					(p-assign @10.1-10.11 (ident "empty_list")))
-				(e-lookup-local @19.41-19.51
-					(p-assign @10.1-10.11 (ident "empty_list"))))))
-	(d-let
-		(p-assign @20.1-20.13 (ident "mixed_nested"))
-		(e-list @20.16-20.56
-			(elems
-				(e-lookup-local @20.17-20.27
-					(p-assign @10.1-10.11 (ident "empty_list")))
-				(e-list @20.29-20.35
-					(elems
-						(e-int @20.30-20.31 (value "1"))
-						(e-int @20.33-20.34 (value "2"))))
-				(e-lookup-local @20.37-20.47
-					(p-assign @10.1-10.11 (ident "empty_list")))
-				(e-list @20.49-20.55
-					(elems
-						(e-int @20.50-20.51 (value "3"))
-						(e-int @20.53-20.54 (value "4")))))))
-	(d-let
-		(p-assign @23.1-23.12 (ident "poly_record"))
-		(e-record @23.15-23.46
-			(fields
-				(field (name "items")
-					(e-lookup-local @23.24-23.34
-						(p-assign @10.1-10.11 (ident "empty_list"))))
-				(field (name "count")
-					(e-int @23.43-23.44 (value "0"))))))
-	(d-let
-		(p-assign @24.1-24.17 (ident "use_poly_record1"))
-		(e-record @24.20-24.50
-			(fields
-				(field (name "items")
-					(e-list @24.29-24.38
+	(def
+		(pattern
+			(p-assign @4.1-4.4 (ident "num")))
+		(expr
+			(e-int @4.7-4.9 (value "42"))))
+	(def
+		(pattern
+			(p-assign @5.1-5.5 (ident "frac")))
+		(expr
+			(e-dec-small @5.8-5.11 (numerator "42") (denominator-power-of-ten "1") (value "4.2"))))
+	(def
+		(pattern
+			(p-assign @6.1-6.4 (ident "str")))
+		(expr
+			(e-string @6.7-6.14
+				(e-literal @6.8-6.13 (string "hello")))))
+	(def
+		(pattern
+			(p-assign @7.1-7.5 (ident "bool")))
+		(expr
+			(e-nominal @7.8-7.12 (nominal "Bool")
+				(e-tag @7.8-7.12 (name "True")))))
+	(def
+		(pattern
+			(p-assign @10.1-10.11 (ident "empty_list")))
+		(expr
+			(e-empty_list @10.14-10.16)))
+	(def
+		(pattern
+			(p-assign @11.1-11.13 (ident "empty_record")))
+		(expr
+			(e-empty_record @11.16-11.18)))
+	(def
+		(pattern
+			(p-assign @14.1-14.9 (ident "int_list")))
+		(expr
+			(e-list @14.12-14.21
+				(elems
+					(e-int @14.13-14.14 (value "1"))
+					(e-int @14.16-14.17 (value "2"))
+					(e-int @14.19-14.20 (value "3"))))))
+	(def
+		(pattern
+			(p-assign @15.1-15.9 (ident "str_list")))
+		(expr
+			(e-list @15.12-15.27
+				(elems
+					(e-string @15.13-15.16
+						(e-literal @15.14-15.15 (string "a")))
+					(e-string @15.18-15.21
+						(e-literal @15.19-15.20 (string "b")))
+					(e-string @15.23-15.26
+						(e-literal @15.24-15.25 (string "c")))))))
+	(def
+		(pattern
+			(p-assign @16.1-16.10 (ident "bool_list")))
+		(expr
+			(e-list @16.13-16.26
+				(elems
+					(e-nominal @16.14-16.18 (nominal "Bool")
+						(e-tag @16.14-16.18 (name "True")))
+					(e-nominal @16.20-16.25 (nominal "Bool")
+						(e-tag @16.20-16.25 (name "False")))))))
+	(def
+		(pattern
+			(p-assign @19.1-19.13 (ident "nested_empty")))
+		(expr
+			(e-list @19.16-19.52
+				(elems
+					(e-lookup-local @19.17-19.27
+						(p-assign @10.1-10.11 (ident "empty_list")))
+					(e-lookup-local @19.29-19.39
+						(p-assign @10.1-10.11 (ident "empty_list")))
+					(e-lookup-local @19.41-19.51
+						(p-assign @10.1-10.11 (ident "empty_list")))))))
+	(def
+		(pattern
+			(p-assign @20.1-20.13 (ident "mixed_nested")))
+		(expr
+			(e-list @20.16-20.56
+				(elems
+					(e-lookup-local @20.17-20.27
+						(p-assign @10.1-10.11 (ident "empty_list")))
+					(e-list @20.29-20.35
 						(elems
-							(e-int @24.30-24.31 (value "1"))
-							(e-int @24.33-24.34 (value "2"))
-							(e-int @24.36-24.37 (value "3")))))
-				(field (name "count")
-					(e-int @24.47-24.48 (value "0"))))))
-	(d-let
-		(p-assign @25.1-25.17 (ident "use_poly_record2"))
-		(e-record @25.20-25.56
-			(fields
-				(field (name "items")
-					(e-list @25.29-25.44
+							(e-int @20.30-20.31 (value "1"))
+							(e-int @20.33-20.34 (value "2"))))
+					(e-lookup-local @20.37-20.47
+						(p-assign @10.1-10.11 (ident "empty_list")))
+					(e-list @20.49-20.55
 						(elems
-							(e-string @25.30-25.33
-								(e-literal @25.31-25.32 (string "x")))
-							(e-string @25.35-25.38
-								(e-literal @25.36-25.37 (string "y")))
-							(e-string @25.40-25.43
-								(e-literal @25.41-25.42 (string "z"))))))
-				(field (name "count")
-					(e-int @25.53-25.54 (value "0"))))))
-	(d-let
-		(p-assign @28.1-28.12 (ident "base_config"))
-		(e-record @28.15-35.2
-			(fields
-				(field (name "data")
-					(e-lookup-local @29.11-29.21
-						(p-assign @10.1-10.11 (ident "empty_list"))))
-				(field (name "metadata")
-					(e-record @30.15-34.6
-						(fields
-							(field (name "version")
-								(e-lookup-local @31.18-31.21
-									(p-assign @4.1-4.4 (ident "num"))))
-							(field (name "ratio")
-								(e-lookup-local @32.16-32.20
-									(p-assign @5.1-5.5 (ident "frac"))))
-							(field (name "description")
-								(e-lookup-local @33.22-33.25
-									(p-assign @6.1-6.4 (ident "str"))))))))))
-	(d-let
-		(p-assign @38.1-38.8 (ident "config1"))
-		(e-record @38.11-46.2
-			(fields
-				(field (name "data")
-					(e-list @39.11-39.26
-						(elems
-							(e-int @39.12-39.13 (value "1"))
-							(e-int @39.15-39.16 (value "2"))
-							(e-int @39.18-39.19 (value "3"))
-							(e-int @39.21-39.22 (value "4"))
-							(e-int @39.24-39.25 (value "5")))))
-				(field (name "metadata")
-					(e-record @40.15-44.6
-						(fields
-							(field (name "version")
-								(e-lookup-local @41.18-41.21
-									(p-assign @4.1-4.4 (ident "num"))))
-							(field (name "ratio")
-								(e-lookup-local @42.16-42.20
-									(p-assign @5.1-5.5 (ident "frac"))))
-							(field (name "description")
-								(e-lookup-local @43.22-43.25
-									(p-assign @6.1-6.4 (ident "str")))))))
-				(field (name "name")
-					(e-string @45.11-45.21
-						(e-literal @45.12-45.20 (string "integers")))))))
-	(d-let
-		(p-assign @48.1-48.8 (ident "config2"))
-		(e-record @48.11-56.2
-			(fields
-				(field (name "data")
-					(e-list @49.11-49.40
-						(elems
-							(e-string @49.12-49.19
-								(e-literal @49.13-49.18 (string "apple")))
-							(e-string @49.21-49.29
-								(e-literal @49.22-49.28 (string "banana")))
-							(e-string @49.31-49.39
-								(e-literal @49.32-49.38 (string "cherry"))))))
-				(field (name "metadata")
-					(e-record @50.15-54.6
-						(fields
-							(field (name "version")
-								(e-lookup-local @51.18-51.21
-									(p-assign @4.1-4.4 (ident "num"))))
-							(field (name "ratio")
-								(e-lookup-local @52.16-52.20
-									(p-assign @5.1-5.5 (ident "frac"))))
-							(field (name "description")
-								(e-lookup-local @53.22-53.25
-									(p-assign @6.1-6.4 (ident "str")))))))
-				(field (name "name")
-					(e-string @55.11-55.19
-						(e-literal @55.12-55.18 (string "fruits")))))))
-	(d-let
-		(p-assign @59.1-59.15 (ident "make_container"))
-		(e-lambda @59.18-59.54
-			(args
-				(p-assign @59.19-59.22 (ident "val")))
-			(e-record @59.24-59.54
+							(e-int @20.50-20.51 (value "3"))
+							(e-int @20.53-20.54 (value "4"))))))))
+	(def
+		(pattern
+			(p-assign @23.1-23.12 (ident "poly_record")))
+		(expr
+			(e-record @23.15-23.46
 				(fields
-					(field (name "value")
-						(e-lookup-local @59.33-59.36
-							(p-assign @59.19-59.22 (ident "val"))))
-					(field (name "wrapper")
-						(e-list @59.47-59.52
-							(elems
-								(e-lookup-local @59.48-59.51
-									(p-assign @59.19-59.22 (ident "val"))))))))))
-	(d-let
-		(p-assign @60.1-60.11 (ident "container1"))
-		(e-call @60.14-60.33
-			(e-lookup-local @60.14-60.28
-				(p-assign @59.1-59.15 (ident "make_container")))
-			(e-lookup-local @60.29-60.32
-				(p-assign @4.1-4.4 (ident "num")))))
-	(d-let
-		(p-assign @61.1-61.11 (ident "container2"))
-		(e-call @61.14-61.33
-			(e-lookup-local @61.14-61.28
-				(p-assign @59.1-59.15 (ident "make_container")))
-			(e-lookup-local @61.29-61.32
-				(p-assign @6.1-6.4 (ident "str")))))
-	(d-let
-		(p-assign @62.1-62.11 (ident "container3"))
-		(e-call @62.14-62.34
-			(e-lookup-local @62.14-62.28
-				(p-assign @59.1-59.15 (ident "make_container")))
-			(e-lookup-local @62.29-62.33
-				(p-assign @5.1-5.5 (ident "frac")))))
-	(d-let
-		(p-assign @65.1-65.5 (ident "deep"))
-		(e-record @65.8-81.2
-			(fields
-				(field (name "level1")
-					(e-record @66.13-75.6
-						(fields
-							(field (name "level2")
-								(e-record @67.17-73.10
-									(fields
-										(field (name "level3")
-											(e-record @68.21-71.14
-												(fields
-													(field (name "data")
-														(e-lookup-local @69.23-69.33
-															(p-assign @10.1-10.11 (ident "empty_list"))))
-													(field (name "value")
-														(e-lookup-local @70.24-70.27
-															(p-assign @4.1-4.4 (ident "num")))))))
-										(field (name "items")
-											(e-list @72.20-72.43
-												(elems
-													(e-lookup-local @72.21-72.24
-														(p-assign @4.1-4.4 (ident "num")))
-													(e-binop @72.26-72.33 (op "mul")
-														(e-lookup-local @72.26-72.29
-															(p-assign @4.1-4.4 (ident "num")))
-														(e-int @72.32-72.33 (value "2")))
-													(e-binop @72.35-72.42 (op "mul")
-														(e-lookup-local @72.35-72.38
-															(p-assign @4.1-4.4 (ident "num")))
-														(e-int @72.41-72.42 (value "3")))))))))
-							(field (name "collection")
-								(e-lookup-local @74.21-74.31
-									(p-assign @10.1-10.11 (ident "empty_list")))))))
-				(field (name "results")
-					(e-list @76.14-80.6
-						(elems
-							(e-record @77.9-77.37
+					(record-field (label "items")
+						(value
+							(e-lookup-local @23.24-23.34
+								(p-assign @10.1-10.11 (ident "empty_list")))))
+					(record-field (label "count")
+						(value
+							(e-int @23.43-23.44 (value "0"))))))))
+	(def
+		(pattern
+			(p-assign @24.1-24.17 (ident "use_poly_record1")))
+		(expr
+			(e-record @24.20-24.50
+				(fields
+					(record-field (label "items")
+						(value
+							(e-list @24.29-24.38
+								(elems
+									(e-int @24.30-24.31 (value "1"))
+									(e-int @24.33-24.34 (value "2"))
+									(e-int @24.36-24.37 (value "3"))))))
+					(record-field (label "count")
+						(value
+							(e-int @24.47-24.48 (value "0"))))))))
+	(def
+		(pattern
+			(p-assign @25.1-25.17 (ident "use_poly_record2")))
+		(expr
+			(e-record @25.20-25.56
+				(fields
+					(record-field (label "items")
+						(value
+							(e-list @25.29-25.44
+								(elems
+									(e-string @25.30-25.33
+										(e-literal @25.31-25.32 (string "x")))
+									(e-string @25.35-25.38
+										(e-literal @25.36-25.37 (string "y")))
+									(e-string @25.40-25.43
+										(e-literal @25.41-25.42 (string "z")))))))
+					(record-field (label "count")
+						(value
+							(e-int @25.53-25.54 (value "0"))))))))
+	(def
+		(pattern
+			(p-assign @28.1-28.12 (ident "base_config")))
+		(expr
+			(e-record @28.15-35.2
+				(fields
+					(record-field (label "data")
+						(value
+							(e-lookup-local @29.11-29.21
+								(p-assign @10.1-10.11 (ident "empty_list")))))
+					(record-field (label "metadata")
+						(value
+							(e-record @30.15-34.6
 								(fields
-									(field (name "data")
-										(e-list @77.17-77.20
-											(elems
-												(e-int @77.18-77.19 (value "1")))))
-									(field (name "tag")
-										(e-string @77.27-77.35
-											(e-literal @77.28-77.34 (string "single"))))))
-							(e-record @78.9-78.38
+									(record-field (label "version")
+										(value
+											(e-lookup-local @31.18-31.21
+												(p-assign @4.1-4.4 (ident "num")))))
+									(record-field (label "ratio")
+										(value
+											(e-lookup-local @32.16-32.20
+												(p-assign @5.1-5.5 (ident "frac")))))
+									(record-field (label "description")
+										(value
+											(e-lookup-local @33.22-33.25
+												(p-assign @6.1-6.4 (ident "str")))))))))))))
+	(def
+		(pattern
+			(p-assign @38.1-38.8 (ident "config1")))
+		(expr
+			(e-record @38.11-46.2
+				(fields
+					(record-field (label "data")
+						(value
+							(e-list @39.11-39.26
+								(elems
+									(e-int @39.12-39.13 (value "1"))
+									(e-int @39.15-39.16 (value "2"))
+									(e-int @39.18-39.19 (value "3"))
+									(e-int @39.21-39.22 (value "4"))
+									(e-int @39.24-39.25 (value "5"))))))
+					(record-field (label "metadata")
+						(value
+							(e-record @40.15-44.6
 								(fields
-									(field (name "data")
-										(e-list @78.17-78.23
-											(elems
-												(e-int @78.18-78.19 (value "1"))
-												(e-int @78.21-78.22 (value "2")))))
-									(field (name "tag")
-										(e-string @78.30-78.36
-											(e-literal @78.31-78.35 (string "ints"))))))
-							(e-record @79.9-79.41
+									(record-field (label "version")
+										(value
+											(e-lookup-local @41.18-41.21
+												(p-assign @4.1-4.4 (ident "num")))))
+									(record-field (label "ratio")
+										(value
+											(e-lookup-local @42.16-42.20
+												(p-assign @5.1-5.5 (ident "frac")))))
+									(record-field (label "description")
+										(value
+											(e-lookup-local @43.22-43.25
+												(p-assign @6.1-6.4 (ident "str")))))))))
+					(record-field (label "name")
+						(value
+							(e-string @45.11-45.21
+								(e-literal @45.12-45.20 (string "integers")))))))))
+	(def
+		(pattern
+			(p-assign @48.1-48.8 (ident "config2")))
+		(expr
+			(e-record @48.11-56.2
+				(fields
+					(record-field (label "data")
+						(value
+							(e-list @49.11-49.40
+								(elems
+									(e-string @49.12-49.19
+										(e-literal @49.13-49.18 (string "apple")))
+									(e-string @49.21-49.29
+										(e-literal @49.22-49.28 (string "banana")))
+									(e-string @49.31-49.39
+										(e-literal @49.32-49.38 (string "cherry")))))))
+					(record-field (label "metadata")
+						(value
+							(e-record @50.15-54.6
 								(fields
-									(field (name "data")
-										(e-list @79.17-79.26
-											(elems
-												(e-int @79.18-79.19 (value "1"))
-												(e-int @79.21-79.22 (value "2"))
-												(e-int @79.24-79.25 (value "3")))))
-									(field (name "tag")
-										(e-string @79.33-79.39
-											(e-literal @79.34-79.38 (string "more"))))))))))))
-	(d-let
-		(p-assign @84.1-84.9 (ident "compute1"))
-		(e-binop @84.12-84.20 (op "add")
-			(e-lookup-local @84.12-84.15
-				(p-assign @4.1-4.4 (ident "num")))
-			(e-int @84.18-84.20 (value "10"))))
-	(d-let
-		(p-assign @85.1-85.9 (ident "compute2"))
-		(e-binop @85.12-85.19 (op "mul")
-			(e-lookup-local @85.12-85.15
-				(p-assign @4.1-4.4 (ident "num")))
-			(e-int @85.18-85.19 (value "2"))))
-	(d-let
-		(p-assign @86.1-86.9 (ident "compute3"))
-		(e-list @86.12-86.22
-			(elems
-				(e-lookup-local @86.13-86.16
-					(p-assign @4.1-4.4 (ident "num")))
-				(e-lookup-local @86.18-86.21
+									(record-field (label "version")
+										(value
+											(e-lookup-local @51.18-51.21
+												(p-assign @4.1-4.4 (ident "num")))))
+									(record-field (label "ratio")
+										(value
+											(e-lookup-local @52.16-52.20
+												(p-assign @5.1-5.5 (ident "frac")))))
+									(record-field (label "description")
+										(value
+											(e-lookup-local @53.22-53.25
+												(p-assign @6.1-6.4 (ident "str")))))))))
+					(record-field (label "name")
+						(value
+							(e-string @55.11-55.19
+								(e-literal @55.12-55.18 (string "fruits")))))))))
+	(def
+		(pattern
+			(p-assign @59.1-59.15 (ident "make_container")))
+		(expr
+			(e-lambda @59.18-59.54
+				(args
+					(p-assign @59.19-59.22 (ident "val")))
+				(e-record @59.24-59.54
+					(fields
+						(record-field (label "value")
+							(value
+								(e-lookup-local @59.33-59.36
+									(p-assign @59.19-59.22 (ident "val")))))
+						(record-field (label "wrapper")
+							(value
+								(e-list @59.47-59.52
+									(elems
+										(e-lookup-local @59.48-59.51
+											(p-assign @59.19-59.22 (ident "val"))))))))))))
+	(def
+		(pattern
+			(p-assign @60.1-60.11 (ident "container1")))
+		(expr
+			(e-call @60.14-60.33
+				(e-lookup-local @60.14-60.28
+					(p-assign @59.1-59.15 (ident "make_container")))
+				(e-lookup-local @60.29-60.32
 					(p-assign @4.1-4.4 (ident "num"))))))
-	(d-let
-		(p-assign @87.1-87.9 (ident "compute4"))
-		(e-record @87.12-87.59
-			(fields
-				(field (name "base")
-					(e-lookup-local @87.20-87.23
-						(p-assign @4.1-4.4 (ident "num"))))
-				(field (name "derived")
-					(e-list @87.34-87.57
-						(elems
-							(e-lookup-local @87.35-87.38
-								(p-assign @4.1-4.4 (ident "num")))
-							(e-binop @87.40-87.47 (op "add")
-								(e-lookup-local @87.40-87.43
-									(p-assign @4.1-4.4 (ident "num")))
-								(e-int @87.46-87.47 (value "1")))
-							(e-binop @87.49-87.56 (op "add")
-								(e-lookup-local @87.49-87.52
-									(p-assign @4.1-4.4 (ident "num")))
-								(e-int @87.55-87.56 (value "2")))))))))
-	(d-let
-		(p-assign @90.1-90.6 (ident "mixed"))
-		(e-record @90.9-103.2
-			(fields
-				(field (name "numbers")
-					(e-record @91.14-91.59
-						(fields
-							(field (name "value")
-								(e-lookup-local @91.23-91.26
-									(p-assign @4.1-4.4 (ident "num"))))
-							(field (name "list")
-								(e-list @91.34-91.44
-									(elems
-										(e-lookup-local @91.35-91.38
-											(p-assign @4.1-4.4 (ident "num")))
-										(e-lookup-local @91.40-91.43
-											(p-assign @4.1-4.4 (ident "num"))))))
-							(field (name "float")
-								(e-lookup-local @91.53-91.57
-									(p-assign @5.1-5.5 (ident "frac")))))))
-				(field (name "strings")
-					(e-record @92.14-92.46
-						(fields
-							(field (name "value")
-								(e-lookup-local @92.23-92.26
-									(p-assign @6.1-6.4 (ident "str"))))
-							(field (name "list")
-								(e-list @92.34-92.44
-									(elems
-										(e-lookup-local @92.35-92.38
-											(p-assign @6.1-6.4 (ident "str")))
-										(e-lookup-local @92.40-92.43
-											(p-assign @6.1-6.4 (ident "str")))))))))
-				(field (name "empty_lists")
-					(e-record @93.18-97.6
-						(fields
-							(field (name "raw")
-								(e-lookup-local @94.14-94.24
-									(p-assign @10.1-10.11 (ident "empty_list"))))
-							(field (name "in_list")
-								(e-list @95.18-95.30
-									(elems
-										(e-lookup-local @95.19-95.29
-											(p-assign @10.1-10.11 (ident "empty_list"))))))
-							(field (name "in_record")
-								(e-record @96.20-96.40
-									(fields
-										(field (name "data")
-											(e-lookup-local @96.28-96.38
-												(p-assign @10.1-10.11 (ident "empty_list"))))))))))
-				(field (name "computations")
-					(e-record @98.19-102.6
-						(fields
-							(field (name "from_num")
-								(e-binop @99.19-99.28 (op "mul")
-									(e-lookup-local @99.19-99.22
+	(def
+		(pattern
+			(p-assign @61.1-61.11 (ident "container2")))
+		(expr
+			(e-call @61.14-61.33
+				(e-lookup-local @61.14-61.28
+					(p-assign @59.1-59.15 (ident "make_container")))
+				(e-lookup-local @61.29-61.32
+					(p-assign @6.1-6.4 (ident "str"))))))
+	(def
+		(pattern
+			(p-assign @62.1-62.11 (ident "container3")))
+		(expr
+			(e-call @62.14-62.34
+				(e-lookup-local @62.14-62.28
+					(p-assign @59.1-59.15 (ident "make_container")))
+				(e-lookup-local @62.29-62.33
+					(p-assign @5.1-5.5 (ident "frac"))))))
+	(def
+		(pattern
+			(p-assign @65.1-65.5 (ident "deep")))
+		(expr
+			(e-record @65.8-81.2
+				(fields
+					(record-field (label "level1")
+						(value
+							(e-record @66.13-75.6
+								(fields
+									(record-field (label "level2")
+										(value
+											(e-record @67.17-73.10
+												(fields
+													(record-field (label "level3")
+														(value
+															(e-record @68.21-71.14
+																(fields
+																	(record-field (label "data")
+																		(value
+																			(e-lookup-local @69.23-69.33
+																				(p-assign @10.1-10.11 (ident "empty_list")))))
+																	(record-field (label "value")
+																		(value
+																			(e-lookup-local @70.24-70.27
+																				(p-assign @4.1-4.4 (ident "num")))))))))
+													(record-field (label "items")
+														(value
+															(e-list @72.20-72.43
+																(elems
+																	(e-lookup-local @72.21-72.24
+																		(p-assign @4.1-4.4 (ident "num")))
+																	(e-binop @72.26-72.33 (op "mul")
+																		(e-lookup-local @72.26-72.29
+																			(p-assign @4.1-4.4 (ident "num")))
+																		(e-int @72.32-72.33 (value "2")))
+																	(e-binop @72.35-72.42 (op "mul")
+																		(e-lookup-local @72.35-72.38
+																			(p-assign @4.1-4.4 (ident "num")))
+																		(e-int @72.41-72.42 (value "3")))))))))))
+									(record-field (label "collection")
+										(value
+											(e-lookup-local @74.21-74.31
+												(p-assign @10.1-10.11 (ident "empty_list")))))))))
+					(record-field (label "results")
+						(value
+							(e-list @76.14-80.6
+								(elems
+									(e-record @77.9-77.37
+										(fields
+											(record-field (label "data")
+												(value
+													(e-list @77.17-77.20
+														(elems
+															(e-int @77.18-77.19 (value "1"))))))
+											(record-field (label "tag")
+												(value
+													(e-string @77.27-77.35
+														(e-literal @77.28-77.34 (string "single")))))))
+									(e-record @78.9-78.38
+										(fields
+											(record-field (label "data")
+												(value
+													(e-list @78.17-78.23
+														(elems
+															(e-int @78.18-78.19 (value "1"))
+															(e-int @78.21-78.22 (value "2"))))))
+											(record-field (label "tag")
+												(value
+													(e-string @78.30-78.36
+														(e-literal @78.31-78.35 (string "ints")))))))
+									(e-record @79.9-79.41
+										(fields
+											(record-field (label "data")
+												(value
+													(e-list @79.17-79.26
+														(elems
+															(e-int @79.18-79.19 (value "1"))
+															(e-int @79.21-79.22 (value "2"))
+															(e-int @79.24-79.25 (value "3"))))))
+											(record-field (label "tag")
+												(value
+													(e-string @79.33-79.39
+														(e-literal @79.34-79.38 (string "more")))))))))))))))
+	(def
+		(pattern
+			(p-assign @84.1-84.9 (ident "compute1")))
+		(expr
+			(e-binop @84.12-84.20 (op "add")
+				(e-lookup-local @84.12-84.15
+					(p-assign @4.1-4.4 (ident "num")))
+				(e-int @84.18-84.20 (value "10")))))
+	(def
+		(pattern
+			(p-assign @85.1-85.9 (ident "compute2")))
+		(expr
+			(e-binop @85.12-85.19 (op "mul")
+				(e-lookup-local @85.12-85.15
+					(p-assign @4.1-4.4 (ident "num")))
+				(e-int @85.18-85.19 (value "2")))))
+	(def
+		(pattern
+			(p-assign @86.1-86.9 (ident "compute3")))
+		(expr
+			(e-list @86.12-86.22
+				(elems
+					(e-lookup-local @86.13-86.16
+						(p-assign @4.1-4.4 (ident "num")))
+					(e-lookup-local @86.18-86.21
+						(p-assign @4.1-4.4 (ident "num")))))))
+	(def
+		(pattern
+			(p-assign @87.1-87.9 (ident "compute4")))
+		(expr
+			(e-record @87.12-87.59
+				(fields
+					(record-field (label "base")
+						(value
+							(e-lookup-local @87.20-87.23
+								(p-assign @4.1-4.4 (ident "num")))))
+					(record-field (label "derived")
+						(value
+							(e-list @87.34-87.57
+								(elems
+									(e-lookup-local @87.35-87.38
 										(p-assign @4.1-4.4 (ident "num")))
-									(e-int @99.25-99.28 (value "100"))))
-							(field (name "from_frac")
-								(e-binop @100.20-100.31 (op "mul")
-									(e-lookup-local @100.20-100.24
-										(p-assign @5.1-5.5 (ident "frac")))
-									(e-dec-small @100.27-100.31 (numerator "100") (denominator-power-of-ten "1") (value "10"))))
-							(field (name "list_from_num")
-								(e-list @101.24-101.39
-									(elems
-										(e-lookup-local @101.25-101.28
+									(e-binop @87.40-87.47 (op "add")
+										(e-lookup-local @87.40-87.43
 											(p-assign @4.1-4.4 (ident "num")))
-										(e-lookup-local @101.30-101.33
+										(e-int @87.46-87.47 (value "1")))
+									(e-binop @87.49-87.56 (op "add")
+										(e-lookup-local @87.49-87.52
 											(p-assign @4.1-4.4 (ident "num")))
-										(e-lookup-local @101.35-101.38
-											(p-assign @4.1-4.4 (ident "num"))))))))))))
-	(d-let
-		(p-assign @105.1-105.5 (ident "main"))
-		(e-lambda @105.8-108.2
-			(args
-				(p-underscore @105.9-105.10))
-			(e-block @105.12-108.2
-				(e-binop @107.5-107.26 (op "add")
-					(e-dot-access @107.5-107.21 (field "value")
-						(receiver
-							(e-lookup-local @107.5-107.15
-								(p-assign @60.1-60.11 (ident "container1")))))
-					(e-int @107.24-107.26 (value "10")))))))
+										(e-int @87.55-87.56 (value "2")))))))))))
+	(def
+		(pattern
+			(p-assign @90.1-90.6 (ident "mixed")))
+		(expr
+			(e-record @90.9-103.2
+				(fields
+					(record-field (label "numbers")
+						(value
+							(e-record @91.14-91.59
+								(fields
+									(record-field (label "value")
+										(value
+											(e-lookup-local @91.23-91.26
+												(p-assign @4.1-4.4 (ident "num")))))
+									(record-field (label "list")
+										(value
+											(e-list @91.34-91.44
+												(elems
+													(e-lookup-local @91.35-91.38
+														(p-assign @4.1-4.4 (ident "num")))
+													(e-lookup-local @91.40-91.43
+														(p-assign @4.1-4.4 (ident "num")))))))
+									(record-field (label "float")
+										(value
+											(e-lookup-local @91.53-91.57
+												(p-assign @5.1-5.5 (ident "frac")))))))))
+					(record-field (label "strings")
+						(value
+							(e-record @92.14-92.46
+								(fields
+									(record-field (label "value")
+										(value
+											(e-lookup-local @92.23-92.26
+												(p-assign @6.1-6.4 (ident "str")))))
+									(record-field (label "list")
+										(value
+											(e-list @92.34-92.44
+												(elems
+													(e-lookup-local @92.35-92.38
+														(p-assign @6.1-6.4 (ident "str")))
+													(e-lookup-local @92.40-92.43
+														(p-assign @6.1-6.4 (ident "str")))))))))))
+					(record-field (label "empty_lists")
+						(value
+							(e-record @93.18-97.6
+								(fields
+									(record-field (label "raw")
+										(value
+											(e-lookup-local @94.14-94.24
+												(p-assign @10.1-10.11 (ident "empty_list")))))
+									(record-field (label "in_list")
+										(value
+											(e-list @95.18-95.30
+												(elems
+													(e-lookup-local @95.19-95.29
+														(p-assign @10.1-10.11 (ident "empty_list")))))))
+									(record-field (label "in_record")
+										(value
+											(e-record @96.20-96.40
+												(fields
+													(record-field (label "data")
+														(value
+															(e-lookup-local @96.28-96.38
+																(p-assign @10.1-10.11 (ident "empty_list")))))))))))))
+					(record-field (label "computations")
+						(value
+							(e-record @98.19-102.6
+								(fields
+									(record-field (label "from_num")
+										(value
+											(e-binop @99.19-99.28 (op "mul")
+												(e-lookup-local @99.19-99.22
+													(p-assign @4.1-4.4 (ident "num")))
+												(e-int @99.25-99.28 (value "100")))))
+									(record-field (label "from_frac")
+										(value
+											(e-binop @100.20-100.31 (op "mul")
+												(e-lookup-local @100.20-100.24
+													(p-assign @5.1-5.5 (ident "frac")))
+												(e-dec-small @100.27-100.31 (numerator "100") (denominator-power-of-ten "1") (value "10")))))
+									(record-field (label "list_from_num")
+										(value
+											(e-list @101.24-101.39
+												(elems
+													(e-lookup-local @101.25-101.28
+														(p-assign @4.1-4.4 (ident "num")))
+													(e-lookup-local @101.30-101.33
+														(p-assign @4.1-4.4 (ident "num")))
+													(e-lookup-local @101.35-101.38
+														(p-assign @4.1-4.4 (ident "num")))))))))))))))
+	(def
+		(pattern
+			(p-assign @105.1-105.5 (ident "main")))
+		(expr
+			(e-lambda @105.8-108.2
+				(args
+					(p-underscore @105.9-105.10))
+				(e-block @105.12-108.2
+					(e-binop @107.5-107.26 (op "add")
+						(e-dot-access @107.5-107.21 (field "value")
+							(receiver
+								(e-lookup-local @107.5-107.15
+									(p-assign @60.1-60.11 (ident "container1")))))
+						(e-int @107.24-107.26 (value "10"))))))))
 ~~~
 # TYPES
 ~~~clojure

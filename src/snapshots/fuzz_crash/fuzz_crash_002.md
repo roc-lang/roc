@@ -27,24 +27,24 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:19:1:20
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:20:1:21
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:24:1:25
 LIST NOT CLOSED - fuzz_crash_002.md:1:25:1:25
-INVALID STATEMENT - fuzz_crash_002.md:1:5:1:6
-INVALID STATEMENT - fuzz_crash_002.md:1:6:1:7
-INVALID STATEMENT - fuzz_crash_002.md:1:7:1:8
-INVALID STATEMENT - fuzz_crash_002.md:1:8:1:9
-INVALID STATEMENT - fuzz_crash_002.md:1:9:1:10
-INVALID STATEMENT - fuzz_crash_002.md:1:10:1:11
-INVALID STATEMENT - fuzz_crash_002.md:1:11:1:12
-INVALID STATEMENT - fuzz_crash_002.md:1:12:1:13
-INVALID STATEMENT - fuzz_crash_002.md:1:13:1:14
-INVALID STATEMENT - fuzz_crash_002.md:1:14:1:15
-INVALID STATEMENT - fuzz_crash_002.md:1:15:1:16
-INVALID STATEMENT - fuzz_crash_002.md:1:16:1:17
-INVALID STATEMENT - fuzz_crash_002.md:1:17:1:18
-INVALID STATEMENT - fuzz_crash_002.md:1:18:1:19
-INVALID STATEMENT - fuzz_crash_002.md:1:19:1:20
-INVALID STATEMENT - fuzz_crash_002.md:1:20:1:21
-INVALID STATEMENT - fuzz_crash_002.md:1:21:1:23
-INVALID STATEMENT - fuzz_crash_002.md:1:23:1:25
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_002.md:0:0:0:0
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -279,203 +279,113 @@ modu:;::::::::::::::le[%
                         
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_002.md:1:5:1:6:**
-```roc
-modu:;::::::::::::::le[%
-```
-    ^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
-**fuzz_crash_002.md:1:6:1:7:**
-```roc
-modu:;::::::::::::::le[%
-```
-     ^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_002.md:1:7:1:8:**
-```roc
-modu:;::::::::::::::le[%
-```
-      ^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
-**fuzz_crash_002.md:1:8:1:9:**
-```roc
-modu:;::::::::::::::le[%
-```
-       ^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_002.md:1:9:1:10:**
-```roc
-modu:;::::::::::::::le[%
-```
-        ^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
-**fuzz_crash_002.md:1:10:1:11:**
-```roc
-modu:;::::::::::::::le[%
-```
-         ^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_002.md:1:11:1:12:**
-```roc
-modu:;::::::::::::::le[%
-```
-          ^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
-**fuzz_crash_002.md:1:12:1:13:**
-```roc
-modu:;::::::::::::::le[%
-```
-           ^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_002.md:1:13:1:14:**
-```roc
-modu:;::::::::::::::le[%
-```
-            ^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
-**fuzz_crash_002.md:1:14:1:15:**
-```roc
-modu:;::::::::::::::le[%
-```
-             ^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_002.md:1:15:1:16:**
-```roc
-modu:;::::::::::::::le[%
-```
-              ^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
-**fuzz_crash_002.md:1:16:1:17:**
-```roc
-modu:;::::::::::::::le[%
-```
-               ^
+**COMPILER DIAGNOSTIC**
 
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:17:1:18:**
-```roc
-modu:;::::::::::::::le[%
-```
-                ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:18:1:19:**
-```roc
-modu:;::::::::::::::le[%
-```
-                 ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:19:1:20:**
-```roc
-modu:;::::::::::::::le[%
-```
-                  ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:20:1:21:**
-```roc
-modu:;::::::::::::::le[%
-```
-                   ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:21:1:23:**
-```roc
-modu:;::::::::::::::le[%
-```
-                    ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:23:1:25:**
-```roc
-modu:;::::::::::::::le[%
-```
-                      ^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_002.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

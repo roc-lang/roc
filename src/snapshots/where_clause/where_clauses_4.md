@@ -16,14 +16,15 @@ decodeThings : List(List(U8)) -> List(a)
 EXPOSED BUT NOT DEFINED - where_clauses_4.md:1:9:1:15
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
-The module header says that `decode` is exposed, but it is not defined anywhere in this module.
 
+**Exposed but Not Defined**
+'decode' is exposed in the module header but is not defined:
 **where_clauses_4.md:1:9:1:15:**
 ```roc
 module [decode]
 ```
         ^^^^^^
-You can fix this by either defining `decode` in this module, or by removing it from the list of exposed values.
+
 
 # TOKENS
 ~~~zig
@@ -65,7 +66,7 @@ NO CHANGE
 (can-ir
 	(s-import @3.1-3.32 (module "Decode")
 		(exposes
-			(exposed (name "Decode") (wildcard false))))
+			(exposed-item (name "Decode") (is_wildcard false))))
 	(s-type-anno @5.1-6.24 (name "decodeThings")
 		(ty-fn @5.16-5.41 (effectful false)
 			(ty-apply @5.16-5.30 (symbol "List")
@@ -74,8 +75,11 @@ NO CHANGE
 			(ty-apply @5.34-5.41 (symbol "List")
 				(ty-var @5.39-5.40 (name "a"))))
 		(where
-			(alias @6.8-6.24 (module-of "a") (ident "Decode"))))
-	(ext-decl @6.8-6.24 (ident "module(a).Decode") (kind "type")))
+			(where-clause
+				(type "mod-alias")
+				(var-name "a")
+				(alias-name "Decode"))))
+	(external-decl (qualified-name "module(a).Decode") (module-name "module(a)") (local-name "Decode") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

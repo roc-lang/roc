@@ -13,9 +13,9 @@ vavar t= '
 # EXPECTED
 MISSING HEADER - fuzz_crash_031.md:1:1:1:5
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
-INVALID STATEMENT - fuzz_crash_031.md:1:6:1:8
-INVALID STATEMENT - fuzz_crash_031.md:4:1:4:6
-UNKNOWN OPERATOR - fuzz_crash_031.md:4:10:4:11
+COMPILER DIAGNOSTIC - fuzz_crash_031.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_031.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_031.md:0:0:0:0
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -45,38 +45,23 @@ vavar t= '
          ^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_031.md:1:6:1:8:**
-```roc
-mule []
-```
-     ^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_031.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_031.md:0:0:0:0**
 
-**fuzz_crash_031.md:4:1:4:6:**
-```roc
-vavar t= '
-```
-^^^^^
+**COMPILER DIAGNOSTIC**
 
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-
-**fuzz_crash_031.md:4:10:4:11:**
-```roc
-vavar t= '
-```
-         ^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+**Compiler Diagnostic**
+Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation.
+**fuzz_crash_031.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -105,9 +90,11 @@ t =
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.7-4.8 (ident "t"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+	(def
+		(pattern
+			(p-assign @4.7-4.8 (ident "t")))
+		(expr
+			(e-runtime-error (tag "expr_not_canonicalized")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -115,5 +102,5 @@ t =
 	(defs
 		(patt @4.7-4.8 (type "Error")))
 	(expressions
-		(expr @4.10-4.11 (type "Error"))))
+		(expr @1.1-1.1 (type "Error"))))
 ~~~

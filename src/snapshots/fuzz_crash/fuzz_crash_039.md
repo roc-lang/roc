@@ -11,7 +11,7 @@ module[}('
 # EXPECTED
 MISMATCHED BRACE - :0:0:0:0
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_039.md:1:10:1:11
-INVALID STATEMENT - fuzz_crash_039.md:1:9:2:2
+COMPILER DIAGNOSTIC - fuzz_crash_039.md:0:0:0:0
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.
@@ -28,16 +28,11 @@ module[}('
          ^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_039.md:1:9:2:2:**
-```roc
-module[}('
-)
-```
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_039.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

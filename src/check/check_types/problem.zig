@@ -275,14 +275,7 @@ pub const ReportBuilder = struct {
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(self.source, region.start.offset, region.end.offset) catch |err| switch (err) {
-            else => base.RegionInfo{
-                .start_line_idx = 0,
-                .start_col_idx = 0,
-                .end_line_idx = 0,
-                .end_col_idx = 0,
-            },
-        };
+        const region_info = self.module_env.calcRegionInfo(region.*);
 
         try report.document.addReflowingText("This expression is used in an unexpected way:");
         try report.document.addLineBreak();
@@ -1047,7 +1040,7 @@ pub const ReportBuilder = struct {
         std.debug.assert(actual_content.structure == .tag_union);
         std.debug.assert(actual_content.structure.tag_union.tags.len() == 1);
         const actual_tag = self.snapshots.tags.get(actual_content.structure.tag_union.tags.start);
-        const tag_name_bytes = self.can_ir.env.idents.getText(actual_tag.name);
+        const tag_name_bytes = self.can_ir.idents.getText(actual_tag.name);
         const tag_name = try report.addOwnedString(tag_name_bytes);
 
         // Add description
@@ -1133,14 +1126,7 @@ pub const ReportBuilder = struct {
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(self.source, region.start.offset, region.end.offset) catch |err| switch (err) {
-            else => base.RegionInfo{
-                .start_line_idx = 0,
-                .start_col_idx = 0,
-                .end_line_idx = 0,
-                .end_col_idx = 0,
-            },
-        };
+        const region_info = self.module_env.calcRegionInfo(region.*);
         const literal_text = self.source[region.start.offset..region.end.offset];
 
         try report.document.addReflowingText("The number ");
@@ -1180,14 +1166,7 @@ pub const ReportBuilder = struct {
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(self.source, region.start.offset, region.end.offset) catch |err| switch (err) {
-            else => base.RegionInfo{
-                .start_line_idx = 0,
-                .start_col_idx = 0,
-                .end_line_idx = 0,
-                .end_col_idx = 0,
-            },
-        };
+        const region_info = self.module_env.calcRegionInfo(region.*);
         const literal_text = self.source[region.start.offset..region.end.offset];
 
         try report.document.addReflowingText("The number ");

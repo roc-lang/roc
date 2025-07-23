@@ -32,10 +32,9 @@ UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
 UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable `unused_var` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_unused_var` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'unused_var' is defined but never used:
 **unused_vars_block.md:5:5:5:15:**
 ```roc
     unused_var = 42
@@ -44,10 +43,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `another_unused` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_another_unused` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'another_unused' is defined but never used:
 **unused_vars_block.md:11:5:11:19:**
 ```roc
     another_unused = "hello"
@@ -138,33 +136,35 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @3.1-3.6 (ident "main!"))
-		(e-lambda @3.9-21.2
-			(args
-				(p-underscore @3.10-3.11))
-			(e-block @3.13-21.2
-				(s-let @5.5-5.20
-					(p-assign @5.5-5.15 (ident "unused_var"))
-					(e-int @5.18-5.20 (value "42")))
-				(s-let @8.5-8.19
-					(p-assign @8.5-8.13 (ident "used_var"))
-					(e-int @8.16-8.19 (value "100")))
-				(s-let @11.5-11.29
-					(p-assign @11.5-11.19 (ident "another_unused"))
-					(e-string @11.22-11.29
-						(e-literal @11.23-11.28 (string "hello"))))
-				(s-let @14.5-16.10
-					(p-assign @14.5-14.13 (ident "_ignored"))
-					(e-int @16.7-16.10 (value "999")))
-				(s-let @19.5-19.27
-					(p-assign @19.5-19.11 (ident "result"))
-					(e-binop @19.14-19.27 (op "add")
-						(e-lookup-local @19.14-19.22
-							(p-assign @8.5-8.13 (ident "used_var")))
-						(e-int @19.25-19.27 (value "10"))))
-				(e-lookup-local @20.5-20.11
-					(p-assign @19.5-19.11 (ident "result")))))))
+	(def
+		(pattern
+			(p-assign @3.1-3.6 (ident "main!")))
+		(expr
+			(e-lambda @3.9-21.2
+				(args
+					(p-underscore @3.10-3.11))
+				(e-block @3.13-21.2
+					(s-let @5.5-5.20
+						(p-assign @5.5-5.15 (ident "unused_var"))
+						(e-int @5.18-5.20 (value "42")))
+					(s-let @8.5-8.19
+						(p-assign @8.5-8.13 (ident "used_var"))
+						(e-int @8.16-8.19 (value "100")))
+					(s-let @11.5-11.29
+						(p-assign @11.5-11.19 (ident "another_unused"))
+						(e-string @11.22-11.29
+							(e-literal @11.23-11.28 (string "hello"))))
+					(s-let @14.5-16.10
+						(p-assign @14.5-14.13 (ident "_ignored"))
+						(e-int @16.7-16.10 (value "999")))
+					(s-let @19.5-19.27
+						(p-assign @19.5-19.11 (ident "result"))
+						(e-binop @19.14-19.27 (op "add")
+							(e-lookup-local @19.14-19.22
+								(p-assign @8.5-8.13 (ident "used_var")))
+							(e-int @19.25-19.27 (value "10"))))
+					(e-lookup-local @20.5-20.11
+						(p-assign @19.5-19.11 (ident "result"))))))))
 ~~~
 # TYPES
 ~~~clojure

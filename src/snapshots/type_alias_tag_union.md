@@ -134,54 +134,65 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @8.1-8.8 (ident "process"))
-		(e-lambda @8.11-8.32
-			(args
-				(p-assign @8.12-8.19 (ident "_result")))
-			(e-string @8.21-8.32
-				(e-literal @8.22-8.31 (string "processed"))))
-		(annotation @8.1-8.8
-			(declared-type
-				(ty-fn @7.11-7.36 (effectful false)
-					(ty-apply @7.11-7.29 (symbol "MyResult")
-						(ty @7.20-7.23 (name "Str"))
-						(ty @7.25-7.28 (name "I32")))
-					(ty @7.33-7.36 (name "Str"))))))
-	(d-let
-		(p-assign @15.1-15.10 (ident "getString"))
-		(e-lambda @15.13-15.29
-			(args
-				(p-assign @15.14-15.18 (ident "_opt")))
-			(e-string @15.20-15.29
-				(e-literal @15.21-15.28 (string "default"))))
-		(annotation @15.1-15.10
-			(declared-type
-				(ty-fn @14.13-14.31 (effectful false)
-					(ty-apply @14.13-14.24 (symbol "Option")
-						(ty @14.20-14.23 (name "Str")))
-					(ty @14.28-14.31 (name "Str"))))))
-	(d-let
-		(p-assign @18.1-18.10 (ident "getNumber"))
-		(e-lambda @18.13-18.21
-			(args
-				(p-assign @18.14-18.18 (ident "_opt")))
-			(e-int @18.20-18.21 (value "0")))
-		(annotation @18.1-18.10
-			(declared-type
-				(ty-fn @17.13-17.31 (effectful false)
-					(ty-apply @17.13-17.24 (symbol "Option")
-						(ty @17.20-17.23 (name "I32")))
-					(ty @17.28-17.31 (name "I32"))))))
-	(d-let
-		(p-assign @20.1-20.6 (ident "main!"))
-		(e-lambda @20.9-20.15
-			(args
-				(p-underscore @20.10-20.11))
-			(e-empty_record @20.13-20.15)))
+	(def
+		(pattern
+			(p-assign @8.1-8.8 (ident "process")))
+		(expr
+			(e-lambda @8.11-8.32
+				(args
+					(p-assign @8.12-8.19 (ident "_result")))
+				(e-string @8.21-8.32
+					(e-literal @8.22-8.31 (string "processed")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @7.11-7.36 (effectful false)
+						(ty-apply @7.11-7.29 (symbol "MyResult")
+							(ty @7.20-7.23 (name "Str"))
+							(ty @7.25-7.28 (name "I32")))
+						(ty @7.33-7.36 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @15.1-15.10 (ident "getString")))
+		(expr
+			(e-lambda @15.13-15.29
+				(args
+					(p-assign @15.14-15.18 (ident "_opt")))
+				(e-string @15.20-15.29
+					(e-literal @15.21-15.28 (string "default")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @14.13-14.31 (effectful false)
+						(ty-apply @14.13-14.24 (symbol "Option")
+							(ty @14.20-14.23 (name "Str")))
+						(ty @14.28-14.31 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @18.1-18.10 (ident "getNumber")))
+		(expr
+			(e-lambda @18.13-18.21
+				(args
+					(p-assign @18.14-18.18 (ident "_opt")))
+				(e-int @18.20-18.21 (value "0"))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @17.13-17.31 (effectful false)
+						(ty-apply @17.13-17.24 (symbol "Option")
+							(ty @17.20-17.23 (name "I32")))
+						(ty @17.28-17.31 (name "I32")))))))
+	(def
+		(pattern
+			(p-assign @20.1-20.6 (ident "main!")))
+		(expr
+			(e-lambda @20.9-20.15
+				(args
+					(p-underscore @20.10-20.11))
+				(e-empty_record @20.13-20.15))))
 	(s-alias-decl @4.1-4.41
-		(ty-header @4.1-4.18 (name "MyResult")
-			(ty-args
+		(type-header (name "MyResult")
+			(args
 				(ty-var @4.10-4.12 (name "ok"))
 				(ty-var @4.14-4.17 (name "err"))))
 		(ty-tag-union @4.21-4.41
@@ -190,8 +201,8 @@ NO CHANGE
 			(ty-apply @4.32-4.40 (symbol "Bad")
 				(ty-var @4.36-4.39 (name "err")))))
 	(s-alias-decl @11.1-11.28
-		(ty-header @11.1-11.10 (name "Option")
-			(ty-args
+		(type-header (name "Option")
+			(args
 				(ty-var @11.8-11.9 (name "a"))))
 		(ty-tag-union @11.13-11.28
 			(ty-apply @11.14-11.21 (symbol "Some")
@@ -208,13 +219,13 @@ NO CHANGE
 		(patt @20.1-20.6 (type "_arg -> {}")))
 	(type_decls
 		(alias @4.1-4.41 (type "MyResult(ok, err)")
-			(ty-header @4.1-4.18 (name "MyResult")
-				(ty-args
+			(type-header (name "MyResult")
+				(args
 					(ty-var @4.10-4.12 (name "ok"))
 					(ty-var @4.14-4.17 (name "err")))))
 		(alias @11.1-11.28 (type "Option(a)")
-			(ty-header @11.1-11.10 (name "Option")
-				(ty-args
+			(type-header (name "Option")
+				(args
 					(ty-var @11.8-11.9 (name "a"))))))
 	(expressions
 		(expr @8.11-8.32 (type "MyResult(Str, I32) -> Str"))

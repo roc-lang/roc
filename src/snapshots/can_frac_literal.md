@@ -45,15 +45,21 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @3.1-3.2 (ident "x"))
-		(e-dec-small @3.5-3.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
-	(d-let
-		(p-assign @4.1-4.2 (ident "y"))
-		(e-frac-f64 @4.5-4.12 (value "1.23e45")))
-	(d-let
-		(p-assign @5.1-5.2 (ident "z"))
-		(e-dec-small @5.5-5.8 (numerator "5") (denominator-power-of-ten "1") (value "0.5"))))
+	(def
+		(pattern
+			(p-assign @3.1-3.2 (ident "x")))
+		(expr
+			(e-dec-small @3.5-3.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
+	(def
+		(pattern
+			(p-assign @4.1-4.2 (ident "y")))
+		(expr
+			(e-frac-f64 @4.5-4.12 (value "1.23e45"))))
+	(def
+		(pattern
+			(p-assign @5.1-5.2 (ident "z")))
+		(expr
+			(e-dec-small @5.5-5.8 (numerator "5") (denominator-power-of-ten "1") (value "0.5")))))
 ~~~
 # TYPES
 ~~~clojure

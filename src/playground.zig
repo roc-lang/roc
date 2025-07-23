@@ -777,7 +777,7 @@ fn writeTypeInfoResponse(response_buffer: []u8, data: CompilerStageData, message
 /// Find type information for an identifier at a specific byte position
 fn findTypeInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier: []const u8) !?[]const u8 {
     const cir = data.can_ir.?;
-    const gpa = cir.env.gpa;
+    const gpa = cir.gpa;
 
     // Create TypeWriter for converting types to strings
     var type_writer = compile.type_writers.TypeWriter.init(gpa, cir.env) catch return null;
@@ -799,7 +799,7 @@ fn findTypeInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier:
             switch (pattern) {
                 .assign => |assign| {
                     // Get the identifier text
-                    const ident_text = cir.env.idents.getText(assign.ident);
+                    const ident_text = cir.idents.getText(assign.ident);
 
                     // Check if this matches our target identifier
                     if (std.mem.eql(u8, ident_text, identifier)) {

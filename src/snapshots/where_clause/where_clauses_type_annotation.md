@@ -54,31 +54,34 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.8 (ident "convert"))
-		(e-lambda @4.11-4.23
-			(args
-				(p-assign @4.12-4.13 (ident "a")))
-			(e-dot-access @4.15-4.23 (field "to_b")
-				(receiver
-					(e-lookup-local @4.15-4.16
-						(p-assign @4.12-4.13 (ident "a"))))
-				(args)))
-		(annotation @4.1-4.8
-			(declared-type
-				(ty-fn @3.11-3.17 (effectful false)
-					(ty-var @3.11-3.12 (name "a"))
-					(ty-var @3.16-3.17 (name "b"))))))
+	(def
+		(pattern
+			(p-assign @4.1-4.8 (ident "convert")))
+		(expr
+			(e-lambda @4.11-4.23
+				(args
+					(p-assign @4.12-4.13 (ident "a")))
+				(e-dot-access @4.15-4.23 (field "to_b")
+					(receiver
+						(e-lookup-local @4.15-4.16
+							(p-assign @4.12-4.13 (ident "a"))))
+					(args))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @3.11-3.17 (effectful false)
+						(ty-var @3.11-3.12 (name "a"))
+						(ty-var @3.16-3.17 (name "b")))))))
 	(s-type-anno @3.1-3.47 (name "convert")
 		(ty-fn @3.11-3.17 (effectful false)
 			(ty-var @3.11-3.12 (name "a"))
 			(ty-var @3.16-3.17 (name "b")))
 		(where
-			(method @3.24-3.47 (module-of "a") (ident "to_b")
-				(args
-					(ty-var @3.41-3.42 (name "a")))
-				(ty-var @3.46-3.47 (name "b")))))
-	(ext-decl @3.24-3.47 (ident "module(a).to_b") (kind "value")))
+			(where-clause
+				(type "mod-method")
+				(var-name "a")
+				(method-name "to_b"))))
+	(external-decl (qualified-name "module(a).to_b") (module-name "module(a)") (local-name "to_b") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

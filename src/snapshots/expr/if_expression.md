@@ -11,9 +11,9 @@ if x > 5 "big" else "small"
 UNDEFINED VARIABLE - if_expression.md:1:4:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'x' is not defined:
 **if_expression.md:1:4:1:5:**
 ```roc
 if x > 5 "big" else "small"

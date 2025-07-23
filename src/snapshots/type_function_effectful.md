@@ -15,10 +15,10 @@ main! = |_| {}
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:25:3:27
 UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:31:3:33
-INVALID STATEMENT - type_function_effectful.md:3:25:3:27
-INVALID STATEMENT - type_function_effectful.md:3:28:3:30
-INVALID STATEMENT - type_function_effectful.md:3:31:3:33
-INVALID STATEMENT - type_function_effectful.md:3:34:3:36
+COMPILER DIAGNOSTIC - type_function_effectful.md:0:0:0:0
+COMPILER DIAGNOSTIC - type_function_effectful.md:0:0:0:0
+COMPILER DIAGNOSTIC - type_function_effectful.md:0:0:0:0
+COMPILER DIAGNOSTIC - type_function_effectful.md:0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **->** is not expected in an expression.
@@ -44,49 +44,29 @@ runEffect! : (_a => _b) -> _a => _b
                               ^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**type_function_effectful.md:3:25:3:27:**
-```roc
-runEffect! : (_a => _b) -> _a => _b
-```
-                        ^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**type_function_effectful.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**type_function_effectful.md:0:0:0:0**
 
-**type_function_effectful.md:3:28:3:30:**
-```roc
-runEffect! : (_a => _b) -> _a => _b
-```
-                           ^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**type_function_effectful.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**type_function_effectful.md:3:31:3:33:**
-```roc
-runEffect! : (_a => _b) -> _a => _b
-```
-                              ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_function_effectful.md:3:34:3:36:**
-```roc
-runEffect! : (_a => _b) -> _a => _b
-```
-                                 ^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**type_function_effectful.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -148,23 +128,27 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.11 (ident "runEffect!"))
-		(e-lambda @4.14-4.29
-			(args
-				(p-assign @4.15-4.18 (ident "fn!"))
-				(p-assign @4.20-4.21 (ident "x")))
-			(e-call @4.23-4.29
-				(e-lookup-local @4.23-4.26
-					(p-assign @4.15-4.18 (ident "fn!")))
-				(e-lookup-local @4.27-4.28
-					(p-assign @4.20-4.21 (ident "x"))))))
-	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.15
-			(args
-				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+	(def
+		(pattern
+			(p-assign @4.1-4.11 (ident "runEffect!")))
+		(expr
+			(e-lambda @4.14-4.29
+				(args
+					(p-assign @4.15-4.18 (ident "fn!"))
+					(p-assign @4.20-4.21 (ident "x")))
+				(e-call @4.23-4.29
+					(e-lookup-local @4.23-4.26
+						(p-assign @4.15-4.18 (ident "fn!")))
+					(e-lookup-local @4.27-4.28
+						(p-assign @4.20-4.21 (ident "x")))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.6 (ident "main!")))
+		(expr
+			(e-lambda @6.9-6.15
+				(args
+					(p-underscore @6.10-6.11))
+				(e-empty_record @6.13-6.15)))))
 ~~~
 # TYPES
 ~~~clojure

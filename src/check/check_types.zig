@@ -135,7 +135,7 @@ pub fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result
     defer trace.end();
 
     return try unifier.unify(
-        self.cir.env,
+        self.cir,
         self.types,
         &self.problems,
         &self.snapshots,
@@ -398,7 +398,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             const module_idx = @intFromEnum(e.module_idx);
             if (module_idx < self.other_modules.len) {
                 const other_module_cir = self.other_modules[module_idx];
-                const other_module_env = &other_module_cir.env;
+                const other_module_env = other_module_cir;
 
                 // The idx of the expression in the other module
                 const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(e.target_node_idx));
@@ -421,7 +421,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         self.types,
                         imported_var,
                         &other_module_env.*.idents,
-                        &self.cir.env.idents,
+                        @constCast(&self.cir.idents),
                         self.gpa,
                     );
                     try self.import_cache.put(self.gpa, cache_key, new_copy);
@@ -619,7 +619,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     const field_names = record_fields.items(.name);
                     const field_vars = record_fields.items(.var_);
                     for (field_names, field_vars) |type_field_name, type_field_var| {
-                        if (self.cir.env.idents.identsHaveSameText(type_field_name, field.name)) {
+                        if (self.cir.idents.identsHaveSameText(type_field_name, field.name)) {
                             // Extract the type variable from the field value expression
                             // Different expression types store their type variables in different places
                             const field_expr_type_var = @as(Var, @enumFromInt(@intFromEnum(field.value)));
@@ -779,7 +779,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         if (dot_access.args) |args_span| {
                             // Method call with arguments
                             // Get the origin module path
-                            const origin_module_path = self.cir.env.idents.getText(nominal.origin_module);
+                            const origin_module_path = self.cir.idents.getText(nominal.origin_module);
 
                             // Find which imported module matches this path
                             var origin_module_idx: ?CIR.Import.Idx = null;
@@ -801,10 +801,10 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
                             if (origin_module) |module| {
                                 // Look up the method in the origin module's exports
-                                const method_name_str = self.cir.env.idents.getText(dot_access.field_name);
+                                const method_name_str = self.cir.idents.getText(dot_access.field_name);
 
                                 // Search through the module's exposed nodes
-                                if (module.env.exposed_nodes.get(method_name_str)) |node_idx| {
+                                if (module.exposed_nodes.get(method_name_str)) |node_idx| {
                                     // Found the method!
                                     const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(node_idx));
 
@@ -820,11 +820,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                                         // Copy the method's type from the origin module to our type store
                                         const source_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
                                         const new_copy = try copy_import.copyImportedType(
-                                            &module.env.types,
+                                            &module.types,
                                             self.types,
                                             source_var,
-                                            &module.env.idents,
-                                            &self.cir.env.idents,
+                                            &module.idents,
+                                            @constCast(&self.cir.idents),
                                             self.gpa,
                                         );
                                         try self.import_cache.put(self.gpa, cache_key, new_copy);

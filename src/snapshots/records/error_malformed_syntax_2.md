@@ -10,7 +10,7 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - error_malformed_syntax_2.md:1:8:1:10
 UNEXPECTED TOKEN IN EXPRESSION - error_malformed_syntax_2.md:1:10:1:11
-MALFORMED TYPE - :0:0:0:0
+COMPILER DIAGNOSTIC - error_malformed_syntax_2.md:0:0:0:0
 UNUSED VARIABLE - error_malformed_syntax_2.md:1:12:1:16
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -37,14 +37,16 @@ Here is the problematic code:
          ^
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
+**error_malformed_syntax_2.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `name` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'name' is defined but never used:
 **error_malformed_syntax_2.md:1:12:1:16:**
 ```roc
 { age: 42, name = "Alice" }
@@ -80,7 +82,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:6),OpColon(1:6-1:7),Int(1:8-1:10),Comma(1:10
 ~~~clojure
 (e-block @1.1-1.28
 	(s-type-anno @1.3-1.10 (name "age")
-		(ty-malformed @1.8-1.10))
+		(ty-malformed @1.1-1.1))
 	(s-let @1.12-1.26
 		(p-assign @1.12-1.16 (ident "name"))
 		(e-string @1.19-1.26

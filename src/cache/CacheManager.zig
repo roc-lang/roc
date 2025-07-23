@@ -132,7 +132,7 @@ pub const CacheManager = struct {
             return;
         };
 
-        const cache_data = Cache.create(self.allocator, process_result.cir.env, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
+        const cache_data = Cache.create(self.allocator, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }
@@ -276,16 +276,9 @@ pub const CacheManager = struct {
         const module_env = try self.allocator.create(ModuleEnv);
         module_env.* = restored.module_env;
 
-        const cir = try self.allocator.create(CIR);
-
-        // Copy CIR but don't copy the invalid env pointer
-        cir.* = restored.cir;
-        // Immediately fix env pointer to point to our heap-allocated module_env
-        cir.env = module_env;
-
-        // Create ProcessResult with proper ownership
+        // Create ProcessResult with proper ownership - ModuleEnv is now CIR
         const process_result = coordinate_simple.ProcessResult{
-            .cir = cir,
+            .cir = module_env,
             .source = source,
             .own_source = true,
             .reports = reports,

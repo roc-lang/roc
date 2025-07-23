@@ -37,10 +37,9 @@ parser = Json.Parser.Advanced.NonExistent.create
 UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable `req` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'req' is defined but never used:
 **can_import_unresolved_qualified.md:15:19:15:22:**
 ```roc
 processRequest = |req| Http.Server.defaultResponse
@@ -145,72 +144,88 @@ parser = Json.create
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @7.1-7.5 (ident "main"))
-		(e-lookup-external @7.8-7.31
-			(module-idx "0")
-			(target-node-idx "0")))
-	(d-let
-		(p-assign @11.1-11.10 (ident "parseData"))
-		(e-lambda @11.13-11.40
-			(args
-				(p-assign @11.14-11.18 (ident "data")))
-			(e-call @11.20-11.40
-				(e-lookup-external @11.20-11.34
+	(def
+		(pattern
+			(p-assign @7.1-7.5 (ident "main")))
+		(expr
+			(e-lookup-external @7.8-7.31
+				(module-idx "0")
+				(target-node-idx "0"))))
+	(def
+		(pattern
+			(p-assign @11.1-11.10 (ident "parseData")))
+		(expr
+			(e-lambda @11.13-11.40
+				(args
+					(p-assign @11.14-11.18 (ident "data")))
+				(e-call @11.20-11.40
+					(e-lookup-external @11.20-11.34
+						(module-idx "0")
+						(target-node-idx "0"))
+					(e-lookup-local @11.35-11.39
+						(p-assign @11.14-11.18 (ident "data"))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @10.13-10.36 (effectful false)
+						(ty-lookup-external @10.13-10.29
+							(external-decl @10.13-10.29 (qualified-name "Json.InvalidType") (module-name "Json") (local-name "InvalidType") (kind "type")))
+						(ty @10.33-10.36 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @15.1-15.15 (ident "processRequest")))
+		(expr
+			(e-lambda @15.18-15.51
+				(args
+					(p-assign @15.19-15.22 (ident "req")))
+				(e-lookup-external @15.24-15.51
+					(module-idx "1")
+					(target-node-idx "0"))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @14.18-14.61 (effectful false)
+						(ty-lookup-external @14.18-14.37
+							(external-decl @14.18-14.37 (qualified-name "Http.Server.Request") (module-name "Http.Server") (local-name "Request") (kind "type")))
+						(ty-lookup-external @14.41-14.61
+							(external-decl @14.41-14.61 (qualified-name "Http.Server.Response") (module-name "Http.Server") (local-name "Response") (kind "type"))))))))
+	(def
+		(pattern
+			(p-assign @18.1-18.7 (ident "result")))
+		(expr
+			(e-call @18.10-18.28
+				(e-lookup-external @18.10-18.20
 					(module-idx "0")
 					(target-node-idx "0"))
-				(e-lookup-local @11.35-11.39
-					(p-assign @11.14-11.18 (ident "data")))))
-		(annotation @11.1-11.10
-			(declared-type
-				(ty-fn @10.13-10.36 (effectful false)
-					(ty-lookup-external @10.13-10.29
-						(ext-decl @10.13-10.29 (ident "Json.InvalidType") (kind "type")))
-					(ty @10.33-10.36 (name "Str"))))))
-	(d-let
-		(p-assign @15.1-15.15 (ident "processRequest"))
-		(e-lambda @15.18-15.51
-			(args
-				(p-assign @15.19-15.22 (ident "req")))
-			(e-lookup-external @15.24-15.51
+				(e-string @18.21-18.27
+					(e-literal @18.22-18.26 (string "test"))))))
+	(def
+		(pattern
+			(p-assign @21.1-21.7 (ident "config")))
+		(expr
+			(e-lookup-local @21.10-21.31
+				(p-assign @21.1-21.7 (ident "config")))))
+	(def
+		(pattern
+			(p-assign @24.1-24.7 (ident "client")))
+		(expr
+			(e-lookup-external @24.10-24.28
 				(module-idx "1")
-				(target-node-idx "0")))
-		(annotation @15.1-15.15
-			(declared-type
-				(ty-fn @14.18-14.61 (effectful false)
-					(ty-lookup-external @14.18-14.37
-						(ext-decl @14.18-14.37 (ident "Http.Server.Request") (kind "type")))
-					(ty-lookup-external @14.41-14.61
-						(ext-decl @14.41-14.61 (ident "Http.Server.Response") (kind "type")))))))
-	(d-let
-		(p-assign @18.1-18.7 (ident "result"))
-		(e-call @18.10-18.28
-			(e-lookup-external @18.10-18.20
+				(target-node-idx "0"))))
+	(def
+		(pattern
+			(p-assign @27.1-27.7 (ident "parser")))
+		(expr
+			(e-lookup-external @27.10-27.49
 				(module-idx "0")
-				(target-node-idx "0"))
-			(e-string @18.21-18.27
-				(e-literal @18.22-18.26 (string "test")))))
-	(d-let
-		(p-assign @21.1-21.7 (ident "config"))
-		(e-lookup-local @21.10-21.31
-			(p-assign @21.1-21.7 (ident "config"))))
-	(d-let
-		(p-assign @24.1-24.7 (ident "client"))
-		(e-lookup-external @24.10-24.28
-			(module-idx "1")
-			(target-node-idx "0")))
-	(d-let
-		(p-assign @27.1-27.7 (ident "parser"))
-		(e-lookup-external @27.10-27.49
-			(module-idx "0")
-			(target-node-idx "0")))
+				(target-node-idx "0"))))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.27 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes))
-	(ext-decl @10.13-10.29 (ident "Json.InvalidType") (kind "type"))
-	(ext-decl @14.18-14.37 (ident "Http.Server.Request") (kind "type"))
-	(ext-decl @14.41-14.61 (ident "Http.Server.Response") (kind "type")))
+	(external-decl (qualified-name "Json.InvalidType") (module-name "Json") (local-name "InvalidType") (kind "type"))
+	(external-decl (qualified-name "Http.Server.Request") (module-name "Http.Server") (local-name "Request") (kind "type"))
+	(external-decl (qualified-name "Http.Server.Response") (module-name "Http.Server") (local-name "Response") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

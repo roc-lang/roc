@@ -16,9 +16,9 @@ match data {
 UNDEFINED VARIABLE - mixed_pattern_scoping.md:1:7:1:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `data` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'data' is not defined:
 **mixed_pattern_scoping.md:1:7:1:11:**
 ```roc
 match data {

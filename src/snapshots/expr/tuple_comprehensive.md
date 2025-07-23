@@ -26,7 +26,7 @@ type=expr
 }
 ~~~
 # EXPECTED
-EMPTY TUPLE NOT ALLOWED - tuple_comprehensive.md:9:10:9:12
+COMPILER DIAGNOSTIC - tuple_comprehensive.md:0:0:0:0
 UNUSED VARIABLE - tuple_comprehensive.md:16:2:16:13
 UNUSED VARIABLE - tuple_comprehensive.md:10:2:10:8
 UNUSED VARIABLE - tuple_comprehensive.md:11:2:11:6
@@ -35,21 +35,16 @@ UNUSED VARIABLE - tuple_comprehensive.md:12:2:12:8
 UNUSED VARIABLE - tuple_comprehensive.md:14:2:14:7
 UNUSED VARIABLE - tuple_comprehensive.md:15:2:15:11
 # PROBLEMS
-**EMPTY TUPLE NOT ALLOWED**
-I am part way through parsing this tuple, but it is empty:
-**tuple_comprehensive.md:9:10:9:12:**
-```roc
-	empty = ()
-```
-         ^^
+**COMPILER DIAGNOSTIC**
 
-If you want to represent nothing, try using an empty record: `{}`.
+**Compiler Diagnostic**
+Diagnostic type 'empty_tuple' is not yet handled in report generation.
+**tuple_comprehensive.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `with_lambda` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_with_lambda` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'with_lambda' is defined but never used:
 **tuple_comprehensive.md:16:2:16:13:**
 ```roc
 	with_lambda = (|n| n + 1, 42)
@@ -58,10 +53,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `single` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_single` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'single' is defined but never used:
 **tuple_comprehensive.md:10:2:10:8:**
 ```roc
 	single = (42)
@@ -70,10 +64,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `pair` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_pair` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'pair' is defined but never used:
 **tuple_comprehensive.md:11:2:11:6:**
 ```roc
 	pair = (1, 2)
@@ -82,10 +75,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `nested` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_nested` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'nested' is defined but never used:
 **tuple_comprehensive.md:13:2:13:8:**
 ```roc
 	nested = ((1, 2), (3, 4))
@@ -94,10 +86,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `triple` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_triple` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'triple' is defined but never used:
 **tuple_comprehensive.md:12:2:12:8:**
 ```roc
 	triple = (1, "hello", True)
@@ -106,10 +97,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `mixed` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_mixed` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'mixed' is defined but never used:
 **tuple_comprehensive.md:14:2:14:7:**
 ```roc
 	mixed = (add_one(5), "world", [1, 2, 3])
@@ -118,10 +108,9 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `with_vars` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_with_vars` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'with_vars' is defined but never used:
 **tuple_comprehensive.md:15:2:15:11:**
 ```roc
 	with_vars = (x, y, z)

@@ -17,50 +17,44 @@ foo = 42
 MyType : [A, B, C]
 ~~~
 # EXPECTED
-REDUNDANT EXPOSED - exposed_not_impl.md:1:38:1:41
-REDUNDANT EXPOSED - exposed_not_impl.md:1:43:1:49
+COMPILER DIAGNOSTIC - exposed_not_impl.md:0:0:0:0
+COMPILER DIAGNOSTIC - exposed_not_impl.md:0:0:0:0
 EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:14:1:17
 EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:27:1:36
 # PROBLEMS
-**REDUNDANT EXPOSED**
-The identifier `foo` is exposed multiple times in the module header.
+**COMPILER DIAGNOSTIC**
 
-**exposed_not_impl.md:1:38:1:41:**
-```roc
-module [foo, bar, MyType, OtherType, foo, MyType]
-```
-                                     ^^^
-You can remove the duplicate entry to fix this warning.
+**Compiler Diagnostic**
+Diagnostic type 'redundant_exposed' is not yet handled in report generation.
+**exposed_not_impl.md:0:0:0:0**
 
-**REDUNDANT EXPOSED**
-The identifier `MyType` is exposed multiple times in the module header.
+**COMPILER DIAGNOSTIC**
 
-**exposed_not_impl.md:1:43:1:49:**
-```roc
-module [foo, bar, MyType, OtherType, foo, MyType]
-```
-                                          ^^^^^^
-You can remove the duplicate entry to fix this warning.
+**Compiler Diagnostic**
+Diagnostic type 'redundant_exposed' is not yet handled in report generation.
+**exposed_not_impl.md:0:0:0:0**
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `bar` is exposed, but it is not defined anywhere in this module.
 
+**Exposed but Not Defined**
+'bar' is exposed in the module header but is not defined:
 **exposed_not_impl.md:1:14:1:17:**
 ```roc
 module [foo, bar, MyType, OtherType, foo, MyType]
 ```
              ^^^
-You can fix this by either defining `bar` in this module, or by removing it from the list of exposed values.
+
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `OtherType` is exposed, but it is not defined anywhere in this module.
 
+**Exposed but Not Defined**
+'OtherType' is exposed in the module header but is not defined:
 **exposed_not_impl.md:1:27:1:36:**
 ```roc
 module [foo, bar, MyType, OtherType, foo, MyType]
 ```
                           ^^^^^^^^^
-You can fix this by either defining `OtherType` in this module, or by removing it from the list of exposed values.
+
 
 # TOKENS
 ~~~zig
@@ -102,11 +96,13 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @8.1-8.4 (ident "foo"))
-		(e-int @8.7-8.9 (value "42")))
+	(def
+		(pattern
+			(p-assign @8.1-8.4 (ident "foo")))
+		(expr
+			(e-int @8.7-8.9 (value "42"))))
 	(s-alias-decl @10.1-10.19
-		(ty-header @10.1-10.7 (name "MyType"))
+		(type-header (name "MyType"))
 		(ty-tag-union @10.10-10.19
 			(ty @10.11-10.12 (name "A"))
 			(ty @10.14-10.15 (name "B"))
@@ -119,7 +115,7 @@ NO CHANGE
 		(patt @8.1-8.4 (type "Num(_size)")))
 	(type_decls
 		(alias @10.1-10.19 (type "MyType")
-			(ty-header @10.1-10.7 (name "MyType"))))
+			(type-header (name "MyType"))))
 	(expressions
 		(expr @8.7-8.9 (type "Num(_size)"))))
 ~~~

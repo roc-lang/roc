@@ -17,7 +17,7 @@ MISMATCHED BRACE - :0:0:0:0
 UNCLOSED STRING - :0:0:0:0
 MISSING HEADER - fuzz_crash_010.md:1:1:1:2
 PARSE ERROR - fuzz_crash_010.md:5:35:5:35
-INVALID STATEMENT - fuzz_crash_010.md:1:2:2:7
+COMPILER DIAGNOSTIC - fuzz_crash_010.md:0:0:0:0
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -56,16 +56,11 @@ Here is the problematic code:
                                   
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_010.md:1:2:2:7:**
-```roc
-H{o,
-    ]
-```
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_010.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -98,10 +93,12 @@ foo =
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @3.1-3.4 (ident "foo"))
-		(e-string @5.5-5.35
-			(e-literal @5.6-5.35 (string "on        (string 'onmo %')))")))))
+	(def
+		(pattern
+			(p-assign @3.1-3.4 (ident "foo")))
+		(expr
+			(e-string @5.5-5.35
+				(e-literal @5.6-5.35 (string "on        (string 'onmo %')))"))))))
 ~~~
 # TYPES
 ~~~clojure

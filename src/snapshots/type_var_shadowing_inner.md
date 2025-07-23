@@ -95,39 +95,44 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.6 (ident "outer"))
-		(e-lambda @4.9-9.2
-			(args
-				(p-assign @4.10-4.11 (ident "x")))
-			(e-block @4.13-9.2
-				(s-type-anno @5.5-5.19 (name "inner")
-					(ty-fn @5.13-5.19 (effectful false)
-						(ty-var @5.13-5.14 (name "a"))
-						(ty-var @5.18-5.19 (name "a"))))
-				(s-let @6.5-6.18
-					(p-assign @6.5-6.10 (ident "inner"))
-					(e-lambda @6.13-6.18
-						(args
-							(p-assign @6.14-6.15 (ident "y")))
-						(e-lookup-local @6.17-6.18
-							(p-assign @6.14-6.15 (ident "y")))))
-				(e-call @8.5-8.13
-					(e-lookup-local @8.5-8.10
-						(p-assign @6.5-6.10 (ident "inner")))
-					(e-lookup-local @8.11-8.12
-						(p-assign @4.10-4.11 (ident "x"))))))
-		(annotation @4.1-4.6
-			(declared-type
-				(ty-fn @3.9-3.15 (effectful false)
-					(ty-var @3.9-3.10 (name "a"))
-					(ty-var @3.14-3.15 (name "a"))))))
-	(d-let
-		(p-assign @11.1-11.6 (ident "main!"))
-		(e-lambda @11.9-11.15
-			(args
-				(p-underscore @11.10-11.11))
-			(e-empty_record @11.13-11.15))))
+	(def
+		(pattern
+			(p-assign @4.1-4.6 (ident "outer")))
+		(expr
+			(e-lambda @4.9-9.2
+				(args
+					(p-assign @4.10-4.11 (ident "x")))
+				(e-block @4.13-9.2
+					(s-type-anno @5.5-5.19 (name "inner")
+						(ty-fn @5.13-5.19 (effectful false)
+							(ty-var @5.13-5.14 (name "a"))
+							(ty-var @5.18-5.19 (name "a"))))
+					(s-let @6.5-6.18
+						(p-assign @6.5-6.10 (ident "inner"))
+						(e-lambda @6.13-6.18
+							(args
+								(p-assign @6.14-6.15 (ident "y")))
+							(e-lookup-local @6.17-6.18
+								(p-assign @6.14-6.15 (ident "y")))))
+					(e-call @8.5-8.13
+						(e-lookup-local @8.5-8.10
+							(p-assign @6.5-6.10 (ident "inner")))
+						(e-lookup-local @8.11-8.12
+							(p-assign @4.10-4.11 (ident "x")))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @3.9-3.15 (effectful false)
+						(ty-var @3.9-3.10 (name "a"))
+						(ty-var @3.14-3.15 (name "a")))))))
+	(def
+		(pattern
+			(p-assign @11.1-11.6 (ident "main!")))
+		(expr
+			(e-lambda @11.9-11.15
+				(args
+					(p-underscore @11.10-11.11))
+				(e-empty_record @11.13-11.15)))))
 ~~~
 # TYPES
 ~~~clojure

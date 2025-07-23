@@ -19,26 +19,26 @@ UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
+**Underscore in Type Alias**
+Underscore cannot be used in a type alias declaration:
 **usage_test.md:1:1:1:1:**
 ```roc
 module []
 ```
 
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
+**Underscore in Type Alias**
+Underscore cannot be used in a type alias declaration:
 **usage_test.md:1:1:1:1:**
 ```roc
 module []
 ```
 
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 # TOKENS
 ~~~zig
@@ -75,17 +75,20 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @8.1-8.6 (ident "value"))
-		(e-int @8.9-8.11 (value "42"))
-		(annotation @8.1-8.6
-			(declared-type
-				(ty @7.9-7.17 (name "UsedType")))))
+	(def
+		(pattern
+			(p-assign @8.1-8.6 (ident "value")))
+		(expr
+			(e-int @8.9-8.11 (value "42")))
+		(annotation
+			(annotation
+				(type-anno
+					(ty @7.9-7.17 (name "UsedType"))))))
 	(s-nominal-decl @3.1-3.16
-		(ty-header @3.1-3.11 (name "UnusedType"))
+		(type-header (name "UnusedType"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @5.1-5.14
-		(ty-header @5.1-5.9 (name "UsedType"))
+		(type-header (name "UsedType"))
 		(ty-underscore @1.1-1.1)))
 ~~~
 # TYPES
@@ -95,9 +98,9 @@ NO CHANGE
 		(patt @8.1-8.6 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.16 (type "Error")
-			(ty-header @3.1-3.11 (name "UnusedType")))
+			(type-header (name "UnusedType")))
 		(nominal @5.1-5.14 (type "Error")
-			(ty-header @5.1-5.9 (name "UsedType"))))
+			(type-header (name "UsedType"))))
 	(expressions
 		(expr @8.9-8.11 (type "Error"))))
 ~~~

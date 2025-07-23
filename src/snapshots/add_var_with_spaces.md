@@ -13,9 +13,9 @@ add2 = x +      2
 UNDEFINED VARIABLE - add_var_with_spaces.md:3:8:3:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'x' is not defined:
 **add_var_with_spaces.md:3:8:3:9:**
 ```roc
 add2 = x +      2
@@ -51,11 +51,13 @@ add2 = x + 2
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @3.1-3.5 (ident "add2"))
-		(e-binop @3.8-3.18 (op "add")
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-int @3.17-3.18 (value "2")))))
+	(def
+		(pattern
+			(p-assign @3.1-3.5 (ident "add2")))
+		(expr
+			(e-binop @3.8-3.18 (op "add")
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-int @3.17-3.18 (value "2"))))))
 ~~~
 # TYPES
 ~~~clojure

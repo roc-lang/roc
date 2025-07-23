@@ -36,10 +36,9 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'x' is defined but never used:
 **type_var_underscore_conventions.md:5:15:5:16:**
 ```roc
 single_use = |x| "hello"
@@ -48,10 +47,9 @@ single_use = |x| "hello"
 
 
 **UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'list' is defined but never used:
 **type_var_underscore_conventions.md:9:22:9:26:**
 ```roc
 ending_underscore = |list| "default"
@@ -60,10 +58,9 @@ ending_underscore = |list| "default"
 
 
 **UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'x' is defined but never used:
 **type_var_underscore_conventions.md:13:17:13:18:**
 ```roc
 combo_single = |x| "combo"
@@ -72,10 +69,9 @@ combo_single = |x| "combo"
 
 
 **UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'x' is defined but never used:
 **type_var_underscore_conventions.md:17:17:17:18:**
 ```roc
 valid_single = |x| "valid"
@@ -84,10 +80,9 @@ valid_single = |x| "valid"
 
 
 **UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'x' is defined but never used:
 **type_var_underscore_conventions.md:22:9:22:10:**
 ```roc
 main = |x| "done"
@@ -205,80 +200,97 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @5.1-5.11 (ident "single_use"))
-		(e-lambda @5.14-5.25
-			(args
-				(p-assign @5.15-5.16 (ident "x")))
-			(e-string @5.18-5.25
-				(e-literal @5.19-5.24 (string "hello"))))
-		(annotation @5.1-5.11
-			(declared-type
-				(ty-fn @4.14-4.31 (effectful false)
-					(ty-apply @4.14-4.24 (symbol "List")
-						(ty-var @4.19-4.23 (name "elem")))
-					(ty @4.28-4.31 (name "Str"))))))
-	(d-let
-		(p-assign @9.1-9.18 (ident "ending_underscore"))
-		(e-lambda @9.21-9.37
-			(args
-				(p-assign @9.22-9.26 (ident "list")))
-			(e-string @9.28-9.37
-				(e-literal @9.29-9.36 (string "default"))))
-		(annotation @9.1-9.18
-			(declared-type
-				(ty-fn @8.21-8.41 (effectful false)
-					(ty-apply @8.21-8.32 (symbol "List")
-						(ty-var @8.26-8.31 (name "elem_")))
-					(ty-var @8.36-8.41 (name "elem_"))))))
-	(d-let
-		(p-assign @13.1-13.13 (ident "combo_single"))
-		(e-lambda @13.16-13.27
-			(args
-				(p-assign @13.17-13.18 (ident "x")))
-			(e-string @13.20-13.27
-				(e-literal @13.21-13.26 (string "combo"))))
-		(annotation @13.1-13.13
-			(declared-type
-				(ty-fn @12.16-12.33 (effectful false)
-					(ty-apply @12.16-12.26 (symbol "List")
-						(ty-var @12.21-12.25 (name "bad_")))
-					(ty @12.30-12.33 (name "Str"))))))
-	(d-let
-		(p-assign @17.1-17.13 (ident "valid_single"))
-		(e-lambda @17.16-17.27
-			(args
-				(p-assign @17.17-17.18 (ident "x")))
-			(e-string @17.20-17.27
-				(e-literal @17.21-17.26 (string "valid"))))
-		(annotation @17.1-17.13
-			(declared-type
-				(ty-fn @16.16-16.34 (effectful false)
-					(ty-apply @16.16-16.27 (symbol "List")
-						(ty-var @16.21-16.26 (name "_elem")))
-					(ty @16.31-16.34 (name "Str"))))))
-	(d-let
-		(p-assign @20.1-20.12 (ident "valid_multi"))
-		(e-lambda @20.15-20.22
-			(args
-				(p-assign @20.16-20.17 (ident "x")))
-			(e-list @20.19-20.22
-				(elems
-					(e-lookup-local @20.20-20.21
-						(p-assign @20.16-20.17 (ident "x"))))))
-		(annotation @20.1-20.12
-			(declared-type
-				(ty-fn @19.15-19.33 (effectful false)
-					(ty-var @19.15-19.19 (name "elem"))
-					(ty-apply @19.23-19.33 (symbol "List")
-						(ty-var @19.28-19.32 (name "elem")))))))
-	(d-let
-		(p-assign @22.1-22.5 (ident "main"))
-		(e-lambda @22.8-22.18
-			(args
-				(p-assign @22.9-22.10 (ident "x")))
-			(e-string @22.12-22.18
-				(e-literal @22.13-22.17 (string "done"))))))
+	(def
+		(pattern
+			(p-assign @5.1-5.11 (ident "single_use")))
+		(expr
+			(e-lambda @5.14-5.25
+				(args
+					(p-assign @5.15-5.16 (ident "x")))
+				(e-string @5.18-5.25
+					(e-literal @5.19-5.24 (string "hello")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @4.14-4.31 (effectful false)
+						(ty-apply @4.14-4.24 (symbol "List")
+							(ty-var @4.19-4.23 (name "elem")))
+						(ty @4.28-4.31 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @9.1-9.18 (ident "ending_underscore")))
+		(expr
+			(e-lambda @9.21-9.37
+				(args
+					(p-assign @9.22-9.26 (ident "list")))
+				(e-string @9.28-9.37
+					(e-literal @9.29-9.36 (string "default")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @8.21-8.41 (effectful false)
+						(ty-apply @8.21-8.32 (symbol "List")
+							(ty-var @8.26-8.31 (name "elem_")))
+						(ty-var @8.36-8.41 (name "elem_")))))))
+	(def
+		(pattern
+			(p-assign @13.1-13.13 (ident "combo_single")))
+		(expr
+			(e-lambda @13.16-13.27
+				(args
+					(p-assign @13.17-13.18 (ident "x")))
+				(e-string @13.20-13.27
+					(e-literal @13.21-13.26 (string "combo")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @12.16-12.33 (effectful false)
+						(ty-apply @12.16-12.26 (symbol "List")
+							(ty-var @12.21-12.25 (name "bad_")))
+						(ty @12.30-12.33 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @17.1-17.13 (ident "valid_single")))
+		(expr
+			(e-lambda @17.16-17.27
+				(args
+					(p-assign @17.17-17.18 (ident "x")))
+				(e-string @17.20-17.27
+					(e-literal @17.21-17.26 (string "valid")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @16.16-16.34 (effectful false)
+						(ty-apply @16.16-16.27 (symbol "List")
+							(ty-var @16.21-16.26 (name "_elem")))
+						(ty @16.31-16.34 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @20.1-20.12 (ident "valid_multi")))
+		(expr
+			(e-lambda @20.15-20.22
+				(args
+					(p-assign @20.16-20.17 (ident "x")))
+				(e-list @20.19-20.22
+					(elems
+						(e-lookup-local @20.20-20.21
+							(p-assign @20.16-20.17 (ident "x")))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @19.15-19.33 (effectful false)
+						(ty-var @19.15-19.19 (name "elem"))
+						(ty-apply @19.23-19.33 (symbol "List")
+							(ty-var @19.28-19.32 (name "elem"))))))))
+	(def
+		(pattern
+			(p-assign @22.1-22.5 (ident "main")))
+		(expr
+			(e-lambda @22.8-22.18
+				(args
+					(p-assign @22.9-22.10 (ident "x")))
+				(e-string @22.12-22.18
+					(e-literal @22.13-22.17 (string "done")))))))
 ~~~
 # TYPES
 ~~~clojure

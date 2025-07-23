@@ -80,42 +80,47 @@ extract_age = |person| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.12 (ident "extract_age"))
-		(e-lambda @4.15-8.2
-			(args
-				(p-assign @4.16-4.22 (ident "person")))
-			(e-block @4.24-8.2
-				(s-let @5.5-5.21
-					(p-record-destructure @5.5-5.12
-						(destructs
-							(record-destruct @5.7-5.10 (label "age") (ident "age")
-								(required))))
-					(e-lookup-local @5.15-5.21
-						(p-assign @4.16-4.22 (ident "person"))))
-				(e-binop @7.2-7.31 (op "sub")
-					(e-binop @7.2-7.18 (op "add")
-						(e-dot-access @7.2-7.12 (field "a")
+	(def
+		(pattern
+			(p-assign @4.1-4.12 (ident "extract_age")))
+		(expr
+			(e-lambda @4.15-8.2
+				(args
+					(p-assign @4.16-4.22 (ident "person")))
+				(e-block @4.24-8.2
+					(s-let @5.5-5.21
+						(p-record-destructure @5.5-5.12
+							(destructs
+								(record-destruct @5.7-5.10 (label "age") (ident "age")
+									(required))))
+						(e-lookup-local @5.15-5.21
+							(p-assign @4.16-4.22 (ident "person"))))
+					(e-binop @7.2-7.31 (op "sub")
+						(e-binop @7.2-7.18 (op "add")
+							(e-dot-access @7.2-7.12 (field "a")
+								(receiver
+									(e-record @7.2-7.10
+										(fields
+											(record-field (label "a")
+												(value
+													(e-int @7.7-7.8 (value "0"))))))))
+							(e-lookup-local @7.15-7.18
+								(p-assign @5.7-5.10 (ident "age"))))
+						(e-dot-access @7.21-7.31 (field "a")
 							(receiver
-								(e-record @7.2-7.10
+								(e-record @7.21-7.29
 									(fields
-										(field (name "a")
-											(e-int @7.7-7.8 (value "0")))))))
-						(e-lookup-local @7.15-7.18
-							(p-assign @5.7-5.10 (ident "age"))))
-					(e-dot-access @7.21-7.31 (field "a")
-						(receiver
-							(e-record @7.21-7.29
-								(fields
-									(field (name "a")
-										(e-int @7.26-7.27 (value "0"))))))))))
-		(annotation @4.1-4.12
-			(declared-type
-				(ty-fn @3.15-3.35 (effectful false)
-					(ty-record @3.15-3.28
-						(field (field "age")
-							(ty @3.23-3.26 (name "U64"))))
-					(ty @3.32-3.35 (name "U64")))))))
+										(record-field (label "a")
+											(value
+												(e-int @7.26-7.27 (value "0"))))))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @3.15-3.35 (effectful false)
+						(ty-record @3.15-3.28
+							(field (field "age")
+								(ty @3.23-3.26 (name "U64"))))
+						(ty @3.32-3.35 (name "U64"))))))))
 ~~~
 # TYPES
 ~~~clojure

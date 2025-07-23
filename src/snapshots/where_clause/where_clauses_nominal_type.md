@@ -52,19 +52,19 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-nominal-decl @3.1-5.28
-		(ty-header @3.1-3.12 (name "Cache")
-			(ty-args
+		(type-header (name "Cache")
+			(args
 				(ty-var @3.7-3.8 (name "k"))
 				(ty-var @3.10-3.11 (name "v"))))
 		(ty-apply @3.16-3.28 (symbol "Dict")
 			(ty @3.21-3.24 (name "U64"))
 			(ty-var @3.26-3.27 (name "v")))
 		(where
-			(method @5.3-5.28 (module-of "k") (ident "hash")
-				(args
-					(ty-var @5.20-5.21 (name "k")))
-				(ty @5.25-5.28 (name "U64")))))
-	(ext-decl @5.3-5.28 (ident "module(k).hash") (kind "value")))
+			(where-clause
+				(type "mod-method")
+				(var-name "k")
+				(method-name "hash"))))
+	(external-decl (qualified-name "module(k).hash") (module-name "module(k)") (local-name "hash") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
@@ -72,8 +72,8 @@ NO CHANGE
 	(defs)
 	(type_decls
 		(nominal @3.1-5.28 (type "Error")
-			(ty-header @3.1-3.12 (name "Cache")
-				(ty-args
+			(type-header (name "Cache")
+				(args
 					(ty-var @3.7-3.8 (name "k"))
 					(ty-var @3.10-3.11 (name "v"))))))
 	(expressions))

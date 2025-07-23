@@ -61,152 +61,97 @@ combineResults = |jsonResult, httpStatus|
     }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - can_import_exposing_types.md:31:18:31:24
-UNDECLARED TYPE - can_import_exposing_types.md:32:18:32:24
-UNDECLARED TYPE - can_import_exposing_types.md:33:23:33:31
-UNDECLARED TYPE - can_import_exposing_types.md:8:27:8:32
-UNDECLARED TYPE - can_import_exposing_types.md:8:34:8:39
-UNDECLARED TYPE - can_import_exposing_types.md:12:17:12:24
-UNDECLARED TYPE - can_import_exposing_types.md:12:28:12:36
-UNDECLARED TYPE - can_import_exposing_types.md:22:15:22:21
-UNDECLARED TYPE - can_import_exposing_types.md:22:28:22:33
-UNDECLARED TYPE - can_import_exposing_types.md:22:50:22:55
-UNDECLARED TYPE - can_import_exposing_types.md:22:58:22:63
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
 UNDEFINED VARIABLE - can_import_exposing_types.md:24:5:24:16
-UNDECLARED TYPE - can_import_exposing_types.md:37:16:37:22
-UNDECLARED TYPE - can_import_exposing_types.md:41:18:41:26
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
 UNDEFINED VARIABLE - can_import_exposing_types.md:45:23:45:37
-UNDECLARED TYPE - can_import_exposing_types.md:49:25:49:30
-UNDECLARED TYPE - can_import_exposing_types.md:49:32:49:37
-UNDECLARED TYPE - can_import_exposing_types.md:49:40:49:46
-UNDECLARED TYPE - can_import_exposing_types.md:49:57:49:65
-UNDECLARED TYPE - can_import_exposing_types.md:49:67:49:72
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
+COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Config_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**can_import_exposing_types.md:31:18:31:24:**
-```roc
-    jsonConfig : Config,
-```
-                 ^^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**UNDECLARED TYPE**
-The type _Status_ is not declared in this scope.
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
-This type is referenced here:
-**can_import_exposing_types.md:32:18:32:24:**
-```roc
-    httpStatus : Status,
-```
-                 ^^^^^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
-**UNDECLARED TYPE**
-The type _Response_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**can_import_exposing_types.md:33:23:33:31:**
-```roc
-    defaultResponse : Response,
-```
-                      ^^^^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
-This type is referenced here:
-**can_import_exposing_types.md:8:27:8:32:**
-```roc
-parseJson : Str -> Result(Value, Error)
-```
-                          ^^^^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
-**UNDECLARED TYPE**
-The type _Error_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**can_import_exposing_types.md:8:34:8:39:**
-```roc
-parseJson : Str -> Result(Value, Error)
-```
-                                 ^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**UNDECLARED TYPE**
-The type _Request_ is not declared in this scope.
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
-This type is referenced here:
-**can_import_exposing_types.md:12:17:12:24:**
-```roc
-handleRequest : Request -> Response
-```
-                ^^^^^^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
-**UNDECLARED TYPE**
-The type _Response_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**can_import_exposing_types.md:12:28:12:36:**
-```roc
-handleRequest : Request -> Response
-```
-                           ^^^^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**UNDECLARED TYPE**
-The type _Config_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:22:15:22:21:**
-```roc
-processData : Config, List(Value) -> Result(List(Value), Error)
-```
-              ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:22:28:22:33:**
-```roc
-processData : Config, List(Value) -> Result(List(Value), Error)
-```
-                           ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:22:50:22:55:**
-```roc
-processData : Config, List(Value) -> Result(List(Value), Error)
-```
-                                                 ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Error_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:22:58:22:63:**
-```roc
-processData : Config, List(Value) -> Result(List(Value), Error)
-```
-                                                         ^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `mapTry` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'mapTry' is not defined:
 **can_import_exposing_types.md:24:5:24:16:**
 ```roc
     List.mapTry(
@@ -214,32 +159,22 @@ Is there an `import` or `exposing` missing up-top?
     ^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Config_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**can_import_exposing_types.md:37:16:37:22:**
-```roc
-createClient : Config -> Http.Client
-```
-               ^^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**UNDECLARED TYPE**
-The type _Response_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:41:18:41:26:**
-```roc
-handleResponse : Response -> Str
-```
-                 ^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `toString` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'toString' is not defined:
 **can_import_exposing_types.md:45:23:45:37:**
 ```roc
         Err(error) => Error.toString(error)
@@ -247,60 +182,35 @@ Is there an `import` or `exposing` missing up-top?
                       ^^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**can_import_exposing_types.md:49:25:49:30:**
-```roc
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-```
-                        ^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**UNDECLARED TYPE**
-The type _Error_ is not declared in this scope.
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
-This type is referenced here:
-**can_import_exposing_types.md:49:32:49:37:**
-```roc
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-```
-                               ^^^^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
-**UNDECLARED TYPE**
-The type _Status_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**can_import_exposing_types.md:49:40:49:46:**
-```roc
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-```
-                                       ^^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**UNDECLARED TYPE**
-The type _Response_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:49:57:49:65:**
-```roc
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-```
-                                                        ^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Error_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:49:67:49:72:**
-```roc
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-```
-                                                                  ^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**can_import_exposing_types.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -586,211 +496,231 @@ combineResults = |jsonResult, httpStatus|
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @9.1-9.10 (ident "parseJson"))
-		(e-lambda @9.13-9.38
-			(args
-				(p-assign @9.14-9.19 (ident "input")))
-			(e-call @9.21-9.38
-				(e-lookup-external @9.21-9.31
-					(module-idx "0")
-					(target-node-idx "0"))
-				(e-lookup-local @9.32-9.37
-					(p-assign @9.14-9.19 (ident "input")))))
-		(annotation @9.1-9.10
-			(declared-type
-				(ty-fn @8.13-8.40 (effectful false)
-					(ty @8.13-8.16 (name "Str"))
-					(ty-apply @8.20-8.40 (symbol "Result")
-						(ty @8.27-8.32 (name "Value"))
-						(ty @8.34-8.39 (name "Error")))))))
-	(d-let
-		(p-assign @13.1-13.14 (ident "handleRequest"))
-		(e-lambda @13.17-19.2
-			(args
-				(p-assign @13.18-13.21 (ident "req")))
-			(e-block @13.23-19.2
-				(s-let @14.5-14.35
-					(p-assign @14.5-14.11 (ident "result"))
-					(e-call @14.14-14.35
-						(e-lookup-external @14.14-14.25
-							(module-idx "0")
-							(target-node-idx "0"))
-						(e-dot-access @14.26-14.34 (field "body")
-							(receiver
-								(e-lookup-local @14.26-14.29
-									(p-assign @13.18-13.21 (ident "req")))))))
-				(e-match @15.5-18.6
-					(match @15.5-18.6
+	(def
+		(pattern
+			(p-assign @9.1-9.10 (ident "parseJson")))
+		(expr
+			(e-lambda @9.13-9.38
+				(args
+					(p-assign @9.14-9.19 (ident "input")))
+				(e-call @9.21-9.38
+					(e-lookup-external @9.21-9.31
+						(module-idx "0")
+						(target-node-idx "0"))
+					(e-lookup-local @9.32-9.37
+						(p-assign @9.14-9.19 (ident "input"))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @8.13-8.40 (effectful false)
+						(ty @8.13-8.16 (name "Str"))
+						(ty-apply @8.20-8.40 (symbol "Result")
+							(ty @8.27-8.32 (name "Value"))
+							(ty @8.34-8.39 (name "Error"))))))))
+	(def
+		(pattern
+			(p-assign @13.1-13.14 (ident "handleRequest")))
+		(expr
+			(e-lambda @13.17-19.2
+				(args
+					(p-assign @13.18-13.21 (ident "req")))
+				(e-block @13.23-19.2
+					(s-let @14.5-14.35
+						(p-assign @14.5-14.11 (ident "result"))
+						(e-call @14.14-14.35
+							(e-lookup-external @14.14-14.25
+								(module-idx "0")
+								(target-node-idx "0"))
+							(e-dot-access @14.26-14.34 (field "body")
+								(receiver
+									(e-lookup-local @14.26-14.29
+										(p-assign @13.18-13.21 (ident "req")))))))
+					(e-match @15.5-18.6
+						(match @15.5-18.6
+							(cond
+								(e-lookup-local @15.11-15.17
+									(p-assign @14.5-14.11 (ident "result"))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @16.9-16.18)))
+									(value
+										(e-call @16.22-16.36
+											(e-lookup-external @16.22-16.29
+												(module-idx "1")
+												(target-node-idx "0"))
+											(e-lookup-local @16.30-16.35
+												(p-assign @16.12-16.17 (ident "value"))))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @17.9-17.19)))
+									(value
+										(e-call @17.23-17.45
+											(e-lookup-external @17.23-17.38
+												(module-idx "1")
+												(target-node-idx "0"))
+											(e-lookup-local @17.39-17.44
+												(p-assign @17.13-17.18 (ident "error"))))))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @12.17-12.36 (effectful false)
+						(ty @12.17-12.24 (name "Request"))
+						(ty @12.28-12.36 (name "Response")))))))
+	(def
+		(pattern
+			(p-assign @23.1-23.12 (ident "processData")))
+		(expr
+			(e-lambda @23.15-27.6
+				(args
+					(p-assign @23.16-23.22 (ident "config"))
+					(p-assign @23.24-23.30 (ident "values")))
+				(e-call @24.5-27.6
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local @25.9-25.15
+						(p-assign @23.24-23.30 (ident "values")))
+					(e-lambda @26.9-26.41
+						(args
+							(p-assign @26.10-26.11 (ident "v")))
+						(e-call @26.13-26.41
+							(e-lookup-external @26.13-26.30
+								(module-idx "0")
+								(target-node-idx "0"))
+							(e-lookup-local @26.31-26.37
+								(p-assign @23.16-23.22 (ident "config")))
+							(e-lookup-local @26.39-26.40
+								(p-assign @26.10-26.11 (ident "v"))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @22.15-22.64 (effectful false)
+						(ty @22.15-22.21 (name "Config"))
+						(ty-apply @22.23-22.34 (symbol "List")
+							(ty @22.28-22.33 (name "Value")))
+						(ty-apply @22.38-22.64 (symbol "Result")
+							(ty-apply @22.45-22.56 (symbol "List")
+								(ty @22.50-22.55 (name "Value")))
+							(ty @22.58-22.63 (name "Error"))))))))
+	(def
+		(pattern
+			(p-assign @38.1-38.13 (ident "createClient")))
+		(expr
+			(e-lambda @38.16-38.48
+				(args
+					(p-assign @38.17-38.23 (ident "config")))
+				(e-call @38.25-38.48
+					(e-lookup-external @38.25-38.40
+						(module-idx "1")
+						(target-node-idx "0"))
+					(e-lookup-local @38.41-38.47
+						(p-assign @38.17-38.23 (ident "config"))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @37.16-37.37 (effectful false)
+						(ty @37.16-37.22 (name "Config"))
+						(ty-lookup-external @37.26-37.37
+							(external-decl @37.26-37.37 (qualified-name "Http.Client") (module-name "Http") (local-name "Client") (kind "type"))))))))
+	(def
+		(pattern
+			(p-assign @42.1-42.15 (ident "handleResponse")))
+		(expr
+			(e-lambda @42.18-46.6
+				(args
+					(p-assign @42.19-42.27 (ident "response")))
+				(e-match @43.5-46.6
+					(match @43.5-46.6
 						(cond
-							(e-lookup-local @15.11-15.17
-								(p-assign @14.5-14.11 (ident "result"))))
+							(e-dot-access @43.11-43.26 (field "status")
+								(receiver
+									(e-lookup-local @43.11-43.19
+										(p-assign @42.19-42.27 (ident "response"))))))
 						(branches
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @16.9-16.18)))
+										(p-applied-tag @44.9-44.19)))
 								(value
-									(e-call @16.22-16.36
-										(e-lookup-external @16.22-16.29
+									(e-call @44.23-44.50
+										(e-lookup-external @44.23-44.42
 											(module-idx "1")
 											(target-node-idx "0"))
-										(e-lookup-local @16.30-16.35
-											(p-assign @16.12-16.17 (ident "value"))))))
+										(e-lookup-local @44.43-44.49
+											(p-assign @44.12-44.18 (ident "status"))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @17.9-17.19)))
+										(p-applied-tag @45.9-45.19)))
 								(value
-									(e-call @17.23-17.45
-										(e-lookup-external @17.23-17.38
-											(module-idx "1")
-											(target-node-idx "0"))
-										(e-lookup-local @17.39-17.44
-											(p-assign @17.13-17.18 (ident "error")))))))))))
-		(annotation @13.1-13.14
-			(declared-type
-				(ty-fn @12.17-12.36 (effectful false)
-					(ty @12.17-12.24 (name "Request"))
-					(ty @12.28-12.36 (name "Response"))))))
-	(d-let
-		(p-assign @23.1-23.12 (ident "processData"))
-		(e-lambda @23.15-27.6
-			(args
-				(p-assign @23.16-23.22 (ident "config"))
-				(p-assign @23.24-23.30 (ident "values")))
-			(e-call @24.5-27.6
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @25.9-25.15
-					(p-assign @23.24-23.30 (ident "values")))
-				(e-lambda @26.9-26.41
-					(args
-						(p-assign @26.10-26.11 (ident "v")))
-					(e-call @26.13-26.41
-						(e-lookup-external @26.13-26.30
-							(module-idx "0")
-							(target-node-idx "0"))
-						(e-lookup-local @26.31-26.37
-							(p-assign @23.16-23.22 (ident "config")))
-						(e-lookup-local @26.39-26.40
-							(p-assign @26.10-26.11 (ident "v")))))))
-		(annotation @23.1-23.12
-			(declared-type
-				(ty-fn @22.15-22.64 (effectful false)
-					(ty @22.15-22.21 (name "Config"))
-					(ty-apply @22.23-22.34 (symbol "List")
-						(ty @22.28-22.33 (name "Value")))
-					(ty-apply @22.38-22.64 (symbol "Result")
-						(ty-apply @22.45-22.56 (symbol "List")
-							(ty @22.50-22.55 (name "Value")))
-						(ty @22.58-22.63 (name "Error")))))))
-	(d-let
-		(p-assign @38.1-38.13 (ident "createClient"))
-		(e-lambda @38.16-38.48
-			(args
-				(p-assign @38.17-38.23 (ident "config")))
-			(e-call @38.25-38.48
-				(e-lookup-external @38.25-38.40
-					(module-idx "1")
-					(target-node-idx "0"))
-				(e-lookup-local @38.41-38.47
-					(p-assign @38.17-38.23 (ident "config")))))
-		(annotation @38.1-38.13
-			(declared-type
-				(ty-fn @37.16-37.37 (effectful false)
-					(ty @37.16-37.22 (name "Config"))
-					(ty-lookup-external @37.26-37.37
-						(ext-decl @37.26-37.37 (ident "Http.Client") (kind "type")))))))
-	(d-let
-		(p-assign @42.1-42.15 (ident "handleResponse"))
-		(e-lambda @42.18-46.6
-			(args
-				(p-assign @42.19-42.27 (ident "response")))
-			(e-match @43.5-46.6
-				(match @43.5-46.6
-					(cond
-						(e-dot-access @43.11-43.26 (field "status")
-							(receiver
-								(e-lookup-local @43.11-43.19
-									(p-assign @42.19-42.27 (ident "response"))))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @44.9-44.19)))
-							(value
-								(e-call @44.23-44.50
-									(e-lookup-external @44.23-44.42
-										(module-idx "1")
-										(target-node-idx "0"))
-									(e-lookup-local @44.43-44.49
-										(p-assign @44.12-44.18 (ident "status"))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @45.9-45.19)))
-							(value
-								(e-call @45.23-45.44
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local @45.38-45.43
-										(p-assign @45.13-45.18 (ident "error"))))))))))
-		(annotation @42.1-42.15
-			(declared-type
-				(ty-fn @41.18-41.33 (effectful false)
-					(ty @41.18-41.26 (name "Response"))
-					(ty @41.30-41.33 (name "Str"))))))
-	(d-let
-		(p-assign @50.1-50.15 (ident "combineResults"))
-		(e-lambda @50.18-54.6
-			(args
-				(p-assign @50.19-50.29 (ident "jsonResult"))
-				(p-assign @50.31-50.41 (ident "httpStatus")))
-			(e-match @51.5-54.6
-				(match @51.5-54.6
-					(cond
-						(e-lookup-local @51.11-51.21
-							(p-assign @50.19-50.29 (ident "jsonResult"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @52.9-52.18)))
-							(value
-								(e-tag @52.22-52.24 (name "Ok")
-									(args
-										(e-record @52.25-52.73
-											(fields
-												(field (name "body")
-													(e-call @52.33-52.51
-														(e-lookup-external @52.33-52.44
-															(module-idx "0")
-															(target-node-idx "0"))
-														(e-lookup-local @52.45-52.50
-															(p-assign @52.12-52.17 (ident "value")))))
-												(field (name "status")
-													(e-lookup-local @52.61-52.71
-														(p-assign @50.31-50.41 (ident "httpStatus"))))))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @53.9-53.19)))
-							(value
-								(e-tag @53.23-53.26 (name "Err")
-									(args
-										(e-lookup-local @53.27-53.32
-											(p-assign @53.13-53.18 (ident "error")))))))))))
-		(annotation @50.1-50.15
-			(declared-type
-				(ty-fn @49.18-49.73 (effectful false)
-					(ty-apply @49.18-49.38 (symbol "Result")
-						(ty @49.25-49.30 (name "Value"))
-						(ty @49.32-49.37 (name "Error")))
-					(ty @49.40-49.46 (name "Status"))
-					(ty-apply @49.50-49.73 (symbol "Result")
-						(ty @49.57-49.65 (name "Response"))
-						(ty @49.67-49.72 (name "Error")))))))
+									(e-call @45.23-45.44
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local @45.38-45.43
+											(p-assign @45.13-45.18 (ident "error")))))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @41.18-41.33 (effectful false)
+						(ty @41.18-41.26 (name "Response"))
+						(ty @41.30-41.33 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @50.1-50.15 (ident "combineResults")))
+		(expr
+			(e-lambda @50.18-54.6
+				(args
+					(p-assign @50.19-50.29 (ident "jsonResult"))
+					(p-assign @50.31-50.41 (ident "httpStatus")))
+				(e-match @51.5-54.6
+					(match @51.5-54.6
+						(cond
+							(e-lookup-local @51.11-51.21
+								(p-assign @50.19-50.29 (ident "jsonResult"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @52.9-52.18)))
+								(value
+									(e-tag @52.22-52.24 (name "Ok")
+										(args
+											(e-record @52.25-52.73
+												(fields
+													(record-field (label "body")
+														(value
+															(e-call @52.33-52.51
+																(e-lookup-external @52.33-52.44
+																	(module-idx "0")
+																	(target-node-idx "0"))
+																(e-lookup-local @52.45-52.50
+																	(p-assign @52.12-52.17 (ident "value"))))))
+													(record-field (label "status")
+														(value
+															(e-lookup-local @52.61-52.71
+																(p-assign @50.31-50.41 (ident "httpStatus")))))))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @53.9-53.19)))
+								(value
+									(e-tag @53.23-53.26 (name "Err")
+										(args
+											(e-lookup-local @53.27-53.32
+												(p-assign @53.13-53.18 (ident "error"))))))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @49.18-49.73 (effectful false)
+						(ty-apply @49.18-49.38 (symbol "Result")
+							(ty @49.25-49.30 (name "Value"))
+							(ty @49.32-49.37 (name "Error")))
+						(ty @49.40-49.46 (name "Status"))
+						(ty-apply @49.50-49.73 (symbol "Result")
+							(ty @49.57-49.65 (name "Response"))
+							(ty @49.67-49.72 (name "Error"))))))))
 	(s-alias-decl @30.1-34.2
-		(ty-header @30.1-30.13 (name "ServerConfig"))
+		(type-header (name "ServerConfig"))
 		(ty-record @30.16-34.2
 			(field (field "jsonConfig")
 				(ty @31.18-31.24 (name "Config")))
@@ -800,18 +730,18 @@ combineResults = |jsonResult, httpStatus|
 				(ty @33.23-33.31 (name "Response")))))
 	(s-import @3.1-3.49 (module "json.Json") (qualifier "json")
 		(exposes
-			(exposed (name "Value") (wildcard false))
-			(exposed (name "Error") (wildcard false))
-			(exposed (name "Config") (wildcard false))))
+			(exposed-item (name "Value") (is_wildcard false))
+			(exposed-item (name "Error") (is_wildcard false))
+			(exposed-item (name "Config") (is_wildcard false))))
 	(s-import @4.1-4.64 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes
-			(exposed (name "Request") (wildcard false))
-			(exposed (name "Response") (wildcard false))
-			(exposed (name "Status") (wildcard false))))
+			(exposed-item (name "Request") (is_wildcard false))
+			(exposed-item (name "Response") (is_wildcard false))
+			(exposed-item (name "Status") (is_wildcard false))))
 	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
 		(exposes
-			(exposed (name "Result") (wildcard false))))
-	(ext-decl @37.26-37.37 (ident "Http.Client") (kind "type")))
+			(exposed-item (name "Result") (is_wildcard false))))
+	(external-decl (qualified-name "Http.Client") (module-name "Http") (local-name "Client") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -825,7 +755,7 @@ combineResults = |jsonResult, httpStatus|
 		(patt @50.1-50.15 (type "Error, Error -> Error")))
 	(type_decls
 		(alias @30.1-34.2 (type "ServerConfig")
-			(ty-header @30.1-30.13 (name "ServerConfig"))))
+			(type-header (name "ServerConfig"))))
 	(expressions
 		(expr @9.13-9.38 (type "Str -> Error"))
 		(expr @13.17-19.2 (type "Error -> Error"))

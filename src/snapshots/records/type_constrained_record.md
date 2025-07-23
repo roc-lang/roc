@@ -10,7 +10,7 @@ process_user! : { name : Str, age : U32, ..a } => Str
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - type_constrained_record.md:1:42:1:44
 PARSE ERROR - type_constrained_record.md:1:37:1:40
-MALFORMED TYPE - :0:0:0:0
+COMPILER DIAGNOSTIC - type_constrained_record.md:0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **..** is not expected in a type annotation.
@@ -36,8 +36,11 @@ process_user! : { name : Str, age : U32, ..a } => Str
                                     ^^^
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
+**type_constrained_record.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -67,7 +70,7 @@ process_user! : { name : Str, age :  } => Str
 				(field (field "name")
 					(ty @1.26-1.29 (name "Str")))
 				(field (field "age")
-					(ty-malformed @1.37-1.45)))
+					(ty-malformed @1.1-1.1)))
 			(ty @1.51-1.54 (name "Str")))))
 ~~~
 # TYPES

@@ -17,25 +17,19 @@ main =
     expectsPerson("not a person")
 ~~~
 # EXPECTED
-UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
+COMPILER DIAGNOSTIC - nominal_type_origin_mismatch.md:0:0:0:0
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:6:18:6:19
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Person_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-This type is referenced here:
-**nominal_type_origin_mismatch.md:5:17:5:23:**
-```roc
-expectsPerson : Person -> Str
-```
-                ^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**nominal_type_origin_mismatch.md:0:0:0:0**
 
 **UNUSED VARIABLE**
-Variable `p` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_p` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'p' is defined but never used:
 **nominal_type_origin_mismatch.md:6:18:6:19:**
 ```roc
 expectsPerson = |p| "Got a person"
@@ -95,28 +89,33 @@ main =
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.14 (ident "expectsPerson"))
-		(e-lambda @6.17-6.35
-			(args
-				(p-assign @6.18-6.19 (ident "p")))
-			(e-string @6.21-6.35
-				(e-literal @6.22-6.34 (string "Got a person"))))
-		(annotation @6.1-6.14
-			(declared-type
-				(ty-fn @5.17-5.30 (effectful false)
-					(ty @5.17-5.23 (name "Person"))
-					(ty @5.27-5.30 (name "Str"))))))
-	(d-let
-		(p-assign @8.1-8.5 (ident "main"))
-		(e-call @10.5-10.34
-			(e-lookup-local @10.5-10.18
-				(p-assign @6.1-6.14 (ident "expectsPerson")))
-			(e-string @10.19-10.33
-				(e-literal @10.20-10.32 (string "not a person")))))
+	(def
+		(pattern
+			(p-assign @6.1-6.14 (ident "expectsPerson")))
+		(expr
+			(e-lambda @6.17-6.35
+				(args
+					(p-assign @6.18-6.19 (ident "p")))
+				(e-string @6.21-6.35
+					(e-literal @6.22-6.34 (string "Got a person")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @5.17-5.30 (effectful false)
+						(ty @5.17-5.23 (name "Person"))
+						(ty @5.27-5.30 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @8.1-8.5 (ident "main")))
+		(expr
+			(e-call @10.5-10.34
+				(e-lookup-local @10.5-10.18
+					(p-assign @6.1-6.14 (ident "expectsPerson")))
+				(e-string @10.19-10.33
+					(e-literal @10.20-10.32 (string "not a person"))))))
 	(s-import @3.1-3.30 (module "Data")
 		(exposes
-			(exposed (name "Person") (wildcard false)))))
+			(exposed-item (name "Person") (is_wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

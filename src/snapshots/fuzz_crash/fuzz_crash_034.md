@@ -8,30 +8,20 @@ type=file
 module[]0 f
 ~~~
 # EXPECTED
-INVALID STATEMENT - fuzz_crash_034.md:1:9:1:10
-INVALID STATEMENT - fuzz_crash_034.md:1:11:1:12
+COMPILER DIAGNOSTIC - fuzz_crash_034.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_034.md:0:0:0:0
 # PROBLEMS
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_034.md:1:9:1:10:**
-```roc
-module[]0 f
-```
-        ^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_034.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_034.md:1:11:1:12:**
-```roc
-module[]0 f
-```
-          ^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_034.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

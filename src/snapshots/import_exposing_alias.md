@@ -78,40 +78,44 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @5.1-5.5 (ident "main"))
-		(e-block @5.8-10.2
-			(s-let @6.2-6.33
-				(p-assign @6.2-6.6 (ident "data"))
-				(e-record @6.9-6.33
-					(fields
-						(field (name "name")
-							(e-string @6.17-6.22
-								(e-literal @6.18-6.21 (string "Bob"))))
-						(field (name "age")
-							(e-int @6.29-6.31 (value "25"))))))
-			(s-let @7.2-7.24
-				(p-assign @7.2-7.9 (ident "encoded"))
-				(e-call @7.12-7.24
-					(e-lookup-external @7.12-7.18
-						(module-idx "0")
-						(target-node-idx "0"))
-					(e-lookup-local @7.19-7.23
-						(p-assign @6.2-6.6 (ident "data")))))
-			(s-let @8.2-8.29
-				(p-assign @8.2-8.9 (ident "decoded"))
-				(e-call @8.12-8.29
-					(e-lookup-external @8.12-8.20
-						(module-idx "0")
-						(target-node-idx "0"))
-					(e-lookup-local @8.21-8.28
-						(p-assign @7.2-7.9 (ident "encoded")))))
-			(e-lookup-local @9.2-9.9
-				(p-assign @8.2-8.9 (ident "decoded")))))
+	(def
+		(pattern
+			(p-assign @5.1-5.5 (ident "main")))
+		(expr
+			(e-block @5.8-10.2
+				(s-let @6.2-6.33
+					(p-assign @6.2-6.6 (ident "data"))
+					(e-record @6.9-6.33
+						(fields
+							(record-field (label "name")
+								(value
+									(e-string @6.17-6.22
+										(e-literal @6.18-6.21 (string "Bob")))))
+							(record-field (label "age")
+								(value
+									(e-int @6.29-6.31 (value "25")))))))
+				(s-let @7.2-7.24
+					(p-assign @7.2-7.9 (ident "encoded"))
+					(e-call @7.12-7.24
+						(e-lookup-external @7.12-7.18
+							(module-idx "0")
+							(target-node-idx "0"))
+						(e-lookup-local @7.19-7.23
+							(p-assign @6.2-6.6 (ident "data")))))
+				(s-let @8.2-8.29
+					(p-assign @8.2-8.9 (ident "decoded"))
+					(e-call @8.12-8.29
+						(e-lookup-external @8.12-8.20
+							(module-idx "0")
+							(target-node-idx "0"))
+						(e-lookup-local @8.21-8.28
+							(p-assign @7.2-7.9 (ident "encoded")))))
+				(e-lookup-local @9.2-9.9
+					(p-assign @8.2-8.9 (ident "decoded"))))))
 	(s-import @3.1-3.65 (module "json.Json") (qualifier "json")
 		(exposes
-			(exposed (name "decode") (alias "fromJson") (wildcard false))
-			(exposed (name "encode") (alias "toJson") (wildcard false)))))
+			(exposed-item (name "decode") (alias "fromJson") (is_wildcard false))
+			(exposed-item (name "encode") (alias "toJson") (is_wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

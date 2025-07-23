@@ -18,9 +18,9 @@ blue = CC.Color.RGB(0,0,255)
 UNDEFINED VARIABLE - nominal_tag_package_import.md:8:10:8:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'Color' is not defined:
 **nominal_tag_package_import.md:8:10:8:16:**
 ```roc
 blue = CC.Color.RGB(0,0,255)
@@ -68,16 +68,19 @@ blue = CC.Color.RGB(0, 0, 255)
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @8.1-8.5 (ident "blue"))
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(annotation @8.1-8.5
-			(declared-type
-				(ty-lookup-external @7.8-7.14
-					(ext-decl @7.8-7.14 (ident "CC.RGB") (kind "type"))))))
+	(def
+		(pattern
+			(p-assign @8.1-8.5 (ident "blue")))
+		(expr
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-lookup-external @7.8-7.14
+						(external-decl @7.8-7.14 (qualified-name "CC.RGB") (module-name "CC") (local-name "RGB") (kind "type")))))))
 	(s-import @4.1-4.26 (module "styles.Color") (qualifier "styles") (alias "CC")
 		(exposes))
-	(ext-decl @7.8-7.14 (ident "CC.RGB") (kind "type")))
+	(external-decl (qualified-name "CC.RGB") (module-name "CC") (local-name "RGB") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -85,5 +88,5 @@ blue = CC.Color.RGB(0, 0, 255)
 	(defs
 		(patt @8.1-8.5 (type "Error")))
 	(expressions
-		(expr @8.10-8.16 (type "Error"))))
+		(expr @1.1-1.1 (type "Error"))))
 ~~~

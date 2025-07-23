@@ -99,42 +99,47 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.9 (ident "swapPair"))
-		(e-lambda @6.12-6.27
-			(args
-				(p-tuple @6.13-6.19
-					(patterns
-						(p-assign @6.14-6.15 (ident "x"))
-						(p-assign @6.17-6.18 (ident "y")))))
-			(e-tuple @6.21-6.27
-				(elems
-					(e-lookup-local @6.22-6.23
-						(p-assign @6.17-6.18 (ident "y")))
-					(e-lookup-local @6.25-6.26
-						(p-assign @6.14-6.15 (ident "x"))))))
-		(annotation @6.1-6.9
-			(declared-type
-				(ty-fn @5.12-5.36 (effectful false)
-					(ty-apply @5.12-5.22 (symbol "Pair")
-						(ty-var @5.17-5.18 (name "a"))
-						(ty-var @5.20-5.21 (name "b")))
-					(ty-apply @5.26-5.36 (symbol "Pair")
-						(ty-var @5.31-5.32 (name "b"))
-						(ty-var @5.34-5.35 (name "a")))))))
-	(d-let
-		(p-assign @8.1-8.6 (ident "main!"))
-		(e-lambda @8.9-8.27
-			(args
-				(p-underscore @8.10-8.11))
-			(e-call @8.13-8.27
-				(e-lookup-local @8.13-8.21
-					(p-assign @6.1-6.9 (ident "swapPair")))
-				(e-int @8.22-8.23 (value "1"))
-				(e-int @8.25-8.26 (value "2")))))
+	(def
+		(pattern
+			(p-assign @6.1-6.9 (ident "swapPair")))
+		(expr
+			(e-lambda @6.12-6.27
+				(args
+					(p-tuple @6.13-6.19
+						(patterns
+							(p-assign @6.14-6.15 (ident "x"))
+							(p-assign @6.17-6.18 (ident "y")))))
+				(e-tuple @6.21-6.27
+					(elems
+						(e-lookup-local @6.22-6.23
+							(p-assign @6.17-6.18 (ident "y")))
+						(e-lookup-local @6.25-6.26
+							(p-assign @6.14-6.15 (ident "x")))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @5.12-5.36 (effectful false)
+						(ty-apply @5.12-5.22 (symbol "Pair")
+							(ty-var @5.17-5.18 (name "a"))
+							(ty-var @5.20-5.21 (name "b")))
+						(ty-apply @5.26-5.36 (symbol "Pair")
+							(ty-var @5.31-5.32 (name "b"))
+							(ty-var @5.34-5.35 (name "a"))))))))
+	(def
+		(pattern
+			(p-assign @8.1-8.6 (ident "main!")))
+		(expr
+			(e-lambda @8.9-8.27
+				(args
+					(p-underscore @8.10-8.11))
+				(e-call @8.13-8.27
+					(e-lookup-local @8.13-8.21
+						(p-assign @6.1-6.9 (ident "swapPair")))
+					(e-int @8.22-8.23 (value "1"))
+					(e-int @8.25-8.26 (value "2"))))))
 	(s-alias-decl @3.1-3.20
-		(ty-header @3.1-3.11 (name "Pair")
-			(ty-args
+		(type-header (name "Pair")
+			(args
 				(ty-var @3.6-3.7 (name "a"))
 				(ty-var @3.9-3.10 (name "b"))))
 		(ty-tuple @3.14-3.20
@@ -149,8 +154,8 @@ NO CHANGE
 		(patt @8.1-8.6 (type "_arg -> _ret")))
 	(type_decls
 		(alias @3.1-3.20 (type "Pair(a, b)")
-			(ty-header @3.1-3.11 (name "Pair")
-				(ty-args
+			(type-header (name "Pair")
+				(args
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.10 (name "b"))))))
 	(expressions

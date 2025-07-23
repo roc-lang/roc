@@ -26,17 +26,17 @@ UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:3:23:3:31
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:12:14:17
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:17:14:22
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:22:14:29
-INVALID STATEMENT - multi_qualified_import.md:3:17:3:22
-INVALID STATEMENT - multi_qualified_import.md:3:23:3:31
-INVALID STATEMENT - multi_qualified_import.md:3:32:3:41
-UNDECLARED TYPE - multi_qualified_import.md:5:16:5:23
+COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
+COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
+COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
+COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
 UNDEFINED VARIABLE - multi_qualified_import.md:6:16:6:45
 UNUSED VARIABLE - multi_qualified_import.md:10:12:10:19
 UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
-INVALID STATEMENT - multi_qualified_import.md:14:12:14:17
-INVALID STATEMENT - multi_qualified_import.md:14:17:14:22
-INVALID STATEMENT - multi_qualified_import.md:14:22:14:29
-INVALID STATEMENT - multi_qualified_import.md:14:29:14:38
+COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
+COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
+COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
+COMPILER DIAGNOSTIC - multi_qualified_import.md:0:0:0:0
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.Utf8** is not expected in an expression.
@@ -98,54 +98,34 @@ data = json.Core.Utf8.encode("hello")
                      ^^^^^^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**multi_qualified_import.md:3:17:3:22:**
-```roc
-import json.Core.Utf8 exposing [Encoder]
-```
-                ^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**multi_qualified_import.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**multi_qualified_import.md:0:0:0:0**
 
-**multi_qualified_import.md:3:23:3:31:**
-```roc
-import json.Core.Utf8 exposing [Encoder]
-```
-                      ^^^^^^^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**multi_qualified_import.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**multi_qualified_import.md:3:32:3:41:**
-```roc
-import json.Core.Utf8 exposing [Encoder]
-```
-                               ^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Encoder_ is not declared in this scope.
-
-This type is referenced here:
-**multi_qualified_import.md:5:16:5:23:**
-```roc
-json_encoder : Encoder
-```
-               ^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**multi_qualified_import.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
-Nothing is named `defaultEncoder` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'defaultEncoder' is not defined:
 **multi_qualified_import.md:6:16:6:45:**
 ```roc
 json_encoder = Json.Core.Utf8.defaultEncoder
@@ -154,10 +134,9 @@ json_encoder = Json.Core.Utf8.defaultEncoder
 
 
 **UNUSED VARIABLE**
-Variable `encoder` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_encoder` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'encoder' is defined but never used:
 **multi_qualified_import.md:10:12:10:19:**
 ```roc
 process = |encoder| "processing"
@@ -166,9 +145,9 @@ process = |encoder| "processing"
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `json` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'json' is not defined:
 **multi_qualified_import.md:14:8:14:12:**
 ```roc
 data = json.Core.Utf8.encode("hello")
@@ -176,49 +155,29 @@ data = json.Core.Utf8.encode("hello")
        ^^^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**multi_qualified_import.md:14:12:14:17:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-           ^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**multi_qualified_import.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**multi_qualified_import.md:0:0:0:0**
 
-**multi_qualified_import.md:14:17:14:22:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                ^^^^^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**multi_qualified_import.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**multi_qualified_import.md:14:22:14:29:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                     ^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:14:29:14:38:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                            ^^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**multi_qualified_import.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -294,36 +253,45 @@ data = json
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.13 (ident "json_encoder"))
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(annotation @6.1-6.13
-			(declared-type
-				(ty @5.16-5.23 (name "Encoder")))))
-	(d-let
-		(p-assign @10.1-10.8 (ident "process"))
-		(e-lambda @10.11-10.33
-			(args
-				(p-assign @10.12-10.19 (ident "encoder")))
-			(e-string @10.21-10.33
-				(e-literal @10.22-10.32 (string "processing"))))
-		(annotation @10.1-10.8
-			(declared-type
-				(ty-fn @9.11-9.40 (effectful false)
-					(ty-lookup-external @9.11-9.33
-						(ext-decl @9.11-9.33 (ident "json.Core.Utf8.Encoder") (kind "type")))
-					(ty @9.37-9.40 (name "Str"))))))
-	(d-let
-		(p-assign @14.1-14.5 (ident "data"))
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(annotation @14.1-14.5
-			(declared-type
-				(ty-lookup-external @13.8-13.34
-					(ext-decl @13.8-13.34 (ident "json.Core.Utf8.EncodedData") (kind "type"))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.13 (ident "json_encoder")))
+		(expr
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(annotation
+			(annotation
+				(type-anno
+					(ty @5.16-5.23 (name "Encoder"))))))
+	(def
+		(pattern
+			(p-assign @10.1-10.8 (ident "process")))
+		(expr
+			(e-lambda @10.11-10.33
+				(args
+					(p-assign @10.12-10.19 (ident "encoder")))
+				(e-string @10.21-10.33
+					(e-literal @10.22-10.32 (string "processing")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @9.11-9.40 (effectful false)
+						(ty-lookup-external @9.11-9.33
+							(external-decl @9.11-9.33 (qualified-name "json.Core.Utf8.Encoder") (module-name "json.Core.Utf8") (local-name "Encoder") (kind "type")))
+						(ty @9.37-9.40 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @14.1-14.5 (ident "data")))
+		(expr
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-lookup-external @13.8-13.34
+						(external-decl @13.8-13.34 (qualified-name "json.Core.Utf8.EncodedData") (module-name "json.Core.Utf8") (local-name "EncodedData") (kind "type")))))))
 	(s-import @3.1-3.17 (module "json.Core") (qualifier "json")
 		(exposes))
-	(ext-decl @9.11-9.33 (ident "json.Core.Utf8.Encoder") (kind "type"))
-	(ext-decl @13.8-13.34 (ident "json.Core.Utf8.EncodedData") (kind "type")))
+	(external-decl (qualified-name "json.Core.Utf8.Encoder") (module-name "json.Core.Utf8") (local-name "Encoder") (kind "type"))
+	(external-decl (qualified-name "json.Core.Utf8.EncodedData") (module-name "json.Core.Utf8") (local-name "EncodedData") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -333,7 +301,7 @@ data = json
 		(patt @10.1-10.8 (type "json.Core.Utf8.Encoder -> Str"))
 		(patt @14.1-14.5 (type "Error")))
 	(expressions
-		(expr @6.16-6.45 (type "Error"))
+		(expr @1.1-1.1 (type "Error"))
 		(expr @10.11-10.33 (type "json.Core.Utf8.Encoder -> Str"))
-		(expr @14.8-14.12 (type "Error"))))
+		(expr @1.1-1.1 (type "Error"))))
 ~~~

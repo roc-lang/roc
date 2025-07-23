@@ -265,12 +265,11 @@ pub const Repl = struct {
         // Empty scratch space
         parse_ast.store.emptyScratch();
 
-        // Create CIR
-        var cir = try CIR.init(self.allocator, "repl");
-        defer cir.deinit();
+        // Initialize CIR fields in the existing module_env
+        try module_env.initCIRFields(self.allocator, "repl");
 
         // Create canonicalizer
-        var can = canonicalize.init(&cir, &parse_ast, null) catch |err| {
+        var can = canonicalize.init(&module_env, &parse_ast, null) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
         };
         defer can.deinit();
@@ -284,7 +283,7 @@ pub const Repl = struct {
         };
 
         // Type check
-        var checker = check_types.init(self.allocator, &module_env.types, &cir, &.{}, &cir.store.regions) catch |err| {
+        var checker = check_types.init(self.allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };
         defer checker.deinit();
@@ -300,7 +299,7 @@ pub const Repl = struct {
         defer layout_cache.deinit();
 
         // Create interpreter
-        var interpreter = eval.Interpreter.init(self.allocator, &cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
+        var interpreter = eval.Interpreter.init(self.allocator, &module_env, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinit();
@@ -499,12 +498,11 @@ test "Repl - minimal interpreter integration" {
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
 
-    // Step 3: Create CIR
-    var cir = try CIR.init(allocator, "test");
-    defer cir.deinit();
+    // Step 3: Initialize CIR fields in the existing module_env
+    try module_env.initCIRFields(allocator, "test");
 
     // Step 4: Canonicalize
-    var can = try canonicalize.init(&cir, &parse_ast, null);
+    var can = try canonicalize.init(&module_env, &parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -513,7 +511,7 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 5: Type check
-    var checker = try check_types.init(allocator, &module_env.types, &cir, &.{}, &cir.store.regions);
+    var checker = try check_types.init(allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
     defer checker.deinit();
 
     _ = try checker.checkExpr(canonical_expr_idx);
@@ -527,7 +525,7 @@ test "Repl - minimal interpreter integration" {
     defer layout_cache.deinit();
 
     // Step 8: Create interpreter
-    var interpreter = try eval.Interpreter.init(allocator, &cir, &eval_stack, &layout_cache, &module_env.types);
+    var interpreter = try eval.Interpreter.init(allocator, &module_env, &eval_stack, &layout_cache, &module_env.types);
     defer interpreter.deinit();
 
     // Step 9: Evaluate

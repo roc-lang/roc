@@ -14,9 +14,9 @@ match isReady {
 UNDEFINED VARIABLE - boolean_patterns.md:1:7:1:14
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `isReady` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'isReady' is not defined:
 **boolean_patterns.md:1:7:1:14:**
 ```roc
 match isReady {

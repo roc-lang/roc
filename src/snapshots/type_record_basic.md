@@ -79,37 +79,44 @@ main! = |_| getName({ name: "luke", age: 21 })
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.1-4.8 (ident "getName"))
-		(e-lambda @4.11-4.28
-			(args
-				(p-assign @4.12-4.19 (ident "_person")))
-			(e-string @4.21-4.28
-				(e-literal @4.22-4.27 (string "hello"))))
-		(annotation @4.1-4.8
-			(declared-type
-				(ty-fn @3.11-3.41 (effectful false)
-					(ty-record @3.11-3.34
-						(field (field "name")
-							(ty @3.19-3.22 (name "Str")))
-						(field (field "age")
-							(ty @3.29-3.32 (name "U64"))))
-					(ty @3.38-3.41 (name "Str"))))))
-	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.44
-			(args
-				(p-underscore @6.10-6.11))
-			(e-call @6.13-6.44
-				(e-lookup-local @6.13-6.20
-					(p-assign @4.1-4.8 (ident "getName")))
-				(e-record @6.21-6.43
-					(fields
-						(field (name "name")
-							(e-string @6.28-6.34
-								(e-literal @6.29-6.33 (string "luke"))))
-						(field (name "age")
-							(e-int @6.40-6.42 (value "21")))))))))
+	(def
+		(pattern
+			(p-assign @4.1-4.8 (ident "getName")))
+		(expr
+			(e-lambda @4.11-4.28
+				(args
+					(p-assign @4.12-4.19 (ident "_person")))
+				(e-string @4.21-4.28
+					(e-literal @4.22-4.27 (string "hello")))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @3.11-3.41 (effectful false)
+						(ty-record @3.11-3.34
+							(field (field "name")
+								(ty @3.19-3.22 (name "Str")))
+							(field (field "age")
+								(ty @3.29-3.32 (name "U64"))))
+						(ty @3.38-3.41 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.6 (ident "main!")))
+		(expr
+			(e-lambda @6.9-6.44
+				(args
+					(p-underscore @6.10-6.11))
+				(e-call @6.13-6.44
+					(e-lookup-local @6.13-6.20
+						(p-assign @4.1-4.8 (ident "getName")))
+					(e-record @6.21-6.43
+						(fields
+							(record-field (label "name")
+								(value
+									(e-string @6.28-6.34
+										(e-literal @6.29-6.33 (string "luke")))))
+							(record-field (label "age")
+								(value
+									(e-int @6.40-6.42 (value "21")))))))))))
 ~~~
 # TYPES
 ~~~clojure

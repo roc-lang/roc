@@ -84,10 +84,9 @@ TYPE MISMATCH - Color.md:20:20:20:22
 TYPE MISMATCH - Color.md:26:7:26:10
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable `is_char_in_hex_range` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_is_char_in_hex_range` to suppress this warning.
-The unused variable is declared here:
+**Unused Variable**
+The variable 'is_char_in_hex_range' is defined but never used:
 **Color.md:30:5:30:25:**
 ```roc
     is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
@@ -96,9 +95,9 @@ The unused variable is declared here:
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `from_list` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'from_list' is not defined:
 **Color.md:68:14:68:27:**
 ```roc
     colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
@@ -648,371 +647,388 @@ is_named_color = |str| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @18.1-18.4 (ident "rgb"))
-		(e-lambda @18.7-18.35
-			(args
-				(p-assign @18.8-18.9 (ident "r"))
-				(p-assign @18.11-18.12 (ident "g"))
-				(p-assign @18.14-18.15 (ident "b")))
-			(e-nominal @18.17-18.22 (nominal "Color")
-				(e-tag @18.17-18.26 (name "RGB")
-					(args
-						(e-lookup-local @18.27-18.28
-							(p-assign @18.8-18.9 (ident "r")))
-						(e-lookup-local @18.30-18.31
-							(p-assign @18.11-18.12 (ident "g")))
-						(e-lookup-local @18.33-18.34
-							(p-assign @18.14-18.15 (ident "b")))))))
-		(annotation @18.1-18.4
-			(declared-type
-				(ty-fn @17.7-17.26 (effectful false)
-					(ty @17.7-17.9 (name "U8"))
-					(ty @17.11-17.13 (name "U8"))
-					(ty @17.15-17.17 (name "U8"))
-					(ty @17.21-17.26 (name "Color"))))))
-	(d-let
-		(p-assign @21.1-21.5 (ident "rgba"))
-		(e-lambda @21.8-24.2
-			(args
-				(p-assign @21.9-21.10 (ident "r"))
-				(p-assign @21.12-21.13 (ident "g"))
-				(p-assign @21.15-21.16 (ident "b"))
-				(p-assign @21.18-21.19 (ident "a")))
-			(e-block @21.21-24.2
-				(s-let @22.5-22.34
-					(p-assign @22.5-22.12 (ident "rounded"))
-					(e-binop @22.15-22.34 (op "div")
-						(e-dot-access @22.15-22.26 (field "to_frac")
+	(def
+		(pattern
+			(p-assign @18.1-18.4 (ident "rgb")))
+		(expr
+			(e-lambda @18.7-18.35
+				(args
+					(p-assign @18.8-18.9 (ident "r"))
+					(p-assign @18.11-18.12 (ident "g"))
+					(p-assign @18.14-18.15 (ident "b")))
+				(e-nominal @18.17-18.22 (nominal "Color")
+					(e-tag @18.17-18.26 (name "RGB")
+						(args
+							(e-lookup-local @18.27-18.28
+								(p-assign @18.8-18.9 (ident "r")))
+							(e-lookup-local @18.30-18.31
+								(p-assign @18.11-18.12 (ident "g")))
+							(e-lookup-local @18.33-18.34
+								(p-assign @18.14-18.15 (ident "b"))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @17.7-17.26 (effectful false)
+						(ty @17.7-17.9 (name "U8"))
+						(ty @17.11-17.13 (name "U8"))
+						(ty @17.15-17.17 (name "U8"))
+						(ty @17.21-17.26 (name "Color")))))))
+	(def
+		(pattern
+			(p-assign @21.1-21.5 (ident "rgba")))
+		(expr
+			(e-lambda @21.8-24.2
+				(args
+					(p-assign @21.9-21.10 (ident "r"))
+					(p-assign @21.12-21.13 (ident "g"))
+					(p-assign @21.15-21.16 (ident "b"))
+					(p-assign @21.18-21.19 (ident "a")))
+				(e-block @21.21-24.2
+					(s-let @22.5-22.34
+						(p-assign @22.5-22.12 (ident "rounded"))
+						(e-binop @22.15-22.34 (op "div")
+							(e-dot-access @22.15-22.26 (field "to_frac")
+								(receiver
+									(e-lookup-local @22.15-22.16
+										(p-assign @21.18-21.19 (ident "a"))))
+								(args))
+							(e-dec-small @22.29-22.34 (numerator "2550") (denominator-power-of-ten "1") (value "255"))))
+					(e-nominal @23.5-23.10 (nominal "Color")
+						(e-tag @23.5-23.15 (name "RGBA")
+							(args
+								(e-lookup-local @23.16-23.17
+									(p-assign @21.9-21.10 (ident "r")))
+								(e-lookup-local @23.19-23.20
+									(p-assign @21.12-21.13 (ident "g")))
+								(e-lookup-local @23.22-23.23
+									(p-assign @21.15-21.16 (ident "b")))
+								(e-lookup-local @23.25-23.32
+									(p-assign @22.5-22.12 (ident "rounded")))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @20.8-20.31 (effectful false)
+						(ty @20.8-20.10 (name "U8"))
+						(ty @20.12-20.14 (name "U8"))
+						(ty @20.16-20.18 (name "U8"))
+						(ty @20.20-20.22 (name "U8"))
+						(ty @20.26-20.31 (name "Color")))))))
+	(def
+		(pattern
+			(p-assign @27.1-27.4 (ident "hex")))
+		(expr
+			(e-lambda @27.7-46.2
+				(args
+					(p-assign @27.8-27.11 (ident "str")))
+				(e-block @27.13-46.2
+					(s-let @29.5-29.26
+						(p-assign @29.5-29.10 (ident "bytes"))
+						(e-dot-access @29.13-29.26 (field "to_utf8")
 							(receiver
-								(e-lookup-local @22.15-22.16
-									(p-assign @21.18-21.19 (ident "a"))))
-							(args))
-						(e-dec-small @22.29-22.34 (numerator "2550") (denominator-power-of-ten "1") (value "255"))))
-				(e-nominal @23.5-23.10 (nominal "Color")
-					(e-tag @23.5-23.15 (name "RGBA")
-						(args
-							(e-lookup-local @23.16-23.17
-								(p-assign @21.9-21.10 (ident "r")))
-							(e-lookup-local @23.19-23.20
-								(p-assign @21.12-21.13 (ident "g")))
-							(e-lookup-local @23.22-23.23
-								(p-assign @21.15-21.16 (ident "b")))
-							(e-lookup-local @23.25-23.32
-								(p-assign @22.5-22.12 (ident "rounded"))))))))
-		(annotation @21.1-21.5
-			(declared-type
-				(ty-fn @20.8-20.31 (effectful false)
-					(ty @20.8-20.10 (name "U8"))
-					(ty @20.12-20.14 (name "U8"))
-					(ty @20.16-20.18 (name "U8"))
-					(ty @20.20-20.22 (name "U8"))
-					(ty @20.26-20.31 (name "Color"))))))
-	(d-let
-		(p-assign @27.1-27.4 (ident "hex"))
-		(e-lambda @27.7-46.2
-			(args
-				(p-assign @27.8-27.11 (ident "str")))
-			(e-block @27.13-46.2
-				(s-let @29.5-29.26
-					(p-assign @29.5-29.10 (ident "bytes"))
-					(e-dot-access @29.13-29.26 (field "to_utf8")
-						(receiver
-							(e-lookup-local @29.13-29.16
-								(p-assign @27.8-27.11 (ident "str"))))
-						(args)))
-				(s-let @30.5-30.109
-					(p-assign @30.5-30.25 (ident "is_char_in_hex_range"))
-					(e-lambda @30.28-30.109
-						(args
-							(p-assign @30.29-30.30 (ident "b")))
-						(e-binop @30.32-30.109 (op "or")
-							(e-binop @30.32-30.82 (op "or")
-								(e-binop @30.33-30.54 (op "and")
-									(e-binop @30.33-30.41 (op "ge")
-										(e-lookup-local @30.33-30.34
+								(e-lookup-local @29.13-29.16
+									(p-assign @27.8-27.11 (ident "str"))))
+							(args)))
+					(s-let @30.5-30.109
+						(p-assign @30.5-30.25 (ident "is_char_in_hex_range"))
+						(e-lambda @30.28-30.109
+							(args
+								(p-assign @30.29-30.30 (ident "b")))
+							(e-binop @30.32-30.109 (op "or")
+								(e-binop @30.32-30.82 (op "or")
+									(e-binop @30.33-30.54 (op "and")
+										(e-binop @30.33-30.41 (op "ge")
+											(e-lookup-local @30.33-30.34
+												(p-assign @30.29-30.30 (ident "b")))
+											(e-int @30.38-30.41 (value "48")))
+										(e-binop @30.46-30.54 (op "le")
+											(e-lookup-local @30.46-30.47
+												(p-assign @30.29-30.30 (ident "b")))
+											(e-int @30.51-30.54 (value "57"))))
+									(e-binop @30.60-30.81 (op "and")
+										(e-binop @30.60-30.68 (op "ge")
+											(e-lookup-local @30.60-30.61
+												(p-assign @30.29-30.30 (ident "b")))
+											(e-int @30.65-30.68 (value "97")))
+										(e-binop @30.73-30.81 (op "le")
+											(e-lookup-local @30.73-30.74
+												(p-assign @30.29-30.30 (ident "b")))
+											(e-int @30.78-30.81 (value "102")))))
+								(e-binop @30.87-30.108 (op "and")
+									(e-binop @30.87-30.95 (op "ge")
+										(e-lookup-local @30.87-30.88
 											(p-assign @30.29-30.30 (ident "b")))
-										(e-int @30.38-30.41 (value "48")))
-									(e-binop @30.46-30.54 (op "le")
-										(e-lookup-local @30.46-30.47
+										(e-int @30.92-30.95 (value "65")))
+									(e-binop @30.100-30.108 (op "le")
+										(e-lookup-local @30.100-30.101
 											(p-assign @30.29-30.30 (ident "b")))
-										(e-int @30.51-30.54 (value "57"))))
-								(e-binop @30.60-30.81 (op "and")
-									(e-binop @30.60-30.68 (op "ge")
-										(e-lookup-local @30.60-30.61
-											(p-assign @30.29-30.30 (ident "b")))
-										(e-int @30.65-30.68 (value "97")))
-									(e-binop @30.73-30.81 (op "le")
-										(e-lookup-local @30.73-30.74
-											(p-assign @30.29-30.30 (ident "b")))
-										(e-int @30.78-30.81 (value "102")))))
-							(e-binop @30.87-30.108 (op "and")
-								(e-binop @30.87-30.95 (op "ge")
-									(e-lookup-local @30.87-30.88
-										(p-assign @30.29-30.30 (ident "b")))
-									(e-int @30.92-30.95 (value "65")))
-								(e-binop @30.100-30.108 (op "le")
-									(e-lookup-local @30.100-30.101
-										(p-assign @30.29-30.30 (ident "b")))
-									(e-int @30.105-30.108 (value "70")))))))
-				(e-match @32.5-45.6
-					(match @32.5-45.6
+										(e-int @30.105-30.108 (value "70")))))))
+					(e-match @32.5-45.6
+						(match @32.5-45.6
+							(cond
+								(e-lookup-local @32.11-32.16
+									(p-assign @29.5-29.10 (ident "bytes"))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-list @33.9-33.32
+												(patterns
+													(p-int @33.10-33.13 (value "35"))
+													(p-assign @33.15-33.16 (ident "a"))
+													(p-assign @33.18-33.19 (ident "b"))
+													(p-assign @33.21-33.22 (ident "c"))
+													(p-assign @33.24-33.25 (ident "d"))
+													(p-assign @33.27-33.28 (ident "e"))
+													(p-assign @33.30-33.31 (ident "f"))))))
+									(value
+										(e-block @33.36-43.10
+											(s-let @34.13-40.45
+												(p-assign @34.13-34.21 (ident "is_valid"))
+												(e-binop @35.17-40.45 (op "and")
+													(e-binop @35.17-39.45 (op "and")
+														(e-binop @35.17-38.45 (op "and")
+															(e-binop @35.17-37.45 (op "and")
+																(e-binop @35.17-36.45 (op "and")
+																	(e-dot-access @35.17-35.41 (field "is_char_in_hex_range")
+																		(receiver
+																			(e-lookup-local @35.17-35.18
+																				(p-assign @33.15-33.16 (ident "a"))))
+																		(args))
+																	(e-dot-access @36.21-36.45 (field "is_char_in_hex_range")
+																		(receiver
+																			(e-lookup-local @36.21-36.22
+																				(p-assign @33.18-33.19 (ident "b"))))
+																		(args)))
+																(e-dot-access @37.21-37.45 (field "is_char_in_hex_range")
+																	(receiver
+																		(e-lookup-local @37.21-37.22
+																			(p-assign @33.21-33.22 (ident "c"))))
+																	(args)))
+															(e-dot-access @38.21-38.45 (field "is_char_in_hex_range")
+																(receiver
+																	(e-lookup-local @38.21-38.22
+																		(p-assign @33.24-33.25 (ident "d"))))
+																(args)))
+														(e-dot-access @39.21-39.45 (field "is_char_in_hex_range")
+															(receiver
+																(e-lookup-local @39.21-39.22
+																	(p-assign @33.27-33.28 (ident "e"))))
+															(args)))
+													(e-dot-access @40.21-40.45 (field "is_char_in_hex_range")
+														(receiver
+															(e-lookup-local @40.21-40.22
+																(p-assign @33.30-33.31 (ident "f"))))
+														(args))))
+											(e-if @42.13-42.125
+												(if-branches
+													(if-branch
+														(e-lookup-local @42.16-42.24
+															(p-assign @34.13-34.21 (ident "is_valid")))
+														(e-tag @42.25-42.27 (name "Ok")
+															(args
+																(e-nominal @42.28-42.33 (nominal "Color")
+																	(e-tag @42.28-42.37 (name "Hex")
+																		(args
+																			(e-lookup-local @42.38-42.41
+																				(p-assign @27.8-27.11 (ident "str"))))))))))
+												(if-else
+													(e-tag @42.49-42.52 (name "Err")
+														(args
+															(e-tag @42.53-42.63 (name "InvalidHex")
+																(args
+																	(e-string @42.64-42.123
+																		(e-literal @42.65-42.116 (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
+																		(e-lookup-local @42.118-42.121
+																			(p-assign @27.8-27.11 (ident "str")))
+																		(e-literal @42.122-42.122 (string ""))))))))))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-underscore @44.9-44.10)))
+									(value
+										(e-tag @44.14-44.17 (name "Err")
+											(args
+												(e-tag @44.18-44.28 (name "InvalidHex")
+													(args
+														(e-string @44.29-44.98
+															(e-literal @44.30-44.91 (string "Expected Hex must start with # and be 7 characters long, got "))
+															(e-lookup-local @44.93-44.96
+																(p-assign @27.8-27.11 (ident "str")))
+															(e-literal @44.97-44.97 (string "")))))))))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @26.7-26.46 (effectful false)
+						(ty @26.7-26.10 (name "Str"))
+						(ty-apply @26.14-26.46 (symbol "Result")
+							(ty @26.21-26.26 (name "Color"))
+							(ty-tag-union @26.28-26.45
+								(ty-apply @26.29-26.44 (symbol "InvalidHex")
+									(ty @26.40-26.43 (name "Str"))))))))))
+	(def
+		(pattern
+			(p-assign @49.1-49.7 (ident "to_str")))
+		(expr
+			(e-lambda @49.10-54.2
+				(args
+					(p-assign @49.11-49.16 (ident "color")))
+				(e-match @49.18-54.2
+					(match @49.18-54.2
 						(cond
-							(e-lookup-local @32.11-32.16
-								(p-assign @29.5-29.10 (ident "bytes"))))
+							(e-lookup-local @49.24-49.29
+								(p-assign @49.11-49.16 (ident "color"))))
 						(branches
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-list @33.9-33.32
-											(patterns
-												(p-int @33.10-33.13 (value "35"))
-												(p-assign @33.15-33.16 (ident "a"))
-												(p-assign @33.18-33.19 (ident "b"))
-												(p-assign @33.21-33.22 (ident "c"))
-												(p-assign @33.24-33.25 (ident "d"))
-												(p-assign @33.27-33.28 (ident "e"))
-												(p-assign @33.30-33.31 (ident "f"))))))
+										(p-nominal @50.5-50.10
+											(p-applied-tag @50.5-50.23))))
 								(value
-									(e-block @33.36-43.10
-										(s-let @34.13-40.45
-											(p-assign @34.13-34.21 (ident "is_valid"))
-											(e-binop @35.17-40.45 (op "and")
-												(e-binop @35.17-39.45 (op "and")
-													(e-binop @35.17-38.45 (op "and")
-														(e-binop @35.17-37.45 (op "and")
-															(e-binop @35.17-36.45 (op "and")
-																(e-dot-access @35.17-35.41 (field "is_char_in_hex_range")
-																	(receiver
-																		(e-lookup-local @35.17-35.18
-																			(p-assign @33.15-33.16 (ident "a"))))
-																	(args))
-																(e-dot-access @36.21-36.45 (field "is_char_in_hex_range")
-																	(receiver
-																		(e-lookup-local @36.21-36.22
-																			(p-assign @33.18-33.19 (ident "b"))))
-																	(args)))
-															(e-dot-access @37.21-37.45 (field "is_char_in_hex_range")
-																(receiver
-																	(e-lookup-local @37.21-37.22
-																		(p-assign @33.21-33.22 (ident "c"))))
-																(args)))
-														(e-dot-access @38.21-38.45 (field "is_char_in_hex_range")
-															(receiver
-																(e-lookup-local @38.21-38.22
-																	(p-assign @33.24-33.25 (ident "d"))))
-															(args)))
-													(e-dot-access @39.21-39.45 (field "is_char_in_hex_range")
-														(receiver
-															(e-lookup-local @39.21-39.22
-																(p-assign @33.27-33.28 (ident "e"))))
-														(args)))
-												(e-dot-access @40.21-40.45 (field "is_char_in_hex_range")
-													(receiver
-														(e-lookup-local @40.21-40.22
-															(p-assign @33.30-33.31 (ident "f"))))
-													(args))))
-										(e-if @42.13-42.125
-											(if-branches
-												(if-branch
-													(e-lookup-local @42.16-42.24
-														(p-assign @34.13-34.21 (ident "is_valid")))
-													(e-tag @42.25-42.27 (name "Ok")
-														(args
-															(e-nominal @42.28-42.33 (nominal "Color")
-																(e-tag @42.28-42.37 (name "Hex")
-																	(args
-																		(e-lookup-local @42.38-42.41
-																			(p-assign @27.8-27.11 (ident "str"))))))))))
-											(if-else
-												(e-tag @42.49-42.52 (name "Err")
-													(args
-														(e-tag @42.53-42.63 (name "InvalidHex")
-															(args
-																(e-string @42.64-42.123
-																	(e-literal @42.65-42.116 (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
-																	(e-lookup-local @42.118-42.121
-																		(p-assign @27.8-27.11 (ident "str")))
-																	(e-literal @42.122-42.122 (string ""))))))))))))
+									(e-string @50.27-50.86
+										(e-literal @50.28-50.32 (string "rgb("))
+										(e-call @50.34-50.47
+											(e-lookup-local @50.34-50.44
+												(p-assign @49.1-49.7 (ident "to_str")))
+											(e-lookup-local @50.45-50.46
+												(p-assign @50.15-50.16 (ident "r"))))
+										(e-literal @50.48-50.50 (string ", "))
+										(e-call @50.52-50.65
+											(e-lookup-local @50.52-50.62
+												(p-assign @49.1-49.7 (ident "to_str")))
+											(e-lookup-local @50.63-50.64
+												(p-assign @50.18-50.19 (ident "g"))))
+										(e-literal @50.66-50.68 (string ", "))
+										(e-call @50.70-50.83
+											(e-lookup-local @50.70-50.80
+												(p-assign @49.1-49.7 (ident "to_str")))
+											(e-lookup-local @50.81-50.82
+												(p-assign @50.21-50.22 (ident "b"))))
+										(e-literal @50.84-50.85 (string ")")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-underscore @44.9-44.10)))
+										(p-nominal @51.5-51.10
+											(p-applied-tag @51.5-51.27))))
 								(value
-									(e-tag @44.14-44.17 (name "Err")
-										(args
-											(e-tag @44.18-44.28 (name "InvalidHex")
-												(args
-													(e-string @44.29-44.98
-														(e-literal @44.30-44.91 (string "Expected Hex must start with # and be 7 characters long, got "))
-														(e-lookup-local @44.93-44.96
-															(p-assign @27.8-27.11 (ident "str")))
-														(e-literal @44.97-44.97 (string ""))))))))))))))
-		(annotation @27.1-27.4
-			(declared-type
-				(ty-fn @26.7-26.46 (effectful false)
-					(ty @26.7-26.10 (name "Str"))
-					(ty-apply @26.14-26.46 (symbol "Result")
-						(ty @26.21-26.26 (name "Color"))
-						(ty-tag-union @26.28-26.45
-							(ty-apply @26.29-26.44 (symbol "InvalidHex")
-								(ty @26.40-26.43 (name "Str")))))))))
-	(d-let
-		(p-assign @49.1-49.7 (ident "to_str"))
-		(e-lambda @49.10-54.2
-			(args
-				(p-assign @49.11-49.16 (ident "color")))
-			(e-match @49.18-54.2
-				(match @49.18-54.2
-					(cond
-						(e-lookup-local @49.24-49.29
-							(p-assign @49.11-49.16 (ident "color"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal @50.5-50.10
-										(p-applied-tag @50.5-50.23))))
-							(value
-								(e-string @50.27-50.86
-									(e-literal @50.28-50.32 (string "rgb("))
-									(e-call @50.34-50.47
-										(e-lookup-local @50.34-50.44
-											(p-assign @49.1-49.7 (ident "to_str")))
-										(e-lookup-local @50.45-50.46
-											(p-assign @50.15-50.16 (ident "r"))))
-									(e-literal @50.48-50.50 (string ", "))
-									(e-call @50.52-50.65
-										(e-lookup-local @50.52-50.62
-											(p-assign @49.1-49.7 (ident "to_str")))
-										(e-lookup-local @50.63-50.64
-											(p-assign @50.18-50.19 (ident "g"))))
-									(e-literal @50.66-50.68 (string ", "))
-									(e-call @50.70-50.83
-										(e-lookup-local @50.70-50.80
-											(p-assign @49.1-49.7 (ident "to_str")))
-										(e-lookup-local @50.81-50.82
-											(p-assign @50.21-50.22 (ident "b"))))
-									(e-literal @50.84-50.85 (string ")")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal @51.5-51.10
-										(p-applied-tag @51.5-51.27))))
-							(value
-								(e-string @51.31-51.109
-									(e-literal @51.32-51.37 (string "rgba("))
-									(e-call @51.39-51.52
-										(e-lookup-local @51.39-51.49
-											(p-assign @49.1-49.7 (ident "to_str")))
-										(e-lookup-local @51.50-51.51
-											(p-assign @51.16-51.17 (ident "r"))))
-									(e-literal @51.53-51.55 (string ", "))
-									(e-call @51.57-51.70
-										(e-lookup-local @51.57-51.67
-											(p-assign @49.1-49.7 (ident "to_str")))
-										(e-lookup-local @51.68-51.69
-											(p-assign @51.19-51.20 (ident "g"))))
-									(e-literal @51.71-51.73 (string ", "))
-									(e-call @51.75-51.88
-										(e-lookup-local @51.75-51.85
-											(p-assign @49.1-49.7 (ident "to_str")))
-										(e-lookup-local @51.86-51.87
-											(p-assign @51.22-51.23 (ident "b"))))
-									(e-literal @51.89-51.91 (string ", "))
-									(e-call @51.93-51.106
-										(e-lookup-local @51.93-51.103
-											(p-assign @49.1-49.7 (ident "to_str")))
-										(e-lookup-local @51.104-51.105
-											(p-assign @51.25-51.26 (ident "a"))))
-									(e-literal @51.107-51.108 (string ")")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal @52.5-52.10
-										(p-applied-tag @52.5-52.23))))
-							(value
-								(e-lookup-local @52.27-52.32
-									(p-assign @52.17-52.22 (ident "inner")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal @53.5-53.10
-										(p-applied-tag @53.5-53.21))))
-							(value
-								(e-lookup-local @53.25-53.30
-									(p-assign @53.15-53.20 (ident "inner")))))))))
-		(annotation @49.1-49.7
-			(declared-type
-				(ty-fn @48.10-48.22 (effectful false)
-					(ty @48.10-48.15 (name "Color"))
-					(ty @48.19-48.22 (name "Str"))))))
-	(d-let
-		(p-assign @61.1-61.6 (ident "named"))
-		(e-lambda @61.9-65.50
-			(args
-				(p-assign @61.10-61.13 (ident "str")))
-			(e-if @62.5-65.50
-				(if-branches
-					(if-branch
-						(e-dot-access @62.8-62.28 (field "is_named_color")
-							(receiver
-								(e-lookup-local @62.8-62.11
-									(p-assign @61.10-61.13 (ident "str"))))
-							(args))
-						(e-tag @63.9-63.11 (name "Ok")
-							(args
-								(e-nominal @63.12-63.17 (nominal "Color")
-									(e-tag @63.12-63.23 (name "Named")
-										(args
-											(e-lookup-local @63.24-63.27
-												(p-assign @61.10-61.13 (ident "str"))))))))))
-				(if-else
-					(e-tag @65.9-65.12 (name "Err")
-						(args
-							(e-tag @65.13-65.25 (name "UnknownColor")
+									(e-string @51.31-51.109
+										(e-literal @51.32-51.37 (string "rgba("))
+										(e-call @51.39-51.52
+											(e-lookup-local @51.39-51.49
+												(p-assign @49.1-49.7 (ident "to_str")))
+											(e-lookup-local @51.50-51.51
+												(p-assign @51.16-51.17 (ident "r"))))
+										(e-literal @51.53-51.55 (string ", "))
+										(e-call @51.57-51.70
+											(e-lookup-local @51.57-51.67
+												(p-assign @49.1-49.7 (ident "to_str")))
+											(e-lookup-local @51.68-51.69
+												(p-assign @51.19-51.20 (ident "g"))))
+										(e-literal @51.71-51.73 (string ", "))
+										(e-call @51.75-51.88
+											(e-lookup-local @51.75-51.85
+												(p-assign @49.1-49.7 (ident "to_str")))
+											(e-lookup-local @51.86-51.87
+												(p-assign @51.22-51.23 (ident "b"))))
+										(e-literal @51.89-51.91 (string ", "))
+										(e-call @51.93-51.106
+											(e-lookup-local @51.93-51.103
+												(p-assign @49.1-49.7 (ident "to_str")))
+											(e-lookup-local @51.104-51.105
+												(p-assign @51.25-51.26 (ident "a"))))
+										(e-literal @51.107-51.108 (string ")")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal @52.5-52.10
+											(p-applied-tag @52.5-52.23))))
+								(value
+									(e-lookup-local @52.27-52.32
+										(p-assign @52.17-52.22 (ident "inner")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal @53.5-53.10
+											(p-applied-tag @53.5-53.21))))
+								(value
+									(e-lookup-local @53.25-53.30
+										(p-assign @53.15-53.20 (ident "inner"))))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @48.10-48.22 (effectful false)
+						(ty @48.10-48.15 (name "Color"))
+						(ty @48.19-48.22 (name "Str")))))))
+	(def
+		(pattern
+			(p-assign @61.1-61.6 (ident "named")))
+		(expr
+			(e-lambda @61.9-65.50
+				(args
+					(p-assign @61.10-61.13 (ident "str")))
+				(e-if @62.5-65.50
+					(if-branches
+						(if-branch
+							(e-dot-access @62.8-62.28 (field "is_named_color")
+								(receiver
+									(e-lookup-local @62.8-62.11
+										(p-assign @61.10-61.13 (ident "str"))))
+								(args))
+							(e-tag @63.9-63.11 (name "Ok")
 								(args
-									(e-string @65.26-65.48
-										(e-literal @65.27-65.41 (string "Unknown color "))
-										(e-lookup-local @65.43-65.46
-											(p-assign @61.10-61.13 (ident "str")))
-										(e-literal @65.47-65.47 (string ""))))))))))
-		(annotation @61.1-61.6
-			(declared-type
-				(ty-fn @60.9-60.50 (effectful false)
-					(ty @60.9-60.12 (name "Str"))
-					(ty-apply @60.16-60.50 (symbol "Result")
-						(ty @60.23-60.28 (name "Color"))
-						(ty-tag-union @60.30-60.49
-							(ty-apply @60.31-60.48 (symbol "UnknownColor")
-								(ty @60.44-60.47 (name "Str")))))))))
-	(d-let
-		(p-assign @67.1-67.15 (ident "is_named_color"))
-		(e-lambda @67.18-71.2
-			(args
-				(p-assign @67.19-67.22 (ident "str")))
-			(e-block @67.23-71.2
-				(s-let @68.5-68.66
-					(p-assign @68.5-68.11 (ident "colors"))
-					(e-call @68.14-68.66
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-list @68.28-68.65
-							(elems
-								(e-string @68.29-68.40
-									(e-literal @68.30-68.39 (string "AliceBlue")))
-								(e-string @68.42-68.56
-									(e-literal @68.43-68.55 (string "AntiqueWhite")))
-								(e-string @68.58-68.64
-									(e-literal @68.59-68.63 (string "Aqua")))))))
-				(e-dot-access @70.5-70.25 (field "contains")
-					(receiver
-						(e-lookup-local @70.5-70.11
-							(p-assign @68.5-68.11 (ident "colors"))))
-					(args
-						(e-lookup-local @70.21-70.24
-							(p-assign @67.19-67.22 (ident "str"))))))))
+									(e-nominal @63.12-63.17 (nominal "Color")
+										(e-tag @63.12-63.23 (name "Named")
+											(args
+												(e-lookup-local @63.24-63.27
+													(p-assign @61.10-61.13 (ident "str"))))))))))
+					(if-else
+						(e-tag @65.9-65.12 (name "Err")
+							(args
+								(e-tag @65.13-65.25 (name "UnknownColor")
+									(args
+										(e-string @65.26-65.48
+											(e-literal @65.27-65.41 (string "Unknown color "))
+											(e-lookup-local @65.43-65.46
+												(p-assign @61.10-61.13 (ident "str")))
+											(e-literal @65.47-65.47 (string "")))))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @60.9-60.50 (effectful false)
+						(ty @60.9-60.12 (name "Str"))
+						(ty-apply @60.16-60.50 (symbol "Result")
+							(ty @60.23-60.28 (name "Color"))
+							(ty-tag-union @60.30-60.49
+								(ty-apply @60.31-60.48 (symbol "UnknownColor")
+									(ty @60.44-60.47 (name "Str"))))))))))
+	(def
+		(pattern
+			(p-assign @67.1-67.15 (ident "is_named_color")))
+		(expr
+			(e-lambda @67.18-71.2
+				(args
+					(p-assign @67.19-67.22 (ident "str")))
+				(e-block @67.23-71.2
+					(s-let @68.5-68.66
+						(p-assign @68.5-68.11 (ident "colors"))
+						(e-call @68.14-68.66
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-list @68.28-68.65
+								(elems
+									(e-string @68.29-68.40
+										(e-literal @68.30-68.39 (string "AliceBlue")))
+									(e-string @68.42-68.56
+										(e-literal @68.43-68.55 (string "AntiqueWhite")))
+									(e-string @68.58-68.64
+										(e-literal @68.59-68.63 (string "Aqua")))))))
+					(e-dot-access @70.5-70.25 (field "contains")
+						(receiver
+							(e-lookup-local @70.5-70.11
+								(p-assign @68.5-68.11 (ident "colors"))))
+						(args
+							(e-lookup-local @70.21-70.24
+								(p-assign @67.19-67.22 (ident "str")))))))))
 	(s-nominal-decl @10.1-15.2
-		(ty-header @10.1-10.6 (name "Color"))
+		(type-header (name "Color"))
 		(ty-tag-union @10.10-15.2
 			(ty-apply @11.5-11.20 (symbol "RGB")
 				(ty @11.9-11.11 (name "U8"))
@@ -1083,7 +1099,7 @@ is_named_color = |str| {
 		(patt @67.1-67.15 (type "_arg -> _ret")))
 	(type_decls
 		(nominal @10.1-15.2 (type "Color")
-			(ty-header @10.1-10.6 (name "Color"))))
+			(type-header (name "Color"))))
 	(expressions
 		(expr @18.7-18.35 (type "Error, Error, Error -> Color"))
 		(expr @21.8-24.2 (type "Error, Error, Error, Error -> Color"))

@@ -11,9 +11,9 @@ type=expr
 UNDEFINED VARIABLE - record_mixed_types.md:1:35:1:44
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `true` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'true' is not defined:
 **record_mixed_types.md:1:35:1:44:**
 ```roc
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
@@ -51,21 +51,26 @@ NO CHANGE
 ~~~clojure
 (e-record @1.1-1.86
 	(fields
-		(field (name "name")
-			(e-string @1.9-1.16
-				(e-literal @1.10-1.15 (string "Alice"))))
-		(field (name "age")
-			(e-int @1.23-1.25 (value "30")))
-		(field (name "active")
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(field (name "scores")
-			(e-list @1.54-1.66
-				(elems
-					(e-int @1.55-1.57 (value "95"))
-					(e-int @1.59-1.61 (value "87"))
-					(e-int @1.63-1.65 (value "92")))))
-		(field (name "balance")
-			(e-frac-dec @1.77-1.84 (value "1250.75")))))
+		(record-field (label "name")
+			(value
+				(e-string @1.9-1.16
+					(e-literal @1.10-1.15 (string "Alice")))))
+		(record-field (label "age")
+			(value
+				(e-int @1.23-1.25 (value "30"))))
+		(record-field (label "active")
+			(value
+				(e-runtime-error (tag "ident_not_in_scope"))))
+		(record-field (label "scores")
+			(value
+				(e-list @1.54-1.66
+					(elems
+						(e-int @1.55-1.57 (value "95"))
+						(e-int @1.59-1.61 (value "87"))
+						(e-int @1.63-1.65 (value "92"))))))
+		(record-field (label "balance")
+			(value
+				(e-frac-dec @1.77-1.84 (value "1250.75"))))))
 ~~~
 # TYPES
 ~~~clojure

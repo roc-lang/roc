@@ -14,9 +14,9 @@ UNDEFINED VARIABLE - record_shorthand_fields.md:1:14:1:19
 UNDEFINED VARIABLE - record_shorthand_fields.md:1:21:1:27
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `name` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'name' is not defined:
 **record_shorthand_fields.md:1:3:1:7:**
 ```roc
 { name, age, email, active }
@@ -25,9 +25,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `age` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'age' is not defined:
 **record_shorthand_fields.md:1:9:1:12:**
 ```roc
 { name, age, email, active }
@@ -36,9 +36,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `email` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'email' is not defined:
 **record_shorthand_fields.md:1:14:1:19:**
 ```roc
 { name, age, email, active }
@@ -47,9 +47,9 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `active` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'active' is not defined:
 **record_shorthand_fields.md:1:21:1:27:**
 ```roc
 { name, age, email, active }
@@ -77,14 +77,18 @@ NO CHANGE
 ~~~clojure
 (e-record @1.1-1.29
 	(fields
-		(field (name "name")
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(field (name "age")
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(field (name "email")
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(field (name "active")
-			(e-runtime-error (tag "ident_not_in_scope")))))
+		(record-field (label "name")
+			(value
+				(e-runtime-error (tag "ident_not_in_scope"))))
+		(record-field (label "age")
+			(value
+				(e-runtime-error (tag "ident_not_in_scope"))))
+		(record-field (label "email")
+			(value
+				(e-runtime-error (tag "ident_not_in_scope"))))
+		(record-field (label "active")
+			(value
+				(e-runtime-error (tag "ident_not_in_scope"))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -115,60 +115,66 @@ is_ok = |result| match result {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @6.1-6.3 (ident "ok"))
-		(e-lambda @6.6-6.24
-			(args
-				(p-assign @6.7-6.8 (ident "a")))
-			(e-nominal @6.10-6.18 (nominal "MyResult")
-				(e-tag @6.10-6.21 (name "Ok")
-					(args
-						(e-lookup-local @6.22-6.23
-							(p-assign @6.7-6.8 (ident "a")))))))
-		(annotation @6.1-6.3
-			(declared-type
-				(ty-fn @5.6-5.27 (effectful false)
-					(ty-var @5.6-5.8 (name "ok"))
-					(ty-apply @5.12-5.27 (symbol "MyResult")
-						(ty-var @5.21-5.23 (name "ok"))
-						(ty-underscore @1.1-1.1))))))
-	(d-let
-		(p-assign @9.1-9.6 (ident "is_ok"))
-		(e-lambda @9.9-12.2
-			(args
-				(p-assign @9.10-9.16 (ident "result")))
-			(e-match @9.18-12.2
-				(match @9.18-12.2
-					(cond
-						(e-lookup-local @9.24-9.30
-							(p-assign @9.10-9.16 (ident "result"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal @10.5-10.13
-										(p-applied-tag @10.5-10.19))))
-							(value
-								(e-nominal @10.23-10.27 (nominal "Bool")
-									(e-tag @10.23-10.32 (name "True")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal @11.5-11.13
-										(p-applied-tag @11.5-11.20))))
-							(value
-								(e-nominal @11.24-11.28 (nominal "Bool")
-									(e-tag @11.24-11.34 (name "False")))))))))
-		(annotation @9.1-9.6
-			(declared-type
-				(ty-fn @8.9-8.36 (effectful false)
-					(ty-apply @8.9-8.28 (symbol "MyResult")
-						(ty-var @8.18-8.21 (name "_ok"))
-						(ty-var @8.23-8.27 (name "_err")))
-					(ty @8.32-8.36 (name "Bool"))))))
+	(def
+		(pattern
+			(p-assign @6.1-6.3 (ident "ok")))
+		(expr
+			(e-lambda @6.6-6.24
+				(args
+					(p-assign @6.7-6.8 (ident "a")))
+				(e-nominal @6.10-6.18 (nominal "MyResult")
+					(e-tag @6.10-6.21 (name "Ok")
+						(args
+							(e-lookup-local @6.22-6.23
+								(p-assign @6.7-6.8 (ident "a"))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @5.6-5.27 (effectful false)
+						(ty-var @5.6-5.8 (name "ok"))
+						(ty-apply @5.12-5.27 (symbol "MyResult")
+							(ty-var @5.21-5.23 (name "ok"))
+							(ty-underscore @1.1-1.1)))))))
+	(def
+		(pattern
+			(p-assign @9.1-9.6 (ident "is_ok")))
+		(expr
+			(e-lambda @9.9-12.2
+				(args
+					(p-assign @9.10-9.16 (ident "result")))
+				(e-match @9.18-12.2
+					(match @9.18-12.2
+						(cond
+							(e-lookup-local @9.24-9.30
+								(p-assign @9.10-9.16 (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal @10.5-10.13
+											(p-applied-tag @10.5-10.19))))
+								(value
+									(e-nominal @10.23-10.27 (nominal "Bool")
+										(e-tag @10.23-10.32 (name "True")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal @11.5-11.13
+											(p-applied-tag @11.5-11.20))))
+								(value
+									(e-nominal @11.24-11.28 (nominal "Bool")
+										(e-tag @11.24-11.34 (name "False"))))))))))
+		(annotation
+			(annotation
+				(type-anno
+					(ty-fn @8.9-8.36 (effectful false)
+						(ty-apply @8.9-8.28 (symbol "MyResult")
+							(ty-var @8.18-8.21 (name "_ok"))
+							(ty-var @8.23-8.27 (name "_err")))
+						(ty @8.32-8.36 (name "Bool")))))))
 	(s-nominal-decl @3.1-3.40
-		(ty-header @3.1-3.18 (name "MyResult")
-			(ty-args
+		(type-header (name "MyResult")
+			(args
 				(ty-var @3.10-3.12 (name "ok"))
 				(ty-var @3.14-3.17 (name "err"))))
 		(ty-tag-union @3.22-3.40
@@ -185,8 +191,8 @@ is_ok = |result| match result {
 		(patt @9.1-9.6 (type "MyResult(ok, err) -> Bool")))
 	(type_decls
 		(nominal @3.1-3.40 (type "MyResult(ok, err)")
-			(ty-header @3.1-3.18 (name "MyResult")
-				(ty-args
+			(type-header (name "MyResult")
+				(args
 					(ty-var @3.10-3.12 (name "ok"))
 					(ty-var @3.14-3.17 (name "err"))))))
 	(expressions

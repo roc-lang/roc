@@ -9,20 +9,13 @@ module[]r:a	where
 module(a).h:s
 ~~~
 # EXPECTED
-UNDECLARED TYPE VARIABLE - fuzz_crash_055.md:2:13:2:14
+COMPILER DIAGNOSTIC - fuzz_crash_055.md:0:0:0:0
 # PROBLEMS
-**UNDECLARED TYPE VARIABLE**
-The type variable _s_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**fuzz_crash_055.md:2:13:2:14:**
-```roc
-module(a).h:s
-```
-            ^
-
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type_var' is not yet handled in report generation.
+**fuzz_crash_055.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -55,10 +48,11 @@ r : a
 	(s-type-anno @1.9-2.14 (name "r")
 		(ty-var @1.11-1.12 (name "a"))
 		(where
-			(method @2.1-2.14 (module-of "a") (ident "h")
-				(args)
-				(ty-var @2.13-2.14 (name "s")))))
-	(ext-decl @2.1-2.14 (ident "module(a).h") (kind "value")))
+			(where-clause
+				(type "mod-method")
+				(var-name "a")
+				(method-name "h"))))
+	(external-decl (qualified-name "module(a).h") (module-name "module(a)") (local-name "h") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

@@ -20,37 +20,20 @@ Bar : SomeUndeclaredType
 Baz : Foo
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_scope_integration.md:7:1:7:10
-UNDECLARED TYPE - type_scope_integration.md:10:7:10:25
+COMPILER DIAGNOSTIC - type_scope_integration.md:0:0:0:0
+COMPILER DIAGNOSTIC - type_scope_integration.md:0:0:0:0
 # PROBLEMS
-**TYPE REDECLARED**
-The type _Foo_ is being redeclared.
+**COMPILER DIAGNOSTIC**
 
-The redeclaration is here:
-**type_scope_integration.md:7:1:7:10:**
-```roc
-Foo : Str
-```
-^^^^^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'type_redeclared' is not yet handled in report generation.
+**type_scope_integration.md:0:0:0:0**
 
-But _Foo_ was already declared here:
-**type_scope_integration.md:4:1:4:10:**
-```roc
-Foo : U64
-```
-^^^^^^^^^
+**COMPILER DIAGNOSTIC**
 
-
-**UNDECLARED TYPE**
-The type _SomeUndeclaredType_ is not declared in this scope.
-
-This type is referenced here:
-**type_scope_integration.md:10:7:10:25:**
-```roc
-Bar : SomeUndeclaredType
-```
-      ^^^^^^^^^^^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'undeclared_type' is not yet handled in report generation.
+**type_scope_integration.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -93,16 +76,16 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-alias-decl @4.1-4.10
-		(ty-header @4.1-4.4 (name "Foo"))
+		(type-header (name "Foo"))
 		(ty @4.7-4.10 (name "U64")))
 	(s-alias-decl @7.1-7.10
-		(ty-header @7.1-7.4 (name "Foo"))
+		(type-header (name "Foo"))
 		(ty @7.7-7.10 (name "Str")))
 	(s-alias-decl @10.1-10.25
-		(ty-header @10.1-10.4 (name "Bar"))
+		(type-header (name "Bar"))
 		(ty @10.7-10.25 (name "SomeUndeclaredType")))
 	(s-alias-decl @13.1-13.10
-		(ty-header @13.1-13.4 (name "Baz"))
+		(type-header (name "Baz"))
 		(ty @13.7-13.10 (name "Foo"))))
 ~~~
 # TYPES
@@ -111,12 +94,12 @@ NO CHANGE
 	(defs)
 	(type_decls
 		(alias @4.1-4.10 (type "Foo")
-			(ty-header @4.1-4.4 (name "Foo")))
+			(type-header (name "Foo")))
 		(alias @7.1-7.10 (type "Foo")
-			(ty-header @7.1-7.4 (name "Foo")))
+			(type-header (name "Foo")))
 		(alias @10.1-10.25 (type "Error")
-			(ty-header @10.1-10.4 (name "Bar")))
+			(type-header (name "Bar")))
 		(alias @13.1-13.10 (type "Baz")
-			(ty-header @13.1-13.4 (name "Baz"))))
+			(type-header (name "Baz"))))
 	(expressions))
 ~~~

@@ -51,9 +51,11 @@ topLevelVar_ = 0
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @4.5-4.17 (ident "topLevelVar_"))
-		(e-int @4.20-4.21 (value "0"))))
+	(def
+		(pattern
+			(p-assign @4.5-4.17 (ident "topLevelVar_")))
+		(expr
+			(e-int @4.20-4.21 (value "0")))))
 ~~~
 # TYPES
 ~~~clojure

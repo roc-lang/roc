@@ -12,9 +12,9 @@ UNDEFINED VARIABLE - can_dot_access.md:1:1:1:5
 UNDEFINED VARIABLE - can_dot_access.md:1:10:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `list` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'list' is not defined:
 **can_dot_access.md:1:1:1:5:**
 ```roc
 list.map(fn)
@@ -23,9 +23,9 @@ list.map(fn)
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `fn` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'fn' is not defined:
 **can_dot_access.md:1:10:1:12:**
 ```roc
 list.map(fn)

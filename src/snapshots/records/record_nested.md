@@ -94,45 +94,59 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~clojure
 (e-record @1.1-12.2
 	(fields
-		(field (name "person")
-			(e-record @2.13-2.39
-				(fields
-					(field (name "name")
-						(e-string @2.21-2.28
-							(e-literal @2.22-2.27 (string "Alice"))))
-					(field (name "age")
-						(e-int @2.35-2.37 (value "30"))))))
-		(field (name "address")
-			(e-record @3.14-7.6
-				(fields
-					(field (name "street")
-						(e-string @4.17-4.30
-							(e-literal @4.18-4.29 (string "123 Main St"))))
-					(field (name "city")
-						(e-string @5.15-5.28
-							(e-literal @5.16-5.27 (string "Springfield"))))
-					(field (name "coordinates")
-						(e-record @6.22-6.53
-							(fields
-								(field (name "lat")
-									(e-frac-dec @6.29-6.36 (value "42.1234")))
-								(field (name "lng")
-									(e-frac-dec @6.43-6.51 (value "-71.5678")))))))))
-		(field (name "contact")
-			(e-record @8.14-11.6
-				(fields
-					(field (name "email")
-						(e-string @9.16-9.35
-							(e-literal @9.17-9.34 (string "alice@example.com"))))
-					(field (name "phone")
-						(e-record @10.16-10.54
-							(fields
-								(field (name "home")
-									(e-string @10.24-10.34
-										(e-literal @10.25-10.33 (string "555-1234"))))
-								(field (name "work")
-									(e-string @10.42-10.52
-										(e-literal @10.43-10.51 (string "555-5678"))))))))))))
+		(record-field (label "person")
+			(value
+				(e-record @2.13-2.39
+					(fields
+						(record-field (label "name")
+							(value
+								(e-string @2.21-2.28
+									(e-literal @2.22-2.27 (string "Alice")))))
+						(record-field (label "age")
+							(value
+								(e-int @2.35-2.37 (value "30"))))))))
+		(record-field (label "address")
+			(value
+				(e-record @3.14-7.6
+					(fields
+						(record-field (label "street")
+							(value
+								(e-string @4.17-4.30
+									(e-literal @4.18-4.29 (string "123 Main St")))))
+						(record-field (label "city")
+							(value
+								(e-string @5.15-5.28
+									(e-literal @5.16-5.27 (string "Springfield")))))
+						(record-field (label "coordinates")
+							(value
+								(e-record @6.22-6.53
+									(fields
+										(record-field (label "lat")
+											(value
+												(e-frac-dec @6.29-6.36 (value "42.1234"))))
+										(record-field (label "lng")
+											(value
+												(e-frac-dec @6.43-6.51 (value "-71.5678"))))))))))))
+		(record-field (label "contact")
+			(value
+				(e-record @8.14-11.6
+					(fields
+						(record-field (label "email")
+							(value
+								(e-string @9.16-9.35
+									(e-literal @9.17-9.34 (string "alice@example.com")))))
+						(record-field (label "phone")
+							(value
+								(e-record @10.16-10.54
+									(fields
+										(record-field (label "home")
+											(value
+												(e-string @10.24-10.34
+													(e-literal @10.25-10.33 (string "555-1234")))))
+										(record-field (label "work")
+											(value
+												(e-string @10.42-10.52
+													(e-literal @10.43-10.51 (string "555-5678")))))))))))))))
 ~~~
 # TYPES
 ~~~clojure

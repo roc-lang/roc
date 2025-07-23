@@ -15,9 +15,9 @@ UNDEFINED VARIABLE - variable_shadowing.md:1:8:1:13
 UNDEFINED VARIABLE - variable_shadowing.md:1:15:1:20
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `value` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'value' is not defined:
 **variable_shadowing.md:1:8:1:13:**
 ```roc
 match (value, other) {
@@ -26,9 +26,9 @@ match (value, other) {
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `other` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**Undefined Variable**
+The variable 'other' is not defined:
 **variable_shadowing.md:1:15:1:20:**
 ```roc
 match (value, other) {

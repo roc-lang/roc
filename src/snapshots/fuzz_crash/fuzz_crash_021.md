@@ -15,10 +15,10 @@ MISSING HEADER - fuzz_crash_021.md:1:1:1:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_021.md:1:4:1:5
 PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 PARSE ERROR - fuzz_crash_021.md:3:15:3:15
-MALFORMED TYPE - :0:0:0:0
-INVALID STATEMENT - fuzz_crash_021.md:1:4:1:5
-INVALID STATEMENT - fuzz_crash_021.md:1:5:1:13
-INVALID STATEMENT - fuzz_crash_021.md:1:13:1:16
+COMPILER DIAGNOSTIC - fuzz_crash_021.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_021.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_021.md:0:0:0:0
+COMPILER DIAGNOSTIC - fuzz_crash_021.md:0:0:0:0
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -75,41 +75,29 @@ Pair(a, b+ : (
               
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**Compiler Diagnostic**
+Diagnostic type 'malformed_type_annotation' is not yet handled in report generation.
+**fuzz_crash_021.md:0:0:0:0**
 
-**fuzz_crash_021.md:1:4:1:5:**
-```roc
-Fli/main.roc" }
-```
-   ^
+**COMPILER DIAGNOSTIC**
 
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_021.md:0:0:0:0**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**COMPILER DIAGNOSTIC**
 
-**fuzz_crash_021.md:1:5:1:13:**
-```roc
-Fli/main.roc" }
-```
-    ^^^^^^^^
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_021.md:0:0:0:0**
 
+**COMPILER DIAGNOSTIC**
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_021.md:1:13:1:16:**
-```roc
-Fli/main.roc" }
-```
-            ^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
+**fuzz_crash_021.md:0:0:0:0**
 
 # TOKENS
 ~~~zig
@@ -143,8 +131,8 @@ main.roc
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-3.15
-		(ty-header @3.1-3.11 (name "Fli"))
-		(ty-malformed @3.14-3.15)))
+		(type-header (name "Fli"))
+		(ty-malformed @1.1-1.1)))
 ~~~
 # TYPES
 ~~~clojure
@@ -152,6 +140,6 @@ main.roc
 	(defs)
 	(type_decls
 		(alias @3.1-3.15 (type "Error")
-			(ty-header @3.1-3.11 (name "Fli"))))
+			(type-header (name "Fli"))))
 	(expressions))
 ~~~

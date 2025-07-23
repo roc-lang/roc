@@ -53,24 +53,31 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @3.1-3.7 (ident "person"))
-		(e-record @3.10-3.36
-			(fields
-				(field (name "name")
-					(e-string @3.18-3.25
-						(e-literal @3.19-3.24 (string "Alice"))))
-				(field (name "age")
-					(e-int @3.32-3.34 (value "30"))))))
-	(d-let
-		(p-assign @4.1-4.8 (ident "updated"))
-		(e-record @4.11-4.32
-			(ext
-				(e-lookup-local @4.15-4.21
-					(p-assign @3.1-3.7 (ident "person"))))
-			(fields
-				(field (name "age")
-					(e-int @4.28-4.30 (value "31")))))))
+	(def
+		(pattern
+			(p-assign @3.1-3.7 (ident "person")))
+		(expr
+			(e-record @3.10-3.36
+				(fields
+					(record-field (label "name")
+						(value
+							(e-string @3.18-3.25
+								(e-literal @3.19-3.24 (string "Alice")))))
+					(record-field (label "age")
+						(value
+							(e-int @3.32-3.34 (value "30"))))))))
+	(def
+		(pattern
+			(p-assign @4.1-4.8 (ident "updated")))
+		(expr
+			(e-record @4.11-4.32
+				(ext
+					(e-lookup-local @4.15-4.21
+						(p-assign @3.1-3.7 (ident "person"))))
+				(fields
+					(record-field (label "age")
+						(value
+							(e-int @4.28-4.30 (value "31")))))))))
 ~~~
 # TYPES
 ~~~clojure

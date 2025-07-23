@@ -15,24 +15,26 @@ EXPOSED BUT NOT DEFINED - hosted.md:1:9:1:11
 EXPOSED BUT NOT DEFINED - hosted.md:1:13:1:15
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
-The module header says that `a!` is exposed, but it is not defined anywhere in this module.
 
+**Exposed but Not Defined**
+'a!' is exposed in the module header but is not defined:
 **hosted.md:1:9:1:11:**
 ```roc
 hosted [a!, b!,]
 ```
         ^^
-You can fix this by either defining `a!` in this module, or by removing it from the list of exposed values.
+
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `b!` is exposed, but it is not defined anywhere in this module.
 
+**Exposed but Not Defined**
+'b!' is exposed in the module header but is not defined:
 **hosted.md:1:13:1:15:**
 ```roc
 hosted [a!, b!,]
 ```
             ^^
-You can fix this by either defining `b!` in this module, or by removing it from the list of exposed values.
+
 
 # TOKENS
 ~~~zig
