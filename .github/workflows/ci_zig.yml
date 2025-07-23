@@ -60,7 +60,7 @@ jobs:
       - run: roc version
 
       - run: |
-          roc check src/PROFILING/bench_exec.roc
+          roc check src/PROFILING/exec_bench.roc
 
 
   zig-tests:
