@@ -91,14 +91,14 @@ match person {
 							(p-record-destructure @2.5-2.40
 								(destructs
 									(record-destruct @2.7-2.11 (label "name") (ident "name")
-										(required))
+										(requenved))
 									(record-destruct @2.13-2.38 (label "address") (ident "address")
 										(sub-pattern
 											(p-as @2.22-2.33 (as "addr")
 												(p-record-destructure @2.22-2.30
 													(destructs
 														(record-destruct @2.24-2.28 (label "city") (ident "city")
-															(required))))))))))))
+															(requenved))))))))))))
 				(value
 					(e-tuple @2.58-2.82
 						(elems
@@ -107,20 +107,20 @@ match person {
 									(p-record-destructure @2.5-2.40
 										(destructs
 											(record-destruct @2.7-2.11 (label "name") (ident "name")
-												(required))
+												(requenved))
 											(record-destruct @2.13-2.38 (label "address") (ident "address")
 												(sub-pattern
 													(p-as @2.22-2.33 (as "addr")
 														(p-record-destructure @2.22-2.30
 															(destructs
 																(record-destruct @2.24-2.28 (label "city") (ident "city")
-																	(required)))))))))))
+																	(requenved)))))))))))
 							(e-lookup-local @2.71-2.75
 								(p-as @2.22-2.33 (as "addr")
 									(p-record-destructure @2.22-2.30
 										(destructs
 											(record-destruct @2.24-2.28 (label "city") (ident "city")
-												(required))))))
+												(requenved))))))
 							(e-lookup-local @2.77-2.81
 								(p-assign @2.24-2.28 (ident "city")))))))
 			(branch
@@ -130,7 +130,7 @@ match person {
 							(p-record-destructure @3.5-3.13
 								(destructs
 									(record-destruct @3.7-3.11 (label "name") (ident "name")
-										(required)))))))
+										(requenved)))))))
 				(value
 					(e-tuple @3.33-3.64
 						(elems
@@ -139,7 +139,7 @@ match person {
 									(p-record-destructure @3.5-3.13
 										(destructs
 											(record-destruct @3.7-3.11 (label "name") (ident "name")
-												(required))))))
+												(requenved))))))
 							(e-lookup-local @3.48-3.52
 								(p-assign @3.7-3.11 (ident "name")))
 							(e-string @3.54-3.63

@@ -201,7 +201,7 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-crash");
                 const region = env.store.getStatementRegion(stmt_idx);
                 try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPaenv("msg", env.strings.get(c.msg));
+                try tree.pushStringPair("msg", env.strings.get(c.msg));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -267,14 +267,14 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-import");
                 const region = env.store.getStatementRegion(stmt_idx);
                 try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPaenv("module", env.idents.getText(s.module_name_tok));
+                try tree.pushStringPair("module", env.idents.getText(s.module_name_tok));
 
                 if (s.qualifier_tok) |qualifier| {
-                    try tree.pushStringPaenv("qualifier", env.getIdentText(qualifier));
+                    try tree.pushStringPair("qualifier", env.getIdentText(qualifier));
                 }
 
                 if (s.alias_tok) |alias| {
-                    try tree.pushStringPaenv("alias", env.getIdentText(alias));
+                    try tree.pushStringPair("alias", env.getIdentText(alias));
                 }
 
                 const attrs = tree.beginNode();
@@ -284,7 +284,7 @@ pub const Statement = union(enum) {
                 const exposes_attrs = tree.beginNode();
                 const exposes_slice = env.store.sliceExposedItems(s.exposes);
                 for (exposes_slice) |exposed_idx| {
-                    try env.store.getExposedItem(exposed_idx).pushToSExprTree(env.env, env, tree);
+                    try env.store.getExposedItem(exposed_idx).pushToSExprTree({}, env, tree);
                 }
                 try tree.endNode(exposes_begin, exposes_attrs);
 
@@ -343,7 +343,7 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-type-anno");
                 const region = env.store.getStatementRegion(stmt_idx);
                 try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPaenv("name", env.getIdentText(s.name));
+                try tree.pushStringPair("name", env.getIdentText(s.name));
                 const attrs = tree.beginNode();
 
                 try env.store.getTypeAnno(s.anno).pushToSExprTree(env, tree, s.anno);

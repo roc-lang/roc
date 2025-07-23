@@ -59,11 +59,11 @@ NO CHANGE
 			(p-record-destructure @1.2-1.20
 				(destructs
 					(record-destruct @1.4-1.8 (label "name") (ident "name")
-						(required))
+						(requenved))
 					(record-destruct @1.10-1.13 (label "age") (ident "age")
-						(required))
+						(requenved))
 					(record-destruct @1.15-1.18 (label "a") (ident "a")
-						(required))))))
+						(requenved))))))
 	(e-record @1.32-1.103
 		(fields
 			(record-field (label "greeting")
@@ -80,11 +80,11 @@ NO CHANGE
 							(p-record-destructure @1.2-1.20
 								(destructs
 									(record-destruct @1.4-1.8 (label "name") (ident "name")
-										(required))
+										(requenved))
 									(record-destruct @1.10-1.13 (label "age") (ident "age")
-										(required))
+										(requenved))
 									(record-destruct @1.15-1.18 (label "a") (ident "a")
-										(required))))))))
+										(requenved))))))))
 			(record-field (label "is_adult")
 				(value
 					(e-binop @1.92-1.101 (op "ge")

@@ -89,7 +89,7 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty-apply");
                 const region = env.store.getTypeAnnoRegion(type_anno_idx);
                 try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPaenv("symbol", env.getIdentText(a.symbol));
+                try tree.pushStringPair("symbol", env.getIdentText(a.symbol));
                 const attrs = tree.beginNode();
 
                 const args_slice = env.store.sliceTypeAnnos(a.args);
@@ -104,7 +104,7 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty-var");
                 const region = env.store.getTypeAnnoRegion(type_anno_idx);
                 try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPaenv("name", env.getIdentText(tv.name));
+                try tree.pushStringPair("name", env.getIdentText(tv.name));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -121,7 +121,7 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty");
                 const region = env.store.getTypeAnnoRegion(type_anno_idx);
                 try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPaenv("name", env.getIdentText(t.symbol));
+                try tree.pushStringPair("name", env.getIdentText(t.symbol));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -170,7 +170,7 @@ pub const TypeAnno = union(enum) {
 
                     const field_begin = tree.beginNode();
                     try tree.pushStaticAtom("field");
-                    try tree.pushStringPaenv("field", env.getIdentText(field.name));
+                    try tree.pushStringPair("field", env.getIdentText(field.name));
                     const field_attrs = tree.beginNode();
 
                     try env.store.getTypeAnno(field.ty).pushToSExprTree(env, tree, field.ty);
@@ -185,7 +185,7 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty-fn");
                 const region = env.store.getTypeAnnoRegion(type_anno_idx);
                 try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushBoolPaenv("effectful", f.effectful);
+                try tree.pushBoolPair("effectful", f.effectful);
                 const attrs = tree.beginNode();
 
                 const args_slice = env.store.sliceTypeAnnos(f.args);

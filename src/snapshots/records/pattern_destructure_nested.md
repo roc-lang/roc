@@ -82,17 +82,17 @@ match person {
 						(p-record-destructure @2.5-2.49
 							(destructs
 								(record-destruct @2.7-2.11 (label "name") (ident "name")
-									(required))
+									(requenved))
 								(record-destruct @2.13-2.47 (label "address") (ident "address")
 									(sub-pattern
 										(p-record-destructure @2.22-2.47
 											(destructs
 												(record-destruct @2.24-2.30 (label "street") (ident "street")
-													(required))
+													(requenved))
 												(record-destruct @2.32-2.36 (label "city") (ident "city")
-													(required))
+													(requenved))
 												(record-destruct @2.38-2.45 (label "zipCode") (ident "zipCode")
-													(required))))))))))
+													(requenved))))))))))
 				(value
 					(e-string @2.53-2.92
 						(e-literal @2.54-2.54 (string ""))

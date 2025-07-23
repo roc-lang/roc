@@ -53,11 +53,11 @@ NO CHANGE
 			(p-record-destructure @3.1-3.21
 				(destructs
 					(record-destruct @3.3-3.7 (label "name") (ident "name")
-						(required))
+						(requenved))
 					(record-destruct @3.9-3.12 (label "age") (ident "age")
-						(required))
+						(requenved))
 					(record-destruct @3.14-3.19 (label "email") (ident "email")
-						(required)))))
+						(requenved)))))
 		(expr
 			(e-runtime-error (tag "ident_not_in_scope")))))
 ~~~

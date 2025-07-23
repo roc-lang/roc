@@ -25,7 +25,7 @@ const base = @import("base");
 const types = @import("types");
 const ModuleEnv = @import("compile").ModuleEnv;
 const collections = @import("collections");
-const Diagnostic = @import("Diagnostic.zig").Diagnostic;
+const Diagnostic = ModuleEnv.Diagnostic;
 
 const StringLiteral = base.StringLiteral;
 const Region = base.Region;

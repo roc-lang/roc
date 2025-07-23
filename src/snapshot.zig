@@ -24,7 +24,7 @@ const repl = @import("repl/eval.zig");
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const parallel = base.parallel;
-const CIR = canonicalize.CIR;
+const CIR = compile.CIR;
 const ModuleEnv = compile.ModuleEnv;
 const AST = parse.AST;
 const Report = reporting.Report;
@@ -476,7 +476,7 @@ fn generateAllReports(
     var problems_itr = solver.problems.problems.iterIndices();
     while (problems_itr.next()) |problem_idx| {
         const problem = solver.problems.problems.get(problem_idx);
-        const empty_modules: []const *CIR = &.{};
+        const empty_modules: []const *ModuleEnv = &.{};
         var report_builder = types_problem_mod.ReportBuilder.init(
             allocator,
             module_env,
@@ -1077,7 +1077,7 @@ fn processSnapshotContent(
     module_env.debugAssertArraysInSync();
 
     // Types
-    const empty_modules: []const *CIR = &.{};
+    const empty_modules: []const *ModuleEnv = &.{};
     var solver = try Solver.init(
         allocator,
         &module_env.types,
@@ -1101,7 +1101,7 @@ fn processSnapshotContent(
         // Generate original S-expression for comparison
         var original_tree = SExprTree.init(allocator);
         defer original_tree.deinit();
-        try CIR.pushToSExprTree(&module_env, null, &original_tree);
+        try module_env.pushToSExprTree(null, &original_tree);
 
         var original_sexpr = std.ArrayList(u8).init(allocator);
         defer original_sexpr.deinit();

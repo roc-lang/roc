@@ -1462,9 +1462,9 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: ModuleEnv.Pattern.R
         .tag = .record_destruct,
     };
 
-    // Store kind in extra_data if it's not Required
+    // Store kind in extra_data if it's not Requenved
     switch (record_destruct.kind) {
-        .Required => {
+        .Requenved => {
             // No extra data needed
         },
 
@@ -1927,11 +1927,11 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
         const kind_tag = extra_data[0];
 
         break :blk switch (kind_tag) {
-            0 => ModuleEnv.Pattern.RecordDestruct.Kind.Required,
+            0 => ModuleEnv.Pattern.RecordDestruct.Kind.Requenved,
             1 => ModuleEnv.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
             else => unreachable,
         };
-    } else ModuleEnv.Pattern.RecordDestruct.Kind.Required;
+    } else ModuleEnv.Pattern.RecordDestruct.Kind.Requenved;
 
     return ModuleEnv.Pattern.RecordDestruct{
         .label = @bitCast(node.data_1),

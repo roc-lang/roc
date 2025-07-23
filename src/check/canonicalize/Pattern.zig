@@ -19,7 +19,7 @@ const base = @import("base");
 const types = @import("types");
 const ModuleEnv = @import("compile").ModuleEnv;
 const collections = @import("collections");
-const Diagnostic = @import("Diagnostic.zig").Diagnostic;
+const Diagnostic = ModuleEnv.Diagnostic;
 
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
@@ -252,8 +252,8 @@ pub const Pattern = union(enum) {
 
             const label_text = env.idents.getText(self.label);
             const ident_text = env.idents.getText(self.ident);
-            try tree.pushStringPaenv("label", label_text);
-            try tree.pushStringPaenv("ident", ident_text);
+            try tree.pushStringPair("label", label_text);
+            try tree.pushStringPair("ident", ident_text);
 
             const attrs = tree.beginNode();
             try self.kind.pushToSExprTree(env, tree);
@@ -269,7 +269,7 @@ pub const Pattern = union(enum) {
                 try env.appendRegionInfoToSExprTree(tree, pattern_idx);
 
                 const ident = env.getIdentText(p.ident);
-                try tree.pushStringPaenv("ident", ident);
+                try tree.pushStringPair("ident", ident);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -279,7 +279,7 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-as");
                 try env.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const ident = env.getIdentText(p.ident);
-                try tree.pushStringPaenv("as", ident);
+                try tree.pushStringPair("as", ident);
 
                 const attrs = tree.beginNode();
                 try env.store.getPattern(p.pattern).pushToSExprTree(env, tree, p.pattern);
@@ -340,7 +340,7 @@ pub const Pattern = union(enum) {
 
                     var index_buf: [32]u8 = undefined;
                     const index_str = std.fmt.bufPrint(&index_buf, "{d}", .{rest.index}) catch "fmt_error";
-                    try tree.pushDynamicAtomPaenv("index", index_str);
+                    try tree.pushDynamicAtomPair("index", index_str);
 
                     const rest_attrs = tree.beginNode();
                     if (rest.pattern) |rest_pattern_idx| {
@@ -376,7 +376,7 @@ pub const Pattern = union(enum) {
                 const value_i128: i128 = @bitCast(p.value.bytes);
                 var value_buf: [40]u8 = undefined;
                 const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
-                try tree.pushStringPaenv("value", value_str);
+                try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -401,7 +401,7 @@ pub const Pattern = union(enum) {
                 try env.appendRegionInfoToSExprTree(tree, pattern_idx);
 
                 const text = env.strings.get(p.literal);
-                try tree.pushStringPaenv("text", text);
+                try tree.pushStringPair("text", text);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -419,7 +419,7 @@ pub const Pattern = union(enum) {
                 try env.appendRegionInfoToSExprTree(tree, pattern_idx);
 
                 const diagnostic = env.store.getDiagnostic(e.diagnostic);
-                try tree.pushStringPaenv("tag", @tagName(diagnostic));
+                try tree.pushStringPair("tag", @tagName(diagnostic));
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);

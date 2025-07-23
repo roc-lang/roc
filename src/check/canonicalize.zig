@@ -12,7 +12,8 @@ const parse = @import("parse.zig");
 const tokenize = @import("parse/tokenize.zig");
 const collections = @import("collections");
 const types = @import("types");
-const RocDec = compile.ModuleEnv.RocDec;
+const CIR = @import("CIR.zig");
+const RocDec = CIR.RocDec;
 
 const NodeStore = @import("./canonicalize/NodeStore.zig");
 const Scope = @import("./canonicalize/Scope.zig");
@@ -33,7 +34,7 @@ const TypeVarProblem = struct {
     ast_anno: AST.TypeAnno.Idx,
 };
 
-can_ir: *CIR,
+can_ir: *ModuleEnv,
 parse_ir: *AST,
 scopes: std.ArrayListUnmanaged(Scope) = .{},
 /// Special scope for tracking exposed items from module header
@@ -143,7 +144,7 @@ pub fn deinit(
     self.scratch_tags.deinit(gpa);
 }
 
-pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*ModuleEnv)) std.mem.Allocator.Error!Self {
+pub fn init(self: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*ModuleEnv)) std.mem.Allocator.Error!Self {
     const gpa = self.gpa;
 
     // Create the canonicalizer with scopes
@@ -222,7 +223,7 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
     return result;
 }
 
-fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
+fn addBuiltin(self: *Self, ir: *ModuleEnv, ident_text: []const u8, idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
     const gpa = ir.gpa;
     const ident_store = &ir.idents;
     const ident_add = try ir.idents.insert(gpa, base.Ident.for_text(ident_text), Region.zero());
@@ -233,7 +234,7 @@ fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Id
 
 /// Stub builtin types. Currently sets every type to be a nominal type
 /// This should be replaced by real builtins eventually
-fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8, content: types.Content) std.mem.Allocator.Error!CIR.Statement.Idx {
+fn addBuiltinType(self: *Self, ir: *ModuleEnv, type_name: []const u8, content: types.Content) std.mem.Allocator.Error!CIR.Statement.Idx {
     const gpa = ir.gpa;
     const type_ident = try ir.idents.insert(gpa, base.Ident.for_text(type_name), Region.zero());
 
@@ -274,7 +275,7 @@ fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8, content: types.C
 
 /// Stub builtin types. Currently sets every type to be a nominal type
 /// This should be replaced by real builtins eventually
-fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
+fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void {
     const gpa = ir.gpa;
     const type_ident = try ir.idents.insert(gpa, base.Ident.for_text("Bool"), Region.zero());
 
@@ -283,7 +284,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
         .name = type_ident,
         .args = .{ .span = .{ .start = 0, .len = 0 } }, // No type parameters for built-ins
     }, .{ .flex_var = null }, Region.zero());
-    const header_node_idx = CIR.nodeIdxFrom(header_idx);
+    const header_node_idx = ModuleEnv.nodeIdxFrom(header_idx);
 
     // Create a type annotation that refers to itself (built-in types are primitive)
     const ext_var = try ir.addTypeSlotAndTypeVar(
@@ -322,7 +323,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
     try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
 
-    try ir.redirectTypeTo(CIR.Pattern.Idx, BUILTIN_BOOL, CIR.varFrom(type_decl_idx));
+    try ir.redirectTypeTo(CIR.Pattern.Idx, BUILTIN_BOOL, ModuleEnv.varFrom(type_decl_idx));
 
     // Add True and False to unqualified_nominal_tags
     // TODO: in the future, we should have hardcoded constants for these.
@@ -331,10 +332,6 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
 }
 
 const Self = @This();
-
-/// Compatibility alias: The intermediate representation of a canonicalized Roc program.
-/// This points to ModuleEnv which now contains all the functionality that was previously in CIR.
-pub const CIR = compile.ModuleEnv;
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/AST.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
@@ -2178,7 +2175,7 @@ pub fn canonicalizeExpr(
             // Create lambda expression with function type
             const lambda_type_content = try self.can_ir.types.mkFuncUnbound(
                 @ptrCast(self.can_ir.store.slicePatterns(args_span)),
-                CIR.varFrom(body_idx),
+                ModuleEnv.varFrom(body_idx),
             );
             const expr_idx = try self.can_ir.addExprAndTypeVar(CIR.Expr{
                 .e_lambda = .{
@@ -3052,7 +3049,7 @@ fn canonicalizePattern(
                         const record_destruct = CIR.Pattern.RecordDestruct{
                             .label = field_name_ident,
                             .ident = field_name_ident,
-                            .kind = .Required,
+                            .kind = .Requenved,
                         };
 
                         const destruct_idx = try self.can_ir.addRecordDestructAndTypeVar(record_destruct, .{ .flex_var = null }, field_region);
@@ -5731,7 +5728,7 @@ fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) std.mem.Allocato
 
 /// Convert a parsed TypeAnno into a canonical TypeVar with appropriate Content
 fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) std.mem.Allocator.Error!TypeVar {
-    const type_anno_node_idx = CIR.nodeIdxFrom(type_anno_idx);
+    const type_anno_node_idx = ModuleEnv.nodeIdxFrom(type_anno_idx);
     const type_anno = self.can_ir.store.getTypeAnno(type_anno_idx);
     const region = self.can_ir.store.getTypeAnnoRegion(type_anno_idx);
 
@@ -5964,10 +5961,10 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
         const decl = self.can_ir.store.getStatement(decl_idx);
         switch (decl) {
             .s_alias_decl => |_| {
-                return try self.can_ir.addTypeSlotAndTypeVarRedirect(parent_node_idx, CIR.varFrom(decl_idx), region, TypeVar);
+                return try self.can_ir.addTypeSlotAndTypeVarRedirect(parent_node_idx, ModuleEnv.varFrom(decl_idx), region, TypeVar);
             },
             .s_nominal_decl => |_| {
-                return try self.can_ir.addTypeSlotAndTypeVarRedirect(parent_node_idx, CIR.varFrom(decl_idx), region, TypeVar);
+                return try self.can_ir.addTypeSlotAndTypeVarRedirect(parent_node_idx, ModuleEnv.varFrom(decl_idx), region, TypeVar);
             },
             else => {
                 // TODO: Add malformed node?

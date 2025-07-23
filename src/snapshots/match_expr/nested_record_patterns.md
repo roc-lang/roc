@@ -113,15 +113,15 @@ match ... {
 						(p-record-destructure @2.5-2.41
 							(destructs
 								(record-destruct @2.7-2.11 (label "name") (ident "name")
-									(required))
+									(requenved))
 								(record-destruct @2.13-2.39 (label "address") (ident "address")
 									(sub-pattern
 										(p-record-destructure @2.22-2.39
 											(destructs
 												(record-destruct @2.24-2.28 (label "city") (ident "city")
-													(required))
+													(requenved))
 												(record-destruct @2.30-2.37 (label "country") (ident "country")
-													(required))))))))))
+													(requenved))))))))))
 				(value
 					(e-string @2.45-2.83
 						(e-literal @2.46-2.46 (string ""))
@@ -144,15 +144,15 @@ match ... {
 										(p-record-destructure @3.15-3.28
 											(destructs
 												(record-destruct @3.17-3.21 (label "name") (ident "name")
-													(required))
+													(requenved))
 												(record-destruct @3.23-3.26 (label "age") (ident "age")
-													(required))))))
+													(requenved))))))
 								(record-destruct @3.30-3.48 (label "location") (ident "location")
 									(sub-pattern
 										(p-record-destructure @3.40-3.48
 											(destructs
 												(record-destruct @3.42-3.46 (label "city") (ident "city")
-													(required))))))))))
+													(requenved))))))))))
 				(value
 					(e-string @3.54-3.94
 						(e-literal @3.55-3.55 (string ""))
@@ -182,7 +182,7 @@ match ... {
 														(p-record-destructure @4.21-4.30
 															(destructs
 																(record-destruct @4.23-4.28 (label "value") (ident "value")
-																	(required))))))))))))))
+																	(requenved))))))))))))))
 				(value
 					(e-string @4.38-4.61
 						(e-literal @4.39-4.52 (string "Deep nested: "))
@@ -195,7 +195,7 @@ match ... {
 						(p-record-destructure @5.5-5.15
 							(destructs
 								(record-destruct @5.7-5.13 (label "simple") (ident "simple")
-									(required))))))
+									(requenved))))))
 				(value
 					(e-string @5.19-5.38
 						(e-literal @5.20-5.28 (string "Simple: "))
