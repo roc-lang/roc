@@ -2,7 +2,7 @@
 //!
 //! This module contains unit tests that verify the correct canonicalization
 //! of fractional literals and decimal expressions from parsed AST into the
-//! compiler's canonical internal representation (CIR).
+//! compiler's canonical internal representation (ModuleEnv).
 
 const std = @import("std");
 const testing = std.testing;
@@ -10,7 +10,7 @@ const base = @import("base");
 const compile = @import("compile");
 const parse = @import("../../parse.zig");
 const canonicalize = @import("../../../check/canonicalize.zig");
-// CIR has been replaced by ModuleEnv
+// ModuleEnv is the replacement for the former CIR
 const types = @import("types").types;
 const RocDec = @import("builtins").RocDec;
 

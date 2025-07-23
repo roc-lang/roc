@@ -1,7 +1,7 @@
 //! Expression constructs used in Roc's canonicalization phase.
 //!
 //! This module defines the `Expr` union which represents all possible expressions
-//! in Roc's canonical intermediate representation (CIR). These expressions are
+//! in Roc's canonical intermediate representation. These expressions are
 //! created during the canonicalization phase and represent the semantic meaning
 //! of parsed code after semantic analysis.
 //!
@@ -23,7 +23,7 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const CIR = @import("compile").ModuleEnv;
+const ModuleEnv = @import("compile").ModuleEnv;
 const collections = @import("collections");
 const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
@@ -34,14 +34,14 @@ const CalledVia = base.CalledVia;
 const Ident = base.Ident;
 const SExprTree = base.SExprTree;
 const SExpr = base.SExpr;
-const Pattern = CIR.Pattern;
-const IntValue = CIR.IntValue;
-const RocDec = CIR.RocDec;
-const ExternalDecl = CIR.ExternalDecl;
+const Pattern = ModuleEnv.Pattern;
+const IntValue = ModuleEnv.IntValue;
+const RocDec = ModuleEnv.RocDec;
+const ExternalDecl = ModuleEnv.ExternalDecl;
 const TypeVar = types.Var;
-const If = CIR.If;
-const RecordField = CIR.RecordField;
-const Statement = CIR.Statement;
+const If = ModuleEnv.If;
+const RecordField = ModuleEnv.RecordField;
+const Statement = ModuleEnv.Statement;
 
 /// An expression in the Roc language.
 pub const Expr = union(enum) {
@@ -116,7 +116,7 @@ pub const Expr = union(enum) {
     /// foo = Utf8.encode("hello") # "Utf8.encode" is defined in another module
     /// ```
     e_lookup_external: struct {
-        module_idx: CIR.Import.Idx,
+        module_idx: ModuleEnv.Import.Idx,
         target_node_idx: u16,
         region: Region,
     },
@@ -358,7 +358,7 @@ pub const Expr = union(enum) {
     };
 
     pub fn initStr(expr_span: Expr.Span) Expr {
-        return CIR.Expr{
+        return ModuleEnv.Expr{
             .e_str = .{
                 .span = expr_span,
             },
@@ -366,7 +366,7 @@ pub const Expr = union(enum) {
     }
 
     pub fn initStrSegment(literal: StringLiteral.Idx) Expr {
-        return CIR.Expr{
+        return ModuleEnv.Expr{
             .e_str_segment = .{
                 .literal = literal,
             },
@@ -425,7 +425,7 @@ pub const Expr = union(enum) {
     /// The type inside a nominal var
     pub const NominalBackingType = enum { tag, record, tuple, value };
 
-    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .e_int => |int_expr| {
                 const begin = tree.beginNode();
@@ -943,7 +943,7 @@ pub const Expr = union(enum) {
             /// Marks whether a match branch is redundant using a variable.
             redundant: TypeVar,
 
-            pub fn pushToSExprTree(self: *const Match.Branch, ir: *const CIR, tree: *SExprTree, _: Match.Branch.Idx) std.mem.Allocator.Error!void {
+            pub fn pushToSExprTree(self: *const Match.Branch, ir: *const ModuleEnv, tree: *SExprTree, _: Match.Branch.Idx) std.mem.Allocator.Error!void {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("branch");
                 const attrs = tree.beginNode();
@@ -1008,7 +1008,7 @@ pub const Expr = union(enum) {
             pub const Span = struct { span: base.DataSpan };
         };
 
-        pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, region: Region) std.mem.Allocator.Error!void {
+        pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, region: Region) std.mem.Allocator.Error!void {
             const begin = tree.beginNode();
             try tree.pushStaticAtom("match");
             try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);

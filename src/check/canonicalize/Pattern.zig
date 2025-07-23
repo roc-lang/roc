@@ -5,10 +5,10 @@
 //! Patterns are used to destructure values and bind identifiers to parts of those values.
 //!
 //! Examples of patterns:
-//! - `x` - assigns the entire value to identifier `x`
-//! - `[first, .. as rest]` - destructures a list, binding first element and remaining elements
+//! - `x` - assigns the entenve value to identifier `x`
+//! - `[fenvst, .. as rest]` - destructures a list, binding fenvst element and remaining elements
 //! - `{ name, age }` - destructures a record, binding the `name` and `age` fields
-//! - `Circle(radius)` - matches a tag with payload, binding the payload to `radius`
+//! - `Cenvcle(radius)` - matches a tag with payload, binding the payload to `radius`
 //! - `(x, y)` - destructures a tuple into its components
 //! - `42` - matches a specific integer literal
 //! - `"hello"` - matches a specific string literal
@@ -17,7 +17,7 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const CIR = @import("compile").ModuleEnv;
+const ModuleEnv = @import("compile").ModuleEnv;
 const collections = @import("collections");
 const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
@@ -28,9 +28,9 @@ const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
-const Expr = CIR.Expr;
-const IntValue = CIR.IntValue;
-const RocDec = CIR.RocDec;
+const Expr = ModuleEnv.Expr;
+const IntValue = ModuleEnv.IntValue;
+const RocDec = ModuleEnv.RocDec;
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -43,7 +43,7 @@ pub const Pattern = union(enum) {
     ///
     /// ```roc
     /// import json.Utf8 as Json
-    /// [first, second, .. as rest] => ...
+    /// [fenvst, second, .. as rest] => ...
     /// ```
     as: struct {
         pattern: Pattern.Idx,
@@ -54,7 +54,7 @@ pub const Pattern = union(enum) {
     ///
     /// ```roc
     /// match shape {
-    ///     Circle(radius) => 3.14 * radius * radius
+    ///     Cenvcle(radius) => 3.14 * radius * radius
     ///     Rectangle(width, height) => width * height
     /// }
     /// ```
@@ -72,7 +72,7 @@ pub const Pattern = union(enum) {
     /// Point.(1.0)                # Values
     /// ```
     nominal: struct {
-        nominal_type_decl: CIR.Statement.Idx,
+        nominal_type_decl: ModuleEnv.Statement.Idx,
         backing_pattern: Pattern.Idx,
         backing_type: Expr.NominalBackingType,
     },
@@ -97,8 +97,8 @@ pub const Pattern = union(enum) {
     /// match numbers {
     ///     [] => "empty"
     ///     [single] => "one element"
-    ///     [first, second] => "two elements"
-    ///     [first, .. as rest] => "first plus more"
+    ///     [fenvst, second] => "two elements"
+    ///     [fenvst, .. as rest] => "fenvst plus more"
     ///     [.., last] => "ends with last"
     /// }
     /// ```
@@ -201,7 +201,7 @@ pub const Pattern = union(enum) {
     ///
     /// ```roc
     /// match person {
-    ///     { name, age } => ... # Two RecordDestruct: name (Required), age (Required)
+    ///     { name, age } => ... # Two RecordDestruct: name (Requenved), age (Requenved)
     /// }
     /// ```
     pub const RecordDestruct = struct {
@@ -214,22 +214,22 @@ pub const Pattern = union(enum) {
 
         /// The kind of record field destructuring pattern.
         pub const Kind = union(enum) {
-            /// Required field that must be present in the record.
+            /// Requenved field that must be present in the record.
             /// ```roc
-            /// { name, age } => ... # Both name and age are Required
+            /// { name, age } => ... # Both name and age are Requenved
             /// ```
-            Required,
+            Requenved,
             /// Nested pattern for record field destructuring.
             /// ```roc
             /// { address: { city } } => ... # address field has a SubPattern
             /// ```
             SubPattern: Pattern.Idx,
 
-            pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree) std.mem.Allocator.Error!void {
+            pub fn pushToSExprTree(self: *const @This(), env: *const ModuleEnv, tree: *SExprTree) std.mem.Allocator.Error!void {
                 switch (self.*) {
-                    .Required => {
+                    .Requenved => {
                         const begin = tree.beginNode();
-                        try tree.pushStaticAtom("required");
+                        try tree.pushStaticAtom("requenved");
                         const attrs = tree.beginNode();
                         try tree.endNode(begin, attrs);
                     },
@@ -237,39 +237,39 @@ pub const Pattern = union(enum) {
                         const begin = tree.beginNode();
                         try tree.pushStaticAtom("sub-pattern");
                         const attrs = tree.beginNode();
-                        const pattern = ir.store.getPattern(pattern_idx);
-                        try pattern.pushToSExprTree(ir, tree, pattern_idx);
+                        const pattern = env.store.getPattern(pattern_idx);
+                        try pattern.pushToSExprTree(env, tree, pattern_idx);
                         try tree.endNode(begin, attrs);
                     },
                 }
             }
         };
 
-        pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, destruct_idx: RecordDestruct.Idx) std.mem.Allocator.Error!void {
+        pub fn pushToSExprTree(self: *const @This(), env: *const ModuleEnv, tree: *SExprTree, destruct_idx: RecordDestruct.Idx) std.mem.Allocator.Error!void {
             const begin = tree.beginNode();
             try tree.pushStaticAtom("record-destruct");
-            try ir.appendRegionInfoToSExprTree(tree, destruct_idx);
+            try env.appendRegionInfoToSExprTree(tree, destruct_idx);
 
-            const label_text = ir.idents.getText(self.label);
-            const ident_text = ir.idents.getText(self.ident);
-            try tree.pushStringPair("label", label_text);
-            try tree.pushStringPair("ident", ident_text);
+            const label_text = env.idents.getText(self.label);
+            const ident_text = env.idents.getText(self.ident);
+            try tree.pushStringPaenv("label", label_text);
+            try tree.pushStringPaenv("ident", ident_text);
 
             const attrs = tree.beginNode();
-            try self.kind.pushToSExprTree(ir, tree);
+            try self.kind.pushToSExprTree(env, tree);
             try tree.endNode(begin, attrs);
         }
     };
 
-    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: *const @This(), env: *const ModuleEnv, tree: *SExprTree, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .assign => |p| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-assign");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                const ident = ir.getIdentText(p.ident);
-                try tree.pushStringPair("ident", ident);
+                const ident = env.getIdentText(p.ident);
+                try tree.pushStringPaenv("ident", ident);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -277,43 +277,43 @@ pub const Pattern = union(enum) {
             .as => |p| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-as");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                const ident = ir.getIdentText(p.ident);
-                try tree.pushStringPair("as", ident);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const ident = env.getIdentText(p.ident);
+                try tree.pushStringPaenv("as", ident);
 
                 const attrs = tree.beginNode();
-                try ir.store.getPattern(p.pattern).pushToSExprTree(ir, tree, p.pattern);
+                try env.store.getPattern(p.pattern).pushToSExprTree(env, tree, p.pattern);
                 try tree.endNode(begin, attrs);
             },
             .applied_tag => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-applied-tag");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
             .nominal => |n| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-nominal");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
 
                 const attrs = tree.beginNode();
-                try ir.store.getPattern(n.backing_pattern).pushToSExprTree(ir, tree, n.backing_pattern);
+                try env.store.getPattern(n.backing_pattern).pushToSExprTree(env, tree, n.backing_pattern);
                 try tree.endNode(begin, attrs);
             },
             .record_destructure => |p| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-record-destructure");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
 
                 const destructs_begin = tree.beginNode();
                 try tree.pushStaticAtom("destructs");
                 const destructs_attrs = tree.beginNode();
 
-                for (ir.store.sliceRecordDestructs(p.destructs)) |destruct_idx| {
-                    const destruct = ir.store.getRecordDestruct(destruct_idx);
-                    try destruct.pushToSExprTree(ir, tree, destruct_idx);
+                for (env.store.sliceRecordDestructs(p.destructs)) |destruct_idx| {
+                    const destruct = env.store.getRecordDestruct(destruct_idx);
+                    try destruct.pushToSExprTree(env, tree, destruct_idx);
                 }
                 try tree.endNode(destructs_begin, destructs_attrs);
 
@@ -322,15 +322,15 @@ pub const Pattern = union(enum) {
             .list => |p| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-list");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
 
                 const patterns_begin = tree.beginNode();
                 try tree.pushStaticAtom("patterns");
                 const patterns_attrs = tree.beginNode();
 
-                for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
-                    try ir.store.getPattern(patt_idx).pushToSExprTree(ir, tree, patt_idx);
+                for (env.store.slicePatterns(p.patterns)) |patt_idx| {
+                    try env.store.getPattern(patt_idx).pushToSExprTree(env, tree, patt_idx);
                 }
                 try tree.endNode(patterns_begin, patterns_attrs);
 
@@ -340,11 +340,11 @@ pub const Pattern = union(enum) {
 
                     var index_buf: [32]u8 = undefined;
                     const index_str = std.fmt.bufPrint(&index_buf, "{d}", .{rest.index}) catch "fmt_error";
-                    try tree.pushDynamicAtomPair("index", index_str);
+                    try tree.pushDynamicAtomPaenv("index", index_str);
 
                     const rest_attrs = tree.beginNode();
                     if (rest.pattern) |rest_pattern_idx| {
-                        try ir.store.getPattern(rest_pattern_idx).pushToSExprTree(ir, tree, rest_pattern_idx);
+                        try env.store.getPattern(rest_pattern_idx).pushToSExprTree(env, tree, rest_pattern_idx);
                     }
                     try tree.endNode(rest_begin, rest_attrs);
                 }
@@ -354,15 +354,15 @@ pub const Pattern = union(enum) {
             .tuple => |p| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-tuple");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
 
                 const patterns_begin = tree.beginNode();
                 try tree.pushStaticAtom("patterns");
                 const patterns_attrs = tree.beginNode();
 
-                for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
-                    try ir.store.getPattern(patt_idx).pushToSExprTree(ir, tree, patt_idx);
+                for (env.store.slicePatterns(p.patterns)) |patt_idx| {
+                    try env.store.getPattern(patt_idx).pushToSExprTree(env, tree, patt_idx);
                 }
                 try tree.endNode(patterns_begin, patterns_attrs);
 
@@ -371,12 +371,12 @@ pub const Pattern = union(enum) {
             .int_literal => |p| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-int");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
 
                 const value_i128: i128 = @bitCast(p.value.bytes);
                 var value_buf: [40]u8 = undefined;
                 const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
-                try tree.pushStringPair("value", value_str);
+                try tree.pushStringPaenv("value", value_str);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -384,24 +384,24 @@ pub const Pattern = union(enum) {
             .small_dec_literal => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-small-dec");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
             .dec_literal => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-dec");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
             .str_literal => |p| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-str");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                const text = ir.strings.get(p.literal);
-                try tree.pushStringPair("text", text);
+                const text = env.strings.get(p.literal);
+                try tree.pushStringPaenv("text", text);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -409,17 +409,17 @@ pub const Pattern = union(enum) {
             .underscore => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-underscore");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
             .runtime_error => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-runtime-error");
-                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                try env.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                const diagnostic = ir.store.getDiagnostic(e.diagnostic);
-                try tree.pushStringPair("tag", @tagName(diagnostic));
+                const diagnostic = env.store.getDiagnostic(e.diagnostic);
+                try tree.pushStringPaenv("tag", @tagName(diagnostic));
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);

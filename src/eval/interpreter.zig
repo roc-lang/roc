@@ -25,7 +25,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const CIR = @import("compile").ModuleEnv;
+const ModuleEnv = @import("compile").ModuleEnv;
 const types = @import("types");
 const layout = @import("../layout/layout.zig");
 const build_options = @import("build_options");
@@ -122,7 +122,7 @@ pub const WorkItem = struct {
     /// The type of work to be performed
     kind: WorkKind,
     /// The expression index this work item operates on
-    expr_idx: CIR.Expr.Idx,
+    expr_idx: ModuleEnv.Expr.Idx,
 };
 
 /// Data for conditional branch evaluation in if-expressions.
@@ -132,9 +132,9 @@ pub const WorkItem = struct {
 /// `if condition then body` clause.
 const BranchData = struct {
     /// Expression index for the branch condition (must evaluate to Bool)
-    cond: CIR.Expr.Idx,
+    cond: ModuleEnv.Expr.Idx,
     /// Expression index for the branch body (evaluated if condition is true)
-    body: CIR.Expr.Idx,
+    body: ModuleEnv.Expr.Idx,
 };
 
 /// Simple closure representation for lambda expressions.
@@ -163,8 +163,8 @@ const BranchData = struct {
 /// The `body_expr_idx` is evaluated when the closure is called, with arguments
 /// bound to the patterns specified by `args_pattern_span`.
 pub const SimpleClosure = struct {
-    body_expr_idx: CIR.Expr.Idx, // What expression to execute
-    args_pattern_span: CIR.Pattern.Span, // Parameters to bind
+    body_expr_idx: ModuleEnv.Expr.Idx, // What expression to execute
+    args_pattern_span: ModuleEnv.Pattern.Span, // Parameters to bind
 };
 
 // Debug configuration
@@ -191,7 +191,7 @@ const DEBUG_ENABLED = build_options.trace_eval;
 /// may use hash maps or other data structures for better performance.
 const ParameterBinding = struct {
     /// Pattern index that this binding satisfies (for pattern matching)
-    pattern_idx: CIR.Pattern.Idx,
+    pattern_idx: ModuleEnv.Pattern.Idx,
     /// Pointer to the argument value in stack memory
     value_ptr: *anyopaque,
     /// Type and layout information for the argument value
@@ -216,8 +216,8 @@ const ParameterBinding = struct {
 pub const Interpreter = struct {
     /// Memory allocator for dynamic data structures
     allocator: std.mem.Allocator,
-    /// Canonicalized Intermediate Representation containing expressions to evaluate
-    cir: *const CIR,
+    /// ModuleEnv containing expressions to evaluate
+    env: *const ModuleEnv,
     /// Stack memory for storing expression values during evaluation
     stack_memory: *stack.Stack,
     /// Cache for type layout information and size calculations
@@ -233,14 +233,14 @@ pub const Interpreter = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        cir: *const CIR,
+        env: *const ModuleEnv,
         stack_memory: *stack.Stack,
         layout_cache: *layout_store.Store,
         type_store: *types_store.Store,
     ) !Interpreter {
         return Interpreter{
             .allocator = allocator,
-            .cir = cir,
+            .env = env,
             .stack_memory = stack_memory,
             .layout_cache = layout_cache,
             .type_store = type_store,
@@ -256,11 +256,11 @@ pub const Interpreter = struct {
         self.parameter_bindings.deinit();
     }
 
-    /// Evaluates a CIR expression and returns the result.
+    /// Evaluates a ModuleEnv expression and returns the result.
     ///
     /// This is the main entry point for expression evaluation. Uses an iterative
     /// work queue approach to evaluate complex expressions without recursion.
-    pub fn eval(self: *Interpreter, expr_idx: CIR.Expr.Idx) EvalError!EvalResult {
+    pub fn eval(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx) EvalError!EvalResult {
         // Ensure work_stack and layout_stack are empty before we start. (stack_memory might not be, and that's fine!)
         std.debug.assert(self.work_stack.items.len == 0);
         std.debug.assert(self.layout_stack.items.len == 0);
@@ -288,7 +288,7 @@ pub const Interpreter = struct {
                     // The expr_idx encodes both the if expression and the branch index
                     // Lower 16 bits: if expression index
                     // Upper 16 bits: branch index
-                    const if_expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(work.expr_idx) & 0xFFFF);
+                    const if_expr_idx: ModuleEnv.Expr.Idx = @enumFromInt(@intFromEnum(work.expr_idx) & 0xFFFF);
                     const branch_index: u16 = @intCast((@intFromEnum(work.expr_idx) >> 16) & 0xFFFF);
                     try self.checkIfCondition(if_expr_idx, branch_index);
                 },
@@ -332,7 +332,7 @@ pub const Interpreter = struct {
         };
     }
 
-    /// Evaluates a single CIR expression, pushing the result onto the stack.
+    /// Evaluates a single ModuleEnv expression, pushing the result onto the stack.
     ///
     /// # Stack Effects
     /// - Pushes exactly one value onto `stack_memory`
@@ -342,8 +342,8 @@ pub const Interpreter = struct {
     /// # Error Handling
     /// Malformed expressions result in runtime error placeholders rather
     /// than evaluation failure.
-    fn evalExpr(self: *Interpreter, expr_idx: CIR.Expr.Idx) EvalError!void {
-        const expr = self.cir.store.getExpr(expr_idx);
+    fn evalExpr(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx) EvalError!void {
+        const expr = self.env.store.getExpr(expr_idx);
 
         // Check for runtime errors first
         switch (expr) {
@@ -406,7 +406,7 @@ pub const Interpreter = struct {
                 };
 
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-                const tag_name = self.cir.idents.getText(tag.name);
+                const tag_name = self.env.idents.getText(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
                     tag_ptr.* = 1;
                 } else if (std.mem.eql(u8, tag_name, "False")) {
@@ -469,15 +469,15 @@ pub const Interpreter = struct {
                 if (if_expr.branches.span.len > 0) {
                     // Push work to check condition after it's evaluated
                     // Encode branch index (0) in upper 16 bits
-                    const encoded_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                    const encoded_idx: ModuleEnv.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx));
                     try self.work_stack.append(.{
                         .kind = .if_check_condition,
                         .expr_idx = encoded_idx,
                     });
 
                     // Push work to evaluate the first condition
-                    const branches = self.cir.store.sliceIfBranches(if_expr.branches);
-                    const branch = self.cir.store.getIfBranch(branches[0]);
+                    const branches = self.env.store.sliceIfBranches(if_expr.branches);
+                    const branch = self.env.store.getIfBranch(branches[0]);
 
                     try self.work_stack.append(.{
                         .kind = .eval_expr,
@@ -525,9 +525,9 @@ pub const Interpreter = struct {
                 }
 
                 // If not found in parameters, fall back to existing lookup logic
-                const defs = self.cir.store.sliceDefs(self.cir.all_defs);
+                const defs = self.env.store.sliceDefs(self.env.all_defs);
                 for (defs) |def_idx| {
-                    const def = self.cir.store.getDef(def_idx);
+                    const def = self.env.store.getDef(def_idx);
                     if (@intFromEnum(def.pattern) == @intFromEnum(lookup.pattern_idx)) {
                         // Found the definition, evaluate its expression
                         try self.work_stack.append(.{
@@ -557,7 +557,7 @@ pub const Interpreter = struct {
 
                 // For now, handle boolean tags (True/False) as u8
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-                const tag_name = self.cir.idents.getText(tag.name);
+                const tag_name = self.env.idents.getText(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
                     tag_ptr.* = 1;
                 } else if (std.mem.eql(u8, tag_name, "False")) {
@@ -571,7 +571,7 @@ pub const Interpreter = struct {
 
             .e_call => |call| {
                 // Get function and arguments from the call
-                const all_exprs = self.cir.store.sliceExpr(call.args);
+                const all_exprs = self.env.store.sliceExpr(call.args);
 
                 if (all_exprs.len == 0) {
                     return error.LayoutError; // No function to call
@@ -676,7 +676,7 @@ pub const Interpreter = struct {
                 // Verify closure creation for debugging
                 if (DEBUG_ENABLED) {
                     const span = lambda_expr.args;
-                    const patterns = self.cir.store.slicePatterns(span);
+                    const patterns = self.env.store.slicePatterns(span);
                     std.debug.print("DEBUG: CLOSURE CREATION: span_len={}, patterns={}\n", .{ span.span.len, patterns.len });
                 }
 
@@ -855,7 +855,7 @@ pub const Interpreter = struct {
         try self.layout_stack.append(operand_layout);
     }
 
-    fn checkIfCondition(self: *Interpreter, expr_idx: CIR.Expr.Idx, branch_index: u16) EvalError!void {
+    fn checkIfCondition(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, branch_index: u16) EvalError!void {
         // Pop the condition layout
         _ = self.layout_stack.pop() orelse return error.InvalidStackState; // Remove condition layout
 
@@ -868,18 +868,18 @@ pub const Interpreter = struct {
         self.stack_memory.used -= cond_size;
 
         // Get the if expression
-        const if_expr = switch (self.cir.store.getExpr(expr_idx)) {
+        const if_expr = switch (self.env.store.getExpr(expr_idx)) {
             .e_if => |e| e,
             else => return error.InvalidBranchNode,
         };
 
-        const branches = self.cir.store.sliceIfBranches(if_expr.branches);
+        const branches = self.env.store.sliceIfBranches(if_expr.branches);
 
         if (branch_index >= branches.len) {
             return error.InvalidBranchNode;
         }
 
-        const branch = self.cir.store.getIfBranch(branches[branch_index]);
+        const branch = self.env.store.getIfBranch(branches[branch_index]);
 
         if (cond_val == 1) {
             // Condition is true, evaluate this branch's body
@@ -892,11 +892,11 @@ pub const Interpreter = struct {
             if (branch_index + 1 < branches.len) {
                 // Evaluate the next branch
                 const next_branch_idx = branch_index + 1;
-                const next_branch = self.cir.store.getIfBranch(branches[next_branch_idx]);
+                const next_branch = self.env.store.getIfBranch(branches[next_branch_idx]);
 
                 // Push work to check next condition after it's evaluated
                 // Encode branch index in upper 16 bits
-                const encoded_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx) | (@as(u32, next_branch_idx) << 16));
+                const encoded_idx: ModuleEnv.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx) | (@as(u32, next_branch_idx) << 16));
                 try self.work_stack.append(.{
                     .kind = .if_check_condition,
                     .expr_idx = encoded_idx,
@@ -933,7 +933,7 @@ pub const Interpreter = struct {
     /// # Call Frame Layout
     /// After this step: `[return_space]`
     /// Eventually becomes: `[return_space, function, arg1, arg2, ...]`
-    fn handleAllocReturnSpace(self: *Interpreter, call_expr_idx: CIR.Expr.Idx) EvalError!void {
+    fn handleAllocReturnSpace(self: *Interpreter, call_expr_idx: ModuleEnv.Expr.Idx) EvalError!void {
         // Allocate space for the return value (landing pad)
         // At this point, we need to know the return type to allocate the right amount of space
 
@@ -964,7 +964,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn handleCallFunction(self: *Interpreter, call_expr_idx: CIR.Expr.Idx) EvalError!void {
+    fn handleCallFunction(self: *Interpreter, call_expr_idx: ModuleEnv.Expr.Idx) EvalError!void {
         self.debugTraceCall("handleCallFunction", call_expr_idx);
         defer self.debugTraceCallExit("handleCallFunction");
 
@@ -974,7 +974,7 @@ pub const Interpreter = struct {
         self.debugTracePhase("call_validation", call_expr_idx);
 
         // Get the call expression to find argument count
-        const call_expr = self.cir.store.getExpr(call_expr_idx);
+        const call_expr = self.env.store.getExpr(call_expr_idx);
         const call = switch (call_expr) {
             .e_call => |c| c,
             else => {
@@ -983,7 +983,7 @@ pub const Interpreter = struct {
             },
         };
 
-        const all_exprs = self.cir.store.sliceExpr(call.args);
+        const all_exprs = self.env.store.sliceExpr(call.args);
         const arg_count = all_exprs.len - 1; // Subtract 1 for the function itself
 
         // Check that we have enough items on the layout stack
@@ -1035,12 +1035,12 @@ pub const Interpreter = struct {
     /// - Multi-parameter support
     /// - Pattern destructuring (tuples, records)
     /// - Optimized parameter lookup (hash maps)
-    fn handleBindParameters(self: *Interpreter, call_expr_idx: CIR.Expr.Idx) EvalError!void {
+    fn handleBindParameters(self: *Interpreter, call_expr_idx: ModuleEnv.Expr.Idx) EvalError!void {
         self.debugTraceCall("handleBindParameters", call_expr_idx);
         defer self.debugTraceCallExit("handleBindParameters");
 
         // Get the call expression to determine argument count
-        const call_expr = self.cir.store.getExpr(call_expr_idx);
+        const call_expr = self.env.store.getExpr(call_expr_idx);
         const call = switch (call_expr) {
             .e_call => |c| c,
             else => {
@@ -1049,7 +1049,7 @@ pub const Interpreter = struct {
             },
         };
 
-        const all_exprs = self.cir.store.sliceExpr(call.args);
+        const all_exprs = self.env.store.sliceExpr(call.args);
         const arg_count = all_exprs.len - 1; // Subtract 1 for the function itself
 
         if (self.layout_stack.items.len < arg_count + 1) {
@@ -1094,7 +1094,7 @@ pub const Interpreter = struct {
         // Verify closure integrity
         self.debugVerifyClosure(closure_ptr, "parameter_binding");
 
-        const parameter_patterns = self.cir.store.slicePatterns(closure_ptr.args_pattern_span);
+        const parameter_patterns = self.env.store.slicePatterns(closure_ptr.args_pattern_span);
 
         if (parameter_patterns.len != arg_count) {
             if (DEBUG_ENABLED) {
@@ -1145,24 +1145,24 @@ pub const Interpreter = struct {
         self.debugTracePhase("parameter_binding_complete", call_expr_idx);
     }
 
-    fn handleEvalFunctionBody(self: *Interpreter, call_expr_idx: CIR.Expr.Idx) EvalError!void {
+    fn handleEvalFunctionBody(self: *Interpreter, call_expr_idx: ModuleEnv.Expr.Idx) EvalError!void {
         // Evaluate the function body and copy the result to the return space (landing pad)
 
         // Get the call expression to access the function
-        const call_expr = self.cir.store.getExpr(call_expr_idx);
+        const call_expr = self.env.store.getExpr(call_expr_idx);
         const call = switch (call_expr) {
             .e_call => |c| c,
             else => return error.LayoutError,
         };
 
-        const all_exprs = self.cir.store.sliceExpr(call.args);
+        const all_exprs = self.env.store.sliceExpr(call.args);
         if (all_exprs.len == 0) {
             return error.LayoutError; // No function to call
         }
 
         const function_expr_idx = all_exprs[0];
 
-        const function_expr = self.cir.store.getExpr(function_expr_idx);
+        const function_expr = self.env.store.getExpr(function_expr_idx);
 
         // Extract the lambda body from the function expression
         const lambda_body = switch (function_expr) {
@@ -1202,7 +1202,7 @@ pub const Interpreter = struct {
     /// # Memory Safety
     /// Uses byte-level copying to handle different result types safely.
     /// Return space was pre-allocated with correct size and alignment.
-    fn handleCopyResultToReturnSpace(self: *Interpreter, call_expr_idx: CIR.Expr.Idx) EvalError!void {
+    fn handleCopyResultToReturnSpace(self: *Interpreter, call_expr_idx: ModuleEnv.Expr.Idx) EvalError!void {
         // Copy the function body result to the return space (landing pad)
         // At this point the stack has: [return_space, function, args..., body_result]
         // We need to copy body_result to return_space and clean up body_result
@@ -1228,13 +1228,13 @@ pub const Interpreter = struct {
         // Find the return space - it should be at the bottom of our call frame
         // We need to find how many items are in our call frame to calculate the return space position
 
-        const call_expr = self.cir.store.getExpr(call_expr_idx);
+        const call_expr = self.env.store.getExpr(call_expr_idx);
         const call = switch (call_expr) {
             .e_call => |c| c,
             else => return error.LayoutError,
         };
 
-        const all_exprs = self.cir.store.sliceExpr(call.args);
+        const all_exprs = self.env.store.sliceExpr(call.args);
         const arg_count = all_exprs.len - 1; // Subtract 1 for the function
 
         if (DEBUG_ENABLED) {
@@ -1333,7 +1333,7 @@ pub const Interpreter = struct {
     /// - Compacts stack to eliminate unused call frame data
     /// - Ensures return value is at predictable location (stack base)
     /// - Maintains proper alignment for return value
-    fn handleCleanupFunction(self: *Interpreter, call_expr_idx: CIR.Expr.Idx) EvalError!void {
+    fn handleCleanupFunction(self: *Interpreter, call_expr_idx: ModuleEnv.Expr.Idx) EvalError!void {
         // Remove parameter bindings that were added for this function call
         self.parameter_bindings.clearRetainingCapacity();
 
@@ -1343,13 +1343,13 @@ pub const Interpreter = struct {
         }
 
         // Get call information
-        const call_expr = self.cir.store.getExpr(call_expr_idx);
+        const call_expr = self.env.store.getExpr(call_expr_idx);
         const call = switch (call_expr) {
             .e_call => |c| c,
             else => return error.LayoutError,
         };
 
-        const all_exprs = self.cir.store.sliceExpr(call.args);
+        const all_exprs = self.env.store.sliceExpr(call.args);
         const arg_count = all_exprs.len - 1; // Subtract 1 for the function itself
 
         // Layout stack currently has: [return_layout, function_layout, arg_layouts...]
@@ -1426,7 +1426,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn debugTraceCall(self: *const Interpreter, function_name: []const u8, expr_idx: CIR.Expr.Idx) void {
+    fn debugTraceCall(self: *const Interpreter, function_name: []const u8, expr_idx: ModuleEnv.Expr.Idx) void {
         _ = self;
         if (!DEBUG_ENABLED) return;
         std.debug.print("DEBUG: ENTER {s} (expr={})\n", .{ function_name, @intFromEnum(expr_idx) });
@@ -1438,7 +1438,7 @@ pub const Interpreter = struct {
         std.debug.print("DEBUG: EXIT  {s}\n", .{function_name});
     }
 
-    fn debugTracePhase(self: *const Interpreter, phase_name: []const u8, expr_idx: CIR.Expr.Idx) void {
+    fn debugTracePhase(self: *const Interpreter, phase_name: []const u8, expr_idx: ModuleEnv.Expr.Idx) void {
         _ = self;
         if (!DEBUG_ENABLED) return;
         std.debug.print("DEBUG:  {s} (expr={})\n", .{ phase_name, @intFromEnum(expr_idx) });
@@ -1478,7 +1478,7 @@ pub const Interpreter = struct {
         });
     }
 
-    fn debugError(self: *const Interpreter, error_type: []const u8, expr_idx: CIR.Expr.Idx, context: []const u8) void {
+    fn debugError(self: *const Interpreter, error_type: []const u8, expr_idx: ModuleEnv.Expr.Idx, context: []const u8) void {
         if (!DEBUG_ENABLED) return;
         std.debug.print("❌ {s} in {s}: expr={}, stack_used={}\n", .{ error_type, context, @intFromEnum(expr_idx), self.stack_memory.used });
     }

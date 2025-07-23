@@ -6523,7 +6523,7 @@ const ScopeTestContext = struct {
         // heap allocate env for testing
         const env = try gpa.create(compile.ModuleEnv);
         env.* = try compile.ModuleEnv.init(gpa, "");
-        
+
         // Initialize CIR fields in the existing env
         try env.initCIRFields(gpa, "Test");
 
@@ -6837,7 +6837,6 @@ test "hexadecimal integer literals" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         var can = try init(&env, &ast, null);
@@ -6927,7 +6926,6 @@ test "binary integer literals" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         var can = try init(&env, &ast, null);
@@ -7017,7 +7015,6 @@ test "octal integer literals" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         var can = try init(&env, &ast, null);
@@ -7107,7 +7104,6 @@ test "integer literals with uppercase base prefixes" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         var can = try init(&env, &ast, null);
@@ -7166,7 +7162,6 @@ test "numeric literal patterns use pattern idx as type var" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         // Create an int literal pattern directly
@@ -7211,7 +7206,6 @@ test "numeric literal patterns use pattern idx as type var" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         // Create a dec literal pattern directly
@@ -7263,7 +7257,6 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         const pattern = CIR.Pattern{
@@ -7301,7 +7294,6 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         const pattern = CIR.Pattern{
@@ -7351,7 +7343,6 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         const pattern = CIR.Pattern{
@@ -7389,7 +7380,6 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         const pattern = CIR.Pattern{
@@ -7435,7 +7425,6 @@ test "numeric pattern types: unbound vs polymorphic" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         const pattern = CIR.Pattern{
@@ -7482,7 +7471,6 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         var can = try Self.init(&env, &ast, null);
@@ -7520,7 +7508,6 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         var can = try Self.init(&env, &ast, null);
@@ -7558,7 +7545,6 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         var can = try Self.init(&env, &ast, null);
@@ -7603,7 +7589,6 @@ test "record_unbound basic functionality" {
     var ast = try parse.parseExpr(&env);
     defer ast.deinit(gpa);
 
-    // Initialize CIR fields in the existing env instead of creating separate CIR
     try env.initCIRFields(gpa, "Test");
 
     var can = try Self.init(&env, &ast, null);
@@ -7647,7 +7632,6 @@ test "record_unbound with multiple fields" {
     var ast = try parse.parseExpr(&env);
     defer ast.deinit(gpa);
 
-    // Initialize CIR fields in the existing env instead of creating separate CIR
     try env.initCIRFields(gpa, "Test");
 
     var can = try Self.init(&env, &ast, null);
@@ -7685,7 +7669,6 @@ test "record with extension variable" {
     var env = try compile.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    // Initialize CIR fields in the existing env instead of creating separate CIR
     try env.initCIRFields(gpa, "Test");
 
     // Test that regular records have extension variables
@@ -7761,7 +7744,6 @@ test "numeric pattern types: unbound vs polymorphic - frac" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         const pattern = CIR.Pattern{
@@ -7817,7 +7799,6 @@ test "pattern numeric literal value edge cases" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         // Test i128 max
@@ -7846,7 +7827,6 @@ test "pattern numeric literal value edge cases" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         const small_dec_pattern = CIR.Pattern{
@@ -7870,7 +7850,6 @@ test "pattern numeric literal value edge cases" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         const dec_pattern = CIR.Pattern{
@@ -7892,7 +7871,6 @@ test "pattern numeric literal value edge cases" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         // Test negative zero (RocDec doesn't distinguish between +0 and -0)
@@ -7918,7 +7896,6 @@ test "pattern literal type transitions" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         const pattern = CIR.Pattern{
@@ -7964,7 +7941,6 @@ test "pattern literal type transitions" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         // Hex pattern (0xFF)
@@ -8010,7 +7986,6 @@ test "pattern type inference with numeric literals" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         // Create patterns representing different numeric literals
@@ -8079,7 +8054,6 @@ test "pattern type inference with numeric literals" {
         var env = try compile.ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        // Initialize CIR fields in the existing env instead of creating separate CIR
         try env.initCIRFields(gpa, "Test");
 
         // Create a pattern that will be constrained by context

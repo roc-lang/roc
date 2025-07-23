@@ -276,7 +276,6 @@ pub const CacheManager = struct {
         const module_env = try self.allocator.create(ModuleEnv);
         module_env.* = restored.module_env;
 
-        // Create ProcessResult with proper ownership - ModuleEnv is now CIR
         const process_result = coordinate_simple.ProcessResult{
             .cir = module_env,
             .source = source,

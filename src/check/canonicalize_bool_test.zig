@@ -6,7 +6,7 @@ const compile = @import("compile");
 const parse = @import("./parse.zig");
 const canonicalize = @import("./canonicalize.zig");
 const types = @import("types");
-const CIR = @import("compile").ModuleEnv;
+const ModuleEnv = @import("compile").ModuleEnv;
 
 test "canonicalize True as Bool" {
     const allocator = testing.allocator;
@@ -21,7 +21,7 @@ test "canonicalize True as Bool" {
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
-    // Initialize CIR fields in the existing module_env
+    // Initialize ModuleEnv fields in the existing module_env
     try module_env.initCIRFields(allocator, "test");
 
     // Canonicalize
@@ -40,7 +40,7 @@ test "canonicalize True as Bool" {
     // The backing expression should be a tag
     const backing_expr = module_env.store.getExpr(expr.e_nominal.backing_expr);
     try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(CIR.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
+    try testing.expectEqual(ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
 
     // The tag should be "True"
     const tag_name = module_env.idents.getText(backing_expr.e_tag.name);
@@ -60,7 +60,7 @@ test "canonicalize False as Bool" {
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
-    // Initialize CIR fields in the existing module_env
+    // Initialize ModuleEnv fields in the existing module_env
     try module_env.initCIRFields(allocator, "test");
 
     // Canonicalize
@@ -79,7 +79,7 @@ test "canonicalize False as Bool" {
     // The backing expression should be a tag
     const backing_expr = module_env.store.getExpr(expr.e_nominal.backing_expr);
     try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(CIR.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
+    try testing.expectEqual(ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
 
     // The tag should be "False"
     const tag_name = module_env.idents.getText(backing_expr.e_tag.name);
@@ -99,7 +99,7 @@ test "canonicalize random tag not as Bool" {
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
-    // Initialize CIR fields in the existing module_env
+    // Initialize ModuleEnv fields in the existing module_env
     try module_env.initCIRFields(allocator, "test");
 
     // Canonicalize

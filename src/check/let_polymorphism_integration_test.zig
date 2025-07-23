@@ -39,7 +39,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
         };
     }
 
-    // Canonicalize - initialize CIR fields in existing module_env
+    // Canonicalize - initialize ModuleEnv fields in existing module_env
     try module_env.initCIRFields(allocator, "Test");
 
     const can = try allocator.create(canonicalize);
@@ -102,7 +102,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
         };
     }
 
-    // Canonicalize - initialize CIR fields in existing module_env
+    // Canonicalize - initialize ModuleEnv fields in existing module_env
     try module_env.initCIRFields(allocator, "Test");
 
     const can = try allocator.create(canonicalize);
@@ -169,7 +169,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
         };
     }
 
-    // Canonicalize - initialize CIR fields in existing module_env
+    // Canonicalize - initialize ModuleEnv fields in existing module_env
     try module_env.initCIRFields(allocator, "Test");
 
     const can = try allocator.create(canonicalize);

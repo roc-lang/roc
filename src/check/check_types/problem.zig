@@ -15,7 +15,7 @@ const Document = reporting.Document;
 const UnderlineRegion = reporting.UnderlineRegion;
 const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
 
-const CIR = can.CIR;
+const ModuleEnv = compile.ModuleEnv;
 const TypesStore = types_mod.Store;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -95,28 +95,28 @@ pub const TypeMismatchDetail = union(enum) {
 
 /// Problem data for when list elements have incompatible types
 pub const IncompatibleListElements = struct {
-    last_elem_expr: CIR.Expr.Idx,
+    last_elem_expr: ModuleEnv.Expr.Idx,
     incompatible_elem_index: u32, // 0-based index of the incompatible element
     list_length: u32, // Total number of elements in the list
 };
 
 /// Problem data for cross-module import type mismatches
 pub const CrossModuleImport = struct {
-    import_region: CIR.Expr.Idx,
-    module_idx: CIR.Import.Idx,
+    import_region: ModuleEnv.Expr.Idx,
+    module_idx: ModuleEnv.Import.Idx,
 };
 
 /// Problem data for when if branches have incompatible types
 pub const IncompatibleIfBranches = struct {
-    parent_if_expr: CIR.Expr.Idx,
-    last_if_branch: CIR.Expr.IfBranch.Idx,
+    parent_if_expr: ModuleEnv.Expr.Idx,
+    last_if_branch: ModuleEnv.Expr.IfBranch.Idx,
     num_branches: u32,
     problem_branch_index: u32,
 };
 
 /// Problem data for when match patterns have have incompatible types
 pub const IncompatibleMatchPatterns = struct {
-    match_expr: CIR.Expr.Idx,
+    match_expr: ModuleEnv.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
     num_patterns: u32,
@@ -125,14 +125,14 @@ pub const IncompatibleMatchPatterns = struct {
 
 /// Problem data for when match branches have have incompatible types
 pub const IncompatibleMatchBranches = struct {
-    match_expr: CIR.Expr.Idx,
+    match_expr: ModuleEnv.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
 };
 
 /// Problem data for when a bool binop (`and` or `or`) is invalid
 pub const InvalidBoolBinop = struct {
-    binop_expr: CIR.Expr.Idx,
+    binop_expr: ModuleEnv.Expr.Idx,
     problem_side: enum { lhs, rhs },
     binop: enum { @"and", @"or" },
 };
@@ -156,27 +156,27 @@ pub const ReportBuilder = struct {
     gpa: Allocator,
     buf: std.ArrayList(u8),
     module_env: *const compile.ModuleEnv,
-    can_ir: *const can.CIR,
+    can_module_env: *const ModuleEnv,
     snapshots: *const snapshot.Store,
     source: []const u8,
     filename: []const u8,
-    other_modules: []const *const can.CIR,
+    other_modules: []const *const ModuleEnv,
 
     /// Init report builder
     /// Only owned field is `buf`
     pub fn init(
         gpa: Allocator,
         module_env: *const compile.ModuleEnv,
-        can_ir: *const can.CIR,
+        can_module_env: *const ModuleEnv,
         snapshots: *const snapshot.Store,
         filename: []const u8,
-        other_modules: []const *const can.CIR,
+        other_modules: []const *const ModuleEnv,
     ) Self {
         return .{
             .gpa = gpa,
             .buf = std.ArrayList(u8).init(gpa),
             .module_env = module_env,
-            .can_ir = can_ir,
+            .can_module_env = can_module_env,
             .snapshots = snapshots,
             .source = module_env.source,
             .filename = filename,
@@ -202,8 +202,8 @@ pub const ReportBuilder = struct {
             self.buf.writer(),
             self.snapshots,
             &self.module_env.idents,
-            self.can_ir.module_name,
-            self.can_ir,
+            self.can_module_env.module_name,
+            self.can_module_env,
             self.other_modules,
         );
 
@@ -272,7 +272,7 @@ pub const ReportBuilder = struct {
         try snapshot_writer.write(types.actual_snapshot);
         const owned_actual = try report.addOwnedString(self.buf.items[0..]);
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -370,8 +370,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const expected_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.last_elem_expr)));
+        const actual_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const expected_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(data.last_elem_expr)));
         const overall_start_offset = @min(actual_region.start.offset, expected_region.start.offset);
         const overall_end_offset = @max(actual_region.end.offset, expected_region.end.offset);
 
@@ -484,7 +484,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Get the region info for the invalid condition
-        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const actual_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const actual_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.line_starts.items.items,
@@ -587,12 +587,12 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const last_if_branch_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.last_if_branch)));
+        const last_if_branch_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(data.last_if_branch)));
 
         // TODO: getExprSpecific will panic if actual_var is not an Expr
         // It _should_ always be, but we should handle this better so it don't blow up
-        const zoomed_in_var = self.can_ir.store.getExprSpecific(@enumFromInt(@intFromEnum(types.actual_var)));
-        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(zoomed_in_var)));
+        const zoomed_in_var = self.can_module_env.store.getExprSpecific(@enumFromInt(@intFromEnum(types.actual_var)));
+        const actual_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(zoomed_in_var)));
 
         const overall_start_offset = @min(last_if_branch_region.start.offset, actual_region.start.offset);
         const overall_end_offset = @max(last_if_branch_region.end.offset, actual_region.end.offset);
@@ -731,7 +731,7 @@ pub const ReportBuilder = struct {
         }
 
         // Determine the overall region that encompasses both elements
-        const match_expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const match_expr_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
         const overall_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.line_starts.items.items,
@@ -740,7 +740,7 @@ pub const ReportBuilder = struct {
         ) catch return report;
 
         // Get region info for invalid branch
-        const invalid_var_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const invalid_var_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const invalid_var_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.line_starts.items.items,
@@ -848,8 +848,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
-        const this_branch_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const expr_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const this_branch_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         const overall_start_offset = expr_region.start.offset;
         const overall_end_offset = this_branch_region.end.offset;
@@ -950,8 +950,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.binop_expr)));
-        const problem_side_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const expr_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(data.binop_expr)));
+        const problem_side_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         const overall_start_offset = expr_region.start.offset;
         const overall_end_offset = problem_side_region.end.offset;
@@ -1040,7 +1040,7 @@ pub const ReportBuilder = struct {
         std.debug.assert(actual_content.structure == .tag_union);
         std.debug.assert(actual_content.structure.tag_union.tags.len() == 1);
         const actual_tag = self.snapshots.tags.get(actual_content.structure.tag_union.tags.start);
-        const tag_name_bytes = self.can_ir.idents.getText(actual_tag.name);
+        const tag_name_bytes = self.can_module_env.idents.getText(actual_tag.name);
         const tag_name = try report.addOwnedString(tag_name_bytes);
 
         // Add description
@@ -1048,8 +1048,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.expected_var)));
-        const problem_side_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const expr_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(types.expected_var)));
+        const problem_side_region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         const overall_start_offset = expr_region.start.offset;
         const overall_end_offset = problem_side_region.end.offset;
@@ -1123,7 +1123,7 @@ pub const ReportBuilder = struct {
         try snapshot_writer.write(data.expected_type);
         const owned_expected = try report.addOwnedString(self.buf.items[0..]);
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
+        const region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -1163,7 +1163,7 @@ pub const ReportBuilder = struct {
         try snapshot_writer.write(data.expected_type);
         const owned_expected = try report.addOwnedString(self.buf.items[0..]);
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
+        const region = self.can_module_env.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -1211,7 +1211,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Get the import expression
-        const import_expr = self.can_ir.store.getExpr(data.import_region);
+        const import_expr = self.can_module_env.store.getExpr(data.import_region);
         const import_region = import_expr.e_lookup_external.region;
 
         // Get region info for the import
@@ -1249,8 +1249,8 @@ pub const ReportBuilder = struct {
 
         // Get module name if available
         const module_idx = @intFromEnum(data.module_idx);
-        const module_name = if (module_idx < self.can_ir.imports.imports.items.len) blk: {
-            const import_name = self.can_ir.imports.imports.items[module_idx];
+        const module_name = if (module_idx < self.can_module_env.imports.imports.items.len) blk: {
+            const import_name = self.can_module_env.imports.imports.items[module_idx];
             break :blk import_name;
         } else null;
 
