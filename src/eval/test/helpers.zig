@@ -49,7 +49,7 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
     try testing.expectError(expected_error, result);
 }
 
-/// Helpers to setup and run an interpeter expecting an integer result.
+/// Helpers to setup and run an interpreter expecting an integer result.
 pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);

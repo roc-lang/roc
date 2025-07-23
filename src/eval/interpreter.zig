@@ -22,7 +22,7 @@
 //! 2. **Push Arguments**: Function and arguments pushed onto stack by evaluating them IN ORDER. This means
 //!    the first argument ends up push on the bottom of the stack, and the last argument on top.
 //!    The fact that we execute in-order makes it easier to debug/understand, as the evaluation matches the source code order.
-//!    This is only observable in the debugger or via `dbg` statemnts.
+//!    This is only observable in the debugger or via `dbg` statements.
 //! 3. **Create the frame and call**: Once all the args are evaluated (pushed), we can actually work on calling the function.
 //! 4. **Function body executes**: Per normal, we evaluate the function body.
 //! 5. **Clean up / copy**: After the function is evaluated, we need to copy the result and clean up the stack.
@@ -133,7 +133,7 @@ const BranchData = struct {
 
 /// Tracks execution context for function calls
 pub const CallFrame = struct {
-    /// this function's body epxression
+    /// this function's body expression
     body_idx: CIR.Expr.Idx,
     /// Offset into the `stack_memory` of the interpreter where this frame's values start
     value_base: u32,
@@ -166,6 +166,7 @@ const Binding = struct {
     layout: Layout,
 };
 
+/// TODO
 pub const Closure = struct {
     body_idx: CIR.Expr.Idx,
     params: CIR.Pattern.Span,
@@ -1132,7 +1133,7 @@ fn writeIntToMemory(ptr: [*]u8, value: i128, precision: types.Num.Int.Precision)
     }
 }
 
-// Helper function to read an integer from memory with the correct precision
+/// Helper function to read an integer from memory with the correct precision
 pub fn readIntFromMemory(ptr: [*]u8, precision: types.Num.Int.Precision) i128 {
     return switch (precision) {
         .u8 => @as(i128, @as(*u8, @ptrCast(@alignCast(ptr))).*),
