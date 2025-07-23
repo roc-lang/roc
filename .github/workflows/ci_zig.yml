@@ -61,6 +61,7 @@ jobs:
 
       - run: |
           roc check src/PROFILING/exec_bench.roc
+          roc test src/PROFILING/exec_bench.roc
 
 
   zig-tests:

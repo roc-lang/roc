@@ -14,17 +14,18 @@ main! = |raw_args|
     # get the second argument, the first is the executable's path
     out_file = when List.get(args, 1) |> Result.map_err(|_| ZeroArgsGiven) is
         Err(ZeroArgsGiven) ->
-            Err(Exit(1, "Error ZeroArgsGiven:\n\tI expected one argument, but I got none.\n\tRun the app like this: `roc exec_bench.roc -- output.txt`"))?
+            Err(Exit(1, "Error ZeroArgsGiven:\n\tI expected one argument, but I got none.\n\tRun the app like this: `roc ./src/PROFILING/exec_bench.roc ./output.txt`"))?
         Ok(first_arg) ->
             first_arg
-    # Run the command 5 times and collect outputs
-    outputs = List.range({ start: At(0), end: Before(5) })
+
+    # Run `roc check ... --time` 5 times and collect outputs
+    bench_stdout_list = List.range({ start: At(0), end: Before(5) })
         |> List.map_try!(|_| run_benchmark_command!({}))?
 
     # Parse all outputs to extract timing data
-    all_timing_data = List.map_try(outputs, parse_output)?
+    all_timing_data = List.map_try(bench_stdout_list, parse_bench_stdout)?
 
-    # Validate phases are consistent across all runs
+    # Check that the per phase timings are present
     validate_phases(all_timing_data)?
 
     # Calculate median values
@@ -45,7 +46,7 @@ main! = |raw_args|
     zig_version_out = run_cmd_w_output!("zig", ["version"])?
     zig_version = Str.trim(zig_version_out)
 
-    # Get operating system with version (works on both Linux and macOS)
+    # Get operating system with version
     operating_system_out = run_cmd_w_output!("uname", ["-sr"])?
     operating_system = Str.trim(operating_system_out)
 
@@ -67,8 +68,8 @@ run_benchmark_command! : {} => Result Str _
 run_benchmark_command! = |{}|
     run_cmd_w_output!("./zig-out/bin/roc", ["check", "src/PROFILING/bench_repeated_check.roc", "--time", "--no-cache"])
 
-parse_output : Str -> Result TimingData _
-parse_output = |output|
+parse_bench_stdout : Str -> Result TimingData _
+parse_bench_stdout = |output|
     lines = Str.split_on(output, "\n")
     
     # Extract total time from "No errors found in XXX ms"
@@ -91,7 +92,7 @@ extract_total_time = |lines|
                 Ok time -> Ok(time)
                 Err _ -> Err(InvalidTotalTime("Could not parse total time: ${total_time_str}"))
 
-        Err _ -> Err(InvalidTotalTime("Could not find 'No errors found in' line"))
+        Err _ -> Err(InvalidTotalTime("Could not find line containing 'No errors found in' in:\n\t${Str.join_with(lines, "\n")}"))
 
 extract_phase_timings : List Str -> Result (List PhaseTime) _
 extract_phase_timings = |lines|
@@ -113,13 +114,17 @@ extract_phase_time = |lines, phase_name|
         Ok line ->
             # Parse "  tokenize + parse:             37.6 ms  (37602963 ns)"
             parts = Str.split_on(line, "(")
+
             when List.get(parts, 1) is
                 Ok ns_part ->
                     ns_str = Str.replace_first(ns_part, " ns)", "") |> Str.trim
+
                     when Str.to_u64(ns_str) is
                         Ok ns -> Ok({ phase: phase_name, time_ns: ns })
                         Err _ -> Err(InvalidPhaseTime("Could not parse ns value: ${ns_str}"))
+
                 Err _ -> Err(InvalidPhaseTime("Could not find ns value in line: ${line}"))
+
         Err _ -> Err(InvalidPhaseTime("Could not find phase '${phase_name}' in:\n\t${Str.join_with(lines, "\n")}"))
 
 validate_phases : List TimingData -> Result {} _
@@ -143,6 +148,7 @@ validate_phases = |all_timing_data|
                     Ok({})
                 else
                     Err(InvalidPhaseOrder("Phases not in expected order"))
+                    
         Err _ -> Err(NoTimingData("No timing data found"))
 
 calculate_medians : List TimingData -> MedianResults
@@ -336,7 +342,7 @@ expect
           type checking diagnostics:    0.0 ms  (300 ns)
         """
     
-    result = parse_output(test_output)
+    result = parse_bench_stdout(test_output)
     
     expected = Ok({
         total_time_ms: 772.4dec,
