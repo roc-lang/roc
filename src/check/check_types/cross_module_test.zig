@@ -12,7 +12,6 @@ const snapshot = @import("snapshot.zig");
 const occurs = @import("occurs.zig");
 
 const testing = std.testing;
-// CIR has been replaced by ModuleEnv
 const Var = types_mod.Var;
 const Content = types_mod.Content;
 const Ident = base.Ident;

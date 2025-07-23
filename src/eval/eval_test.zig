@@ -7,7 +7,6 @@ const compile = @import("compile");
 const parse = @import("../check/parse.zig");
 const canonicalize = @import("../check/canonicalize.zig");
 const check_types = @import("../check/check_types.zig");
-// CIR has been replaced by ModuleEnv
 const types = @import("types");
 const stack = @import("stack.zig");
 const layout_store = @import("../layout/store.zig");

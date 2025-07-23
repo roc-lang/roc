@@ -10,7 +10,6 @@ const base = @import("base");
 const compile = @import("compile");
 const parse = @import("../../parse.zig");
 const canonicalize = @import("../../../check/canonicalize.zig");
-// CIR has been replaced by ModuleEnv
 const types = @import("types");
 
 const test_allocator = testing.allocator;

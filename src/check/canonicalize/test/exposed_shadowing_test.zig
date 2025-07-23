@@ -9,7 +9,6 @@ const testing = std.testing;
 const base = @import("base");
 const compile = @import("compile");
 const AST = @import("../../parse/AST.zig");
-// CIR has been replaced by ModuleEnv
 const canonicalize = @import("../../canonicalize.zig");
 const parse = @import("../../parse.zig");
 const tokenize = @import("../../parse/tokenize.zig");

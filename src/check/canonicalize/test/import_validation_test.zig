@@ -11,7 +11,6 @@ const base = @import("base");
 const compile = @import("compile");
 const parse = @import("../../parse.zig");
 const canonicalize = @import("../../canonicalize.zig");
-// CIR has been replaced by ModuleEnv
 const expectEqual = testing.expectEqual;
 
 test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT EXPOSED, and working imports" {

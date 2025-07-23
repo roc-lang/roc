@@ -1,7 +1,7 @@
 //! Module cache for Roc files
 //!
 //! This module provides memory-mapped caching for compiled Roc modules,
-//! allowing fast serialization and deserialization of ModuleEnv and CIR data.
+//! allowing fast serialization and deserialization of ModuleEnv data.
 
 const std = @import("std");
 const base = @import("base");
@@ -636,7 +636,7 @@ test "create and restore cache" {
     // Validate cache
     try cache.validate();
 
-    // Restore ModuleEnv and CIR
+    // Restore ModuleEnv
     // Duplicate source since restore takes ownership
     const restored = try cache.restore(gpa, "TestModule", source);
 
