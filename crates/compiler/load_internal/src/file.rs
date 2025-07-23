@@ -6892,8 +6892,6 @@ pub fn to_package_version_conflict_report(
        The package shorthand \"{}\" is being used by two different versions:\n\n\
        • First version: {}\n\
        • Conflicting version: {}\n\n\
-       Package shorthands must be unique across all dependencies. This usually happens\n\
-       when different packages depend on different versions of the same package.\n\n\
        To fix this, you can:\n\n\
        1. Update all packages to use the same version\n\
        2. Use different shorthand names for different versions\n\
