@@ -92,6 +92,7 @@ const WorkKind = enum {
     w_unary_minus,
     w_if_check_condition,
     w_lambda_call,
+    w_lambda_return,
 };
 
 /// A unit of work to be processed during iterative evaluation.
@@ -136,9 +137,9 @@ pub const CallFrame = struct {
     /// this function's body expression
     body_idx: CIR.Expr.Idx,
     /// Offset into the `stack_memory` of the interpreter where this frame's values start
-    value_base: u32,
+    stack_base: u32,
     /// Offset into the `layout_cache` of the interpreter where this frame's layouts start
-    layout_base: u32,
+    value_base: u32,
     /// Offset into the `work_stack` of the interpreter where this frame's work items start.
     ///
     /// Each work item represents an expression we're in the process of evaluating.
@@ -173,6 +174,13 @@ pub const Closure = struct {
     captures: CIR.Expr.Capture.Span,
 };
 
+pub const Value = struct {
+    /// Type layout of the value
+    layout: Layout,
+    /// Offset into the `stack_memory` where the value is stored
+    offset: u32,
+};
+
 /// - **No Heap Allocation**: Values are stack-only for performance and safety
 pub const Interpreter = struct {
     /// Memory allocator for dynamic data structures
@@ -191,7 +199,7 @@ pub const Interpreter = struct {
     ///
     /// There's one value per logical value in the layout stack, but that value
     /// will consume an arbitrary amount of space in the `stack_memory`
-    layout_stack: std.ArrayList(Layout),
+    value_stack: std.ArrayList(Value),
     /// Active parameter or local bindings
     bindings_stack: std.ArrayList(Binding),
     /// Function stack
@@ -217,7 +225,7 @@ pub const Interpreter = struct {
             .layout_cache = layout_cache,
             .type_store = type_store,
             .work_stack = try std.ArrayList(WorkItem).initCapacity(allocator, 128),
-            .layout_stack = try std.ArrayList(layout.Layout).initCapacity(allocator, 128),
+            .value_stack = try std.ArrayList(Value).initCapacity(allocator, 128),
             .bindings_stack = try std.ArrayList(Binding).initCapacity(allocator, 128),
             .frame_stack = try std.ArrayList(CallFrame).initCapacity(allocator, 128),
             .trace_indent = 0,
@@ -227,7 +235,7 @@ pub const Interpreter = struct {
 
     pub fn deinit(self: *Interpreter) void {
         self.work_stack.deinit();
-        self.layout_stack.deinit();
+        self.value_stack.deinit();
         self.bindings_stack.deinit();
         self.frame_stack.deinit();
     }
@@ -237,10 +245,10 @@ pub const Interpreter = struct {
     /// This is the main entry point for expression evaluation. Uses an iterative
     /// work queue approach to evaluate complex expressions without recursion.
     pub fn eval(self: *Interpreter, expr_idx: CIR.Expr.Idx) EvalError!StackValue {
-        // Ensure work_stack and layout_stack are empty before we start. (stack_memory might not be, and that's fine!)
+        // Ensure work_stack and value_stack are empty before we start. (stack_memory might not be, and that's fine!)
         std.debug.assert(self.work_stack.items.len == 0);
-        std.debug.assert(self.layout_stack.items.len == 0);
-        errdefer self.layout_stack.clearRetainingCapacity();
+        std.debug.assert(self.value_stack.items.len == 0);
+        errdefer self.value_stack.clearRetainingCapacity();
 
         // We'll calculate the result pointer at the end based on the final layout
 
@@ -274,23 +282,24 @@ pub const Interpreter = struct {
                     work.expr_idx,
                     work.extra, // stores the arg count
                 ),
+                .w_lambda_return => try self.handleLambdaReturn(),
             }
         }
 
         // Pop the final layout - should be the only thing left on the layout stack
-        const final_layout = self.layout_stack.pop() orelse return error.InvalidStackState;
+        const final_value = self.value_stack.pop() orelse return error.InvalidStackState;
 
         // Debug: check what's left on the layout stack
-        if (self.layout_stack.items.len > 0) {
-            self.traceWarn("Layout stack not empty! {} items remaining:", .{self.layout_stack.items.len});
-            for (self.layout_stack.items, 0..) |item_layout, i| {
-                self.traceInfo("[{}]: tag = {s}", .{ i, @tagName(item_layout.tag) });
+        if (self.value_stack.items.len > 0) {
+            self.traceWarn("Layout stack not empty! {} items remaining:", .{self.value_stack.items.len});
+            for (self.value_stack.items, 0..) |item_layout, i| {
+                self.traceInfo("[{}]: tag = {s}", .{ i, @tagName(item_layout.layout.tag) });
             }
         }
 
         // Ensure both stacks are empty at the end - if not, it's a bug!
         std.debug.assert(self.work_stack.items.len == 0);
-        std.debug.assert(self.layout_stack.items.len == 0);
+        std.debug.assert(self.value_stack.items.len == 0);
 
         // With proper calling convention, after cleanup the result is at the start of the stack
         const result_ptr = @as([*]u8, @ptrCast(self.stack_memory.start));
@@ -298,7 +307,7 @@ pub const Interpreter = struct {
         self.traceInfo("Final result at stack pos 0 (calling convention)", .{});
 
         return StackValue{
-            .layout = final_layout,
+            .layout = final_value.layout,
             .ptr = @as(*anyopaque, @ptrCast(result_ptr)),
         };
     }
@@ -335,7 +344,7 @@ pub const Interpreter = struct {
     ///
     /// # Stack Effects
     /// - Pushes exactly one value onto `stack_memory`
-    /// - Pushes corresponding layout onto `layout_stack`
+    /// - Pushes corresponding layout onto `value_stack`
     /// - May push additional work items for complex expressions
     ///
     /// # Error Handling
@@ -364,10 +373,6 @@ pub const Interpreter = struct {
         };
         const expr_layout = self.layout_cache.getLayout(layout_idx);
 
-        // Calculate size and alignment
-        const size = self.layout_cache.layoutSize(expr_layout);
-        const alignment = expr_layout.alignment(target.TargetUsize.native);
-
         // Handle different expression types
         switch (expr) {
             // Runtime errors are handled at the beginning
@@ -387,24 +392,19 @@ pub const Interpreter = struct {
             },
 
             .e_frac_f64 => |float_lit| {
-                const ptr = self.stack_memory.alloca(size, alignment) catch |err| switch (err) {
-                    error.StackOverflow => return error.StackOverflow,
-                };
+                const result_ptr = (try self.pushStackValue(expr_layout)).?;
 
-                const typed_ptr = @as(*f64, @ptrCast(@alignCast(ptr)));
+                const typed_ptr = @as(*f64, @ptrCast(@alignCast(result_ptr)));
                 typed_ptr.* = float_lit.value;
 
-                self.traceEnter("PUSH e_frac_f64", .{});
-                try self.layout_stack.append(expr_layout);
+                self.traceEnter("PUSH e_frac_f64 {}", .{float_lit.value});
             },
 
             // Zero-argument tags (e.g., True, False)
             .e_zero_argument_tag => |tag| {
-                const ptr = self.stack_memory.alloca(size, alignment) catch |err| switch (err) {
-                    error.StackOverflow => return error.StackOverflow,
-                };
+                const result_ptr = (try self.pushStackValue(expr_layout)).?;
 
-                const tag_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+                const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
                 const tag_name = self.cir.env.idents.getText(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
                     tag_ptr.* = 1;
@@ -413,20 +413,18 @@ pub const Interpreter = struct {
                 } else {
                     tag_ptr.* = 0; // TODO: get actual tag discriminant
                 }
-
-                try self.layout_stack.append(expr_layout);
             },
 
             // Empty record
             .e_empty_record => {
                 // Empty record has no bytes
-                try self.layout_stack.append(expr_layout);
+                _ = (try self.pushStackValue(expr_layout)).?;
             },
 
             // Empty list
             .e_empty_list => {
                 // Empty list has no bytes
-                try self.layout_stack.append(expr_layout);
+                _ = (try self.pushStackValue(expr_layout)).?;
             },
 
             // Binary operations
@@ -448,7 +446,8 @@ pub const Interpreter = struct {
 
                 self.schedule_work(WorkItem{ .kind = binop_kind, .expr_idx = expr_idx });
 
-                // Push operands in reverse order (right, then left)
+                // Push operands in order - note that this results in the results being pushed to the stack in reverse order
+                // We do this so that `dbg` statements are printed in the expected order
                 self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = binop.rhs });
                 self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = binop.lhs });
             },
@@ -521,12 +520,10 @@ pub const Interpreter = struct {
 
             // Tags with arguments
             .e_tag => |tag| {
-                const ptr = self.stack_memory.alloca(size, alignment) catch |err| switch (err) {
-                    error.StackOverflow => return error.StackOverflow,
-                };
+                const result_ptr = (try self.pushStackValue(expr_layout)).?;
 
                 // For now, handle boolean tags (True/False) as u8
-                const tag_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+                const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
                 const tag_name = self.cir.env.idents.getText(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
                     tag_ptr.* = 1;
@@ -536,8 +533,7 @@ pub const Interpreter = struct {
                     tag_ptr.* = 0; // TODO: get actual tag discriminant
                 }
 
-                self.traceInfo("PUSH e_tag >> TODO update this to use our new helper pushToStack", .{});
-                try self.layout_stack.append(expr_layout);
+                self.traceInfo("PUSH e_tag", .{});
             },
 
             .e_call => |call| {
@@ -574,6 +570,15 @@ pub const Interpreter = struct {
                     .kind = .w_eval_expr,
                     .expr_idx = function_expr,
                 });
+
+                // 0. Push a slot for the return value
+                const return_layout_idx = self.layout_cache.addTypeVar(expr_var) catch |err| switch (err) {
+                    error.ZeroSizedType => return error.ZeroSizedType,
+                    error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
+                    else => |e| return e,
+                };
+                const return_layout = self.layout_cache.getLayout(return_layout_idx);
+                _ = try self.pushStackValue(return_layout);
             },
 
             // Unary minus operation
@@ -597,7 +602,6 @@ pub const Interpreter = struct {
             },
 
             .e_lambda => |lambda_expr| {
-
                 // TODO how should we calculate env size for now it's 1 usize per capture?
                 const capture_count = lambda_expr.captures.span.len;
                 const env_size: u16 = @intCast(capture_count * target_usize.size());
@@ -618,10 +622,9 @@ pub const Interpreter = struct {
         self.traceEnter("completeBinop {s}", .{@tagName(kind)});
         defer self.traceExit("", .{});
 
-        const lhs = try self.popStackValue();
+        const lhs = try self.peekStackValue(2);
+        const rhs = try self.peekStackValue(1);
         self.traceInfo("\tLeft layout: tag={}", .{lhs.layout.tag});
-
-        const rhs = try self.popStackValue();
         self.traceInfo("\tRight layout: tag={}", .{rhs.layout.tag});
 
         // For now, only support integer operations
@@ -635,8 +638,12 @@ pub const Interpreter = struct {
         }
 
         // Read the values
-        const lhs_val = readIntFromMemory(@ptrCast(rhs.ptr.?), lhs.layout.data.scalar.data.int);
-        const rhs_val = readIntFromMemory(@ptrCast(lhs.ptr.?), rhs.layout.data.scalar.data.int);
+        const lhs_val = readIntFromMemory(@ptrCast(lhs.ptr.?), lhs.layout.data.scalar.data.int);
+        const rhs_val = readIntFromMemory(@ptrCast(rhs.ptr.?), rhs.layout.data.scalar.data.int);
+
+        // Pop the operands from the stack, which we can safely do after reading their values
+        try self.popStackValue();
+        try self.popStackValue();
 
         // Debug: Values read from memory
         self.traceInfo("\tRead values - left = {}, right = {}", .{ lhs_val, rhs_val });
@@ -646,7 +653,7 @@ pub const Interpreter = struct {
             .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div => lhs.layout, // Numeric result
             .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le => blk: {
                 // Boolean result
-                const bool_layout = layout.Layout{
+                const bool_layout = Layout{
                     .tag = .scalar,
                     .data = .{ .scalar = .{
                         .tag = .int,
@@ -714,7 +721,8 @@ pub const Interpreter = struct {
 
     fn completeUnaryMinus(self: *Interpreter) EvalError!void {
         // Pop the operand layout
-        const operand_layout = self.layout_stack.pop() orelse return error.InvalidStackState;
+        const operand_value = try self.peekStackValue(1);
+        const operand_layout = operand_value.layout;
 
         // For now, only support integer operations
         if (operand_layout.tag != .scalar) {
@@ -727,26 +735,24 @@ pub const Interpreter = struct {
         }
 
         // Calculate operand size and read the value
-        const operand_size = self.layout_cache.layoutSize(operand_layout);
-        const operand_ptr = @as(*anyopaque, @ptrFromInt(@intFromPtr(self.stack_memory.start) + self.stack_memory.used - operand_size));
-        const operand_val = readIntFromMemory(@as([*]u8, @ptrCast(operand_ptr)), operand_scalar.data.int);
+        const operand_val = readIntFromMemory(@as([*]u8, @ptrCast(operand_value.ptr)), operand_scalar.data.int);
 
         self.traceInfo("Unary minus operation: -{} = {}", .{ operand_val, -operand_val });
 
         // Negate the value and write it back to the same location
         const result_val: i128 = -operand_val;
-        writeIntToMemory(@as([*]u8, @ptrCast(operand_ptr)), result_val, operand_scalar.data.int);
-
-        // Push result layout (same as operand layout)
-        try self.layout_stack.append(operand_layout);
+        writeIntToMemory(@as([*]u8, @ptrCast(operand_value.ptr)), result_val, operand_scalar.data.int);
     }
 
     fn checkIfCondition(self: *Interpreter, expr_idx: CIR.Expr.Idx, branch_index: u16) EvalError!void {
         // Pop the condition layout
-        const condition = try self.popStackValue();
+        const condition = try self.peekStackValue(1);
 
         // Read the condition value
-        const cond_val: *u8 = @ptrCast(condition.ptr.?);
+        const cond_ptr: *u8 = @ptrCast(condition.ptr.?);
+        const cond_val = cond_ptr.*;
+
+        try self.popStackValue();
 
         // Get the if expression
         const if_expr = switch (self.cir.store.getExpr(expr_idx)) {
@@ -762,7 +768,7 @@ pub const Interpreter = struct {
 
         const branch = self.cir.store.getIfBranch(branches[branch_index]);
 
-        if (cond_val.* == 1) {
+        if (cond_val == 1) {
             // Condition is true, evaluate this branch's body
             self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = branch.body });
         } else {
@@ -791,19 +797,10 @@ pub const Interpreter = struct {
         self.traceEnter("handleLambdaCall {}", .{expr_idx});
         defer self.traceExit("", .{});
 
-        // 1. Pop the lambda arguments from the stack (in reverse order since we pushed these in order)
-        const args = try self.allocator.alloc(StackValue, arg_count);
-        defer self.allocator.free(args);
-
-        for (0..arg_count) |i| {
-            args[arg_count - 1 - i] = self.popStackValue() catch |err| {
-                self.traceError("unable to pop lambda arg {d}", .{i});
-                return err;
-            };
-        }
-
         // 2. Pop the lambda closure from the stack
-        const closure_value = try self.popStackValue();
+        const closure_value = try self.peekStackValue(arg_count + 1);
+        const value_base = self.value_stack.items.len - arg_count - 1;
+        const stack_base = self.value_stack.items[value_base].offset;
 
         if (closure_value.layout.tag != LayoutTag.closure) {
             self.traceError("Expected closure, got {}", .{closure_value.layout.tag});
@@ -816,8 +813,8 @@ pub const Interpreter = struct {
         const frame: *CallFrame = try self.frame_stack.addOne();
         frame.* = CallFrame{
             .body_idx = closure.body_idx,
-            .value_base = self.stack_memory.used,
-            .layout_base = @intCast(self.layout_stack.items.len),
+            .stack_base = stack_base,
+            .value_base = @intCast(value_base),
             .work_base = @intCast(self.work_stack.items.len),
             .bindings_base = @intCast(self.bindings_stack.items.len),
             .is_tail_call = false,
@@ -833,10 +830,11 @@ pub const Interpreter = struct {
 
         for (param_ids, 0..) |param_idx, i| {
 
-            // Get the corresponding argument (in reverse order)
-            //
+            // Get the corresponding argument
+            // Note that peekStackValue is indexed in reverse order, so we end up accessing the correct argument.
+            // Example: the last argument will have just been pushed to the stack, so it will be at index 1.
             // We checked above to confirm that the number of arguments matches the number of parameters
-            const arg = args[param_ids.len - 1 - i];
+            const arg = try self.peekStackValue(i + 1);
 
             // Create a binding that associates the pattern with the value
             const binding = Binding{
@@ -849,11 +847,43 @@ pub const Interpreter = struct {
             try self.bindings_stack.append(binding);
         }
 
-        // 5. Schedule body evaluation
+        // TODO: add bindings for closure captures
+
+        // 5. Schedule the work to copy the return value and break down the stack frame
+        self.schedule_work(WorkItem{
+            .kind = .w_lambda_return,
+            .expr_idx = closure.body_idx,
+        });
+
+        // 6. Schedule body evaluation
         self.schedule_work(WorkItem{
             .kind = .w_eval_expr,
             .expr_idx = closure.body_idx,
         });
+    }
+
+    fn handleLambdaReturn(self: *Interpreter) !void {
+        const frame = self.frame_stack.pop() orelse return error.InvalidStackState;
+        const return_slot = self.value_stack.items[frame.value_base - 1];
+        const return_size = self.layout_cache.layoutSize(return_slot.layout);
+
+        const value = try self.peekStackValue(1);
+        std.debug.assert(return_slot.layout.tag == value.layout.tag); // TODO: assert more equality
+        const value_ptr = @as([*]u8, @ptrCast(value.ptr.?));
+        const value_slice = value_ptr[0..return_size];
+
+        if (return_size != 0) {
+            const dest_ptr = @as([*]u8, @ptrCast(self.stack_memory.start)) + return_slot.offset;
+            const dest_slice = dest_ptr[0..return_size];
+            std.mem.copyForwards(u8, dest_slice, value_slice);
+        }
+
+        // reset the stacks
+        self.work_stack.items.len = frame.work_base;
+        self.bindings_stack.items.len = frame.bindings_base;
+        self.value_stack.items.len = frame.value_base;
+        self.stack_memory.used = frame.stack_base;
+        self.traceInfo("Lambda return: copied value to stack base at {}", .{frame.stack_base});
     }
 
     /// Start a debug trace session with a given name and writer
@@ -993,8 +1023,8 @@ pub const Interpreter = struct {
             var stack_repr = std.ArrayList([]const u8).init(self.allocator);
             defer stack_repr.deinit();
 
-            for (self.layout_stack.items) |l| {
-                _ = stack_repr.append(@tagName(l.tag)) catch break;
+            for (self.value_stack.items) |v| {
+                _ = stack_repr.append(@tagName(v.layout.tag)) catch break;
             }
 
             // Join tags with commas and print
@@ -1007,7 +1037,7 @@ pub const Interpreter = struct {
     }
 
     /// Trace layout information
-    pub fn traceLayout(self: *const Interpreter, label: []const u8, layout_val: layout.Layout) void {
+    pub fn traceLayout(self: *const Interpreter, label: []const u8, layout_val: Layout) void {
         if (self.trace_writer) |writer| {
             self.printTraceIndent();
             const size = self.layout_cache.layoutSize(layout_val);
@@ -1019,7 +1049,7 @@ pub const Interpreter = struct {
     pub fn traceLayoutStackSummary(self: *const Interpreter) void {
         if (self.trace_writer) |writer| {
             self.printTraceIndent();
-            writer.print("LAYOUT STACK items={}\n", .{self.layout_stack.items.len}) catch {};
+            writer.print("LAYOUT STACK items={}\n", .{self.value_stack.items.len}) catch {};
         }
     }
 
@@ -1030,13 +1060,13 @@ pub const Interpreter = struct {
     pub const StackValue = struct {
         /// Type and memory layout information for the result value
         layout: Layout,
-        /// Offset to the actual value start in stack memory
+        /// Ptr to the actual value in stack memory
         ptr: ?*anyopaque,
     };
 
     /// Helper to push a value onto the stacks.
     ///
-    /// Allocates memory on `stack_memory`, pushes the layout to `layout_stack`,
+    /// Allocates memory on `stack_memory`, pushes the layout to `value_stack`,
     /// and returns a pointer to the newly allocated memory.
     ///
     /// The caller is responsible for writing the actual value to the returned pointer.
@@ -1048,10 +1078,12 @@ pub const Interpreter = struct {
 
         const value_size = self.layout_cache.layoutSize(value_layout);
         var value_ptr: ?*anyopaque = null;
+        var offset: u32 = self.stack_memory.used;
 
         if (value_size > 0) {
             const value_alignment = value_layout.alignment(target_usize);
             value_ptr = try self.stack_memory.alloca(value_size, value_alignment);
+            offset = @intCast(@intFromPtr(value_ptr) - @intFromPtr(self.stack_memory.start));
             self.traceInfo(
                 "Allocated {} bytes at address {} with alignment {}",
                 .{
@@ -1062,58 +1094,37 @@ pub const Interpreter = struct {
             );
         }
 
-        try self.layout_stack.append(value_layout);
+        try self.value_stack.append(Value{
+            .layout = value_layout,
+            .offset = offset,
+        });
 
         return value_ptr;
     }
 
     /// Helper to pop a value from the stacks.
     ///
-    /// Pops a layout from `layout_stack`, calculates the corresponding value's
+    /// Pops a layout from `value_stack`, calculates the corresponding value's
     /// location on `stack_memory`, adjusts the stack pointer, and returns
     /// the layout and a pointer to the value's (now popped) location.
-    pub fn popStackValue(self: *Interpreter) EvalError!StackValue {
-        const value_layout = self.layout_stack.pop() orelse return error.InvalidStackState;
-        const value_size = self.layout_cache.layoutSize(value_layout);
-
-        if (value_size == 0) {
-            return StackValue{ .layout = value_layout, .ptr = null };
-        }
-
-        // Work backwards to find the actual placement
-        const value_alignment = value_layout.alignment(target_usize);
-
-        const stack_end = @intFromPtr(self.stack_memory.start) + self.stack_memory.used;
-        const theoretical_start = stack_end - value_size;
-        const aligned_value_start = std.mem.alignBackward(usize, theoretical_start, value_alignment.toByteUnits());
-        const value_ptr: *anyopaque = @ptrFromInt(aligned_value_start);
-
-        // Calculate how much space this allocation actually used
-        // const value_end = aligned_value_start + value_size;
-        const space_used = stack_end - aligned_value_start;
-
-        // Update stack used
-        if (self.stack_memory.used >= space_used) {
-            self.stack_memory.used = @intCast(self.stack_memory.used - space_used);
-        } else {
-            self.stack_memory.used = 0;
-        }
-
-        return StackValue{ .layout = value_layout, .ptr = value_ptr };
+    pub fn popStackValue(self: *Interpreter) EvalError!void {
+        const value = self.value_stack.pop() orelse return error.InvalidStackState;
+        self.stack_memory.used = value.offset;
     }
 
-    /// Helper to peek at the top value on the evaluation stacks without popping it.
+    /// Helper to peek at a value on the evaluation stacks without popping it.
     /// Returns the layout and a pointer to the value.
-    fn peekTopStackValue(self: *Interpreter) !StackValue {
-        const value_layout = self.layout_stack.items[self.layout_stack.items.len - 1];
-        const value_size = self.layout_cache.layoutSize(value_layout);
+    /// Note: offset should be 1 for the topmost value, 2 for the second, etc.
+    fn peekStackValue(self: *Interpreter, offset: usize) !StackValue {
+        const value = self.value_stack.items[self.value_stack.items.len - offset];
+        const value_size = self.layout_cache.layoutSize(value.layout);
 
         if (value_size == 0) {
-            return StackValue{ .layout = value_layout, .ptr = null };
+            return StackValue{ .layout = value.layout, .ptr = null };
         }
 
-        const ptr = @as([*]u8, @ptrCast(self.stack_memory.start)) + self.stack_memory.used - value_size;
-        return StackValue{ .layout = value_layout, .ptr = @as(*anyopaque, @ptrCast(ptr)) };
+        const ptr = @as([*]u8, @ptrCast(self.stack_memory.start)) + value.offset;
+        return StackValue{ .layout = value.layout, .ptr = @as(*anyopaque, @ptrCast(ptr)) };
     }
 };
 
@@ -1169,32 +1180,29 @@ test "stack-based binary operations" {
     // Test addition: 2 + 3 = 5
     {
         // Push 2
-        const int_layout = layout.Layout{
+        const int_layout = Layout{
             .tag = .scalar,
             .data = .{ .scalar = .{
                 .tag = .int,
                 .data = .{ .int = .i64 },
             } },
         };
-        const size = @sizeOf(i64);
-        const alignment: std.mem.Alignment = .@"8";
 
-        const ptr1 = eval_stack.alloca(size, alignment) catch unreachable;
+        // Push 2
+        const ptr1 = try interpreter.pushStackValue(int_layout);
         @as(*i64, @ptrCast(@alignCast(ptr1))).* = 2;
-        try interpreter.layout_stack.append(int_layout);
 
         // Push 3
-        const ptr2 = eval_stack.alloca(size, alignment) catch unreachable;
+        const ptr2 = try interpreter.pushStackValue(int_layout);
         @as(*i64, @ptrCast(@alignCast(ptr2))).* = 3;
-        try interpreter.layout_stack.append(int_layout);
 
         // Perform addition
         try interpreter.completeBinop(.w_binop_add);
 
         // Check result
-        try std.testing.expectEqual(@as(usize, 1), interpreter.layout_stack.items.len);
-        const result_ptr = @as([*]u8, @ptrCast(eval_stack.start)) + eval_stack.used - size;
-        const result = @as(*i64, @ptrCast(@alignCast(result_ptr))).*;
+        try std.testing.expectEqual(@as(usize, 1), interpreter.value_stack.items.len);
+        const result_value = try interpreter.peekStackValue(1);
+        const result = @as(*i64, @ptrCast(@alignCast(result_value.ptr))).*;
         try std.testing.expectEqual(@as(i64, 5), result);
     }
 }
@@ -1213,38 +1221,34 @@ test "stack-based comparisons" {
 
     // Test 5 > 3 = True (1)
     {
-        // Push 5
-        const int_layout = layout.Layout{
+        const int_layout = Layout{
             .tag = .scalar,
             .data = .{ .scalar = .{
                 .tag = .int,
                 .data = .{ .int = .i64 },
             } },
         };
-        const size = @sizeOf(i64);
-        const alignment: std.mem.Alignment = .@"8";
 
-        const ptr1 = eval_stack.alloca(size, alignment) catch unreachable;
+        // Push 5
+        const ptr1 = try interpreter.pushStackValue(int_layout);
         @as(*i64, @ptrCast(@alignCast(ptr1))).* = 5;
-        try interpreter.layout_stack.append(int_layout);
 
         // Push 3
-        const ptr2 = eval_stack.alloca(size, alignment) catch unreachable;
+        const ptr2 = try interpreter.pushStackValue(int_layout);
         @as(*i64, @ptrCast(@alignCast(ptr2))).* = 3;
-        try interpreter.layout_stack.append(int_layout);
 
         // Perform comparison
         try interpreter.completeBinop(.w_binop_gt);
 
         // Check result - should be a u8 with value 1 (true)
-        try std.testing.expectEqual(@as(usize, 1), interpreter.layout_stack.items.len);
-        const bool_layout = interpreter.layout_stack.items[0];
+        try std.testing.expectEqual(@as(usize, 1), interpreter.value_stack.items.len);
+        const result_value = try interpreter.peekStackValue(1);
+        const result = @as(*u8, @ptrCast(@alignCast(result_value.ptr))).*;
+        std.debug.print("result {}", .{result});
+        try std.testing.expectEqual(@as(u8, 1), result);
+        const bool_layout = interpreter.value_stack.items[0].layout;
         try std.testing.expect(bool_layout.tag == .scalar);
         try std.testing.expect(bool_layout.data.scalar.tag == .int);
         try std.testing.expect(bool_layout.data.scalar.data.int == .u8);
-
-        const result_ptr = @as([*]u8, @ptrCast(eval_stack.start)) + eval_stack.used - 1;
-        const result = result_ptr[0];
-        try std.testing.expectEqual(@as(u8, 1), result);
     }
 }
