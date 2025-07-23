@@ -2161,13 +2161,15 @@ fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) std.mem.Allocator
             });
             // Continue loop to check for more chained applications
         } else if (self.peek() == .NoSpaceOpQuestion) {
+            self.advance();
+
             // Handle question mark suffix
             expression = try self.store.addExpr(.{ .suffix_single_question = .{
                 .expr = expression,
                 .operator = start,
                 .region = .{ .start = start, .end = self.pos },
             } });
-            self.advance();
+
             // Continue loop to check for more suffixes
         } else {
             // No more suffixes to parse
