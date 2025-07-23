@@ -174,6 +174,7 @@ pub const Closure = struct {
     captures: CIR.Expr.Capture.Span,
 };
 
+/// Represents a value on the stack.
 pub const Value = struct {
     /// Type layout of the value
     layout: Layout,
