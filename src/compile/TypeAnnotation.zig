@@ -1,4 +1,4 @@
-//! Representation of type annotations in the ModuleEnv.
+//! Representation of type annotations in the Canonical Intermediate Representation (CIR).
 //!
 //! Includes formatting of type annotations to s-expression debug format.
 

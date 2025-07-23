@@ -1,7 +1,7 @@
 //! Fuzzing for the Roc canonicalization phase
 //!
 //! This fuzzer tests the canonicalization phase of the Roc compiler, which transforms
-//! the parsed AST into a ModuleEnv. The fuzzer is
+//! the parsed AST into the Canonical Intermediate Representation (CIR). The fuzzer is
 //! designed to bias toward inputs that successfully parse and pass through canonicalization
 //! without errors, as these provide better code coverage for finding edge cases.
 //!

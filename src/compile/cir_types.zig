@@ -1,4 +1,4 @@
-//! Common types used by CIR that need to be available in ModuleEnv
+//! Common types used by the Canonical Intermediate Representation (CIR)
 //! These types are extracted from the canonicalize module to avoid circular dependencies
 
 const std = @import("std");

@@ -2,7 +2,7 @@
 //!
 //! This module contains unit tests that verify the correct canonicalization
 //! of integer literals and integer expressions from parsed AST into the
-//! compiler's canonical internal representation (ModuleEnv).
+//! compiler's Canonical Intermediate Representation (CIR).
 
 const std = @import("std");
 const testing = std.testing;

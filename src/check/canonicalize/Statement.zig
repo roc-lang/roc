@@ -1,5 +1,5 @@
 //! This module defines the `Statement` type, which represents all possible statement forms
-//! in the ModuleEnv of the Roc compiler. Statements are
+//! in the Canonical Intermediate Representation (CIR) of the Roc compiler. Statements are
 //! produced during the canonicalization phase, after parsing and semantic analysis, and
 //! serve as the structured, type-aware building blocks for Roc program logic.
 //!
@@ -7,7 +7,7 @@
 //! immutable and mutable declarations, reassignments, expressions, control flow constructs
 //! (such as `for`, `return`, and `crash`), imports, type declarations, and type annotations.
 //!
-//! The ModuleEnv `Statement` is used both at the module top level and within block expressions,
+//! The CIR `Statement` is used both at the module top level and within block expressions,
 //! and is designed to support robust error recovery and diagnostics, in line with Roc's
 //! "inform, don't block" compilation philosophy.
 

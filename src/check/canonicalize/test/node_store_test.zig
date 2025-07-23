@@ -1,4 +1,4 @@
-//! Unit tests to verify `ModuleEnv.Statement` are correctly stored in `NodeStore`
+//! Unit tests to verify CIR statements are correctly stored in `NodeStore`
 
 const std = @import("std");
 const testing = std.testing;
