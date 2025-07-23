@@ -7,7 +7,8 @@ name: CI New Compiler
 permissions: {}
 
 jobs:
-  check-zig:
+  # Checks that don't need to run on every OS
+  check-once:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -41,8 +42,30 @@ jobs:
           # Just the do super fast check step for now.
           zig build -Dno-bin -Dfuzz -Dtracy=./tracy
 
+      # To `roc check` benchmark script:
+      - name: setup Roc
+        run: |
+          curl -s -OL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+          # rename nightly tar
+          mv $(ls | grep "roc_nightly.*tar\.gz") roc_nightly.tar.gz
+          # decompress the tar
+          tar -xzf roc_nightly.tar.gz
+          rm roc_nightly.tar.gz
+          # simplify nightly folder name
+          mv roc_nightly* roc_nightly
+          cd roc_nightly
+          # make roc binary available
+          echo "$(pwd)" >> $GITHUB_PATH
+
+      - run: roc version
+
+      - run: |
+          roc check src/PROFILING/exec_bench.roc
+          roc test src/PROFILING/exec_bench.roc
+
+
   zig-tests:
-    needs: check-zig
+    needs: check-once
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -143,7 +166,7 @@ jobs:
           nix develop ./src/flake.nix -c zig build snapshot && zig build test
 
   zig-cross-compile:
-    needs: check-zig
+    needs: check-once
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false

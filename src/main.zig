@@ -604,7 +604,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         }
     }
 
-    printTimingBreakdown(stderr, process_result.timing);
+    printTimingBreakdown(stdout, process_result.timing);
 }
 
 fn printTimingBreakdown(writer: anytype, timing: ?coordinate_simple.TimingInfo) void {
