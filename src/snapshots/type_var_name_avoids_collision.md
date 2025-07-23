@@ -72,22 +72,10 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - type_var_name_avoids_collision.md:59:5:59:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
+UNUSED VARIABLE - type_var_name_avoids_collision.md:59:5:59:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:60:5:60:12
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `result3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
-The unused variable is declared here:
-**type_var_name_avoids_collision.md:59:5:59:12:**
-```roc
-    result3 = combine(result1, result2)
-```
-    ^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable `result5` is not used anywhere in your code.
 
@@ -96,6 +84,18 @@ The unused variable is declared here:
 **type_var_name_avoids_collision.md:61:5:61:12:**
 ```roc
     result5 = finalIdentity(3.14)
+```
+    ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `result3` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
+The unused variable is declared here:
+**type_var_name_avoids_collision.md:59:5:59:12:**
+```roc
+    result3 = combine(result1, result2)
 ```
     ^^^^^^^
 

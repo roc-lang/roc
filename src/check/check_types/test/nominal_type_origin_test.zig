@@ -15,9 +15,9 @@ test "nominal type origin - displays origin in snapshot writer" {
     defer idents.deinit(test_allocator);
 
     // Create module name identifiers
-    const current_module_ident = try idents.insert(test_allocator, Ident.for_text("CurrentModule"), base.Region.zero());
-    const other_module_ident = try idents.insert(test_allocator, Ident.for_text("Data.Types"), base.Region.zero());
-    const type_name_ident = try idents.insert(test_allocator, Ident.for_text("Person"), base.Region.zero());
+    const current_module_ident = try idents.insert(test_allocator, Ident.for_text("CurrentModule"));
+    const other_module_ident = try idents.insert(test_allocator, Ident.for_text("Data.Types"));
+    const type_name_ident = try idents.insert(test_allocator, Ident.for_text("Person"));
 
     // Create a snapshot store
     var snapshots = try snapshot.Store.initCapacity(test_allocator, 16);
@@ -119,8 +119,8 @@ test "nominal type origin - works with no context" {
     var idents = try Ident.Store.initCapacity(test_allocator, 16);
     defer idents.deinit(test_allocator);
 
-    const type_name_ident = try idents.insert(test_allocator, Ident.for_text("MyType"), base.Region.zero());
-    const module_ident = try idents.insert(test_allocator, Ident.for_text("SomeModule"), base.Region.zero());
+    const type_name_ident = try idents.insert(test_allocator, Ident.for_text("MyType"));
+    const module_ident = try idents.insert(test_allocator, Ident.for_text("SomeModule"));
 
     var snapshots = try snapshot.Store.initCapacity(test_allocator, 16);
     defer snapshots.deinit();

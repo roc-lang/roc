@@ -204,7 +204,6 @@ pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, 
 pub fn introduceTypeDecl(
     scope: *Scope,
     gpa: std.mem.Allocator,
-    ident_store: *const base.Ident.Store,
     name: Ident.Idx,
     type_decl: CIR.Statement.Idx,
     parent_lookup_fn: ?fn (Ident.Idx) ?CIR.Statement.Idx,
@@ -212,7 +211,7 @@ pub fn introduceTypeDecl(
     // Check if already exists in current scope by comparing text content
     var iter = scope.type_decls.iterator();
     while (iter.next()) |entry| {
-        if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
+        if (name.idx == entry.key_ptr.idx) {
             // Type redeclaration is an error, not just a warning
             return TypeIntroduceResult{ .redeclared_error = entry.value_ptr.* };
         }
@@ -237,11 +236,11 @@ pub fn introduceTypeDecl(
 /// TODO: Optimize lookup performance - currently O(n) due to text comparison
 /// TODO: Consider caching or using a more efficient data structure for type lookup
 /// TODO: Support for nominal vs structural type distinction (future := operator)
-pub fn lookupTypeDecl(scope: *const Scope, ident_store: *const base.Ident.Store, name: Ident.Idx) TypeLookupResult {
+pub fn lookupTypeDecl(scope: *const Scope, name: Ident.Idx) TypeLookupResult {
     // Search by comparing text content, not identifier index
     var iter = scope.type_decls.iterator();
     while (iter.next()) |entry| {
-        if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
+        if (name.idx == entry.key_ptr.idx) {
             return TypeLookupResult{ .found = entry.value_ptr.* };
         }
     }
@@ -254,14 +253,13 @@ pub fn lookupTypeDecl(scope: *const Scope, ident_store: *const base.Ident.Store,
 pub fn updateTypeDecl(
     scope: *Scope,
     gpa: std.mem.Allocator,
-    ident_store: *const base.Ident.Store,
     name: Ident.Idx,
     new_type_decl: CIR.Statement.Idx,
 ) std.mem.Allocator.Error!void {
     // Find the existing entry by comparing text content
     var iter = scope.type_decls.iterator();
     while (iter.next()) |entry| {
-        if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
+        if (name.idx == entry.key_ptr.idx) {
             // Update the existing entry with the new statement index
             entry.value_ptr.* = new_type_decl;
             return;
@@ -275,7 +273,6 @@ pub fn updateTypeDecl(
 pub fn introduceTypeVar(
     scope: *Scope,
     gpa: std.mem.Allocator,
-    ident_store: *const base.Ident.Store,
     name: Ident.Idx,
     type_var_anno: CIR.TypeAnno.Idx,
     parent_lookup_fn: ?fn (Ident.Idx) ?CIR.TypeAnno.Idx,
@@ -283,7 +280,7 @@ pub fn introduceTypeVar(
     // Check if already exists in current scope by comparing text content
     var iter = scope.type_vars.iterator();
     while (iter.next()) |entry| {
-        if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
+        if (name.idx == entry.key_ptr.idx) {
             // Type variable already exists in this scope
             return TypeVarIntroduceResult{ .already_in_scope = entry.value_ptr.* };
         }
@@ -305,11 +302,11 @@ pub fn introduceTypeVar(
 }
 
 /// Lookup a type variable in the scope hierarchy
-pub fn lookupTypeVar(scope: *const Scope, ident_store: *const base.Ident.Store, name: Ident.Idx) TypeVarLookupResult {
+pub fn lookupTypeVar(scope: *const Scope, name: Ident.Idx) TypeVarLookupResult {
     // Search by comparing text content, not identifier index
     var iter = scope.type_vars.iterator();
     while (iter.next()) |entry| {
-        if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
+        if (name.idx == entry.key_ptr.idx) {
             return TypeVarLookupResult{ .found = entry.value_ptr.* };
         }
     }
@@ -317,11 +314,11 @@ pub fn lookupTypeVar(scope: *const Scope, ident_store: *const base.Ident.Store, 
 }
 
 /// Look up a module alias in this scope
-pub fn lookupModuleAlias(scope: *const Scope, ident_store: *const base.Ident.Store, name: Ident.Idx) ModuleAliasLookupResult {
+pub fn lookupModuleAlias(scope: *const Scope, name: Ident.Idx) ModuleAliasLookupResult {
     // Search by comparing text content, not identifier index
     var iter = scope.module_aliases.iterator();
     while (iter.next()) |entry| {
-        if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
+        if (name.idx == entry.key_ptr.idx) {
             return ModuleAliasLookupResult{ .found = entry.value_ptr.* };
         }
     }
@@ -332,7 +329,6 @@ pub fn lookupModuleAlias(scope: *const Scope, ident_store: *const base.Ident.Sto
 pub fn introduceModuleAlias(
     scope: *Scope,
     gpa: std.mem.Allocator,
-    ident_store: *const base.Ident.Store,
     alias_name: Ident.Idx,
     module_name: Ident.Idx,
     parent_lookup_fn: ?fn (Ident.Idx) ?Ident.Idx,
@@ -340,7 +336,7 @@ pub fn introduceModuleAlias(
     // Check if already exists in current scope by comparing text content
     var iter = scope.module_aliases.iterator();
     while (iter.next()) |entry| {
-        if (ident_store.identsHaveSameText(alias_name, entry.key_ptr.*)) {
+        if (alias_name.idx == entry.key_ptr.idx) {
             // Module alias already exists in this scope
             return ModuleAliasIntroduceResult{ .already_in_scope = entry.value_ptr.* };
         }
@@ -362,11 +358,11 @@ pub fn introduceModuleAlias(
 }
 
 /// Look up an exposed item in this scope
-pub fn lookupExposedItem(scope: *const Scope, ident_store: *const base.Ident.Store, name: Ident.Idx) ExposedItemLookupResult {
+pub fn lookupExposedItem(scope: *const Scope, name: Ident.Idx) ExposedItemLookupResult {
     // Search by comparing text content, not identifier index
     var iter = scope.exposed_items.iterator();
     while (iter.next()) |entry| {
-        if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
+        if (name.idx == entry.key_ptr.idx) {
             return ExposedItemLookupResult{ .found = entry.value_ptr.* };
         }
     }
@@ -377,7 +373,6 @@ pub fn lookupExposedItem(scope: *const Scope, ident_store: *const base.Ident.Sto
 pub fn introduceExposedItem(
     scope: *Scope,
     gpa: std.mem.Allocator,
-    ident_store: *const base.Ident.Store,
     item_name: Ident.Idx,
     item_info: ExposedItemInfo,
     parent_lookup_fn: ?fn (Ident.Idx) ?ExposedItemInfo,
@@ -385,7 +380,7 @@ pub fn introduceExposedItem(
     // Check if already exists in current scope by comparing text content
     var iter = scope.exposed_items.iterator();
     while (iter.next()) |entry| {
-        if (ident_store.identsHaveSameText(item_name, entry.key_ptr.*)) {
+        if (item_name.idx == entry.key_ptr.idx) {
             // Exposed item already exists in this scope
             return ExposedItemIntroduceResult{ .already_in_scope = entry.value_ptr.* };
         }

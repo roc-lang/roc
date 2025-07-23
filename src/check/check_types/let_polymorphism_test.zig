@@ -146,8 +146,8 @@ test "let-polymorphism with nested structures" {
     var fields = std.ArrayList(types.RecordField).init(test_allocator);
     defer fields.deinit();
 
-    const data_field_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("data"), base.Region.zero());
-    const count_field_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("count"), base.Region.zero());
+    const data_field_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("data"));
+    const count_field_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("count"));
 
     try fields.append(.{ .name = data_field_name, .var_ = list_var });
     try fields.append(.{ .name = count_field_name, .var_ = u64_var });
@@ -264,11 +264,11 @@ test "let-polymorphism with simple tag union" {
     try env.store.setVarContent(type_param, types.Content{ .flex_var = null });
 
     // Create the Some tag with a single argument
-    const some_tag_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("Some"), base.Region.zero());
+    const some_tag_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("Some"));
     const some_args = try env.store.appendVars(&.{type_param});
 
     // Create the None tag with no arguments
-    const none_tag_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("None"), base.Region.zero());
+    const none_tag_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("None"));
     // For a tag with no arguments, we use an empty slice
     const none_args = try env.store.appendVars(&.{});
 
@@ -306,8 +306,8 @@ test "let-polymorphism interaction with pattern matching" {
     const maybe_var = try env.store.fresh();
 
     // Create tags
-    const just_tag_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("Just"), base.Region.zero());
-    const nothing_tag_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("Nothing"), base.Region.zero());
+    const just_tag_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("Just"));
+    const nothing_tag_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("Nothing"));
 
     var tags = std.ArrayList(types.Tag).init(test_allocator);
     defer tags.deinit();
@@ -321,8 +321,8 @@ test "let-polymorphism interaction with pattern matching" {
 
     // Create a function that pattern matches on Maybe: forall a. Maybe a -> Bool
     const bool_content = types.Content{ .structure = .{ .tag_union = .{ .tags = try env.store.appendTags(&.{
-        .{ .name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("True"), base.Region.zero()), .args = types.Var.SafeList.Range.empty() },
-        .{ .name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("False"), base.Region.zero()), .args = types.Var.SafeList.Range.empty() },
+        .{ .name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("True")), .args = types.Var.SafeList.Range.empty() },
+        .{ .name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("False")), .args = types.Var.SafeList.Range.empty() },
     }), .ext = try env.store.fresh() } } };
     const bool_var = try env.store.freshFromContent(bool_content);
 
@@ -358,9 +358,9 @@ test "let-polymorphism preserves sharing within single instantiation" {
     var fields = std.ArrayList(types.RecordField).init(test_allocator);
     defer fields.deinit();
 
-    const first_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("first"), base.Region.zero());
-    const second_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("second"), base.Region.zero());
-    const pair_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("pair"), base.Region.zero());
+    const first_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("first"));
+    const second_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("second"));
+    const pair_name = try env.module_env.idents.insert(test_allocator, base.Ident.for_text("pair"));
 
     try fields.append(.{ .name = first_name, .var_ = type_param });
     try fields.append(.{ .name = second_name, .var_ = type_param });
