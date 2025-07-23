@@ -190,9 +190,10 @@ getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 
 
 **UNUSED VARIABLE**
+Variable `color` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'color' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_color` to suppress this warning.
+The unused variable is declared here:
 **qualified_type_canonicalization.md:35:17:35:22:**
 ```roc
 processColor = |color|
@@ -223,9 +224,10 @@ The variable 'default' is not defined:
 
 
 **UNUSED VARIABLE**
+Variable `err` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'err' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_err` to suppress this warning.
+The unused variable is declared here:
 **qualified_type_canonicalization.md:43:20:43:23:**
 ```roc
         Result.Err(err) => TypeC.default

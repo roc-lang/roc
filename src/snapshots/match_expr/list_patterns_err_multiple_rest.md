@@ -32,9 +32,10 @@ Diagnostic type 'pattern_not_canonicalized' is not yet handled in report generat
 **list_patterns_err_multiple_rest.md:0:0:0:0**
 
 **UNUSED VARIABLE**
+Variable `middle` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'middle' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_middle` to suppress this warning.
+The unused variable is declared here:
 **list_patterns_err_multiple_rest.md:2:10:2:16:**
 ```roc
     [.., middle, ..] => ... # error, multiple rest patterns not allowed

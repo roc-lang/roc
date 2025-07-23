@@ -11,9 +11,10 @@ type=expr
 UNUSED VARIABLE - function_record_parameter_capture.md:1:15:1:18
 # PROBLEMS
 **UNUSED VARIABLE**
+Variable `a` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'a' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
+The unused variable is declared here:
 **function_record_parameter_capture.md:1:15:1:18:**
 ```roc
 |{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
@@ -59,11 +60,11 @@ NO CHANGE
 			(p-record-destructure @1.2-1.20
 				(destructs
 					(record-destruct @1.4-1.8 (label "name") (ident "name")
-						(requenved))
+						(required))
 					(record-destruct @1.10-1.13 (label "age") (ident "age")
-						(requenved))
+						(required))
 					(record-destruct @1.15-1.18 (label "a") (ident "a")
-						(requenved))))))
+						(required))))))
 	(e-record @1.32-1.103
 		(fields
 			(record-field (label "greeting")
@@ -80,11 +81,11 @@ NO CHANGE
 							(p-record-destructure @1.2-1.20
 								(destructs
 									(record-destruct @1.4-1.8 (label "name") (ident "name")
-										(requenved))
+										(required))
 									(record-destruct @1.10-1.13 (label "age") (ident "age")
-										(requenved))
+										(required))
 									(record-destruct @1.15-1.18 (label "a") (ident "a")
-										(requenved))))))))
+										(required))))))))
 			(record-field (label "is_adult")
 				(value
 					(e-binop @1.92-1.101 (op "ge")

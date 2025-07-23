@@ -25,9 +25,10 @@ match person {
 
 
 **UNUSED VARIABLE**
+Variable `zipCode` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'zipCode' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_zipCode` to suppress this warning.
+The unused variable is declared here:
 **pattern_destructure_nested.md:2:38:2:45:**
 ```roc
     { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
@@ -82,17 +83,17 @@ match person {
 						(p-record-destructure @2.5-2.49
 							(destructs
 								(record-destruct @2.7-2.11 (label "name") (ident "name")
-									(requenved))
+									(required))
 								(record-destruct @2.13-2.47 (label "address") (ident "address")
 									(sub-pattern
 										(p-record-destructure @2.22-2.47
 											(destructs
 												(record-destruct @2.24-2.30 (label "street") (ident "street")
-													(requenved))
+													(required))
 												(record-destruct @2.32-2.36 (label "city") (ident "city")
-													(requenved))
+													(required))
 												(record-destruct @2.38-2.45 (label "zipCode") (ident "zipCode")
-													(requenved))))))))))
+													(required))))))))))
 				(value
 					(e-string @2.53-2.92
 						(e-literal @2.54-2.54 (string ""))

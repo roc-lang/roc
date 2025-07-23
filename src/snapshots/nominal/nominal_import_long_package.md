@@ -76,11 +76,16 @@ Diagnostic type 'invalid_top_level_statement' is not yet handled in report gener
 Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
 **nominal_import_long_package.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _CE_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**nominal_import_long_package.md:0:0:0:0**
+This type is referenced here:
+**nominal_import_long_package.md:5:7:5:9:**
+```roc
+red : CE
+```
+      ^^
+
 
 # TOKENS
 ~~~zig

@@ -26,9 +26,10 @@ match numbers {
 
 
 **UNUSED VARIABLE**
+Variable `first` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'first' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
+The unused variable is declared here:
 **can_list_rest_types.md:2:6:2:11:**
 ```roc
     [first, .. as restNums] => restNums

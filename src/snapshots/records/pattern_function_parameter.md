@@ -54,11 +54,11 @@ NO CHANGE
 				(p-record-destructure @1.15-1.35
 					(destructs
 						(record-destruct @1.17-1.21 (label "name") (ident "name")
-							(requenved))
+							(required))
 						(record-destruct @1.23-1.26 (label "age") (ident "age")
-							(requenved))
+							(required))
 						(record-destruct @1.28-1.33 (label "email") (ident "email")
-							(requenved)))))
+							(required)))))
 			(e-string @1.37-1.109
 				(e-literal @1.38-1.44 (string "User: "))
 				(e-lookup-local @1.46-1.50

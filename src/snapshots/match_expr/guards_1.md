@@ -376,9 +376,10 @@ Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation
 **guards_1.md:0:0:0:0**
 
 **UNUSED VARIABLE**
+Variable `x` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'x' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
 **guards_1.md:2:5:2:6:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -410,9 +411,10 @@ The variable 'x' is not defined:
 
 
 **UNUSED VARIABLE**
+Variable `toStr` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'toStr' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
+The unused variable is declared here:
 **guards_1.md:2:32:2:41:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"

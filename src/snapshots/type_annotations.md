@@ -19,23 +19,38 @@ COMPILER DIAGNOSTIC - type_annotations.md:0:0:0:0
 COMPILER DIAGNOSTIC - type_annotations.md:0:0:0:0
 COMPILER DIAGNOSTIC - type_annotations.md:0:0:0:0
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Thing_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_annotations.md:0:0:0:0**
+This type is referenced here:
+**type_annotations.md:4:7:4:12:**
+```roc
+bar : Thing(_a, _b, _)
+```
+      ^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_annotations.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _String_ is not declared in this scope.
 
-**COMPILER DIAGNOSTIC**
+This type is referenced here:
+**type_annotations.md:7:14:7:20:**
+```roc
+main! : List(String) -> Result({}, _)
+```
+             ^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_annotations.md:0:0:0:0**
+
+**UNDECLARED TYPE**
+The type _Value_ is not declared in this scope.
+
+This type is referenced here:
+**type_annotations.md:8:13:8:18:**
+```roc
+tag_tuple : Value((_a, _b, _c))
+```
+            ^^^^^
+
 
 # TOKENS
 ~~~zig

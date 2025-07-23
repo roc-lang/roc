@@ -16,12 +16,12 @@ const SExpr = base.SExpr;
 const TypeVar = types_mod.Var;
 
 // Re-export these from other modules for convenience
-pub const NodeStore = @import("./canonicalize/NodeStore.zig");
-pub const Node = @import("./canonicalize/Node.zig");
-pub const Expr = @import("./canonicalize/Expression.zig").Expr;
-pub const Pattern = @import("./canonicalize/Pattern.zig").Pattern;
-pub const Statement = @import("./canonicalize/Statement.zig").Statement;
-pub const TypeAnno = @import("./canonicalize/TypeAnnotation.zig").TypeAnno;
+pub const NodeStore = @import("NodeStore.zig");
+pub const Node = @import("Node.zig");
+pub const Expr = @import("Expression.zig").Expr;
+pub const Pattern = @import("Pattern.zig").Pattern;
+pub const Statement = @import("Statement.zig").Statement;
+pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
 
 // Type definitions for module compilation
 

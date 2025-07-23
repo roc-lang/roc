@@ -83,9 +83,10 @@ match data {
 
 
 **UNUSED VARIABLE**
+Variable `items` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'items' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
 **list_rest_scoping_variables.md:2:8:2:8:**
 ```roc
     [..items] => 1
@@ -94,9 +95,10 @@ The variable 'items' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `items` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'items' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
 **list_rest_scoping_variables.md:3:15:3:15:**
 ```roc
     [first, ..items] => first
@@ -105,9 +107,10 @@ The variable 'items' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `items` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'items' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
 **list_rest_scoping_variables.md:4:8:4:8:**
 ```roc
     [..items, last] => last
@@ -116,9 +119,10 @@ The variable 'items' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `items` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'items' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
 **list_rest_scoping_variables.md:5:15:5:15:**
 ```roc
     [first, ..items, last] => first + last

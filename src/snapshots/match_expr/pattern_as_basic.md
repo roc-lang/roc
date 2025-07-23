@@ -14,9 +14,10 @@ UNUSED VARIABLE - pattern_as_basic.md:2:9:2:10
 UNUSED VARIABLE - pattern_as_basic.md:2:6:2:7
 # PROBLEMS
 **UNUSED VARIABLE**
+Variable `y` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'y' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
 **pattern_as_basic.md:2:9:2:10:**
 ```roc
     (x, y) as point => point
@@ -25,9 +26,10 @@ The variable 'y' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `x` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'x' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
 **pattern_as_basic.md:2:6:2:7:**
 ```roc
     (x, y) as point => point

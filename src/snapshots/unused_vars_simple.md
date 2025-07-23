@@ -32,9 +32,10 @@ UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
 COMPILER DIAGNOSTIC - unused_vars_simple.md:0:0:0:0
 # PROBLEMS
 **UNUSED VARIABLE**
+Variable `x` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'x' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
 **unused_vars_simple.md:4:19:4:20:**
 ```roc
 unused_regular = |x| 42

@@ -45,9 +45,10 @@ Diagnostic type 'var_across_function_boundary' is not yet handled in report gene
 **can_var_scoping_regular_var.md:0:0:0:0**
 
 **UNUSED VARIABLE**
+Variable `items` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'items' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
 **can_var_scoping_regular_var.md:4:17:4:22:**
 ```roc
 processItems = |items| {

@@ -25,9 +25,10 @@ match person {
 
 
 **UNUSED VARIABLE**
+Variable `age` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'age' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
+The unused variable is declared here:
 **pattern_destructure_simple.md:2:13:2:16:**
 ```roc
     { name, age } => name
@@ -71,9 +72,9 @@ match person {
 						(p-record-destructure @2.5-2.18
 							(destructs
 								(record-destruct @2.7-2.11 (label "name") (ident "name")
-									(requenved))
+									(required))
 								(record-destruct @2.13-2.16 (label "age") (ident "age")
-									(requenved))))))
+									(required))))))
 				(value
 					(e-lookup-local @2.22-2.26
 						(p-assign @2.7-2.11 (ident "name"))))))))

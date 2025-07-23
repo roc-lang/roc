@@ -52,9 +52,10 @@ The variable 'acc' is not defined:
 
 
 **UNUSED VARIABLE**
+Variable `rest` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'rest' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
 **list_patterns.md:3:15:3:15:**
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error
@@ -63,9 +64,10 @@ The variable 'rest' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `first` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'first' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
+The unused variable is declared here:
 **list_patterns.md:3:6:3:11:**
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error

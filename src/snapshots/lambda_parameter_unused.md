@@ -39,9 +39,10 @@ TYPE MISMATCH - lambda_parameter_unused.md:24:15:24:42
 TYPE MISMATCH - lambda_parameter_unused.md:24:5:24:42
 # PROBLEMS
 **UNUSED VARIABLE**
+Variable `unused` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'unused' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_unused` to suppress this warning.
+The unused variable is declared here:
 **lambda_parameter_unused.md:5:8:5:14:**
 ```roc
 add = |unused| 42

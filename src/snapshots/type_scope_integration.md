@@ -29,11 +29,16 @@ COMPILER DIAGNOSTIC - type_scope_integration.md:0:0:0:0
 Diagnostic type 'type_redeclared' is not yet handled in report generation.
 **type_scope_integration.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _SomeUndeclaredType_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_scope_integration.md:0:0:0:0**
+This type is referenced here:
+**type_scope_integration.md:10:7:10:25:**
+```roc
+Bar : SomeUndeclaredType
+```
+      ^^^^^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

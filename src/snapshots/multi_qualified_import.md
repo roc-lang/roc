@@ -116,11 +116,16 @@ Diagnostic type 'invalid_top_level_statement' is not yet handled in report gener
 Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
 **multi_qualified_import.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Encoder_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**multi_qualified_import.md:0:0:0:0**
+This type is referenced here:
+**multi_qualified_import.md:5:16:5:23:**
+```roc
+json_encoder : Encoder
+```
+               ^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 
@@ -134,9 +139,10 @@ json_encoder = Json.Core.Utf8.defaultEncoder
 
 
 **UNUSED VARIABLE**
+Variable `encoder` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'encoder' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_encoder` to suppress this warning.
+The unused variable is declared here:
 **multi_qualified_import.md:10:12:10:19:**
 ```roc
 process = |encoder| "processing"

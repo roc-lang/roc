@@ -47,34 +47,55 @@ deepNested = |_| crash "not implemented"
                  ^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Maybe_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_app_complex_nested.md:0:0:0:0**
+This type is referenced here:
+**type_app_complex_nested.md:16:33:16:38:**
+```roc
+ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
+```
+                                ^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_app_complex_nested.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Error_ is not declared in this scope.
 
-**COMPILER DIAGNOSTIC**
+This type is referenced here:
+**type_app_complex_nested.md:16:54:16:59:**
+```roc
+ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
+```
+                                                     ^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_app_complex_nested.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Maybe_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_app_complex_nested.md:0:0:0:0**
+This type is referenced here:
+**type_app_complex_nested.md:4:30:4:35:**
+```roc
+processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+```
+                             ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Error_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:4:51:4:56:**
+```roc
+processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+```
+                                                  ^^^^^
+
 
 **UNUSED VARIABLE**
+Variable `maybeList` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'maybeList' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_maybeList` to suppress this warning.
+The unused variable is declared here:
 **type_app_complex_nested.md:7:12:7:21:**
 ```roc
         Ok(maybeList) => []
@@ -82,11 +103,16 @@ The variable 'maybeList' is defined but never used:
            ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Maybe_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_app_complex_nested.md:0:0:0:0**
+This type is referenced here:
+**type_app_complex_nested.md:12:14:12:19:**
+```roc
+deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
+```
+             ^^^^^
+
 
 **COMPILER DIAGNOSTIC**
 

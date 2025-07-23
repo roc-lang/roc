@@ -29,29 +29,49 @@ COMPILER DIAGNOSTIC - type_declarations.md:0:0:0:0
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:51:1:56
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:42:1:49
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Bar_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_declarations.md:0:0:0:0**
+This type is referenced here:
+**type_declarations.md:5:8:5:11:**
+```roc
+Foo : (Bar, Baz)
+```
+       ^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_declarations.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Baz_ is not declared in this scope.
 
-**COMPILER DIAGNOSTIC**
+This type is referenced here:
+**type_declarations.md:5:13:5:16:**
+```roc
+Foo : (Bar, Baz)
+```
+            ^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_declarations.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Ok_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_declarations.md:0:0:0:0**
+This type is referenced here:
+**type_declarations.md:7:19:7:21:**
+```roc
+Some(a) : { foo : Ok(a), bar : Something }
+```
+                  ^^
+
+
+**UNDECLARED TYPE**
+The type _Something_ is not declared in this scope.
+
+This type is referenced here:
+**type_declarations.md:7:32:7:41:**
+```roc
+Some(a) : { foo : Ok(a), bar : Something }
+```
+                               ^^^^^^^^^
+
 
 **EXPOSED BUT NOT DEFINED**
 

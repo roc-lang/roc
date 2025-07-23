@@ -114,9 +114,10 @@ Diagnostic type 'if_condition_not_canonicalized' is not yet handled in report ge
 **fuzz_crash_022.md:0:0:0:0**
 
 **UNUSED VARIABLE**
+Variable `id` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'id' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_022.md:6:12:6:14:**
 ```roc
 getUser = |id| if (id > 1!) "big" else "l"

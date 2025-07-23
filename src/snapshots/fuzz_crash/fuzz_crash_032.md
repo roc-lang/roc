@@ -88,11 +88,16 @@ Green => LocalStatus-Complete
 Diagnostic type 'undeclared_type_var' is not yet handled in report generation.
 **fuzz_crash_032.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Loc_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_032.md:0:0:0:0**
+This type is referenced here:
+**fuzz_crash_032.md:3:21:3:24:**
+```roc
+LocalStatus :lue => Loc= [Pending, Complete]
+```
+                    ^^^
+
 
 **COMPILER DIAGNOSTIC**
 

@@ -32,9 +32,10 @@ match list {
 
 
 **UNUSED VARIABLE**
+Variable `tail` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'tail' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_tail` to suppress this warning.
+The unused variable is declared here:
 **list_destructure_variations.md:1:1:1:1:**
 ```roc
 match list {
@@ -43,9 +44,10 @@ match list {
 
 
 **UNUSED VARIABLE**
+Variable `rest` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'rest' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
 **list_destructure_variations.md:1:1:1:1:**
 ```roc
 match list {
@@ -54,9 +56,10 @@ match list {
 
 
 **UNUSED VARIABLE**
+Variable `more` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'more' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_more` to suppress this warning.
+The unused variable is declared here:
 **list_destructure_variations.md:1:1:1:1:**
 ```roc
 match list {

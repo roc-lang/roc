@@ -379,9 +379,10 @@ Diagnostic type 'expr_not_canonicalized' is not yet handled in report generation
 **guards_2.md:0:0:0:0**
 
 **UNUSED VARIABLE**
+Variable `first` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'first' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
+The unused variable is declared here:
 **guards_2.md:2:6:2:11:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -390,9 +391,10 @@ The variable 'first' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `rest` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'rest' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
 **guards_2.md:1:1:1:1:**
 ```roc
 match value {
@@ -424,9 +426,10 @@ The variable 'first' is not defined:
 
 
 **UNUSED VARIABLE**
+Variable `toStr` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'toStr' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
+The unused variable is declared here:
 **guards_2.md:2:77:2:86:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"

@@ -28,9 +28,10 @@ main! = |_| {}
 UNUSED VARIABLE - type_tag_union_basic.md:4:12:4:17
 # PROBLEMS
 **UNUSED VARIABLE**
+Variable `maybe` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'maybe' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_maybe` to suppress this warning.
+The unused variable is declared here:
 **type_tag_union_basic.md:4:12:4:17:**
 ```roc
 process = |maybe| "result"

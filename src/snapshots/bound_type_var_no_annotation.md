@@ -35,9 +35,10 @@ main! = |_| {
 UNUSED VARIABLE - bound_type_var_no_annotation.md:19:5:19:9
 # PROBLEMS
 **UNUSED VARIABLE**
+Variable `pair` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'pair' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_pair` to suppress this warning.
+The unused variable is declared here:
 **bound_type_var_no_annotation.md:19:5:19:9:**
 ```roc
     pair = combine(num, text)

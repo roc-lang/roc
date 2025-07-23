@@ -84,9 +84,10 @@ TYPE MISMATCH - Color.md:20:20:20:22
 TYPE MISMATCH - Color.md:26:7:26:10
 # PROBLEMS
 **UNUSED VARIABLE**
+Variable `is_char_in_hex_range` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'is_char_in_hex_range' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_is_char_in_hex_range` to suppress this warning.
+The unused variable is declared here:
 **Color.md:30:5:30:25:**
 ```roc
     is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')

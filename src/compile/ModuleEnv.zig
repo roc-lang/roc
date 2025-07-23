@@ -10,7 +10,7 @@ const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
 const reporting = @import("reporting");
-const CIR = @import("../check/CIR.zig");
+const CIR = @import("CIR.zig");
 
 // Re-export types from CIR module
 pub const Def = CIR.Def;

@@ -318,23 +318,38 @@ Here is the problematic code:
  
 
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Bar_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_027.md:0:0:0:0**
+This type is referenced here:
+**fuzz_crash_027.md:26:8:26:11:**
+```roc
+Foo : (Bar, Baz)
+```
+       ^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_027.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Baz_ is not declared in this scope.
 
-**COMPILER DIAGNOSTIC**
+This type is referenced here:
+**fuzz_crash_027.md:26:13:26:16:**
+```roc
+Foo : (Bar, Baz)
+```
+            ^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_027.md:0:0:0:0**
+
+**UNDECLARED TYPE**
+The type _Ok_ is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:32:19:32:21:**
+```roc
+Some(a) : { foo : Ok(a), bar : g }
+```
+                  ^^
+
 
 **COMPILER DIAGNOSTIC**
 
@@ -342,41 +357,71 @@ Diagnostic type 'undeclared_type' is not yet handled in report generation.
 Diagnostic type 'undeclared_type_var' is not yet handled in report generation.
 **fuzz_crash_027.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Som_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_027.md:0:0:0:0**
+This type is referenced here:
+**fuzz_crash_027.md:34:8:34:11:**
+```roc
+	bar : Som# Afld
+```
+       ^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_027.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Som_ is not declared in this scope.
 
-**COMPILER DIAGNOSTIC**
+This type is referenced here:
+**fuzz_crash_027.md:38:8:38:11:**
+```roc
+	bar : Som
+```
+       ^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_027.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Maybe_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_027.md:0:0:0:0**
+This type is referenced here:
+**fuzz_crash_027.md:43:11:43:16:**
+```roc
+Func(a) : Maybe(a), a -> Maybe(a)
+```
+          ^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_027.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Maybe_ is not declared in this scope.
 
-**COMPILER DIAGNOSTIC**
+This type is referenced here:
+**fuzz_crash_027.md:43:26:43:31:**
+```roc
+Func(a) : Maybe(a), a -> Maybe(a)
+```
+                         ^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_027.md:0:0:0:0**
+
+**UNDECLARED TYPE**
+The type _Bar_ is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:29:2:29:5:**
+```roc
+	Bar, #
+```
+ ^^^
+
+
+**UNDECLARED TYPE**
+The type _Baz_ is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:30:2:30:5:**
+```roc
+	Baz, #m
+```
+ ^^^
+
 
 **COMPILER DIAGNOSTIC**
 
@@ -407,9 +452,10 @@ The variable 'x' is not defined:
 
 
 **UNUSED VARIABLE**
+Variable `lue` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'lue' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:64:11:64:14:**
 ```roc
 	match a {lue | Red => {
@@ -429,9 +475,10 @@ The variable 'ment' is not defined:
 
 
 **UNUSED VARIABLE**
+Variable `rest` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'rest' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:1:1:1:1:**
 ```roc
 # Thnt!
@@ -446,9 +493,10 @@ Diagnostic type 'not_implemented' is not yet handled in report generation.
 **fuzz_crash_027.md:0:0:0:0**
 
 **UNUSED VARIABLE**
+Variable `rest` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'rest' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:1:1:1:1:**
 ```roc
 # Thnt!
@@ -457,9 +505,10 @@ The variable 'rest' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `ist` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'ist' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_ist` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:76:1:76:4:**
 ```roc
 ist
@@ -480,9 +529,10 @@ Diagnostic type 'not_implemented' is not yet handled in report generation.
 **fuzz_crash_027.md:0:0:0:0**
 
 **UNUSED VARIABLE**
+Variable `rest` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'rest' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:82:21:82:27:**
 ```roc
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
@@ -503,9 +553,10 @@ Diagnostic type 'not_implemented' is not yet handled in report generation.
 **fuzz_crash_027.md:0:0:0:0**
 
 **UNUSED VARIABLE**
+Variable `b` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'b' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:62:2:62:3:**
 ```roc
 	b,
@@ -524,11 +575,16 @@ The variable 'blah' is not defined:
  ^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _String_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_027.md:0:0:0:0**
+This type is referenced here:
+**fuzz_crash_027.md:99:14:99:20:**
+```roc
+main! : List(String) -> Result({}, _)
+```
+             ^^^^^^
+
 
 **UNDEFINED VARIABLE**
 
@@ -630,16 +686,22 @@ The variable 'toStr' is not defined:
    ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Value_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_027.md:0:0:0:0**
+This type is referenced here:
+**fuzz_crash_027.md:153:9:153:14:**
+```roc
+tuple : Value((a, b, c))
+```
+        ^^^^^
+
 
 **UNUSED VARIABLE**
+Variable `record` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'record' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:131:2:131:8:**
 ```roc
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
@@ -648,9 +710,10 @@ The variable 'record' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `list` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'list' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:121:2:121:6:**
 ```roc
 	list = [
@@ -659,9 +722,10 @@ The variable 'list' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `m_tuple` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'm_tuple' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_m_tuple` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:133:2:133:9:**
 ```roc
 	m_tuple = (
@@ -670,9 +734,10 @@ The variable 'm_tuple' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `stale` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'stale' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_stale` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:142:2:142:7:**
 ```roc
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
@@ -681,9 +746,10 @@ The variable 'stale' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `empty` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'empty' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_empty` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:151:1:151:6:**
 ```roc
 empty = {}
@@ -692,9 +758,10 @@ empty = {}
 
 
 **UNUSED VARIABLE**
+Variable `tag_with` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'tag_with' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_tag_with` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:119:2:119:10:**
 ```roc
 	tag_with = Ok(number)
@@ -703,9 +770,10 @@ The variable 'tag_with' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `bsult` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'bsult' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_bsult` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:141:2:141:7:**
 ```roc
 	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
@@ -714,9 +782,10 @@ The variable 'bsult' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `ited` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'ited' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_ited` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:120:2:120:6:**
 ```roc
 	ited = "Hello, ${world}"
@@ -1743,7 +1812,7 @@ main! = |_| { # Yeah Ie
 													(sub-pattern
 														(p-int @82.18-82.19 (value "2"))))
 												(record-destruct @82.21-82.27 (label "rest") (ident "rest")
-													(requenved))))))
+													(required))))))
 								(value
 									(e-runtime-error (tag "not_implemented"))))
 							(branch

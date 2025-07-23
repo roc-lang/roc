@@ -49,9 +49,10 @@ UNUSED VARIABLE - everything.md:23:2:23:4
 UNUSED VARIABLE - everything.md:19:2:19:4
 # PROBLEMS
 **UNUSED VARIABLE**
+Variable `b` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'b' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
+The unused variable is declared here:
 **everything.md:26:10:26:11:**
 ```roc
 		Z1((a, b,)) => a
@@ -60,9 +61,10 @@ The variable 'b' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `b` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'b' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
+The unused variable is declared here:
 **everything.md:27:9:27:10:**
 ```roc
 		Z2(a, b,) => a
@@ -71,9 +73,10 @@ The variable 'b' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `b` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'b' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
+The unused variable is declared here:
 **everything.md:28:11:28:12:**
 ```roc
 		Z3({ a, b, }) => a
@@ -82,9 +85,10 @@ The variable 'b' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `b` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'b' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
+The unused variable is declared here:
 **everything.md:29:10:29:11:**
 ```roc
 		Z4([a, b,]) => a
@@ -93,9 +97,10 @@ The variable 'b' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `h3` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'h3' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
+The unused variable is declared here:
 **everything.md:21:2:21:4:**
 ```roc
 	h3 = A(x, y,)
@@ -104,9 +109,10 @@ The variable 'h3' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `h4` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'h4' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
+The unused variable is declared here:
 **everything.md:22:2:22:4:**
 ```roc
 	h4 = [x, y,]
@@ -115,9 +121,10 @@ The variable 'h4' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `h2` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'h2' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
+The unused variable is declared here:
 **everything.md:20:2:20:4:**
 ```roc
 	h2 = h(x, y,)
@@ -126,9 +133,10 @@ The variable 'h2' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `h5` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'h5' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
+The unused variable is declared here:
 **everything.md:23:2:23:4:**
 ```roc
 	h5 = (x, y,)
@@ -137,9 +145,10 @@ The variable 'h5' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `h1` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'h1' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
+The unused variable is declared here:
 **everything.md:19:2:19:4:**
 ```roc
 	h1 = { h11: x, h12: x, h13: { h131: x, h132: y, }, }

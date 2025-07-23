@@ -15,11 +15,16 @@ main! = |_| processNested([])
 # EXPECTED
 COMPILER DIAGNOSTIC - type_app_nested.md:0:0:0:0
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Err_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_app_nested.md:0:0:0:0**
+This type is referenced here:
+**type_app_nested.md:3:34:3:37:**
+```roc
+processNested : List(Result(Str, Err)) -> List(Str)
+```
+                                 ^^^
+
 
 # TOKENS
 ~~~zig

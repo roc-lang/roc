@@ -45,9 +45,10 @@ The variable 'MyResultType' is not defined:
 
 
 **UNUSED VARIABLE**
+Variable `code` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'code' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_code` to suppress this warning.
+The unused variable is declared here:
 **nominal_external_fully_qualified.md:9:41:9:45:**
 ```roc
         MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"

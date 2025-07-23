@@ -42,11 +42,16 @@ Here is the problematic code:
 ^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _S_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**fuzz_crash_018.md:0:0:0:0**
+This type is referenced here:
+**fuzz_crash_018.md:1:5:1:6:**
+```roc
+0 b:S
+```
+    ^
+
 
 **COMPILER DIAGNOSTIC**
 

@@ -17,19 +17,25 @@ main =
     expectsPerson("not a person")
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - nominal_type_origin_mismatch.md:0:0:0:0
+UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:6:18:6:19
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Person_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**nominal_type_origin_mismatch.md:0:0:0:0**
+This type is referenced here:
+**nominal_type_origin_mismatch.md:5:17:5:23:**
+```roc
+expectsPerson : Person -> Str
+```
+                ^^^^^^
+
 
 **UNUSED VARIABLE**
+Variable `p` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'p' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_p` to suppress this warning.
+The unused variable is declared here:
 **nominal_type_origin_mismatch.md:6:18:6:19:**
 ```roc
 expectsPerson = |p| "Got a person"

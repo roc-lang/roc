@@ -42,9 +42,9 @@ NO CHANGE
 		(p-record-destructure @1.2-1.24
 			(destructs
 				(record-destruct @1.4-1.14 (label "first_name") (ident "first_name")
-					(requenved))
+					(required))
 				(record-destruct @1.16-1.22 (label "rest") (ident "rest")
-					(requenved)))))
+					(required)))))
 	(e-string @1.26-1.65
 		(e-literal @1.27-1.33 (string "Hello "))
 		(e-lookup-local @1.35-1.45

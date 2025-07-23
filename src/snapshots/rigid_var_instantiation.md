@@ -31,9 +31,10 @@ UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
 UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 # PROBLEMS
 **UNUSED VARIABLE**
+Variable `str` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'str' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
+The unused variable is declared here:
 **rigid_var_instantiation.md:13:5:13:8:**
 ```roc
     str = identity("hello")
@@ -42,9 +43,10 @@ The variable 'str' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `num` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'num' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
+The unused variable is declared here:
 **rigid_var_instantiation.md:10:5:10:8:**
 ```roc
     num = identity(42)
@@ -53,9 +55,10 @@ The variable 'num' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `lst` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'lst' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_lst` to suppress this warning.
+The unused variable is declared here:
 **rigid_var_instantiation.md:16:5:16:8:**
 ```roc
     lst = identity([1, 2, 3])

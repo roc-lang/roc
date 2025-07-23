@@ -17,26 +17,37 @@ processValue = |value| {
 AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - type_undeclared_usage.md:0:0:0:0
-COMPILER DIAGNOSTIC - type_undeclared_usage.md:0:0:0:0
+UNDECLARED TYPE - type_undeclared_usage.md:3:10:3:21
+UNDECLARED TYPE - type_undeclared_usage.md:5:16:5:32
 UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _UnknownType_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_undeclared_usage.md:0:0:0:0**
+This type is referenced here:
+**type_undeclared_usage.md:3:10:3:21:**
+```roc
+MyType : UnknownType
+```
+         ^^^^^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_undeclared_usage.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _UndeclaredResult_ is not declared in this scope.
+
+This type is referenced here:
+**type_undeclared_usage.md:5:16:5:32:**
+```roc
+processValue : UndeclaredResult -> Str
+```
+               ^^^^^^^^^^^^^^^^
+
 
 **UNUSED VARIABLE**
+Variable `value` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'value' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
+The unused variable is declared here:
 **type_undeclared_usage.md:6:17:6:22:**
 ```roc
 processValue = |value| {

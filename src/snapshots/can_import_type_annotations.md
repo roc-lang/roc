@@ -50,22 +50,33 @@ COMPILER DIAGNOSTIC - can_import_type_annotations.md:0:0:0:0
 COMPILER DIAGNOSTIC - can_import_type_annotations.md:0:0:0:0
 UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Request_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_type_annotations.md:0:0:0:0**
+This type is referenced here:
+**can_import_type_annotations.md:7:18:7:25:**
+```roc
+processRequest : Request -> Response
+```
+                 ^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_type_annotations.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Response_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_type_annotations.md:7:29:7:37:**
+```roc
+processRequest : Request -> Response
+```
+                            ^^^^^^^^
+
 
 **UNUSED VARIABLE**
+Variable `req` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'req' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
+The unused variable is declared here:
 **can_import_type_annotations.md:8:19:8:22:**
 ```roc
 processRequest = |req| Http.defaultResponse

@@ -92,7 +92,7 @@ extract_age = |person| {
 						(p-record-destructure @5.5-5.12
 							(destructs
 								(record-destruct @5.7-5.10 (label "age") (ident "age")
-									(requenved))))
+									(required))))
 						(e-lookup-local @5.15-5.21
 							(p-assign @4.16-4.22 (ident "person"))))
 					(e-binop @7.2-7.31 (op "sub")

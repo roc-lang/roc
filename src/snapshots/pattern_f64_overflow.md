@@ -50,9 +50,10 @@ Diagnostic type 'f64_pattern_literal' is not yet handled in report generation.
 **pattern_f64_overflow.md:0:0:0:0**
 
 **UNUSED VARIABLE**
+Variable `value` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'value' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
+The unused variable is declared here:
 **pattern_f64_overflow.md:6:5:6:10:**
 ```roc
     value => "other"

@@ -43,23 +43,38 @@ import Color.*
 Diagnostic type 'invalid_top_level_statement' is not yet handled in report generation.
 **nominal_import_wildcard.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Color_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**nominal_import_wildcard.md:0:0:0:0**
+This type is referenced here:
+**nominal_import_wildcard.md:5:7:5:12:**
+```roc
+red : Color
+```
+      ^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**nominal_import_wildcard.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Color_ is not declared in this scope.
 
-**COMPILER DIAGNOSTIC**
+This type is referenced here:
+**nominal_import_wildcard.md:8:8:8:13:**
+```roc
+blue : Color
+```
+       ^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**nominal_import_wildcard.md:0:0:0:0**
+
+**UNDECLARED TYPE**
+The type _Color_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_import_wildcard.md:11:9:11:14:**
+```roc
+green : Color
+```
+        ^^^^^
+
 
 # TOKENS
 ~~~zig

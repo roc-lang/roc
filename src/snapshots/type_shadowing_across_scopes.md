@@ -90,9 +90,10 @@ Diagnostic type 'malformed_type_annotation' is not yet handled in report generat
 **type_shadowing_across_scopes.md:0:0:0:0**
 
 **UNUSED VARIABLE**
+Variable `data` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'data' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
+The unused variable is declared here:
 **type_shadowing_across_scopes.md:6:16:6:20:**
 ```roc
 processData = |data|

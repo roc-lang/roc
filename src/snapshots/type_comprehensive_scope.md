@@ -56,11 +56,16 @@ COMPILER DIAGNOSTIC - type_comprehensive_scope.md:0:0:0:0
 Diagnostic type 'type_redeclared' is not yet handled in report generation.
 **type_comprehensive_scope.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Node_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_comprehensive_scope.md:0:0:0:0**
+This type is referenced here:
+**type_comprehensive_scope.md:15:19:15:23:**
+```roc
+Tree(a) : [Branch(Node(a)), Leaf(a)]
+```
+                  ^^^^
+
 
 **COMPILER DIAGNOSTIC**
 
@@ -68,11 +73,16 @@ Diagnostic type 'undeclared_type' is not yet handled in report generation.
 Diagnostic type 'type_redeclared' is not yet handled in report generation.
 **type_comprehensive_scope.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _SomeUndeclaredType_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**type_comprehensive_scope.md:0:0:0:0**
+This type is referenced here:
+**type_comprehensive_scope.md:27:11:27:29:**
+```roc
+BadType : SomeUndeclaredType
+```
+          ^^^^^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

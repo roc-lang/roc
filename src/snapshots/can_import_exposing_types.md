@@ -82,71 +82,126 @@ COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
 COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
 COMPILER DIAGNOSTIC - can_import_exposing_types.md:0:0:0:0
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Config_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+This type is referenced here:
+**can_import_exposing_types.md:31:18:31:24:**
+```roc
+    jsonConfig : Config,
+```
+                 ^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Status_ is not declared in this scope.
 
-**COMPILER DIAGNOSTIC**
+This type is referenced here:
+**can_import_exposing_types.md:32:18:32:24:**
+```roc
+    httpStatus : Status,
+```
+                 ^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Response_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+This type is referenced here:
+**can_import_exposing_types.md:33:23:33:31:**
+```roc
+    defaultResponse : Response,
+```
+                      ^^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Value_ is not declared in this scope.
 
-**COMPILER DIAGNOSTIC**
+This type is referenced here:
+**can_import_exposing_types.md:8:27:8:32:**
+```roc
+parseJson : Str -> Result(Value, Error)
+```
+                          ^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Error_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+This type is referenced here:
+**can_import_exposing_types.md:8:34:8:39:**
+```roc
+parseJson : Str -> Result(Value, Error)
+```
+                                 ^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Request_ is not declared in this scope.
 
-**COMPILER DIAGNOSTIC**
+This type is referenced here:
+**can_import_exposing_types.md:12:17:12:24:**
+```roc
+handleRequest : Request -> Response
+```
+                ^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Response_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+This type is referenced here:
+**can_import_exposing_types.md:12:28:12:36:**
+```roc
+handleRequest : Request -> Response
+```
+                           ^^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Config_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:22:15:22:21:**
+```roc
+processData : Config, List(Value) -> Result(List(Value), Error)
+```
+              ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Value_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:22:28:22:33:**
+```roc
+processData : Config, List(Value) -> Result(List(Value), Error)
+```
+                           ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Value_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:22:50:22:55:**
+```roc
+processData : Config, List(Value) -> Result(List(Value), Error)
+```
+                                                 ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Error_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:22:58:22:63:**
+```roc
+processData : Config, List(Value) -> Result(List(Value), Error)
+```
+                                                         ^^^^^
+
 
 **UNDEFINED VARIABLE**
 
@@ -159,17 +214,27 @@ The variable 'mapTry' is not defined:
     ^^^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Config_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+This type is referenced here:
+**can_import_exposing_types.md:37:16:37:22:**
+```roc
+createClient : Config -> Http.Client
+```
+               ^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Response_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:41:18:41:26:**
+```roc
+handleResponse : Response -> Str
+```
+                 ^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 
@@ -182,35 +247,60 @@ The variable 'toString' is not defined:
                       ^^^^^^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Value_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+This type is referenced here:
+**can_import_exposing_types.md:49:25:49:30:**
+```roc
+combineResults : Result(Value, Error), Status -> Result(Response, Error)
+```
+                        ^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Error_ is not declared in this scope.
 
-**COMPILER DIAGNOSTIC**
+This type is referenced here:
+**can_import_exposing_types.md:49:32:49:37:**
+```roc
+combineResults : Result(Value, Error), Status -> Result(Response, Error)
+```
+                               ^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Status_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+This type is referenced here:
+**can_import_exposing_types.md:49:40:49:46:**
+```roc
+combineResults : Result(Value, Error), Status -> Result(Response, Error)
+```
+                                       ^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'undeclared_type' is not yet handled in report generation.
-**can_import_exposing_types.md:0:0:0:0**
+**UNDECLARED TYPE**
+The type _Response_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:49:57:49:65:**
+```roc
+combineResults : Result(Value, Error), Status -> Result(Response, Error)
+```
+                                                        ^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Error_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:49:67:49:72:**
+```roc
+combineResults : Result(Value, Error), Status -> Result(Response, Error)
+```
+                                                                  ^^^^^
+
 
 # TOKENS
 ~~~zig

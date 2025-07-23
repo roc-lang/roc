@@ -91,9 +91,9 @@ match person {
 						(p-record-destructure @2.5-2.29
 							(destructs
 								(record-destruct @2.7-2.17 (label "first_name") (ident "first_name")
-									(requenved))
+									(required))
 								(record-destruct @2.19-2.27 (label "others") (ident "others")
-									(requenved))))))
+									(required))))))
 				(value
 					(e-binop @2.33-2.80 (op "gt")
 						(e-call @2.33-2.52

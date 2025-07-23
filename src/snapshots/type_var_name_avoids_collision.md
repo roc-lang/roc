@@ -77,9 +77,10 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:60:5:60:12
 # PROBLEMS
 **UNUSED VARIABLE**
+Variable `result3` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'result3' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
+The unused variable is declared here:
 **type_var_name_avoids_collision.md:59:5:59:12:**
 ```roc
     result3 = combine(result1, result2)
@@ -88,9 +89,10 @@ The variable 'result3' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `result5` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'result5' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_result5` to suppress this warning.
+The unused variable is declared here:
 **type_var_name_avoids_collision.md:61:5:61:12:**
 ```roc
     result5 = finalIdentity(3.14)
@@ -99,9 +101,10 @@ The variable 'result5' is defined but never used:
 
 
 **UNUSED VARIABLE**
+Variable `result4` is not used anywhere in your code.
 
-**Unused Variable**
-The variable 'result4' is defined but never used:
+If you don't need this variable, prefix it with an underscore like `_result4` to suppress this warning.
+The unused variable is declared here:
 **type_var_name_avoids_collision.md:60:5:60:12:**
 ```roc
     result4 = yetAnotherIdentity(True)
