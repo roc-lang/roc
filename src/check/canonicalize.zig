@@ -89,8 +89,10 @@ const Tag = types.Tag;
 /// Struct to track fields that have been seen before during canonicalization
 const SeenRecordField = struct { ident: base.Ident.Idx, region: base.Region };
 
-/// The idx of the builtin Bool
+/// The idx of the builtin Bool pattern (not used for type checking - use BUILTIN_BOOL_TYPE instead)
 pub const BUILTIN_BOOL: Pattern.Idx = @enumFromInt(0);
+/// The idx of the builtin Bool type declaration (use this for type checking)
+pub var BUILTIN_BOOL_TYPE: Statement.Idx = undefined;
 /// The idx of the builtin Box
 pub const BUILTIN_BOX: Pattern.Idx = @enumFromInt(1);
 /// The idx of the builtin Decode
@@ -228,18 +230,16 @@ fn addBuiltin(self: *Self, ir: *ModuleEnv, ident_text: []const u8, idx: Pattern.
     const gpa = ir.gpa;
     const ident_store = &ir.idents;
     const ident_add = try ir.idents.insert(gpa, base.Ident.for_text(ident_text), Region.zero());
-    const pattern_idx_add = try ir.addPatternAndTypeVar(
-        Pattern{ .assign = .{ .ident = ident_add } },
-        .{ .flex_var = null },
-        Region.zero()
-    );
+    
+    const pattern_idx_add = try ir.store.addPattern(Pattern{ .assign = .{ .ident = ident_add } }, Region.zero());
+    // Add a corresponding type variable to keep arrays in sync
+    _ = try ir.types.freshFromContent(.{ .flex_var = null });
     _ = try self.scopeIntroduceInternal(gpa, ident_store, .ident, ident_add, pattern_idx_add, false, true);
     std.debug.assert(idx == pattern_idx_add);
 }
 
-/// Stub builtin types. Currently sets every type to be a nominal type
-/// This should be replaced by real builtins eventually
-fn addBuiltinType(self: *Self, ir: *ModuleEnv, type_name: []const u8, _: types.Content) std.mem.Allocator.Error!Statement.Idx {
+/// Add builtin types with their proper content (e.g., U8 -> num_compact)
+fn addBuiltinType(self: *Self, ir: *ModuleEnv, type_name: []const u8, builtin_content: types.Content) std.mem.Allocator.Error!Statement.Idx {
     const gpa = ir.gpa;
     const type_ident = try ir.idents.insert(gpa, base.Ident.for_text(type_name), Region.zero());
 
@@ -249,10 +249,10 @@ fn addBuiltinType(self: *Self, ir: *ModuleEnv, type_name: []const u8, _: types.C
         .args = .{ .span = .{ .start = 0, .len = 0 } }, // No type parameters for built-ins
     }, .{ .flex_var = null }, Region.zero());
 
-    // Create a type annotation that refers to itself (built-in types are primitive)
+    // Create a type annotation with the proper builtin content
     const anno_idx = try ir.addTypeAnnoAndTypeVar(.{ .ty = .{
         .symbol = type_ident,
-    } }, .{ .flex_var = null }, Region.zero());
+    } }, builtin_content, Region.zero());
     const anno_var = castIdx(TypeAnno.Idx, TypeVar, anno_idx);
 
     // Create the type declaration statement
@@ -292,7 +292,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
     // const header_node_idx = nodeIdxFrom(header_idx);
 
     // Create a type annotation that refers to itself (built-in types are primitive)
-    // const ext_var = @as(TypeVar, @enumFromInt(0)); // TODO: Implement type slot properly
+    // For Bool, we'll create it as a flex var first, then properly set it up later
     const anno_idx = try ir.addTypeAnnoAndTypeVar(.{ .ty = .{
         .symbol = type_ident,
     } }, .{ .flex_var = null }, Region.zero());
@@ -323,7 +323,11 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
     try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
 
-    // TODO: Implement type redirection for built-in types
+    // Save the Bool type declaration index for use in type checking
+    BUILTIN_BOOL_TYPE = type_decl_idx;
+
+    // Redirect the builtin Bool pattern to the Bool type declaration
+    try ir.redirectTypeTo(Pattern.Idx, BUILTIN_BOOL, varFrom(type_decl_idx));
 
     // Add True and False to unqualified_nominal_tags
     // TODO: in the future, we should have hardcoded constants for these.

@@ -11,6 +11,7 @@ const base = @import("base");
 const canonicalize = @import("check/canonicalize.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const cache = @import("cache/mod.zig");
+const ModuleEnv = @import("compile/ModuleEnv.zig");
 
 const Solver = @import("check/check_types.zig");
 const parse = @import("check/parse.zig");
@@ -440,7 +441,7 @@ fn generateAllReports(
     can_ir: *CIR,
     solver: *Solver,
     snapshot_path: []const u8,
-    module_env: *@import("compile/ModuleEnv.zig"),
+    module_env: *ModuleEnv,
 ) !std.ArrayList(reporting.Report) {
     var reports = std.ArrayList(reporting.Report).init(allocator);
     errdefer reports.deinit();
@@ -463,6 +464,7 @@ fn generateAllReports(
 
     // Generate canonicalization reports
     const diagnostics = try can_ir.getDiagnostics();
+    defer allocator.free(diagnostics);
     for (diagnostics) |diagnostic| {
         const report = can_ir.diagnosticToReport(diagnostic, allocator, snapshot_path) catch |err| {
             std.debug.panic("Failed to create canonicalization report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
@@ -1017,7 +1019,7 @@ fn processSnapshotContent(
     }
 
     // Process the content through the compilation pipeline
-    var module_env = try @import("compile/ModuleEnv.zig").init(allocator, content.source);
+    var module_env = try ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
 
     // Parse the source code based on node type
@@ -1840,7 +1842,7 @@ fn generateProblemsSection(output: *DualOutput, reports: *const std.ArrayList(re
 }
 
 /// Generate TOKENS section for both markdown and HTML
-pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Content, module_env: *@import("compile/ModuleEnv.zig")) !void {
+pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Content, module_env: *ModuleEnv) !void {
     try output.begin_section("TOKENS");
     try output.begin_code_block("zig");
 
@@ -1917,7 +1919,7 @@ fn source_contains_newline_in_range(source: []const u8, start: usize, end: usize
 }
 
 /// Generate PARSE2 section using SExprTree for both markdown and HTML
-fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *@import("compile/ModuleEnv.zig")) !void {
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *ModuleEnv) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
 

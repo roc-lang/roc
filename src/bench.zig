@@ -8,6 +8,7 @@ const collections = @import("collections");
 
 const tokenize = @import("check/parse/tokenize.zig");
 const parse = @import("check/parse.zig");
+const ModuleEnv = @import("compile/ModuleEnv.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -60,7 +61,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
     std.debug.print("Total: {} bytes, {} lines\n", .{ metrics.total_bytes, metrics.total_lines });
 
     // Create a module environment for tokenization (reused for tokenizer, created per-iteration for parser)
-    var env: ?@import("compile/ModuleEnv.zig") = if (!is_parse) try @import("compile/ModuleEnv.zig").init(gpa, "") else null;
+    var env: ?ModuleEnv = if (!is_parse) try ModuleEnv.init(gpa, "") else null;
     defer if (env) |*e| e.deinit();
 
     // Benchmark parameters

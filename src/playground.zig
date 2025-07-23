@@ -365,6 +365,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Collect canonicalization diagnostics
     const can_diags = can_ir.getDiagnostics() catch &.{};
+    defer if (can_diags.len > 0) allocator.free(can_diags);
     for (can_diags) |diag| {
         const report = can_ir.diagnosticToReport(diag, allocator, "main.roc") catch continue;
         result.can_reports.append(report) catch continue;

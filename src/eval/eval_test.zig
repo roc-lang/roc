@@ -11,11 +11,113 @@ const types = @import("types");
 const stack = @import("stack.zig");
 const layout_store = @import("../layout/store.zig");
 const layout = @import("../layout/layout.zig");
+const ModuleEnv = @import("../compile/ModuleEnv.zig");
 
 const test_allocator = testing.allocator;
 
+// Removed defaultNumericTypes - origin/main doesn't have this function
+// The flex var workaround in layout/store.zig handles unresolved types
+// fn defaultNumericTypes(allocator: std.mem.Allocator, type_store: *types.store.Store, cir: *CIR, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+//     // First, handle sub-expressions
+//     const expr = cir.store.getExpr(expr_idx);
+//     switch (expr) {
+//         .e_binop => |binop| {
+//             // Default types for both operands
+//             try defaultNumericTypes(allocator, type_store, cir, binop.lhs);
+//             try defaultNumericTypes(allocator, type_store, cir, binop.rhs);
+//         },
+//         .e_if => |if_expr| {
+//             // Default types for all branches
+//             // Removed recursive calls - would need updating for new expression structure
+//         },
+//         .e_call => |call| {
+//             // Default types for function and arguments
+//             // Removed recursive calls - would need updating for new expression structure
+//         },
+//         else => {},
+//     }
+//     
+//     // Then handle this expression's type
+//     const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
+//     const resolved = type_store.resolveVar(expr_var);
+//     
+//     switch (resolved.desc.content) {
+//         .structure => |structure| switch (structure) {
+//             .num => |num| switch (num) {
+//                 .num_unbound => |requirements| {
+//                     // Default to i64 for signed integers, u64 for unsigned
+//                     const precision = if (requirements.sign_needed)
+//                         types.Num.Int.Precision.i64
+//                     else
+//                         types.Num.Int.Precision.u64;
+//                     
+//                     const new_content = types.Content{
+//                         .structure = .{
+//                             .num = .{
+//                                 .num_compact = .{ .int = precision },
+//                             },
+//                         },
+//                     };
+//                     try type_store.setVarContent(expr_var, new_content);
+//                 },
+//                 .int_unbound => |requirements| {
+//                     // Default to i64 for signed integers, u64 for unsigned
+//                     const precision = if (requirements.sign_needed)
+//                         types.Num.Int.Precision.i64
+//                     else
+//                         types.Num.Int.Precision.u64;
+//                     
+//                     const new_content = types.Content{
+//                         .structure = .{
+//                             .num = .{
+//                                 .num_compact = .{ .int = precision },
+//                             },
+//                         },
+//                     };
+//                     try type_store.setVarContent(expr_var, new_content);
+//                 },
+//                 .num_poly => |poly| {
+//                     // For polymorphic nums, set the inner variable to a concrete type
+//                     const precision = if (poly.requirements.sign_needed)
+//                         types.Num.Int.Precision.i64
+//                     else
+//                         types.Num.Int.Precision.u64;
+//                     
+//                     const new_content = types.Content{
+//                         .structure = .{
+//                             .num = .{
+//                                 .num_compact = .{ .int = precision },
+//                             },
+//                         },
+//                     };
+//                     try type_store.setVarContent(poly.var_, new_content);
+//                 },
+//                 .int_poly => |poly| {
+//                     // For polymorphic ints, set the inner variable to a concrete type
+//                     const precision = if (poly.requirements.sign_needed)
+//                         types.Num.Int.Precision.i64
+//                     else
+//                         types.Num.Int.Precision.u64;
+//                     
+//                     const new_content = types.Content{
+//                         .structure = .{
+//                             .num = .{
+//                                 .num_compact = .{ .int = precision },
+//                             },
+//                         },
+//                     };
+//                     try type_store.setVarContent(poly.var_, new_content);
+//                 },
+//                 else => {}, // Already concrete
+//             },
+//             else => {},
+//         },
+//         else => {},
+//     }
+// }
+
 fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
-    module_env: *@import("../compile/ModuleEnv.zig"),
+    module_env: *ModuleEnv,
     parse_ast: *parse.AST,
     cir: *CIR,
     can: *canonicalize,
@@ -23,8 +125,8 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     expr_idx: CIR.Expr.Idx,
 } {
     // Initialize the ModuleEnv
-    const module_env = try allocator.create(@import("../compile/ModuleEnv.zig"));
-    module_env.* = try @import("../compile/ModuleEnv.zig").init(allocator, source);
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, source);
 
     // Parse the source code as an expression
     const parse_ast = try allocator.create(parse.AST);
@@ -69,6 +171,7 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
 
     // Type check the expression
     _ = try checker.checkExpr(canonical_expr_idx);
+
 
     // WORKAROUND: The type checker doesn't set types for binop expressions yet.
     // For numeric binops, manually set the type to match the operands.

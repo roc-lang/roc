@@ -192,8 +192,20 @@ pub fn pushDiagnostic(self: *Self, reason: Diagnostic) std.mem.Allocator.Error!v
 pub fn pushMalformed(self: *Self, comptime RetIdx: type, reason: Diagnostic) std.mem.Allocator.Error!RetIdx {
     comptime if (!isCastable(RetIdx)) @compileError("Idx type " ++ @typeName(RetIdx) ++ " is not castable");
     const diag_idx = try self.addDiagnosticAndTypeVar(reason, .err);
-    const malformed_idx = try self.addMalformedAndTypeVar(diag_idx, .err, Region.zero());
+    const region = getDiagnosticRegion(reason);
+    const malformed_idx = try self.addMalformedAndTypeVar(diag_idx, .err, region);
     return castIdx(Node.Idx, RetIdx, malformed_idx);
+}
+
+/// Extract the region from any diagnostic variant
+fn getDiagnosticRegion(diagnostic: Diagnostic) Region {
+    return switch (diagnostic) {
+        .type_redeclared => |data| data.redeclared_region,
+        .type_alias_redeclared => |data| data.redeclared_region,
+        .nominal_type_redeclared => |data| data.redeclared_region,
+        .duplicate_record_field => |data| data.duplicate_region,
+        inline else => |data| data.region,
+    };
 }
 
 /// Import helper functions from CIR
@@ -224,35 +236,64 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
         .invalid_num_literal => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
             
+            // Extract the literal text from the source
+            const literal_text = self.source[data.region.start.offset..data.region.end.offset];
+            
             var report = Report.init(allocator, "INVALID NUMBER", .runtime_error);
-            try report.addHeader("Invalid Number");
-            
-            try report.document.addText("The number literal is invalid or too large to represent:");
+            const owned_literal = try report.addOwnedString(literal_text);
+
+            try report.document.addReflowingText("This number literal is not valid: ");
+            try report.document.addInlineCode(owned_literal);
             try report.document.addLineBreak();
-            
-            // Add source context with location
+            try report.document.addLineBreak();
+
             const owned_filename = try report.addOwnedString(filename);
-            try report.addSourceContext(region_info, owned_filename, self.source, self.line_starts.items.items);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Check that the number is correctly formatted. Valid examples include: ");
+            try report.document.addInlineCode("42");
+            try report.document.addReflowingText(", ");
+            try report.document.addInlineCode("3.14");
+            try report.document.addReflowingText(", ");
+            try report.document.addInlineCode("0x1A");
+            try report.document.addReflowingText(", or ");
+            try report.document.addInlineCode("1_000_000");
+            try report.document.addReflowingText(".");
             
             break :blk report;
         },
         .ident_not_in_scope => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            
-            var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error);
-            try report.addHeader("Undefined Variable");
-            
             const ident_name = self.idents.getText(data.ident);
             
-            const message = try std.fmt.allocPrint(allocator, "The variable '{s}' is not defined:", .{ident_name});
-            defer allocator.free(message);
-            const owned_message = try report.addOwnedString(message);
-            try report.document.addText(owned_message);
+            var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("Nothing is named ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" in this scope.");
             try report.document.addLineBreak();
-            
-            // Add source context with location
+            try report.document.addReflowingText("Is there an ");
+            try report.document.addKeyword("import");
+            try report.document.addReflowingText(" or ");
+            try report.document.addKeyword("exposing");
+            try report.document.addReflowingText(" missing up-top?");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
-            try report.addSourceContext(region_info, owned_filename, self.source, self.line_starts.items.items);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
             
             break :blk report;
         },
@@ -260,19 +301,23 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             const region_info = self.calcRegionInfo(data.region);
             
             var report = Report.init(allocator, "EXPOSED BUT NOT DEFINED", .runtime_error);
-            try report.addHeader("Exposed but Not Defined");
             
             const ident_name = self.idents.getText(data.ident);
+            const owned_ident = try report.addOwnedString(ident_name);
             
-            const message = try std.fmt.allocPrint(allocator, "'{s}' is exposed in the module header but is not defined:", .{ident_name});
-            defer allocator.free(message);
-            const owned_message = try report.addOwnedString(message);
-            try report.document.addText(owned_message);
+            try report.document.addReflowingText("The module header says that ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is exposed, but it is not defined anywhere in this module.");
+            try report.document.addLineBreak();
             try report.document.addLineBreak();
             
             // Add source context with location
             const owned_filename = try report.addOwnedString(filename);
             try report.addSourceContext(region_info, owned_filename, self.source, self.line_starts.items.items);
+            
+            try report.document.addReflowingText("You can fix this by either defining ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" in this module, or by removing it from the list of exposed values.");
             
             break :blk report;
         },
@@ -321,18 +366,24 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             const region_info = self.calcRegionInfo(data.region);
             
             var report = Report.init(allocator, "UNDERSCORE IN TYPE ALIAS", .runtime_error);
-            try report.addHeader("Underscore in Type Alias");
             
             const kind = if (data.is_alias) "alias" else "opaque type";
-            const message = try std.fmt.allocPrint(allocator, "Underscore cannot be used in a type {s} declaration:", .{kind});
+            const message = try std.fmt.allocPrint(allocator, "Underscores are not allowed in type {s} declarations.", .{kind});
             defer allocator.free(message);
             const owned_message = try report.addOwnedString(message);
-            try report.document.addText(owned_message);
+            try report.document.addReflowingText(owned_message);
+            try report.document.addLineBreak();
             try report.document.addLineBreak();
             
             // Add source context with location
             const owned_filename = try report.addOwnedString(filename);
             try report.addSourceContext(region_info, owned_filename, self.source, self.line_starts.items.items);
+            
+            try report.document.addLineBreak();
+            const explanation = try std.fmt.allocPrint(allocator, "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.", .{});
+            defer allocator.free(explanation);
+            const owned_explanation = try report.addOwnedString(explanation);
+            try report.document.addReflowingText(owned_explanation);
             
             break :blk report;
         },
@@ -438,9 +489,16 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             
-            try report.document.addReflowingText("Variables prefixed with an underscore are supposed to be ignored. But ");
-            try report.document.addUnqualifiedSymbol(owned_ident);
-            try report.document.addReflowingText(" is used here:");
+            try report.document.addReflowingText("Variables prefixed with ");
+            try report.document.addUnqualifiedSymbol("_");
+            try report.document.addReflowingText(" are intended to be unused. Remove the underscore prefix: ");
+            
+            // Create the suggested name without underscore
+            const suggested_name = ident_name[1..]; // Remove first character (_)
+            const owned_suggested = try report.addOwnedString(suggested_name);
+            try report.document.addUnqualifiedSymbol(owned_suggested);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -469,6 +527,15 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 self.source,
                 self.line_starts.items.items,
             );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Check the spelling and make sure you're using a valid Roc operator like ");
+            try report.document.addBinaryOperator("+");
+            try report.document.addReflowingText(", ");
+            try report.document.addBinaryOperator("-");
+            try report.document.addReflowingText(", ");
+            try report.document.addBinaryOperator("==");
+            try report.document.addReflowingText(".");
             
             break :blk report;
         },
@@ -533,6 +600,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 self.line_starts.items.items,
             );
             
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
+            
             break :blk report;
         },
         .redundant_exposed => |data| blk: {
@@ -556,17 +626,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 self.source,
                 self.line_starts.items.items,
             );
-            
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("It was already exposed here:");
-            try report.document.addLineBreak();
-            try report.document.addSourceRegion(
-                original_region_info,
-                .dimmed,
-                owned_filename,
-                self.source,
-                self.line_starts.items.items,
-            );
+
+            // we don't need to display the original region info
+            // as this header is in a single location
+            _ = original_region_info;
+
+            try report.document.addReflowingText("You can remove the duplicate entry to fix this warning.");
             
             break :blk report;
         },
@@ -730,13 +795,19 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             const region_info = self.calcRegionInfo(data.region);
             
             var report = Report.init(allocator, "MALFORMED WHERE CLAUSE", .runtime_error);
-            try report.addHeader("Malformed Where Clause");
             try report.document.addReflowingText("This where clause could not be parsed correctly.");
             try report.document.addLineBreak();
-            
-            // Add source context with location
+            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
-            try report.addSourceContext(region_info, owned_filename, self.source, self.line_starts.items.items);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Check the syntax of your where clause.");
             
             break :blk report;
         },
@@ -744,7 +815,13 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             _ = data;
             
             var report = Report.init(allocator, "VAR REASSIGNMENT ERROR", .runtime_error);
-            try report.document.addReflowingText("Variables cannot be reassigned across function boundaries.");
+            try report.document.addReflowingText("Cannot reassign a ");
+            try report.document.addKeyword("var");
+            try report.document.addReflowingText(" from outside the function where it was declared.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Variables declared with ");
+            try report.document.addKeyword("var");
+            try report.document.addReflowingText(" can only be reassigned within the same function scope.");
             
             break :blk report;
         },
@@ -757,22 +834,41 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .f64_pattern_literal => |data| blk: {
-            const region_info = self.calcRegionInfo(data.region);
+            // Extract the literal text from the source
+            const literal_text = self.source[data.region.start.offset..data.region.end.offset];
             
             var report = Report.init(allocator, "F64 NOT ALLOWED IN PATTERN", .runtime_error);
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addReflowingText("I am in the middle of parsing a pattern, and I found a floating-point literal:");
+            
+            // Format the message to match origin/main
+            try report.document.addText("This floating-point literal cannot be used in a pattern match: ");
+            try report.document.addInlineCode(literal_text);
             try report.document.addLineBreak();
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.source,
-                self.line_starts.items.items,
-            );
             try report.document.addLineBreak();
-            try report.document.addReflowingText("Floating-point numbers are not allowed in patterns. ");
-            try report.document.addReflowingText("You can use an if-guard or a when expression with comparisons instead.");
+            
+            try report.document.addReflowingText("This number exceeds the precision range of Roc's ");
+            try report.document.addInlineCode("Dec");
+            try report.document.addReflowingText(" type and would require F64 representation. ");
+            try report.document.addReflowingText("Floating-point numbers (F64) cannot be used in patterns because they don't have reliable equality comparison.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            
+            try report.document.addText("Consider one of these alternatives:");
+            try report.document.addLineBreak();
+            try report.document.addText("• Use a guard condition with a range check");
+            try report.document.addLineBreak();
+            try report.document.addText("• Use a smaller number that fits in Dec's precision");
+            try report.document.addLineBreak();
+            try report.document.addText("• Restructure your code to avoid pattern matching on this value");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            
+            try report.document.addText("For example, instead of:");
+            try report.document.addLineBreak();
+            try report.document.addInlineCode("1e100 => ...");
+            try report.document.addLineBreak();
+            try report.document.addText("Use a guard:");
+            try report.document.addLineBreak();
+            try report.document.addInlineCode("n if n > 1e99 => ...");
             
             break :blk report;
         },
@@ -860,6 +956,8 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
         const cir_nodes = self.store.nodes.items.len;
         const region_nodes = self.store.regions.len();
         const type_nodes = self.types.len();
+        
+        
         if (!(cir_nodes == region_nodes and region_nodes == type_nodes)) {
             std.debug.panic(
                 "Arrays out of sync:\n  cir_nodes={}\n  region_nodes={}\n  type_nodes={}\n",
@@ -872,10 +970,14 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 /// Assert that nodes, regions and types are all in sync
 inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: anytype) void {
     if (std.debug.runtime_safety) {
-        if (@intFromEnum(idx1) != @intFromEnum(idx2)) {
+        const idx1_int = @intFromEnum(idx1);
+        const idx2_int = @intFromEnum(idx2);
+        
+        
+        if (idx1_int != idx2_int) {
             std.debug.panic(
                 "{s} idxs out of sync: {} != {}\n",
-                .{ desc, @intFromEnum(idx1), @intFromEnum(idx2) },
+                .{ desc, idx1_int, idx2_int },
             );
         }
     }

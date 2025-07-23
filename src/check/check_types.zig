@@ -278,6 +278,8 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
         }
 
         // Unify the expression with its annotation
+        // This is where numeric literal constraints should be checked against
+        // the annotation type (e.g., 500 against U8)
         _ = try self.unify(expr_var, annotation.signature);
     }
 
@@ -365,6 +367,14 @@ pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator
                 },
             }
         },
+        .int_literal => |_| {
+            // Integer literal patterns have their type constraints (bits_needed, sign_needed)
+            // created during canonicalization. The type variable for this pattern was already
+            // created with the appropriate num_unbound or int_unbound content.
+            // When this pattern is unified with the match scrutinee, the numeric constraints
+            // will be checked and produce NumberDoesNotFit or NegativeUnsignedInt errors
+            // if there's a mismatch.
+        },
         else => {},
     }
 }
@@ -378,10 +388,23 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
     const expr_region = self.cir.store.getNodeRegion(CIR.nodeIdxFrom(expr_idx));
     var does_fx = false; // Does this expression potentially perform any side effects?
     switch (expr) {
-        .e_int => |_| {},
-        .e_frac_f64 => |_| {},
-        .e_frac_dec => |_| {},
-        .e_dec_small => |_| {},
+        .e_int => |_| {
+            // Integer literals have their type constraints (bits_needed, sign_needed) 
+            // created during canonicalization. Here we just need to ensure those 
+            // constraints will be checked when unified with expected types.
+            // The type variable for this expression was already created with the 
+            // appropriate num_unbound or int_unbound content during canonicalization.
+        },
+        .e_frac_f64 => |_| {
+            // Fractional literals have their type constraints (fits_in_f32, fits_in_dec)
+            // created during canonicalization. No additional checking needed here.
+        },
+        .e_frac_dec => |_| {
+            // Decimal literals are similar to frac_f64.
+        },
+        .e_dec_small => |_| {
+            // Small decimal literals are similar to frac_f64.
+        },
         .e_str_segment => |_| {},
         .e_str => |_| {},
         .e_lookup_local => |local| {
@@ -1090,11 +1113,11 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
         .lt, .gt, .le, .ge, .eq, .ne => {
             // Comparison operators always return Bool
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-            const fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+            const fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             _ = try self.unify(expr_var, fresh_bool);
         },
         .@"and" => {
-            const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+            const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -1103,7 +1126,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+                const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -1113,7 +1136,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             }
         },
         .@"or" => {
-            const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+            const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -1122,7 +1145,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+                const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -1184,7 +1207,7 @@ fn checkIfElseExpr(
     // Check the condition of the 1st branch
     var does_fx = try self.checkExpr(first_branch.cond);
     const first_cond_var: Var = @enumFromInt(@intFromEnum(first_branch.cond));
-    const bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+    const bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
     const first_cond_result = try self.unify(bool_var, first_cond_var);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
@@ -1204,7 +1227,7 @@ fn checkIfElseExpr(
         // Check the branches condition
         does_fx = try self.checkExpr(branch.cond) or does_fx;
         const cond_var: Var = @enumFromInt(@intFromEnum(branch.cond));
-        const branch_bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+        const branch_bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
         const cond_result = try self.unify(branch_bool_var, cond_var);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
@@ -1227,7 +1250,7 @@ fn checkIfElseExpr(
                 does_fx = try self.checkExpr(remaining_branch.cond) or does_fx;
                 const remaining_cond_var: Var = @enumFromInt(@intFromEnum(remaining_branch.cond));
 
-                const fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+                const fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 
@@ -1935,6 +1958,7 @@ test "call site unification order matters for concrete vs flexible types" {
         }
     }
 }
+
 
 test {
     _ = @import("check_types/cross_module_test.zig");

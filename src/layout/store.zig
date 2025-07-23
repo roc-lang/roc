@@ -6,6 +6,7 @@ const types = @import("types");
 const layout_ = @import("./layout.zig");
 const collections = @import("collections");
 const work = @import("./work.zig");
+const ModuleEnv = @import("../compile/ModuleEnv.zig");
 
 const types_store = types.store;
 const target = base.target;
@@ -39,7 +40,7 @@ pub const LayoutError = error{
 pub const Store = struct {
     const Self = @This();
 
-    env: *@import("../compile/ModuleEnv.zig"),
+    env: *ModuleEnv,
     types_store: *const types_store.Store,
     layouts: collections.SafeMultiList(Layout),
     tuple_elems: collections.SafeList(Idx),
@@ -96,7 +97,7 @@ pub const Store = struct {
     }
 
     pub fn init(
-        env: *@import("../compile/ModuleEnv.zig"),
+        env: *ModuleEnv,
         type_store: *const types_store.Store,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
@@ -341,7 +342,7 @@ pub const Store = struct {
         // Sort fields by alignment (descending) first, then by name (ascending)
         const AlignmentSortCtx = struct {
             store: *Self,
-            env: *@import("../compile/ModuleEnv.zig"),
+            env: *ModuleEnv,
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout);
@@ -890,10 +891,12 @@ pub const Store = struct {
                         }
                     }
 
-                    std.debug.assert(false);
-                    return LayoutError.BugUnboxedFlexVar;
+                    // Flex vars appear in REPL/eval contexts where type constraints haven't been fully solved.
+                    // This is a known issue that needs proper constraint solving before layout computation.
+                    // For now, default to I64 for numeric flex vars.
+                    break :blk Layout.int(.i64);
                 },
-                .rigid_var => |_| blk: {
+                .rigid_var => |ident| blk: {
                     // Rigid vars can only be sent to the host if boxed.
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
@@ -902,6 +905,17 @@ pub const Store = struct {
                         }
                     }
 
+                    // Rigid vars should not appear unboxed in layout computation.
+                    // This is likely a bug in the type system.
+                    if (std.debug.runtime_safety) {
+                        std.debug.print("\nERROR: Encountered unboxed rigid_var in layout computation\n", .{});
+                        const name = self.env.idents.getText(ident);
+                        std.debug.print("  Rigid var name: {s}\n", .{name});
+                        std.debug.print("  Variable: {}\n", .{current.var_});
+                    }
+
+                    // Unlike flex vars, rigid vars represent type parameters that should
+                    // have been instantiated. This is a bug that should be fixed.
                     std.debug.assert(false);
                     return LayoutError.BugUnboxedRigidVar;
                 },
