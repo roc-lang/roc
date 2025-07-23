@@ -470,7 +470,7 @@ test "addTypeVar - box of rigid_var compiles to box of opaque_ptr" {
     defer layout_store.deinit();
 
     // Create an ident for the rigid var
-    const ident_idx = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"), base.Region.zero());
+    const ident_idx = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"));
 
     // Create a rigid_var type variable
     const rigid_var = try type_store.freshFromContent(.{ .rigid_var = ident_idx });
@@ -563,9 +563,9 @@ test "alignment - record alignment is max of field alignments" {
     defer layout_store.deinit();
 
     // Create field identifiers
-    const field1_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field1"), base.Region.zero());
-    const field2_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field2"), base.Region.zero());
-    const field3_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field3"), base.Region.zero());
+    const field1_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field1"));
+    const field2_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field2"));
+    const field3_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field3"));
 
     // Create type variables for fields
     const u8_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
@@ -631,10 +631,10 @@ test "alignment - deeply nested record alignment (non-recursive)" {
     defer layout_store.deinit();
 
     // Create field identifiers
-    const inner_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("inner"), base.Region.zero());
-    const middle_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("middle"), base.Region.zero());
-    const outer_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("outer"), base.Region.zero());
-    const data_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("data"), base.Region.zero());
+    const inner_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("inner"));
+    const middle_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("middle"));
+    const outer_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("outer"));
+    const data_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("data"));
 
     // Create a U64 field (alignment 8)
     const u64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
@@ -745,8 +745,8 @@ test "addTypeVar - simple record" {
     const u32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
 
     // Create field identifiers
-    const name_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"), base.Region.zero());
-    const age_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("age"), base.Region.zero());
+    const name_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"));
+    const age_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("age"));
 
     // Create record type { name: str, age: u32 }
     const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
@@ -809,10 +809,10 @@ test "record size calculation" {
     const u32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
     const u64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
 
-    const a_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"), base.Region.zero());
-    const b_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("b"), base.Region.zero());
-    const c_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("c"), base.Region.zero());
-    const d_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("d"), base.Region.zero());
+    const a_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"));
+    const b_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("b"));
+    const c_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("c"));
+    const d_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("d"));
 
     const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = a_ident, .var_ = u8_var },
@@ -859,8 +859,8 @@ test "addTypeVar - nested record" {
 
     // Create inner record type { x: i32, y: i32 }
     const i32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
-    const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"), base.Region.zero());
+    const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"));
+    const y_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"));
 
     const point_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = i32_var },
@@ -872,8 +872,8 @@ test "addTypeVar - nested record" {
 
     // Create outer record type { name: Str, position: { x: i32, y: i32 } }
     const str_var = try type_store.freshFromContent(.{ .structure = .str });
-    const name_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"), base.Region.zero());
-    const position_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("position"), base.Region.zero());
+    const name_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"));
+    const position_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("position"));
 
     const player_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = name_ident, .var_ = str_var },
@@ -949,8 +949,8 @@ test "addTypeVar - list of records" {
     const u64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
     // For bool, we'll use u8 as a placeholder
     const bool_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
-    const id_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("id"), base.Region.zero());
-    const active_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("active"), base.Region.zero());
+    const id_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("id"));
+    const active_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("active"));
 
     const record_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = id_ident, .var_ = u64_var },
@@ -1013,8 +1013,8 @@ test "addTypeVar - record with extension" {
     // Create extension record { y: i32, z: u16 }
     const i32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
     const u16_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u16 } } } });
-    const y_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"), base.Region.zero());
-    const z_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("z"), base.Region.zero());
+    const y_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"));
+    const z_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("z"));
 
     const ext_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = y_ident, .var_ = i32_var },
@@ -1026,7 +1026,7 @@ test "addTypeVar - record with extension" {
 
     // Create main record { x: str } extending the above
     const str_var = try type_store.freshFromContent(.{ .structure = .str });
-    const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
+    const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"));
 
     const main_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = str_var },
@@ -1088,7 +1088,7 @@ test "addTypeVar - record extension with str type fails" {
     defer layout_store.deinit();
 
     // Create a record with str as extension (invalid)
-    const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
+    const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("field"));
     var fields = std.ArrayList(types.RecordField).init(gpa);
     defer fields.deinit();
 
@@ -1119,7 +1119,7 @@ test "addTypeVar - record extension with num type fails" {
     defer layout_store.deinit();
 
     // Create a record with number as extension (invalid)
-    const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
+    const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("field"));
     var fields = std.ArrayList(types.RecordField).init(gpa);
     defer fields.deinit();
 
@@ -1190,7 +1190,7 @@ test "addTypeVar - record with single zero-sized field in container" {
     defer layout_store.deinit();
 
     // Create List({ only_field: {} })
-    const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("only_field"), base.Region.zero());
+    const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("only_field"));
     var fields = std.ArrayList(types.RecordField).init(gpa);
     defer fields.deinit();
 
@@ -1225,9 +1225,9 @@ test "addTypeVar - record field ordering stability" {
     defer layout_store.deinit();
 
     // Create multiple records with same fields but different order
-    const field_a = try module_env.idents.insert(gpa, base.Ident.for_text("aaa"), base.Region.zero());
-    const field_b = try module_env.idents.insert(gpa, base.Ident.for_text("bbb"), base.Region.zero());
-    const field_c = try module_env.idents.insert(gpa, base.Ident.for_text("ccc"), base.Region.zero());
+    const field_a = try module_env.idents.insert(gpa, base.Ident.for_text("aaa"));
+    const field_b = try module_env.idents.insert(gpa, base.Ident.for_text("bbb"));
+    const field_c = try module_env.idents.insert(gpa, base.Ident.for_text("ccc"));
 
     // All fields have same type (same alignment)
     const field_type = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
@@ -1347,7 +1347,7 @@ test "addTypeVar - empty record in different contexts" {
     try testing.expect(result3_layout.tag == .list_of_zst);
 
     // Test 4: Record containing only empty record field
-    const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("empty"), base.Region.zero());
+    const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("empty"));
     var fields = std.ArrayList(types.RecordField).init(gpa);
     defer fields.deinit();
     try fields.append(.{
@@ -1389,7 +1389,7 @@ test "addTypeVar - record alignment edge cases" {
     };
 
     for (alignments) |field_info| {
-        const field_name = try module_env.idents.insert(gpa, base.Ident.for_text(field_info.name), base.Region.zero());
+        const field_name = try module_env.idents.insert(gpa, base.Ident.for_text(field_info.name));
         try fields.append(.{
             .name = field_name,
             .var_ = try type_store.freshFromContent(.{ .structure = field_info.type }),
@@ -1440,8 +1440,8 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
     // Create types
     const str_var = try type_store.freshFromContent(.{ .structure = .str });
     const i32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
-    const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"), base.Region.zero());
+    const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"));
+    const y_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"));
 
     // Create extension record { x: str, y: i32 }
     const ext_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
@@ -1514,7 +1514,7 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
     // Create types
     const str_var = try type_store.freshFromContent(.{ .structure = .str });
     const i32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
-    const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
+    const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"));
 
     // Create extension record { x: i32 }
     const ext_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
@@ -1580,7 +1580,7 @@ test "addTypeVar - record with invalid extension type" {
 
     // Create a str type to use as invalid extension
     const str_var = try type_store.freshFromContent(.{ .structure = .str });
-    const x_ident = try module_env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero());
+    const x_ident = try module_env.idents.insert(gpa, base.Ident.for_text("x"));
 
     // Create main record { x: str } with str as extension (invalid)
     const main_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
@@ -1615,10 +1615,10 @@ test "addTypeVar - record with chained extensions" {
     const f64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
     const u8_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
 
-    const w_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("w"), base.Region.zero());
-    const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"), base.Region.zero());
-    const z_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("z"), base.Region.zero());
+    const w_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("w"));
+    const x_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"));
+    const y_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"));
+    const z_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("z"));
 
     // Create innermost extension record { z: u8 }
     const inner_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
@@ -1708,9 +1708,9 @@ test "addTypeVar - record with zero-sized fields dropped" {
     const empty_record_var = try type_store.freshFromContent(.{ .structure = .empty_record });
     const i32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
 
-    const name_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"), base.Region.zero());
-    const empty_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("empty"), base.Region.zero());
-    const age_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("age"), base.Region.zero());
+    const name_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"));
+    const empty_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("empty"));
+    const age_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("age"));
 
     // Create record { name: str, empty: {}, age: i32 }
     const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
@@ -1772,8 +1772,8 @@ test "addTypeVar - record with all zero-sized fields becomes empty" {
     const empty_record_var = try type_store.freshFromContent(.{ .structure = .empty_record });
     const empty_tag_union_var = try type_store.freshFromContent(.{ .structure = .empty_tag_union });
 
-    const field1_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field1"), base.Region.zero());
-    const field2_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field2"), base.Region.zero());
+    const field1_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field1"));
+    const field2_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field2"));
 
     // Create record { field1: {}, field2: [] }
     const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
@@ -1807,8 +1807,8 @@ test "addTypeVar - box of record with all zero-sized fields" {
     // Create types
     const empty_record_var = try type_store.freshFromContent(.{ .structure = .empty_record });
 
-    const field1_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field1"), base.Region.zero());
-    const field2_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field2"), base.Region.zero());
+    const field1_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field1"));
+    const field2_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field2"));
 
     // Create record { field1: {}, field2: {} }
     const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
@@ -1852,12 +1852,12 @@ test "addTypeVar - comprehensive nested record combinations" {
 
     // Create field names we'll reuse
     const field_names = [_]Ident.Idx{
-        try module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"), base.Region.zero()),
-        try module_env.idents.insert(module_env.gpa, base.Ident.for_text("b"), base.Region.zero()),
-        try module_env.idents.insert(module_env.gpa, base.Ident.for_text("c"), base.Region.zero()),
-        try module_env.idents.insert(module_env.gpa, base.Ident.for_text("d"), base.Region.zero()),
-        try module_env.idents.insert(module_env.gpa, base.Ident.for_text("e"), base.Region.zero()),
-        try module_env.idents.insert(module_env.gpa, base.Ident.for_text("f"), base.Region.zero()),
+        try module_env.idents.insert(module_env.gpa, base.Ident.for_text("a")),
+        try module_env.idents.insert(module_env.gpa, base.Ident.for_text("b")),
+        try module_env.idents.insert(module_env.gpa, base.Ident.for_text("c")),
+        try module_env.idents.insert(module_env.gpa, base.Ident.for_text("d")),
+        try module_env.idents.insert(module_env.gpa, base.Ident.for_text("e")),
+        try module_env.idents.insert(module_env.gpa, base.Ident.for_text("f")),
     };
 
     // Test all combinations
@@ -2034,8 +2034,8 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
 
     // Create inner record with only zero-sized fields
     const empty_record_var = try type_store.freshFromContent(.{ .structure = .empty_record });
-    const a_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"), base.Region.zero());
-    const b_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("b"), base.Region.zero());
+    const a_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"));
+    const b_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("b"));
 
     // Create inner record
     const inner_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
@@ -2048,8 +2048,8 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
 
     // Create outer record { name: str, data: inner_record }
     const str_var = try type_store.freshFromContent(.{ .structure = .str });
-    const name_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"), base.Region.zero());
-    const data_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("data"), base.Region.zero());
+    const name_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"));
+    const data_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("data"));
 
     const outer_fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = name_ident, .var_ = str_var },
@@ -2084,7 +2084,7 @@ test "addTypeVar - list of record with all zero-sized fields" {
 
     // Create empty record type
     const empty_record_var = try type_store.freshFromContent(.{ .structure = .empty_record });
-    const field_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"), base.Region.zero());
+    const field_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"));
 
     // Create record { field: {} }
     const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
@@ -2122,7 +2122,7 @@ test "alignment - record with log2 alignment representation" {
     // Test 1: Record with U8 field (alignment 1, log2 = 0)
     {
         const u8_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
-        const field_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"), base.Region.zero());
+        const field_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"));
         const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
             .{ .name = field_ident, .var_ = u8_var },
         });
@@ -2145,7 +2145,7 @@ test "alignment - record with log2 alignment representation" {
     // Test 2: Record with U32 field (alignment 4, log2 = 2)
     {
         const u32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
-        const field_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"), base.Region.zero());
+        const field_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"));
         const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
             .{ .name = field_ident, .var_ = u32_var },
         });
@@ -2168,7 +2168,7 @@ test "alignment - record with log2 alignment representation" {
     // Test 3: Record with U64 field (alignment 8, log2 = 3)
     {
         const u64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
-        const field_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"), base.Region.zero());
+        const field_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"));
         const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
             .{ .name = field_ident, .var_ = u64_var },
         });
@@ -2192,8 +2192,8 @@ test "alignment - record with log2 alignment representation" {
     {
         const u8_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
         const u64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
-        const field1_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("small"), base.Region.zero());
-        const field2_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("large"), base.Region.zero());
+        const field1_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("small"));
+        const field2_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("large"));
         const fields = try type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
             .{ .name = field1_ident, .var_ = u8_var },
             .{ .name = field2_ident, .var_ = u64_var },
@@ -2236,10 +2236,10 @@ test "record fields sorted by alignment then name" {
     const u64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
 
     // Create field names that would sort differently alphabetically
-    const a_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"), base.Region.zero());
-    const b_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("b"), base.Region.zero());
-    const c_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("c"), base.Region.zero());
-    const d_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("d"), base.Region.zero());
+    const a_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"));
+    const b_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("b"));
+    const c_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("c"));
+    const d_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("d"));
 
     // Create record with fields in a specific order to test sorting
     // { a: u32, b: u64, c: u8, d: u64 }
@@ -2316,9 +2316,9 @@ test "record fields with same alignment sorted by name" {
     const f32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } });
 
     // Create field names that are not in alphabetical order
-    const zebra_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("zebra"), base.Region.zero());
-    const apple_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("apple"), base.Region.zero());
-    const banana_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("banana"), base.Region.zero());
+    const zebra_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("zebra"));
+    const apple_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("apple"));
+    const banana_ident = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("banana"));
 
     // Create record with fields that all have alignment 4
     // { zebra: i32, apple: u32, banana: f32 }
@@ -2385,7 +2385,7 @@ test "addTypeVar - maximum nesting depth" {
 
     var depth: usize = 0;
     while (depth < max_depth) : (depth += 1) {
-        const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
+        const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("field"));
         var fields = std.ArrayList(types.RecordField).init(gpa);
         defer fields.deinit();
 
@@ -2427,7 +2427,7 @@ test "addTypeVar - record with maximum fields" {
     while (i < num_fields) : (i += 1) {
         var name_buf: [20]u8 = undefined;
         const name_str = std.fmt.bufPrint(&name_buf, "field_{}", .{i}) catch unreachable;
-        const field_name = try module_env.idents.insert(gpa, base.Ident.for_text(name_str), base.Region.zero());
+        const field_name = try module_env.idents.insert(gpa, base.Ident.for_text(name_str));
 
         // Alternate between different types to test alignment sorting
         const field_var = if (i % 3 == 0)
@@ -2475,10 +2475,10 @@ test "addTypeVar - record field alignments differ between targets" {
 
     // Create fields with different alignments on 32-bit vs 64-bit
     // str/pointer types have 4-byte alignment on 32-bit, 8-byte on 64-bit
-    const str_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("str_field"), base.Region.zero());
-    const u64_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("u64_field"), base.Region.zero());
-    const u32_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("u32_field"), base.Region.zero());
-    const u8_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("u8_field"), base.Region.zero());
+    const str_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("str_field"));
+    const u64_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("u64_field"));
+    const u32_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("u32_field"));
+    const u8_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("u8_field"));
 
     const str_var = try type_store.freshFromContent(.{ .structure = .str });
     const u64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
@@ -2567,10 +2567,10 @@ test "addTypeVar - record field sorting follows alignment then name order" {
 
     // Create fields with different alignments to test sorting
     // Names are chosen to test alphabetical sorting within same alignment group
-    const zebra_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("zebra"), base.Region.zero());
-    const apple_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("apple"), base.Region.zero());
-    const banana_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("banana"), base.Region.zero());
-    const carrot_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("carrot"), base.Region.zero());
+    const zebra_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("zebra"));
+    const apple_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("apple"));
+    const banana_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("banana"));
+    const carrot_field_name = try module_env.idents.insert(gpa, base.Ident.for_text("carrot"));
 
     // Create fields with specific alignments:
     // zebra: u64 (8-byte alignment)
@@ -2700,8 +2700,8 @@ test "addTypeVar - record with very long field names" {
     const long_name_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const long_name_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    const field_name_a = try module_env.idents.insert(gpa, base.Ident.for_text(long_name_a), base.Region.zero());
-    const field_name_b = try module_env.idents.insert(gpa, base.Ident.for_text(long_name_b), base.Region.zero());
+    const field_name_a = try module_env.idents.insert(gpa, base.Ident.for_text(long_name_a));
+    const field_name_b = try module_env.idents.insert(gpa, base.Ident.for_text(long_name_b));
 
     try fields.append(.{
         .name = field_name_a,
@@ -2746,7 +2746,7 @@ test "addTypeVar - alternating zero-sized and non-zero-sized fields" {
     while (i < num_fields) : (i += 1) {
         var name_buf: [20]u8 = undefined;
         const name_str = std.fmt.bufPrint(&name_buf, "field_{}", .{i}) catch unreachable;
-        const field_name = try module_env.idents.insert(gpa, base.Ident.for_text(name_str), base.Region.zero());
+        const field_name = try module_env.idents.insert(gpa, base.Ident.for_text(name_str));
 
         const field_var = if (i % 2 == 0) blk: {
             expected_non_zero_count += 1;
@@ -2797,7 +2797,7 @@ test "addTypeVar - record field type changes through alias" {
     const alias_var = backing_var;
 
     // Create record using the alias
-    const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("aliased"), base.Region.zero());
+    const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("aliased"));
     var fields = std.ArrayList(types.RecordField).init(gpa);
     defer fields.deinit();
 
@@ -2849,8 +2849,8 @@ test "addTypeVar - mixed container types" {
     const inner_list_var = try type_store.freshFromContent(.{ .structure = .{ .list = u64_var } });
 
     // Record with two fields
-    const field_a = try module_env.idents.insert(gpa, base.Ident.for_text("a"), base.Region.zero());
-    const field_b = try module_env.idents.insert(gpa, base.Ident.for_text("b"), base.Region.zero());
+    const field_a = try module_env.idents.insert(gpa, base.Ident.for_text("a"));
+    const field_b = try module_env.idents.insert(gpa, base.Ident.for_text("b"));
 
     var record_fields = std.ArrayList(types.RecordField).init(gpa);
     defer record_fields.deinit();
@@ -2932,9 +2932,9 @@ test "addTypeVar - record size calculation with padding" {
     var fields = std.ArrayList(types.RecordField).init(gpa);
     defer fields.deinit();
 
-    const field_a = try module_env.idents.insert(gpa, base.Ident.for_text("a"), base.Region.zero());
-    const field_b = try module_env.idents.insert(gpa, base.Ident.for_text("b"), base.Region.zero());
-    const field_c = try module_env.idents.insert(gpa, base.Ident.for_text("c"), base.Region.zero());
+    const field_a = try module_env.idents.insert(gpa, base.Ident.for_text("a"));
+    const field_b = try module_env.idents.insert(gpa, base.Ident.for_text("b"));
+    const field_c = try module_env.idents.insert(gpa, base.Ident.for_text("c"));
 
     try fields.append(.{
         .name = field_a,
@@ -3131,7 +3131,7 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
     defer layout_store.deinit();
 
     // Create a record type (non-scalar)
-    const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
+    const field_name = try module_env.idents.insert(gpa, base.Ident.for_text("field"));
     const str_var = try type_store.freshFromContent(.{ .structure = .str });
     const fields = try type_store.record_fields.appendSlice(gpa, &[_]types.RecordField{
         .{ .name = field_name, .var_ = str_var },

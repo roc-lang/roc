@@ -89,7 +89,7 @@ pub const TypeWriter = struct {
         // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
         // Skip any names that already exist in the identifier store
         // We need at most one more name than the number of existing identifiers
-        const max_attempts = self.env.idents.interner.outer_indices.items.len + 1;
+        const max_attempts = self.env.idents.interner.strings.size + 1;
         var attempts: usize = 0;
         while (attempts < max_attempts) : (attempts += 1) {
             var n = self.next_name_index;
@@ -112,18 +112,7 @@ pub const TypeWriter = struct {
 
             // Check if this name already exists in the identifier store
             const candidate_name = name_buf[0..name_len];
-            var exists = false;
-
-            // Check all identifiers in the store
-            var i: u32 = 0;
-            while (i < self.env.idents.interner.outer_indices.items.len) : (i += 1) {
-                const ident_idx = Ident.Idx{ .idx = @truncate(i), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-                const existing_name = self.env.idents.getText(ident_idx);
-                if (std.mem.eql(u8, existing_name, candidate_name)) {
-                    exists = true;
-                    break;
-                }
-            }
+            const exists = self.env.idents.interner.contains(candidate_name);
 
             if (!exists) {
                 // This name is available, write it to the buffer
@@ -164,7 +153,7 @@ pub const TypeWriter = struct {
         var found = false;
 
         // We need at most as many attempts as there are existing identifiers
-        const max_attempts = self.env.idents.interner.outer_indices.items.len;
+        const max_attempts = self.env.idents.interner.strings.size;
         var attempts: usize = 0;
         while (!found and attempts < max_attempts) : (attempts += 1) {
             var buf: [32]u8 = undefined;
@@ -180,16 +169,7 @@ pub const TypeWriter = struct {
             };
 
             // Check if this name already exists in the identifier store
-            var exists = false;
-            var i: u32 = 0;
-            while (i < self.env.idents.interner.outer_indices.items.len) : (i += 1) {
-                const ident_idx = Ident.Idx{ .idx = @truncate(i), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-                const existing_name = self.env.idents.getText(ident_idx);
-                if (std.mem.eql(u8, existing_name, candidate_name)) {
-                    exists = true;
-                    break;
-                }
-            }
+            const exists = self.env.idents.interner.contains(candidate_name);
 
             if (!exists) {
                 // This name is available, write it to the buffer

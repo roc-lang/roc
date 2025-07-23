@@ -216,14 +216,14 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
-UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
-UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
-UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
-UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
-UNUSED VARIABLE - fuzz_crash_027.md:151:1:151:6
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
+UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
 UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
+UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
+UNUSED VARIABLE - fuzz_crash_027.md:151:1:151:6
+UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
+UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
 TYPE MISMATCH - fuzz_crash_027.md:47:11:47:14
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:111:2:111:12
@@ -702,27 +702,15 @@ tuple : Value((a, b, c))
 
 
 **UNUSED VARIABLE**
-Variable `record` is not used anywhere in your code.
+Variable `tag_with` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_tag_with` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_027.md:131:2:131:8:**
+**fuzz_crash_027.md:119:2:119:10:**
 ```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+	tag_with = Ok(number)
 ```
- ^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:121:2:121:6:**
-```roc
-	list = [
-```
- ^^^^
+ ^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -735,42 +723,6 @@ The unused variable is declared here:
 	m_tuple = (
 ```
  ^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `stale` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_stale` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:142:2:142:7:**
-```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-```
- ^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `empty` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_empty` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:151:1:151:6:**
-```roc
-empty = {}
-```
-^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `tag_with` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_tag_with` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:119:2:119:10:**
-```roc
-	tag_with = Ok(number)
-```
- ^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -793,6 +745,54 @@ The unused variable is declared here:
 **fuzz_crash_027.md:120:2:120:6:**
 ```roc
 	ited = "Hello, ${world}"
+```
+ ^^^^
+
+
+**UNUSED VARIABLE**
+Variable `record` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:131:2:131:8:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+ ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `empty` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_empty` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:151:1:151:6:**
+```roc
+empty = {}
+```
+^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `stale` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_stale` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:142:2:142:7:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+ ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `list` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:121:2:121:6:**
+```roc
+	list = [
 ```
  ^^^^
 

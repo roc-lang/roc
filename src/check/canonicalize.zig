@@ -253,10 +253,9 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
 
 fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
     const gpa = ir.env.gpa;
-    const ident_store = &ir.env.idents;
-    const ident_add = try ir.env.idents.insert(gpa, base.Ident.for_text(ident_text), Region.zero());
+    const ident_add = try ir.env.idents.insert(gpa, base.Ident.for_text(ident_text));
     const pattern_idx_add = try ir.addPatternAndTypeVar(CIR.Pattern{ .assign = .{ .ident = ident_add } }, Content{ .flex_var = null }, Region.zero());
-    _ = try self.scopeIntroduceInternal(gpa, ident_store, .ident, ident_add, pattern_idx_add, false, true);
+    _ = try self.scopeIntroduceInternal(gpa, .ident, ident_add, pattern_idx_add, false, true);
     std.debug.assert(idx == pattern_idx_add);
 }
 
@@ -264,7 +263,7 @@ fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Id
 /// This should be replaced by real builtins eventually
 fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8, content: types.Content) std.mem.Allocator.Error!CIR.Statement.Idx {
     const gpa = ir.env.gpa;
-    const type_ident = try ir.env.idents.insert(gpa, base.Ident.for_text(type_name), Region.zero());
+    const type_ident = try ir.env.idents.insert(gpa, base.Ident.for_text(type_name));
 
     // Create a type header for the built-in type
     const header_idx = try ir.addTypeHeaderAndTypeVar(.{
@@ -305,7 +304,7 @@ fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8, content: types.C
 /// This should be replaced by real builtins eventually
 fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
     const gpa = ir.env.gpa;
-    const type_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("Bool"), Region.zero());
+    const type_ident = try ir.env.idents.insert(gpa, base.Ident.for_text("Bool"));
 
     // Create a type header for the built-in type
     const header_idx = try ir.addTypeHeaderAndTypeVar(.{
@@ -342,7 +341,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
             types.TypeIdent{ .ident_idx = type_ident },
             anno_var,
             &.{},
-            try ir.env.idents.insert(gpa, base.Ident.for_text(ir.module_name), Region.zero()),
+            try ir.env.idents.insert(gpa, base.Ident.for_text(ir.module_name)),
         ),
         Region.zero(),
     );
@@ -529,7 +528,7 @@ pub fn canonicalizeFile(
                                     type_ident,
                                     anno_var,
                                     arg_anno_slice,
-                                    try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.can_ir.module_name), Region.zero()),
+                                    try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.can_ir.module_name)),
                                 );
 
                             break :blk .{
@@ -589,7 +588,7 @@ pub fn canonicalizeFile(
                     if (self.parse_ir.store.getPattern(decl.pattern) == .ident) {
                         const pattern_ident = self.parse_ir.store.getPattern(decl.pattern).ident;
                         if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
-                            if (self.can_ir.env.idents.identsHaveSameText(anno_info.name, decl_ident)) {
+                            if (anno_info.name.idx == decl_ident.idx) {
                                 // This declaration matches the type annotation
                                 const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
                                 const type_var = try self.can_ir.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, pattern_region, TypeVar);
@@ -956,7 +955,7 @@ fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
         const ident_text = entry.key_ptr.*;
         const region = entry.value_ptr.*;
         // Create an identifier for error reporting
-        const ident_idx = try self.can_ir.env.idents.insert(gpa, base.Ident.for_text(ident_text), region);
+        const ident_idx = try self.can_ir.env.idents.insert(gpa, base.Ident.for_text(ident_text));
 
         // Report error: exposed identifier but not implemented
         const diag = CIR.Diagnostic{ .exposed_but_not_implemented = .{
@@ -972,7 +971,7 @@ fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
         const type_text = entry.key_ptr.*;
         const region = entry.value_ptr.*;
         // Create an identifier for error reporting
-        const ident_idx = try self.can_ir.env.idents.insert(gpa, base.Ident.for_text(type_text), region);
+        const ident_idx = try self.can_ir.env.idents.insert(gpa, base.Ident.for_text(type_text));
 
         // Report error: exposed type but not implemented
         try self.can_ir.pushDiagnostic(CIR.Diagnostic{ .exposed_but_not_implemented = .{
@@ -1106,7 +1105,7 @@ fn canonicalizeImportStatement(
 
             // Validate the full_name using Ident.from_bytes
             if (base.Ident.from_bytes(full_name)) |valid_ident| {
-                break :blk try self.can_ir.env.idents.insert(self.can_ir.env.gpa, valid_ident, Region.zero());
+                break :blk try self.can_ir.env.idents.insert(self.can_ir.env.gpa, valid_ident);
             } else |err| {
                 // Invalid identifier - create diagnostic and use placeholder
                 const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
@@ -1123,7 +1122,7 @@ fn canonicalizeImportStatement(
 
                 // Use a placeholder identifier instead
                 const placeholder_text = "MALFORMED_IMPORT";
-                break :blk try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(placeholder_text), Region.zero());
+                break :blk try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(placeholder_text));
             }
         } else {
             // No qualifier, just use the module name directly
@@ -1251,7 +1250,7 @@ fn convertASTExposesToCIR(
                 if (self.parse_ir.tokens.resolveIdentifier(ident_token)) |resolved| {
                     break :resolve_ident resolved;
                 } else {
-                    break :resolve_ident try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), base.Region.zero());
+                    break :resolve_ident try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"));
                 }
             };
 
@@ -1261,7 +1260,7 @@ fn convertASTExposesToCIR(
                     if (self.parse_ir.tokens.resolveIdentifier(as_token)) |resolved| {
                         break :resolve_alias resolved;
                     } else {
-                        break :resolve_alias try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), base.Region.zero());
+                        break :resolve_alias try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"));
                     }
                 } else {
                     break :resolve_alias null;
@@ -1658,7 +1657,7 @@ pub fn canonicalizeExpr(
                 }
 
                 // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
-                switch (self.scopeLookup(&self.can_ir.env.idents, .ident, ident)) {
+                switch (self.scopeLookup(.ident, ident)) {
                     .found => |pattern_idx| {
                         // Mark this pattern as used for unused variable checking
                         try self.used_patterns.put(self.can_ir.env.gpa, pattern_idx, {});
@@ -2087,7 +2086,7 @@ pub fn canonicalizeExpr(
                     // Check for duplicate field names
                     var found_duplicate = false;
                     for (self.scratch_seen_record_fields.sliceFromStart(seen_fields_top)) |seen_field| {
-                        if (self.can_ir.env.idents.identsHaveSameText(field_name_ident, seen_field.ident)) {
+                        if (field_name_ident.idx == seen_field.ident.idx) {
                             // Found a duplicate - add diagnostic
                             const diagnostic = CIR.Diagnostic{
                                 .duplicate_record_field = .{
@@ -2649,9 +2648,8 @@ pub fn canonicalizeExpr(
 fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std.mem.Allocator.Error!?CIR.Expr.Idx {
     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-    const parse_tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse return null;
-    const tag_name_text = self.parse_ir.env.idents.getText(parse_tag_name);
-    const tag_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(tag_name_text), region);
+    const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse @panic("tag token is not an ident");
+    const tag_name_text = self.parse_ir.env.idents.getText(tag_name);
 
     var args_span = CIR.Expr.Span{ .span = base.DataSpan.empty() };
 
@@ -2715,16 +2713,8 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
         // Get the last token of the qualifiers
         const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
         const last_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
-        const last_tok_ident, const last_tok_region = self.parse_ir.tokens.resolveIdentifierAndRegion(last_tok_idx) orelse {
-            const feature = try self.can_ir.env.strings.insert(
-                self.can_ir.env.gpa,
-                "tag qualifier token is not an ident",
-            );
-            return try self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = region,
-            } });
-        };
+        const last_tok_ident = self.parse_ir.tokens.resolveIdentifier(last_tok_idx) orelse unreachable;
+        const last_tok_region = self.parse_ir.tokens.resolve(last_tok_idx);
 
         // Lookup last token (assumed to be a type decl) in scope
         const nominal_type_decl = self.scopeLookupTypeDecl(last_tok_ident) orelse
@@ -2813,7 +2803,7 @@ fn canonicalizePattern(
                 try self.recordPatternFunctionContext(pattern_idx);
 
                 // Introduce the identifier into scope mapping to this pattern node
-                switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true)) {
+                switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
                     .success => {},
                     .shadowing_warning => |shadowed_pattern_idx| {
                         const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
@@ -3038,16 +3028,8 @@ fn canonicalizePattern(
                 // Get the last token of the qualifiers
                 const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
                 const last_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
-                const last_tok_ident, const last_tok_region = self.parse_ir.tokens.resolveIdentifierAndRegion(last_tok_idx) orelse {
-                    const feature = try self.can_ir.env.strings.insert(
-                        self.can_ir.env.gpa,
-                        "tag qualifier token is not an ident",
-                    );
-                    return try self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
-                        .feature = feature,
-                        .region = region,
-                    } });
-                };
+                const last_tok_region = self.parse_ir.tokens.resolve(last_tok_idx);
+                const last_tok_ident = self.parse_ir.tokens.resolveIdentifier(last_tok_idx) orelse unreachable;
 
                 // Lookup last token (assumed to be a type decl) in scope
                 const nominal_type_decl = self.scopeLookupTypeDecl(last_tok_ident) orelse
@@ -3119,7 +3101,7 @@ fn canonicalizePattern(
                         } }, .{ .flex_var = null }, field_region);
 
                         // Introduce the identifier into scope
-                        switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, field_name_ident, assign_pattern_idx, false, true)) {
+                        switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, .ident, field_name_ident, assign_pattern_idx, false, true)) {
                             .success => {},
                             .shadowing_warning => |shadowed_pattern_idx| {
                                 const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
@@ -3252,7 +3234,7 @@ fn canonicalizePattern(
                             } }, Content{ .flex_var = null }, name_region);
 
                             // Introduce the identifier into scope
-                            switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
+                            switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, .ident, ident_idx, assign_idx, false, true)) {
                                 .success => {},
                                 .shadowing_warning => |shadowed_pattern_idx| {
                                     const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
@@ -3399,7 +3381,7 @@ fn canonicalizePattern(
                 const pattern_idx = try self.can_ir.addPatternAndTypeVar(as_pattern, .{ .flex_var = null }, region);
 
                 // Introduce the identifier into scope
-                switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true)) {
+                switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
                     .success => {},
                     .shadowing_warning => |shadowed_pattern_idx| {
                         const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
@@ -3870,7 +3852,7 @@ fn scopeIntroduceVar(
     is_declaration: bool,
     comptime T: type,
 ) std.mem.Allocator.Error!T {
-    const result = try self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, true, is_declaration);
+    const result = try self.scopeIntroduceInternal(self.can_ir.env.gpa, .ident, ident_idx, pattern_idx, true, is_declaration);
 
     switch (result) {
         .success => {
@@ -3925,7 +3907,7 @@ fn canonicalizeTagVariant(self: *Self, anno_idx: AST.TypeAnno.Idx) std.mem.Alloc
                 ident
             else
                 // Create identifier from text if resolution fails
-                try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.parse_ir.resolve(ty.token)), region);
+                try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.parse_ir.resolve(ty.token)));
 
             return try self.can_ir.addTypeAnnoAndTypeVar(.{ .ty = .{
                 .symbol = ident_idx,
@@ -3946,7 +3928,7 @@ fn canonicalizeTagVariant(self: *Self, anno_idx: AST.TypeAnno.Idx) std.mem.Alloc
                 .ty => |ty| if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |ident|
                     ident
                 else
-                    try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.parse_ir.resolve(ty.token)), region),
+                    try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.parse_ir.resolve(ty.token))),
                 else => return try self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{ .region = region } }),
             };
 
@@ -4287,11 +4269,11 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                 const module_text = type_name_text[0..last_dot];
                 const local_type_text = type_name_text[last_dot + 1 ..];
 
-                const module_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(module_text), Region.zero());
-                const local_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(local_type_text), Region.zero());
+                const module_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(module_text));
+                const local_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(local_type_text));
 
                 // Create qualified name identifier from the full type name
-                const qualified_name_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(type_name_text), region);
+                const qualified_name_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(type_name_text));
 
                 // Create external declaration for the qualified type
                 const external_type_var = try self.can_ir.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
@@ -4330,7 +4312,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                     ident
                 else
                     // Create identifier from text if resolution fails
-                    try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(type_name_text), region);
+                    try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(type_name_text));
 
                 if (self.scopeLookupTypeDecl(ident_idx) == null) {
                     // Type not found in scope - issue diagnostic
@@ -4433,7 +4415,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                 const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse {
                     // Malformed field name - continue with placeholder
                     const malformed_field_ident = Ident.for_text("malformed_field");
-                    const malformed_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, malformed_field_ident, Region.zero());
+                    const malformed_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, malformed_field_ident);
                     const canonicalized_ty = try self.canonicalizeTypeAnno(ast_field.ty, can_intro_vars, in_type_declaration);
 
                     const cir_field = CIR.TypeAnno.RecordField{
@@ -4732,7 +4714,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                     const region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(d.pattern).to_tokenized_region());
 
                     // Check if this identifier exists and is a var
-                    switch (self.scopeLookup(&self.can_ir.env.idents, .ident, ident_idx)) {
+                    switch (self.scopeLookup(.ident, ident_idx)) {
                         .found => |existing_pattern_idx| {
                             // Check if this is a var reassignment across function boundaries
                             if (self.isVarReassignmentAcrossFunctionBoundary(existing_pattern_idx)) {
@@ -5082,7 +5064,6 @@ pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.
 /// Check if an identifier is in scope
 fn scopeContains(
     self: *Self,
-    ident_store: *const base.Ident.Store,
     comptime item_kind: Scope.ItemKind,
     name: base.Ident.Idx,
 ) ?CIR.Pattern.Idx {
@@ -5094,7 +5075,7 @@ fn scopeContains(
 
         var iter = map.iterator();
         while (iter.next()) |entry| {
-            if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
+            if (name.idx == entry.key_ptr.idx) {
                 return entry.value_ptr.*;
             }
         }
@@ -5105,11 +5086,10 @@ fn scopeContains(
 /// Look up an identifier in the scope
 fn scopeLookup(
     self: *Self,
-    ident_store: *const base.Ident.Store,
     comptime item_kind: Scope.ItemKind,
     name: base.Ident.Idx,
 ) Scope.LookupResult {
-    if (self.scopeContains(ident_store, item_kind, name)) |pattern| {
+    if (self.scopeContains(item_kind, name)) |pattern| {
         return Scope.LookupResult{ .found = pattern };
     }
     return Scope.LookupResult{ .not_found = {} };
@@ -5123,7 +5103,7 @@ fn scopeLookupTypeVar(self: *const Self, name_ident: Ident.Idx) ?CIR.TypeAnno.Id
         i -= 1;
         const scope = &self.scopes.items[i];
 
-        switch (scope.lookupTypeVar(&self.can_ir.env.idents, name_ident)) {
+        switch (scope.lookupTypeVar(name_ident)) {
             .found => |type_var_idx| return type_var_idx,
             .not_found => continue,
         }
@@ -5138,7 +5118,7 @@ fn scopeIntroduceTypeVar(self: *Self, name: Ident.Idx, type_var_anno: CIR.TypeAn
 
     // Don't use parent lookup function for now - just introduce directly
     // Type variable shadowing is allowed in Roc
-    const result = try current_scope.introduceTypeVar(gpa, &self.can_ir.env.idents, name, type_var_anno, null);
+    const result = try current_scope.introduceTypeVar(gpa, name, type_var_anno, null);
 
     switch (result) {
         .success => {},
@@ -5351,7 +5331,6 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
 fn scopeIntroduceInternal(
     self: *Self,
     gpa: std.mem.Allocator,
-    ident_store: *const base.Ident.Store,
     comptime item_kind: Scope.ItemKind,
     ident_idx: base.Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
@@ -5364,7 +5343,7 @@ fn scopeIntroduceInternal(
     }
 
     // Check for existing identifier in any scope level for shadowing detection
-    if (self.scopeContains(ident_store, item_kind, ident_idx)) |existing_pattern| {
+    if (self.scopeContains(item_kind, ident_idx)) |existing_pattern| {
         // If it's a var reassignment (not declaration), check function boundaries
         if (is_var and !is_declaration) {
             // Find the scope where the var was declared and check for function boundaries
@@ -5379,7 +5358,7 @@ fn scopeIntroduceInternal(
 
                 var iter = map.iterator();
                 while (iter.next()) |entry| {
-                    if (ident_store.identsHaveSameText(ident_idx, entry.key_ptr.*)) {
+                    if (ident_idx.idx == entry.key_ptr.idx) {
                         declaration_scope_idx = scope_idx;
                         break;
                     }
@@ -5429,7 +5408,7 @@ fn scopeIntroduceInternal(
 
     var iter = map.iterator();
     while (iter.next()) |entry| {
-        if (ident_store.identsHaveSameText(ident_idx, entry.key_ptr.*)) {
+        if (ident_idx.idx == entry.key_ptr.idx) {
             // Duplicate in same scope - still introduce but return shadowing warning
             try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
             return Scope.IntroduceResult{ .shadowing_warning = entry.value_ptr.* };
@@ -5524,7 +5503,7 @@ fn scopeIntroduceTypeDecl(
         while (i > 0) {
             i -= 1;
             const scope = &self.scopes.items[i];
-            switch (scope.lookupTypeDecl(&self.can_ir.env.idents, name_ident)) {
+            switch (scope.lookupTypeDecl(name_ident)) {
                 .found => |type_decl_idx| {
                     shadowed_in_parent = type_decl_idx;
                     break;
@@ -5534,7 +5513,7 @@ fn scopeIntroduceTypeDecl(
         }
     }
 
-    const result = try current_scope.introduceTypeDecl(gpa, &self.can_ir.env.idents, name_ident, type_decl_stmt, null);
+    const result = try current_scope.introduceTypeDecl(gpa, name_ident, type_decl_stmt, null);
 
     switch (result) {
         .success => {
@@ -5625,7 +5604,7 @@ fn scopeUpdateTypeDecl(
 ) std.mem.Allocator.Error!void {
     const gpa = self.can_ir.env.gpa;
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    try current_scope.updateTypeDecl(gpa, &self.can_ir.env.idents, name_ident, new_type_decl_stmt);
+    try current_scope.updateTypeDecl(gpa, name_ident, new_type_decl_stmt);
 }
 
 fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?CIR.Statement.Idx {
@@ -5635,7 +5614,7 @@ fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?CIR.Statement.Idx {
         i -= 1;
         const scope = &self.scopes.items[i];
 
-        switch (scope.lookupTypeDecl(&self.can_ir.env.idents, ident_idx)) {
+        switch (scope.lookupTypeDecl(ident_idx)) {
             .found => |type_decl_idx| return type_decl_idx,
             .not_found => continue,
         }
@@ -5652,7 +5631,7 @@ fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
         i -= 1;
         const scope = &self.scopes.items[i];
 
-        switch (scope.lookupModuleAlias(&self.can_ir.env.idents, alias_name)) {
+        switch (scope.lookupModuleAlias(alias_name)) {
             .found => |module_name| return module_name,
             .not_found => continue,
         }
@@ -5667,7 +5646,7 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Simplified introduction without parent lookup for now
-    const result = try current_scope.introduceModuleAlias(gpa, &self.can_ir.env.idents, alias_name, module_name, null);
+    const result = try current_scope.introduceModuleAlias(gpa, alias_name, module_name, null);
 
     switch (result) {
         .success => {},
@@ -5724,7 +5703,7 @@ fn scopeLookupExposedItem(self: *const Self, item_name: Ident.Idx) ?Scope.Expose
         i -= 1;
         const scope = &self.scopes.items[i];
 
-        switch (scope.lookupExposedItem(&self.can_ir.env.idents, item_name)) {
+        switch (scope.lookupExposedItem(item_name)) {
             .found => |item_info| return item_info,
             .not_found => continue,
         }
@@ -5739,7 +5718,7 @@ fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Simplified introduction without parent lookup for now
-    const result = try current_scope.introduceExposedItem(gpa, &self.can_ir.env.idents, item_name, item_info, null);
+    const result = try current_scope.introduceExposedItem(gpa, item_name, item_info, null);
 
     switch (result) {
         .success => {},
@@ -5824,7 +5803,7 @@ fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) std.mem.Allocato
     // Find the last dot and extract the part after it
     if (std.mem.lastIndexOf(u8, module_text, ".")) |last_dot_idx| {
         const extracted_name = module_text[last_dot_idx + 1 ..];
-        return try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(extracted_name), Region.zero());
+        return try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(extracted_name));
     } else {
         // No dot found, return the original name
         return module_name_ident;
@@ -5841,9 +5820,8 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) s
         .ty_var => |tv| {
             // Check if this type variable is already in scope
             const scope = self.currentScope();
-            const ident_store = &self.can_ir.env.idents;
 
-            switch (scope.lookupTypeVar(ident_store, tv.name)) {
+            switch (scope.lookupTypeVar(tv.name)) {
                 .found => |_| {
                     // Type variable already exists, create fresh var with same name
                     return try self.can_ir.addTypeSlotAndTypeVar(
@@ -5863,7 +5841,7 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) s
 
                     // Add to scope (simplified - ignoring result for now)
                     // TODO: Handle scope result and possible error
-                    _ = try scope.introduceTypeVar(self.can_ir.env.gpa, ident_store, tv.name, ty_var_anno, null);
+                    _ = try scope.introduceTypeVar(self.can_ir.env.gpa, tv.name, ty_var_anno, null);
 
                     return CIR.castIdx(CIR.TypeAnno.Idx, TypeVar, ty_var_anno);
                 },
@@ -5963,8 +5941,8 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, can_
                 method_name_text;
 
             // Intern the variable and method names
-            const var_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(var_name), region);
-            const method_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(method_name_clean), region);
+            const var_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(var_name));
+            const method_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(method_name_clean));
 
             // Canonicalize argument types
             const args_slice = self.parse_ir.store.typeAnnoSlice(.{ .span = self.parse_ir.store.getCollection(mm.args).span });
@@ -5986,12 +5964,12 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, can_
             // Create qualified name: "module(a).method"
             const qualified_text = try std.fmt.allocPrint(self.can_ir.env.gpa, "module({s}).{s}", .{ var_name_text, method_name_clean });
             defer self.can_ir.env.gpa.free(qualified_text);
-            const qualified_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(qualified_text), region);
+            const qualified_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(qualified_text));
 
             // Create module name: "module(a)"
             const module_text = try std.fmt.allocPrint(self.can_ir.env.gpa, "module({s})", .{var_name_text});
             defer self.can_ir.env.gpa.free(module_text);
-            const module_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(module_text), region);
+            const module_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(module_text));
 
             const external_decl = try self.createExternalDeclaration(qualified_name, module_name, method_ident, .value, region);
 
@@ -6019,8 +5997,8 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, can_
                 alias_name_text;
 
             // Intern the variable and alias names
-            const var_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(var_name), region);
-            const alias_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(alias_name_clean), region);
+            const var_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(var_name));
+            const alias_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(alias_name_clean));
 
             // Create external declaration for where clause alias constraint
             // This represents the requirement that type variable must come from a module
@@ -6030,12 +6008,12 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, can_
             // Create qualified name: "module(a).Alias"
             const qualified_text = try std.fmt.allocPrint(self.can_ir.env.gpa, "module({s}).{s}", .{ var_name_text, alias_name_clean });
             defer self.can_ir.env.gpa.free(qualified_text);
-            const qualified_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(qualified_text), region);
+            const qualified_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(qualified_text));
 
             // Create module name: "module(a)"
             const module_text = try std.fmt.allocPrint(self.can_ir.env.gpa, "module({s})", .{var_name_text});
             defer self.can_ir.env.gpa.free(module_text);
-            const module_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(module_text), region);
+            const module_name = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(module_text));
 
             const external_decl = try self.createExternalDeclaration(qualified_name, module_name, alias_ident, .type, region);
 
@@ -6162,7 +6140,7 @@ fn canonicalizeTypeApplication(self: *Self, apply: CIR.TypeAnno.Apply, parent_no
                 }
                 const arg_anno_slice = self.scratch_vars.slice(scratch_anno_start, self.scratch_vars.top());
 
-                const module_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.can_ir.module_name), Region.zero());
+                const module_ident = try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.can_ir.module_name));
                 const nominal = try self.can_ir.env.types.mkNominal(types.TypeIdent{ .ident_idx = header.name }, d.anno_var, arg_anno_slice, module_ident);
                 const nominal_var = try self.can_ir.addTypeSlotAndTypeVar(
                     parent_node_idx,
@@ -6435,7 +6413,6 @@ fn processTypeImports(self: *Self, module_name: Ident.Idx, alias_name: Ident.Idx
     const scope = self.currentScope();
     _ = try scope.introduceModuleAlias(
         self.can_ir.env.gpa,
-        &self.can_ir.env.idents,
         alias_name,
         module_name,
         null, // No parent lookup function for now
@@ -6613,7 +6590,7 @@ fn resolveIdentOrFallback(self: *Self, token: Token.Idx) std.mem.Allocator.Error
 /// Used when we encounter malformed or unexpected syntax but want to continue
 /// compilation instead of stopping. This supports the compiler's "inform don't block" approach.
 fn createUnknownIdent(self: *Self) std.mem.Allocator.Error!Ident.Idx {
-    return try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), Region.zero());
+    return try self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"));
 }
 
 /// Context helper for Scope tests
@@ -6680,8 +6657,8 @@ test "empty scope has no items" {
     var ctx = try ScopeTestContext.init(gpa);
     defer ctx.deinit();
 
-    const foo_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("foo"), base.Region.zero());
-    const result = ctx.self.scopeLookup(&ctx.env.idents, .ident, foo_ident);
+    const foo_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("foo"));
+    const result = ctx.self.scopeLookup(.ident, foo_ident);
 
     try std.testing.expectEqual(Scope.LookupResult{ .not_found = {} }, result);
 }
@@ -6692,21 +6669,21 @@ test "can add and lookup idents at top level" {
     var ctx = try ScopeTestContext.init(gpa);
     defer ctx.deinit();
 
-    const foo_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("foo"), base.Region.zero());
-    const bar_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("bar"), base.Region.zero());
+    const foo_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("foo"));
+    const bar_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("bar"));
     const foo_pattern: CIR.Pattern.Idx = @enumFromInt(1);
     const bar_pattern: CIR.Pattern.Idx = @enumFromInt(2);
 
     // Add identifiers
-    const foo_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, foo_ident, foo_pattern, false, true);
-    const bar_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, bar_ident, bar_pattern, false, true);
+    const foo_result = ctx.self.scopeIntroduceInternal(gpa, .ident, foo_ident, foo_pattern, false, true);
+    const bar_result = ctx.self.scopeIntroduceInternal(gpa, .ident, bar_ident, bar_pattern, false, true);
 
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, foo_result);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, bar_result);
 
     // Lookup should find them
-    const foo_lookup = ctx.self.scopeLookup(&ctx.env.idents, .ident, foo_ident);
-    const bar_lookup = ctx.self.scopeLookup(&ctx.env.idents, .ident, bar_ident);
+    const foo_lookup = ctx.self.scopeLookup(.ident, foo_ident);
+    const bar_lookup = ctx.self.scopeLookup(.ident, bar_ident);
 
     try std.testing.expectEqual(Scope.LookupResult{ .found = foo_pattern }, foo_lookup);
     try std.testing.expectEqual(Scope.LookupResult{ .found = bar_pattern }, bar_lookup);
@@ -6718,34 +6695,34 @@ test "nested scopes shadow outer scopes" {
     var ctx = try ScopeTestContext.init(gpa);
     defer ctx.deinit();
 
-    const x_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero());
+    const x_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("x"));
     const outer_pattern: CIR.Pattern.Idx = @enumFromInt(1);
     const inner_pattern: CIR.Pattern.Idx = @enumFromInt(2);
 
     // Add x to outer scope
-    const outer_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, x_ident, outer_pattern, false, true);
+    const outer_result = ctx.self.scopeIntroduceInternal(gpa, .ident, x_ident, outer_pattern, false, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, outer_result);
 
     // Enter new scope
     try ctx.self.scopeEnter(gpa, false);
 
     // x from outer scope should still be visible
-    const outer_lookup = ctx.self.scopeLookup(&ctx.env.idents, .ident, x_ident);
+    const outer_lookup = ctx.self.scopeLookup(.ident, x_ident);
     try std.testing.expectEqual(Scope.LookupResult{ .found = outer_pattern }, outer_lookup);
 
     // Add x to inner scope (shadows outer)
-    const inner_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, x_ident, inner_pattern, false, true);
+    const inner_result = ctx.self.scopeIntroduceInternal(gpa, .ident, x_ident, inner_pattern, false, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .shadowing_warning = outer_pattern }, inner_result);
 
     // Now x should resolve to inner scope
-    const inner_lookup = ctx.self.scopeLookup(&ctx.env.idents, .ident, x_ident);
+    const inner_lookup = ctx.self.scopeLookup(.ident, x_ident);
     try std.testing.expectEqual(Scope.LookupResult{ .found = inner_pattern }, inner_lookup);
 
     // Exit inner scope
     try ctx.self.scopeExit(gpa);
 
     // x should resolve to outer scope again
-    const after_exit_lookup = ctx.self.scopeLookup(&ctx.env.idents, .ident, x_ident);
+    const after_exit_lookup = ctx.self.scopeLookup(.ident, x_ident);
     try std.testing.expectEqual(Scope.LookupResult{ .found = outer_pattern }, after_exit_lookup);
 }
 
@@ -6755,11 +6732,11 @@ test "top level var error" {
     var ctx = try ScopeTestContext.init(gpa);
     defer ctx.deinit();
 
-    const var_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("count_"), base.Region.zero());
+    const var_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("count_"));
     const pattern: CIR.Pattern.Idx = @enumFromInt(1);
 
     // Should fail to introduce var at top level
-    const result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, var_ident, pattern, true, true);
+    const result = ctx.self.scopeIntroduceInternal(gpa, .ident, var_ident, pattern, true, true);
 
     try std.testing.expectEqual(Scope.IntroduceResult{ .top_level_var_error = {} }, result);
 }
@@ -6771,25 +6748,25 @@ test "type variables are tracked separately from value identifiers" {
     defer ctx.deinit();
 
     // Create identifiers for 'a' - one for value, one for type
-    const a_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("a"), base.Region.zero());
+    const a_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("a"));
     const pattern: CIR.Pattern.Idx = @enumFromInt(1);
     const type_anno: CIR.TypeAnno.Idx = @enumFromInt(1);
 
     // Introduce 'a' as a value identifier
-    const value_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, a_ident, pattern, false, true);
+    const value_result = ctx.self.scopeIntroduceInternal(gpa, .ident, a_ident, pattern, false, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, value_result);
 
     // Introduce 'a' as a type variable - should succeed because they're in separate namespaces
     const current_scope = &ctx.self.scopes.items[ctx.self.scopes.items.len - 1];
-    const type_result = current_scope.introduceTypeVar(gpa, &ctx.env.idents, a_ident, type_anno, null);
+    const type_result = current_scope.introduceTypeVar(gpa, a_ident, type_anno, null);
     try std.testing.expectEqual(Scope.TypeVarIntroduceResult{ .success = {} }, type_result);
 
     // Lookup 'a' as value should find the pattern
-    const value_lookup = ctx.self.scopeLookup(&ctx.env.idents, .ident, a_ident);
+    const value_lookup = ctx.self.scopeLookup(.ident, a_ident);
     try std.testing.expectEqual(Scope.LookupResult{ .found = pattern }, value_lookup);
 
     // Lookup 'a' as type variable should find the type annotation
-    const type_lookup = current_scope.lookupTypeVar(&ctx.env.idents, a_ident);
+    const type_lookup = current_scope.lookupTypeVar(a_ident);
     try std.testing.expectEqual(Scope.TypeVarLookupResult{ .found = type_anno }, type_lookup);
 }
 
@@ -6802,20 +6779,20 @@ test "var reassignment within same function" {
     // Enter function scope
     try ctx.self.scopeEnter(gpa, true);
 
-    const count_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("count_"), base.Region.zero());
+    const count_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("count_"));
     const pattern1: CIR.Pattern.Idx = @enumFromInt(1);
     const pattern2: CIR.Pattern.Idx = @enumFromInt(2);
 
     // Declare var
-    const declare_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, count_ident, pattern1, true, true);
+    const declare_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern1, true, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, declare_result);
 
     // Reassign var (not a declaration)
-    const reassign_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, count_ident, pattern2, true, false);
+    const reassign_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern2, true, false);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, reassign_result);
 
     // Should resolve to the reassigned value
-    const lookup_result = ctx.self.scopeLookup(&ctx.env.idents, .ident, count_ident);
+    const lookup_result = ctx.self.scopeLookup(.ident, count_ident);
     try std.testing.expectEqual(Scope.LookupResult{ .found = pattern2 }, lookup_result);
 }
 
@@ -6828,19 +6805,19 @@ test "var reassignment across function boundary fails" {
     // Enter first function scope
     try ctx.self.scopeEnter(gpa, true);
 
-    const count_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("count_"), base.Region.zero());
+    const count_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("count_"));
     const pattern1: CIR.Pattern.Idx = @enumFromInt(1);
     const pattern2: CIR.Pattern.Idx = @enumFromInt(2);
 
     // Declare var in first function
-    const declare_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, count_ident, pattern1, true, true);
+    const declare_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern1, true, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, declare_result);
 
     // Enter second function scope (function boundary)
     try ctx.self.scopeEnter(gpa, true);
 
     // Try to reassign var from different function - should fail
-    const reassign_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, count_ident, pattern2, true, false);
+    const reassign_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern2, true, false);
     try std.testing.expectEqual(Scope.IntroduceResult{ .var_across_function_boundary = pattern1 }, reassign_result);
 }
 
@@ -6850,8 +6827,8 @@ test "identifiers with and without underscores are different" {
     var ctx = try ScopeTestContext.init(gpa);
     defer ctx.deinit();
 
-    const sum_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("sum"), base.Region.zero());
-    const sum_underscore_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("sum_"), base.Region.zero());
+    const sum_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("sum"));
+    const sum_underscore_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("sum_"));
     const pattern1: CIR.Pattern.Idx = @enumFromInt(1);
     const pattern2: CIR.Pattern.Idx = @enumFromInt(2);
 
@@ -6859,16 +6836,16 @@ test "identifiers with and without underscores are different" {
     try ctx.self.scopeEnter(gpa, true);
 
     // Introduce regular identifier
-    const regular_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, sum_ident, pattern1, false, true);
+    const regular_result = ctx.self.scopeIntroduceInternal(gpa, .ident, sum_ident, pattern1, false, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, regular_result);
 
     // Introduce var with underscore - should not conflict
-    const var_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, sum_underscore_ident, pattern2, true, true);
+    const var_result = ctx.self.scopeIntroduceInternal(gpa, .ident, sum_underscore_ident, pattern2, true, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, var_result);
 
     // Both should be found independently
-    const regular_lookup = ctx.self.scopeLookup(&ctx.env.idents, .ident, sum_ident);
-    const var_lookup = ctx.self.scopeLookup(&ctx.env.idents, .ident, sum_underscore_ident);
+    const regular_lookup = ctx.self.scopeLookup(.ident, sum_ident);
+    const var_lookup = ctx.self.scopeLookup(.ident, sum_underscore_ident);
 
     try std.testing.expectEqual(Scope.LookupResult{ .found = pattern1 }, regular_lookup);
     try std.testing.expectEqual(Scope.LookupResult{ .found = pattern2 }, var_lookup);
@@ -6880,20 +6857,20 @@ test "aliases work separately from idents" {
     var ctx = try ScopeTestContext.init(gpa);
     defer ctx.deinit();
 
-    const foo_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("Foo"), base.Region.zero());
+    const foo_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("Foo"));
     const ident_pattern: CIR.Pattern.Idx = @enumFromInt(1);
     const alias_pattern: CIR.Pattern.Idx = @enumFromInt(2);
 
     // Add as both ident and alias (they're in separate namespaces)
-    const ident_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, foo_ident, ident_pattern, false, true);
-    const alias_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .alias, foo_ident, alias_pattern, false, true);
+    const ident_result = ctx.self.scopeIntroduceInternal(gpa, .ident, foo_ident, ident_pattern, false, true);
+    const alias_result = ctx.self.scopeIntroduceInternal(gpa, .alias, foo_ident, alias_pattern, false, true);
 
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, ident_result);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, alias_result);
 
     // Both should be found in their respective namespaces
-    const ident_lookup = ctx.self.scopeLookup(&ctx.env.idents, .ident, foo_ident);
-    const alias_lookup = ctx.self.scopeLookup(&ctx.env.idents, .alias, foo_ident);
+    const ident_lookup = ctx.self.scopeLookup(.ident, foo_ident);
+    const alias_lookup = ctx.self.scopeLookup(.alias, foo_ident);
 
     try std.testing.expectEqual(Scope.LookupResult{ .found = ident_pattern }, ident_lookup);
     try std.testing.expectEqual(Scope.LookupResult{ .found = alias_pattern }, alias_lookup);
@@ -7802,8 +7779,8 @@ test "record with extension variable" {
     const str_var = try env.types.freshFromContent(Content{ .structure = .str });
 
     const fields = [_]types.RecordField{
-        .{ .name = try env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero()), .var_ = num_var },
-        .{ .name = try env.idents.insert(gpa, base.Ident.for_text("y"), base.Region.zero()), .var_ = str_var },
+        .{ .name = try env.idents.insert(gpa, base.Ident.for_text("x")), .var_ = num_var },
+        .{ .name = try env.idents.insert(gpa, base.Ident.for_text("y")), .var_ = str_var },
     };
     const fields_range = try env.types.appendRecordFields(&fields);
     const ext_var = try env.types.fresh(); // Open extension

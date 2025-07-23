@@ -197,8 +197,8 @@ pub const Store = struct {
     // make builtin types //
 
     pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: Var) std.mem.Allocator.Error!Content {
-        const true_ident = try idents.insert(gpa, base.Ident.for_text("True"), base.Region.zero());
-        const false_ident = try idents.insert(gpa, base.Ident.for_text("False"), base.Region.zero());
+        const true_ident = try idents.insert(gpa, base.Ident.for_text("True"));
+        const false_ident = try idents.insert(gpa, base.Ident.for_text("False"));
 
         const true_tag = try self.mkTag(true_ident, &[_]Var{});
         const false_tag = try self.mkTag(false_ident, &[_]Var{});

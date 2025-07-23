@@ -98,11 +98,11 @@ UNKNOWN OPERATOR - complex_list_tags.md:4:84:4:85
 INVALID PATTERN - :0:0:0:0
 UNKNOWN OPERATOR - complex_list_tags.md:4:97:4:98
 UNKNOWN OPERATOR - complex_list_tags.md:5:53:5:74
-UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
-UNUSED VARIABLE - complex_list_tags.md:5:30:5:33
-UNUSED VARIABLE - complex_list_tags.md:5:25:5:28
 UNUSED VARIABLE - complex_list_tags.md:5:11:5:13
+UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
 UNUSED VARIABLE - complex_list_tags.md:5:15:5:17
+UNUSED VARIABLE - complex_list_tags.md:5:25:5:28
+UNUSED VARIABLE - complex_list_tags.md:5:30:5:33
 INVALID PATTERN - :0:0:0:0
 UNKNOWN OPERATOR - complex_list_tags.md:5:75:5:76
 INVALID PATTERN - :0:0:0:0
@@ -122,10 +122,10 @@ UNUSED VARIABLE - complex_list_tags.md:5:126:5:129
 INVALID PATTERN - :0:0:0:0
 UNKNOWN OPERATOR - complex_list_tags.md:5:130:5:131
 UNKNOWN OPERATOR - complex_list_tags.md:6:55:6:81
-UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
 UNUSED VARIABLE - complex_list_tags.md:6:13:6:19
 UNUSED VARIABLE - complex_list_tags.md:6:31:6:32
 UNUSED VARIABLE - complex_list_tags.md:6:28:6:29
+UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
 INVALID PATTERN - :0:0:0:0
 UNKNOWN OPERATOR - complex_list_tags.md:6:82:6:97
 INVALID PATTERN - :0:0:0:0
@@ -1083,6 +1083,18 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
+Variable `dx` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_dx` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:5:11:5:13:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+          ^^
+
+
+**UNUSED VARIABLE**
 Variable `others` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_others` to suppress this warning.
@@ -1095,15 +1107,15 @@ match events {
 
 
 **UNUSED VARIABLE**
-Variable `dy2` is not used anywhere in your code.
+Variable `dy` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dy2` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_dy` to suppress this warning.
 The unused variable is declared here:
-**complex_list_tags.md:5:30:5:33:**
+**complex_list_tags.md:5:15:5:17:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
 ```
-                             ^^^
+              ^^
 
 
 **UNUSED VARIABLE**
@@ -1119,27 +1131,15 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `dx` is not used anywhere in your code.
+Variable `dy2` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dx` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_dy2` to suppress this warning.
 The unused variable is declared here:
-**complex_list_tags.md:5:11:5:13:**
+**complex_list_tags.md:5:30:5:33:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
 ```
-          ^^
-
-
-**UNUSED VARIABLE**
-Variable `dy` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_dy` to suppress this warning.
-The unused variable is declared here:
-**complex_list_tags.md:5:15:5:17:**
-```roc
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-```
-              ^^
+                             ^^^
 
 
 **INVALID PATTERN**
@@ -1307,18 +1307,6 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
-Variable `remaining` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_remaining` to suppress this warning.
-The unused variable is declared here:
-**complex_list_tags.md:1:1:1:1:**
-```roc
-match events {
-```
-
-
-
-**UNUSED VARIABLE**
 Variable `amount` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_amount` to suppress this warning.
@@ -1352,6 +1340,18 @@ The unused variable is declared here:
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
 ```
                            ^
+
+
+**UNUSED VARIABLE**
+Variable `remaining` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_remaining` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:1:1:1:1:**
+```roc
+match events {
+```
+
 
 
 **INVALID PATTERN**
