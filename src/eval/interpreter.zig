@@ -214,7 +214,7 @@ pub const Interpreter = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        cir: *CIR,
+        cir: *const CIR,
         stack_memory: *stack.Stack,
         layout_cache: *layout_store.Store,
         type_store: *types_store.Store,
@@ -1245,7 +1245,6 @@ test "stack-based comparisons" {
         try std.testing.expectEqual(@as(usize, 1), interpreter.value_stack.items.len);
         const result_value = try interpreter.peekStackValue(1);
         const result = @as(*u8, @ptrCast(@alignCast(result_value.ptr))).*;
-        std.debug.print("result {}", .{result});
         try std.testing.expectEqual(@as(u8, 1), result);
         const bool_layout = interpreter.value_stack.items[0].layout;
         try std.testing.expect(bool_layout.tag == .scalar);
