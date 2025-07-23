@@ -780,11 +780,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         else => {
-            // For now, log which diagnostic type is unhandled
-            const diagnostic_name = @tagName(diagnostic);
-            std.log.debug("Unhandled diagnostic type in diagnosticToReport: {s}", .{diagnostic_name});
-            
             // For unhandled diagnostics, create a generic report
+            const diagnostic_name = @tagName(diagnostic);
             
             var report = Report.init(allocator, "COMPILER DIAGNOSTIC", .runtime_error);
             try report.addHeader("Compiler Diagnostic");
