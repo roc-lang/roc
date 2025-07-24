@@ -306,8 +306,7 @@ fn Unifier(comptime StoreTypeB: type) type {
         const Self = @This();
 
         module_env: *const base.ModuleEnv,
-        types_store_a: *types_mod.Store,
-        types_store_b: StoreTypeB,
+        types_store: StoreTypeB,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
         depth: u8,
@@ -322,8 +321,7 @@ fn Unifier(comptime StoreTypeB: type) type {
         ) Unifier(*types_mod.Store) {
             return .{
                 .module_env = module_env,
-                .types_store_a = types_store,
-                .types_store_b = types_store,
+                .types_store = types_store,
                 .scratch = scratch,
                 .occurs_scratch = occurs_scratch,
                 .depth = 0,
@@ -336,7 +334,7 @@ fn Unifier(comptime StoreTypeB: type) type {
         /// Link the variables & updated the content in the type_store
         /// In the old compiler, this function was called "merge"
         fn merge(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) void {
-            self.types_store_a.union_(vars.a.var_, vars.b.var_, .{
+            self.types_store.union_(vars.a.var_, vars.b.var_, .{
                 .content = new_content,
                 .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
                 .mark = Mark.none,
@@ -345,7 +343,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
         /// Create a new type variable *in this pool*
         fn fresh(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) std.mem.Allocator.Error!Var {
-            const var_ = try self.types_store_b.register(.{
+            const var_ = try self.types_store.register(.{
                 .content = new_content,
                 .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
                 .mark = Mark.none,
@@ -370,7 +368,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
-            switch (self.types_store_b.checkVarsEquiv(a_var, b_var)) {
+            switch (self.types_store.checkVarsEquiv(a_var, b_var)) {
                 .equiv => {
                     // this means that the vars point to the same exact type
                     // descriptor, so nothing needs to happen
@@ -408,8 +406,8 @@ fn Unifier(comptime StoreTypeB: type) type {
                     try self.unifyRigid(vars, vars.b.desc.content);
                 },
                 .alias => |a_alias| {
-                    const backing_var = self.types_store_b.getAliasBackingVar(a_alias);
-                    const backing_resolved = self.types_store_b.resolveVar(backing_var);
+                    const backing_var = self.types_store.getAliasBackingVar(a_alias);
+                    const backing_resolved = self.types_store.resolveVar(backing_var);
                     if (backing_resolved.desc.content == .err) {
                         // Invalid alias - treat as transparent
                         self.merge(vars, vars.b.desc.content);
@@ -430,7 +428,7 @@ fn Unifier(comptime StoreTypeB: type) type {
         /// This function is called when unify has recursed a sufficient depth that
         /// a recursive type seems likely.
         fn checkRecursive(self: *Self, vars: *const ResolvedVarDescs) Error!void {
-            const a_occurs = occurs.occurs(self.types_store_b, self.occurs_scratch, vars.a.var_) catch return Error.AllocatorError;
+            const a_occurs = occurs.occurs(self.types_store, self.occurs_scratch, vars.a.var_) catch return Error.AllocatorError;
             switch (a_occurs) {
                 .not_recursive => {},
                 .recursive_nominal => {},
@@ -442,7 +440,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                 },
             }
 
-            const b_occurs = occurs.occurs(self.types_store_b, self.occurs_scratch, vars.b.var_) catch return Error.AllocatorError;
+            const b_occurs = occurs.occurs(self.types_store, self.occurs_scratch, vars.b.var_) catch return Error.AllocatorError;
             switch (b_occurs) {
                 .not_recursive => {},
                 .recursive_nominal => {},
@@ -500,7 +498,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
-            const backing_var = self.types_store_b.getAliasBackingVar(a_alias);
+            const backing_var = self.types_store.getAliasBackingVar(a_alias);
 
             switch (b_content) {
                 .flex_var => |_| {
@@ -510,8 +508,8 @@ fn Unifier(comptime StoreTypeB: type) type {
                     try self.unifyGuarded(backing_var, vars.b.var_);
                 },
                 .alias => |b_alias| {
-                    const b_backing_var = self.types_store_b.getAliasBackingVar(b_alias);
-                    const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
+                    const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
+                    const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                     if (b_backing_resolved.desc.content == .err) {
                         // Invalid alias - treat as transparent
                         self.merge(vars, vars.a.desc.content);
@@ -549,16 +547,16 @@ fn Unifier(comptime StoreTypeB: type) type {
             }
 
             // Unify each pair of arguments
-            const a_args_slice = self.types_store_b.sliceAliasArgs(a_alias);
-            const b_args_slice = self.types_store_b.sliceAliasArgs(b_alias);
+            const a_args_slice = self.types_store.sliceAliasArgs(a_alias);
+            const b_args_slice = self.types_store.sliceAliasArgs(b_alias);
             for (a_args_slice, b_args_slice) |a_arg, b_arg| {
                 try self.unifyGuarded(a_arg, b_arg);
             }
 
             // Rust compiler comment:
             // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
-            const a_backing_var = self.types_store_b.getAliasBackingVar(a_alias);
-            const b_backing_var = self.types_store_b.getAliasBackingVar(b_alias);
+            const a_backing_var = self.types_store.getAliasBackingVar(a_alias);
+            const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
             self.unifyGuarded(a_backing_var, b_backing_var) catch {};
 
             // Ensure the target variable has slots for the alias arguments
@@ -583,7 +581,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                 },
                 .rigid_var => return error.TypeMismatch,
                 .alias => |b_alias| {
-                    try self.unifyGuarded(vars.a.var_, self.types_store_b.getAliasBackingVar(b_alias));
+                    try self.unifyGuarded(vars.a.var_, self.types_store.getAliasBackingVar(b_alias));
                 },
                 .structure => |b_flat_type| {
                     try self.unifyFlatType(vars, a_flat_type, b_flat_type);
@@ -607,8 +605,8 @@ fn Unifier(comptime StoreTypeB: type) type {
                     switch (b_flat_type) {
                         .str => self.merge(vars, vars.b.desc.content),
                         .nominal_type => |b_type| {
-                            const b_backing_var = self.types_store_b.getNominalBackingVar(b_type);
-                            const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
+                            const b_backing_var = self.types_store.getNominalBackingVar(b_type);
+                            const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                             if (b_backing_resolved.desc.content == .err) {
                                 // Invalid nominal type - treat as transparent
                                 self.merge(vars, vars.a.desc.content);
@@ -671,8 +669,8 @@ fn Unifier(comptime StoreTypeB: type) type {
                     }
                 },
                 .nominal_type => |a_type| {
-                    const a_backing_var = self.types_store_b.getNominalBackingVar(a_type);
-                    const a_backing_resolved = self.types_store_b.resolveVar(a_backing_var);
+                    const a_backing_var = self.types_store.getNominalBackingVar(a_type);
+                    const a_backing_resolved = self.types_store.resolveVar(a_backing_var);
                     if (a_backing_resolved.desc.content == .err) {
                         // Invalid nominal type - treat as transparent
                         self.merge(vars, vars.b.desc.content);
@@ -681,8 +679,8 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                     switch (b_flat_type) {
                         .nominal_type => |b_type| {
-                            const b_backing_var = self.types_store_b.getNominalBackingVar(b_type);
-                            const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
+                            const b_backing_var = self.types_store.getNominalBackingVar(b_type);
+                            const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                             if (b_backing_resolved.desc.content == .err) {
                                 // Invalid nominal type - treat as transparent
                                 self.merge(vars, vars.a.desc.content);
@@ -769,7 +767,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // For record_unbound, we just have the fields directly (no extension)
                             const b_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store_b.record_fields,
+                                &self.types_store.record_fields,
                                 b_fields,
                             ) catch return Error.AllocatorError;
 
@@ -821,7 +819,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             // When unifying record_unbound with record, record wins
                             // Copy unbound fields into scratch
                             const a_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store_b.record_fields,
+                                &self.types_store.record_fields,
                                 a_fields,
                             ) catch return Error.AllocatorError;
 
@@ -859,11 +857,11 @@ fn Unifier(comptime StoreTypeB: type) type {
                             // Both are record_unbound - unify fields and stay unbound
                             // Copy both field sets into scratch
                             const a_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store_b.record_fields,
+                                &self.types_store.record_fields,
                                 a_fields,
                             ) catch return Error.AllocatorError;
                             const b_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store_b.record_fields,
+                                &self.types_store.record_fields,
                                 b_fields,
                             ) catch return Error.AllocatorError;
 
@@ -897,7 +895,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             // When unifying record_unbound with record_poly, poly wins
                             // Copy unbound fields into scratch
                             const a_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store_b.record_fields,
+                                &self.types_store.record_fields,
                                 a_fields,
                             ) catch return Error.AllocatorError;
 
@@ -952,7 +950,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // Copy unbound fields into scratch
                             const b_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store_b.record_fields,
+                                &self.types_store.record_fields,
                                 b_fields,
                             ) catch return Error.AllocatorError;
 
@@ -1070,8 +1068,8 @@ fn Unifier(comptime StoreTypeB: type) type {
                 return error.TypeMismatch;
             }
 
-            const a_elems = self.types_store_b.sliceVars(a_tuple.elems);
-            const b_elems = self.types_store_b.sliceVars(b_tuple.elems);
+            const a_elems = self.types_store.sliceVars(a_tuple.elems);
+            const b_elems = self.types_store.sliceVars(b_tuple.elems);
             for (a_elems, b_elems) |a_elem, b_elem| {
                 try self.unifyGuarded(a_elem, b_elem);
             }
@@ -1658,7 +1656,7 @@ fn Unifier(comptime StoreTypeB: type) type {
         ) ResolvedNum {
             var num_var = initial_num_var;
             while (true) {
-                const resolved = self.types_store_b.resolveVar(num_var);
+                const resolved = self.types_store.resolveVar(num_var);
                 switch (resolved.desc.content) {
                     .flex_var => return .flex_resolved,
                     .structure => |flat_type| {
@@ -1697,16 +1695,16 @@ fn Unifier(comptime StoreTypeB: type) type {
             defer trace.end();
 
             // Check if either nominal type has an invalid backing variable
-            const a_backing_var = self.types_store_b.getNominalBackingVar(a_type);
-            const a_backing_resolved = self.types_store_b.resolveVar(a_backing_var);
+            const a_backing_var = self.types_store.getNominalBackingVar(a_type);
+            const a_backing_resolved = self.types_store.resolveVar(a_backing_var);
             if (a_backing_resolved.desc.content == .err) {
                 // Invalid nominal type - treat as transparent
                 self.merge(vars, vars.b.desc.content);
                 return;
             }
 
-            const b_backing_var = self.types_store_b.getNominalBackingVar(b_type);
-            const b_backing_resolved = self.types_store_b.resolveVar(b_backing_var);
+            const b_backing_var = self.types_store.getNominalBackingVar(b_type);
+            const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
             if (b_backing_resolved.desc.content == .err) {
                 // Invalid nominal type - treat as transparent
                 self.merge(vars, vars.a.desc.content);
@@ -1722,8 +1720,8 @@ fn Unifier(comptime StoreTypeB: type) type {
             }
 
             // Unify each pair of arguments using iterators
-            const a_slice = self.types_store_b.sliceNominalArgs(a_type);
-            const b_slice = self.types_store_b.sliceNominalArgs(b_type);
+            const a_slice = self.types_store.sliceNominalArgs(a_type);
+            const b_slice = self.types_store.sliceNominalArgs(b_type);
             for (a_slice, b_slice) |a_arg, b_arg| {
                 try self.unifyGuarded(a_arg, b_arg);
             }
@@ -1752,8 +1750,8 @@ fn Unifier(comptime StoreTypeB: type) type {
                 return error.TypeMismatch;
             }
 
-            const a_args = self.types_store_b.sliceVars(a_func.args);
-            const b_args = self.types_store_b.sliceVars(b_func.args);
+            const a_args = self.types_store.sliceVars(a_func.args);
+            const b_args = self.types_store.sliceVars(b_func.args);
             for (a_args, b_args) |a_arg, b_arg| {
                 try self.unifyGuarded(a_arg, b_arg);
             }
@@ -1892,7 +1890,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                 .a_extends_b => {
                     // Create a new variable of a record with only a's uniq fields
                     // This copies fields from scratch into type_store
-                    const only_in_a_fields_range = self.types_store_b.appendRecordFields(
+                    const only_in_a_fields_range = self.types_store.appendRecordFields(
                         self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
                     ) catch return Error.AllocatorError;
                     const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
@@ -1916,7 +1914,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                 .b_extends_a => {
                     // Create a new variable of a record with only b's uniq fields
                     // This copies fields from scratch into type_store
-                    const only_in_b_fields_range = self.types_store_b.appendRecordFields(
+                    const only_in_b_fields_range = self.types_store.appendRecordFields(
                         self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
                     ) catch return Error.AllocatorError;
                     const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
@@ -1940,7 +1938,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                 .both_extend => {
                     // Create a new variable of a record with only a's uniq fields
                     // This copies fields from scratch into type_store
-                    const only_in_a_fields_range = self.types_store_b.appendRecordFields(
+                    const only_in_a_fields_range = self.types_store.appendRecordFields(
                         self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
                     ) catch return Error.AllocatorError;
                     const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
@@ -1950,7 +1948,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                     // Create a new variable of a record with only b's uniq fields
                     // This copies fields from scratch into type_store
-                    const only_in_b_fields_range = self.types_store_b.appendRecordFields(
+                    const only_in_b_fields_range = self.types_store.appendRecordFields(
                         self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
                     ) catch return Error.AllocatorError;
                     const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
@@ -1996,14 +1994,14 @@ fn Unifier(comptime StoreTypeB: type) type {
             // first, copy from the store's MultiList record fields array into scratch's
             // regular list, capturing the insertion range
             var range = self.scratch.copyGatherFieldsFromMultiList(
-                &self.types_store_b.record_fields,
+                &self.types_store.record_fields,
                 record.fields,
             ) catch return Error.AllocatorError;
 
             // then recursiv
             var ext_var = record.ext;
             while (true) {
-                switch (self.types_store_b.resolveVar(ext_var).desc.content) {
+                switch (self.types_store.resolveVar(ext_var).desc.content) {
                     .flex_var => {
                         return .{ .ext = ext_var, .range = range };
                     },
@@ -2011,13 +2009,13 @@ fn Unifier(comptime StoreTypeB: type) type {
                         return .{ .ext = ext_var, .range = range };
                     },
                     .alias => |alias| {
-                        ext_var = self.types_store_b.getAliasBackingVar(alias);
+                        ext_var = self.types_store.getAliasBackingVar(alias);
                     },
                     .structure => |flat_type| {
                         switch (flat_type) {
                             .record => |ext_record| {
                                 const next_range = self.scratch.copyGatherFieldsFromMultiList(
-                                    &self.types_store_b.record_fields,
+                                    &self.types_store.record_fields,
                                     ext_record.fields,
                                 ) catch return Error.AllocatorError;
                                 range.count += next_range.count;
@@ -2025,7 +2023,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             },
                             .record_unbound => |fields| {
                                 const next_range = self.scratch.copyGatherFieldsFromMultiList(
-                                    &self.types_store_b.record_fields,
+                                    &self.types_store.record_fields,
                                     fields,
                                 ) catch return Error.AllocatorError;
                                 range.count += next_range.count;
@@ -2034,7 +2032,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             },
                             .record_poly => |poly| {
                                 const next_range = self.scratch.copyGatherFieldsFromMultiList(
-                                    &self.types_store_b.record_fields,
+                                    &self.types_store.record_fields,
                                     poly.record.fields,
                                 ) catch return Error.AllocatorError;
                                 range.count += next_range.count;
@@ -2151,13 +2149,13 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
-            const range_start: u32 = self.types_store_b.record_fields.len();
+            const range_start: u32 = self.types_store.record_fields.len();
 
             // Here, iterate over shared fields, sub unifying the field variables.
             // At this point, the fields are know to be identical, so we arbitrary choose b
             for (shared_fields) |shared| {
                 try self.unifyGuarded(shared.a.var_, shared.b.var_);
-                _ = self.types_store_b.appendRecordFields(&[_]RecordField{.{
+                _ = self.types_store.appendRecordFields(&[_]RecordField{.{
                     .name = shared.b.name,
                     .var_ = shared.b.var_,
                 }}) catch return Error.AllocatorError;
@@ -2165,15 +2163,15 @@ fn Unifier(comptime StoreTypeB: type) type {
 
             // Append combined fields
             if (mb_a_extended_fields) |extended_fields| {
-                _ = self.types_store_b.appendRecordFields(extended_fields) catch return Error.AllocatorError;
+                _ = self.types_store.appendRecordFields(extended_fields) catch return Error.AllocatorError;
             }
             if (mb_b_extended_fields) |extended_fields| {
-                _ = self.types_store_b.appendRecordFields(extended_fields) catch return Error.AllocatorError;
+                _ = self.types_store.appendRecordFields(extended_fields) catch return Error.AllocatorError;
             }
 
             // Merge vars
             self.merge(vars, Content{ .structure = FlatType{ .record = .{
-                .fields = self.types_store_b.record_fields.rangeToEnd(range_start),
+                .fields = self.types_store.record_fields.rangeToEnd(range_start),
                 .ext = ext,
             } } });
         }
@@ -2309,7 +2307,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                 .a_extends_b => {
                     // Create a new variable of a tag_union with only a's uniq tags
                     // This copies tags from scratch into type_store
-                    const only_in_a_tags_range = self.types_store_b.appendTags(
+                    const only_in_a_tags_range = self.types_store.appendTags(
                         self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
                     ) catch return Error.AllocatorError;
                     const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -2333,7 +2331,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                 .b_extends_a => {
                     // Create a new variable of a tag_union with only b's uniq tags
                     // This copies tags from scratch into type_store
-                    const only_in_b_tags_range = self.types_store_b.appendTags(
+                    const only_in_b_tags_range = self.types_store.appendTags(
                         self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
                     ) catch return Error.AllocatorError;
                     const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -2357,7 +2355,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                 .both_extend => {
                     // Create a new variable of a tag_union with only a's uniq tags
                     // This copies tags from scratch into type_store
-                    const only_in_a_tags_range = self.types_store_b.appendTags(
+                    const only_in_a_tags_range = self.types_store.appendTags(
                         self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
                     ) catch return Error.AllocatorError;
                     const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -2367,7 +2365,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                     // Create a new variable of a tag_union with only b's uniq tags
                     // This copies tags from scratch into type_store
-                    const only_in_b_tags_range = self.types_store_b.appendTags(
+                    const only_in_b_tags_range = self.types_store.appendTags(
                         self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
                     ) catch return Error.AllocatorError;
                     const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -2413,14 +2411,14 @@ fn Unifier(comptime StoreTypeB: type) type {
             // first, copy from the store's MultiList record fields array into scratch's
             // regular list, capturing the insertion range
             var range = self.scratch.copyGatherTagsFromMultiList(
-                &self.types_store_b.tags,
+                &self.types_store.tags,
                 tag_union.tags,
             ) catch return Error.AllocatorError;
 
             // then loop gathering extensible tags
             var ext_var = tag_union.ext;
             while (true) {
-                switch (self.types_store_b.resolveVar(ext_var).desc.content) {
+                switch (self.types_store.resolveVar(ext_var).desc.content) {
                     .flex_var => {
                         return .{ .ext = ext_var, .range = range };
                     },
@@ -2428,13 +2426,13 @@ fn Unifier(comptime StoreTypeB: type) type {
                         return .{ .ext = ext_var, .range = range };
                     },
                     .alias => |alias| {
-                        ext_var = self.types_store_b.getAliasBackingVar(alias);
+                        ext_var = self.types_store.getAliasBackingVar(alias);
                     },
                     .structure => |flat_type| {
                         switch (flat_type) {
                             .tag_union => |ext_tag_union| {
                                 const next_range = self.scratch.copyGatherTagsFromMultiList(
-                                    &self.types_store_b.tags,
+                                    &self.types_store.tags,
                                     ext_tag_union.tags,
                                 ) catch return Error.AllocatorError;
                                 range.count += next_range.count;
@@ -2548,11 +2546,11 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
-            const range_start: u32 = self.types_store_b.tags.len();
+            const range_start: u32 = self.types_store.tags.len();
 
             for (shared_tags) |tags| {
-                const tag_a_args = self.types_store_b.sliceVars(tags.a.args);
-                const tag_b_args = self.types_store_b.sliceVars(tags.b.args);
+                const tag_a_args = self.types_store.sliceVars(tags.a.args);
+                const tag_b_args = self.types_store.sliceVars(tags.b.args);
 
                 if (tag_a_args.len != tag_b_args.len) return error.TypeMismatch;
 
@@ -2560,7 +2558,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     try self.unifyGuarded(a_arg, b_arg);
                 }
 
-                _ = self.types_store_b.appendTags(&[_]Tag{.{
+                _ = self.types_store.appendTags(&[_]Tag{.{
                     .name = tags.b.name,
                     .args = tags.b.args,
                 }}) catch return Error.AllocatorError;
@@ -2568,15 +2566,15 @@ fn Unifier(comptime StoreTypeB: type) type {
 
             // Append combined tags
             if (mb_a_extended_tags) |extended_tags| {
-                _ = self.types_store_b.appendTags(extended_tags) catch return Error.AllocatorError;
+                _ = self.types_store.appendTags(extended_tags) catch return Error.AllocatorError;
             }
             if (mb_b_extended_tags) |extended_tags| {
-                _ = self.types_store_b.appendTags(extended_tags) catch return Error.AllocatorError;
+                _ = self.types_store.appendTags(extended_tags) catch return Error.AllocatorError;
             }
 
             // Merge vars
             self.merge(vars, Content{ .structure = FlatType{ .tag_union = .{
-                .tags = self.types_store_b.tags.rangeToEnd(range_start),
+                .tags = self.types_store.tags.rangeToEnd(range_start),
                 .ext = ext,
             } } });
         }
