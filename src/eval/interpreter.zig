@@ -877,22 +877,8 @@ pub const Interpreter = struct {
         std.debug.assert(param_ids.len == arg_count);
 
         for (param_ids, 0..) |param_idx, i| {
-
-            // Get the corresponding argument
-            // Note that peekStackValue is indexed in reverse order, so we end up accessing the correct argument.
-            // Example: the last argument will have just been pushed to the stack, so it will be at index 1.
-            // We checked above to confirm that the number of arguments matches the number of parameters
             const arg = try self.peekStackValue(i + 1);
-
-            // Create a binding that associates the pattern with the value
-            const binding = Binding{
-                .pattern_idx = param_idx,
-                .value_ptr = arg.ptr.?, // Pointer to the argument's data in stack memory
-                .layout = arg.layout, // Layout information for type safety
-            };
-
-            // Add binding to the stack
-            try self.bindings_stack.append(binding);
+            try self.bindPattern(param_idx, arg);
         }
 
         // TODO: add bindings for closure captures
@@ -1243,6 +1229,70 @@ pub const Interpreter = struct {
         if (self.trace_writer) |writer| {
             self.printTraceIndent();
             writer.print("LAYOUT STACK items={}\n", .{self.value_stack.items.len}) catch {};
+        }
+    }
+
+    fn bindPattern(self: *Interpreter, pattern_idx: CIR.Pattern.Idx, value: StackValue) EvalError!void {
+        const pattern = self.cir.store.getPattern(pattern_idx);
+        switch (pattern) {
+            .assign => {
+                // For a variable pattern, we create a binding for the variable
+                const binding = Binding{
+                    .pattern_idx = pattern_idx,
+                    .value_ptr = value.ptr.?,
+                    .layout = value.layout,
+                };
+                try self.bindings_stack.append(binding);
+            },
+            .record_destructure => |record_destruct| {
+                const destructs = self.cir.store.sliceRecordDestructs(record_destruct.destructs);
+                const record_ptr = @as([*]u8, @ptrCast(@alignCast(value.ptr.?)));
+
+                // Get the record layout
+                if (value.layout.tag != .record) {
+                    return error.LayoutError;
+                }
+                const record_data = self.layout_cache.getRecordData(value.layout.data.record.idx);
+                const record_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
+
+                // For each field in the pattern
+                for (destructs) |destruct_idx| {
+                    const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                    const field_name = self.cir.env.idents.getText(destruct.label);
+                    // Find the field in the record layout by name
+                    var field_index: ?usize = null;
+
+                    for (0..record_fields.len) |idx| {
+                        const field = record_fields.get(idx);
+                        if (std.mem.eql(u8, self.cir.env.idents.getText(field.name), field_name)) {
+                            field_index = idx;
+                            break;
+                        }
+                    }
+                    const index = field_index orelse return error.LayoutError;
+
+                    // Get the field offset
+                    const field_offset = self.layout_cache.getRecordFieldOffset(value.layout.data.record.idx, @intCast(index));
+                    const field_layout = self.layout_cache.getLayout(record_fields.get(index).layout);
+                    const field_ptr = record_ptr + field_offset;
+
+                    // Create binding for the inner pattern (which should be an identifier)
+                    const binding_pattern_idx = switch (destruct.kind) {
+                        .Required => |p_idx| p_idx,
+                        .SubPattern => |p_idx| p_idx,
+                    };
+                    const binding = Binding{
+                        .pattern_idx = binding_pattern_idx,
+                        .value_ptr = field_ptr,
+                        .layout = field_layout,
+                    };
+                    try self.bindings_stack.append(binding);
+                }
+            },
+            else => {
+                // TODO: handle other patterns
+                return error.LayoutError;
+            },
         }
     }
 

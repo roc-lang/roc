@@ -1466,12 +1466,16 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
         .tag = .record_destruct,
     };
 
-    // Store kind in extra_data if it's not Required
+    // Store kind in extra_data
     switch (record_destruct.kind) {
-        .Required => {
-            // No extra data needed
+        .Required => |pattern_idx| {
+            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            // Store kind tag (0 for Required)
+            try store.extra_data.append(store.gpa, 0);
+            // Store pattern index
+            try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
+            node.data_3 = extra_data_start;
         },
-
         .SubPattern => |sub_pattern| {
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
 
@@ -1961,11 +1965,15 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
         const kind_tag = extra_data[0];
 
         break :blk switch (kind_tag) {
-            0 => CIR.Pattern.RecordDestruct.Kind.Required,
+            0 => CIR.Pattern.RecordDestruct.Kind{ .Required = @enumFromInt(extra_data[1]) },
             1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
             else => unreachable,
         };
-    } else CIR.Pattern.RecordDestruct.Kind.Required;
+    } else blk: {
+        // Backwards compatibility for old format where Required had no payload
+        const dummy_pattern_idx: CIR.Pattern.Idx = @enumFromInt(0);
+        break :blk CIR.Pattern.RecordDestruct.Kind{ .Required = dummy_pattern_idx };
+    };
 
     return CIR.Pattern.RecordDestruct{
         .label = @bitCast(node.data_1),
