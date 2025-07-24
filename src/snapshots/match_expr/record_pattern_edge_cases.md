@@ -145,7 +145,8 @@ match ... {
 														(p-record-destructure @2.15-2.20
 															(destructs
 																(record-destruct @2.17-2.18 (label "c") (ident "c")
-																	(required))))))))))))))
+																	(required
+																		(p-assign @2.17-2.18 (ident "c"))))))))))))))))
 				(value
 					(e-string @2.28-2.49
 						(e-literal @2.29-2.44 (string "deeply nested: "))
@@ -158,7 +159,8 @@ match ... {
 						(p-record-destructure @3.5-3.17
 							(destructs
 								(record-destruct @3.7-3.8 (label "x") (ident "x")
-									(required))
+									(required
+										(p-assign @3.7-3.8 (ident "x"))))
 								(record-destruct @3.10-3.15 (label "y") (ident "y")
 									(sub-pattern
 										(p-record-destructure @3.13-3.15
@@ -179,9 +181,11 @@ match ... {
 										(p-record-destructure @4.14-4.23
 											(destructs
 												(record-destruct @4.16-4.21 (label "inner") (ident "inner")
-													(required))))))
+													(required
+														(p-assign @4.16-4.21 (ident "inner"))))))))
 								(record-destruct @4.25-4.31 (label "simple") (ident "simple")
-									(required))))))
+									(required
+										(p-assign @4.25-4.31 (ident "simple"))))))))
 				(value
 					(e-string @4.37-4.68
 						(e-literal @4.38-4.45 (string "mixed: "))
@@ -201,13 +205,15 @@ match ... {
 										(p-record-destructure @5.10-5.15
 											(destructs
 												(record-destruct @5.12-5.13 (label "b") (ident "b")
-													(required))))))
+													(required
+														(p-assign @5.12-5.13 (ident "b"))))))))
 								(record-destruct @5.17-5.25 (label "c") (ident "c")
 									(sub-pattern
 										(p-record-destructure @5.20-5.25
 											(destructs
 												(record-destruct @5.22-5.23 (label "d") (ident "d")
-													(required))))))))))
+													(required
+														(p-assign @5.22-5.23 (ident "d"))))))))))))
 				(value
 					(e-string @5.31-5.60
 						(e-literal @5.32-5.49 (string "multiple nested: "))

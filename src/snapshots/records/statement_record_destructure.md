@@ -52,11 +52,14 @@ NO CHANGE
 		(p-record-destructure @3.1-3.21
 			(destructs
 				(record-destruct @3.3-3.7 (label "name") (ident "name")
-					(required))
+					(required
+						(p-assign @3.3-3.7 (ident "name"))))
 				(record-destruct @3.9-3.12 (label "age") (ident "age")
-					(required))
+					(required
+						(p-assign @3.9-3.12 (ident "age"))))
 				(record-destruct @3.14-3.19 (label "email") (ident "email")
-					(required))))
+					(required
+						(p-assign @3.14-3.19 (ident "email"))))))
 		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES

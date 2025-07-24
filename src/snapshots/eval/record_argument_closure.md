@@ -45,9 +45,11 @@ NO CHANGE
 			(p-record-destructure @1.3-1.11
 				(destructs
 					(record-destruct @1.5-1.6 (label "x") (ident "x")
-						(required))
+						(required
+							(p-assign @1.5-1.6 (ident "x"))))
 					(record-destruct @1.8-1.9 (label "y") (ident "y")
-						(required)))))
+						(required
+							(p-assign @1.8-1.9 (ident "y")))))))
 		(captures
 			(capture @1.5-1.6 (ident "x"))
 			(capture @1.8-1.9 (ident "y")))

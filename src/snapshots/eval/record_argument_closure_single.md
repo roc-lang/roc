@@ -40,7 +40,8 @@ OpenRound(1:1-1:2),OpBar(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:5-1:6),CloseCu
 			(p-record-destructure @1.3-1.8
 				(destructs
 					(record-destruct @1.5-1.6 (label "x") (ident "x")
-						(required)))))
+						(required
+							(p-assign @1.5-1.6 (ident "x")))))))
 		(captures
 			(capture @1.5-1.6 (ident "x")))
 		(e-lookup-local @1.10-1.11

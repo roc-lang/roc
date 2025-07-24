@@ -79,9 +79,11 @@ match ... {
 						(p-record-destructure @2.5-2.18
 							(destructs
 								(record-destruct @2.7-2.11 (label "name") (ident "name")
-									(required))
+									(required
+										(p-assign @2.7-2.11 (ident "name"))))
 								(record-destruct @2.13-2.16 (label "age") (ident "age")
-									(required))))))
+									(required
+										(p-assign @2.13-2.16 (ident "age"))))))))
 				(value
 					(e-string @2.22-2.60
 						(e-literal @2.23-2.23 (string ""))
@@ -100,13 +102,15 @@ match ... {
 						(p-record-destructure @3.5-3.32
 							(destructs
 								(record-destruct @3.7-3.11 (label "name") (ident "name")
-									(required))
+									(required
+										(p-assign @3.7-3.11 (ident "name"))))
 								(record-destruct @3.13-3.30 (label "address") (ident "address")
 									(sub-pattern
 										(p-record-destructure @3.22-3.30
 											(destructs
 												(record-destruct @3.24-3.28 (label "city") (ident "city")
-													(required))))))))))
+													(required
+														(p-assign @3.24-3.28 (ident "city"))))))))))))
 				(value
 					(e-string @3.36-3.68
 						(e-literal @3.37-3.37 (string ""))
