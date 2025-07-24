@@ -607,18 +607,6 @@ pub const Store = struct {
         }
     }
 
-    /// Ensure that all slots required for an alias or nominal type are allocated.
-    /// This includes:
-    /// - The type variable itself
-    /// - The backing variable at +1
-    /// - All argument variables starting at +2
-    pub fn ensureAliasSlots(self: *Self, alias_var: Var, num_args: u32) Allocator.Error!void {
-        // The highest index we need is alias_var + 1 + num_args
-        // (alias var, backing var, then each arg)
-        const max_idx = @intFromEnum(alias_var) + 1 + num_args;
-        try self.*.testOnlyFillInSlotsThru(@enumFromInt(max_idx));
-    }
-
     // union //
 
     /// Link the variables & updated the content in the unification table
@@ -669,24 +657,6 @@ pub const Store = struct {
             .redirect => {
                 return error.VarNotRoot;
             },
-        }
-    }
-
-    // test helpers //
-
-    /// Given a target variable, check that the var is in bounds
-    /// If it is, do nothing
-    /// If it's not, then fill in the types store with flex vars for all missing
-    /// intervening vars, *up to and including* the provided var
-    pub fn testOnlyFillInSlotsThru(self: *Self, target_var: Var) Allocator.Error!void {
-        const idx = @intFromEnum(target_var);
-
-        while (self.slots.backing.len() <= idx) {
-            const desc_idx = try self.descs.insert(
-                self.gpa,
-                .{ .content = .{ .flex_var = null }, .rank = Rank.top_level, .mark = Mark.none },
-            );
-            _ = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         }
     }
 
