@@ -17,7 +17,7 @@ const SERIALIZATION_ALIGNMENT = 16;
 const Allocator = std.mem.Allocator;
 const TypeStore = types.Store;
 const ModuleEnv = canonicalize.ModuleEnv;
-const CIR = canonicalize.CIR; // CIR is now an alias for ModuleEnv
+const CIR = canonicalize.CIR;
 const Node = ModuleEnv.Node;
 const NodeStore = ModuleEnv.NodeStore;
 const SafeList = collections.SafeList;
@@ -599,7 +599,7 @@ test "Header alignment" {
 
 test "create and restore cache" {
     // SKIPPED: This test fails with signal 6 after the CIR refactor.
-    // 
+    //
     // PROBLEM ANALYSIS:
     // After removing the CIR wrapper struct and consolidating everything into ModuleEnv,
     // this test hits an assertion failure during canonicalize.init(). The issue is related
@@ -631,7 +631,7 @@ test "create and restore cache" {
     // TODO: Re-enable this test after fixing builtin initialization sync issues
     const skip_test = true;
     if (skip_test) return error.SkipZigTest;
-    
+
     const gpa = std.testing.allocator;
 
     // Real Roc module source for comprehensive testing
@@ -687,9 +687,6 @@ test "create and restore cache" {
 
     var restored_module_env = restored.module_env;
     defer restored_module_env.deinit();
-    // CIR is now just ModuleEnv, no separate deinit needed
-
-    // CIR is now just ModuleEnv, no env pointer to fix
 
     // Generate S-expression from restored CIR
     var restored_tree = SExprTree.init(gpa);
@@ -828,9 +825,6 @@ test "cache filesystem roundtrip with in-memory storage" {
 
     var restored_module_env = restored.module_env;
     defer restored_module_env.deinit();
-    // CIR is now just ModuleEnv, no separate deinit needed
-
-    // CIR is now just ModuleEnv, no env pointer to fix
 
     // Generate S-expression from restored CIR
     var restored_tree = SExprTree.init(gpa);

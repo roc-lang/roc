@@ -1117,7 +1117,6 @@ fn processSnapshotContent(
         // Restore ModuleEnv and CIR
         var restored = try loaded_cache.restore(allocator, module_name, content.source);
         defer restored.module_env.deinit();
-        // CIR is now just an alias for ModuleEnv, no need to deinit separately
 
         // Generate S-expression from restored CIR
         var restored_tree = SExprTree.init(allocator);
