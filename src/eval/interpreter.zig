@@ -94,6 +94,7 @@ const WorkKind = enum {
     w_lambda_call,
     w_lambda_return,
     w_eval_record_fields,
+    w_eval_tuple_elements,
 };
 
 /// A unit of work to be processed during iterative evaluation.
@@ -288,6 +289,10 @@ pub const Interpreter = struct {
                 .w_eval_record_fields => try self.handleRecordFields(
                     work.expr_idx,
                     work.extra, // stores the current_field_idx
+                ),
+                .w_eval_tuple_elements => try self.handleTupleElements(
+                    work.expr_idx,
+                    work.extra, // stores the current_element_idx
                 ),
             }
         }
@@ -602,7 +607,7 @@ pub const Interpreter = struct {
                 });
             },
 
-            .e_str, .e_str_segment, .e_list, .e_tuple, .e_dot_access, .e_block, .e_lookup_external, .e_match, .e_frac_dec, .e_dec_small, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
+            .e_str, .e_str_segment, .e_list, .e_dot_access, .e_block, .e_lookup_external, .e_match, .e_frac_dec, .e_dec_small, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
                 return error.LayoutError;
             },
 
@@ -638,6 +643,25 @@ pub const Interpreter = struct {
                     .params = lambda_expr.args,
                     .captures = lambda_expr.captures,
                 };
+            },
+
+            .e_tuple => |tuple_expr| {
+                const elements = self.cir.store.sliceExpr(tuple_expr.elems);
+                if (elements.len == 0) {
+                    // Empty tuple has no bytes, but we still need to push its layout.
+                    _ = try self.pushStackValue(expr_layout);
+                    return;
+                }
+
+                // Allocate space for the entire tuple on the stack.
+                _ = try self.pushStackValue(expr_layout);
+
+                // Schedule the first work item to start evaluating the elements.
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_tuple_elements,
+                    .expr_idx = expr_idx,
+                    .extra = 0, // Start with current_element_idx = 0
+                });
             },
         }
     }
@@ -996,6 +1020,62 @@ pub const Interpreter = struct {
         } else {
             // All fields have been processed. The record is fully constructed on the stack.
             self.traceInfo("All record fields processed for record_expr_idx={}", .{record_expr_idx});
+        }
+    }
+
+    fn handleTupleElements(self: *Interpreter, tuple_expr_idx: CIR.Expr.Idx, current_element_idx: u32) EvalError!void {
+        self.traceEnter("handleTupleElements tuple_expr_idx={}, current_element_idx={}", .{ tuple_expr_idx, current_element_idx });
+        defer self.traceExit("", .{});
+
+        const tuple_layout_idx = self.layout_cache.addTypeVar(@enumFromInt(@intFromEnum(tuple_expr_idx))) catch unreachable;
+        const tuple_layout = self.layout_cache.getLayout(tuple_layout_idx);
+        const tuple_data = self.layout_cache.getTupleData(tuple_layout.data.tuple.idx);
+        const element_layouts = self.layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+
+        // Step 1: Copy the value of the *previous* element (if any) into the tuple structure.
+        if (current_element_idx > 0) {
+            const prev_element_index = current_element_idx - 1;
+            const prev_element_layout_info = element_layouts.get(prev_element_index);
+            const prev_element_layout = self.layout_cache.getLayout(prev_element_layout_info.layout);
+            const prev_element_size = self.layout_cache.layoutSize(prev_element_layout);
+
+            const prev_element_value = try self.popStackValue();
+            const tuple_value_on_stack = try self.peekStackValue(1);
+            const tuple_base_ptr = @as([*]u8, @ptrCast(tuple_value_on_stack.ptr.?));
+
+            const prev_element_offset = self.layout_cache.getTupleElementOffset(tuple_layout.data.tuple.idx, @intCast(prev_element_index));
+
+            if (prev_element_size > 0) {
+                const dest_ptr = tuple_base_ptr + prev_element_offset;
+                const src_ptr = @as([*]const u8, @ptrCast(prev_element_value.ptr.?));
+                std.mem.copyForwards(u8, dest_ptr[0..prev_element_size], src_ptr[0..prev_element_size]);
+
+                self.traceInfo("Copied element {} (size={}) to offset {}", .{ prev_element_index, prev_element_size, prev_element_offset });
+            }
+        }
+
+        // Step 2 & 3: Schedule work for the current element.
+        if (current_element_idx < element_layouts.len) {
+            self.schedule_work(WorkItem{
+                .kind = .w_eval_tuple_elements,
+                .expr_idx = tuple_expr_idx,
+                .extra = current_element_idx + 1,
+            });
+
+            const tuple_expr = self.cir.store.getExpr(tuple_expr_idx);
+            const cir_elements = switch (tuple_expr) {
+                .e_tuple => |t| self.cir.store.sliceExpr(t.elems),
+                else => unreachable,
+            };
+
+            const current_element_expr_idx = cir_elements[current_element_idx];
+
+            self.schedule_work(WorkItem{
+                .kind = .w_eval_expr,
+                .expr_idx = current_element_expr_idx,
+            });
+        } else {
+            self.traceInfo("All tuple elements processed for tuple_expr_idx={}", .{tuple_expr_idx});
         }
     }
 

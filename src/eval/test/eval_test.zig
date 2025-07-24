@@ -95,6 +95,22 @@ test "record literal" {
     // try helpers.runExpectRecord("{ p: { x: 1, y: 2 } }", expected_fields6, .no_trace);
 }
 
+test "tuple literal" {
+    // Tuple with integer elements
+    const expected_elements1 = &[_]helpers.ExpectedElement{
+        .{ .index = 0, .value = 10 },
+        .{ .index = 1, .value = 20 },
+    };
+    try helpers.runExpectTuple("(10, 20)", expected_elements1, .no_trace);
+
+    // Tuple with elements from arithmetic expressions
+    const expected_elements3 = &[_]helpers.ExpectedElement{
+        .{ .index = 0, .value = 6 },
+        .{ .index = 1, .value = 15 },
+    };
+    try helpers.runExpectTuple("(5 + 1, 5 * 3)", expected_elements3, .no_trace);
+}
+
 test "simple lambdas" {
     try runExpectInt("(|x| x + 1)(5)", 6, .no_trace);
     try runExpectInt("(|x| x * 2 + 1)(10)", 21, .no_trace);

@@ -96,6 +96,62 @@ pub const ExpectedField = struct {
     value: i128,
 };
 
+/// A tuple element we expect to see in our unit test results
+pub const ExpectedElement = struct {
+    index: u32,
+    value: i128,
+};
+
+/// Helpers to setup and run an interpreter expecting a tuple result.
+pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElement, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+    defer eval_stack.deinit();
+
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
+
+    var interpreter = try eval.Interpreter.init(
+        test_allocator,
+        resources.cir,
+        &eval_stack,
+        &layout_cache,
+        &resources.module_env.types,
+    );
+    defer interpreter.deinit();
+
+    if (should_trace == .trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
+    }
+
+    const result = try interpreter.eval(resources.expr_idx);
+
+    if (should_trace == .trace) {
+        interpreter.endTrace();
+    }
+
+    // Verify we got a tuple layout
+    try testing.expect(result.layout.tag == .tuple);
+
+    const tuple_data = layout_cache.getTupleData(result.layout.data.tuple.idx);
+    const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+
+    try testing.expectEqual(expected_elements.len, element_layouts.len);
+
+    for (expected_elements) |expected_element| {
+        const element_layout_info = element_layouts.get(expected_element.index);
+        const element_layout = layout_cache.getLayout(element_layout_info.layout);
+        try testing.expect(element_layout.tag == .scalar and element_layout.data.scalar.tag == .int);
+
+        const offset = layout_cache.getTupleElementOffset(result.layout.data.tuple.idx, @intCast(expected_element.index));
+        const element_ptr = @as([*]u8, @ptrCast(result.ptr.?)) + offset;
+        const int_val = eval.readIntFromMemory(element_ptr, element_layout.data.scalar.data.int);
+        try testing.expectEqual(expected_element.value, int_val);
+    }
+}
+
 /// Helpers to setup and run an interpreter expecting a record result.
 pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);

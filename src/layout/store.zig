@@ -223,6 +223,34 @@ pub const Store = struct {
         return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_field_alignment.toByteUnits()))));
     }
 
+    pub fn getTupleElementOffset(self: *const Self, tuple_idx: TupleIdx, element_index_in_sorted_elements: u32) u32 {
+        const target_usize = self.targetUsize();
+        const tuple_data = self.getTupleData(tuple_idx);
+        const sorted_elements = self.tuple_fields.sliceRange(tuple_data.getFields());
+
+        var current_offset: u32 = 0;
+        var element_idx: u32 = 0;
+
+        while (element_idx < element_index_in_sorted_elements) : (element_idx += 1) {
+            const element = sorted_elements.get(element_idx);
+            const element_layout = self.getLayout(element.layout);
+            const element_alignment = element_layout.alignment(target_usize);
+            const element_size = self.layoutSize(element_layout);
+
+            // Align current offset to element's alignment
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(element_alignment.toByteUnits()))));
+
+            // Add element size
+            current_offset += element_size;
+        }
+
+        // Now, align the offset for the requested element
+        const requested_element = sorted_elements.get(element_index_in_sorted_elements);
+        const requested_element_layout = self.getLayout(requested_element.layout);
+        const requested_element_alignment = requested_element_layout.alignment(target_usize);
+        return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_element_alignment.toByteUnits()))));
+    }
+
     fn targetUsize(_: *const Self) target.TargetUsize {
         return target.TargetUsize.native;
     }
