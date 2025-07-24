@@ -351,6 +351,17 @@ pub const Interpreter = struct {
         return maybe_work;
     }
 
+    /// Helper to get the layout for an expression
+    fn getLayoutIdx(self: *Interpreter, expr_idx: CIR.Expr.Idx) EvalError!layout.Idx {
+        const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
+        const layout_idx = self.layout_cache.addTypeVar(expr_var) catch |err| switch (err) {
+            error.ZeroSizedType => return error.ZeroSizedType,
+            error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
+            else => |e| return e,
+        };
+        return layout_idx;
+    }
+
     /// Evaluates a single CIR expression, pushing the result onto the stack.
     ///
     /// # Stack Effects
@@ -373,17 +384,6 @@ pub const Interpreter = struct {
             else => {},
         }
 
-        // Get the type variable for this expression
-        const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
-
-        // Get the real layout from the type checker
-        const layout_idx = self.layout_cache.addTypeVar(expr_var) catch |err| switch (err) {
-            error.ZeroSizedType => return error.ZeroSizedType,
-            error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
-            else => |e| return e,
-        };
-        const expr_layout = self.layout_cache.getLayout(layout_idx);
-
         // Handle different expression types
         switch (expr) {
             // Runtime errors are handled at the beginning
@@ -391,6 +391,8 @@ pub const Interpreter = struct {
 
             // Numeric literals - push directly to stack
             .e_int => |int_lit| {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
                 const result_ptr = (try self.pushStackValue(expr_layout)).?;
 
                 if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .int) {
@@ -403,6 +405,8 @@ pub const Interpreter = struct {
             },
 
             .e_frac_f64 => |float_lit| {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
                 const result_ptr = (try self.pushStackValue(expr_layout)).?;
 
                 const typed_ptr = @as(*f64, @ptrCast(@alignCast(result_ptr)));
@@ -413,6 +417,8 @@ pub const Interpreter = struct {
 
             // Zero-argument tags (e.g., True, False)
             .e_zero_argument_tag => |tag| {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
                 const result_ptr = (try self.pushStackValue(expr_layout)).?;
 
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
@@ -428,12 +434,16 @@ pub const Interpreter = struct {
 
             // Empty record
             .e_empty_record => {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
                 // Empty record has no bytes
                 _ = (try self.pushStackValue(expr_layout)).?;
             },
 
             // Empty list
             .e_empty_list => {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
                 // Empty list has no bytes
                 _ = (try self.pushStackValue(expr_layout)).?;
             },
@@ -531,6 +541,8 @@ pub const Interpreter = struct {
 
             // Tags with arguments
             .e_tag => |tag| {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
                 const result_ptr = (try self.pushStackValue(expr_layout)).?;
 
                 // For now, handle boolean tags (True/False) as u8
@@ -581,15 +593,6 @@ pub const Interpreter = struct {
                     .kind = .w_eval_expr,
                     .expr_idx = function_expr,
                 });
-
-                // 0. Push a slot for the return value
-                const return_layout_idx = self.layout_cache.addTypeVar(expr_var) catch |err| switch (err) {
-                    error.ZeroSizedType => return error.ZeroSizedType,
-                    error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
-                    else => |e| return e,
-                };
-                const return_layout = self.layout_cache.getLayout(return_layout_idx);
-                _ = try self.pushStackValue(return_layout);
             },
 
             // Unary minus operation
@@ -612,6 +615,8 @@ pub const Interpreter = struct {
             },
 
             .e_record => |record_expr| {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
                 const fields = self.cir.store.sliceRecordFields(record_expr.fields);
                 if (fields.len == 0) {
                     // Per the test, `{}` should be a zero-sized type error.
@@ -631,6 +636,7 @@ pub const Interpreter = struct {
             },
 
             .e_lambda => |lambda_expr| {
+                _ = try self.getLayoutIdx(expr_idx);
                 // TODO how should we calculate env size for now it's 1 usize per capture?
                 const capture_count = lambda_expr.captures.span.len;
                 const env_size: u16 = @intCast(capture_count * target_usize.size());
@@ -646,6 +652,8 @@ pub const Interpreter = struct {
             },
 
             .e_tuple => |tuple_expr| {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
                 const elements = self.cir.store.sliceExpr(tuple_expr.elems);
                 if (elements.len == 0) {
                     // Empty tuple has no bytes, but we still need to push its layout.
@@ -846,8 +854,8 @@ pub const Interpreter = struct {
         defer self.traceExit("", .{});
 
         // 2. Pop the lambda closure from the stack
-        const closure_value = try self.peekStackValue(arg_count + 1);
-        const value_base = self.value_stack.items.len - arg_count - 1;
+        const closure_value = try self.peekStackValue(@as(usize, arg_count) + 1);
+        const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1;
         const stack_base = self.value_stack.items[value_base].offset;
 
         if (closure_value.layout.tag != LayoutTag.closure) {
@@ -898,26 +906,26 @@ pub const Interpreter = struct {
 
     fn handleLambdaReturn(self: *Interpreter) !void {
         const frame = self.frame_stack.pop() orelse return error.InvalidStackState;
-        const return_slot = self.value_stack.items[frame.value_base - 1];
-        const return_size = self.layout_cache.layoutSize(return_slot.layout);
 
-        const value = try self.peekStackValue(1);
-        std.debug.assert(return_slot.layout.tag == value.layout.tag); // TODO: assert more equality
-        const value_ptr = @as([*]u8, @ptrCast(value.ptr.?));
-        const value_slice = value_ptr[0..return_size];
-
-        if (return_size != 0) {
-            const dest_ptr = @as([*]u8, @ptrCast(self.stack_memory.start)) + return_slot.offset;
-            const dest_slice = dest_ptr[0..return_size];
-            std.mem.copyForwards(u8, dest_slice, value_slice);
-        }
+        // The return value is on top of the stack. We need to pop it,
+        // reset the stack to its pre-call state, and then push the return value back on.
+        const return_value = try self.popStackValue();
 
         // reset the stacks
         self.work_stack.items.len = frame.work_base;
         self.bindings_stack.items.len = frame.bindings_base;
         self.value_stack.items.len = frame.value_base;
         self.stack_memory.used = frame.stack_base;
-        self.traceInfo("Lambda return: copied value to stack base at {}", .{frame.stack_base});
+
+        // Push the return value back onto the now-clean stack
+        const new_ptr = try self.pushStackValue(return_value.layout);
+        if (return_value.ptr != null and new_ptr != null) {
+            const size = self.layout_cache.layoutSize(return_value.layout);
+            if (size > 0) {
+                std.mem.copyForwards(u8, @as([*]u8, @ptrCast(new_ptr))[0..size], @as([*]const u8, @ptrCast(return_value.ptr.?))[0..size]);
+            }
+        }
+        self.traceInfo("Lambda return: stack cleaned and return value pushed", .{});
     }
 
     fn handleRecordFields(self: *Interpreter, record_expr_idx: CIR.Expr.Idx, current_field_idx: u32) EvalError!void {

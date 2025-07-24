@@ -80,10 +80,6 @@ test "record literal" {
     };
     try helpers.runExpectRecord("{ sum: (|x| x + 1)(5), product: 5 * 3 }", expected_fields4, .no_trace);
 
-    try helpers.runExpectInt("(|{ x }| x )({ x: -10 })", -10, .trace);
-    try helpers.runExpectInt("(|{ x, y }| x * y)({ x: 10, y: 20 })", 200, .trace);
-    try helpers.runExpectInt("(|{ x, y, z }| x * y * z)({ x: 10, y: 20, z: 30 })", 6000, .trace);
-
     // TODO: Add support for non-integer fields in tests
     // Record with a string field
     // const expected_fields5 = &[_]helpers.ExpectedField{
@@ -97,6 +93,12 @@ test "record literal" {
     //     .{ .name = "p", .value = ... },
     // };
     // try helpers.runExpectRecord("{ p: { x: 1, y: 2 } }", expected_fields6, .no_trace);
+}
+
+test "record destructure patterns" {
+    try helpers.runExpectInt("(|{ x }| x )({ x: -10 })", -10, .trace);
+    try helpers.runExpectInt("(|{ x, y }| x * y)({ x: 10, y: 20 })", 200, .no_trace);
+    try helpers.runExpectInt("(|{ x, y, z }| x * y * z)({ x: 10, y: 20, z: 30 })", 6000, .no_trace);
 }
 
 test "tuple literal" {
