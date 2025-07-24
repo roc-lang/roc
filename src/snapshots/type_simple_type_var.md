@@ -15,42 +15,7 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `Decode` is being redeclared in this scope.
-
-The redeclaration is here:
-**type_simple_type_var.md:4:1:4:9:**
-```roc
-identity = |x| x
-```
-^^^^^^^^
-
-But `Decode` was already defined here:
-**type_simple_type_var.md:1:1:1:1:**
-```roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-```
-
-
-
-**DUPLICATE DEFINITION**
-The name `Bool` is being redeclared in this scope.
-
-The redeclaration is here:
-**type_simple_type_var.md:6:1:6:6:**
-```roc
-main! = |_| {}
-```
-^^^^^
-
-But `Bool` was already defined here:
-**type_simple_type_var.md:1:1:1:1:**
-```roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-```
-
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
@@ -64,7 +29,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 	(app @1.1-1.53
 		(provides @1.5-1.12
 			(exposed-lower-ident @1.6-1.11
-				(text "Bool")))
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -98,19 +63,19 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.9 (ident "Decode"))
+		(p-assign @4.1-4.9 (ident "identity"))
 		(e-lambda @4.12-4.17
 			(args
-				(p-assign @4.13-4.14 (ident "")))
+				(p-assign @4.13-4.14 (ident "x")))
 			(e-lookup-local @4.16-4.17
-				(p-assign @4.13-4.14 (ident ""))))
+				(p-assign @4.13-4.14 (ident "x"))))
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.18 (effectful false)
-					(ty-var @3.12-3.13 (name "ct"))
-					(ty-var @3.17-3.18 (name "ct"))))))
+					(ty-var @3.12-3.13 (name "a"))
+					(ty-var @3.17-3.18 (name "a"))))))
 	(d-let
-		(p-assign @6.1-6.6 (ident "Bool"))
+		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
 			(args
 				(p-underscore @6.10-6.11))
@@ -120,9 +85,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.9 (type "ct -> ct"))
+		(patt @4.1-4.9 (type "a -> a"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
 	(expressions
-		(expr @4.12-4.17 (type "ct -> ct"))
+		(expr @4.12-4.17 (type "a -> a"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~

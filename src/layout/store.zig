@@ -217,8 +217,8 @@ pub const Store = struct {
             .list, .list_of_zst => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
-            .closure => 20 + layout.data.closure.env_size, // Base closure size (20) + captured environment bytes
-            // TODO can we add a unit test to assert this size?
+            .closure => 24 + layout.data.closure.env_size, // Base closure size (24) + captured environment bytes
+            // Note: Closure struct size is 24 bytes (includes padding). See interpreter.zig CLOSURE_HEADER_SIZE
         };
     }
 

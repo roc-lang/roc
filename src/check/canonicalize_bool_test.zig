@@ -8,7 +8,9 @@ const ModuleEnv = canonicalize.ModuleEnv;
 const canonicalize = @import("./canonicalize.zig");
 
 test "canonicalize True as Bool" {
-    const allocator = testing.allocator;
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const allocator = gpa_state.allocator();
     const source = "True";
 
     // Initialize ModuleEnv
@@ -20,9 +22,8 @@ test "canonicalize True as Bool" {
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
-    // Copy the "True" identifier from parse AST to ModuleEnv
-    // This ensures canonicalization can find the parsed identifier
-    _ = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("True"));
+    // The tokenizer should have inserted the identifier "True" during parsing
+    // No manual insertion needed anymore since we fixed the tokenizer to use a pointer
 
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
@@ -51,7 +52,9 @@ test "canonicalize True as Bool" {
 }
 
 test "canonicalize False as Bool" {
-    const allocator = testing.allocator;
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const allocator = gpa_state.allocator();
     const source = "False";
 
     // Initialize ModuleEnv
@@ -63,9 +66,8 @@ test "canonicalize False as Bool" {
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
-    // Copy the "False" identifier from parse AST to ModuleEnv
-    // This ensures canonicalization can find the parsed identifier
-    _ = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("False"));
+    // The tokenizer should have inserted the identifier "False" during parsing
+    // No manual insertion needed anymore since we fixed the tokenizer to use a pointer
 
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
@@ -94,7 +96,9 @@ test "canonicalize False as Bool" {
 }
 
 test "canonicalize random tag not as Bool" {
-    const allocator = testing.allocator;
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const allocator = gpa_state.allocator();
     const source = "SomeTag";
 
     // Initialize ModuleEnv
@@ -106,9 +110,8 @@ test "canonicalize random tag not as Bool" {
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
-    // Copy the "SomeTag" identifier from parse AST to ModuleEnv
-    // This ensures canonicalization can find the parsed identifier
-    _ = try module_env.idents.insert(module_env.gpa, base.Ident.for_text("SomeTag"));
+    // The tokenizer should have inserted the identifier "SomeTag" during parsing
+    // No manual insertion needed anymore since we fixed the tokenizer to use a pointer
 
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");

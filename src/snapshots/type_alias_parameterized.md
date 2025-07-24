@@ -17,24 +17,6 @@ main! = |_| swapPair(1, 2)
 # EXPECTED
 TYPE MISMATCH - type_alias_parameterized.md:8:13:8:21
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `Bool` is being redeclared in this scope.
-
-The redeclaration is here:
-**type_alias_parameterized.md:8:1:8:6:**
-```roc
-main! = |_| swapPair(1, 2)
-```
-^^^^^
-
-But `Bool` was already defined here:
-**type_alias_parameterized.md:1:1:1:1:**
-```roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-```
-
-
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **type_alias_parameterized.md:8:13:8:21:**
@@ -44,7 +26,7 @@ main! = |_| swapPair(1, 2)
             ^^^^^^^^
 
 It is of type:
-    _Decode(e, Dict) -> Decode(Dict, e)_
+    _Pair(a, b) -> Pair(b, a)_
 
 But you are trying to use it as:
     _Num(_size), Num(_size2) -> _ret_
@@ -63,7 +45,7 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 	(app @1.1-1.53
 		(provides @1.5-1.12
 			(exposed-lower-ident @1.6-1.11
-				(text "Bool")))
+				(text "main!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -118,48 +100,48 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.9 (ident "ct"))
+		(p-assign @6.1-6.9 (ident "swapPair"))
 		(e-lambda @6.12-6.27
 			(args
 				(p-tuple @6.13-6.19
 					(patterns
-						(p-assign @6.14-6.15 (ident ""))
-						(p-assign @6.17-6.18 (ident "ash")))))
+						(p-assign @6.14-6.15 (ident "x"))
+						(p-assign @6.17-6.18 (ident "y")))))
 			(e-tuple @6.21-6.27
 				(elems
 					(e-lookup-local @6.22-6.23
-						(p-assign @6.17-6.18 (ident "ash")))
+						(p-assign @6.17-6.18 (ident "y")))
 					(e-lookup-local @6.25-6.26
-						(p-assign @6.14-6.15 (ident ""))))))
+						(p-assign @6.14-6.15 (ident "x"))))))
 		(annotation @6.1-6.9
 			(declared-type
 				(ty-fn @5.12-5.36 (effectful false)
-					(ty-apply @5.12-5.22 (symbol "Decode")
-						(ty-var @5.17-5.18 (name "e"))
-						(ty-var @5.20-5.21 (name "Dict")))
-					(ty-apply @5.26-5.36 (symbol "Decode")
-						(ty-var @5.31-5.32 (name "Dict"))
-						(ty-var @5.34-5.35 (name "e")))))))
+					(ty-apply @5.12-5.22 (symbol "Pair")
+						(ty-var @5.17-5.18 (name "a"))
+						(ty-var @5.20-5.21 (name "b")))
+					(ty-apply @5.26-5.36 (symbol "Pair")
+						(ty-var @5.31-5.32 (name "b"))
+						(ty-var @5.34-5.35 (name "a")))))))
 	(d-let
-		(p-assign @8.1-8.6 (ident "Bool"))
+		(p-assign @8.1-8.6 (ident "main!"))
 		(e-lambda @8.9-8.27
 			(args
 				(p-underscore @8.10-8.11))
 			(captures
-				(capture @6.1-6.9 (ident "ct")))
+				(capture @6.1-6.9 (ident "swapPair")))
 			(e-call @8.13-8.27
 				(e-lookup-local @8.13-8.21
-					(p-assign @6.1-6.9 (ident "ct")))
+					(p-assign @6.1-6.9 (ident "swapPair")))
 				(e-int @8.22-8.23 (value "1"))
 				(e-int @8.25-8.26 (value "2")))))
 	(s-alias-decl @3.1-3.20
-		(ty-header @3.1-3.11 (name "Decode")
+		(ty-header @3.1-3.11 (name "Pair")
 			(ty-args
-				(ty-var @3.6-3.7 (name "e"))
-				(ty-var @3.9-3.10 (name "Dict"))))
+				(ty-var @3.6-3.7 (name "a"))
+				(ty-var @3.9-3.10 (name "b"))))
 		(ty-tuple @3.14-3.20
-			(ty-var @3.15-3.16 (name "e"))
-			(ty-var @3.18-3.19 (name "Dict")))))
+			(ty-var @3.15-3.16 (name "a"))
+			(ty-var @3.18-3.19 (name "b")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -168,11 +150,11 @@ NO CHANGE
 		(patt @6.1-6.9 (type "Error"))
 		(patt @8.1-8.6 (type "_arg -> _ret")))
 	(type_decls
-		(alias @3.1-3.20 (type "Decode(e, Dict)")
-			(ty-header @3.1-3.11 (name "Decode")
+		(alias @3.1-3.20 (type "Pair(a, b)")
+			(ty-header @3.1-3.11 (name "Pair")
 				(ty-args
-					(ty-var @3.6-3.7 (name "e"))
-					(ty-var @3.9-3.10 (name "Dict"))))))
+					(ty-var @3.6-3.7 (name "a"))
+					(ty-var @3.9-3.10 (name "b"))))))
 	(expressions
 		(expr @6.12-6.27 (type "Error"))
 		(expr @8.9-8.27 (type "_arg -> _ret"))))

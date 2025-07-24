@@ -14,34 +14,7 @@ test = Color.Red
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE REDECLARED**
-The type _Bool_ is being redeclared.
-
-The redeclaration is here:
-**qualified_tag.md:3:1:3:21:**
-```roc
-Color := [Red, Blue]
-```
-^^^^^^^^^^^^^^^^^^^^
-
-But _Bool_ was already declared here:
-**qualified_tag.md:1:1:1:1:**
-```roc
-module [Color]
-```
-
-
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `Bool` is exposed, but it is not defined anywhere in this module.
-
-**qualified_tag.md:1:9:1:14:**
-```roc
-module [Color]
-```
-        ^^^^^
-You can fix this by either defining `Bool` in this module, or by removing it from the list of exposed values.
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),CloseSquare(1:14-1:15),
@@ -53,7 +26,7 @@ LowerIdent(5:1-5:5),OpAssign(5:6-5:7),UpperIdent(5:8-5:13),NoSpaceDotUpperIdent(
 (file @1.1-5.17
 	(module @1.1-1.15
 		(exposes @1.8-1.15
-			(exposed-upper-ident @1.9-1.14 (text "Bool"))))
+			(exposed-upper-ident @1.9-1.14 (text "Color"))))
 	(statements
 		(s-type-decl @3.1-3.21
 			(header @3.1-3.6 (name "Color")
@@ -74,23 +47,23 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @5.1-5.5 (ident ""))
-		(e-nominal @5.8-5.13 (nominal "Bool")
-			(e-tag @5.8-5.17 (name "ox"))))
+		(p-assign @5.1-5.5 (ident "test"))
+		(e-nominal @5.8-5.13 (nominal "Color")
+			(e-tag @5.8-5.17 (name "Red"))))
 	(s-nominal-decl @3.1-3.21
-		(ty-header @3.1-3.6 (name "Bool"))
+		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.10-3.21
-			(ty @3.11-3.14 (name "ox"))
-			(ty @3.16-3.20 (name "ecode")))))
+			(ty @3.11-3.14 (name "Red"))
+			(ty @3.16-3.20 (name "Blue")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "Bool")))
+		(patt @5.1-5.5 (type "Color")))
 	(type_decls
-		(nominal @3.1-3.21 (type "Bool")
-			(ty-header @3.1-3.6 (name "Bool"))))
+		(nominal @3.1-3.21 (type "Color")
+			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions
-		(expr @5.8-5.13 (type "Bool"))))
+		(expr @5.8-5.13 (type "Color"))))
 ~~~

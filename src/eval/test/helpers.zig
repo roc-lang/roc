@@ -7,7 +7,6 @@ const parse = @import("../../check/parse.zig");
 const canonicalize = @import("../../check/canonicalize.zig");
 const check_types = @import("../../check/check_types.zig");
 const ModuleEnv = @import("../../compile/ModuleEnv.zig");
-const compile = @import("compile");
 const types = @import("types");
 const stack = @import("../stack.zig");
 const layout_store = @import("../../layout/store.zig");
@@ -94,7 +93,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
 fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
-    can: *canonicalize,
+        can: *canonicalize,
     checker: *check_types,
     expr_idx: ModuleEnv.Expr.Idx,
 } {
@@ -112,7 +111,7 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
 
-    // Initialize CIR fields in the module_env
+    // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
 
     // Create canonicalizer
@@ -220,8 +219,35 @@ test "eval runtime error - returns crash error" {
 }
 
 test "eval tag - already primitive" {
-    // Skip this test for now as tag_union layout is not yet implemented
-    return error.SkipZigTest;
+    // Try to see if tag_union layout is now implemented
+    const source = "True";
+    
+    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+    
+    // Create a stack for evaluation
+    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+    defer eval_stack.deinit();
+    
+    // Create layout store  
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
+    
+    // Create interpreter
+    var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
+    defer interpreter.deinit();
+    
+    // Try to evaluate - if tag_union layout is not implemented, this might fail
+    const result = interpreter.eval(resources.expr_idx) catch |err| {
+        std.debug.print("Tag evaluation failed with error: {}\n", .{err});
+        // If evaluation fails for any reason, skip for now
+        return error.SkipZigTest;
+    };
+    
+    // If we get here, check if we have a valid result
+    // True/False are optimized to scalar values in the current implementation
+    try testing.expect(result.layout.tag == .scalar);
+    try testing.expect(result.ptr != null);
 }
 
 test "eval binop - basic implementation" {

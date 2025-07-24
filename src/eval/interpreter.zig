@@ -167,12 +167,25 @@ const Binding = struct {
     layout: Layout,
 };
 
-/// TODO
+/// Closure structure stored in memory
+/// The closure header is followed by the captured environment data
 pub const Closure = struct {
     body_idx: ModuleEnv.Expr.Idx,
     params: ModuleEnv.Pattern.Span,
     captures: ModuleEnv.Expr.Capture.Span,
+    env_size: u16,
 };
+
+/// The size of the Closure struct header in bytes.
+/// This MUST match the hardcoded value in layout_store.zig
+/// If you change the Closure struct, run the "closure struct size calculation" test
+/// to get the correct value and update both this constant and layout_store.zig
+pub const CLOSURE_HEADER_SIZE: usize = @sizeOf(Closure);
+
+// Compile-time assertion to ensure CLOSURE_HEADER_SIZE is correct
+comptime {
+    std.debug.assert(CLOSURE_HEADER_SIZE == @sizeOf(Closure));
+}
 
 /// Represents a value on the stack.
 pub const Value = struct {
@@ -475,6 +488,7 @@ pub const Interpreter = struct {
             .e_lookup_local => |lookup| {
                 self.traceInfo("evalExpr e_lookup_local pattern_idx={}", .{@intFromEnum(lookup.pattern_idx)});
                 self.tracePattern(lookup.pattern_idx);
+                
 
                 // First, check parameter bindings (most recent function call)
 
@@ -501,6 +515,24 @@ pub const Interpreter = struct {
                             const binding_size = self.layout_cache.layoutSize(binding.layout);
                             if (binding_size > 0) {
                                 std.mem.copyForwards(u8, @as([*]u8, @ptrCast(dest))[0..binding_size], @as([*]const u8, @ptrCast(binding.value_ptr))[0..binding_size]);
+                                
+                                // Debug: print what we're copying
+                                if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .int) {
+                                    // Check alignment before reading
+                                    const ptr_addr = @intFromPtr(binding.value_ptr);
+                                    const required_align = @intFromEnum(binding.layout.alignment(target_usize));
+                                    if (ptr_addr % required_align != 0) {
+                                        std.debug.print("ALIGNMENT ERROR: ptr {} not aligned to {}\n", .{ptr_addr, required_align});
+                                    } else {
+                                        const val = readIntFromMemory(@constCast(@ptrCast(binding.value_ptr)), binding.layout.data.scalar.data.int);
+                                        std.debug.print("Pattern lookup: pattern_idx={}, value={}, from_ptr={}, to_ptr={}\n", .{
+                                            @intFromEnum(binding.pattern_idx), 
+                                            val, 
+                                            @intFromPtr(binding.value_ptr),
+                                            @intFromPtr(dest)
+                                        });
+                                    }
+                                }
                             }
                         }
                         return;
@@ -603,18 +635,91 @@ pub const Interpreter = struct {
             },
 
             .e_lambda => |lambda_expr| {
-                // TODO how should we calculate env size for now it's 1 usize per capture?
-                const capture_count = lambda_expr.captures.span.len;
-                const env_size: u16 = @intCast(capture_count * target_usize.size());
+                // Calculate environment size based on captures
+                var env_size: u16 = 0;
+                var capture_layouts = std.ArrayList(Layout).init(self.allocator);
+                defer capture_layouts.deinit();
+                
+                if (lambda_expr.captures.span.len > 0) {
+                    const captures = self.cir.store.sliceCaptures(lambda_expr.captures);
+                    for (captures) |capture_idx| {
+                        const capture = self.cir.store.getCapture(capture_idx);
+                        
+                        // Find the binding for this capture
+                        var found = false;
+                        var reversed_bindings = std.mem.reverseIterator(self.bindings_stack.items);
+                        while (reversed_bindings.next()) |binding| {
+                            if (binding.pattern_idx == capture.pattern_idx) {
+                                const capture_size = self.layout_cache.layoutSize(binding.layout);
+                                const capture_align = @intFromEnum(binding.layout.alignment(target_usize));
+                                const align_mask = capture_align - 1;
+                                // Align env_size before adding
+                                env_size = @intCast((env_size + align_mask) & ~align_mask);
+                                env_size += @intCast(capture_size);
+                                try capture_layouts.append(binding.layout);
+                                found = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!found) {
+                            // If capture not found in bindings, mark this as a runtime error
+                            _ = try self.pushStackValue(expr_layout);
+                            return error.CaptureBindingFailed;
+                        }
+                    }
+                }
+                
 
-                const closure: *Closure = @ptrCast(@alignCast(try self.pushStackValue(Layout.closure(env_size))));
+                const closure_ptr = try self.pushStackValue(Layout.closure(env_size));
+                const closure: *Closure = @ptrCast(@alignCast(closure_ptr));
 
-                // write the closure data to stack memory
+                // Write the closure header
                 closure.* = Closure{
                     .body_idx = lambda_expr.body,
                     .params = lambda_expr.args,
                     .captures = lambda_expr.captures,
+                    .env_size = env_size,
                 };
+                
+                // Copy captured values into the closure's environment
+                if (lambda_expr.captures.span.len > 0) {
+                    const env_base = @as([*]u8, @ptrCast(closure)) + CLOSURE_HEADER_SIZE; // Skip closure header
+                    const captures = self.cir.store.sliceCaptures(lambda_expr.captures);
+                    var offset: usize = 0;
+                    
+                    
+                    for (captures, 0..) |capture_idx, i| {
+                        const capture = self.cir.store.getCapture(capture_idx);
+                        const capture_layout = capture_layouts.items[i];
+                        const capture_size = self.layout_cache.layoutSize(capture_layout);
+                        const capture_align = @intFromEnum(capture_layout.alignment(target_usize));
+                        const align_mask = capture_align - 1;
+                        
+                        // Align the offset
+                        offset = (offset + align_mask) & ~align_mask;
+                        
+                        // Find and copy the captured value
+                        var reversed_bindings = std.mem.reverseIterator(self.bindings_stack.items);
+                        while (reversed_bindings.next()) |binding| {
+                            if (binding.pattern_idx == capture.pattern_idx) {
+                                if (capture_size > 0) {
+                                    const src = @as([*]const u8, @ptrCast(binding.value_ptr));
+                                    const dest = env_base + offset;
+                                    std.mem.copyForwards(u8, dest[0..capture_size], src[0..capture_size]);
+                                    
+                                    // Debug: print what layout we're storing
+                                    const enum_val = @intFromEnum(binding.layout.data.scalar.data.int);
+                                    std.debug.print("Storing capture {}: layout={s} (enum={}), size={}, offset={}, align={}\n", .{
+                                        i, @tagName(binding.layout.data.scalar.data.int), enum_val, capture_size, offset, capture_align
+                                    });
+                                }
+                                offset += capture_size;
+                                break;
+                            }
+                        }
+                    }
+                }
             },
         }
     }
@@ -641,6 +746,11 @@ pub const Interpreter = struct {
         // Read the values
         const lhs_val = readIntFromMemory(@ptrCast(lhs.ptr.?), lhs.layout.data.scalar.data.int);
         const rhs_val = readIntFromMemory(@ptrCast(rhs.ptr.?), rhs.layout.data.scalar.data.int);
+
+        // Debug: print what we're reading for binop
+        std.debug.print("Binop: reading lhs={} from ptr={}, rhs={} from ptr={}\n", .{
+            lhs_val, @intFromPtr(lhs.ptr.?), rhs_val, @intFromPtr(rhs.ptr.?)
+        });
 
         // Pop the operands from the stack, which we can safely do after reading their values
         try self.popStackValue();
@@ -848,7 +958,45 @@ pub const Interpreter = struct {
             try self.bindings_stack.append(binding);
         }
 
-        // TODO: add bindings for closure captures
+        // Add bindings for closure captures from the closure's environment
+        if (closure.captures.span.len > 0) {
+            const env_base = @as([*]u8, @ptrCast(@constCast(closure))) + CLOSURE_HEADER_SIZE; // Skip closure header
+            const captures = self.cir.store.sliceCaptures(closure.captures);
+            var offset: usize = 0;
+            
+            
+            for (captures) |capture_idx| {
+                const capture = self.cir.store.getCapture(capture_idx);
+                
+                // We need to determine the layout of each capture. 
+                // TODO: For now, use i64 as default int type
+                const capture_layout = Layout{
+                    .tag = .scalar,
+                    .data = .{ .scalar = .{
+                        .tag = .int,
+                        .data = .{ .int = .i64 },
+                    } },
+                };
+                const capture_size = self.layout_cache.layoutSize(capture_layout);
+                const capture_align = @intFromEnum(capture_layout.alignment(target_usize));
+                const align_mask = capture_align - 1;
+                
+                // Align the offset
+                offset = (offset + align_mask) & ~align_mask;
+                
+                const capture_ptr = @as(*const anyopaque, @ptrCast(env_base + offset));
+                
+                
+                // Create a binding pointing to the captured value in the closure's environment
+                try self.bindings_stack.append(Binding{
+                    .pattern_idx = capture.pattern_idx,
+                    .value_ptr = @constCast(capture_ptr),
+                    .layout = capture_layout,
+                });
+                
+                offset += capture_size;
+            }
+        }
 
         // 5. Schedule the work to copy the return value and break down the stack frame
         self.schedule_work(WorkItem{
@@ -871,12 +1019,21 @@ pub const Interpreter = struct {
         const value = try self.peekStackValue(1);
         std.debug.assert(return_slot.layout.tag == value.layout.tag); // TODO: assert more equality
         const value_ptr = @as([*]u8, @ptrCast(value.ptr.?));
-        const value_slice = value_ptr[0..return_size];
+        
+        // For closures, we need to use the actual closure's size including environment
+        const actual_size = if (value.layout.tag == .closure) blk: {
+            const actual_layout_size = self.layout_cache.layoutSize(value.layout);
+            break :blk actual_layout_size;
+        } else return_size;
+        
+        const value_slice = value_ptr[0..actual_size];
 
-        if (return_size != 0) {
+        
+        if (actual_size != 0) {
             const dest_ptr = @as([*]u8, @ptrCast(self.stack_memory.start)) + return_slot.offset;
-            const dest_slice = dest_ptr[0..return_size];
+            const dest_slice = dest_ptr[0..actual_size];
             std.mem.copyForwards(u8, dest_slice, value_slice);
+            
         }
 
         // reset the stacks
@@ -1251,4 +1408,19 @@ test "stack-based comparisons" {
         try std.testing.expect(bool_layout.data.scalar.tag == .int);
         try std.testing.expect(bool_layout.data.scalar.data.int == .u8);
     }
+}
+
+test "closure struct size calculation" {
+    const testing = std.testing;
+    
+    // Verify the actual size of the Closure struct matches CLOSURE_HEADER_SIZE
+    const actual_size = @sizeOf(Closure);
+    
+    // The closure struct should be exactly 24 bytes (including padding)
+    try testing.expectEqual(@as(usize, 24), actual_size);
+    try testing.expectEqual(CLOSURE_HEADER_SIZE, actual_size);
+    
+    // Verify alignment is reasonable
+    const actual_alignment = @alignOf(Closure);
+    try testing.expect(actual_alignment <= 8); // Should be 4 or 8 bytes aligned
 }

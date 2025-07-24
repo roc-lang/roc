@@ -348,7 +348,10 @@ pub const Num = union(enum) {
 
             /// Alignment
             pub fn alignment(self: @This()) std.mem.Alignment {
-                // Both self and std.mem.Alignment are stored as log2(alignment) integers.
+                // Map precision values to log2(alignment):
+                // f32 (2) -> 4 bytes -> log2(4) = 2
+                // f64 (3) -> 8 bytes -> log2(8) = 3  
+                // dec (4) -> 16 bytes -> log2(16) = 4
                 return @enumFromInt(@intFromEnum(self));
             }
         };
