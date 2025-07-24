@@ -3069,19 +3069,17 @@ fn canonicalizePattern(
                         try self.can_ir.store.addScratchRecordDestruct(destruct_idx);
                     } else {
                         // Simple case: Create the RecordDestruct for this field
+                        const assign_pattern = CIR.Pattern{ .assign = .{ .ident = field_name_ident } };
+                        const assign_pattern_idx = try self.can_ir.addPatternAndTypeVar(assign_pattern, .{ .flex_var = null }, field_region);
+
                         const record_destruct = CIR.Pattern.RecordDestruct{
                             .label = field_name_ident,
                             .ident = field_name_ident,
-                            .kind = .Required,
+                            .kind = .{ .Required = assign_pattern_idx },
                         };
 
                         const destruct_idx = try self.can_ir.addRecordDestructAndTypeVar(record_destruct, .{ .flex_var = null }, field_region);
                         try self.can_ir.store.addScratchRecordDestruct(destruct_idx);
-
-                        // Create an assign pattern for this identifier and introduce it into scope
-                        const assign_pattern_idx = try self.can_ir.addPatternAndTypeVar(CIR.Pattern{ .assign = .{
-                            .ident = field_name_ident,
-                        } }, .{ .flex_var = null }, field_region);
 
                         // Introduce the identifier into scope
                         switch (try self.scopeIntroduceInternal(self.can_ir.env.gpa, .ident, field_name_ident, assign_pattern_idx, false, true)) {

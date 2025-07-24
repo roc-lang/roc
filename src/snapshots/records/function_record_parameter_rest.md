@@ -42,9 +42,11 @@ NO CHANGE
 		(p-record-destructure @1.2-1.24
 			(destructs
 				(record-destruct @1.4-1.14 (label "first_name") (ident "first_name")
-					(required))
+					(required
+						(p-assign @1.4-1.14 (ident "first_name"))))
 				(record-destruct @1.16-1.22 (label "rest") (ident "rest")
-					(required)))))
+					(required
+						(p-assign @1.16-1.22 (ident "rest")))))))
 	(captures
 		(capture @1.4-1.14 (ident "first_name"))
 		(capture @1.16-1.22 (ident "rest")))

@@ -52,8 +52,78 @@ test "list literal" {
 test "record literal" {
     // Empty record literal is a zero-sized type
     try runExpectError("{}", EvalError.ZeroSizedType, .no_trace);
-    // Record literals are not yet implemented
-    try runExpectError("{ x: 10, y: 20 }", EvalError.LayoutError, .no_trace);
+
+    // Record with integer fields
+    const expected_fields1 = &[_]helpers.ExpectedField{
+        .{ .name = "x", .value = 10 },
+        .{ .name = "y", .value = 20 },
+    };
+    try helpers.runExpectRecord("{ x: 10, y: 20 }", expected_fields1, .no_trace);
+
+    // Record with a single field
+    const expected_fields2 = &[_]helpers.ExpectedField{
+        .{ .name = "a", .value = 42 },
+    };
+    try helpers.runExpectRecord("{ a: 42 }", expected_fields2, .no_trace);
+
+    // Record with fields in a different order
+    const expected_fields3 = &[_]helpers.ExpectedField{
+        .{ .name = "x", .value = 1 },
+        .{ .name = "y", .value = 2 },
+    };
+    try helpers.runExpectRecord("{ y: 2, x: 1 }", expected_fields3, .no_trace);
+
+    // Record with field values from arithmetic expressions and lambdas
+    const expected_fields4 = &[_]helpers.ExpectedField{
+        .{ .name = "sum", .value = 6 },
+        .{ .name = "product", .value = 15 },
+    };
+    try helpers.runExpectRecord("{ sum: (|x| x + 1)(5), product: 5 * 3 }", expected_fields4, .no_trace);
+
+    // TODO: Add support for non-integer fields in tests
+    // Record with a string field
+    // const expected_fields5 = &[_]helpers.ExpectedField{
+    //     .{ .name = "name", .value = "roc" },
+    // };
+    // try helpers.runExpectRecord("{ name: \"roc\" }", expected_fields5, .no_trace);
+
+    // TODO: Add support for nested records in tests
+    // Record with a nested record
+    // const expected_fields6 = &[_]helpers.ExpectedField{
+    //     .{ .name = "p", .value = ... },
+    // };
+    // try helpers.runExpectRecord("{ p: { x: 1, y: 2 } }", expected_fields6, .no_trace);
+}
+
+test "record destructure patterns" {
+    try helpers.runExpectInt("(|{ x }| x )({ x: -10 })", -10, .no_trace);
+    try helpers.runExpectInt("(|{ x, y }| x * y)({ x: 10, y: 20 })", 200, .no_trace);
+    try helpers.runExpectInt("(|{ x, y, z }| x * y * z)({ x: 10, y: 20, z: 30 })", 6000, .no_trace);
+}
+
+test "tuple destructure patterns" {
+    try helpers.runExpectInt("(|(x,y)| x * y )((10,2))", 20, .no_trace);
+    try helpers.runExpectInt("(|(x,(y,z))| x * y * z )((10,(20,30)))", 6000, .no_trace);
+}
+
+test "mixed destructure patterns" {
+    try helpers.runExpectInt("(|{ a, x: (b, c), y: { d, e } }| a + b + c + d + e)({ a: 1, x: (2, 3), y: { d: 4, e: 5 } })", 15, .no_trace);
+}
+
+test "tuple literal" {
+    // Tuple with integer elements
+    const expected_elements1 = &[_]helpers.ExpectedElement{
+        .{ .index = 0, .value = 10 },
+        .{ .index = 1, .value = 20 },
+    };
+    try helpers.runExpectTuple("(10, 20)", expected_elements1, .no_trace);
+
+    // Tuple with elements from arithmetic expressions
+    const expected_elements3 = &[_]helpers.ExpectedElement{
+        .{ .index = 0, .value = 6 },
+        .{ .index = 1, .value = 15 },
+    };
+    try helpers.runExpectTuple("(5 + 1, 5 * 3)", expected_elements3, .no_trace);
 }
 
 test "simple lambdas" {

@@ -1809,7 +1809,8 @@ main! = |_| { # Yeah Ie
 												(sub-pattern
 													(p-int @82.18-82.19 (value "2"))))
 											(record-destruct @82.21-82.27 (label "rest") (ident "rest")
-												(required))))))
+												(required
+													(p-assign @82.21-82.27 (ident "rest"))))))))
 							(value
 								(e-runtime-error (tag "not_implemented"))))
 						(branch

@@ -1955,7 +1955,8 @@ expect {
 												(sub-pattern
 													(p-int @121.18-121.19 (value "2"))))
 											(record-destruct @121.21-121.27 (label "rest") (ident "rest")
-												(required))))))
+												(required
+													(p-assign @121.21-121.27 (ident "rest"))))))))
 							(value
 								(e-runtime-error (tag "not_implemented"))))
 						(branch
@@ -1970,7 +1971,8 @@ expect {
 												(sub-pattern
 													(p-int @126.9-126.10 (value "2"))))
 											(record-destruct @127.4-128.9 (label "rest") (ident "rest")
-												(required))))))
+												(required
+													(p-assign @127.4-128.9 (ident "rest"))))))))
 							(value
 								(e-int @129.8-129.10 (value "12"))))
 						(branch
