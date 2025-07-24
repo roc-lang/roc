@@ -177,6 +177,76 @@ pub const Store = struct {
         return try self.insertLayout(layout);
     }
 
+    pub fn putRecord(
+        self: *Self,
+        field_layouts: []const Layout,
+        field_names: []const Ident.Idx,
+    ) std.mem.Allocator.Error!Idx {
+        var temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
+        defer temp_fields.deinit();
+
+        for (field_layouts, field_names) |field_layout, field_name| {
+            const field_layout_idx = try self.insertLayout(field_layout);
+            try temp_fields.append(.{
+                .name = field_name,
+                .layout = field_layout_idx,
+            });
+        }
+
+        // Sort fields
+        const AlignmentSortCtx = struct {
+            store: *Self,
+            env: *base.ModuleEnv,
+            target_usize: target.TargetUsize,
+            pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
+                const lhs_layout = ctx.store.getLayout(lhs.layout);
+                const rhs_layout = ctx.store.getLayout(rhs.layout);
+                const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
+                const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
+                if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
+                    return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
+                }
+                const lhs_str = ctx.env.idents.getText(lhs.name);
+                const rhs_str = ctx.env.idents.getText(rhs.name);
+                return std.mem.order(u8, lhs_str, rhs_str) == .lt;
+            }
+        };
+
+        std.mem.sort(
+            RecordField,
+            temp_fields.items,
+            AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
+            AlignmentSortCtx.lessThan,
+        );
+
+        const fields_start = self.record_fields.items.len;
+        for (temp_fields.items) |sorted_field| {
+            _ = try self.record_fields.append(self.env.gpa, sorted_field);
+        }
+
+        var max_alignment = std.mem.Alignment.@"1";
+        var current_offset: u32 = 0;
+        for (temp_fields.items) |field| {
+            const field_layout = self.getLayout(field.layout);
+            const field_alignment = field_layout.alignment(self.targetUsize());
+            const field_size = self.layoutSize(field_layout);
+            max_alignment = max_alignment.max(field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+            current_offset += field_size;
+        }
+
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
+        const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
+        _ = try self.record_data.append(self.env.gpa, .{
+            .size = total_size,
+            .fields = fields_range,
+        });
+
+        const record_layout = Layout.record(max_alignment, record_idx);
+        return try self.insertLayout(record_layout);
+    }
+
     /// Insert a tuple layout with the given alignment and tuple metadata
     pub fn insertTuple(self: *Self, alignment: std.mem.Alignment, tuple_idx: TupleIdx) std.mem.Allocator.Error!Idx {
         const layout = Layout.tuple(alignment, tuple_idx);
@@ -221,6 +291,32 @@ pub const Store = struct {
         const requested_field_layout = self.getLayout(requested_field.layout);
         const requested_field_alignment = requested_field_layout.alignment(target_usize);
         return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_field_alignment.toByteUnits()))));
+    }
+
+    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name: []const u8) !u32 {
+        const target_usize = self.targetUsize();
+        const record_data = self.getRecordData(record_idx);
+        const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
+
+        var current_offset: u32 = 0;
+        var i: usize = 0;
+        while (i < sorted_fields.len) : (i += 1) {
+            const field = sorted_fields.get(i);
+            const field_layout = self.getLayout(field.layout);
+            const field_alignment = field_layout.alignment(target_usize);
+            const field_size = self.layoutSize(field_layout);
+
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+
+            const current_field_name = self.env.idents.getText(field.name);
+            if (std.mem.eql(u8, current_field_name, field_name)) {
+                return current_offset;
+            }
+
+            current_offset += field_size;
+        }
+
+        return error.PatternNotFound;
     }
 
     pub fn getTupleElementOffset(self: *const Self, tuple_idx: TupleIdx, element_index_in_sorted_elements: u32) u32 {
@@ -272,8 +368,7 @@ pub const Store = struct {
             .list, .list_of_zst => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
-            .closure => 20 + layout.data.closure.env_size, // Base closure size (20) + captured environment bytes
-            // TODO can we add a unit test to assert this size?
+            .closure => @sizeOf(layout_.Closure),
         };
     }
 
@@ -690,24 +785,15 @@ pub const Store = struct {
                     },
                     .fn_pure => |func| {
                         _ = func;
-                        break :flat_type Layout{
-                            .tag = .closure,
-                            .data = .{ .closure = .{ .env_size = 0 } },
-                        };
+                        break :flat_type Layout.closure();
                     },
                     .fn_effectful => |func| {
                         _ = func;
-                        break :flat_type Layout{
-                            .tag = .closure,
-                            .data = .{ .closure = .{ .env_size = 0 } },
-                        };
+                        break :flat_type Layout.closure();
                     },
                     .fn_unbound => |func| {
                         _ = func;
-                        break :flat_type Layout{
-                            .tag = .closure,
-                            .data = .{ .closure = .{ .env_size = 0 } },
-                        };
+                        break :flat_type Layout.closure();
                     },
                     .record => |record_type| {
                         const num_fields = try self.gatherRecordFields(record_type);

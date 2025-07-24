@@ -32,6 +32,8 @@ const base = @import("base");
 const CIR = @import("../check/canonicalize/CIR.zig");
 const types = @import("types");
 const layout = @import("../layout/layout.zig");
+const layout_ = @import("../layout/layout.zig");
+const Closure = layout_.Closure;
 const build_options = @import("build_options");
 const layout_store = @import("../layout/store.zig");
 const stack = @import("stack.zig");
@@ -169,13 +171,6 @@ const Binding = struct {
     layout: Layout,
 };
 
-/// TODO
-pub const Closure = struct {
-    body_idx: CIR.Expr.Idx,
-    params: CIR.Pattern.Span,
-    captures: CIR.Expr.Capture.Span,
-};
-
 /// Represents a value on the stack.
 pub const Value = struct {
     /// Type layout of the value
@@ -216,7 +211,7 @@ pub const Interpreter = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        cir: *const CIR,
+        cir: *CIR,
         stack_memory: *stack.Stack,
         layout_cache: *layout_store.Store,
         type_store: *types_store.Store,
@@ -516,12 +511,10 @@ pub const Interpreter = struct {
                 var reversed_bindings = std.mem.reverseIterator(self.bindings_stack.items);
                 while (reversed_bindings.next()) |binding| {
                     if (binding.pattern_idx == lookup.pattern_idx) {
-                        const dest_ptr = try self.pushStackValue(binding.layout);
-                        if (dest_ptr) |dest| {
-                            const binding_size = self.layout_cache.layoutSize(binding.layout);
-                            if (binding_size > 0) {
-                                std.mem.copyForwards(u8, @as([*]u8, @ptrCast(dest))[0..binding_size], @as([*]const u8, @ptrCast(binding.value_ptr))[0..binding_size]);
-                            }
+                        const dest_ptr = (try self.pushStackValue(binding.layout)).?;
+                        const binding_size = self.layout_cache.layoutSize(binding.layout);
+                        if (binding_size > 0) {
+                            std.mem.copyForwards(u8, @as([*]u8, @ptrCast(dest_ptr))[0..binding_size], @as([*]const u8, @ptrCast(binding.value_ptr))[0..binding_size]);
                         }
                         return;
                     }
@@ -636,19 +629,223 @@ pub const Interpreter = struct {
             },
 
             .e_lambda => |lambda_expr| {
-                _ = try self.getLayoutIdx(expr_idx);
-                // TODO how should we calculate env size for now it's 1 usize per capture?
-                const capture_count = lambda_expr.captures.span.len;
-                const env_size: u16 = @intCast(capture_count * target_usize.size());
+                // Create a record layout for captures
+                var field_layouts: [256]Layout = undefined;
+                var field_names: [256]base.Ident.Idx = undefined;
+                var field_count: usize = 0;
 
-                const closure: *Closure = @ptrCast(@alignCast(try self.pushStackValue(Layout.closure(env_size))));
+                // Create a list of destructuring patterns for the captures
+                var destructures = std.ArrayList(CIR.Pattern.RecordDestruct.Idx).init(self.allocator);
+                defer destructures.deinit();
 
-                // write the closure data to stack memory
+                // Recursively find all captures from this lambda and any nested lambdas.
+                var all_captures = std.ArrayList(CIR.Expr.Capture).init(self.allocator);
+                defer all_captures.deinit();
+                try self.collectNestedCaptures(expr_idx, &all_captures);
+
+                // Get the parameters of the current lambda to filter them out from the capture list.
+                const params = self.cir.store.slicePatterns(lambda_expr.args);
+                var param_set = std.ArrayList(CIR.Pattern.Idx).init(self.allocator);
+                defer param_set.deinit();
+                for (params) |param_idx| {
+                    try param_set.append(param_idx);
+                }
+
+                var final_captures = std.ArrayList(CIR.Expr.Capture).init(self.allocator);
+                defer final_captures.deinit();
+
+                var seen_captures = std.ArrayList(CIR.Pattern.Idx).init(self.allocator);
+                defer seen_captures.deinit();
+
+                for (all_captures.items) |capture| {
+                    // A variable is a capture if it's not a parameter of the current lambda.
+                    const is_param = blk: {
+                        for (param_set.items) |param_idx| {
+                            if (param_idx == capture.pattern_idx) {
+                                break :blk true;
+                            }
+                        }
+                        break :blk false;
+                    };
+
+                    const is_seen = blk: {
+                        for (seen_captures.items) |seen_idx| {
+                            if (seen_idx == capture.pattern_idx) {
+                                break :blk true;
+                            }
+                        }
+                        break :blk false;
+                    };
+
+                    if (!is_param and !is_seen) {
+                        try final_captures.append(capture);
+                        try seen_captures.append(capture.pattern_idx);
+                    }
+                }
+
+                self.traceInfo("Creating closure with {} captures", .{final_captures.items.len});
+                for (final_captures.items) |capture| {
+                    self.traceInfo("Processing capture: pattern_idx={}, name={s}", .{ @intFromEnum(capture.pattern_idx), self.cir.getIdentText(capture.name) });
+
+                    // Get the layout for this capture
+                    const capture_var: types.Var = @enumFromInt(@intFromEnum(capture.pattern_idx));
+                    const capture_layout_idx = self.layout_cache.addTypeVar(capture_var) catch |err| switch (err) {
+                        error.ZeroSizedType => return error.ZeroSizedType,
+                        error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
+                        else => |e| return e,
+                    };
+                    const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
+
+                    // Add to field layouts and names
+                    field_layouts[field_count] = capture_layout;
+                    field_names[field_count] = capture.name;
+                    field_count += 1;
+
+                    // Create a destructure for this capture
+                    const destruct_idx = try self.cir.store.addRecordDestruct(.{
+                        .label = capture.name,
+                        .ident = capture.name,
+                        .kind = .{ .Required = capture.pattern_idx },
+                    }, self.cir.store.getExprRegion(expr_idx));
+                    try destructures.append(destruct_idx);
+                }
+
+                // Create the record destructure pattern for all captures
+                const destructs_start = self.cir.store.scratchRecordDestructTop();
+                for (destructures.items) |destruct_idx| {
+                    try self.cir.store.addScratchRecordDestruct(destruct_idx);
+                }
+                const destructs_span = try self.cir.store.recordDestructSpanFrom(destructs_start);
+
+                const whole_var = try self.cir.env.types.fresh();
+                const ext_var = try self.cir.env.types.fresh();
+                const captures_pattern_idx = try self.cir.store.addPattern(.{
+                    .record_destructure = .{
+                        .whole_var = whole_var,
+                        .ext_var = ext_var,
+                        .destructs = destructs_span,
+                    },
+                }, self.cir.store.getExprRegion(expr_idx));
+
+                // Create the record layout for captures
+                const captures_layout_idx = try self.layout_cache.putRecord(
+                    field_layouts[0..field_count],
+                    field_names[0..field_count],
+                );
+
+                // Variable-Sized Closure Allocation
+                const closure_layout = Layout.closure();
+                const captures_record_layout = self.layout_cache.getLayout(captures_layout_idx);
+                const captures_size = self.layout_cache.layoutSize(captures_record_layout);
+
+                // Allocate space for the closure header AND the captured values together.
+                const total_size = @sizeOf(Closure) + captures_size;
+                const captures_alignment = captures_record_layout.alignment(target_usize);
+                const closure_alignment = std.mem.Alignment.fromByteUnits(@alignOf(Closure));
+                const total_alignment = std.mem.Alignment.max(closure_alignment, captures_alignment);
+                const closure_ptr = try self.stack_memory.alloca(total_size, total_alignment);
+
+                // Manually push the layout onto the value stack, since we did a custom allocation.
+                try self.value_stack.append(Value{
+                    .layout = closure_layout,
+                    .offset = @as(u32, @truncate(@intFromPtr(closure_ptr) - @intFromPtr(@as(*const u8, @ptrCast(self.stack_memory.start))))),
+                });
+
+                // Write the closure header
+                const closure: *Closure = @ptrCast(@alignCast(closure_ptr));
                 closure.* = Closure{
                     .body_idx = lambda_expr.body,
                     .params = lambda_expr.args,
-                    .captures = lambda_expr.captures,
+                    .captures_pattern_idx = captures_pattern_idx,
+                    .captures_layout_idx = captures_layout_idx,
                 };
+
+                // Actually capture the values into the memory immediately following the header
+                if (field_count > 0) {
+                    const captures_ptr = @as([*]u8, @ptrCast(closure_ptr)) + @sizeOf(Closure);
+
+                    // For each capture, find its value and copy it to the correct offset in the captures area
+                    for (final_captures.items, 0..) |capture, i| {
+                        // Look up the captured value in the current environment
+                        var found_binding: ?Binding = null;
+                        var reversed_bindings = std.mem.reverseIterator(self.bindings_stack.items);
+                        while (reversed_bindings.next()) |binding| {
+                            if (binding.pattern_idx == capture.pattern_idx) {
+                                found_binding = binding;
+                                break;
+                            }
+                        }
+
+                        var copied = false;
+                        if (found_binding) |binding| {
+                            self.traceInfo("Found binding for capture '{s}' at address {}", .{ self.cir.getIdentText(capture.name), @intFromPtr(binding.value_ptr) });
+                            const binding_size = self.layout_cache.layoutSize(binding.layout);
+                            if (binding_size > 0) {
+                                const capture_name_text = self.cir.getIdentText(capture.name);
+                                const field_offset = self.layout_cache.getRecordFieldOffsetByName(
+                                    captures_record_layout.data.record.idx,
+                                    capture_name_text,
+                                ) catch return error.CaptureBindingFailed;
+
+                                const dest_ptr = captures_ptr + field_offset;
+                                const src_ptr = @as([*]const u8, @ptrCast(binding.value_ptr));
+                                self.traceInfo("Copying {} bytes from {} to {}", .{ binding_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
+                                std.mem.copyForwards(u8, dest_ptr[0..binding_size], src_ptr[0..binding_size]);
+                            }
+                            copied = true;
+                        }
+
+                        // If not found in local bindings, search up the call stack for a closure that has the binding.
+                        if (!copied) {
+                            var frame_idx = self.frame_stack.items.len;
+                            while (frame_idx > 0) {
+                                frame_idx -= 1;
+                                const frame = self.frame_stack.items[frame_idx];
+                                const outer_closure_val = self.value_stack.items[frame.value_base];
+
+                                if (outer_closure_val.layout.tag == .closure) {
+                                    const outer_closure_ptr = &self.stack_memory.start[outer_closure_val.offset];
+                                    const outer_closure: *const Closure = @ptrCast(@alignCast(outer_closure_ptr));
+                                    const outer_captures_layout = self.layout_cache.getLayout(outer_closure.captures_layout_idx);
+                                    const outer_captures_ptr = @as([*]u8, @ptrCast(outer_closure_ptr)) + @sizeOf(Closure);
+                                    const capture_name_text = self.cir.getIdentText(capture.name);
+
+                                    const record_data = self.layout_cache.getRecordData(outer_captures_layout.data.record.idx);
+                                    if (record_data.fields.count > 0) {
+                                        const src_field_offset = self.layout_cache.getRecordFieldOffsetByName(
+                                            outer_captures_layout.data.record.idx,
+                                            capture_name_text,
+                                        ) catch continue; // Not in this closure's captures, try the next one up.
+
+                                        const capture_layout = field_layouts[i];
+                                        const capture_size = self.layout_cache.layoutSize(capture_layout);
+
+                                        if (capture_size > 0) {
+                                            const dest_field_offset = self.layout_cache.getRecordFieldOffsetByName(
+                                                captures_record_layout.data.record.idx,
+                                                capture_name_text,
+                                            ) catch return error.CaptureBindingFailed;
+
+                                            const src_ptr = outer_captures_ptr + src_field_offset;
+                                            const dest_ptr = captures_ptr + dest_field_offset;
+                                            self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from {} to {}", .{ capture_name_text, capture_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
+                                            std.mem.copyForwards(u8, dest_ptr[0..capture_size], src_ptr[0..capture_size]);
+                                            copied = true;
+                                            break; // Found it, stop searching up the stack.
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (!copied) {
+                            // TODO: Handle captures from global scope
+                            self.traceWarn("Capture not found in local bindings or outer closures: {s}", .{self.cir.getIdentText(capture.name)});
+                        }
+                    }
+                }
+
+                self.traceInfo("Closure created with captures layout idx {}, final stack used: {}", .{ captures_layout_idx, self.stack_memory.used });
             },
 
             .e_tuple => |tuple_expr| {
@@ -853,7 +1050,7 @@ pub const Interpreter = struct {
         self.traceEnter("handleLambdaCall {}", .{expr_idx});
         defer self.traceExit("", .{});
 
-        // 2. Pop the lambda closure from the stack
+        // The closure is on the stack, followed by its arguments.
         const closure_value = try self.peekStackValue(@as(usize, arg_count) + 1);
         const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1;
         const stack_base = self.value_stack.items[value_base].offset;
@@ -865,7 +1062,7 @@ pub const Interpreter = struct {
 
         const closure: *const Closure = @ptrCast(@alignCast(closure_value.ptr.?));
 
-        // 3. Create a new call frame
+        // Create a new call frame
         const frame: *CallFrame = try self.frame_stack.addOne();
         frame.* = CallFrame{
             .body_idx = closure.body_idx,
@@ -876,28 +1073,51 @@ pub const Interpreter = struct {
             .is_tail_call = false,
         };
 
+        // 1. The capture record is embedded in the closure value. We need to create a
+        //    StackValue that points to it and push that to the value_stack.
+        const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
+        const captures_size = self.layout_cache.layoutSize(captures_layout);
+
+        // The captures are stored immediately after the Closure header.
+        const captures_ptr = @as([*]u8, @ptrCast(closure_value.ptr.?)) + @sizeOf(Closure);
+
+        // Push the captures record as an implicit first argument.
+        // We need to manually create the Value and push it.
+        try self.value_stack.append(.{
+            .layout = captures_layout,
+            // The offset is relative to the start of the stack memory.
+            .offset = @intCast(@intFromPtr(captures_ptr) - @intFromPtr(@as(*const u8, @ptrCast(self.stack_memory.start)))),
+        });
+
+        // 2. Bind the capture pattern to the newly pushed capture record.
+        if (captures_size > 0) {
+            const capture_record_val = try self.peekStackValue(1);
+            try self.bindPattern(closure.captures_pattern_idx, capture_record_val);
+        }
+
+        // 3. Bind the explicit parameters to their arguments.
         const param_ids = self.cir.store.slicePatterns(closure.params);
-
-        self.traceInfo("Parameter count: {}, Argument count: {}, Closure.Params (before slicePatterns) {}", .{ param_ids.len, arg_count, closure.params.span.len });
-
-        // 4. Bind parameters to arguments
-        // TODO maybe return an ArityMismatch or an error here??
         std.debug.assert(param_ids.len == arg_count);
 
+        // Arguments are on the stack in evaluation order, so the last argument is at the top.
+        // We need to bind them to parameters in the correct order.
+        // The stack layout is: `..., closure, arg1, ..., argN, captures_view`
+        // peek(1) is captures_view
+        // peek(2) is argN
+        // peek(arg_count + 1) is arg1
         for (param_ids, 0..) |param_idx, i| {
-            const arg = try self.peekStackValue(i + 1);
+            const arg_index_from_top = arg_count - i + 1;
+            const arg = try self.peekStackValue(arg_index_from_top);
             try self.bindPattern(param_idx, arg);
         }
 
-        // TODO: add bindings for closure captures
-
-        // 5. Schedule the work to copy the return value and break down the stack frame
+        // 4. Schedule the work to copy the return value and break down the stack frame.
         self.schedule_work(WorkItem{
             .kind = .w_lambda_return,
             .expr_idx = closure.body_idx,
         });
 
-        // 6. Schedule body evaluation
+        // 5. Schedule body evaluation.
         self.schedule_work(WorkItem{
             .kind = .w_eval_expr,
             .expr_idx = closure.body_idx,
@@ -907,9 +1127,44 @@ pub const Interpreter = struct {
     fn handleLambdaReturn(self: *Interpreter) !void {
         const frame = self.frame_stack.pop() orelse return error.InvalidStackState;
 
-        // The return value is on top of the stack. We need to pop it,
-        // reset the stack to its pre-call state, and then push the return value back on.
-        const return_value = try self.popStackValue();
+        // The return value is on top of the stack.
+        const return_value = try self.peekStackValue(1);
+
+        // The closure that was called is at frame.value_base.
+        const closure_value_of_caller = self.value_stack.items[frame.value_base];
+        const closure_ptr_of_caller = &self.stack_memory.start[closure_value_of_caller.offset];
+        const closure_of_caller: *const Closure = @ptrCast(@alignCast(closure_ptr_of_caller));
+        const captures_layout_of_caller = self.layout_cache.getLayout(closure_of_caller.captures_layout_idx);
+        const captures_size_of_caller = self.layout_cache.layoutSize(captures_layout_of_caller);
+
+        // Determine the full size of the return value. If it's a closure, we must include the captures.
+        var return_size: u32 = 0;
+        const return_alignment = return_value.layout.alignment(target_usize);
+        if (return_value.layout.tag == .closure and return_value.ptr != null) {
+            const closure: *const Closure = @ptrCast(@alignCast(return_value.ptr.?));
+            const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
+            const captures_size = self.layout_cache.layoutSize(captures_layout);
+            return_size = @sizeOf(Closure) + captures_size;
+        } else {
+            return_size = self.layout_cache.layoutSize(return_value.layout);
+        }
+
+        // Copy the return value to a temporary buffer before we wipe the stack.
+        // We allocate this on the heap because return values can be large.
+        const temp_buffer = try self.allocator.alloc(u8, return_size);
+        defer self.allocator.free(temp_buffer);
+        if (return_size > 0) {
+            std.mem.copyForwards(u8, temp_buffer, @as([*]const u8, @ptrCast(return_value.ptr.?))[0..return_size]);
+        }
+
+        // Now that we've saved the return value, pop it from the stack.
+        _ = try self.popStackValue();
+
+        // If a capture record view was pushed by handleLambdaCall, we need to pop it from the value_stack.
+        // This view doesn't own memory on stack_memory, so we don't use popStackValue.
+        if (captures_size_of_caller > 0) {
+            _ = self.value_stack.pop() orelse return error.InvalidStackState;
+        }
 
         // reset the stacks
         self.work_stack.items.len = frame.work_base;
@@ -917,14 +1172,17 @@ pub const Interpreter = struct {
         self.value_stack.items.len = frame.value_base;
         self.stack_memory.used = frame.stack_base;
 
-        // Push the return value back onto the now-clean stack
-        const new_ptr = try self.pushStackValue(return_value.layout);
-        if (return_value.ptr != null and new_ptr != null) {
-            const size = self.layout_cache.layoutSize(return_value.layout);
-            if (size > 0) {
-                std.mem.copyForwards(u8, @as([*]u8, @ptrCast(new_ptr))[0..size], @as([*]const u8, @ptrCast(return_value.ptr.?))[0..size]);
-            }
+        // Push the return value back onto the now-clean stack from the temporary buffer.
+        if (return_size > 0) {
+            const new_ptr = try self.stack_memory.alloca(return_size, return_alignment);
+            std.mem.copyForwards(u8, @as([*]u8, @ptrCast(new_ptr))[0..return_size], temp_buffer);
+            const new_offset: u32 = @truncate(@intFromPtr(new_ptr) - @intFromPtr(@as(*const u8, @ptrCast(self.stack_memory.start))));
+            try self.value_stack.append(.{ .layout = return_value.layout, .offset = new_offset });
+        } else {
+            // Handle zero-sized types by just pushing the layout
+            try self.value_stack.append(.{ .layout = return_value.layout, .offset = self.stack_memory.used });
         }
+
         self.traceInfo("Lambda return: stack cleaned and return value pushed", .{});
     }
 
@@ -1358,7 +1616,7 @@ pub const Interpreter = struct {
         if (value_size > 0) {
             const value_alignment = value_layout.alignment(target_usize);
             value_ptr = try self.stack_memory.alloca(value_size, value_alignment);
-            offset = @intCast(@intFromPtr(value_ptr) - @intFromPtr(self.stack_memory.start));
+            offset = @as(u32, @truncate(@intFromPtr(value_ptr) - @intFromPtr(@as(*const u8, @ptrCast(self.stack_memory.start)))));
             self.traceInfo(
                 "Allocated {} bytes at address {} with alignment {}",
                 .{
@@ -1390,7 +1648,7 @@ pub const Interpreter = struct {
         if (value_size == 0) {
             return StackValue{ .layout = value.layout, .ptr = null };
         } else {
-            const ptr = @as([*]u8, @ptrCast(self.stack_memory.start)) + value.offset;
+            const ptr = &self.stack_memory.start[value.offset];
             return StackValue{ .layout = value.layout, .ptr = @as(*anyopaque, @ptrCast(ptr)) };
         }
     }
@@ -1406,8 +1664,60 @@ pub const Interpreter = struct {
             return StackValue{ .layout = value.layout, .ptr = null };
         }
 
-        const ptr = @as([*]u8, @ptrCast(self.stack_memory.start)) + value.offset;
+        const ptr = &self.stack_memory.start[value.offset];
         return StackValue{ .layout = value.layout, .ptr = @as(*anyopaque, @ptrCast(ptr)) };
+    }
+
+    fn collectNestedCaptures(self: *Interpreter, expr_idx: CIR.Expr.Idx, captures_list: *std.ArrayList(CIR.Expr.Capture)) !void {
+        const expr = self.cir.store.getExpr(expr_idx);
+
+        switch (expr) {
+            .e_lambda => |lambda| {
+                const nested_captures = self.cir.store.sliceCaptures(lambda.captures);
+                for (nested_captures) |capture_idx| {
+                    try captures_list.append(self.cir.store.getCapture(capture_idx));
+                }
+                // Recurse on the body to find more nested lambdas
+                try self.collectNestedCaptures(lambda.body, captures_list);
+            },
+            .e_call => |call| {
+                const args = self.cir.store.sliceExpr(call.args);
+                for (args) |arg_idx| {
+                    try self.collectNestedCaptures(arg_idx, captures_list);
+                }
+            },
+            .e_if => |if_expr| {
+                const branches = self.cir.store.sliceIfBranches(if_expr.branches);
+                for (branches) |branch_idx| {
+                    const branch = self.cir.store.getIfBranch(branch_idx);
+                    try self.collectNestedCaptures(branch.cond, captures_list);
+                    try self.collectNestedCaptures(branch.body, captures_list);
+                }
+                try self.collectNestedCaptures(if_expr.final_else, captures_list);
+            },
+            .e_binop => |binop| {
+                try self.collectNestedCaptures(binop.lhs, captures_list);
+                try self.collectNestedCaptures(binop.rhs, captures_list);
+            },
+            .e_unary_minus => |unary| {
+                try self.collectNestedCaptures(unary.expr, captures_list);
+            },
+            .e_record => |record| {
+                const fields = self.cir.store.sliceRecordFields(record.fields);
+                for (fields) |field_idx| {
+                    const field = self.cir.store.getRecordField(field_idx);
+                    try self.collectNestedCaptures(field.value, captures_list);
+                }
+            },
+            .e_tuple => |tuple| {
+                const elems = self.cir.store.sliceExpr(tuple.elems);
+                for (elems) |elem_idx| {
+                    try self.collectNestedCaptures(elem_idx, captures_list);
+                }
+            },
+            // Base cases: these expressions do not contain other expressions.
+            .e_int, .e_frac_f64, .e_zero_argument_tag, .e_empty_record, .e_empty_list, .e_lookup_local, .e_runtime_error, .e_tag, .e_str, .e_str_segment, .e_list, .e_dot_access, .e_block, .e_lookup_external, .e_match, .e_frac_dec, .e_dec_small, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_nominal => {},
+        }
     }
 };
 
