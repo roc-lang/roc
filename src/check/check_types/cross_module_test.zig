@@ -11,7 +11,7 @@ const snapshot = @import("snapshot.zig");
 const occurs = @import("occurs.zig");
 
 const testing = std.testing;
-const CIR = can.CIR;
+const CIR = can.ModuleEnv.CIR;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
 const Ident = base.Ident;
@@ -46,8 +46,8 @@ test "cross-module type checking - monomorphic function" {
     try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
-    // Create array of module CIRs
-    var modules = std.ArrayList(*CIR).init(allocator);
+    // Create array of module environments
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -132,8 +132,8 @@ test "cross-module type checking - polymorphic function" {
     try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(func_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(func_expr_idx)), func_content);
 
-    // Create array of module CIRs
-    var modules = std.ArrayList(*CIR).init(allocator);
+    // Create array of module environments
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -232,8 +232,8 @@ test "cross-module type checking - record type" {
     try module_a_env.types.testOnlyFillInSlotsThru(@enumFromInt(@intFromEnum(record_expr_idx)));
     try module_a_env.types.setVarContent(@enumFromInt(@intFromEnum(record_expr_idx)), record_content);
 
-    // Create array of module CIRs
-    var modules = std.ArrayList(*CIR).init(allocator);
+    // Create array of module environments
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -349,8 +349,8 @@ test "cross-module type checking - type mismatch error" {
     const str_content = Content{ .structure = .str };
     try module_b_env.types.setVarContent(@enumFromInt(@intFromEnum(str_expr)), str_content);
 
-    // Create array of module CIRs
-    var modules = std.ArrayList(*CIR).init(allocator);
+    // Create array of module environments
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -432,8 +432,8 @@ test "cross-module type checking - polymorphic instantiation" {
     // Set the list expression's type
     try module_b_env.types.setVarContent(@enumFromInt(@intFromEnum(list_expr)), str_list_content);
 
-    // Create array of module CIRs
-    var modules = std.ArrayList(*CIR).init(allocator);
+    // Create array of module environments
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -516,8 +516,8 @@ test "cross-module type checking - preserves module A types" {
         .value = .{ .bytes = [_]u8{ 123, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .kind = .i128 },
     } }, base.Region.zero());
 
-    // Create array of module CIRs
-    var modules = std.ArrayList(*CIR).init(allocator);
+    // Create array of module environments
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -611,8 +611,8 @@ test "cross-module type checking - three module chain monomorphic" {
         },
     }, base.Region.zero());
 
-    // Create array of module CIRs
-    var modules = std.ArrayList(*CIR).init(allocator);
+    // Create array of module environments
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -715,8 +715,8 @@ test "cross-module type checking - three module chain polymorphic" {
         },
     }, base.Region.zero());
 
-    // Create array of module CIRs
-    var modules = std.ArrayList(*CIR).init(allocator);
+    // Create array of module environments
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -859,8 +859,8 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
         },
     }, base.Region.zero());
 
-    // Create array of module CIRs
-    var modules = std.ArrayList(*CIR).init(allocator);
+    // Create array of module environments
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -1011,8 +1011,8 @@ test "cross-module type checking - record type chain" {
         },
     }, base.Region.zero());
 
-    // Create array of module CIRs
-    var modules = std.ArrayList(*CIR).init(allocator);
+    // Create array of module environments
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -1171,8 +1171,8 @@ test "cross-module type checking - polymorphic record chain" {
         },
     }, base.Region.zero());
 
-    // Create array of module CIRs
-    var modules = std.ArrayList(*CIR).init(allocator);
+    // Create array of module environments
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -1335,8 +1335,8 @@ test "cross-module type checking - complex polymorphic chain with unification" {
         },
     }, base.Region.zero());
 
-    // Create array of module CIRs
-    var modules = std.ArrayList(*CIR).init(allocator);
+    // Create array of module environments
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -1490,7 +1490,7 @@ test "cross-module type checking - type mismatch with proper error message" {
     }, base.Region.zero());
 
     // Set up modules array
-    var modules = std.ArrayList(*CIR).init(allocator);
+    var modules = std.ArrayList(*can.ModuleEnv).init(allocator);
     defer modules.deinit();
     try modules.append(module_a_cir);
 

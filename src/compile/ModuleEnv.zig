@@ -10,7 +10,7 @@ const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
 const reporting = @import("reporting");
-const CIR = @import("CIR.zig");
+pub const CIR = @import("CIR.zig");
 
 // Re-export types from CIR module
 pub const Def = CIR.Def;
@@ -100,6 +100,11 @@ pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u
     self.module_name = module_name;
     self.diagnostics = Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
+}
+
+/// Alias for initCIRFields for backwards compatibility with tests
+pub fn initModuleEnvFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u8) !void {
+    return self.initCIRFields(gpa, module_name);
 }
 
 /// Initialize the module environment.
@@ -1033,6 +1038,16 @@ pub fn addExprAndTypeVar(self: *Self, expr: Expr, content: types_mod.Content, re
     return expr_idx;
 }
 
+/// Add a new capture and type variable.
+/// This function asserts that the types array and the nodes are in sync.
+pub fn addCaptureAndTypeVar(self: *Self, capture: Expr.Capture, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Expr.Capture.Idx {
+    const capture_idx = try self.store.addCapture(capture, region);
+    const capture_var = try self.types.freshFromContent(content);
+    debugAssertIdxsEql("addCaptureAndTypeVar", capture_idx, capture_var);
+    self.debugAssertArraysInSync();
+    return capture_idx;
+}
+
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
 pub fn addRecordFieldAndTypeVar(self: *Self, expr: RecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!RecordField.Idx {
@@ -1121,6 +1136,11 @@ pub fn addExposedItemAndTypeVar(self: *Self, expr: ExposedItem, content: types_m
     debugAssertIdxsEql("addExposedItemAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
+}
+
+/// Add a diagnostic without creating a corresponding type variable.
+pub fn addDiagnostic(self: *Self, reason: Diagnostic) std.mem.Allocator.Error!Diagnostic.Idx {
+    return self.store.addDiagnostic(reason);
 }
 
 /// Add a new expression and type variable.

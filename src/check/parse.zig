@@ -33,7 +33,7 @@ fn runParse(env: *ModuleEnv, parserCall: *const fn (*Parser) std.mem.Allocator.E
 
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
-    var tokenizer = try tokenize.Tokenizer.init(env, env.source, msg_slice);
+    var tokenizer = try tokenize.Tokenizer.init(env.*, env.source, msg_slice);
     try tokenizer.tokenize();
     const result = tokenizer.finishAndDeinit();
 

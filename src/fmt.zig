@@ -169,7 +169,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -202,7 +202,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -2154,7 +2154,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         parse_ast.store.emptyScratch();
 
         std.debug.print("Parsed SExpr:\n==========\n", .{});
-        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
         std.debug.print("\n==========\n\n", .{});
     }
 

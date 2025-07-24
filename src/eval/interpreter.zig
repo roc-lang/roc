@@ -29,7 +29,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const CIR = @import("../check/canonicalize.zig").CIR;
+const ModuleEnv = @import("../compile/ModuleEnv.zig");
 const types = @import("types");
 const layout = @import("../layout/layout.zig");
 const build_options = @import("build_options");
@@ -115,7 +115,7 @@ pub const WorkItem = struct {
     /// The type of work to be performed
     kind: WorkKind,
     /// The expression index this work item operates on
-    expr_idx: CIR.Expr.Idx,
+    expr_idx: ModuleEnv.Expr.Idx,
     /// Optional extra data for e.g. if-expressions and lambda call
     extra: u32 = 0,
 };
@@ -127,15 +127,15 @@ pub const WorkItem = struct {
 /// `if condition then body` clause.
 const BranchData = struct {
     /// Expression index for the branch condition (must evaluate to Bool)
-    cond: CIR.Expr.Idx,
+    cond: ModuleEnv.Expr.Idx,
     /// Expression index for the branch body (evaluated if condition is true)
-    body: CIR.Expr.Idx,
+    body: ModuleEnv.Expr.Idx,
 };
 
 /// Tracks execution context for function calls
 pub const CallFrame = struct {
     /// this function's body expression
-    body_idx: CIR.Expr.Idx,
+    body_idx: ModuleEnv.Expr.Idx,
     /// Offset into the `stack_memory` of the interpreter where this frame's values start
     stack_base: u32,
     /// Offset into the `layout_cache` of the interpreter where this frame's layouts start
@@ -160,7 +160,7 @@ pub const CallFrame = struct {
 /// the function call completes as this may have been freed or overwritten.
 const Binding = struct {
     /// Pattern index that this binding satisfies (for pattern matching)
-    pattern_idx: CIR.Pattern.Idx,
+    pattern_idx: ModuleEnv.Pattern.Idx,
     /// Index of the argument's value in stack memory (points to the start of the value)
     value_ptr: *anyopaque,
     /// Type and layout information for the argument value
@@ -169,9 +169,9 @@ const Binding = struct {
 
 /// TODO
 pub const Closure = struct {
-    body_idx: CIR.Expr.Idx,
-    params: CIR.Pattern.Span,
-    captures: CIR.Expr.Capture.Span,
+    body_idx: ModuleEnv.Expr.Idx,
+    params: ModuleEnv.Pattern.Span,
+    captures: ModuleEnv.Expr.Capture.Span,
 };
 
 /// Represents a value on the stack.
@@ -187,7 +187,7 @@ pub const Interpreter = struct {
     /// Memory allocator for dynamic data structures
     allocator: std.mem.Allocator,
     /// Canonicalized Intermediate Representation containing expressions to evaluate
-    cir: *const CIR,
+    cir: *const ModuleEnv,
     /// Stack memory for storing expression values during evaluation
     stack_memory: *stack.Stack,
     /// Cache for type layout information and size calculations
@@ -214,7 +214,7 @@ pub const Interpreter = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        cir: *const CIR,
+        cir: *const ModuleEnv,
         stack_memory: *stack.Stack,
         layout_cache: *layout_store.Store,
         type_store: *types_store.Store,
@@ -245,7 +245,7 @@ pub const Interpreter = struct {
     ///
     /// This is the main entry point for expression evaluation. Uses an iterative
     /// work queue approach to evaluate complex expressions without recursion.
-    pub fn eval(self: *Interpreter, expr_idx: CIR.Expr.Idx) EvalError!StackValue {
+    pub fn eval(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx) EvalError!StackValue {
         // Ensure work_stack and value_stack are empty before we start. (stack_memory might not be, and that's fine!)
         std.debug.assert(self.work_stack.items.len == 0);
         std.debug.assert(self.value_stack.items.len == 0);
@@ -275,7 +275,7 @@ pub const Interpreter = struct {
                     // The expr_idx encodes both the if expression and the branch index
                     // Lower 16 bits: if expression index
                     // Upper 16 bits: branch index
-                    const if_expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(work.expr_idx) & 0xFFFF);
+                    const if_expr_idx: ModuleEnv.Expr.Idx = @enumFromInt(@intFromEnum(work.expr_idx) & 0xFFFF);
                     const branch_index: u16 = @intCast((@intFromEnum(work.expr_idx) >> 16) & 0xFFFF);
                     try self.checkIfCondition(if_expr_idx, branch_index);
                 },
@@ -351,7 +351,7 @@ pub const Interpreter = struct {
     /// # Error Handling
     /// Malformed expressions result in runtime error placeholders rather
     /// than evaluation failure.
-    fn evalExpr(self: *Interpreter, expr_idx: CIR.Expr.Idx) EvalError!void {
+    fn evalExpr(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx) EvalError!void {
         const expr = self.cir.store.getExpr(expr_idx);
 
         self.traceEnter("evalExpr {s}", .{@tagName(expr)});
@@ -745,7 +745,7 @@ pub const Interpreter = struct {
         writeIntToMemory(@as([*]u8, @ptrCast(operand_value.ptr)), result_val, operand_scalar.data.int);
     }
 
-    fn checkIfCondition(self: *Interpreter, expr_idx: CIR.Expr.Idx, branch_index: u16) EvalError!void {
+    fn checkIfCondition(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, branch_index: u16) EvalError!void {
         // Pop the condition layout
         const condition = try self.peekStackValue(1);
 
@@ -780,7 +780,7 @@ pub const Interpreter = struct {
                 const next_branch = self.cir.store.getIfBranch(branches[next_branch_idx]);
 
                 // Encode branch index in upper 16 bits
-                const encoded_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx) | (@as(u32, next_branch_idx) << 16));
+                const encoded_idx: ModuleEnv.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx) | (@as(u32, next_branch_idx) << 16));
 
                 // Push work to check next condition after it's evaluated
                 self.schedule_work(WorkItem{ .kind = .w_if_check_condition, .expr_idx = encoded_idx });
@@ -794,7 +794,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn handleLambdaCall(self: *Interpreter, expr_idx: CIR.Expr.Idx, arg_count: u32) !void {
+    fn handleLambdaCall(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, arg_count: u32) !void {
         self.traceEnter("handleLambdaCall {}", .{expr_idx});
         defer self.traceExit("", .{});
 
@@ -968,12 +968,12 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Helper to pretty print a CIR.Expression in a trace
-    pub fn traceExpression(self: *const Interpreter, expression_idx: CIR.Expr.Idx) void {
+    /// Helper to pretty print a ModuleEnv.Expression in a trace
+    pub fn traceExpression(self: *const Interpreter, expression_idx: ModuleEnv.Expr.Idx) void {
         if (self.trace_writer) |writer| {
             const expression = self.cir.store.getExpr(expression_idx);
 
-            var tree = SExprTree.init(self.cir.env.gpa);
+            var tree = SExprTree.init(self.cir.gpa);
             defer tree.deinit();
 
             expression.pushToSExprTree(self.cir, &tree, expression_idx) catch {};
@@ -986,12 +986,12 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Helper to pretty print a CIR.Pattern in a trace
-    pub fn tracePattern(self: *const Interpreter, pattern_idx: CIR.Pattern.Idx) void {
+    /// Helper to pretty print a ModuleEnv.Pattern in a trace
+    pub fn tracePattern(self: *const Interpreter, pattern_idx: ModuleEnv.Pattern.Idx) void {
         if (self.trace_writer) |writer| {
             const pattern = self.cir.store.getPattern(pattern_idx);
 
-            var tree = SExprTree.init(self.cir.env.gpa);
+            var tree = SExprTree.init(self.cir.gpa);
             defer tree.deinit();
 
             pattern.pushToSExprTree(self.cir, &tree, pattern_idx) catch {};

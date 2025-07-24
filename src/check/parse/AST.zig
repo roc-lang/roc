@@ -26,10 +26,10 @@ const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const Ident = base.Ident;
 const Allocator = std.mem.Allocator;
-
+const ModuleEnv = @import("../../compile/ModuleEnv.zig");
 const AST = @This();
 
-env: *@import("../../compile/ModuleEnv.zig"),
+env: *ModuleEnv,
 tokens: TokenizedBuffer,
 store: NodeStore,
 root_node_idx: u32 = 0,
@@ -93,7 +93,7 @@ pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const 
 }
 
 /// Append region information to an S-expression node for diagnostics
-pub fn appendRegionInfoToSexprTree(self: *AST, env: *@import("../../compile/ModuleEnv.zig"), tree: *SExprTree, region: TokenizedRegion) std.mem.Allocator.Error!void {
+pub fn appendRegionInfoToSexprTree(self: *AST, env: ModuleEnv, tree: *SExprTree, region: TokenizedRegion) std.mem.Allocator.Error!void {
     const start = self.tokens.resolve(region.start);
     const end = self.tokens.resolve(region.end - 1);
     const info: base.RegionInfo = base.RegionInfo.position(self.env.source, env.line_starts.items.items, start.start.offset, end.end.offset) catch .{
@@ -184,7 +184,7 @@ fn getTokenText(self: *AST, token_idx: Token.Idx) []const u8 {
 }
 
 /// Convert a parse diagnostic to a Report for rendering
-pub fn parseDiagnosticToReport(self: *AST, env: *@import("../../compile/ModuleEnv.zig"), diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
+pub fn parseDiagnosticToReport(self: *AST, env: ModuleEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
     const raw_region = self.tokenizedRegionToRegion(diagnostic.region);
 
     // Ensure region bounds are valid for source slicing
@@ -695,7 +695,7 @@ test {
 }
 
 /// Helper function to convert the AST to a human friendly representation in S-expression format
-pub fn toSExprStr(ast: *@This(), env: *@import("../../compile/ModuleEnv.zig"), writer: std.io.AnyWriter) !void {
+pub fn toSExprStr(ast: *@This(), env: ModuleEnv, writer: std.io.AnyWriter) !void {
     const file = ast.store.getFile();
 
     var tree = SExprTree.init(env.gpa);
@@ -707,7 +707,7 @@ pub fn toSExprStr(ast: *@This(), env: *@import("../../compile/ModuleEnv.zig"), w
 }
 
 /// Helper function to convert the AST to a human friendly representation in HTML format
-pub fn toSExprHtml(ast: *@This(), env: *@import("../../compile/ModuleEnv.zig"), writer: std.io.AnyWriter) !void {
+pub fn toSExprHtml(ast: *@This(), env: ModuleEnv, writer: std.io.AnyWriter) !void {
     const file = ast.store.getFile();
 
     var tree = SExprTree.init(env.gpa);
@@ -796,7 +796,7 @@ pub const Statement = union(enum) {
     };
 
     /// Push this Statement to the SExprTree stack
-    pub fn pushToSExprTree(self: @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .decl => |decl| {
                 const begin = tree.beginNode();
@@ -1025,7 +1025,7 @@ pub const Body = struct {
     region: TokenizedRegion,
 
     /// Push this Body to the SExprTree stack
-    pub fn pushToSExprTree(self: @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("e-block");
         try ast.appendRegionInfoToSexprTree(env, tree, self.region);
@@ -1130,7 +1130,7 @@ pub const Pattern = union(enum) {
     }
 
     /// Push this Pattern to the SExprTree stack
-    pub fn pushToSExprTree(self: @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .ident => |ident| {
                 const begin = tree.beginNode();
@@ -1301,7 +1301,7 @@ pub const BinOp = struct {
     region: TokenizedRegion,
 
     /// (binop <op> <left> <right>) e.g. (binop '+' 1 2)
-    pub fn pushToSExprTree(self: *const @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: *const @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         const begin = tree.beginNode();
 
         // Push the node name
@@ -1333,7 +1333,7 @@ pub const Unary = struct {
     region: TokenizedRegion,
 
     /// Push this Unary to the SExprTree stack
-    pub fn pushToSExprTree(self: *const @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: *const @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("unary");
         try tree.pushString(ast.resolve(self.operator));
@@ -1360,7 +1360,7 @@ pub const File = struct {
     region: TokenizedRegion,
 
     /// Push this File to the SExprTree stack
-    pub fn pushToSExprTree(self: @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("file");
         try ast.appendRegionInfoToSexprTree(env, tree, self.region);
@@ -1423,7 +1423,7 @@ pub const Header = union(enum) {
 
     pub const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
 
-    pub fn pushToSExprTree(self: @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .app => |a| {
                 const begin = tree.beginNode();
@@ -1634,7 +1634,7 @@ pub const ExposedItem = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn pushToSExprTree(self: @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .lower_ident => |i| {
                 const begin = tree.beginNode();
@@ -1815,7 +1815,7 @@ pub const TypeAnno = union(enum) {
         }
     }
 
-    pub fn pushToSExprTree(self: @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .apply => |a| {
                 const begin = tree.beginNode();
@@ -1984,7 +1984,7 @@ pub const AnnoRecordField = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn pushToSExprTree(self: @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("anno-record-field");
         try ast.appendRegionInfoToSexprTree(env, tree, self.region);
@@ -2047,7 +2047,7 @@ pub const WhereClause = union(enum) {
         reason: Diagnostic.Tag,
         region: TokenizedRegion,
     },
-    pub fn pushToSExprTree(self: @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .mod_method => |m| {
                 const begin = tree.beginNode();
@@ -2234,7 +2234,7 @@ pub const Expr = union(enum) {
         };
     }
 
-    pub fn pushToSExprTree(self: @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .int => |int| {
                 const begin = tree.beginNode();
@@ -2560,7 +2560,7 @@ pub const RecordField = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn pushToSExprTree(self: @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("record-field");
         try ast.appendRegionInfoToSexprTree(env, tree, self.region);
@@ -2606,7 +2606,7 @@ pub const MatchBranch = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn pushToSExprTree(self: @This(), env: *@import("../../compile/ModuleEnv.zig"), ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("branch");
         try ast.appendRegionInfoToSexprTree(env, tree, self.region);

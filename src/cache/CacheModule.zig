@@ -16,8 +16,7 @@ const SERIALIZATION_ALIGNMENT = 16;
 
 const Allocator = std.mem.Allocator;
 const TypeStore = types.Store;
-const ModuleEnv = canonicalize.ModuleEnv;
-const CIR = canonicalize.CIR;
+const ModuleEnv = @import("../compile/ModuleEnv.zig");
 const Node = ModuleEnv.Node;
 const NodeStore = ModuleEnv.NodeStore;
 const SafeList = collections.SafeList;
@@ -110,7 +109,7 @@ pub const CacheModule = struct {
     pub fn create(
         allocator: Allocator,
         module_env: *const canonicalize.ModuleEnv,
-        _: *const CIR, // CIR is now just ModuleEnv, kept for API compatibility
+        _: *const ModuleEnv, // ModuleEnv contains the canonical IR
         error_count: u32,
         warning_count: u32,
     ) ![]align(SERIALIZATION_ALIGNMENT) u8 {

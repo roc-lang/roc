@@ -6,7 +6,6 @@ const parse = @import("./parse.zig");
 const types = @import("types");
 const ModuleEnv = canonicalize.ModuleEnv;
 const canonicalize = @import("./canonicalize.zig");
-// CIR types are now directly in canonicalize module
 
 test "canonicalize True as Bool" {
     const allocator = testing.allocator;
@@ -40,7 +39,7 @@ test "canonicalize True as Bool" {
     // The backing expression should be a tag
     const backing_expr = module_env.store.getExpr(expr.e_nominal.backing_expr);
     try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(canonicalize.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
+    try testing.expectEqual(canonicalize.ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
 
     // The tag should be "True"
     const tag_name = module_env.idents.getText(backing_expr.e_tag.name);
@@ -79,7 +78,7 @@ test "canonicalize False as Bool" {
     // The backing expression should be a tag
     const backing_expr = module_env.store.getExpr(expr.e_nominal.backing_expr);
     try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(canonicalize.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
+    try testing.expectEqual(canonicalize.ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
 
     // The tag should be "False"
     const tag_name = module_env.idents.getText(backing_expr.e_tag.name);

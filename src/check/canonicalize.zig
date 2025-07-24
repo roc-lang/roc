@@ -210,24 +210,24 @@ pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHash
     // make a start on canonicalization.
 
     // Assert that the node store is completely empty
-    result.debugAssertArraysInSync();
+    env.debugAssertArraysInSync();
 
     // Add builtinss (eventually will be gotten from builtins roc files)
-    try result.addBuiltin(self, "Bool", BUILTIN_BOOL);
-    try result.addBuiltin(self, "Box", BUILTIN_BOX);
-    try result.addBuiltin(self, "Decode", BUILTIN_DECODE);
-    try result.addBuiltin(self, "Dict", BUILTIN_DICT);
-    try result.addBuiltin(self, "Encode", BUILTIN_ENCODE);
-    try result.addBuiltin(self, "Hash", BUILTIN_HASH);
-    try result.addBuiltin(self, "Inspect", BUILTIN_INSPECT);
-    try result.addBuiltin(self, "List", BUILTIN_LIST);
-    try result.addBuiltin(self, "Num", BUILTIN_NUM);
-    try result.addBuiltin(self, "Result", BUILTIN_RESULT);
-    try result.addBuiltin(self, "Set", BUILTIN_SET);
-    try result.addBuiltin(self, "Str", BUILTIN_STR);
+    try result.addBuiltin(env, "Bool", BUILTIN_BOOL);
+    try result.addBuiltin(env, "Box", BUILTIN_BOX);
+    try result.addBuiltin(env, "Decode", BUILTIN_DECODE);
+    try result.addBuiltin(env, "Dict", BUILTIN_DICT);
+    try result.addBuiltin(env, "Encode", BUILTIN_ENCODE);
+    try result.addBuiltin(env, "Hash", BUILTIN_HASH);
+    try result.addBuiltin(env, "Inspect", BUILTIN_INSPECT);
+    try result.addBuiltin(env, "List", BUILTIN_LIST);
+    try result.addBuiltin(env, "Num", BUILTIN_NUM);
+    try result.addBuiltin(env, "Result", BUILTIN_RESULT);
+    try result.addBuiltin(env, "Set", BUILTIN_SET);
+    try result.addBuiltin(env, "Str", BUILTIN_STR);
 
     // Assert that the node store has the 12 builtin types
-    result.debugAssertArraysInSync();
+    env.debugAssertArraysInSync();
 
     // Add built-in types to the type scope
     // TODO: These should ultimately come from the platform/builtin files rather than being hardcoded
@@ -258,7 +258,7 @@ pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHash
 
 fn addBuiltin(self: *Self, ir: *ModuleEnv, ident_text: []const u8, idx: Pattern.Idx) std.mem.Allocator.Error!void {
     const gpa = ir.gpa;
-    const ident_add = try ir.idents.insert(gpa, base.Ident.for_text(ident_text), Region.zero());
+    const ident_add = try ir.idents.insert(gpa, base.Ident.for_text(ident_text));
     const pattern_idx_add = try ir.addPatternAndTypeVar(Pattern{ .assign = .{ .ident = ident_add } }, Content{ .flex_var = null }, Region.zero());
     _ = try self.scopeIntroduceInternal(gpa, .ident, ident_add, pattern_idx_add, false, true);
     std.debug.assert(idx == pattern_idx_add);
@@ -268,7 +268,7 @@ fn addBuiltin(self: *Self, ir: *ModuleEnv, ident_text: []const u8, idx: Pattern.
 /// This should be replaced by real builtins eventually
 fn addBuiltinType(self: *Self, ir: *ModuleEnv, type_name: []const u8, content: types.Content) std.mem.Allocator.Error!Statement.Idx {
     const gpa = ir.gpa;
-    const type_ident = try ir.idents.insert(gpa, base.Ident.for_text(type_name), Region.zero());
+    const type_ident = try ir.idents.insert(gpa, base.Ident.for_text(type_name));
 
     // Create a type header for the built-in type
     const header_idx = try ir.addTypeHeaderAndTypeVar(.{
@@ -309,7 +309,7 @@ fn addBuiltinType(self: *Self, ir: *ModuleEnv, type_name: []const u8, content: t
 /// This should be replaced by real builtins eventually
 fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void {
     const gpa = ir.gpa;
-    const type_ident = try ir.idents.insert(gpa, base.Ident.for_text("Bool"), Region.zero());
+    const type_ident = try ir.idents.insert(gpa, base.Ident.for_text("Bool"));
 
     // Create a type header for the built-in type
     const header_idx = try ir.addTypeHeaderAndTypeVar(.{
@@ -342,11 +342,11 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
 
     const type_decl_idx = try ir.addStatementAndTypeVar(
         type_decl_stmt,
-        try ir.env.types.mkNominal(
+        try ir.types.mkNominal(
             types.TypeIdent{ .ident_idx = type_ident },
             anno_var,
             &.{},
-            try ir.env.idents.insert(gpa, base.Ident.for_text(ir.module_name)),
+            try ir.idents.insert(gpa, base.Ident.for_text(ir.module_name)),
         ),
         Region.zero(),
     );
@@ -4647,7 +4647,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, can_intro
                 // Create type variable annotation for this parameter
                 // Check for underscore in type parameter
                 const param_name = self.parse_ir.env.idents.getText(param_ident);
-                if (param_name[0] == '_') {
+                if (param_name.len > 0 and param_name[0] == '_') {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                         .is_alias = true,
                         .region = param_region,
@@ -6605,22 +6605,17 @@ fn createUnknownIdent(self: *Self) std.mem.Allocator.Error!Ident.Idx {
 const ScopeTestContext = struct {
     self: Self,
     module_env: *ModuleEnv,
-    env: *base.ModuleEnv,
     gpa: std.mem.Allocator,
 
-    fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!ScopeTestContext {
-        // heap allocate env for testing
-        const env = try gpa.create(base.ModuleEnv);
-        env.* = try base.ModuleEnv.init(gpa, "");
-
+    fn init(gpa: std.mem.Allocator) !ScopeTestContext {
         // heap allocate ModuleEnv for testing
         const module_env = try gpa.create(ModuleEnv);
-        module_env.* = try ModuleEnv.init(env, "Test");
+        module_env.* = try ModuleEnv.init(gpa, "");
+        try module_env.initCIRFields(gpa, "test");
 
         return ScopeTestContext{
             .self = try Self.init(module_env, undefined, null),
             .module_env = module_env,
-            .env = env,
             .gpa = gpa,
         };
     }
@@ -6629,8 +6624,6 @@ const ScopeTestContext = struct {
         ctx.self.deinit();
         ctx.module_env.deinit();
         ctx.gpa.destroy(ctx.module_env);
-        ctx.env.deinit();
-        ctx.gpa.destroy(ctx.env);
     }
 };
 
@@ -6665,7 +6658,7 @@ test "empty scope has no items" {
     var ctx = try ScopeTestContext.init(gpa);
     defer ctx.deinit();
 
-    const foo_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("foo"));
+    const foo_ident = try ctx.module_env.idents.insert(gpa, base.Ident.for_text("foo"));
     const result = ctx.self.scopeLookup(.ident, foo_ident);
 
     try std.testing.expectEqual(Scope.LookupResult{ .not_found = {} }, result);
@@ -6677,8 +6670,8 @@ test "can add and lookup idents at top level" {
     var ctx = try ScopeTestContext.init(gpa);
     defer ctx.deinit();
 
-    const foo_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("foo"));
-    const bar_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("bar"));
+    const foo_ident = try ctx.module_env.idents.insert(gpa, base.Ident.for_text("foo"));
+    const bar_ident = try ctx.module_env.idents.insert(gpa, base.Ident.for_text("bar"));
     const foo_pattern: Pattern.Idx = @enumFromInt(1);
     const bar_pattern: Pattern.Idx = @enumFromInt(2);
 
@@ -6703,7 +6696,7 @@ test "nested scopes shadow outer scopes" {
     var ctx = try ScopeTestContext.init(gpa);
     defer ctx.deinit();
 
-    const x_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("x"));
+    const x_ident = try ctx.module_env.idents.insert(gpa, base.Ident.for_text("x"));
     const outer_pattern: Pattern.Idx = @enumFromInt(1);
     const inner_pattern: Pattern.Idx = @enumFromInt(2);
 
@@ -6740,7 +6733,7 @@ test "top level var error" {
     var ctx = try ScopeTestContext.init(gpa);
     defer ctx.deinit();
 
-    const var_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("count_"));
+    const var_ident = try ctx.module_env.idents.insert(gpa, base.Ident.for_text("count_"));
     const pattern: Pattern.Idx = @enumFromInt(1);
 
     // Should fail to introduce var at top level
@@ -6756,7 +6749,7 @@ test "type variables are tracked separately from value identifiers" {
     defer ctx.deinit();
 
     // Create identifiers for 'a' - one for value, one for type
-    const a_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("a"));
+    const a_ident = try ctx.module_env.idents.insert(gpa, base.Ident.for_text("a"));
     const pattern: Pattern.Idx = @enumFromInt(1);
     const type_anno: TypeAnno.Idx = @enumFromInt(1);
 
@@ -6787,7 +6780,7 @@ test "var reassignment within same function" {
     // Enter function scope
     try ctx.self.scopeEnter(gpa, true);
 
-    const count_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("count_"));
+    const count_ident = try ctx.module_env.idents.insert(gpa, base.Ident.for_text("count_"));
     const pattern1: Pattern.Idx = @enumFromInt(1);
     const pattern2: Pattern.Idx = @enumFromInt(2);
 
@@ -6813,7 +6806,7 @@ test "var reassignment across function boundary fails" {
     // Enter first function scope
     try ctx.self.scopeEnter(gpa, true);
 
-    const count_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("count_"));
+    const count_ident = try ctx.module_env.idents.insert(gpa, base.Ident.for_text("count_"));
     const pattern1: Pattern.Idx = @enumFromInt(1);
     const pattern2: Pattern.Idx = @enumFromInt(2);
 
@@ -6835,8 +6828,8 @@ test "identifiers with and without underscores are different" {
     var ctx = try ScopeTestContext.init(gpa);
     defer ctx.deinit();
 
-    const sum_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("sum"));
-    const sum_underscore_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("sum_"));
+    const sum_ident = try ctx.module_env.idents.insert(gpa, base.Ident.for_text("sum"));
+    const sum_underscore_ident = try ctx.module_env.idents.insert(gpa, base.Ident.for_text("sum_"));
     const pattern1: Pattern.Idx = @enumFromInt(1);
     const pattern2: Pattern.Idx = @enumFromInt(2);
 
@@ -6865,7 +6858,7 @@ test "aliases work separately from idents" {
     var ctx = try ScopeTestContext.init(gpa);
     defer ctx.deinit();
 
-    const foo_ident = try ctx.env.idents.insert(gpa, base.Ident.for_text("Foo"));
+    const foo_ident = try ctx.module_env.idents.insert(gpa, base.Ident.for_text("Foo"));
     const ident_pattern: Pattern.Idx = @enumFromInt(1);
     const alias_pattern: Pattern.Idx = @enumFromInt(2);
 
@@ -6924,16 +6917,15 @@ test "hexadecimal integer literals" {
     const gpa = gpa_state.allocator();
 
     for (test_cases) |tc| {
-        var env = try base.ModuleEnv.init(gpa, tc.literal);
+        var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
+
+        try env.initCIRFields(gpa, "test");
 
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
-
-        var can = try init(&cir, &ast, null);
+        var can = try init(&env, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -6943,7 +6935,7 @@ test "hexadecimal integer literals" {
             continue;
         };
 
-        const expr = cir.store.getExpr(canonical_expr_idx);
+        const expr = env.store.getExpr(canonical_expr_idx);
         try std.testing.expect(expr == .e_int);
 
         // Check the value
@@ -7014,16 +7006,15 @@ test "binary integer literals" {
     const gpa = gpa_state.allocator();
 
     for (test_cases) |tc| {
-        var env = try base.ModuleEnv.init(gpa, tc.literal);
+        var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
+
+        try env.initCIRFields(gpa, "test");
 
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
-
-        var can = try init(&cir, &ast, null);
+        var can = try init(&env, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -7033,7 +7024,7 @@ test "binary integer literals" {
             continue;
         };
 
-        const expr = cir.store.getExpr(canonical_expr_idx);
+        const expr = env.store.getExpr(canonical_expr_idx);
         try std.testing.expect(expr == .e_int);
 
         // Check the value
@@ -7104,16 +7095,15 @@ test "octal integer literals" {
     const gpa = gpa_state.allocator();
 
     for (test_cases) |tc| {
-        var env = try base.ModuleEnv.init(gpa, tc.literal);
+        var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
+
+        try env.initCIRFields(gpa, "test");
 
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
-
-        var can = try init(&cir, &ast, null);
+        var can = try init(&env, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -7123,7 +7113,7 @@ test "octal integer literals" {
             continue;
         };
 
-        const expr = cir.store.getExpr(canonical_expr_idx);
+        const expr = env.store.getExpr(canonical_expr_idx);
         try std.testing.expect(expr == .e_int);
 
         // Check the value
@@ -7194,16 +7184,15 @@ test "integer literals with uppercase base prefixes" {
     const gpa = gpa_state.allocator();
 
     for (test_cases) |tc| {
-        var env = try base.ModuleEnv.init(gpa, tc.literal);
+        var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
+
+        try env.initCIRFields(gpa, "test");
 
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
-
-        var can = try init(&cir, &ast, null);
+        var can = try init(&env, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -7213,7 +7202,7 @@ test "integer literals with uppercase base prefixes" {
             continue;
         };
 
-        const expr = cir.store.getExpr(canonical_expr_idx);
+        const expr = env.store.getExpr(canonical_expr_idx);
         try std.testing.expect(expr == .e_int);
 
         // Check the value
@@ -7256,11 +7245,10 @@ test "numeric literal patterns use pattern idx as type var" {
 
     // Test that int literal patterns work and use the pattern index as the type variable
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         // Create an int literal pattern directly
         const int_pattern = Pattern{
@@ -7269,7 +7257,7 @@ test "numeric literal patterns use pattern idx as type var" {
             },
         };
 
-        const pattern_idx = try cir.addPatternAndTypeVar(int_pattern, Content{
+        const pattern_idx = try env.addPatternAndTypeVar(int_pattern, Content{
             .structure = .{ .num = .{ .num_unbound = .{
                 .sign_needed = false,
                 .bits_needed = 0,
@@ -7277,7 +7265,7 @@ test "numeric literal patterns use pattern idx as type var" {
         }, base.Region.zero());
 
         // Verify the stored pattern
-        const stored_pattern = cir.store.getPattern(pattern_idx);
+        const stored_pattern = env.store.getPattern(pattern_idx);
         try std.testing.expect(stored_pattern == .int_literal);
         try std.testing.expectEqual(@as(i128, 42), @as(i128, @bitCast(stored_pattern.int_literal.value.bytes)));
 
@@ -7301,11 +7289,10 @@ test "numeric literal patterns use pattern idx as type var" {
 
     // Test that f64 literal patterns work
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         // Create a dec literal pattern directly
         const dec_pattern = Pattern{
@@ -7314,7 +7301,7 @@ test "numeric literal patterns use pattern idx as type var" {
             },
         };
 
-        const pattern_idx = try cir.addPatternAndTypeVar(dec_pattern, Content{
+        const pattern_idx = try env.addPatternAndTypeVar(dec_pattern, Content{
             .structure = .{ .num = .{ .frac_unbound = .{
                 .fits_in_f32 = true,
                 .fits_in_dec = true,
@@ -7322,7 +7309,7 @@ test "numeric literal patterns use pattern idx as type var" {
         }, base.Region.zero());
 
         // Verify the stored pattern
-        const stored_pattern = cir.store.getPattern(pattern_idx);
+        const stored_pattern = env.store.getPattern(pattern_idx);
         try std.testing.expect(stored_pattern == .dec_literal);
         const expected_dec = RocDec.fromF64(3.14) orelse unreachable;
         try std.testing.expectEqual(expected_dec.num, stored_pattern.dec_literal.value.num);
@@ -7353,11 +7340,10 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test int_unbound pattern
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         const pattern = Pattern{
             .int_literal = .{
@@ -7365,7 +7351,7 @@ test "numeric pattern types: unbound vs polymorphic" {
             },
         };
 
-        const pattern_idx = try cir.addPatternAndTypeVar(pattern, Content{
+        const pattern_idx = try env.addPatternAndTypeVar(pattern, Content{
             .structure = .{ .num = .{ .int_unbound = .{
                 .sign_needed = true,
                 .bits_needed = 0,
@@ -7391,11 +7377,10 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test int_poly pattern (polymorphic integer that can be different int types)
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         const pattern = Pattern{
             .int_literal = .{
@@ -7406,7 +7391,7 @@ test "numeric pattern types: unbound vs polymorphic" {
         // Create a fresh type variable for polymorphic int
         const poly_var = try env.types.fresh();
 
-        const pattern_idx = try cir.store.addPattern(pattern, base.Region.zero());
+        const pattern_idx = try env.store.addPattern(pattern, base.Region.zero());
         _ = try env.types.freshFromContent(Content{
             .structure = .{
                 .num = .{
@@ -7441,11 +7426,10 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test num_unbound pattern (can be int or frac)
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         const pattern = Pattern{
             .int_literal = .{
@@ -7453,7 +7437,7 @@ test "numeric pattern types: unbound vs polymorphic" {
             },
         };
 
-        const pattern_idx = try cir.addPatternAndTypeVar(pattern, Content{
+        const pattern_idx = try env.addPatternAndTypeVar(pattern, Content{
             .structure = .{ .num = .{ .num_unbound = .{
                 .sign_needed = false,
                 .bits_needed = 0,
@@ -7479,11 +7463,10 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test num_poly pattern (polymorphic num that can be int or frac)
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         const pattern = Pattern{
             .int_literal = .{
@@ -7494,7 +7477,7 @@ test "numeric pattern types: unbound vs polymorphic" {
         // Create a fresh type variable for polymorphic num
         const poly_var = try env.types.fresh();
 
-        const pattern_idx = try cir.store.addPattern(pattern, base.Region.zero());
+        const pattern_idx = try env.store.addPattern(pattern, base.Region.zero());
         _ = try env.types.freshFromContent(Content{
             .structure = .{ .num = .{ .num_poly = .{
                 .var_ = poly_var,
@@ -7525,11 +7508,10 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test frac_unbound pattern
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         const pattern = Pattern{
             .dec_literal = .{
@@ -7537,7 +7519,7 @@ test "numeric pattern types: unbound vs polymorphic" {
             },
         };
 
-        const pattern_idx = try cir.addPatternAndTypeVar(pattern, Content{
+        const pattern_idx = try env.addPatternAndTypeVar(pattern, Content{
             .structure = .{ .num = .{ .frac_unbound = .{
                 .fits_in_f32 = true,
                 .fits_in_dec = true,
@@ -7569,16 +7551,15 @@ test "record literal uses record_unbound" {
     {
         const source1 = "{ x: 42, y: \"hello\" }";
 
-        var env = try base.ModuleEnv.init(gpa, source1);
+        var env = try ModuleEnv.init(gpa, source1);
         defer env.deinit();
+
+        try env.initCIRFields(gpa, "test");
 
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
-
-        var can = try Self.init(&cir, &ast, null);
+        var can = try Self.init(&env, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -7607,16 +7588,15 @@ test "record literal uses record_unbound" {
     {
         const source2 = "{}";
 
-        var env = try base.ModuleEnv.init(gpa, source2);
+        var env = try ModuleEnv.init(gpa, source2);
         defer env.deinit();
+
+        try env.initCIRFields(gpa, "test");
 
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
-
-        var can = try Self.init(&cir, &ast, null);
+        var can = try Self.init(&env, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -7645,16 +7625,15 @@ test "record literal uses record_unbound" {
     {
         const source3 = "{ value: 123 }";
 
-        var env = try base.ModuleEnv.init(gpa, source3);
+        var env = try ModuleEnv.init(gpa, source3);
         defer env.deinit();
+
+        try env.initCIRFields(gpa, "test");
 
         var ast = try parse.parseExpr(&env);
         defer ast.deinit(gpa);
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
-
-        var can = try Self.init(&cir, &ast, null);
+        var can = try Self.init(&env, &ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -7690,16 +7669,15 @@ test "record_unbound basic functionality" {
     const source = "{ x: 42, y: 99 }";
 
     // Test that record literals create record_unbound types
-    var env = try base.ModuleEnv.init(gpa, source);
+    var env = try ModuleEnv.init(gpa, source);
     defer env.deinit();
+
+    try env.initCIRFields(gpa, "test");
 
     var ast = try parse.parseExpr(&env);
     defer ast.deinit(gpa);
 
-    var cir = try ModuleEnv.init(&env, "Test");
-    defer cir.deinit();
-
-    var can = try Self.init(&cir, &ast, null);
+    var can = try Self.init(&env, &ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -7733,17 +7711,16 @@ test "record_unbound with multiple fields" {
     const gpa = std.testing.allocator;
     const source = "{ a: 123, b: 456, c: 789 }";
 
-    var env = try base.ModuleEnv.init(gpa, source);
+    var env = try ModuleEnv.init(gpa, source);
     defer env.deinit();
+
+    try env.initCIRFields(gpa, "test");
 
     // Create record_unbound with multiple fields
     var ast = try parse.parseExpr(&env);
     defer ast.deinit(gpa);
 
-    var cir = try ModuleEnv.init(&env, "Test");
-    defer cir.deinit();
-
-    var can = try Self.init(&cir, &ast, null);
+    var can = try Self.init(&env, &ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -7775,11 +7752,10 @@ test "record_unbound with multiple fields" {
 test "record with extension variable" {
     const gpa = std.testing.allocator;
 
-    var env = try base.ModuleEnv.init(gpa, "");
+    var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var cir = try ModuleEnv.init(&env, "Test");
-    defer cir.deinit();
+    try env.initCIRFields(gpa, "test");
 
     // Test that regular records have extension variables
     // Create { x: 42, y: "hi" }* (open record)
@@ -7851,11 +7827,10 @@ test "numeric pattern types: unbound vs polymorphic - frac" {
 
     // Test frac_poly pattern
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         const pattern = Pattern{
             .dec_literal = .{
@@ -7866,7 +7841,7 @@ test "numeric pattern types: unbound vs polymorphic - frac" {
         // Create a fresh type variable for polymorphic frac
         const poly_var = try env.types.fresh();
 
-        const pattern_idx = try cir.store.addPattern(pattern, base.Region.zero());
+        const pattern_idx = try env.store.addPattern(pattern, base.Region.zero());
         _ = try env.types.freshFromContent(Content{
             .structure = .{
                 .num = .{
@@ -7907,11 +7882,10 @@ test "pattern numeric literal value edge cases" {
 
     // Test max/min integer values
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         // Test i128 max
         const max_pattern = Pattern{
@@ -7919,8 +7893,8 @@ test "pattern numeric literal value edge cases" {
                 .value = .{ .bytes = @bitCast(@as(i128, std.math.maxInt(i128))), .kind = .i128 },
             },
         };
-        const max_idx = try cir.store.addPattern(max_pattern, base.Region.zero());
-        const stored_max = cir.store.getPattern(max_idx);
+        const max_idx = try env.store.addPattern(max_pattern, base.Region.zero());
+        const stored_max = env.store.getPattern(max_idx);
         try std.testing.expectEqual(std.math.maxInt(i128), @as(i128, @bitCast(stored_max.int_literal.value.bytes)));
 
         // Test i128 min
@@ -7929,18 +7903,17 @@ test "pattern numeric literal value edge cases" {
                 .value = .{ .bytes = @bitCast(@as(i128, std.math.minInt(i128))), .kind = .i128 },
             },
         };
-        const min_idx = try cir.store.addPattern(min_pattern, base.Region.zero());
-        const stored_min = cir.store.getPattern(min_idx);
+        const min_idx = try env.store.addPattern(min_pattern, base.Region.zero());
+        const stored_min = env.store.getPattern(min_idx);
         try std.testing.expectEqual(std.math.minInt(i128), @as(i128, @bitCast(stored_min.int_literal.value.bytes)));
     }
 
     // Test small decimal pattern
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         const small_dec_pattern = Pattern{
             .small_dec_literal = .{
@@ -7950,8 +7923,8 @@ test "pattern numeric literal value edge cases" {
             },
         };
 
-        const pattern_idx = try cir.store.addPattern(small_dec_pattern, base.Region.zero());
-        const stored = cir.store.getPattern(pattern_idx);
+        const pattern_idx = try env.store.addPattern(small_dec_pattern, base.Region.zero());
+        const stored = env.store.getPattern(pattern_idx);
 
         try std.testing.expect(stored == .small_dec_literal);
         try std.testing.expectEqual(@as(i16, 1234), stored.small_dec_literal.numerator);
@@ -7960,11 +7933,10 @@ test "pattern numeric literal value edge cases" {
 
     // Test dec literal pattern
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         const dec_pattern = Pattern{
             .dec_literal = .{
@@ -7973,8 +7945,8 @@ test "pattern numeric literal value edge cases" {
             },
         };
 
-        const pattern_idx = try cir.store.addPattern(dec_pattern, base.Region.zero());
-        const stored = cir.store.getPattern(pattern_idx);
+        const pattern_idx = try env.store.addPattern(dec_pattern, base.Region.zero());
+        const stored = env.store.getPattern(pattern_idx);
 
         try std.testing.expect(stored == .dec_literal);
         try std.testing.expectEqual(@as(i128, 314159265358979323), stored.dec_literal.value.num);
@@ -7982,11 +7954,10 @@ test "pattern numeric literal value edge cases" {
 
     // Test special float values
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         // Test negative zero (RocDec doesn't distinguish between +0 and -0)
         const neg_zero_pattern = Pattern{
@@ -7994,8 +7965,8 @@ test "pattern numeric literal value edge cases" {
                 .value = RocDec.fromF64(-0.0) orelse unreachable,
             },
         };
-        const neg_zero_idx = try cir.store.addPattern(neg_zero_pattern, base.Region.zero());
-        const stored_neg_zero = cir.store.getPattern(neg_zero_idx);
+        const neg_zero_idx = try env.store.addPattern(neg_zero_pattern, base.Region.zero());
+        const stored_neg_zero = env.store.getPattern(neg_zero_idx);
         try std.testing.expect(stored_neg_zero == .dec_literal);
         try std.testing.expectEqual(@as(i128, 0), stored_neg_zero.dec_literal.value.num);
     }
@@ -8008,11 +7979,10 @@ test "pattern literal type transitions" {
 
     // Test transitioning from unbound to concrete type
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         const pattern = Pattern{
             .int_literal = .{
@@ -8020,7 +7990,7 @@ test "pattern literal type transitions" {
             },
         };
 
-        const pattern_idx = try cir.addPatternAndTypeVar(pattern, Content{
+        const pattern_idx = try env.addPatternAndTypeVar(pattern, Content{
             .structure = .{ .num = .{ .num_unbound = .{
                 .sign_needed = false,
                 .bits_needed = 1,
@@ -8054,11 +8024,10 @@ test "pattern literal type transitions" {
 
     // Test hex/binary/octal patterns must be integers
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         // Hex pattern (0xFF)
         const hex_pattern = Pattern{
@@ -8067,7 +8036,7 @@ test "pattern literal type transitions" {
             },
         };
 
-        const hex_idx = try cir.addPatternAndTypeVar(hex_pattern, Content{
+        const hex_idx = try env.addPatternAndTypeVar(hex_pattern, Content{
             .structure = .{ .num = .{ .int_unbound = .{
                 .sign_needed = false,
                 .bits_needed = 1,
@@ -8100,11 +8069,10 @@ test "pattern type inference with numeric literals" {
 
     // Test that pattern indices work correctly as type variables with type inference
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         // Create patterns representing different numeric literals
         const patterns = [_]struct {
@@ -8156,7 +8124,7 @@ test "pattern type inference with numeric literals" {
         };
 
         for (patterns) |test_case| {
-            const pattern_idx = try cir.addPatternAndTypeVar(test_case.pattern, test_case.expected_type, base.Region.zero());
+            const pattern_idx = try env.addPatternAndTypeVar(test_case.pattern, test_case.expected_type, base.Region.zero());
 
             // Verify the pattern index works as a type variable
             const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
@@ -8169,11 +8137,10 @@ test "pattern type inference with numeric literals" {
 
     // Test patterns with type constraints from context
     {
-        var env = try base.ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        var cir = try ModuleEnv.init(&env, "Test");
-        defer cir.deinit();
+        try env.initCIRFields(gpa, "test");
 
         // Create a pattern that will be constrained by context
         const pattern = Pattern{
@@ -8182,7 +8149,7 @@ test "pattern type inference with numeric literals" {
             },
         };
 
-        const pattern_idx = try cir.addPatternAndTypeVar(pattern, Content{
+        const pattern_idx = try env.addPatternAndTypeVar(pattern, Content{
             .structure = .{ .num = .{ .num_unbound = .{
                 .sign_needed = false,
                 .bits_needed = 1,

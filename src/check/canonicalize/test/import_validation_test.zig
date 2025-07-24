@@ -9,9 +9,8 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("../../parse.zig");
-const ModuleEnv = base.ModuleEnv;
 const canonicalize = @import("../../canonicalize.zig");
-const CIR = canonicalize.CIR;
+const ModuleEnv = @import("../../../compile/ModuleEnv.zig");
 const expectEqual = testing.expectEqual;
 
 test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT EXPOSED, and working imports" {
@@ -76,7 +75,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = ModuleEnv.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, &module_envs);
@@ -94,7 +93,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
 
     const diagnostics = cir.diag_regions.entries.items;
     for (diagnostics) |entry| {
-        const diag_idx: CIR.Diagnostic.Idx = @enumFromInt(entry.value);
+        const diag_idx: ModuleEnv.Diagnostic.Idx = @enumFromInt(entry.value);
         const diagnostic = cir.store.getDiagnostic(diag_idx);
 
         switch (diagnostic) {
@@ -161,7 +160,7 @@ test "import validation - no module_envs provided" {
     var env = base.ModuleEnv.init(allocator, "");
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = ModuleEnv.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -172,7 +171,7 @@ test "import validation - no module_envs provided" {
     // When module_envs is null, no import validation errors should be generated
     const diagnostics = cir.diag_regions.entries.items;
     for (diagnostics) |entry| {
-        const diag_idx: CIR.Diagnostic.Idx = @enumFromInt(entry.value);
+        const diag_idx: ModuleEnv.Diagnostic.Idx = @enumFromInt(entry.value);
         const diagnostic = cir.store.getDiagnostic(diag_idx);
 
         switch (diagnostic) {
@@ -215,7 +214,7 @@ test "import interner - Import.Idx functionality" {
     var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = ModuleEnv.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -255,7 +254,7 @@ test "import interner - Import.Idx functionality" {
 
     // Test the lookup functionality
     // Get the Import.Idx for "List" (should be used twice)
-    var list_import_idx: ?CIR.Import.Idx = null;
+    var list_import_idx: ?ModuleEnv.Import.Idx = null;
     for (canonicalizer.import_indices.iterator()) |entry| {
         const module_name = entry.key_ptr.*;
         if (std.mem.eql(u8, module_name, "List")) {
@@ -303,7 +302,7 @@ test "import interner - comprehensive usage example" {
     var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = ModuleEnv.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -340,21 +339,21 @@ test "import interner - comprehensive usage example" {
 
 test "Import.Idx is u16" {
     // Verify that Import.Idx is indeed a u16 enum
-    const import_idx_type = @TypeOf(CIR.Import.Idx);
+    const import_idx_type = @TypeOf(ModuleEnv.Import.Idx);
     const type_info = @typeInfo(import_idx_type).Enum;
 
     // The underlying type should be u16
     try testing.expectEqual(u16, type_info.tag_type);
 
     // Test that we can create valid Import.Idx values
-    const idx1: CIR.Import.Idx = @enumFromInt(0);
-    const idx2: CIR.Import.Idx = @enumFromInt(65535); // max u16 value
+    const idx1: ModuleEnv.Import.Idx = @enumFromInt(0);
+    const idx2: ModuleEnv.Import.Idx = @enumFromInt(65535); // max u16 value
 
     // Verify they are distinct
     try testing.expect(idx1 != idx2);
 
     // Verify the size in memory
-    try testing.expectEqual(@sizeOf(u16), @sizeOf(CIR.Import.Idx));
+    try testing.expectEqual(@sizeOf(u16), @sizeOf(ModuleEnv.Import.Idx));
 }
 
 test "module scopes - imports are only available in their scope" {
@@ -400,7 +399,7 @@ test "module scopes - imports are only available in their scope" {
     var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = ModuleEnv.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -414,7 +413,7 @@ test "module scopes - imports are only available in their scope" {
 
     const diagnostics = cir.diag_regions.entries.items;
     for (diagnostics) |entry| {
-        const diag_idx: CIR.Diagnostic.Idx = @enumFromInt(entry.value);
+        const diag_idx: ModuleEnv.Diagnostic.Idx = @enumFromInt(entry.value);
         const diagnostic = cir.store.getDiagnostic(diag_idx);
 
         switch (diagnostic) {
@@ -463,7 +462,7 @@ test "module-qualified lookups with e_lookup_external" {
     var env = base.ModuleEnv.init(allocator, try allocator.dupe(u8, source));
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = ModuleEnv.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, null);
@@ -485,7 +484,7 @@ test "module-qualified lookups with e_lookup_external" {
             external_lookup_count += 1;
 
             // Get the external lookup data
-            const module_idx: CIR.Import.Idx = @enumFromInt(node.data_1);
+            const module_idx: ModuleEnv.Import.Idx = @enumFromInt(node.data_1);
             const field_name_idx: base.Ident.Idx = @bitCast(node.data_2);
             const import = &cir.imports.imports.items.items[@intFromEnum(module_idx)];
             const module_name = import.name;
@@ -559,7 +558,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     var env = base.ModuleEnv.init(allocator, "");
     defer env.deinit();
     try env.calcLineStarts(source);
-    var cir = CIR.init(&env, "Test");
+    var cir = ModuleEnv.init(&env, "Test");
     defer cir.deinit();
 
     var canonicalizer = try canonicalize.init(&cir, &ast, &module_envs);
@@ -575,7 +574,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     const all_exprs = cir.store.expr_buffer.items;
     for (all_exprs) |node| {
         if (node.tag == .expr_external_lookup) {
-            const module_idx: CIR.Import.Idx = @enumFromInt(node.data_1);
+            const module_idx: ModuleEnv.Import.Idx = @enumFromInt(node.data_1);
             const field_name_idx: base.Ident.Idx = @bitCast(node.data_2);
             const target_node_idx: u16 = @intCast(node.data_3);
             const import = &cir.imports.imports.items.items[@intFromEnum(module_idx)];
@@ -627,7 +626,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     env2.source = try allocator.dupe(u8, source2);
     env2.owns_source = true;
     try env2.calcLineStarts(source2);
-    var cir2 = CIR.init(&env2);
+    var cir2 = ModuleEnv.init(&env2);
     defer cir2.deinit();
 
     var canonicalizer2 = try canonicalize.init(&cir2, &ast2, &module_envs);
@@ -666,10 +665,10 @@ test "export count safety - ensures safe u16 casting" {
     // Test the diagnostic for exactly maxInt(u16) exports
     var env1 = base.ModuleEnv.init(allocator, "");
     defer env1.deinit();
-    var cir1 = CIR.init(&env1);
+    var cir1 = ModuleEnv.init(&env1);
     defer cir1.deinit();
 
-    const diag_at_limit = CIR.Diagnostic{
+    const diag_at_limit = ModuleEnv.Diagnostic{
         .too_many_exports = .{
             .count = 65535, // Exactly at the limit
             .region = base.Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 10 } },
@@ -689,10 +688,10 @@ test "export count safety - ensures safe u16 casting" {
     // Test the diagnostic for exceeding the limit
     var env2 = base.ModuleEnv.init(allocator, "");
     defer env2.deinit();
-    var cir2 = CIR.init(&env2);
+    var cir2 = ModuleEnv.init(&env2);
     defer cir2.deinit();
 
-    const diag_over_limit = CIR.Diagnostic{
+    const diag_over_limit = ModuleEnv.Diagnostic{
         .too_many_exports = .{
             .count = 70000, // Well over the limit
             .region = base.Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 10 } },

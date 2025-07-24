@@ -26,6 +26,7 @@ regions: Region.List,
 extra_data: std.ArrayListUnmanaged(u32),
 scratch_statements: base.Scratch(ModuleEnv.Statement.Idx),
 scratch_exprs: base.Scratch(ModuleEnv.Expr.Idx),
+scratch_captures: base.Scratch(ModuleEnv.Expr.Capture.Idx),
 scratch_record_fields: base.Scratch(ModuleEnv.RecordField.Idx),
 scratch_match_branches: base.Scratch(ModuleEnv.Expr.Match.Branch.Idx),
 scratch_match_branch_patterns: base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx),
@@ -56,6 +57,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .extra_data = try std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2),
         .scratch_statements = try base.Scratch(ModuleEnv.Statement.Idx).init(gpa),
         .scratch_exprs = try base.Scratch(ModuleEnv.Expr.Idx).init(gpa),
+        .scratch_captures = try base.Scratch(ModuleEnv.Expr.Capture.Idx).init(gpa),
         .scratch_patterns = try base.Scratch(ModuleEnv.Pattern.Idx).init(gpa),
         .scratch_record_fields = try base.Scratch(ModuleEnv.RecordField.Idx).init(gpa),
         .scratch_pattern_record_fields = try base.Scratch(ModuleEnv.PatternRecordField.Idx).init(gpa),
@@ -79,6 +81,7 @@ pub fn deinit(store: *NodeStore) void {
     store.extra_data.deinit(store.gpa);
     store.scratch_statements.items.deinit(store.gpa);
     store.scratch_exprs.items.deinit(store.gpa);
+    store.scratch_captures.items.deinit(store.gpa);
     store.scratch_patterns.items.deinit(store.gpa);
     store.scratch_record_fields.items.deinit(store.gpa);
     store.scratch_pattern_record_fields.items.deinit(store.gpa);
@@ -458,11 +461,14 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const args_start = extra_data[0];
             const args_len = extra_data[1];
             const body_idx = extra_data[2];
+            const captures_start = extra_data[3];
+            const captures_len = extra_data[4];
 
             return ModuleEnv.Expr{
                 .e_lambda = .{
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
                     .body = @enumFromInt(body_idx),
+                    .captures = .{ .span = .{ .start = captures_start, .len = captures_len } },
                 },
             };
         },
@@ -1398,6 +1404,10 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             try store.extra_data.append(store.gpa, e.args.span.len);
             // Store body index
             try store.extra_data.append(store.gpa, @intFromEnum(e.body));
+            // Store captures span start
+            try store.extra_data.append(store.gpa, e.captures.span.start);
+            // Store captures span length
+            try store.extra_data.append(store.gpa, e.captures.span.len);
 
             node.data_1 = extra_data_start;
         },
@@ -1479,6 +1489,23 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: ModuleEnv.Pattern.R
             node.data_3 = extra_data_start;
         },
     }
+
+    const nid = try store.nodes.append(store.gpa, node);
+    _ = try store.regions.append(store.gpa, region);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Adds a capture to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `ModuleEnv`.
+pub fn addCapture(store: *NodeStore, capture: ModuleEnv.Expr.Capture, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Expr.Capture.Idx {
+    const node = Node{
+        .tag = .lambda_capture,
+        .data_1 = @bitCast(capture.name),
+        .data_2 = capture.scope_depth,
+        .data_3 = @intFromEnum(capture.pattern_idx),
+    };
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -1906,6 +1933,20 @@ pub fn getDef(store: *const NodeStore, def_idx: ModuleEnv.Def.Idx) ModuleEnv.Def
     };
 }
 
+/// Retrieves a capture from the store.
+pub fn getCapture(store: *const NodeStore, capture_idx: ModuleEnv.Expr.Capture.Idx) ModuleEnv.Expr.Capture {
+    const nid: Node.Idx = @enumFromInt(@intFromEnum(capture_idx));
+    const node = store.nodes.get(nid);
+
+    std.debug.assert(node.tag == .lambda_capture);
+
+    return ModuleEnv.Expr.Capture{
+        .name = @bitCast(node.data_1),
+        .scope_depth = node.data_2,
+        .pattern_idx = @enumFromInt(node.data_3),
+    };
+}
+
 /// Retrieves a record field from the store.
 pub fn getRecordField(store: *const NodeStore, idx: ModuleEnv.RecordField.Idx) ModuleEnv.RecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
@@ -1993,6 +2034,11 @@ pub fn addScratchExpr(store: *NodeStore, idx: ModuleEnv.Expr.Idx) std.mem.Alloca
     try store.addScratch("scratch_exprs", idx);
 }
 
+/// Adds a capture index to the scratch captures list for building spans.
+pub fn addScratchCapture(store: *NodeStore, idx: ModuleEnv.Expr.Capture.Idx) std.mem.Allocator.Error!void {
+    try store.addScratch("scratch_captures", idx);
+}
+
 /// Adds a statement index to the scratch statements list for building spans.
 pub fn addScratchStatement(store: *NodeStore, idx: ModuleEnv.Statement.Idx) std.mem.Allocator.Error!void {
     try store.addScratch("scratch_statements", idx);
@@ -2001,6 +2047,11 @@ pub fn addScratchStatement(store: *NodeStore, idx: ModuleEnv.Statement.Idx) std.
 /// Computes the span of an expression starting from a given index.
 pub fn exprSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.Expr.Span {
     return try store.spanFrom("scratch_exprs", ModuleEnv.Expr.Span, start);
+}
+
+/// Computes the span of captures starting from a given index.
+pub fn capturesSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!ModuleEnv.Expr.Capture.Span {
+    return try store.spanFrom("scratch_captures", ModuleEnv.Expr.Capture.Span, start);
 }
 
 /// Creates a statement span from the given start position to the current top of scratch statements.
@@ -2177,6 +2228,11 @@ pub fn sliceExpr(store: *const NodeStore, span: ModuleEnv.Expr.Span) []ModuleEnv
 /// Returns a slice of `CanIR.Pattern.Idx`
 pub fn slicePatterns(store: *const NodeStore, span: ModuleEnv.Pattern.Span) []ModuleEnv.Pattern.Idx {
     return store.sliceFromSpan(ModuleEnv.Pattern.Idx, span.span);
+}
+
+/// Returns a slice of `ModuleEnv.Expr.Capture.Idx`
+pub fn sliceCaptures(store: *const NodeStore, span: ModuleEnv.Expr.Capture.Span) []ModuleEnv.Expr.Capture.Idx {
+    return store.sliceFromSpan(ModuleEnv.Expr.Capture.Idx, span.span);
 }
 
 /// Returns a slice of statements from the store.
@@ -2953,6 +3009,7 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
         // All scratch arrays start empty
         .scratch_statements = base.Scratch(ModuleEnv.Statement.Idx){ .items = .{} },
         .scratch_exprs = base.Scratch(ModuleEnv.Expr.Idx){ .items = .{} },
+        .scratch_captures = base.Scratch(ModuleEnv.Expr.Capture.Idx){ .items = .{} },
         .scratch_record_fields = base.Scratch(ModuleEnv.RecordField.Idx){ .items = .{} },
         .scratch_match_branches = base.Scratch(ModuleEnv.Expr.Match.Branch.Idx){ .items = .{} },
         .scratch_match_branch_patterns = base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx){ .items = .{} },

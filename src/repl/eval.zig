@@ -16,7 +16,7 @@ const stack = @import("../eval/stack.zig");
 const writers = types.writers;
 const Allocator = std.mem.Allocator;
 const target = base.target;
-const CIR = canonicalize.CIR;
+const ModuleEnv = @import("../compile/ModuleEnv.zig");
 const AST = parse.AST;
 
 /// Type of definition stored in the REPL history

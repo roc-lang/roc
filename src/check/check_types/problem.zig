@@ -14,7 +14,7 @@ const Document = reporting.Document;
 const UnderlineRegion = @import("../../reporting/document.zig").UnderlineRegion;
 const SourceCodeDisplayRegion = @import("../../reporting/document.zig").SourceCodeDisplayRegion;
 
-const CIR = can.CIR;
+const ModuleEnv = @import("../../compile/ModuleEnv.zig");
 const TypesStore = types_mod.Store;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -94,28 +94,28 @@ pub const TypeMismatchDetail = union(enum) {
 
 /// Problem data for when list elements have incompatible types
 pub const IncompatibleListElements = struct {
-    last_elem_expr: CIR.Expr.Idx,
+    last_elem_expr: ModuleEnv.Expr.Idx,
     incompatible_elem_index: u32, // 0-based index of the incompatible element
     list_length: u32, // Total number of elements in the list
 };
 
 /// Problem data for cross-module import type mismatches
 pub const CrossModuleImport = struct {
-    import_region: CIR.Expr.Idx,
-    module_idx: CIR.Import.Idx,
+    import_region: ModuleEnv.Expr.Idx,
+    module_idx: ModuleEnv.Import.Idx,
 };
 
 /// Problem data for when if branches have incompatible types
 pub const IncompatibleIfBranches = struct {
-    parent_if_expr: CIR.Expr.Idx,
-    last_if_branch: CIR.Expr.IfBranch.Idx,
+    parent_if_expr: ModuleEnv.Expr.Idx,
+    last_if_branch: ModuleEnv.Expr.IfBranch.Idx,
     num_branches: u32,
     problem_branch_index: u32,
 };
 
 /// Problem data for when match patterns have have incompatible types
 pub const IncompatibleMatchPatterns = struct {
-    match_expr: CIR.Expr.Idx,
+    match_expr: ModuleEnv.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
     num_patterns: u32,
@@ -124,14 +124,14 @@ pub const IncompatibleMatchPatterns = struct {
 
 /// Problem data for when match branches have have incompatible types
 pub const IncompatibleMatchBranches = struct {
-    match_expr: CIR.Expr.Idx,
+    match_expr: ModuleEnv.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
 };
 
 /// Problem data for when a bool binop (`and` or `or`) is invalid
 pub const InvalidBoolBinop = struct {
-    binop_expr: CIR.Expr.Idx,
+    binop_expr: ModuleEnv.Expr.Idx,
     problem_side: enum { lhs, rhs },
     binop: enum { @"and", @"or" },
 };
@@ -155,21 +155,21 @@ pub const ReportBuilder = struct {
     gpa: Allocator,
     buf: std.ArrayList(u8),
     module_env: *const @import("../../compile/ModuleEnv.zig"),
-    can_ir: *const can.CIR,
+    can_ir: *const can.ModuleEnv,
     snapshots: *const snapshot.Store,
     source: []const u8,
     filename: []const u8,
-    other_modules: []const *const can.CIR,
+    other_modules: []const *const can.ModuleEnv,
 
     /// Init report builder
     /// Only owned field is `buf`
     pub fn init(
         gpa: Allocator,
         module_env: *const @import("../../compile/ModuleEnv.zig"),
-        can_ir: *const can.CIR,
+        can_ir: *const can.ModuleEnv,
         snapshots: *const snapshot.Store,
         filename: []const u8,
-        other_modules: []const *const can.CIR,
+        other_modules: []const *const can.ModuleEnv,
     ) Self {
         return .{
             .gpa = gpa,

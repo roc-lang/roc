@@ -3,39 +3,37 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
-const ModuleEnv = base.ModuleEnv;
-// Use the CIR re-export from canonicalize.zig
-const CIR = @import("../canonicalize.zig").CIR;
+const ModuleEnv = @import("../../compile/ModuleEnv.zig");
 
 const Ident = base.Ident;
 
 const Scope = @This();
 
 /// Maps an Ident to a Pattern in the Can IR
-idents: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
-aliases: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
+idents: std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx),
+aliases: std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx),
 /// Maps type names to their type declaration statements
-type_decls: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
+type_decls: std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Statement.Idx),
 /// Maps type variables to their type annotation indices
-type_vars: std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
+type_vars: std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.TypeAnno.Idx),
 /// Maps module alias names to their full module names
 module_aliases: std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
 /// Maps exposed item names to their source modules and original names (for import resolution)
 exposed_items: std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
 /// Maps module names to their Import.Idx for modules imported in this scope
-imported_modules: std.StringHashMapUnmanaged(CIR.Import.Idx),
+imported_modules: std.StringHashMapUnmanaged(ModuleEnv.Import.Idx),
 is_function_boundary: bool,
 
 /// Initialize the scope
 pub fn init(is_function_boundary: bool) Scope {
     return Scope{
-        .idents = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx){},
-        .aliases = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx){},
-        .type_decls = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx){},
-        .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx){},
+        .idents = std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx){},
+        .aliases = std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx){},
+        .type_decls = std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Statement.Idx){},
+        .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.TypeAnno.Idx){},
         .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx){},
         .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
-        .imported_modules = std.StringHashMapUnmanaged(CIR.Import.Idx){},
+        .imported_modules = std.StringHashMapUnmanaged(ModuleEnv.Import.Idx){},
         .is_function_boundary = is_function_boundary,
     };
 }
@@ -63,19 +61,19 @@ pub const Error = error{
 
 /// Result of looking up an identifier
 pub const LookupResult = union(enum) {
-    found: CIR.Pattern.Idx,
+    found: ModuleEnv.Pattern.Idx,
     not_found: void,
 };
 
 /// Result of looking up a type declaration
 pub const TypeLookupResult = union(enum) {
-    found: CIR.Statement.Idx,
+    found: ModuleEnv.Statement.Idx,
     not_found: void,
 };
 
 /// Result of looking up a type variable
 pub const TypeVarLookupResult = union(enum) {
-    found: CIR.TypeAnno.Idx,
+    found: ModuleEnv.TypeAnno.Idx,
     not_found: void,
 };
 
@@ -100,21 +98,21 @@ pub const ExposedItemLookupResult = union(enum) {
 /// Result of introducing an identifier
 pub const IntroduceResult = union(enum) {
     success: void,
-    shadowing_warning: CIR.Pattern.Idx, // The pattern that was shadowed
+    shadowing_warning: ModuleEnv.Pattern.Idx, // The pattern that was shadowed
     top_level_var_error: void,
-    var_across_function_boundary: CIR.Pattern.Idx,
+    var_across_function_boundary: ModuleEnv.Pattern.Idx,
 };
 
 /// Result of introducing a type declaration
 pub const TypeIntroduceResult = union(enum) {
     success: void,
-    shadowing_warning: CIR.Statement.Idx, // The type declaration that was shadowed
-    redeclared_error: CIR.Statement.Idx, // The type declaration that was redeclared
-    type_alias_redeclared: CIR.Statement.Idx, // The type alias that was redeclared
-    nominal_type_redeclared: CIR.Statement.Idx, // The nominal type that was redeclared
-    cross_scope_shadowing: CIR.Statement.Idx, // Type shadowed across different scopes
+    shadowing_warning: ModuleEnv.Statement.Idx, // The type declaration that was shadowed
+    redeclared_error: ModuleEnv.Statement.Idx, // The type declaration that was redeclared
+    type_alias_redeclared: ModuleEnv.Statement.Idx, // The type alias that was redeclared
+    nominal_type_redeclared: ModuleEnv.Statement.Idx, // The nominal type that was redeclared
+    cross_scope_shadowing: ModuleEnv.Statement.Idx, // Type shadowed across different scopes
     parameter_conflict: struct {
-        original_stmt: CIR.Statement.Idx,
+        original_stmt: ModuleEnv.Statement.Idx,
         conflicting_parameter: base.Ident.Idx,
     },
 };
@@ -122,8 +120,8 @@ pub const TypeIntroduceResult = union(enum) {
 /// Result of introducing a type variable
 pub const TypeVarIntroduceResult = union(enum) {
     success: void,
-    shadowing_warning: CIR.TypeAnno.Idx, // The type variable that was shadowed
-    already_in_scope: CIR.TypeAnno.Idx, // The type variable already exists in this scope
+    shadowing_warning: ModuleEnv.TypeAnno.Idx, // The type variable that was shadowed
+    already_in_scope: ModuleEnv.TypeAnno.Idx, // The type variable already exists in this scope
 };
 
 /// Result of introducing a module alias
@@ -142,14 +140,14 @@ pub const ExposedItemIntroduceResult = union(enum) {
 
 /// Result of looking up an imported module
 pub const ImportedModuleLookupResult = union(enum) {
-    found: CIR.Import.Idx,
+    found: ModuleEnv.Import.Idx,
     not_found: void,
 };
 
 /// Result of introducing an imported module
 pub const ImportedModuleIntroduceResult = union(enum) {
     success: void,
-    already_imported: CIR.Import.Idx, // The module was already imported in this scope
+    already_imported: ModuleEnv.Import.Idx, // The module was already imported in this scope
 };
 
 /// Item kinds in a scope
@@ -157,9 +155,9 @@ pub const ItemKind = enum { ident, alias, type_decl, type_var, module_alias, exp
 
 /// Get the appropriate map for the given item kind
 pub fn items(scope: *Scope, comptime item_kind: ItemKind) switch (item_kind) {
-    .ident, .alias => *std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
-    .type_decl => *std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
-    .type_var => *std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
+    .ident, .alias => *std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx),
+    .type_decl => *std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Statement.Idx),
+    .type_var => *std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.TypeAnno.Idx),
     .module_alias => *std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
     .exposed_item => *std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
 } {
@@ -175,9 +173,9 @@ pub fn items(scope: *Scope, comptime item_kind: ItemKind) switch (item_kind) {
 
 /// Get the appropriate map for the given item kind (const version)
 pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) switch (item_kind) {
-    .ident, .alias => *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
-    .type_decl => *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
-    .type_var => *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
+    .ident, .alias => *const std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx),
+    .type_decl => *const std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Statement.Idx),
+    .type_var => *const std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.TypeAnno.Idx),
     .module_alias => *const std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
     .exposed_item => *const std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
 } {
@@ -193,9 +191,9 @@ pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) switch (ite
 
 /// Put an item in the scope, panics on OOM
 pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, name: Ident.Idx, value: switch (item_kind) {
-    .ident, .alias => CIR.Pattern.Idx,
-    .type_decl => CIR.Statement.Idx,
-    .type_var => CIR.TypeAnno.Idx,
+    .ident, .alias => ModuleEnv.Pattern.Idx,
+    .type_decl => ModuleEnv.Statement.Idx,
+    .type_var => ModuleEnv.TypeAnno.Idx,
     .module_alias => Ident.Idx,
     .exposed_item => ExposedItemInfo,
 }) std.mem.Allocator.Error!void {
@@ -207,8 +205,8 @@ pub fn introduceTypeDecl(
     scope: *Scope,
     gpa: std.mem.Allocator,
     name: Ident.Idx,
-    type_decl: CIR.Statement.Idx,
-    parent_lookup_fn: ?fn (Ident.Idx) ?CIR.Statement.Idx,
+    type_decl: ModuleEnv.Statement.Idx,
+    parent_lookup_fn: ?fn (Ident.Idx) ?ModuleEnv.Statement.Idx,
 ) std.mem.Allocator.Error!TypeIntroduceResult {
     // Check if already exists in current scope by comparing text content
     var iter = scope.type_decls.iterator();
@@ -220,7 +218,7 @@ pub fn introduceTypeDecl(
     }
 
     // Check for shadowing in parent scopes and issue warnings
-    var shadowed_stmt: ?CIR.Statement.Idx = null;
+    var shadowed_stmt: ?ModuleEnv.Statement.Idx = null;
     if (parent_lookup_fn) |lookup_fn| {
         shadowed_stmt = lookup_fn(name);
     }
@@ -256,7 +254,7 @@ pub fn updateTypeDecl(
     scope: *Scope,
     gpa: std.mem.Allocator,
     name: Ident.Idx,
-    new_type_decl: CIR.Statement.Idx,
+    new_type_decl: ModuleEnv.Statement.Idx,
 ) std.mem.Allocator.Error!void {
     // Find the existing entry by comparing text content
     var iter = scope.type_decls.iterator();
@@ -276,8 +274,8 @@ pub fn introduceTypeVar(
     scope: *Scope,
     gpa: std.mem.Allocator,
     name: Ident.Idx,
-    type_var_anno: CIR.TypeAnno.Idx,
-    parent_lookup_fn: ?fn (Ident.Idx) ?CIR.TypeAnno.Idx,
+    type_var_anno: ModuleEnv.TypeAnno.Idx,
+    parent_lookup_fn: ?fn (Ident.Idx) ?ModuleEnv.TypeAnno.Idx,
 ) std.mem.Allocator.Error!TypeVarIntroduceResult {
     // Check if already exists in current scope by comparing text content
     var iter = scope.type_vars.iterator();
@@ -289,7 +287,7 @@ pub fn introduceTypeVar(
     }
 
     // Check for shadowing in parent scopes
-    var shadowed_type_var: ?CIR.TypeAnno.Idx = null;
+    var shadowed_type_var: ?ModuleEnv.TypeAnno.Idx = null;
     if (parent_lookup_fn) |lookup_fn| {
         shadowed_type_var = lookup_fn(name);
     }
@@ -416,7 +414,7 @@ pub fn introduceImportedModule(
     scope: *Scope,
     gpa: std.mem.Allocator,
     module_name: []const u8,
-    import_idx: CIR.Import.Idx,
+    import_idx: ModuleEnv.Import.Idx,
 ) std.mem.Allocator.Error!ImportedModuleIntroduceResult {
     if (scope.imported_modules.contains(module_name)) {
         return ImportedModuleIntroduceResult{ .already_imported = scope.imported_modules.get(module_name).? };

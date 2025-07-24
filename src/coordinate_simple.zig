@@ -13,7 +13,6 @@ const reporting = @import("reporting.zig");
 const Filesystem = @import("fs/Filesystem.zig");
 
 const ModuleEnv = @import("compile/ModuleEnv.zig");
-const CIR = canonicalize.CIR; // CIR is an alias for compile.ModuleEnv
 const AST = parse.AST;
 const cache_mod = @import("cache/mod.zig");
 const CacheManager = cache_mod.CacheManager;
@@ -44,7 +43,7 @@ pub const TimingInfo = struct {
 /// The reports contain references to the source text, so ProcessResult
 /// must outlive any usage of the reports.
 pub const ProcessResult = struct {
-    cir: *CIR,
+    cir: *ModuleEnv,
     source: []const u8,
     own_source: bool, // Whether we own the source text (true if processed from file)
     reports: []reporting.Report,
@@ -231,7 +230,7 @@ fn processSourceInternal(
 
     // Get parser diagnostic Reports
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(module_env, diagnostic, gpa, "<source>") catch continue;
+        const report = parse_ast.parseDiagnosticToReport(module_env.*, diagnostic, gpa, "<source>") catch continue;
         reports.append(report) catch continue;
     }
 
@@ -272,7 +271,7 @@ fn processSourceInternal(
     collectTiming(config, &timer, &timing_info, "canonicalize_diagnostics_ns");
 
     // Type checking
-    const empty_modules: []const *CIR = &.{};
+    const empty_modules: []const *ModuleEnv = &.{};
     var solver = try Solver.init(gpa, &cir.types, cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 

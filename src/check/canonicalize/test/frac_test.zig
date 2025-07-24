@@ -8,9 +8,8 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("../../parse.zig");
-const ModuleEnv = base.ModuleEnv;
 const canonicalize = @import("../../canonicalize.zig");
-const CIR = canonicalize.CIR;
+const ModuleEnv = @import("../../../compile/ModuleEnv.zig");
 const types = @import("types");
 const RocDec = @import("builtins").RocDec;
 
@@ -39,7 +38,7 @@ fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct 
             } });
             const expr_idx = try module_env.addExprAndTypeVar(
                 ModuleEnv.Expr{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } },
-                types.Content{ .error_unknown = {} },
+                types.Content{ .err = {} },
                 base.Region.zero()
             );
             return .{
@@ -52,10 +51,16 @@ fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct 
     };
 
     // Create fractional expression
-    const frac_value = RocDec.fromF64(parsed_value);
+    // For testing purposes, convert to a simple decimal representation
+    // e.g., 3.14 = 314 / 10^2
+    const scaled = parsed_value * 100;
+    const numerator: i16 = @intFromFloat(scaled);
     const expr_idx = try module_env.addExprAndTypeVar(
-        ModuleEnv.Expr{ .e_frac = .{ .value = frac_value } },
-        types.Content{ .int_or_float = {} },
+        ModuleEnv.Expr{ .e_dec_small = .{ 
+            .numerator = numerator,
+            .denominator_power_of_ten = 2,
+        } },
+        types.Content{ .flex_var = null },
         base.Region.zero()
     );
 
@@ -77,7 +82,7 @@ test "fractional literal - basic decimal" {
     const result = try parseAndCreateFrac(test_allocator, "3.14");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 314);
@@ -111,7 +116,7 @@ test "fractional literal - scientific notation small" {
     const result = try parseAndCreateFrac(test_allocator, "1.23e-10");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_dec => |frac| {
             const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
@@ -164,7 +169,7 @@ test "fractional literal - scientific notation large (near f64 max)" {
     const result = try parseAndCreateFrac(test_allocator, "1e308");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_f64 => |frac| {
             const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
@@ -217,7 +222,7 @@ test "fractional literal - scientific notation at f32 boundary" {
     const result = try parseAndCreateFrac(test_allocator, "3.5e38");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_f64 => |frac| {
             try testing.expect(true); // Infinity doesn't fit in Dec
@@ -234,7 +239,7 @@ test "fractional literal - negative zero" {
     const result = try parseAndCreateFrac(test_allocator, "-0.0");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |small| {
             // dec_small doesn't preserve sign for -0.0
@@ -264,7 +269,7 @@ test "fractional literal - positive zero" {
     const result = try parseAndCreateFrac(test_allocator, "0.0");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |small| {
             try testing.expectEqual(small.numerator, 0);
@@ -283,7 +288,7 @@ test "fractional literal - very small scientific notation" {
     const result = try parseAndCreateFrac(test_allocator, "1e-40");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_f64 => |frac| {
             try testing.expect(true); // This test is for minimum f64 value
@@ -301,8 +306,8 @@ test "fractional literal - NaN handling" {
     // Note: NaN is not a valid numeric literal in Roc
     // The parser will fail before canonicalization
     // This test verifies that behavior
-    const module_env = try test_allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(test_allocator, "NaN");
+    const module_env = try test_allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(test_allocator, "NaN");
     defer {
         module_env.deinit();
         test_allocator.destroy(module_env);
@@ -323,8 +328,8 @@ test "fractional literal - infinity handling" {
     // Note: Infinity is not a valid numeric literal in Roc
     // The parser will fail before canonicalization
     // This test verifies that behavior
-    const module_env = try test_allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(test_allocator, "Infinity");
+    const module_env = try test_allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(test_allocator, "Infinity");
     defer {
         module_env.deinit();
         test_allocator.destroy(module_env);
@@ -345,7 +350,7 @@ test "fractional literal - scientific notation with capital E" {
     const result = try parseAndCreateFrac(test_allocator, "2.5E10");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_dec => |frac| {
             try testing.expect(true); // 1e7 fits in Dec
@@ -362,7 +367,7 @@ test "fractional literal - negative scientific notation" {
     const result = try parseAndCreateFrac(test_allocator, "-1.5e-5");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_dec => |frac| {
             try testing.expect(true); // 1e-7 fits in Dec
@@ -406,7 +411,7 @@ test "negative zero forced to f64 parsing" {
     const result = try parseAndCreateFrac(test_allocator, "-0.0e0");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |small| {
             try testing.expectEqual(small.numerator, 0);
@@ -440,7 +445,7 @@ test "small dec - basic positive decimal" {
     const result = try parseAndCreateFrac(test_allocator, "3.14");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 314);
@@ -457,7 +462,7 @@ test "negative zero preservation - uses f64" {
     const result = try parseAndCreateFrac(test_allocator, "-0.0");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |small| {
             try testing.expectEqual(small.numerator, 0);
@@ -482,7 +487,7 @@ test "negative zero with scientific notation - preserves sign via f64" {
     const result = try parseAndCreateFrac(test_allocator, "-0.0e0");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |small| {
             try testing.expectEqual(small.numerator, 0);
@@ -498,7 +503,7 @@ test "small dec - positive zero" {
     const result = try parseAndCreateFrac(test_allocator, "0.0");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 0);
@@ -517,7 +522,7 @@ test "small dec - precision preservation for 0.1" {
     const result = try parseAndCreateFrac(test_allocator, "0.1");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 1);
@@ -533,7 +538,7 @@ test "small dec - trailing zeros" {
     const result = try parseAndCreateFrac(test_allocator, "1.100");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 1100);
@@ -549,7 +554,7 @@ test "small dec - negative number" {
     const result = try parseAndCreateFrac(test_allocator, "-5.25");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, -525);
@@ -565,7 +570,7 @@ test "small dec - max i8 value" {
     const result = try parseAndCreateFrac(test_allocator, "127.99");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 12799);
@@ -581,7 +586,7 @@ test "small dec - min i8 value" {
     const result = try parseAndCreateFrac(test_allocator, "-128.0");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, -1280);
@@ -597,7 +602,7 @@ test "small dec - 128.0 now fits with new representation" {
     const result = try parseAndCreateFrac(test_allocator, "128.0");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             // With numerator/power representation, 128.0 = 1280/10^1 fits in i16
@@ -614,7 +619,7 @@ test "small dec - exceeds i16 range falls back to Dec" {
     const result = try parseAndCreateFrac(test_allocator, "32768.0");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_dec => {
             // Should fall back to Dec because 327680 > 32767 (max i16)
@@ -633,7 +638,7 @@ test "small dec - too many fractional digits falls back to Dec" {
     const result = try parseAndCreateFrac(test_allocator, "1.234");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 1234);
@@ -649,7 +654,7 @@ test "small dec - complex example 0.001" {
     const result = try parseAndCreateFrac(test_allocator, "0.001");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 1);
@@ -665,7 +670,7 @@ test "small dec - negative example -0.05" {
     const result = try parseAndCreateFrac(test_allocator, "-0.05");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             // -0.05 = -5 / 10^2
@@ -683,7 +688,7 @@ test "negative zero with scientific notation preserves sign" {
     const result = try parseAndCreateFrac(test_allocator, "-0.0e0");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |small| {
             // With scientific notation, now uses dec_small and loses sign
@@ -700,7 +705,7 @@ test "fractional literal - simple 1.0 uses small dec" {
     const result = try parseAndCreateFrac(test_allocator, "1.0");
     defer cleanup(result);
 
-    const expr = result.module_env.getExpr(result.expr_idx).*;
+    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 10);

@@ -4,7 +4,7 @@ const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
 const types = @import("types");
-const CIR = @import("../canonicalize.zig").CIR;
+const ModuleEnv = @import("../../compile/ModuleEnv.zig");
 
 const TypesStore = types.Store;
 const Allocator = std.mem.Allocator;

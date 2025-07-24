@@ -6,6 +6,7 @@ const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
 const reporting = @import("../reporting.zig");
+const builtins = @import("builtins");
 
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
@@ -288,11 +289,7 @@ pub const IntValue = struct {
 
 // RocDec type definition (for missing export)
 // Must match the structure of builtins.RocDec
-pub const RocDec = extern struct {
-    num: i128,
-    
-    pub const decimal_places: u5 = 18;
-    pub const whole_number_places: u5 = 21;
+pub const RocDec = builtins.RocDec;
     
     pub fn toI128(self: RocDec) i128 {
         return self.num;
@@ -303,17 +300,6 @@ pub const RocDec = extern struct {
         const scaled = @as(i128, @intFromFloat(f * 1_000_000_000_000_000_000.0));
         return RocDec{ .num = scaled };
     }
-    
-    pub fn toF64(self: RocDec) f64 {
-        // Simple conversion - the real implementation is in builtins/dec.zig
-        return @as(f64, @floatFromInt(self.num)) / 1_000_000_000_000_000_000.0;
-    }
-    
-    pub fn fromU64(n: u64) RocDec {
-        // Simple conversion - the real implementation is in builtins/dec.zig
-        return RocDec{ .num = @as(i128, n) * 1_000_000_000_000_000_000 };
-    }
-};
 
 // Diagnostic types for compilation errors
 pub const Diagnostic = union(enum) {

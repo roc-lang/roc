@@ -15,6 +15,42 @@ main! = |_| mapList([1,2,3,4,5])
 # EXPECTED
 TYPE MISMATCH - type_app_with_vars.md:6:13:6:20
 # PROBLEMS
+**DUPLICATE DEFINITION**
+The name `Decode` is being redeclared in this scope.
+
+The redeclaration is here:
+**type_app_with_vars.md:4:1:4:8:**
+```roc
+mapList = |list, fn| list.map(fn)
+```
+^^^^^^^
+
+But `Decode` was already defined here:
+**type_app_with_vars.md:1:1:1:1:**
+```roc
+app [main!] { pf: platform "../basic-cli/main.roc" }
+```
+
+
+
+**DUPLICATE DEFINITION**
+The name `Bool` is being redeclared in this scope.
+
+The redeclaration is here:
+**type_app_with_vars.md:6:1:6:6:**
+```roc
+main! = |_| mapList([1,2,3,4,5])
+```
+^^^^^
+
+But `Bool` was already defined here:
+**type_app_with_vars.md:1:1:1:1:**
+```roc
+app [main!] { pf: platform "../basic-cli/main.roc" }
+```
+
+
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **type_app_with_vars.md:6:13:6:20:**
@@ -24,7 +60,7 @@ main! = |_| mapList([1,2,3,4,5])
             ^^^^^^^
 
 It is of type:
-    _Error, a -> b -> Error_
+    _Error, ncode -> ode -> Error_
 
 But you are trying to use it as:
     _List(Num(_size)) -> _ret_
@@ -42,7 +78,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 	(app @1.1-1.53
 		(provides @1.5-1.12
 			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
+				(text "Bool")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -100,39 +136,39 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.8 (ident "mapList"))
+		(p-assign @4.1-4.8 (ident "Decode"))
 		(e-lambda @4.11-4.34
 			(args
-				(p-assign @4.12-4.16 (ident "list"))
-				(p-assign @4.18-4.20 (ident "fn")))
-			(e-dot-access @4.22-4.34 (field "map")
+				(p-assign @4.12-4.16 (ident "e"))
+				(p-assign @4.18-4.20 (ident "h")))
+			(e-dot-access @4.22-4.34 (field "nspect")
 				(receiver
 					(e-lookup-local @4.22-4.26
-						(p-assign @4.12-4.16 (ident "list"))))
+						(p-assign @4.12-4.16 (ident "e"))))
 				(args
 					(e-lookup-local @4.31-4.33
-						(p-assign @4.18-4.20 (ident "fn"))))))
+						(p-assign @4.18-4.20 (ident "h"))))))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.39 (effectful false)
-					(ty-apply @3.11-3.18 (symbol "List")
-						(ty-var @3.16-3.17 (name "a")))
+					(ty-apply @3.11-3.18 (symbol "ict")
+						(ty-var @3.16-3.17 (name "ncode")))
 					(ty-parens @3.20-3.28
 						(ty-fn @3.21-3.27 (effectful false)
-							(ty-var @3.21-3.22 (name "a"))
-							(ty-var @3.26-3.27 (name "b"))))
-					(ty-apply @3.32-3.39 (symbol "List")
-						(ty-var @3.37-3.38 (name "b")))))))
+							(ty-var @3.21-3.22 (name "ncode"))
+							(ty-var @3.26-3.27 (name "ode"))))
+					(ty-apply @3.32-3.39 (symbol "ict")
+						(ty-var @3.37-3.38 (name "ode")))))))
 	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
+		(p-assign @6.1-6.6 (ident "Bool"))
 		(e-lambda @6.9-6.33
 			(args
 				(p-underscore @6.10-6.11))
 			(captures
-				(capture @4.1-4.8 (ident "mapList")))
+				(capture @4.1-4.8 (ident "Decode")))
 			(e-call @6.13-6.33
 				(e-lookup-local @6.13-6.20
-					(p-assign @4.1-4.8 (ident "mapList")))
+					(p-assign @4.1-4.8 (ident "Decode")))
 				(e-list @6.21-6.32
 					(elems
 						(e-int @6.22-6.23 (value "1"))
