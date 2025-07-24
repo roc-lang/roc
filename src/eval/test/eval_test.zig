@@ -54,11 +54,45 @@ test "record literal" {
     try runExpectError("{}", EvalError.ZeroSizedType, .no_trace);
 
     // Record with integer fields
-    const expected_fields = &[_]helpers.ExpectedField{
+    const expected_fields1 = &[_]helpers.ExpectedField{
         .{ .name = "x", .value = 10 },
         .{ .name = "y", .value = 20 },
     };
-    try helpers.runExpectRecord("{ x: 10, y: 20 }", expected_fields, .no_trace);
+    try helpers.runExpectRecord("{ x: 10, y: 20 }", expected_fields1, .no_trace);
+
+    // Record with a single field
+    const expected_fields2 = &[_]helpers.ExpectedField{
+        .{ .name = "a", .value = 42 },
+    };
+    try helpers.runExpectRecord("{ a: 42 }", expected_fields2, .no_trace);
+
+    // Record with fields in a different order
+    const expected_fields3 = &[_]helpers.ExpectedField{
+        .{ .name = "x", .value = 1 },
+        .{ .name = "y", .value = 2 },
+    };
+    try helpers.runExpectRecord("{ y: 2, x: 1 }", expected_fields3, .no_trace);
+
+    // Record with field values from arithmetic expressions and lambdas
+    const expected_fields4 = &[_]helpers.ExpectedField{
+        .{ .name = "sum", .value = 6 },
+        .{ .name = "product", .value = 15 },
+    };
+    try helpers.runExpectRecord("{ sum: (|x| x + 1)(5), product: 5 * 3 }", expected_fields4, .no_trace);
+
+    // TODO: Add support for non-integer fields in tests
+    // Record with a string field
+    // const expected_fields5 = &[_]helpers.ExpectedField{
+    //     .{ .name = "name", .value = "roc" },
+    // };
+    // try helpers.runExpectRecord("{ name: \"roc\" }", expected_fields5, .no_trace);
+
+    // TODO: Add support for nested records in tests
+    // Record with a nested record
+    // const expected_fields6 = &[_]helpers.ExpectedField{
+    //     .{ .name = "p", .value = ... },
+    // };
+    // try helpers.runExpectRecord("{ p: { x: 1, y: 2 } }", expected_fields6, .no_trace);
 }
 
 test "simple lambdas" {
