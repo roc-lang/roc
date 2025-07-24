@@ -2534,7 +2534,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocato
             region = r.region;
             node.data_1 = @bitCast(r.name);
             node.data_2 = @bitCast(r.parameter_name);
-            node.data_3 = r.original_region.start.offset;
+            const extra_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, r.original_region.start.offset);
+            _ = try store.extra_data.append(store.gpa, r.original_region.end.offset);
+            node.data_3 = extra_start;
         },
         .unused_variable => |r| {
             node.tag = .diag_unused_variable;
@@ -2772,7 +2775,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = @intCast(node.data_2) },
-                .end = .{ .offset = @intCast(node.data_3 & 0x7FFFFFFF) },
+                .end = .{ .offset = @intCast(node.data_3) },
             },
         } },
         .diag_type_shadowed_warning => return CIR.Diagnostic{ .type_shadowed_warning = .{
@@ -2784,15 +2787,20 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             },
             .cross_scope = (node.data_3 & 0x80000000) != 0,
         } },
-        .diag_type_parameter_conflict => return CIR.Diagnostic{ .type_parameter_conflict = .{
-            .name = @bitCast(node.data_1),
-            .parameter_name = @bitCast(node.data_2),
-            .region = store.getRegionAt(node_idx),
-            .original_region = .{
-                .start = .{ .offset = @intCast(node.data_3) },
-                .end = .{ .offset = @intCast(node.data_3) },
-            },
-        } },
+        .diag_type_parameter_conflict => {
+            const extra_data = store.extra_data.items.items[node.data_3..];
+            const original_start = extra_data[0];
+            const original_end = extra_data[1];
+            return CIR.Diagnostic{ .type_parameter_conflict = .{
+                .name = @bitCast(node.data_1),
+                .parameter_name = @bitCast(node.data_2),
+                .region = store.getRegionAt(node_idx),
+                .original_region = .{
+                    .start = .{ .offset = original_start },
+                    .end = .{ .offset = original_end },
+                },
+            } };
+        },
         .diag_unused_variable => return CIR.Diagnostic{ .unused_variable = .{
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
@@ -2922,8 +2930,7 @@ pub fn serializedSize(self: *const NodeStore) usize {
     // We only serialize nodes, regions, and extra_data (the scratch arrays are transient)
     const raw_size = self.nodes.serializedSize() +
         self.regions.serializedSize() +
-        @sizeOf(u32) + // extra_data length
-        (self.extra_data.len() * @sizeOf(u32));
+        self.extra_data.serializedSize();
     // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
     return std.mem.alignForward(usize, raw_size, SERIALIZATION_ALIGNMENT);
 }
@@ -2943,11 +2950,6 @@ pub fn serializeInto(self: *const NodeStore, buffer: []align(SERIALIZATION_ALIGN
     // Serialize regions
     const regions_slice = try self.regions.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
     offset += regions_slice.len;
-
-    // Serialize extra_data length
-    const extra_len_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset)));
-    extra_len_ptr.* = self.extra_data.len();
-    offset += @sizeOf(u32);
 
     // Serialize extra_data items
     const extra_data_slice = try self.extra_data.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
@@ -2975,13 +2977,10 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
     const regions = try Region.List.deserializeFrom(regions_buffer, allocator);
     offset += regions.serializedSize();
 
-    // Deserialize extra_data length
-    if (buffer.len < offset + @sizeOf(u32)) return error.BufferTooSmall;
-    offset += @sizeOf(u32);
-
     // Deserialize extra_data items
     const extra_data_buffer = @as([]align(@alignOf(u32)) const u8, @alignCast(buffer[offset..]));
     const extra_data = try SafeList(u32).deserializeFrom(extra_data_buffer, allocator);
+    offset += extra_data.serializedSize();
 
     // Create NodeStore with empty scratch arrays
     return NodeStore{
