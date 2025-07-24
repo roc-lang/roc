@@ -45,8 +45,10 @@ exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
 unqualified_nominal_tags: std.StringHashMapUnmanaged(CIR.Statement.Idx) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.ArrayListUnmanaged(Region),
-/// Stack of function contexts for tracking captures during canonicalization
-function_contexts: std.ArrayListUnmanaged(FunctionContext),
+/// Stack of captures for all functions
+capture_stack: std.ArrayListUnmanaged(CIR.Expr.Capture),
+/// Stack of frame start indices into capture_stack for each function context
+capture_stack_frames: std.ArrayListUnmanaged(u32),
 /// Maps var patterns to the function region they were declared in
 var_function_regions: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region),
 /// Set of pattern indices that are vars
@@ -83,22 +85,6 @@ const CalledVia = base.CalledVia;
 const TypeVar = types.Var;
 const Content = types.Content;
 
-/// Context for tracking lambda captures during canonicalization
-const FunctionContext = struct {
-    depth: u32,
-    captures: std.ArrayList(CIR.Expr.Capture),
-
-    pub fn init(allocator: std.mem.Allocator, depth: u32) FunctionContext {
-        return FunctionContext{
-            .depth = depth,
-            .captures = std.ArrayList(CIR.Expr.Capture).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *FunctionContext) void {
-        self.captures.deinit();
-    }
-};
 const FlatType = types.FlatType;
 const Num = types.Num;
 const TagUnion = types.TagUnion;
@@ -151,11 +137,8 @@ pub fn deinit(
     self.scopes.deinit(gpa);
     self.function_regions.deinit(gpa);
 
-    // Clean up function contexts
-    for (self.function_contexts.items) |*context| {
-        context.deinit();
-    }
-    self.function_contexts.deinit(gpa);
+    self.capture_stack.deinit(gpa);
+    self.capture_stack_frames.deinit(gpa);
     self.var_function_regions.deinit(gpa);
     self.var_patterns.deinit(gpa);
     self.pattern_function_contexts.deinit(gpa);
@@ -179,7 +162,8 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
         .parse_ir = parse_ir,
         .scopes = .{},
         .function_regions = std.ArrayListUnmanaged(Region){},
-        .function_contexts = std.ArrayListUnmanaged(FunctionContext){},
+        .capture_stack = std.ArrayListUnmanaged(CIR.Expr.Capture){},
+        .capture_stack_frames = std.ArrayListUnmanaged(u32){},
         .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .pattern_function_contexts = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32){},
@@ -2205,13 +2189,12 @@ pub fn canonicalizeExpr(
             };
 
             const capture_info: CIR.Expr.Capture.Span = blk: {
-                var context = self.exitFunctionContext();
-                defer context.deinit();
+                const captures = self.exitFunctionContext();
 
                 const scratch_start = self.can_ir.store.scratch_captures.top();
 
-                if (context.captures.items.len > 0) {
-                    for (context.captures.items) |capture| {
+                if (captures.len > 0) {
+                    for (captures) |capture| {
                         const capture_idx = try self.can_ir.addCaptureAndTypeVar(capture, types.Content{ .flex_var = null }, region);
                         try self.can_ir.store.addScratchCapture(capture_idx);
                     }
@@ -3437,28 +3420,34 @@ fn exitFunction(self: *Self) void {
 
 /// Enter a new function context when processing lambda
 fn enterFunctionContext(self: *Self) !void {
-    const depth = self.function_contexts.items.len;
-    const context = FunctionContext.init(self.can_ir.env.gpa, @intCast(depth));
-    try self.function_contexts.append(self.can_ir.env.gpa, context);
+    // Push the current capture_stack length as the frame start for this function context
+    try self.capture_stack_frames.append(self.can_ir.env.gpa, @intCast(self.capture_stack.items.len));
 }
 
 /// Exit function context and return captured variables
-fn exitFunctionContext(self: *Self) FunctionContext {
-    return self.function_contexts.pop().?;
+fn exitFunctionContext(self: *Self) []CIR.Expr.Capture {
+    // Pop the frame start index for this function context
+    const frame_start = self.capture_stack_frames.pop().?;
+    const frame_end = self.capture_stack.items.len;
+    const captures = self.capture_stack.items[frame_start..frame_end];
+
+    // After extracting, shrink the stack back to the frame start
+    self.capture_stack.shrinkRetainingCapacity(frame_start);
+
+    return captures;
 }
 
 /// Record a captured variable in the current function context
 fn recordCapture(self: *Self, name: base.Ident.Idx, pattern_idx: CIR.Pattern.Idx, source_depth: u32) !void {
-    if (self.function_contexts.items.len == 0) return; // No function context
+    if (self.capture_stack_frames.items.len == 0) return; // No function context
 
-    const current_context = &self.function_contexts.items[self.function_contexts.items.len - 1];
-
-    // Avoid duplicate captures
-    for (current_context.captures.items) |existing| {
+    // Avoid duplicate captures in the current frame
+    const frame_start = self.capture_stack_frames.items[self.capture_stack_frames.items.len - 1];
+    for (self.capture_stack.items[frame_start..]) |existing| {
         if (existing.pattern_idx == pattern_idx) return;
     }
 
-    try current_context.captures.append(CIR.Expr.Capture{
+    try self.capture_stack.append(self.can_ir.env.gpa, CIR.Expr.Capture{
         .name = name,
         .pattern_idx = pattern_idx,
         .scope_depth = source_depth,
@@ -3467,7 +3456,7 @@ fn recordCapture(self: *Self, name: base.Ident.Idx, pattern_idx: CIR.Pattern.Idx
 
 /// Get current function depth for capture analysis
 fn getCurrentFunctionDepth(self: *Self) u32 {
-    return @intCast(self.function_contexts.items.len);
+    return @intCast(self.capture_stack_frames.items.len);
 }
 
 /// Get the function context depth where a pattern was defined
