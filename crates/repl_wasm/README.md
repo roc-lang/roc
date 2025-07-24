@@ -13,23 +13,24 @@ crates/repl_wasm/build-www.sh
 
 ### 2. Make symlinks to the generated Wasm and JS
 
+For website folder see https://github.com/roc-lang/www.roc-lang.org
 ```bash
-mkdir -p www/public/repl
-cd www/public/repl
+mkdir -p website/public/repl
+cd website/public/repl
 ln -s ../../../crates/repl_wasm/build/roc_repl_wasm_bg.wasm
 ln -s ../../../crates/repl_wasm/build/roc_repl_wasm.js
 ```
 These symlinks are ignored by Git.
 
-> This is a bit different from the production build, where we copy all the files to `www/build/`. But for development, it's convenient to have just one copy of files like `www/public/repl/repl.js`. You can make changes, reload your browser to see them, and commit them to Git, without getting mixed up between different copies of the same file.
+> This is a bit different from the production build, where we copy all the files to `website/build/`. But for development, it's convenient to have just one copy of files like `website/public/repl/repl.js`. You can make changes, reload your browser to see them, and commit them to Git, without getting mixed up between different copies of the same file.
 
 ### 3. Run a local HTTP server
 
-Browsers won't load .wasm files over the `file://` protocol, so you need to serve the files in `./www/build/` from a local web server.
+Browsers won't load .wasm files over the `file://` protocol, so you need to serve the files in `./website/build/` from a local web server.
 Any server will do, but this example should work on any system that has Python 3 installed:
 
 ```bash
-cd www/public
+cd website/public
 python3 -m http.server
 ```
 
@@ -69,6 +70,6 @@ You should be able to find the Roc REPL at <http://127.0.0.1:8000/repl> (or what
 
 There are several directories/packages involved here:
 
-- `www/public/repl/index.html`: The web page with its JavaScript and a build script
+- `website/public/repl/index.html`: The web page with its JavaScript and a build script
 - `crates/repl_wasm`: The Rust crate that becomes the "compiler" WebAssembly module
 - `crates/repl_eval`: REPL logic shared between `crates/repl_cli` and `crates/repl_wasm`

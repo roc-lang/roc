@@ -108,6 +108,10 @@ pub const Tag = enum {
     pattern_small_dec_literal,
     pattern_str_literal,
     pattern_underscore,
+
+    // Lambda Capture
+    lambda_capture,
+
     // Definitions
     def,
     // Exposed Items

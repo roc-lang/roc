@@ -173,6 +173,9 @@ answer = composed([42])
 		(e-lambda @12.12-12.41
 			(args
 				(p-assign @12.13-12.14 (ident "n")))
+			(captures
+				(capture @9.1-9.10 (ident "get_value"))
+				(capture @6.1-6.12 (ident "make_record")))
 			(e-call @12.16-12.41
 				(e-lookup-local @12.16-12.25
 					(p-assign @9.1-9.10 (ident "get_value")))

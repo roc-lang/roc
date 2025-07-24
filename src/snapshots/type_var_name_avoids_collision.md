@@ -72,22 +72,10 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - type_var_name_avoids_collision.md:59:5:59:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
+UNUSED VARIABLE - type_var_name_avoids_collision.md:59:5:59:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:60:5:60:12
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `result3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
-The unused variable is declared here:
-**type_var_name_avoids_collision.md:59:5:59:12:**
-```roc
-    result3 = combine(result1, result2)
-```
-    ^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable `result5` is not used anywhere in your code.
 
@@ -96,6 +84,18 @@ The unused variable is declared here:
 **type_var_name_avoids_collision.md:61:5:61:12:**
 ```roc
     result5 = finalIdentity(3.14)
+```
+    ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `result3` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
+The unused variable is declared here:
+**type_var_name_avoids_collision.md:59:5:59:12:**
+```roc
+    result3 = combine(result1, result2)
 ```
     ^^^^^^^
 
@@ -531,6 +531,14 @@ main! = |_| {
 		(e-lambda @55.9-65.2
 			(args
 				(p-underscore @55.10-55.11))
+			(captures
+				(capture @7.1-7.9 (ident "identity"))
+				(capture @16.1-16.16 (ident "anotherIdentity"))
+				(capture @20.1-20.8 (ident "combine"))
+				(capture @46.1-46.19 (ident "yetAnotherIdentity"))
+				(capture @53.1-53.14 (ident "finalIdentity"))
+				(capture @4.1-4.2 (ident "a"))
+				(capture @23.1-23.2 (ident "f")))
 			(e-block @55.13-65.2
 				(s-let @57.5-57.28
 					(p-assign @57.5-57.12 (ident "result1"))

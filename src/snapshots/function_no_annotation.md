@@ -117,6 +117,9 @@ NO CHANGE
 		(e-lambda @12.12-12.45
 			(args
 				(p-assign @12.13-12.14 (ident "x")))
+			(captures
+				(capture @9.1-9.14 (ident "print_number!"))
+				(capture @6.1-6.9 (ident "multiply")))
 			(e-call @12.16-12.45
 				(e-lookup-local @12.16-12.29
 					(p-assign @9.1-9.14 (ident "print_number!")))

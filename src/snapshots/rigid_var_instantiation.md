@@ -26,22 +26,10 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
 UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
 UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
+UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `str` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_instantiation.md:13:5:13:8:**
-```roc
-    str = identity("hello")
-```
-    ^^^
-
-
 **UNUSED VARIABLE**
 Variable `num` is not used anywhere in your code.
 
@@ -62,6 +50,18 @@ The unused variable is declared here:
 **rigid_var_instantiation.md:16:5:16:8:**
 ```roc
     lst = identity([1, 2, 3])
+```
+    ^^^
+
+
+**UNUSED VARIABLE**
+Variable `str` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
+The unused variable is declared here:
+**rigid_var_instantiation.md:13:5:13:8:**
+```roc
+    str = identity("hello")
 ```
     ^^^
 
@@ -173,6 +173,8 @@ main! = |_| {
 		(e-lambda @8.9-19.2
 			(args
 				(p-underscore @8.10-8.11))
+			(captures
+				(capture @5.1-5.9 (ident "identity")))
 			(e-block @8.13-19.2
 				(s-let @10.5-10.23
 					(p-assign @10.5-10.8 (ident "num"))

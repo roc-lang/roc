@@ -259,13 +259,13 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_023.md:193:4:193:13
-UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
+UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
+UNUSED VARIABLE - fuzz_crash_023.md:166:2:166:6
 UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
 UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
-UNUSED VARIABLE - fuzz_crash_023.md:166:2:166:6
 UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
+UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
 UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
-UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 TYPE MISMATCH - fuzz_crash_023.md:67:11:67:14
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
@@ -699,15 +699,27 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `multiline_tuple` is not used anywhere in your code.
+Variable `interpolated` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_023.md:180:2:180:17:**
+**fuzz_crash_023.md:165:2:165:14:**
 ```roc
-	multiline_tuple = (
+	interpolated = "Hello, ${world}"
 ```
- ^^^^^^^^^^^^^^^
+ ^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `list` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:166:2:166:6:**
+```roc
+	list = [
+```
+ ^^^^
 
 
 **UNUSED VARIABLE**
@@ -735,18 +747,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:166:2:166:6:**
-```roc
-	list = [
-```
- ^^^^
-
-
-**UNUSED VARIABLE**
 Variable `bin_op_result` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_bin_op_result` to suppress this warning.
@@ -759,6 +759,18 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
+Variable `multiline_tuple` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:180:2:180:17:**
+```roc
+	multiline_tuple = (
+```
+ ^^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
 Variable `static_dispatch_style` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_static_dispatch_style` to suppress this warning.
@@ -768,18 +780,6 @@ The unused variable is declared here:
 	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
  ^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `interpolated` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:165:2:165:14:**
-```roc
-	interpolated = "Hello, ${world}"
-```
- ^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -1557,19 +1557,19 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 							(e-field-access @189.26-189.111
 								(e-field-access @189.26-189.97
 									(e-field-access @189.26-189.66
-										(e-question-suffix @189.26-189.39
+										(e-question-suffix @189.26-189.40
 											(e-apply @189.26-189.39
 												(e-ident @189.26-189.33 (raw "some_fn"))
 												(e-ident @189.34-189.38 (raw "arg1"))))
-										(e-question-suffix @189.40-189.65
+										(e-question-suffix @189.40-189.66
 											(e-apply @189.40-189.65
 												(e-ident @189.40-189.63 (raw "static_dispatch_method")))))
-									(e-question-suffix @189.66-189.96
+									(e-question-suffix @189.66-189.97
 										(e-apply @189.66-189.96
 											(e-ident @189.66-189.94 (raw "next_static_dispatch_method")))))
-								(e-question-suffix @189.97-189.110
+								(e-question-suffix @189.97-189.111
 									(e-ident @189.97-189.110 (raw "record_field")))))
-						(e-question-suffix @190.2-190.28
+						(e-question-suffix @190.2-190.29
 							(e-apply @190.2-190.28
 								(e-ident @190.2-190.14 (raw "Stdout.line!"))
 								(e-ident @190.15-190.27 (raw "interpolated"))))
@@ -2077,6 +2077,10 @@ expect {
 		(e-lambda @144.9-196.2
 			(args
 				(p-underscore @144.10-144.11))
+			(captures
+				(capture @80.1-80.11 (ident "match_time"))
+				(capture @146.2-146.18 (ident "number"))
+				(capture @68.1-68.8 (ident "add_one")))
 			(e-block @144.13-196.2
 				(s-let @145.2-145.17
 					(p-assign @145.2-145.7 (ident "world"))

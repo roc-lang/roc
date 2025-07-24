@@ -173,10 +173,9 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:105:2:105:3
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_019.md:108:4:108:5
 UNDEFINED VARIABLE - fuzz_crash_019.md:108:6:108:8
-UNUSED VARIABLE - fuzz_crash_019.md:87:2:87:3
 UNUSED VARIABLE - fuzz_crash_019.md:76:2:76:3
-UNUSED VARIABLE - fuzz_crash_019.md:88:1:88:2
 UNUSED VARIABLE - fuzz_crash_019.md:96:2:96:4
+UNUSED VARIABLE - fuzz_crash_019.md:87:2:87:3
 UNDECLARED TYPE - fuzz_crash_019.md:116:5:116:6
 UNDEFINED VARIABLE - fuzz_crash_019.md:119:2:119:5
 UNDEFINED VARIABLE - fuzz_crash_019.md:120:1:120:2
@@ -690,18 +689,6 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `i` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_i` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:87:2:87:3:**
-```roc
-	i= "H, ${d}"
-```
- ^
-
-
-**UNUSED VARIABLE**
 Variable `w` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_w` to suppress this warning.
@@ -714,18 +701,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `t` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_t` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:88:1:88:2:**
-```roc
-t = [
-```
-^
-
-
-**UNUSED VARIABLE**
 Variable `rd` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rd` to suppress this warning.
@@ -735,6 +710,18 @@ The unused variable is declared here:
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
  ^^
+
+
+**UNUSED VARIABLE**
+Variable `i` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_i` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_019.md:87:2:87:3:**
+```roc
+	i= "H, ${d}"
+```
+ ^
 
 
 **UNDECLARED TYPE**
@@ -1243,17 +1230,17 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 						(e-field-access @105.55-105.85
 							(e-field-access @105.55-105.79
 								(e-field-access @105.55-105.72
-									(e-question-suffix @105.55-105.65
+									(e-question-suffix @105.55-105.66
 										(e-apply @105.55-105.65
 											(e-ident @105.55-105.59 (raw "e_fn"))
 											(e-ident @105.60-105.64 (raw "arg1"))))
-									(e-question-suffix @105.66-105.71
+									(e-question-suffix @105.66-105.72
 										(e-apply @105.66-105.71
 											(e-ident @105.66-105.69 (raw "od")))))
-								(e-question-suffix @105.72-105.78
+								(e-question-suffix @105.72-105.79
 									(e-apply @105.72-105.78
 										(e-ident @105.72-105.76 (raw "ned")))))
-							(e-question-suffix @105.79-105.84
+							(e-question-suffix @105.79-105.85
 								(e-ident @105.79-105.84 (raw "recd"))))
 						(e-apply @106.2-110.3
 							(e-tag @106.2-106.7 (raw "Stdo!"))
@@ -1575,6 +1562,9 @@ expect {
 		(e-lambda @75.5-111.2
 			(args
 				(p-underscore @75.6-75.7))
+			(captures
+				(capture @49.1-49.3 (ident "me"))
+				(capture @77.2-77.14 (ident "er")))
 			(e-block @75.9-111.2
 				(s-expr @75.11-75.12
 					(e-runtime-error (tag "ident_not_in_scope")))

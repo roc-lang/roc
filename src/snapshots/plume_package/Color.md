@@ -862,6 +862,8 @@ is_named_color = |str| {
 		(e-lambda @49.10-54.2
 			(args
 				(p-assign @49.11-49.16 (ident "color")))
+			(captures
+				(capture @49.1-49.7 (ident "to_str")))
 			(e-match @49.18-54.2
 				(match @49.18-54.2
 					(cond

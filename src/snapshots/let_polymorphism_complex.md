@@ -1042,6 +1042,8 @@ main = |_| {
 		(e-lambda @105.8-108.2
 			(args
 				(p-underscore @105.9-105.10))
+			(captures
+				(capture @60.1-60.11 (ident "container1")))
 			(e-block @105.12-108.2
 				(e-binop @107.5-107.26 (op "add")
 					(e-dot-access @107.5-107.21 (field "value")
@@ -1072,7 +1074,7 @@ main = |_| {
 		(patt @38.1-38.8 (type "{ data: List(Num(_size)), metadata: { version: Num(_size2), ratio: Frac(_size3), description: Str }, name: Str }"))
 		(patt @48.1-48.8 (type "{ data: List(Str), metadata: { version: Num(_size), ratio: Frac(_size2), description: Str }, name: Str }"))
 		(patt @59.1-59.15 (type "_arg -> { value: _field, wrapper: List(_elem) }"))
-		(patt @60.1-60.11 (type "{ value: _field, wrapper: List(_elem) }"))
+		(patt @60.1-60.11 (type "{ value: Num(_size), wrapper: List(_elem) }"))
 		(patt @61.1-61.11 (type "{ value: _field, wrapper: List(_elem) }"))
 		(patt @62.1-62.11 (type "{ value: _field, wrapper: List(_elem) }"))
 		(patt @65.1-65.5 (type "{ level1: { level2: { level3: { data: List(Num(_size)), value: Num(_size2) }, items: List(Num(_size3)) }, collection: List(Num(_size4)) }, results: List({ data: List(Num(_size5)), tag: Str }) }"))
@@ -1101,7 +1103,7 @@ main = |_| {
 		(expr @38.11-46.2 (type "{ data: List(Num(_size)), metadata: { version: Num(_size2), ratio: Frac(_size3), description: Str }, name: Str }"))
 		(expr @48.11-56.2 (type "{ data: List(Str), metadata: { version: Num(_size), ratio: Frac(_size2), description: Str }, name: Str }"))
 		(expr @59.18-59.54 (type "_arg -> { value: _field, wrapper: List(_elem) }"))
-		(expr @60.14-60.33 (type "{ value: _field, wrapper: List(_elem) }"))
+		(expr @60.14-60.33 (type "{ value: Num(_size), wrapper: List(_elem) }"))
 		(expr @61.14-61.33 (type "{ value: _field, wrapper: List(_elem) }"))
 		(expr @62.14-62.34 (type "{ value: _field, wrapper: List(_elem) }"))
 		(expr @65.8-81.2 (type "{ level1: { level2: { level3: { data: List(Num(_size)), value: Num(_size2) }, items: List(Num(_size3)) }, collection: List(Num(_size4)) }, results: List({ data: List(Num(_size5)), tag: Str }) }"))

@@ -641,7 +641,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     const field_names = record_fields.items(.name);
                     const field_vars = record_fields.items(.var_);
                     for (field_names, field_vars) |type_field_name, type_field_var| {
-                        if (self.cir.idents.identsHaveSameText(type_field_name, field.name)) {
+                        if (type_field_name.idx == field.name.idx) {
                             // Extract the type variable from the field value expression
                             // Different expression types store their type variables in different places
                             const field_expr_type_var = @as(Var, @enumFromInt(@intFromEnum(field.value)));
@@ -1620,8 +1620,8 @@ test "lambda with record field access infers correct type" {
     var record_fields = std.ArrayList(types_mod.RecordField).init(gpa);
     defer record_fields.deinit();
 
-    const x_ident = try module_env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident = try module_env.idents.insert(gpa, base.Ident.for_text("y"), base.Region.zero());
+    const x_ident = try module_env.idents.insert(gpa, base.Ident.for_text("x"));
+    const y_ident = try module_env.idents.insert(gpa, base.Ident.for_text("y"));
 
     try record_fields.append(.{ .name = x_ident, .var_ = param_x_var });
     try record_fields.append(.{ .name = y_ident, .var_ = param_y_var });
@@ -1724,7 +1724,7 @@ test "dot access properly unifies field types with parameters" {
     var record_fields = std.ArrayList(types_mod.RecordField).init(gpa);
     defer record_fields.deinit();
 
-    const x_ident = try module_env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero());
+    const x_ident = try module_env.idents.insert(gpa, base.Ident.for_text("x"));
     try record_fields.append(.{ .name = x_ident, .var_ = param_var });
 
     const fields_range = try module_env.types.appendRecordFields(record_fields.items);

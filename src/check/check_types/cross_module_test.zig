@@ -207,8 +207,8 @@ test "cross-module type checking - record type" {
     var record_fields = std.ArrayList(types_mod.RecordField).init(allocator);
     defer record_fields.deinit();
 
-    const x_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("y"), base.Region.zero());
+    const x_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("x"));
+    const y_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("y"));
 
     const i32_var = try module_a_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i32 } } });
     const str_var = try module_a_env.types.freshFromContent(Content{ .structure = .str });
@@ -960,8 +960,8 @@ test "cross-module type checking - record type chain" {
     const str_content = Content{ .structure = .str };
     const str_var = try module_a_env.types.freshFromContent(str_content);
 
-    const x_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("y"), base.Region.zero());
+    const x_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("x"));
+    const y_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("y"));
 
     var record_fields = std.ArrayList(types_mod.RecordField).init(allocator);
     defer record_fields.deinit();
@@ -1043,8 +1043,8 @@ test "cross-module type checking - record type chain" {
     try testing.expectEqual(@as(usize, 2), fields.len);
 
     // Check field names and types
-    const x_ident_c = module_c_env.idents.insert(allocator, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident_c = module_c_env.idents.insert(allocator, base.Ident.for_text("y"), base.Region.zero());
+    const x_ident_c = module_c_env.idents.insert(allocator, base.Ident.for_text("x"));
+    const y_ident_c = module_c_env.idents.insert(allocator, base.Ident.for_text("y"));
 
     try testing.expectEqual(x_ident_c, fields.items(.name)[0]);
     try testing.expectEqual(y_ident_c, fields.items(.name)[1]);
@@ -1085,8 +1085,8 @@ test "cross-module type checking - polymorphic record chain" {
     const list_a_content = Content{ .structure = .{ .list = type_var_a } };
     const list_a_var = try module_a_env.types.freshFromContent(list_a_content);
 
-    const value_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("value"), base.Region.zero());
-    const next_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("next"), base.Region.zero());
+    const value_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("value"));
+    const next_ident = try module_a_env.idents.insert(allocator, base.Ident.for_text("next"));
 
     var record_fields = std.ArrayList(types_mod.RecordField).init(allocator);
     defer record_fields.deinit();
@@ -1137,8 +1137,8 @@ test "cross-module type checking - polymorphic record chain" {
     const list_str_content = Content{ .structure = .{ .list = str_var } };
     const list_str_var = try module_b_env.types.freshFromContent(list_str_content);
 
-    const value_ident_b = try module_b_env.idents.insert(allocator, base.Ident.for_text("value"), base.Region.zero());
-    const next_ident_b = try module_b_env.idents.insert(allocator, base.Ident.for_text("next"), base.Region.zero());
+    const value_ident_b = try module_b_env.idents.insert(allocator, base.Ident.for_text("value"));
+    const next_ident_b = try module_b_env.idents.insert(allocator, base.Ident.for_text("next"));
 
     var str_record_fields = std.ArrayList(types_mod.RecordField).init(allocator);
     defer str_record_fields.deinit();
@@ -1204,8 +1204,8 @@ test "cross-module type checking - polymorphic record chain" {
     try testing.expectEqual(@as(usize, 2), fields.len);
 
     // Check field names and types
-    const value_ident_c = module_c_env.idents.insert(allocator, base.Ident.for_text("value"), base.Region.zero());
-    const next_ident_c = module_c_env.idents.insert(allocator, base.Ident.for_text("next"), base.Region.zero());
+    const value_ident_c = module_c_env.idents.insert(allocator, base.Ident.for_text("value"));
+    const next_ident_c = module_c_env.idents.insert(allocator, base.Ident.for_text("next"));
 
     try testing.expectEqual(value_ident_c, fields.items(.name)[0]);
     try testing.expectEqual(next_ident_c, fields.items(.name)[1]);

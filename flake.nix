@@ -34,14 +34,7 @@
     } // flake-utils.lib.eachSystem supportedSystems (system:
       let
 
-        overlays = [ (import rust-overlay) ] ++ [
-          (final: prev: {
-            # using a custom simple-http-server fork because of github.com/TheWaWaR/simple-http-server/issues/111
-            # the server is used for local testing of the roc website
-            simple-http-server =
-              final.callPackage ./nix/simple-http-server.nix { };
-          })
-        ];
+        overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
 
         rocBuild = import ./nix { inherit pkgs; };
@@ -56,7 +49,7 @@
           lib.optionals stdenv.isLinux [
             valgrind # used in cli tests, see cli/tests/cli_tests.rs
             cargo-llvm-cov # to visualize code coverage
-            curl # used by www/build.sh
+            curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
           ];
 
         # DevInputs are not necessary to build roc as a user

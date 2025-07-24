@@ -204,6 +204,13 @@ main! = |_| {
 		(e-lambda @17.9-23.2
 			(args
 				(p-underscore @17.10-17.11))
+			(captures
+				(capture @9.1-9.9 (ident "identity"))
+				(capture @12.1-12.10 (ident "identity2"))
+				(capture @15.1-15.5 (ident "pair"))
+				(capture @4.1-4.2 (ident "a"))
+				(capture @5.1-5.2 (ident "b"))
+				(capture @6.1-6.2 (ident "c")))
 			(e-block @17.13-23.2
 				(s-let @18.5-18.27
 					(p-assign @18.5-18.12 (ident "result1"))

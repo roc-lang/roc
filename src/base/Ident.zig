@@ -107,20 +107,17 @@ pub const Store = struct {
     pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!Store {
         return .{
             .interner = try SmallStringInterner.initCapacity(gpa, capacity),
-            .attributes = try std.ArrayListUnmanaged(Attributes).initCapacity(gpa, capacity),
         };
     }
 
     /// Deinitialize the memory for an `Ident.Store`.
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         self.interner.deinit(gpa);
-        self.attributes.deinit(gpa);
     }
 
     /// Insert a new identifier into the store.
-    pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident, region: Region) std.mem.Allocator.Error!Idx {
-        const idx = try self.interner.insert(gpa, ident.raw_text, region);
-        try self.attributes.append(gpa, ident.attributes);
+    pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident) std.mem.Allocator.Error!Idx {
+        const idx = try self.interner.insert(gpa, ident.raw_text);
 
         return Idx{
             .attributes = ident.attributes,
@@ -170,21 +167,6 @@ pub const Store = struct {
         };
     }
 
-    /// Checks whether two identifiers have the same text.
-    ///
-    /// This runs in constant time because it just checks if both idents
-    /// point to the same deduped string.
-    pub fn identsHaveSameText(
-        self: *const Store,
-        first_idx: Idx,
-        second_idx: Idx,
-    ) bool {
-        return self.interner.indicesHaveSameText(
-            @enumFromInt(@as(u32, first_idx.idx)),
-            @enumFromInt(@as(u32, second_idx.idx)),
-        );
-    }
-
     /// Get the text for an identifier.
     pub fn getText(self: *const Store, idx: Idx) []u8 {
         return self.interner.getText(@enumFromInt(@as(u32, idx.idx)));
@@ -197,19 +179,6 @@ pub const Store = struct {
         // SmallStringInterner components
         size += @sizeOf(u32); // bytes_len
         size += self.interner.bytes.items.len; // bytes data
-        size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
-
-        size += @sizeOf(u32); // outer_indices_len
-        size += self.interner.outer_indices.items.len * @sizeOf(@TypeOf(self.interner.outer_indices.items[0])); // outer_indices data
-        size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
-
-        size += @sizeOf(u32); // regions_len
-        size += self.interner.regions.items.len * @sizeOf(@TypeOf(self.interner.regions.items[0])); // regions data
-        size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
-
-        // Store components
-        size += @sizeOf(u32); // attributes_len
-        size += self.attributes.items.len * @sizeOf(u8); // attributes data (packed as bytes)
         size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
 
         size += @sizeOf(u32); // next_unique_name
@@ -232,42 +201,6 @@ pub const Store = struct {
         if (bytes_len > 0) {
             @memcpy(buffer[offset .. offset + bytes_len], self.interner.bytes.items);
             offset += bytes_len;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Serialize interner outer_indices
-        const outer_indices_len = @as(u32, @intCast(self.interner.outer_indices.items.len));
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = outer_indices_len;
-        offset += @sizeOf(u32);
-        if (outer_indices_len > 0) {
-            const outer_indices_bytes = outer_indices_len * @sizeOf(@TypeOf(self.interner.outer_indices.items[0]));
-            @memcpy(buffer[offset .. offset + outer_indices_bytes], std.mem.sliceAsBytes(self.interner.outer_indices.items));
-            offset += outer_indices_bytes;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Serialize interner regions
-        const regions_len = @as(u32, @intCast(self.interner.regions.items.len));
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = regions_len;
-        offset += @sizeOf(u32);
-        if (regions_len > 0) {
-            const regions_bytes = regions_len * @sizeOf(@TypeOf(self.interner.regions.items[0]));
-            @memcpy(buffer[offset .. offset + regions_bytes], std.mem.sliceAsBytes(self.interner.regions.items));
-            offset += regions_bytes;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Serialize attributes
-        const attributes_len = @as(u32, @intCast(self.attributes.items.len));
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = attributes_len;
-        offset += @sizeOf(u32);
-        if (attributes_len > 0) {
-            // Serialize each Attributes as a single byte to avoid padding
-            for (self.attributes.items) |attr| {
-                const attr_bits: u3 = @bitCast(attr);
-                buffer[offset] = @as(u8, attr_bits);
-                offset += 1;
-            }
         }
         offset = std.mem.alignForward(usize, offset, @alignOf(u32));
 
@@ -302,75 +235,24 @@ pub const Store = struct {
         }
         offset = std.mem.alignForward(usize, offset, @alignOf(u32));
 
-        // Deserialize interner outer_indices
-        const outer_indices_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-        var outer_indices = std.ArrayListUnmanaged(SmallStringInterner.StringIdx){};
-        if (outer_indices_len > 0) {
-            const outer_indices_bytes = outer_indices_len * @sizeOf(SmallStringInterner.StringIdx);
-            if (offset + outer_indices_bytes > buffer.len) return error.BufferTooSmall;
-            const outer_indices_data = @as([*]const SmallStringInterner.StringIdx, @ptrCast(@alignCast(buffer.ptr + offset)));
-            try outer_indices.appendSlice(gpa, outer_indices_data[0..outer_indices_len]);
-            offset += outer_indices_bytes;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Deserialize interner regions
-        const regions_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-        var regions = std.ArrayListUnmanaged(Region){};
-        if (regions_len > 0) {
-            const regions_bytes = regions_len * @sizeOf(Region);
-            if (offset + regions_bytes > buffer.len) return error.BufferTooSmall;
-            const regions_data = @as([*]const Region, @ptrCast(@alignCast(buffer.ptr + offset)));
-            try regions.appendSlice(gpa, regions_data[0..regions_len]);
-            offset += regions_bytes;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Deserialize attributes
-        const attributes_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-        var attributes = std.ArrayListUnmanaged(Attributes){};
-        if (attributes_len > 0) {
-            if (offset + attributes_len > buffer.len) return error.BufferTooSmall;
-            try attributes.ensureTotalCapacity(gpa, attributes_len);
-            // Deserialize each Attributes from a single byte to avoid padding
-            for (0..attributes_len) |_| {
-                const attr_bits: u3 = @truncate(buffer[offset]);
-                const attr: Attributes = @bitCast(attr_bits);
-                attributes.appendAssumeCapacity(attr);
-                offset += 1;
-            }
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
         // Deserialize next_unique_name
         if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
         const next_unique_name = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
 
         // Create empty strings hash table (used only for deduplication during insertion)
-        const strings = std.StringHashMapUnmanaged(SmallStringInterner.StringIdx){};
+        const strings = std.StringHashMapUnmanaged(SmallStringInterner.Idx){};
 
         // Construct the interner
         const interner = SmallStringInterner{
             .bytes = bytes,
             .strings = strings,
-            .outer_indices = outer_indices,
-            .regions = regions,
             .frozen = if (std.debug.runtime_safety) false else {},
         };
 
         return Store{
             .interner = interner,
-            .attributes = attributes,
             .next_unique_name = next_unique_name,
         };
-    }
-
-    /// Get the region for an identifier.
-    pub fn getRegion(self: *const Store, idx: Idx) Region {
-        return self.interner.getRegion(@enumFromInt(idx.idx));
     }
 
     /// Freeze the identifier store, preventing any new entries from being added.

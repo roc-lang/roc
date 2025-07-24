@@ -103,7 +103,7 @@ fn copyAlias(
 
     // Translate the type name ident
     const type_name_str = source_idents.getText(source_alias.ident.ident_idx);
-    const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str), base.Region.zero());
+    const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
 
     var dest_args = std.ArrayList(Var).init(dest_store.gpa);
     defer dest_args.deinit();
@@ -337,11 +337,11 @@ fn copyNominalType(
 
     // Translate the type name ident
     const type_name_str = source_idents.getText(source_nominal.ident.ident_idx);
-    const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str), base.Region.zero());
+    const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
 
     // Translate the origin module ident
     const origin_str = source_idents.getText(source_nominal.origin_module);
-    const translated_origin = try dest_idents.insert(allocator, base.Ident.for_text(origin_str), base.Region.zero());
+    const translated_origin = try dest_idents.insert(allocator, base.Ident.for_text(origin_str));
 
     var dest_args = std.ArrayList(Var).init(dest_store.gpa);
     defer dest_args.deinit();

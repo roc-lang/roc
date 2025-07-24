@@ -216,14 +216,14 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
-UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
-UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
-UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
-UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
-UNUSED VARIABLE - fuzz_crash_027.md:151:1:151:6
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
+UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
 UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
+UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
+UNUSED VARIABLE - fuzz_crash_027.md:151:1:151:6
+UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
+UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
 TYPE MISMATCH - fuzz_crash_027.md:47:11:47:14
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:111:2:111:12
@@ -702,27 +702,15 @@ tuple : Value((a, b, c))
 
 
 **UNUSED VARIABLE**
-Variable `record` is not used anywhere in your code.
+Variable `tag_with` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_tag_with` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_027.md:131:2:131:8:**
+**fuzz_crash_027.md:119:2:119:10:**
 ```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+	tag_with = Ok(number)
 ```
- ^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:121:2:121:6:**
-```roc
-	list = [
-```
- ^^^^
+ ^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -735,42 +723,6 @@ The unused variable is declared here:
 	m_tuple = (
 ```
  ^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `stale` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_stale` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:142:2:142:7:**
-```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-```
- ^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `empty` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_empty` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:151:1:151:6:**
-```roc
-empty = {}
-```
-^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `tag_with` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_tag_with` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:119:2:119:10:**
-```roc
-	tag_with = Ok(number)
-```
- ^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -793,6 +745,54 @@ The unused variable is declared here:
 **fuzz_crash_027.md:120:2:120:6:**
 ```roc
 	ited = "Hello, ${world}"
+```
+ ^^^^
+
+
+**UNUSED VARIABLE**
+Variable `record` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:131:2:131:8:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+ ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `empty` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_empty` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:151:1:151:6:**
+```roc
+empty = {}
+```
+^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `stale` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_stale` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:142:2:142:7:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+ ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `list` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:121:2:121:6:**
+```roc
+	list = [
 ```
  ^^^^
 
@@ -1433,17 +1433,17 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 							(e-field-access @142.10-142.47
 								(e-field-access @142.10-142.41
 									(e-field-access @142.10-142.34
-										(e-question-suffix @142.10-142.23
+										(e-question-suffix @142.10-142.24
 											(e-apply @142.10-142.23
 												(e-ident @142.10-142.17 (raw "some_fn"))
 												(e-ident @142.18-142.22 (raw "arg1"))))
-										(e-question-suffix @142.24-142.33
+										(e-question-suffix @142.24-142.34
 											(e-apply @142.24-142.33
 												(e-ident @142.24-142.31 (raw "statod")))))
-									(e-question-suffix @142.34-142.40
+									(e-question-suffix @142.34-142.41
 										(e-apply @142.34-142.40
 											(e-ident @142.34-142.38 (raw "ned")))))
-								(e-question-suffix @142.41-142.46
+								(e-question-suffix @142.41-142.47
 									(e-ident @142.41-142.46 (raw "recd")))))
 						(e-apply @143.2-147.3
 							(e-tag @143.2-143.11 (raw "Stdoline!"))
@@ -1852,6 +1852,9 @@ main! = |_| { # Yeah Ie
 		(e-lambda @100.9-159.2
 			(args
 				(p-underscore @100.10-100.11))
+			(captures
+				(capture @60.1-60.11 (ident "match_time"))
+				(capture @102.2-102.18 (ident "number")))
 			(e-block @100.13-159.2
 				(s-let @101.2-101.17
 					(p-assign @101.2-101.7 (ident "world"))

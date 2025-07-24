@@ -315,22 +315,11 @@ pub const Repl = struct {
             switch (result.layout.data.scalar.tag) {
                 .bool => {
                     // Boolean values are stored as u8 (1 for True, 0 for False)
-                    const bool_value = @as(*u8, @ptrCast(@alignCast(result.ptr))).*;
-                    return try self.allocator.dupe(u8, if (bool_value == 1) "True" else "False");
+                    const bool_value: *u8 = @ptrCast(result.ptr.?);
+                    return try self.allocator.dupe(u8, if (bool_value.* == 1) "True" else "False");
                 },
                 .int => {
-                    const value: i128 = switch (result.layout.data.scalar.data.int) {
-                        .u8 => @as(*u8, @ptrCast(@alignCast(result.ptr))).*,
-                        .i8 => @as(*i8, @ptrCast(@alignCast(result.ptr))).*,
-                        .u16 => @as(*u16, @ptrCast(@alignCast(result.ptr))).*,
-                        .i16 => @as(*i16, @ptrCast(@alignCast(result.ptr))).*,
-                        .u32 => @as(*u32, @ptrCast(@alignCast(result.ptr))).*,
-                        .i32 => @as(*i32, @ptrCast(@alignCast(result.ptr))).*,
-                        .u64 => @as(*u64, @ptrCast(@alignCast(result.ptr))).*,
-                        .i64 => @as(*i64, @ptrCast(@alignCast(result.ptr))).*,
-                        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(result.ptr))).*),
-                        .i128 => @as(*i128, @ptrCast(@alignCast(result.ptr))).*,
-                    };
+                    const value: i128 = eval.readIntFromMemory(@ptrCast(result.ptr.?), result.layout.data.scalar.data.int);
                     return try std.fmt.allocPrint(self.allocator, "{d}", .{value});
                 },
                 else => {},
@@ -538,18 +527,8 @@ test "Repl - minimal interpreter integration" {
     try testing.expect(result.layout.data.scalar.tag == .int);
 
     // Read the value back
-    const value: i128 = switch (result.layout.data.scalar.data.int) {
-        .u8 => @as(*u8, @ptrCast(@alignCast(result.ptr))).*,
-        .i8 => @as(*i8, @ptrCast(@alignCast(result.ptr))).*,
-        .u16 => @as(*u16, @ptrCast(@alignCast(result.ptr))).*,
-        .i16 => @as(*i16, @ptrCast(@alignCast(result.ptr))).*,
-        .u32 => @as(*u32, @ptrCast(@alignCast(result.ptr))).*,
-        .i32 => @as(*i32, @ptrCast(@alignCast(result.ptr))).*,
-        .u64 => @as(*u64, @ptrCast(@alignCast(result.ptr))).*,
-        .i64 => @as(*i64, @ptrCast(@alignCast(result.ptr))).*,
-        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(result.ptr))).*),
-        .i128 => @as(*i128, @ptrCast(@alignCast(result.ptr))).*,
-    };
+    const precision = result.layout.data.scalar.data.int;
+    const value: i128 = eval.readIntFromMemory(@ptrCast(result.ptr.?), precision);
 
     try testing.expectEqual(@as(i128, 42), value);
 }

@@ -2862,14 +2862,14 @@ const TestEnv = struct {
     }
 
     fn mkTypeIdent(self: *Self, name: []const u8) std.mem.Allocator.Error!TypeIdent {
-        const ident_idx = try self.module_env.idents.insert(self.module_env.gpa, Ident.for_text(name), Region.zero());
+        const ident_idx = try self.module_env.idents.insert(self.module_env.gpa, Ident.for_text(name));
         return TypeIdent{ .ident_idx = ident_idx };
     }
 
     // helpers - rigid var
 
     fn mkRigidVar(self: *Self, name: []const u8) std.mem.Allocator.Error!Content {
-        const ident_idx = try self.module_env.idents.insert(self.module_env.gpa, Ident.for_text(name), Region.zero());
+        const ident_idx = try self.module_env.idents.insert(self.module_env.gpa, Ident.for_text(name));
         return Self.mkRigidVarFromIdent(ident_idx);
     }
 
@@ -3019,7 +3019,7 @@ const TestEnv = struct {
     // helpers - structure - records
 
     fn mkRecordField(self: *Self, name: []const u8, var_: Var) std.mem.Allocator.Error!RecordField {
-        const ident_idx = try self.module_env.idents.insert(self.module_env.gpa, Ident.for_text(name), Region.zero());
+        const ident_idx = try self.module_env.idents.insert(self.module_env.gpa, Ident.for_text(name));
         return Self.mkRecordFieldFromIdent(ident_idx, var_);
     }
 
@@ -3054,7 +3054,7 @@ const TestEnv = struct {
     }
 
     fn mkTag(self: *Self, name: []const u8, args: []const Var) std.mem.Allocator.Error!Tag {
-        const ident_idx = try self.module_env.idents.insert(self.module_env.gpa, Ident.for_text(name), Region.zero());
+        const ident_idx = try self.module_env.idents.insert(self.module_env.gpa, Ident.for_text(name));
         return Tag{ .name = ident_idx, .args = try self.module_env.types.appendVars(args) };
     }
 

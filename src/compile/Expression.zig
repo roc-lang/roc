@@ -251,6 +251,7 @@ pub const Expr = union(enum) {
     e_lambda: struct {
         args: Pattern.Span,
         body: Expr.Idx,
+        captures: Expr.Capture.Span,
     },
     /// Binary operation between two expressions.
     /// Includes arithmetic, comparison, logical, and pipe operators.
@@ -787,6 +788,26 @@ pub const Expr = union(enum) {
                 }
                 try tree.endNode(args_begin, args_attrs);
 
+                // Display capture information if present
+                if (lambda_expr.captures.span.len > 0) {
+                    const captures_begin = tree.beginNode();
+                    try tree.pushStaticAtom("captures");
+                    const captures_attrs = tree.beginNode();
+                    for (ir.store.sliceCaptures(lambda_expr.captures)) |captured_var_idx| {
+                        const captured_var = ir.store.getCapture(captured_var_idx);
+                        const capture_begin = tree.beginNode();
+                        try tree.pushStaticAtom("capture");
+
+                        const capture_region = ir.store.getPatternRegion(captured_var.pattern_idx);
+                        try ir.appendRegionInfoToSExprTreeFromRegion(tree, capture_region);
+
+                        try tree.pushStringPair("ident", ir.getIdentText(captured_var.name));
+                        const capture_attrs = tree.beginNode();
+                        try tree.endNode(capture_begin, capture_attrs);
+                    }
+                    try tree.endNode(captures_begin, captures_attrs);
+                }
+
                 try ir.store.getExpr(lambda_expr.body).pushToSExprTree(ir, tree, lambda_expr.body);
 
                 try tree.endNode(begin, attrs);
@@ -1030,5 +1051,15 @@ pub const Expr = union(enum) {
 
             try tree.endNode(begin, attrs);
         }
+    };
+
+    /// Represents a variable captured by a lambda
+    pub const Capture = struct {
+        name: base.Ident.Idx,
+        pattern_idx: Pattern.Idx,
+        scope_depth: u32,
+
+        pub const Idx = enum(u32) { _ };
+        pub const Span = struct { span: base.DataSpan };
     };
 };

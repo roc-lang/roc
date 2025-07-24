@@ -19,17 +19,15 @@ const Self = @This();
 bytes: std.ArrayListUnmanaged(u8) = .{},
 /// A deduplicated set of strings mapping to their indices in bytes.
 /// Used for deduplication during insertion. May be empty after deserialization.
-strings: std.StringHashMapUnmanaged(StringIdx) = .{},
-/// A unique ID for every string. This is fundamentally an index into bytes.
-/// It also maps 1:1 with a region at the same index.
-outer_indices: std.ArrayListUnmanaged(StringIdx) = .{},
-regions: std.ArrayListUnmanaged(Region) = .{},
+strings: std.StringHashMapUnmanaged(Idx) = .{},
 /// When true, no new entries can be added to the interner.
 /// This is set after parsing is complete.
 frozen: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
 
 /// A unique index for a deduped string in this interner.
-pub const Idx = enum(u32) { _ };
+pub const Idx = enum(u32) {
+    _,
+};
 
 /// Initialize a `SmallStringInterner` with the specified capacity.
 pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!Self {
@@ -38,9 +36,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 
     var self = Self{
         .bytes = try std.ArrayListUnmanaged(u8).initCapacity(gpa, capacity * bytes_per_string),
-        .strings = std.StringHashMapUnmanaged(StringIdx){},
-        .outer_indices = try std.ArrayListUnmanaged(StringIdx).initCapacity(gpa, capacity),
-        .regions = try std.ArrayListUnmanaged(Region).initCapacity(gpa, capacity),
+        .strings = std.StringHashMapUnmanaged(Idx){},
     };
 
     try self.strings.ensureTotalCapacity(gpa, @intCast(capacity));
@@ -59,13 +55,10 @@ pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
         gpa.free(entry.key_ptr.*);
     }
     self.strings.deinit(gpa);
-
-    self.outer_indices.deinit(gpa);
-    self.regions.deinit(gpa);
 }
 
 /// Add a string to this interner, returning a unique, serial index.
-pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8, region: Region) std.mem.Allocator.Error!Idx {
+pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
     if (std.debug.runtime_safety) {
         std.debug.assert(!self.frozen); // Should not insert into a frozen interner
     }
@@ -76,7 +69,7 @@ pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8, region: R
     else blk: {
         // String doesn't exist, add it to bytes
         try self.bytes.ensureUnusedCapacity(gpa, string.len + 1);
-        const new_offset: StringIdx = @enumFromInt(self.bytes.items.len);
+        const new_offset: Idx = @enumFromInt(self.bytes.items.len);
 
         self.bytes.appendSliceAssumeCapacity(string);
         self.bytes.appendAssumeCapacity(0);
@@ -88,43 +81,18 @@ pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8, region: R
         break :blk new_offset;
     };
 
-    // Always create a new serial index, even for duplicate strings
-    // This maintains the 1:1 mapping between indices and regions
-    return self.addOuterIdForStringIndex(gpa, string_offset, region);
+    return string_offset;
 }
 
-fn addOuterIdForStringIndex(self: *Self, gpa: std.mem.Allocator, string_offset: StringIdx, region: Region) std.mem.Allocator.Error!Idx {
-    if (std.debug.runtime_safety) {
-        std.debug.assert(!self.frozen); // Should not add outer IDs to a frozen interner
-    }
-    const len: Idx = @enumFromInt(@as(u32, @truncate(self.outer_indices.items.len)));
-    try self.outer_indices.append(gpa, string_offset);
-    try self.regions.append(gpa, region);
-
-    return len;
-}
-
-/// Check if two indices have the same text in constant time.
-pub fn indicesHaveSameText(
-    self: *const Self,
-    first_idx: Idx,
-    second_idx: Idx,
-) bool {
-    const first_string_offset = self.outer_indices.items[@as(usize, @intFromEnum(first_idx))];
-    const second_string_offset = self.outer_indices.items[@as(usize, @intFromEnum(second_idx))];
-    return first_string_offset == second_string_offset;
+/// Check if a string is already interned in this interner, used for generating unique names.
+pub fn contains(self: *const Self, string: []const u8) bool {
+    // Check if the string exists in the interner's map
+    return self.strings.get(string) != null;
 }
 
 /// Get a reference to the text for an interned string.
 pub fn getText(self: *const Self, idx: Idx) []u8 {
-    const string_offset = self.outer_indices.items[@as(usize, @intFromEnum(idx))];
-
-    return std.mem.sliceTo(self.bytes.items[@intFromEnum(string_offset)..], 0);
-}
-
-/// Get the region for an interned string.
-pub fn getRegion(self: *const Self, idx: Idx) Region {
-    return self.regions.items[@as(usize, @intFromEnum(idx))];
+    return std.mem.sliceTo(self.bytes.items[@intFromEnum(idx)..], 0);
 }
 
 /// Freeze the interner, preventing any new entries from being added.
@@ -133,8 +101,3 @@ pub fn freeze(self: *Self) void {
         self.frozen = true;
     }
 }
-
-/// TODO
-pub const StringIdx = enum(u32) {
-    _,
-};

@@ -666,6 +666,8 @@ combineResults = |jsonResult, httpStatus|
 				(e-lambda @26.9-26.41
 					(args
 						(p-assign @26.10-26.11 (ident "v")))
+					(captures
+						(capture @23.16-23.22 (ident "config")))
 					(e-call @26.13-26.41
 						(e-lookup-external @26.13-26.30
 							(module-idx "0")

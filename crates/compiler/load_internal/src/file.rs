@@ -3152,6 +3152,26 @@ fn register_package_shorthands<'a>(
             shorthand_path
         );
 
+        // Check for package version conflicts
+        if let Some(existing_path) = shorthands.get(shorthand) {
+            // Compare canonicalized paths to detect version conflicts
+            let existing_canonical = existing_path.root_module_dir().canonicalize().ok();
+            let new_canonical = shorthand_path.root_module_dir().canonicalize().ok();
+
+            if existing_canonical != new_canonical
+                && existing_canonical.is_some()
+                && new_canonical.is_some()
+            {
+                let report = to_package_version_conflict_report(
+                    module_path,
+                    shorthand,
+                    &format!("{}", existing_path.root_module_dir().display()),
+                    package_str,
+                );
+                return Err(LoadingProblem::FormattedReport(report, None));
+            }
+        }
+
         shorthands.insert(shorthand, shorthand_path);
     }
 
@@ -6858,6 +6878,30 @@ fn to_parse_problem_report<'a>(
     report.render(render, &mut buf, &alloc, &palette);
 
     buf
+}
+
+pub fn to_package_version_conflict_report(
+    filename: &Path,
+    shorthand: &str,
+    existing_url: &str,
+    conflicting_url: &str,
+) -> String {
+    format!(
+        "── PACKAGE VERSION CONFLICT in {} ─\n\n\
+       I found a package version conflict with the shorthand \"{}\"\n\n\
+       The package shorthand \"{}\" is being used by two different versions:\n\n\
+       • First version: {}\n\
+       • Conflicting version: {}\n\n\
+       To fix this, you can:\n\n\
+       1. Update all packages to use the same version\n\
+       2. Use different shorthand names for different versions\n\
+       3. Update one of the dependencies to use a compatible version\n",
+        filename.display(),
+        shorthand,
+        shorthand,
+        existing_url,
+        conflicting_url
+    )
 }
 
 fn report_cannot_run(

@@ -106,6 +106,8 @@ NO CHANGE
 		(e-lambda @8.9-8.25
 			(args
 				(p-underscore @8.10-8.11))
+			(captures
+				(capture @6.1-6.8 (ident "getUser")))
 			(e-call @8.13-8.25
 				(e-lookup-local @8.13-8.20
 					(p-assign @6.1-6.8 (ident "getUser")))

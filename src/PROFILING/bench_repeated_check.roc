@@ -1,3 +1,10 @@
+##
+## !! Do not alter this file unless necessary !!
+##
+## Compiler phase benchmarks use this file, see `src/PROFILING/exec_bench.roc`.
+## If the file changes, the benchmarks can't track performance over time.
+## 
+
 module [
     x,
     y,
