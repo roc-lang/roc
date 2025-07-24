@@ -8,7 +8,7 @@ const parse = @import("parse.zig");
 const canonicalize = @import("canonicalize.zig");
 const check_types = @import("check_types.zig");
 const CIR = canonicalize.CIR;
-const ModuleEnv = base.ModuleEnv;
+const ModuleEnv = @import("../compile/ModuleEnv.zig");
 
 const test_allocator = testing.allocator;
 
@@ -41,9 +41,8 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
         };
     }
 
-    // Canonicalize
-    const cir = try allocator.create(CIR);
-    cir.* = try CIR.init(module_env, "Test");
+    // Canonicalize - CIR is an alias for ModuleEnv, so we use the same module_env
+    const cir = module_env;
 
     const can = try allocator.create(canonicalize);
     can.* = try canonicalize.init(cir, parse_ast, null);
@@ -180,9 +179,8 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
         };
     }
 
-    // Canonicalize
-    const cir = try allocator.create(CIR);
-    cir.* = try CIR.init(module_env, "Test");
+    // Canonicalize - CIR is an alias for ModuleEnv, so we use the same module_env
+    const cir = module_env;
 
     const can = try allocator.create(canonicalize);
     can.* = try canonicalize.init(cir, parse_ast, null);
@@ -226,8 +224,7 @@ fn cleanup(result: anytype, allocator: std.mem.Allocator) void {
     allocator.destroy(result.checker);
     result.can.deinit();
     allocator.destroy(result.can);
-    result.cir.deinit();
-    allocator.destroy(result.cir);
+    // Don't destroy cir - it's the same as module_env
     result.parse_ast.deinit(allocator);
     allocator.destroy(result.parse_ast);
     result.module_env.deinit();
