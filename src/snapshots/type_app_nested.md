@@ -107,7 +107,7 @@ main! = |_| processNested([])
 					(ty-apply @3.17-3.39 (symbol "List")
 						(ty-apply @3.22-3.38 (symbol "Result")
 							(ty @3.29-3.32 (name "Str"))
-							(ty @3.34-3.37 (name "Err"))))
+							(ty-malformed @3.34-3.37)))
 					(ty-apply @3.43-3.52 (symbol "List")
 						(ty @3.48-3.51 (name "Str")))))))
 	(d-let

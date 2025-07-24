@@ -513,12 +513,13 @@ fn Unifier(comptime StoreTypeB: type) type {
                 },
                 .alias => |b_alias| {
                     const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-                    const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-                    if (b_backing_resolved.desc.content == .err) {
-                        // Invalid alias - treat as transparent
-                        self.merge(vars, vars.a.desc.content);
-                        return;
-                    }
+                    // TODO: Do we need this?
+                    // const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
+                    // if (b_backing_resolved.desc.content == .err) {
+                    //     // Invalid alias - treat as transparent
+                    //     self.merge(vars, vars.a.desc.content);
+                    //     return;
+                    // }
                     if (TypeIdent.eql(&self.module_env.idents, a_alias.ident, b_alias.ident)) {
                         try self.unifyTwoAliases(vars, a_alias, b_alias);
                     } else {

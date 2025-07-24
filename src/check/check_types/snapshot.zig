@@ -148,6 +148,7 @@ pub const Store = struct {
 
         return SnapshotAlias{
             .ident = alias.ident,
+            .backing = try self.deepCopyContent(store, backing_resolved.desc.content),
             .vars = args_range,
         };
     }
@@ -408,6 +409,7 @@ pub const SnapshotContent = union(enum) {
 /// TODO
 pub const SnapshotAlias = struct {
     ident: types.TypeIdent,
+    backing: SnapshotContentIdx,
     vars: SnapshotContentIdxSafeList.Range, // The 1st variable is the backing var, rest are args
 };
 

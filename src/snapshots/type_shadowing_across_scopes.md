@@ -98,6 +98,13 @@ module [Result, processData]
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
+**type_shadowing_across_scopes.md:11:24:11:31:**
+```roc
+    Result : [Success, Failure]
+```
+                       ^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable `data` is not used anywhere in your code.
 
@@ -233,7 +240,7 @@ InnerModule :
 	(defs
 		(patt @6.1-6.12 (type "Str -> Str")))
 	(type_decls
-		(alias @3.1-3.31 (type "Result(a, b)")
+		(alias @3.1-3.31 (type "Result(a(r), b(r))")
 			(ty-header @3.1-3.13 (name "Result")
 				(ty-args
 					(ty-var @3.8-3.9 (name "a"))

@@ -684,9 +684,22 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             try report.document.addReflowingText("This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!");
             break :blk report;
         },
-        .malformed_type_annotation => |_| blk: {
+        .malformed_type_annotation => |data| blk: {
             var report = Report.init(allocator, "MALFORMED TYPE", .runtime_error);
             try report.document.addReflowingText("This type annotation is malformed or contains invalid syntax.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            const region_info = self.calcRegionInfo(data.region);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
             break :blk report;
         },
         .if_condition_not_canonicalized => |_| blk: {
@@ -1112,6 +1125,16 @@ pub fn addTypeAnnoAndTypeVar(self: *Self, expr: TypeAnno, content: types_mod.Con
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
+pub fn addTypeAnnoAndTypeVarRedirect(self: *Self, expr: TypeAnno, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!TypeAnno.Idx {
+    const expr_idx = try self.store.addTypeAnno(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
+    debugAssertIdxsEql("addTypeAnnoAndTypeVarRedirect", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addAnnotationAndTypeVar(self: *Self, expr: Annotation, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Annotation.Idx {
     const expr_idx = try self.store.addAnnotation(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -1122,9 +1145,29 @@ pub fn addAnnotationAndTypeVar(self: *Self, expr: Annotation, content: types_mod
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
+pub fn addAnnotationAndTypeVarRedirect(self: *Self, expr: Annotation, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!Annotation.Idx {
+    const expr_idx = try self.store.addAnnotation(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
+    debugAssertIdxsEql("addAnnotationAndTypeVar", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addAnnoRecordFieldAndTypeVar(self: *Self, expr: TypeAnno.RecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!TypeAnno.RecordField.Idx {
     const expr_idx = try self.store.addAnnoRecordField(expr, region);
     const expr_var = try self.types.freshFromContent(content);
+    debugAssertIdxsEql("addAnnoRecordFieldAndTypeVar", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
+pub fn addAnnoRecordFieldAndTypeVarRedirect(self: *Self, expr: TypeAnno.RecordField, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!TypeAnno.RecordField.Idx {
+    const expr_idx = try self.store.addAnnoRecordField(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
     debugAssertIdxsEql("addAnnoRecordFieldAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;

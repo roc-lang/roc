@@ -78,6 +78,13 @@ Pair(a, b+ : (
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
+**fuzz_crash_021.md:3:14:3:15:**
+```roc
+Pair(a, b+ : (
+```
+             ^
+
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.

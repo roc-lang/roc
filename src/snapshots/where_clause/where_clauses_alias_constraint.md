@@ -16,7 +16,28 @@ sort = ...
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**where_clauses_alias_constraint.md:4:27:4:28:**
+```roc
+	where module(a).order : (a, a) -> [LT, EQ, GT]
+```
+                          ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**where_clauses_alias_constraint.md:4:30:4:31:**
+```roc
+	where module(a).order : (a, a) -> [LT, EQ, GT]
+```
+                             ^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),Comma(1:13-1:14),LowerIdent(1:15-1:19),CloseSquare(1:19-1:20),
@@ -90,8 +111,8 @@ NO CHANGE
 			(method @4.8-4.48 (module-of "a") (ident "order")
 				(args
 					(ty-tuple @4.26-4.32
-						(ty-var @4.27-4.28 (name "a"))
-						(ty-var @4.30-4.31 (name "a"))))
+						(ty-malformed @4.27-4.28)
+						(ty-malformed @4.30-4.31)))
 				(ty-tag-union @4.36-4.48
 					(ty @4.37-4.39 (name "LT"))
 					(ty @4.41-4.43 (name "EQ"))
@@ -113,7 +134,7 @@ NO CHANGE
 	(defs
 		(patt @7.1-7.5 (type "Error -> Error")))
 	(type_decls
-		(alias @3.1-4.48 (type "Sort(a)")
+		(alias @3.1-4.48 (type "Sort(a(r))")
 			(ty-header @3.1-3.8 (name "Sort")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))))))

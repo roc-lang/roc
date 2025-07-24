@@ -22,6 +22,12 @@ UNDEFINED VARIABLE - nominal_external_fully_qualified.md:8:23:8:36
 UNDEFINED VARIABLE - nominal_external_fully_qualified.md:9:23:9:36
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'type_not_exposed' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/nominal/nominal_external_fully_qualified.md:0:0:0:0**
+
 **UNDEFINED VARIABLE**
 Nothing is named `MyResultType` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -153,13 +159,10 @@ handleResult = |result| {
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.60 (effectful false)
-					(ty-apply @5.16-5.53 (symbol "MyResultModule.MyResultType")
-						(ty @5.44-5.47 (name "Str"))
-						(ty @5.49-5.52 (name "I32")))
+					(ty-malformed @5.16-5.43)
 					(ty @5.57-5.60 (name "Str"))))))
 	(s-import @3.1-3.22 (module "MyResultModule")
-		(exposes))
-	(ext-decl @5.16-5.43 (ident "MyResultModule.MyResultType") (kind "type")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

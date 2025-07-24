@@ -119,6 +119,17 @@ module []
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
+**UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
+
+**underscore_in_type_alias.md:15:18:15:18:**
+```roc
+TagType := [Some(_), None]
+```
+                 
+
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),

@@ -73,6 +73,12 @@ Some(a) : { foo : Ok(a), bar : Something }
                                ^^^^^^^^^
 
 
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_found' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/type_declarations.md:0:0:0:0**
+
 **EXPOSED BUT NOT DEFINED**
 The module header says that `main!` is exposed, but it is not defined anywhere in this module.
 
@@ -206,18 +212,17 @@ NO CHANGE
 	(s-alias-decl @5.1-5.17
 		(ty-header @5.1-5.4 (name "Foo"))
 		(ty-tuple @5.7-5.17
-			(ty @5.8-5.11 (name "Bar"))
-			(ty @5.13-5.16 (name "Baz"))))
+			(ty-malformed @5.8-5.11)
+			(ty-malformed @5.13-5.16)))
 	(s-alias-decl @7.1-7.43
 		(ty-header @7.1-7.8 (name "Some")
 			(ty-args
 				(ty-var @7.6-7.7 (name "a"))))
 		(ty-record @7.11-7.43
 			(field (field "foo")
-				(ty-apply @7.19-7.24 (symbol "Ok")
-					(ty-var @7.22-7.23 (name "a"))))
+				(ty-malformed @7.19-7.21))
 			(field (field "bar")
-				(ty @7.32-7.41 (name "Something")))))
+				(ty-malformed @7.32-7.41))))
 	(s-alias-decl @9.1-9.27
 		(ty-header @9.1-9.9 (name "Maybe")
 			(ty-args
@@ -241,37 +246,35 @@ NO CHANGE
 		(ty @13.10-13.13 (name "U64")))
 	(s-alias-decl @15.1-15.24
 		(ty-header @15.1-15.8 (name "MyType2"))
-		(ty-lookup-external @15.11-15.24
-			(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type"))))
-	(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type")))
+		(ty-malformed @15.11-15.24)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.41 (type "Map(a, b)")
+		(alias @3.1-3.41 (type "Map(a(r), b(r))")
 			(ty-header @3.1-3.10 (name "Map")
 				(ty-args
 					(ty-var @3.5-3.6 (name "a"))
 					(ty-var @3.8-3.9 (name "b")))))
 		(alias @5.1-5.17 (type "Foo")
 			(ty-header @5.1-5.4 (name "Foo")))
-		(alias @7.1-7.43 (type "Some(a)")
+		(alias @7.1-7.43 (type "Some(a(r))")
 			(ty-header @7.1-7.8 (name "Some")
 				(ty-args
 					(ty-var @7.6-7.7 (name "a")))))
-		(alias @9.1-9.27 (type "Maybe(a)")
+		(alias @9.1-9.27 (type "Maybe(a(r))")
 			(ty-header @9.1-9.9 (name "Maybe")
 				(ty-args
 					(ty-var @9.7-9.8 (name "a")))))
-		(alias @11.1-11.38 (type "SomeFunc(a)")
+		(alias @11.1-11.38 (type "SomeFunc(a(r))")
 			(ty-header @11.1-11.12 (name "SomeFunc")
 				(ty-args
 					(ty-var @11.10-11.11 (name "a")))))
 		(alias @13.1-13.13 (type "MyType")
 			(ty-header @13.1-13.7 (name "MyType")))
-		(alias @15.1-15.24 (type "MyType2")
+		(alias @15.1-15.24 (type "Error")
 			(ty-header @15.1-15.8 (name "MyType2"))))
 	(expressions))
 ~~~

@@ -31,6 +31,10 @@ pub const TypeAnno = union(enum) {
     ///
     /// Examples: `List(Str)`, `Dict(String, Int)`, `Result(a, b)`
     apply: Apply,
+    /// Type application: applying a type constructor to arguments.
+    ///
+    /// Examples: `OtherModule.MyMap(String, Int)`
+    apply_external: ApplyExternal,
     /// Type variable: a placeholder type that can be unified with other types.
     ///
     /// Examples: `a`, `b`, `elem` in generic type signatures
@@ -71,7 +75,8 @@ pub const TypeAnno = union(enum) {
     ///
     /// Examples: `Json.Value`, `Http.Request` - types that will be resolved when dependencies are available
     ty_lookup_external: struct {
-        external_decl: ModuleEnv.ExternalDecl.Idx,
+        module_idx: ModuleEnv.Import.Idx,
+        target_node_idx: u16,
     },
     /// Malformed type annotation: represents a type that couldn't be parsed correctly.
     /// This follows the "Inform Don't Block" principle - compilation continues with
@@ -97,6 +102,25 @@ pub const TypeAnno = union(enum) {
                 for (args_slice) |arg_idx| {
                     try ir.store.getTypeAnno(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
+
+                try tree.endNode(begin, attrs);
+            },
+            .apply_external => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("ty-apply-external");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                // Add module index
+                var buf: [32]u8 = undefined;
+                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(a.module_idx)}) catch unreachable;
+                try tree.pushStringPair("module-idx", module_idx_str);
+
+                // Add target node index
+                var buf2: [32]u8 = undefined;
+                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{a.target_node_idx}) catch unreachable;
+                try tree.pushStringPair("target-node-idx", target_idx_str);
 
                 try tree.endNode(begin, attrs);
             },
@@ -216,7 +240,15 @@ pub const TypeAnno = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
-                try ir.getExternalDecl(tle.external_decl).pushToSExprTreeWithRegion(ir, tree, region);
+                // Add module index
+                var buf: [32]u8 = undefined;
+                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(tle.module_idx)}) catch unreachable;
+                try tree.pushStringPair("module-idx", module_idx_str);
+
+                // Add target node index
+                var buf2: [32]u8 = undefined;
+                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{tle.target_node_idx}) catch unreachable;
+                try tree.pushStringPair("target-node-idx", target_idx_str);
 
                 try tree.endNode(begin, attrs);
             },
@@ -243,6 +275,13 @@ pub const TypeAnno = union(enum) {
     /// A type application in a type annotation
     pub const Apply = struct {
         symbol: Ident.Idx, // The type constructor being applied (e.g., "List", "Dict")
+        args: TypeAnno.Span, // The type arguments (e.g., [Str], [String, Int])
+    };
+
+    /// A type application of an external type in a type annotation
+    pub const ApplyExternal = struct {
+        module_idx: ModuleEnv.Import.Idx,
+        target_node_idx: u16,
         args: TypeAnno.Span, // The type arguments (e.g., [Str], [String, Int])
     };
 

@@ -26,7 +26,7 @@ main! = |_| swapPair(1, 2)
             ^^^^^^^^
 
 It is of type:
-    _Pair(a, b) -> Pair(b, a)_
+    _(a, b) -> (b, a)_
 
 But you are trying to use it as:
     _Num(_size), Num(_size2) -> _ret_
@@ -151,7 +151,7 @@ NO CHANGE
 		(patt @6.1-6.9 (type "Error"))
 		(patt @8.1-8.6 (type "_arg -> _ret")))
 	(type_decls
-		(alias @3.1-3.20 (type "Pair(a, b)")
+		(alias @3.1-3.20 (type "Pair(a(r), b(r))")
 			(ty-header @3.1-3.11 (name "Pair")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))

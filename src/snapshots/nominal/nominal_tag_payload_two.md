@@ -21,7 +21,83 @@ is_ok = |result| match result {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_tag_payload_two.md:6:10:6:18:**
+```roc
+ok = |a| MyResult.Ok(a)
+```
+         ^^^^^^^^
+
+It is of type:
+    _MyResult(ok, err)_
+
+But you are trying to use it as:
+    _MyResult(ok, err)_
+
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**nominal_tag_payload_two.md:6:10:**
+```roc
+ok = |a| MyResult.Ok(a)
+```
+         ^^^^^^^^^^^
+
+The tag is:
+    _Ok_
+
+But it should be one of:
+    _[Ok(ok), Err(err)]_
+
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern in the second branch of this `match` differs from previous ones:
+**nominal_tag_payload_two.md:9:18:**
+```roc
+is_ok = |result| match result {
+    MyResult.Ok(_) => Bool.True
+    MyResult.Err(_) => Bool.False
+}
+```
+    ^^^^^^^^
+
+The second pattern has this type:
+    _MyResult(ok, err)_
+
+But the other pattern has this type:
+    _MyResult(ok, err)_
+
+All patterns in an `match` must have compatible types.
+
+
+
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**nominal_tag_payload_two.md:10:5:**
+```roc
+    MyResult.Ok(_) => Bool.True
+```
+    ^^^^^^^^^^^^^^
+
+The tag is:
+    _Ok_
+
+But it should be one of:
+    _[Ok(ok), Err(err)]_
+
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**nominal_tag_payload_two.md:11:5:**
+```roc
+    MyResult.Err(_) => Bool.False
+```
+    ^^^^^^^^^^^^^^^
+
+The tag is:
+    _Err_
+
+But it should be one of:
+    _[Ok(ok), Err(err)]_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),CloseSquare(1:28-1:29),
@@ -181,15 +257,15 @@ is_ok = |result| match result {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.3 (type "ok -> MyResult(ok, err)"))
-		(patt @9.1-9.6 (type "MyResult(ok, err) -> Bool")))
+		(patt @6.1-6.3 (type "ok -> Error"))
+		(patt @9.1-9.6 (type "Error -> Bool")))
 	(type_decls
-		(nominal @3.1-3.40 (type "MyResult(ok, err)")
+		(nominal @3.1-3.40 (type "MyResult(ok(r), err(r))")
 			(ty-header @3.1-3.18 (name "MyResult")
 				(ty-args
 					(ty-var @3.10-3.12 (name "ok"))
 					(ty-var @3.14-3.17 (name "err"))))))
 	(expressions
-		(expr @6.6-6.24 (type "ok -> MyResult(ok, err)"))
-		(expr @9.9-12.2 (type "MyResult(ok, err) -> Bool"))))
+		(expr @6.6-6.24 (type "ok -> Error"))
+		(expr @9.9-12.2 (type "Error -> Bool"))))
 ~~~

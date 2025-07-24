@@ -36,6 +36,24 @@ parser = Json.Parser.Advanced.NonExistent.create
 # EXPECTED
 UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 # PROBLEMS
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_unresolved_qualified.md:0:0:0:0**
+
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_found' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_unresolved_qualified.md:0:0:0:0**
+
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_found' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_unresolved_qualified.md:0:0:0:0**
+
 **UNUSED VARIABLE**
 Variable `req` is not used anywhere in your code.
 
@@ -164,8 +182,7 @@ parser = Json.create
 		(annotation @11.1-11.10
 			(declared-type
 				(ty-fn @10.13-10.36 (effectful false)
-					(ty-lookup-external @10.13-10.29
-						(ext-decl @10.13-10.29 (ident "Json.InvalidType") (kind "type")))
+					(ty-malformed @10.13-10.29)
 					(ty @10.33-10.36 (name "Str"))))))
 	(d-let
 		(p-assign @15.1-15.15 (ident "processRequest"))
@@ -178,10 +195,8 @@ parser = Json.create
 		(annotation @15.1-15.15
 			(declared-type
 				(ty-fn @14.18-14.61 (effectful false)
-					(ty-lookup-external @14.18-14.37
-						(ext-decl @14.18-14.37 (ident "Http.Server.Request") (kind "type")))
-					(ty-lookup-external @14.41-14.61
-						(ext-decl @14.41-14.61 (ident "Http.Server.Response") (kind "type")))))))
+					(ty-malformed @14.18-14.37)
+					(ty-malformed @14.41-14.61)))))
 	(d-let
 		(p-assign @18.1-18.7 (ident "result"))
 		(e-call @18.10-18.28
@@ -207,26 +222,23 @@ parser = Json.create
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.27 (module "http.Client") (qualifier "http") (alias "Http")
-		(exposes))
-	(ext-decl @10.13-10.29 (ident "Json.InvalidType") (kind "type"))
-	(ext-decl @14.18-14.37 (ident "Http.Server.Request") (kind "type"))
-	(ext-decl @14.41-14.61 (ident "Http.Server.Response") (kind "type")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @7.1-7.5 (type "Error"))
-		(patt @11.1-11.10 (type "Json.InvalidType -> Str"))
-		(patt @15.1-15.15 (type "Http.Server.Request -> Error"))
+		(patt @11.1-11.10 (type "Error -> Str"))
+		(patt @15.1-15.15 (type "Error -> Error"))
 		(patt @18.1-18.7 (type "_a"))
 		(patt @21.1-21.7 (type "_a"))
 		(patt @24.1-24.7 (type "Error"))
 		(patt @27.1-27.7 (type "Error")))
 	(expressions
 		(expr @7.8-7.31 (type "Error"))
-		(expr @11.13-11.40 (type "Json.InvalidType -> Str"))
-		(expr @15.18-15.51 (type "Http.Server.Request -> Error"))
+		(expr @11.13-11.40 (type "Error -> Str"))
+		(expr @15.18-15.51 (type "Error -> Error"))
 		(expr @18.10-18.28 (type "_a"))
 		(expr @21.10-21.31 (type "_a"))
 		(expr @24.10-24.28 (type "Error"))

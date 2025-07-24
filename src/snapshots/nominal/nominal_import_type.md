@@ -15,6 +15,12 @@ red = Color.RGB.Red
 # EXPECTED
 UNDEFINED VARIABLE - nominal_import_type.md:6:12:6:16
 # PROBLEMS
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'type_not_exposed' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/nominal/nominal_import_type.md:0:0:0:0**
+
 **UNDEFINED VARIABLE**
 Nothing is named `RGB` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -60,11 +66,9 @@ NO CHANGE
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @6.1-6.4
 			(declared-type
-				(ty-lookup-external @5.7-5.16
-					(ext-decl @5.7-5.16 (ident "Color.RGB") (kind "type"))))))
+				(ty-malformed @5.7-5.16))))
 	(s-import @3.1-3.13 (module "Color")
-		(exposes))
-	(ext-decl @5.7-5.16 (ident "Color.RGB") (kind "type")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

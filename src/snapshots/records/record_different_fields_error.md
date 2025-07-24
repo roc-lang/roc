@@ -286,8 +286,22 @@ Here is the problematic code:
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
+**record_different_fields_error.md:2:20:2:21:**
+```roc
+    _privateField: "leading underscore",
+```
+                   ^
+
+
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
+
+**record_different_fields_error.md:3:13:3:14:**
+```roc
+    field_: "trailing underscore",
+```
+            ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `kebab` in this scope.
@@ -324,6 +338,13 @@ Is there an `import` or `exposing` missing up-top?
 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
+
+**record_different_fields_error.md:6:20:6:21:**
+```roc
+    field$special: "dollar",
+```
+                   ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `field` in this scope.

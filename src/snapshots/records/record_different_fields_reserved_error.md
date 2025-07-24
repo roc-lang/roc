@@ -244,6 +244,13 @@ Here is the problematic code:
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
+**record_different_fields_reserved_error.md:3:11:3:12:**
+```roc
+    when: "pattern match",
+```
+          ^
+
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: statement type in block
 

@@ -153,6 +153,12 @@ json_encoder = Json.Core.Utf8.defaultEncoder
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_found' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/multi_qualified_import.md:0:0:0:0**
+
 **UNUSED VARIABLE**
 Variable `encoder` is not used anywhere in your code.
 
@@ -164,6 +170,12 @@ process = |encoder| "processing"
 ```
            ^^^^^^^
 
+
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_found' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/multi_qualified_import.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
 Nothing is named `json` in this scope.
@@ -299,7 +311,7 @@ data = json
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @6.1-6.13
 			(declared-type
-				(ty @5.16-5.23 (name "Encoder")))))
+				(ty-malformed @5.16-5.23))))
 	(d-let
 		(p-assign @10.1-10.8 (ident "process"))
 		(e-lambda @10.11-10.33
@@ -310,30 +322,26 @@ data = json
 		(annotation @10.1-10.8
 			(declared-type
 				(ty-fn @9.11-9.40 (effectful false)
-					(ty-lookup-external @9.11-9.33
-						(ext-decl @9.11-9.33 (ident "json.Core.Utf8.Encoder") (kind "type")))
+					(ty-malformed @9.11-9.33)
 					(ty @9.37-9.40 (name "Str"))))))
 	(d-let
 		(p-assign @14.1-14.5 (ident "data"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @14.1-14.5
 			(declared-type
-				(ty-lookup-external @13.8-13.34
-					(ext-decl @13.8-13.34 (ident "json.Core.Utf8.EncodedData") (kind "type"))))))
+				(ty-malformed @13.8-13.34))))
 	(s-import @3.1-3.17 (module "json.Core") (qualifier "json")
-		(exposes))
-	(ext-decl @9.11-9.33 (ident "json.Core.Utf8.Encoder") (kind "type"))
-	(ext-decl @13.8-13.34 (ident "json.Core.Utf8.EncodedData") (kind "type")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @6.1-6.13 (type "Error"))
-		(patt @10.1-10.8 (type "json.Core.Utf8.Encoder -> Str"))
+		(patt @10.1-10.8 (type "Error -> Str"))
 		(patt @14.1-14.5 (type "Error")))
 	(expressions
 		(expr @6.16-6.45 (type "Error"))
-		(expr @10.11-10.33 (type "json.Core.Utf8.Encoder -> Str"))
+		(expr @10.11-10.33 (type "Error -> Str"))
 		(expr @14.8-14.12 (type "Error"))))
 ~~~

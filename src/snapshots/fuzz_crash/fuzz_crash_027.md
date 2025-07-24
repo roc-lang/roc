@@ -351,12 +351,10 @@ Some(a) : { foo : Ok(a), bar : g }
                   ^^
 
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _g_ is not declared in this scope.
+**UNDEFINED VARIABLE**
+Nothing is named `g` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
 **fuzz_crash_027.md:32:32:32:33:**
 ```roc
 Some(a) : { foo : Ok(a), bar : g }
@@ -2024,11 +2022,7 @@ main! = |_| { # Yeah Ie
 						(p-assign @151.1-151.6 (ident "empty"))
 						(e-empty_record @151.9-151.11))
 					(s-type-anno @153.1-153.25 (name "tuple")
-						(ty-apply @153.9-153.25 (symbol "Value")
-							(ty-tuple @153.15-153.24
-								(ty-var @153.16-153.17 (name "a"))
-								(ty-var @153.19-153.20 (name "b"))
-								(ty-var @153.22-153.23 (name "c")))))
+						(ty-malformed @153.9-153.14))
 					(s-expect @155.1-159.2
 						(e-block @155.8-159.2
 							(s-let @156.2-156.9
@@ -2047,7 +2041,7 @@ main! = |_| { # Yeah Ie
 			(declared-type
 				(ty-fn @99.9-99.38 (effectful false)
 					(ty-apply @99.9-99.21 (symbol "List")
-						(ty @99.14-99.20 (name "String")))
+						(ty-malformed @99.14-99.20))
 					(ty-apply @99.25-99.38 (symbol "Result")
 						(ty-record @99.32-99.34)
 						(ty-underscore @1.1-1.1))))))
@@ -2081,32 +2075,31 @@ main! = |_| { # Yeah Ie
 	(s-alias-decl @26.1-26.17
 		(ty-header @26.1-26.4 (name "Foo"))
 		(ty-tuple @26.7-26.17
-			(ty @26.8-26.11 (name "Bar"))
-			(ty @26.13-26.16 (name "Baz"))))
+			(ty-malformed @26.8-26.11)
+			(ty-malformed @26.13-26.16)))
 	(s-alias-decl @32.1-32.35
 		(ty-header @32.1-32.8 (name "Some")
 			(ty-args
 				(ty-var @32.6-32.7 (name "a"))))
 		(ty-record @32.11-32.35
 			(field (field "foo")
-				(ty-apply @32.19-32.24 (symbol "Ok")
-					(ty-var @32.22-32.23 (name "a"))))
+				(ty-malformed @32.19-32.21))
 			(field (field "bar")
-				(ty-var @32.32-32.33 (name "g")))))
+				(ty-malformed @32.32-32.33))))
 	(s-alias-decl @33.1-35.2
 		(ty-header @33.1-33.6 (name "Ml")
 			(ty-args
 				(ty-var @33.4-33.5 (name "a"))))
 		(ty-record @33.9-35.2
 			(field (field "bar")
-				(ty @34.8-34.11 (name "Som")))))
+				(ty-malformed @34.8-34.11))))
 	(s-alias-decl @37.1-39.2
 		(ty-header @37.1-37.9 (name "Soine")
 			(ty-args
 				(ty-var @37.7-37.8 (name "a"))))
 		(ty-record @37.12-39.2
 			(field (field "bar")
-				(ty @38.8-38.11 (name "Som")))))
+				(ty-malformed @38.8-38.11))))
 	(s-alias-decl @40.1-41.2
 		(ty-header @40.1-40.5 (name "Maya"))
 		(ty-tag-union @40.9-41.2))
@@ -2115,11 +2108,9 @@ main! = |_| { # Yeah Ie
 			(ty-args
 				(ty-var @43.6-43.7 (name "a"))))
 		(ty-fn @43.11-43.34 (effectful false)
-			(ty-apply @43.11-43.19 (symbol "Maybe")
-				(ty-var @43.17-43.18 (name "a")))
+			(ty-malformed @43.11-43.16)
 			(ty-var @43.21-43.22 (name "a"))
-			(ty-apply @43.26-43.34 (symbol "Maybe")
-				(ty-var @43.32-43.33 (name "a")))))
+			(ty-malformed @43.26-43.31)))
 	(s-import @4.1-4.38 (module "pf.Stdout") (qualifier "pf")
 		(exposes
 			(exposed (name "line!") (wildcard false))
@@ -2144,43 +2135,43 @@ main! = |_| { # Yeah Ie
 (inferred-types
 	(defs
 		(patt @45.1-45.4 (type "Bool -> Num(_size)"))
-		(patt @48.1-48.8 (type "Error -> Error"))
+		(patt @48.1-48.8 (type "Error -> U64"))
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error")))
 	(type_decls
-		(alias @15.1-15.41 (type "Map(a, b)")
+		(alias @15.1-15.41 (type "Map(a(r), b(r))")
 			(ty-header @15.1-15.10 (name "Map")
 				(ty-args
 					(ty-var @15.5-15.6 (name "a"))
 					(ty-var @15.8-15.9 (name "b")))))
-		(alias @16.1-24.15 (type "MapML(a, b)")
+		(alias @16.1-24.15 (type "MapML(a(r), b(r))")
 			(ty-header @16.1-19.2 (name "MapML")
 				(ty-args
 					(ty-var @17.2-17.3 (name "a"))
 					(ty-var @18.2-18.3 (name "b")))))
 		(alias @26.1-26.17 (type "Foo")
 			(ty-header @26.1-26.4 (name "Foo")))
-		(alias @32.1-32.35 (type "Some(a)")
+		(alias @32.1-32.35 (type "Some(a(r))")
 			(ty-header @32.1-32.8 (name "Some")
 				(ty-args
 					(ty-var @32.6-32.7 (name "a")))))
-		(alias @33.1-35.2 (type "Ml(a)")
+		(alias @33.1-35.2 (type "Ml(a(r))")
 			(ty-header @33.1-33.6 (name "Ml")
 				(ty-args
 					(ty-var @33.4-33.5 (name "a")))))
-		(alias @37.1-39.2 (type "Soine(a)")
+		(alias @37.1-39.2 (type "Soine(a(r))")
 			(ty-header @37.1-37.9 (name "Soine")
 				(ty-args
 					(ty-var @37.7-37.8 (name "a")))))
 		(alias @40.1-41.2 (type "Maya")
 			(ty-header @40.1-40.5 (name "Maya")))
-		(alias @43.1-43.34 (type "Func(a)")
+		(alias @43.1-43.34 (type "Func(a(r))")
 			(ty-header @43.1-43.8 (name "Func")
 				(ty-args
 					(ty-var @43.6-43.7 (name "a"))))))
 	(expressions
 		(expr @45.7-45.28 (type "Bool -> Num(_size)"))
-		(expr @48.11-58.2 (type "Error -> Error"))
+		(expr @48.11-58.2 (type "Error -> U64"))
 		(expr @60.14-94.3 (type "Error"))
 		(expr @100.9-159.2 (type "Error -> Error"))))
 ~~~

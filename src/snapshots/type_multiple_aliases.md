@@ -26,7 +26,34 @@ main! = |_| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_multiple_aliases.md:15:21:15:24:**
+```roc
+	user = create_user(123, "Alice", 25)
+```
+                    ^^^
+
+It is of type:
+    _Num(_size)_
+
+But you are trying to use it as:
+    _UserId_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_multiple_aliases.md:15:35:15:37:**
+```roc
+	user = create_user(123, "Alice", 25)
+```
+                                  ^^
+
+It is of type:
+    _Num(_size)_
+
+But you are trying to use it as:
+    _UserAge_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
@@ -178,8 +205,8 @@ NO CHANGE
 		(p-assign @14.1-14.6 (ident "main!"))
 		(e-closure @14.9-17.2
 			(captures
-				(capture @12.1-12.14 (ident "get_user_name"))
-				(capture @9.1-9.12 (ident "create_user")))
+				(capture @9.1-9.12 (ident "create_user"))
+				(capture @12.1-12.14 (ident "get_user_name")))
 			(e-lambda @14.9-17.2
 				(args
 					(p-underscore @14.10-14.11))
@@ -221,8 +248,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> User"))
-		(patt @12.1-12.14 (type "User -> UserName"))
+		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> { id: UserId, name: UserName, age: UserAge }"))
+		(patt @12.1-12.14 (type "{ id: UserId, name: UserName, age: UserAge } -> UserName"))
 		(patt @14.1-14.6 (type "_arg -> UserName")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
@@ -234,7 +261,7 @@ NO CHANGE
 		(alias @6.1-6.55 (type "User")
 			(ty-header @6.1-6.5 (name "User"))))
 	(expressions
-		(expr @9.15-9.48 (type "UserId, UserName, UserAge -> User"))
-		(expr @12.17-12.33 (type "User -> UserName"))
+		(expr @9.15-9.48 (type "UserId, UserName, UserAge -> { id: UserId, name: UserName, age: UserAge }"))
+		(expr @12.17-12.33 (type "{ id: UserId, name: UserName, age: UserAge } -> UserName"))
 		(expr @14.9-17.2 (type "_arg -> UserName"))))
 ~~~

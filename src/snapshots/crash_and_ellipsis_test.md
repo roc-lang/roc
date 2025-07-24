@@ -125,6 +125,20 @@ The unused variable is declared here:
     ^^^^^^^
 
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**crash_and_ellipsis_test.md:16:28:16:30:**
+```roc
+    result1 = testEllipsis(42)
+```
+                           ^^
+
+It is of type:
+    _Num(_size)_
+
+But you are trying to use it as:
+    _U64_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
@@ -273,9 +287,9 @@ main! = |_| {
 		(p-assign @15.1-15.6 (ident "main!"))
 		(e-closure @15.9-20.2
 			(captures
-				(capture @5.1-5.13 (ident "testEllipsis"))
+				(capture @9.1-9.10 (ident "testCrash"))
 				(capture @13.1-13.16 (ident "testCrashSimple"))
-				(capture @9.1-9.10 (ident "testCrash")))
+				(capture @5.1-5.13 (ident "testEllipsis")))
 			(e-lambda @15.9-20.2
 				(args
 					(p-underscore @15.10-15.11))

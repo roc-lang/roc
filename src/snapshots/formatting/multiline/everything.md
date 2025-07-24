@@ -127,6 +127,94 @@ UNUSED VARIABLE - everything.md:69:2:69:4
 UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:73:2:73:4
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**everything.md:17:4:17:5:**
+```roc
+			a,
+```
+   ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**everything.md:18:4:18:5:**
+```roc
+			a,
+```
+   ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**everything.md:21:4:21:5:**
+```roc
+			a,
+```
+   ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**everything.md:22:4:22:5:**
+```roc
+			a,
+```
+   ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `b` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**everything.md:27:4:27:5:**
+```roc
+			b,
+```
+   ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `b` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**everything.md:28:4:28:5:**
+```roc
+			b,
+```
+   ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `b` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**everything.md:31:4:31:5:**
+```roc
+			b,
+```
+   ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `b` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**everything.md:32:4:32:5:**
+```roc
+			b,
+```
+   ^
+
+
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
 
@@ -510,11 +598,11 @@ NO CHANGE
 		(p-assign @60.1-60.2 (ident "h"))
 		(e-closure @60.5-110.2
 			(captures
-				(capture @89.5-89.6 (ident "a"))
-				(capture @94.4-94.5 (ident "a"))
 				(capture @99.5-99.6 (ident "a"))
 				(capture @105.5-105.6 (ident "a"))
-				(capture @60.1-60.2 (ident "h")))
+				(capture @89.5-89.6 (ident "a"))
+				(capture @60.1-60.2 (ident "h"))
+				(capture @94.4-94.5 (ident "a")))
 			(e-lambda @60.5-110.2
 				(args
 					(p-assign @60.6-60.7 (ident "x"))
@@ -615,14 +703,14 @@ NO CHANGE
 			(method @16.3-19.11 (module-of "a") (ident "a1")
 				(args
 					(ty-tuple @16.18-19.4
-						(ty-var @17.4-17.5 (name "a"))
-						(ty-var @18.4-18.5 (name "a"))))
+						(ty-malformed @17.4-17.5)
+						(ty-malformed @18.4-18.5)))
 				(ty @19.8-19.11 (name "Str")))
 			(method @20.3-23.11 (module-of "a") (ident "a2")
 				(args
 					(ty-tuple @20.18-23.4
-						(ty-var @21.4-21.5 (name "a"))
-						(ty-var @22.4-22.5 (name "a"))))
+						(ty-malformed @21.4-21.5)
+						(ty-malformed @22.4-22.5)))
 				(ty @23.8-23.11 (name "Str")))))
 	(s-alias-decl @24.1-33.11
 		(ty-header @24.1-24.5 (name "B")
@@ -633,14 +721,14 @@ NO CHANGE
 			(method @26.3-29.11 (module-of "b") (ident "b1")
 				(args
 					(ty-tuple @26.18-29.4
-						(ty-var @27.4-27.5 (name "b"))
-						(ty-var @28.4-28.5 (name "b"))))
+						(ty-malformed @27.4-27.5)
+						(ty-malformed @28.4-28.5)))
 				(ty @29.8-29.11 (name "Str")))
 			(method @30.3-33.11 (module-of "b") (ident "b2")
 				(args
 					(ty-tuple @30.18-33.4
-						(ty-var @31.4-31.5 (name "b"))
-						(ty-var @32.4-32.5 (name "b"))))
+						(ty-malformed @31.4-31.5)
+						(ty-malformed @32.4-32.5)))
 				(ty @33.8-33.11 (name "Str")))))
 	(s-alias-decl @35.1-41.2
 		(ty-header @35.1-38.2 (name "C")
@@ -698,20 +786,20 @@ NO CHANGE
 	(defs
 		(patt @60.1-60.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
-		(alias @14.1-23.11 (type "A(a)")
+		(alias @14.1-23.11 (type "A(a(r))")
 			(ty-header @14.1-14.5 (name "A")
 				(ty-args
 					(ty-var @14.3-14.4 (name "a")))))
-		(alias @24.1-33.11 (type "B(b)")
+		(alias @24.1-33.11 (type "B(b(r))")
 			(ty-header @24.1-24.5 (name "B")
 				(ty-args
 					(ty-var @24.3-24.4 (name "b")))))
-		(alias @35.1-41.2 (type "C(a, b)")
+		(alias @35.1-41.2 (type "C(a(r), b(r))")
 			(ty-header @35.1-38.2 (name "C")
 				(ty-args
 					(ty-var @36.2-36.3 (name "a"))
 					(ty-var @37.2-37.3 (name "b")))))
-		(alias @42.1-48.2 (type "D(a, b)")
+		(alias @42.1-48.2 (type "D(a(r), b(r))")
 			(ty-header @42.1-45.2 (name "D")
 				(ty-args
 					(ty-var @43.2-43.3 (name "a"))

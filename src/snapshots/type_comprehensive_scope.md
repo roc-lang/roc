@@ -320,8 +320,7 @@ Complex : {
 				(ty-var @15.6-15.7 (name "a"))))
 		(ty-tag-union @15.11-15.37
 			(ty-apply @15.12-15.27 (symbol "Branch")
-				(ty-apply @15.19-15.26 (symbol "Node")
-					(ty-var @15.24-15.25 (name "a"))))
+				(ty-malformed @15.19-15.23))
 			(ty-apply @15.29-15.36 (symbol "Leaf")
 				(ty-var @15.34-15.35 (name "a")))))
 	(s-alias-decl @18.1-18.48
@@ -345,7 +344,7 @@ Complex : {
 		(ty @24.10-24.13 (name "U64")))
 	(s-alias-decl @27.1-27.29
 		(ty-header @27.1-27.8 (name "BadType"))
-		(ty @27.11-27.29 (name "SomeUndeclaredType")))
+		(ty-malformed @27.11-27.29))
 	(s-alias-decl @30.1-30.19
 		(ty-header @30.1-30.7 (name "MyList"))
 		(ty-apply @30.10-30.19 (symbol "List")
@@ -381,16 +380,16 @@ Complex : {
 			(ty-header @6.1-6.7 (name "MyBool")))
 		(alias @9.1-9.33 (type "Person")
 			(ty-header @9.1-9.7 (name "Person")))
-		(alias @12.1-12.37 (type "Result(ok, err)")
+		(alias @12.1-12.37 (type "Result(ok(r), err(r))")
 			(ty-header @12.1-12.16 (name "Result")
 				(ty-args
 					(ty-var @12.8-12.10 (name "ok"))
 					(ty-var @12.12-12.15 (name "err")))))
-		(alias @15.1-15.37 (type "Tree(a)")
+		(alias @15.1-15.37 (type "Tree(a(r))")
 			(ty-header @15.1-15.8 (name "Tree")
 				(ty-args
 					(ty-var @15.6-15.7 (name "a")))))
-		(alias @18.1-18.48 (type "Node(a)")
+		(alias @18.1-18.48 (type "Node(a(r))")
 			(ty-header @18.1-18.8 (name "Node")
 				(ty-args
 					(ty-var @18.6-18.7 (name "a")))))

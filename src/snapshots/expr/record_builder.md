@@ -94,8 +94,22 @@ Is there an `import` or `exposing` missing up-top?
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
+**record_builder.md:2:8:2:9:**
+```roc
+    x: 5,
+```
+       ^
+
+
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
+
+**record_builder.md:3:8:3:9:**
+```roc
+    y: 0,
+```
+       ^
+
 
 # TOKENS
 ~~~zig

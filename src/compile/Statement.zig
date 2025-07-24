@@ -132,7 +132,6 @@ pub const Statement = union(enum) {
     s_alias_decl: struct {
         header: ModuleEnv.TypeHeader.Idx,
         anno: ModuleEnv.TypeAnno.Idx,
-        anno_var: types.Var,
         where: ?ModuleEnv.WhereClause.Span,
     },
     /// A nominal type declaration, e.g., `Foo := (U64, Str)`
@@ -141,7 +140,6 @@ pub const Statement = union(enum) {
     s_nominal_decl: struct {
         header: ModuleEnv.TypeHeader.Idx,
         anno: ModuleEnv.TypeAnno.Idx,
-        anno_var: types.Var,
         where: ?ModuleEnv.WhereClause.Span,
     },
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.

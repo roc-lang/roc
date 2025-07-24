@@ -84,6 +84,54 @@ processRequest = |req| Http.defaultResponse
                   ^^^
 
 
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
+
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
+
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
+
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
+
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
+
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_found' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
+
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
+
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_found' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
@@ -323,8 +371,8 @@ combineResults = |result1, result2|
 		(annotation @8.1-8.15
 			(declared-type
 				(ty-fn @7.18-7.37 (effectful false)
-					(ty @7.18-7.25 (name "Request"))
-					(ty @7.29-7.37 (name "Response"))))))
+					(ty-malformed @7.18-7.25)
+					(ty-malformed @7.29-7.37)))))
 	(d-let
 		(p-assign @11.1-11.10 (ident "parseJson"))
 		(e-lambda @11.13-11.38
@@ -340,14 +388,13 @@ combineResults = |result1, result2|
 			(declared-type
 				(ty-fn @10.13-10.30 (effectful false)
 					(ty @10.13-10.16 (name "Str"))
-					(ty-lookup-external @10.20-10.30
-						(ext-decl @10.20-10.30 (ident "Json.Value") (kind "type")))))))
+					(ty-malformed @10.20-10.30)))))
 	(d-let
 		(p-assign @14.1-14.10 (ident "handleApi"))
 		(e-closure @14.13-20.2
 			(captures
-				(capture @17.12-17.16 (ident "data"))
-				(capture @18.13-18.16 (ident "err")))
+				(capture @18.13-18.16 (ident "err"))
+				(capture @17.12-17.16 (ident "data")))
 			(e-lambda @14.13-20.2
 				(args
 					(p-assign @14.14-14.21 (ident "request")))
@@ -393,13 +440,10 @@ combineResults = |result1, result2|
 		(annotation @14.1-14.10
 			(declared-type
 				(ty-fn @13.13-13.62 (effectful false)
-					(ty-lookup-external @13.13-13.25
-						(ext-decl @13.13-13.25 (ident "Http.Request") (kind "type")))
+					(ty-malformed @13.13-13.25)
 					(ty-apply @13.29-13.62 (symbol "Result")
-						(ty-lookup-external @13.36-13.49
-							(ext-decl @13.36-13.49 (ident "Http.Response") (kind "type")))
-						(ty-lookup-external @13.51-13.61
-							(ext-decl @13.51-13.61 (ident "Json.Error") (kind "type"))))))))
+						(ty-malformed @13.36-13.49)
+						(ty-malformed @13.51-13.61))))))
 	(d-let
 		(p-assign @23.1-23.7 (ident "config"))
 		(e-lookup-external @23.10-23.28
@@ -407,8 +451,7 @@ combineResults = |result1, result2|
 			(target-node-idx "0"))
 		(annotation @23.1-23.7
 			(declared-type
-				(ty-lookup-external @22.10-22.21
-					(ext-decl @22.10-22.21 (ident "Json.Config") (kind "type"))))))
+				(ty-malformed @22.10-22.21))))
 	(d-let
 		(p-assign @27.1-27.15 (ident "advancedParser"))
 		(e-lambda @27.18-27.82
@@ -426,22 +469,19 @@ combineResults = |result1, result2|
 		(annotation @27.1-27.15
 			(declared-type
 				(ty-fn @26.18-26.82 (effectful false)
-					(ty-lookup-external @26.18-26.36
-						(ext-decl @26.18-26.36 (ident "Json.Parser.Config") (kind "type")))
+					(ty-malformed @26.18-26.36)
 					(ty @26.38-26.41 (name "Str"))
 					(ty-apply @26.45-26.82 (symbol "Result")
-						(ty-lookup-external @26.52-26.62
-							(ext-decl @26.52-26.62 (ident "Json.Value") (kind "type")))
-						(ty-lookup-external @26.64-26.81
-							(ext-decl @26.64-26.81 (ident "Json.Parser.Error") (kind "type"))))))))
+						(ty-malformed @26.52-26.62)
+						(ty-malformed @26.64-26.81))))))
 	(d-let
 		(p-assign @31.1-31.15 (ident "combineResults"))
 		(e-closure @31.18-39.6
 			(captures
-				(capture @36.21-36.24 (ident "err"))
 				(capture @35.20-35.26 (ident "value2"))
+				(capture @38.13-38.16 (ident "err"))
 				(capture @33.12-33.18 (ident "value1"))
-				(capture @38.13-38.16 (ident "err")))
+				(capture @36.21-36.24 (ident "err")))
 			(e-lambda @31.18-39.6
 				(args
 					(p-assign @31.19-31.26 (ident "result1"))
@@ -516,31 +556,23 @@ combineResults = |result1, result2|
 		(exposes))
 	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
 		(exposes
-			(exposed (name "Result") (wildcard false))))
-	(ext-decl @10.20-10.30 (ident "Json.Value") (kind "type"))
-	(ext-decl @13.13-13.25 (ident "Http.Request") (kind "type"))
-	(ext-decl @13.36-13.49 (ident "Http.Response") (kind "type"))
-	(ext-decl @13.51-13.61 (ident "Json.Error") (kind "type"))
-	(ext-decl @22.10-22.21 (ident "Json.Config") (kind "type"))
-	(ext-decl @26.18-26.36 (ident "Json.Parser.Config") (kind "type"))
-	(ext-decl @26.52-26.62 (ident "Json.Value") (kind "type"))
-	(ext-decl @26.64-26.81 (ident "Json.Parser.Error") (kind "type")))
+			(exposed (name "Result") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @8.1-8.15 (type "Error -> Error"))
-		(patt @11.1-11.10 (type "Str -> Json.Value"))
-		(patt @14.1-14.10 (type "{ body: _field } -> Error"))
+		(patt @11.1-11.10 (type "Str -> Error"))
+		(patt @14.1-14.10 (type "Error -> Error"))
 		(patt @23.1-23.7 (type "Error"))
-		(patt @27.1-27.15 (type "Json.Parser.Config, Str -> Error"))
+		(patt @27.1-27.15 (type "Error, Str -> Error"))
 		(patt @31.1-31.15 (type "Error, Error -> Error")))
 	(expressions
 		(expr @8.18-8.44 (type "Error -> Error"))
-		(expr @11.13-11.38 (type "Str -> Json.Value"))
-		(expr @14.13-20.2 (type "{ body: _field } -> Error"))
+		(expr @11.13-11.38 (type "Str -> Error"))
+		(expr @14.13-20.2 (type "Error -> Error"))
 		(expr @23.10-23.28 (type "Error"))
-		(expr @27.18-27.82 (type "Json.Parser.Config, Str -> Error"))
+		(expr @27.18-27.82 (type "Error, Str -> Error"))
 		(expr @31.18-39.6 (type "Error, Error -> Error"))))
 ~~~

@@ -25,7 +25,39 @@ Decode(a) : a
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `hasher` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**where_clauses_7.md:7:22:7:28:**
+```roc
+				module(a).hash : hasher # After method
+```
+                     ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `hasher` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**where_clauses_7.md:9:7:9:13:**
+```roc
+						hasher, # After first clause
+```
+      ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**where_clauses_7.md:16:8:16:9:**
+```roc
+		) -> a
+```
+       ^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),CloseSquare(1:13-1:14),
@@ -104,8 +136,8 @@ Decode(a) : a
 		(where
 			(method @7.5-9.13 (module-of "a") (ident "hash")
 				(args
-					(ty-var @7.22-7.28 (name "hasher")))
-				(ty-var @9.7-9.13 (name "hasher")))
+					(ty-malformed @7.22-7.28))
+				(ty-malformed @9.7-9.13))
 			(alias @10.5-10.26 (module-of "hasher") (ident "Hasher"))))
 	(s-alias-decl @12.1-16.9
 		(ty-header @12.1-12.10 (name "Decode")
@@ -117,7 +149,7 @@ Decode(a) : a
 				(args
 					(ty-apply @15.4-15.12 (symbol "List")
 						(ty @15.9-15.11 (name "U8"))))
-				(ty-var @16.8-16.9 (name "a")))))
+				(ty-malformed @16.8-16.9))))
 	(ext-decl @7.5-9.13 (ident "module(a).hash") (kind "value"))
 	(ext-decl @10.5-10.26 (ident "module(hasher).Hasher") (kind "type"))
 	(ext-decl @14.3-16.9 (ident "module(a).decode") (kind "value")))
@@ -127,12 +159,12 @@ Decode(a) : a
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-10.26 (type "Hash(a, hasher)")
+		(alias @3.1-10.26 (type "Hash(a(r), hasher(r))")
 			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.15 (name "hasher")))))
-		(alias @12.1-16.9 (type "Decode(a)")
+		(alias @12.1-16.9 (type "Decode(a(r))")
 			(ty-header @12.1-12.10 (name "Decode")
 				(ty-args
 					(ty-var @12.8-12.9 (name "a"))))))

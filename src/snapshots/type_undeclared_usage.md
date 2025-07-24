@@ -32,6 +32,12 @@ MyType : UnknownType
          ^^^^^^^^^^^
 
 
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_found' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/type_undeclared_usage.md:0:0:0:0**
+
 **UNDECLARED TYPE**
 The type _UndeclaredResult_ is not declared in this scope.
 
@@ -123,16 +129,14 @@ AnotherType : SomeModule.MissingType
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.39 (effectful false)
-					(ty @5.16-5.32 (name "UndeclaredResult"))
+					(ty-malformed @5.16-5.32)
 					(ty @5.36-5.39 (name "Str"))))))
 	(s-alias-decl @3.1-3.21
 		(ty-header @3.1-3.7 (name "MyType"))
-		(ty @3.10-3.21 (name "UnknownType")))
+		(ty-malformed @3.10-3.21))
 	(s-alias-decl @10.1-10.37
 		(ty-header @10.1-10.12 (name "AnotherType"))
-		(ty-lookup-external @10.15-10.37
-			(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type"))))
-	(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type")))
+		(ty-malformed @10.15-10.37)))
 ~~~
 # TYPES
 ~~~clojure
@@ -142,7 +146,7 @@ AnotherType : SomeModule.MissingType
 	(type_decls
 		(alias @3.1-3.21 (type "Error")
 			(ty-header @3.1-3.7 (name "MyType")))
-		(alias @10.1-10.37 (type "AnotherType")
+		(alias @10.1-10.37 (type "Error")
 			(ty-header @10.1-10.12 (name "AnotherType"))))
 	(expressions
 		(expr @6.16-8.2 (type "Error -> Str"))))

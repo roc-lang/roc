@@ -633,6 +633,13 @@ This error doesn't have a proper diagnostic report yet. Let us know if you want 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
+**fuzz_crash_023.md:178:52:178:71:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+                                                   ^^^^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `nested` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -892,6 +899,29 @@ It is of type:
 
 But you are trying to use it as:
     __arg -> _ret_
+
+**INCOMPATIBLE LIST ELEMENTS**
+The first two elements in this list have incompatible types:
+**fuzz_crash_023.md:167:3:**
+```roc
+		add_one(
+			dbg # After dbg in list
+				number, # after dbg expr as arg
+		), # Comment one
+		456, # Comment two
+```
+  ^^^
+
+The first element has this type:
+    _U64_
+
+However, the second element has this type:
+    _Num(_size)_
+
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -1869,9 +1899,9 @@ expect {
 		(p-assign @80.1-80.11 (ident "match_time"))
 		(e-closure @80.14-138.3
 			(captures
-				(capture @94.5-94.6 (ident "x"))
 				(capture @136.11-136.15 (ident "dude"))
-				(capture @86.4-86.5 (ident "x")))
+				(capture @86.4-86.5 (ident "x"))
+				(capture @94.5-94.6 (ident "x")))
 			(e-lambda @80.14-138.3
 				(args
 					(p-assign @81.2-81.3 (ident "a"))
@@ -2083,9 +2113,9 @@ expect {
 		(p-assign @144.1-144.6 (ident "main!"))
 		(e-closure @144.9-196.2
 			(captures
-				(capture @80.1-80.11 (ident "match_time"))
 				(capture @68.1-68.8 (ident "add_one"))
-				(capture @179.2-179.7 (ident "tuple")))
+				(capture @179.2-179.7 (ident "tuple"))
+				(capture @80.1-80.11 (ident "match_time")))
 			(e-lambda @144.9-196.2
 				(args
 					(p-underscore @144.10-144.11))
@@ -2250,7 +2280,7 @@ expect {
 			(declared-type
 				(ty-fn @143.9-143.38 (effectful false)
 					(ty-apply @143.9-143.21 (symbol "List")
-						(ty @143.14-143.20 (name "String")))
+						(ty-malformed @143.14-143.20))
 					(ty-apply @143.25-143.38 (symbol "Result")
 						(ty-record @143.32-143.34)
 						(ty-underscore @1.1-1.1))))))
@@ -2291,43 +2321,40 @@ expect {
 	(s-alias-decl @36.1-36.17
 		(ty-header @36.1-36.4 (name "Foo"))
 		(ty-tuple @36.7-36.17
-			(ty @36.8-36.11 (name "Bar"))
-			(ty @36.13-36.16 (name "Baz"))))
+			(ty-malformed @36.8-36.11)
+			(ty-malformed @36.13-36.16)))
 	(s-alias-decl @38.1-41.2
 		(ty-header @38.1-38.13 (name "FooMultiline"))
 		(ty-tuple @38.16-41.2
-			(ty @39.2-39.5 (name "Bar"))
-			(ty @40.2-40.5 (name "Baz"))))
+			(ty-malformed @39.2-39.5)
+			(ty-malformed @40.2-40.5)))
 	(s-alias-decl @43.1-43.43
 		(ty-header @43.1-43.8 (name "Some")
 			(ty-args
 				(ty-var @43.6-43.7 (name "a"))))
 		(ty-record @43.11-43.43
 			(field (field "foo")
-				(ty-apply @43.19-43.24 (symbol "Ok")
-					(ty-var @43.22-43.23 (name "a"))))
+				(ty-malformed @43.19-43.21))
 			(field (field "bar")
-				(ty @43.32-43.41 (name "Something")))))
+				(ty-malformed @43.32-43.41))))
 	(s-alias-decl @44.1-47.2
 		(ty-header @44.1-44.10 (name "SomeMl")
 			(ty-args
 				(ty-var @44.8-44.9 (name "a"))))
 		(ty-record @44.13-47.2
 			(field (field "foo")
-				(ty-apply @45.8-45.13 (symbol "Ok")
-					(ty-var @45.11-45.12 (name "a"))))
+				(ty-malformed @45.8-45.10))
 			(field (field "bar")
-				(ty @46.8-46.17 (name "Something")))))
+				(ty-malformed @46.8-46.17))))
 	(s-alias-decl @49.1-54.2
 		(ty-header @49.1-49.17 (name "SomeMultiline")
 			(ty-args
 				(ty-var @49.15-49.16 (name "a"))))
 		(ty-record @49.20-54.2
 			(field (field "foo")
-				(ty-apply @52.4-52.9 (symbol "Ok")
-					(ty-var @52.7-52.8 (name "a"))))
+				(ty-malformed @52.4-52.6))
 			(field (field "bar")
-				(ty @53.8-53.17 (name "Something")))))
+				(ty-malformed @53.8-53.17))))
 	(s-alias-decl @56.1-56.27
 		(ty-header @56.1-56.9 (name "Maybe")
 			(ty-args
@@ -2399,12 +2426,12 @@ expect {
 		(patt @144.1-144.6 (type "Error -> Error"))
 		(patt @199.1-199.6 (type "{}")))
 	(type_decls
-		(alias @22.1-22.41 (type "Map(a, b)")
+		(alias @22.1-22.41 (type "Map(a(r), b(r))")
 			(ty-header @22.1-22.10 (name "Map")
 				(ty-args
 					(ty-var @22.5-22.6 (name "a"))
 					(ty-var @22.8-22.9 (name "b")))))
-		(alias @23.1-34.5 (type "MapML(a, b)")
+		(alias @23.1-34.5 (type "MapML(a(r), b(r))")
 			(ty-header @23.1-26.2 (name "MapML")
 				(ty-args
 					(ty-var @24.2-24.3 (name "a"))
@@ -2413,27 +2440,27 @@ expect {
 			(ty-header @36.1-36.4 (name "Foo")))
 		(alias @38.1-41.2 (type "FooMultiline")
 			(ty-header @38.1-38.13 (name "FooMultiline")))
-		(alias @43.1-43.43 (type "Some(a)")
+		(alias @43.1-43.43 (type "Some(a(r))")
 			(ty-header @43.1-43.8 (name "Some")
 				(ty-args
 					(ty-var @43.6-43.7 (name "a")))))
-		(alias @44.1-47.2 (type "SomeMl(a)")
+		(alias @44.1-47.2 (type "SomeMl(a(r))")
 			(ty-header @44.1-44.10 (name "SomeMl")
 				(ty-args
 					(ty-var @44.8-44.9 (name "a")))))
-		(alias @49.1-54.2 (type "SomeMultiline(a)")
+		(alias @49.1-54.2 (type "SomeMultiline(a(r))")
 			(ty-header @49.1-49.17 (name "SomeMultiline")
 				(ty-args
 					(ty-var @49.15-49.16 (name "a")))))
-		(alias @56.1-56.27 (type "Maybe(a)")
+		(alias @56.1-56.27 (type "Maybe(a(r))")
 			(ty-header @56.1-56.9 (name "Maybe")
 				(ty-args
 					(ty-var @56.7-56.8 (name "a")))))
-		(alias @58.1-61.2 (type "MaybeMultiline(a)")
+		(alias @58.1-61.2 (type "MaybeMultiline(a(r))")
 			(ty-header @58.1-58.18 (name "MaybeMultiline")
 				(ty-args
 					(ty-var @58.16-58.17 (name "a")))))
-		(alias @63.1-63.38 (type "SomeFunc(a)")
+		(alias @63.1-63.38 (type "SomeFunc(a(r))")
 			(ty-header @63.1-63.12 (name "SomeFunc")
 				(ty-args
 					(ty-var @63.10-63.11 (name "a"))))))

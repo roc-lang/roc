@@ -101,12 +101,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "Error"))
+		(patt @6.1-6.5 (type "Color"))
 		(patt @9.1-9.7 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.28 (type "Error")
+		(nominal @3.1-3.28 (type "Color")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions
-		(expr @6.8-6.13 (type "Error"))
+		(expr @6.8-6.13 (type "Color"))
 		(expr @9.10-9.15 (type "Error"))))
 ~~~

@@ -100,7 +100,7 @@ NO CHANGE
 		(ty @7.7-7.10 (name "Str")))
 	(s-alias-decl @10.1-10.25
 		(ty-header @10.1-10.4 (name "Bar"))
-		(ty @10.7-10.25 (name "SomeUndeclaredType")))
+		(ty-malformed @10.7-10.25))
 	(s-alias-decl @13.1-13.10
 		(ty-header @13.1-13.4 (name "Baz"))
 		(ty @13.7-13.10 (name "Foo"))))

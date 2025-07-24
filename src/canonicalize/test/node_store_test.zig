@@ -132,7 +132,6 @@ test "NodeStore round trip - Statements" {
         .s_alias_decl = .{
             .header = rand_idx(ModuleEnv.TypeHeader.Idx),
             .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
-            .anno_var = rand_idx(TypeVar),
             .where = null,
         },
     });
@@ -141,7 +140,6 @@ test "NodeStore round trip - Statements" {
         .s_nominal_decl = .{
             .header = rand_idx(ModuleEnv.TypeHeader.Idx),
             .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
-            .anno_var = rand_idx(TypeVar),
             .where = null,
         },
     });

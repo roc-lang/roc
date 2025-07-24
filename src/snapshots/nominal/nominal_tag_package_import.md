@@ -17,6 +17,12 @@ blue = CC.Color.RGB(0,0,255)
 # EXPECTED
 UNDEFINED VARIABLE - nominal_tag_package_import.md:8:10:8:16
 # PROBLEMS
+**COMPILER DIAGNOSTIC**
+
+**Compiler Diagnostic**
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
+**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/nominal/nominal_tag_package_import.md:0:0:0:0**
+
 **UNDEFINED VARIABLE**
 Nothing is named `Color` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -73,11 +79,9 @@ blue = CC.Color.RGB(0, 0, 255)
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @8.1-8.5
 			(declared-type
-				(ty-lookup-external @7.8-7.14
-					(ext-decl @7.8-7.14 (ident "CC.RGB") (kind "type"))))))
+				(ty-malformed @7.8-7.14))))
 	(s-import @4.1-4.26 (module "styles.Color") (qualifier "styles") (alias "CC")
-		(exposes))
-	(ext-decl @7.8-7.14 (ident "CC.RGB") (kind "type")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

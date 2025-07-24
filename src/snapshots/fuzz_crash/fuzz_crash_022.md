@@ -92,6 +92,13 @@ Here is the problematic code:
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
+**fuzz_crash_022.md:1:19:1:27:**
+```roc
+app [main!] { |f: platform "c" }
+```
+                  ^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.

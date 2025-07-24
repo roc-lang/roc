@@ -40,6 +40,13 @@ Here is the problematic code:
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
+**error_malformed_syntax_2.md:1:8:1:10:**
+```roc
+{ age: 42, name = "Alice" }
+```
+       ^^
+
+
 **UNUSED VARIABLE**
 Variable `name` is not used anywhere in your code.
 

@@ -93,32 +93,6 @@ This where clause could not be parsed correctly.
 
 Check the syntax of your where clause.
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _c_ is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**where_clauses_error_cases.md:15:24:15:25:**
-```roc
-    module(c).method : c -> d
-```
-                       ^
-
-
-**UNDECLARED TYPE VARIABLE**
-The type variable _d_ is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**where_clauses_error_cases.md:15:29:15:30:**
-```roc
-    module(c).method : c -> d
-```
-                            ^
-
-
 **EXPOSED BUT NOT DEFINED**
 The module header says that `broken_fn1` is exposed, but it is not defined anywhere in this module.
 

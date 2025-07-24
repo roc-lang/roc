@@ -15,7 +15,20 @@ empty = ConsList.Nil
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_tag_recursive_payload.md:6:9:6:17:**
+```roc
+empty = ConsList.Nil
+```
+        ^^^^^^^^
+
+It is of type:
+    _ConsList(a)_
+
+But you are trying to use it as:
+    _ConsList(a)_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:24),CloseSquare(1:24-1:25),
@@ -81,12 +94,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "ConsList(a)")))
+		(patt @6.1-6.6 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.40 (type "ConsList(a)")
+		(nominal @3.1-3.40 (type "ConsList(a(r))")
 			(ty-header @3.1-3.12 (name "ConsList")
 				(ty-args
 					(ty-var @3.10-3.11 (name "a"))))))
 	(expressions
-		(expr @6.9-6.17 (type "ConsList(a)"))))
+		(expr @6.9-6.17 (type "Error"))))
 ~~~

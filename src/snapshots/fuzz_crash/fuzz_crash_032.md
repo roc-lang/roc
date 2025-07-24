@@ -82,12 +82,10 @@ Green => LocalStatus-Complete
                      
 
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _lue_ is not declared in this scope.
+**UNDEFINED VARIABLE**
+Nothing is named `lue` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
 **fuzz_crash_032.md:3:14:3:17:**
 ```roc
 LocalStatus :lue => Loc= [Pending, Complete]
@@ -310,8 +308,8 @@ olor = |color| {
 	(s-alias-decl @3.1-3.24
 		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-fn @3.14-3.24 (effectful true)
-			(ty-var @3.14-3.17 (name "lue"))
-			(ty @3.21-3.24 (name "Loc")))))
+			(ty-malformed @3.14-3.17)
+			(ty-malformed @3.21-3.24))))
 ~~~
 # TYPES
 ~~~clojure
