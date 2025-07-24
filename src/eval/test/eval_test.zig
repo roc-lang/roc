@@ -106,6 +106,10 @@ test "tuple destructure patterns" {
     try helpers.runExpectInt("(|(x,(y,z))| x * y * z )((10,(20,30)))", 6000, .no_trace);
 }
 
+test "mixed destructure patterns" {
+    try helpers.runExpectInt("(|{ a, x: (b, c), y: { d, e } }| a + b + c + d + e)({ a: 1, x: (2, 3), y: { d: 4, e: 5 } })", 15, .trace);
+}
+
 test "tuple literal" {
     // Tuple with integer elements
     const expected_elements1 = &[_]helpers.ExpectedElement{

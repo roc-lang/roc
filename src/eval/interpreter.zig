@@ -1284,17 +1284,15 @@ pub const Interpreter = struct {
                     const field_layout = self.layout_cache.getLayout(record_fields.get(index).layout);
                     const field_ptr = record_ptr + field_offset;
 
-                    // Create binding for the inner pattern (which should be an identifier)
-                    const binding_pattern_idx = switch (destruct.kind) {
+                    // Recursively bind the sub-pattern
+                    const inner_pattern_idx = switch (destruct.kind) {
                         .Required => |p_idx| p_idx,
                         .SubPattern => |p_idx| p_idx,
                     };
-                    const binding = Binding{
-                        .pattern_idx = binding_pattern_idx,
-                        .value_ptr = field_ptr,
+                    try self.bindPattern(inner_pattern_idx, .{
                         .layout = field_layout,
-                    };
-                    try self.bindings_stack.append(binding);
+                        .ptr = field_ptr,
+                    });
                 }
             },
             .tuple => |tuple_pattern| {
