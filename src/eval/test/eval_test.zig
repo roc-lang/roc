@@ -96,9 +96,14 @@ test "record literal" {
 }
 
 test "record destructure patterns" {
-    try helpers.runExpectInt("(|{ x }| x )({ x: -10 })", -10, .trace);
+    try helpers.runExpectInt("(|{ x }| x )({ x: -10 })", -10, .no_trace);
     try helpers.runExpectInt("(|{ x, y }| x * y)({ x: 10, y: 20 })", 200, .no_trace);
     try helpers.runExpectInt("(|{ x, y, z }| x * y * z)({ x: 10, y: 20, z: 30 })", 6000, .no_trace);
+}
+
+test "tuple destructure patterns" {
+    try helpers.runExpectInt("(|(x,y)| x * y )((10,2))", 20, .no_trace);
+    try helpers.runExpectInt("(|(x,(y,z))| x * y * z )((10,(20,30)))", 6000, .no_trace);
 }
 
 test "tuple literal" {

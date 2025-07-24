@@ -1297,6 +1297,32 @@ pub const Interpreter = struct {
                     try self.bindings_stack.append(binding);
                 }
             },
+            .tuple => |tuple_pattern| {
+                const patterns = self.cir.store.slicePatterns(tuple_pattern.patterns);
+                const tuple_ptr = @as([*]u8, @ptrCast(@alignCast(value.ptr.?)));
+
+                if (value.layout.tag != .tuple) {
+                    return error.LayoutError;
+                }
+                const tuple_data = self.layout_cache.getTupleData(value.layout.data.tuple.idx);
+                const element_layouts = self.layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+
+                if (patterns.len != element_layouts.len) {
+                    return error.ArityMismatch;
+                }
+
+                for (patterns, 0..) |inner_pattern_idx, i| {
+                    const element_layout_info = element_layouts.get(i);
+                    const element_layout = self.layout_cache.getLayout(element_layout_info.layout);
+                    const element_offset = self.layout_cache.getTupleElementOffset(value.layout.data.tuple.idx, @intCast(i));
+                    const element_ptr = tuple_ptr + element_offset;
+
+                    try self.bindPattern(inner_pattern_idx, .{
+                        .layout = element_layout,
+                        .ptr = element_ptr,
+                    });
+                }
+            },
             else => {
                 // TODO: handle other patterns
                 return error.LayoutError;
