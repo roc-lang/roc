@@ -93,6 +93,7 @@ const WorkKind = enum {
     w_if_check_condition,
     w_lambda_call,
     w_lambda_return,
+    w_eval_record_fields,
 };
 
 /// A unit of work to be processed during iterative evaluation.
@@ -284,6 +285,10 @@ pub const Interpreter = struct {
                     work.extra, // stores the arg count
                 ),
                 .w_lambda_return => try self.handleLambdaReturn(),
+                .w_eval_record_fields => try self.handleRecordFields(
+                    work.expr_idx,
+                    work.extra, // stores the current_field_idx
+                ),
             }
         }
 
@@ -597,9 +602,27 @@ pub const Interpreter = struct {
                 });
             },
 
-            // Not yet implemented
-            .e_str, .e_str_segment, .e_list, .e_tuple, .e_record, .e_dot_access, .e_block, .e_lookup_external, .e_match, .e_frac_dec, .e_dec_small, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
+            .e_str, .e_str_segment, .e_list, .e_tuple, .e_dot_access, .e_block, .e_lookup_external, .e_match, .e_frac_dec, .e_dec_small, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
                 return error.LayoutError;
+            },
+
+            .e_record => |record_expr| {
+                const fields = self.cir.store.sliceRecordFields(record_expr.fields);
+                if (fields.len == 0) {
+                    // Per the test, `{}` should be a zero-sized type error.
+                    return error.ZeroSizedType;
+                }
+
+                // Allocate space for the entire record on the stack.
+                // The fields will be filled in one by one.
+                _ = try self.pushStackValue(expr_layout);
+
+                // Schedule the first work item to start evaluating the fields.
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_record_fields,
+                    .expr_idx = expr_idx,
+                    .extra = 0, // Start with current_field_idx = 0
+                });
             },
 
             .e_lambda => |lambda_expr| {
@@ -643,8 +666,8 @@ pub const Interpreter = struct {
         const rhs_val = readIntFromMemory(@ptrCast(rhs.ptr.?), rhs.layout.data.scalar.data.int);
 
         // Pop the operands from the stack, which we can safely do after reading their values
-        try self.popStackValue();
-        try self.popStackValue();
+        _ = try self.popStackValue();
+        _ = try self.popStackValue();
 
         // Debug: Values read from memory
         self.traceInfo("\tRead values - left = {}, right = {}", .{ lhs_val, rhs_val });
@@ -753,7 +776,7 @@ pub const Interpreter = struct {
         const cond_ptr: *u8 = @ptrCast(condition.ptr.?);
         const cond_val = cond_ptr.*;
 
-        try self.popStackValue();
+        _ = try self.popStackValue();
 
         // Get the if expression
         const if_expr = switch (self.cir.store.getExpr(expr_idx)) {
@@ -885,6 +908,95 @@ pub const Interpreter = struct {
         self.value_stack.items.len = frame.value_base;
         self.stack_memory.used = frame.stack_base;
         self.traceInfo("Lambda return: copied value to stack base at {}", .{frame.stack_base});
+    }
+
+    fn handleRecordFields(self: *Interpreter, record_expr_idx: CIR.Expr.Idx, current_field_idx: u32) EvalError!void {
+        self.traceEnter("handleRecordFields record_expr_idx={}, current_field_idx={}", .{ record_expr_idx, current_field_idx });
+        defer self.traceExit("", .{});
+
+        // This function is called iteratively. On each call, it processes one field.
+        // 1. If not the first field, copy the previous field's evaluated value from the stack top into the record.
+        // 2. If there's a current field to process, schedule its evaluation.
+        // 3. Schedule the next call to `handleRecordFields` to process the *next* field.
+
+        const record_layout_idx = self.layout_cache.addTypeVar(@enumFromInt(@intFromEnum(record_expr_idx))) catch unreachable;
+        const record_layout = self.layout_cache.getLayout(record_layout_idx);
+        const record_data = self.layout_cache.getRecordData(record_layout.data.record.idx);
+        const sorted_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
+
+        // Step 1: Copy the value of the *previous* field (if any) into the record structure.
+        if (current_field_idx > 0) {
+            const prev_field_index_in_sorted = current_field_idx - 1;
+            const prev_field_layout_info = sorted_fields.get(prev_field_index_in_sorted);
+            const prev_field_layout = self.layout_cache.getLayout(prev_field_layout_info.layout);
+            const prev_field_size = self.layout_cache.layoutSize(prev_field_layout);
+
+            // The value for the previous field is now on top of the stack.
+            const prev_field_value = try self.popStackValue();
+
+            // The record itself is the value *under* the field value we just popped.
+            const record_value_on_stack = try self.peekStackValue(1);
+            const record_base_ptr = @as([*]u8, @ptrCast(record_value_on_stack.ptr.?));
+
+            // Calculate the destination offset within the record.
+            const prev_field_offset = self.layout_cache.getRecordFieldOffset(record_layout.data.record.idx, @intCast(prev_field_index_in_sorted));
+
+            if (prev_field_size > 0) {
+                const dest_ptr = record_base_ptr + prev_field_offset;
+                const src_ptr = @as([*]const u8, @ptrCast(prev_field_value.ptr.?));
+                std.mem.copyForwards(u8, dest_ptr[0..prev_field_size], src_ptr[0..prev_field_size]);
+
+                self.traceInfo("Copied field '{s}' (size={}) to offset {}", .{ self.cir.env.idents.getText(prev_field_layout_info.name), prev_field_size, prev_field_offset });
+            }
+        }
+
+        // Step 2 & 3: Schedule work for the current field.
+        if (current_field_idx < sorted_fields.len) {
+            // Schedule the next `handleRecordFields` call to process the *next* field.
+            // This will run after the current field's value has been evaluated and pushed to the stack.
+            self.schedule_work(WorkItem{
+                .kind = .w_eval_record_fields,
+                .expr_idx = record_expr_idx,
+                .extra = current_field_idx + 1,
+            });
+
+            // Now, find the expression for the *current* field and schedule its evaluation.
+            // We need to map the layout-sorted field name back to the original CIR expression.
+            const current_field_info = sorted_fields.get(current_field_idx);
+            const current_field_name = current_field_info.name;
+
+            const record_expr = self.cir.store.getExpr(record_expr_idx);
+            const cir_fields = switch (record_expr) {
+                .e_record => |r| self.cir.store.sliceRecordFields(r.fields),
+                else => unreachable, // Should only be called for e_record
+            };
+
+            // Look for the current field CIR.Expr.Idx
+            var value_expr_idx: ?CIR.Expr.Idx = null;
+            for (cir_fields) |field_idx| {
+                const field = self.cir.store.getRecordField(field_idx);
+                if (field.name == current_field_name) {
+                    value_expr_idx = field.value;
+                    break;
+                }
+            }
+
+            const current_field_value_expr_idx = value_expr_idx orelse {
+                // This should be impossible if the CIR and layout are consistent.
+                self.traceError("Could not find value for field '{s}'", .{self.cir.env.idents.getText(current_field_name)});
+                return error.LayoutError;
+            };
+
+            // Schedule the evaluation of the current field's value expression.
+            // Its result will be pushed onto the stack, ready for the next `handleRecordFields` call.
+            self.schedule_work(WorkItem{
+                .kind = .w_eval_expr,
+                .expr_idx = current_field_value_expr_idx,
+            });
+        } else {
+            // All fields have been processed. The record is fully constructed on the stack.
+            self.traceInfo("All record fields processed for record_expr_idx={}", .{record_expr_idx});
+        }
     }
 
     /// Start a debug trace session with a given name and writer
@@ -1108,9 +1220,17 @@ pub const Interpreter = struct {
     /// Pops a layout from `value_stack`, calculates the corresponding value's
     /// location on `stack_memory`, adjusts the stack pointer, and returns
     /// the layout and a pointer to the value's (now popped) location.
-    pub fn popStackValue(self: *Interpreter) EvalError!void {
+    pub fn popStackValue(self: *Interpreter) EvalError!StackValue {
         const value = self.value_stack.pop() orelse return error.InvalidStackState;
         self.stack_memory.used = value.offset;
+
+        const value_size = self.layout_cache.layoutSize(value.layout);
+        if (value_size == 0) {
+            return StackValue{ .layout = value.layout, .ptr = null };
+        } else {
+            const ptr = @as([*]u8, @ptrCast(self.stack_memory.start)) + value.offset;
+            return StackValue{ .layout = value.layout, .ptr = @as(*anyopaque, @ptrCast(ptr)) };
+        }
     }
 
     /// Helper to peek at a value on the evaluation stacks without popping it.

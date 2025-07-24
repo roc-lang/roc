@@ -183,7 +183,7 @@ pub const Store = struct {
         return try self.insertLayout(layout);
     }
 
-    pub fn getLayout(self: *Self, idx: Idx) Layout {
+    pub fn getLayout(self: *const Self, idx: Idx) Layout {
         return self.layouts.get(@enumFromInt(@intFromEnum(idx)));
     }
 
@@ -193,6 +193,34 @@ pub const Store = struct {
 
     pub fn getTupleData(self: *const Self, idx: TupleIdx) *const TupleData {
         return self.tuple_data.get(@enumFromInt(idx.int_idx));
+    }
+
+    pub fn getRecordFieldOffset(self: *const Self, record_idx: RecordIdx, field_index_in_sorted_fields: u32) u32 {
+        const target_usize = self.targetUsize();
+        const record_data = self.getRecordData(record_idx);
+        const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
+
+        var current_offset: u32 = 0;
+        var field_idx: u32 = 0;
+
+        while (field_idx < field_index_in_sorted_fields) : (field_idx += 1) {
+            const field = sorted_fields.get(field_idx);
+            const field_layout = self.getLayout(field.layout);
+            const field_alignment = field_layout.alignment(target_usize);
+            const field_size = self.layoutSize(field_layout);
+
+            // Align current offset to field's alignment
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+
+            // Add field size
+            current_offset += field_size;
+        }
+
+        // Now, align the offset for the requested field
+        const requested_field = sorted_fields.get(field_index_in_sorted_fields);
+        const requested_field_layout = self.getLayout(requested_field.layout);
+        const requested_field_alignment = requested_field_layout.alignment(target_usize);
+        return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_field_alignment.toByteUnits()))));
     }
 
     fn targetUsize(_: *const Self) target.TargetUsize {

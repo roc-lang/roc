@@ -52,8 +52,13 @@ test "list literal" {
 test "record literal" {
     // Empty record literal is a zero-sized type
     try runExpectError("{}", EvalError.ZeroSizedType, .no_trace);
-    // Record literals are not yet implemented
-    try runExpectError("{ x: 10, y: 20 }", EvalError.LayoutError, .no_trace);
+
+    // Record with integer fields
+    const expected_fields = &[_]helpers.ExpectedField{
+        .{ .name = "x", .value = 10 },
+        .{ .name = "y", .value = 20 },
+    };
+    try helpers.runExpectRecord("{ x: 10, y: 20 }", expected_fields, .no_trace);
 }
 
 test "simple lambdas" {
