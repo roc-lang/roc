@@ -35,9 +35,12 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     const bytes_per_string = 4;
 
     var self = Self{
-        .bytes = try std.ArrayListUnmanaged(u8).initCapacity(gpa, capacity * bytes_per_string),
+        .bytes = std.ArrayListUnmanaged(u8){},
         .strings = std.StringHashMapUnmanaged(Idx){},
     };
+    
+    // Properly initialize the bytes array to ensure clean state
+    try self.bytes.ensureTotalCapacity(gpa, capacity * bytes_per_string);
 
     try self.strings.ensureTotalCapacity(gpa, @intCast(capacity));
 
@@ -64,9 +67,9 @@ pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8) std.mem.A
     }
 
     // Check if string already exists for deduplication
-    const string_offset = if (self.strings.get(string)) |existing_offset|
-        existing_offset
-    else blk: {
+    const string_offset = if (self.strings.get(string)) |existing_offset| blk: {
+        break :blk existing_offset;
+    } else blk: {
         // String doesn't exist, add it to bytes
         try self.bytes.ensureUnusedCapacity(gpa, string.len + 1);
         const new_offset: Idx = @enumFromInt(self.bytes.items.len);

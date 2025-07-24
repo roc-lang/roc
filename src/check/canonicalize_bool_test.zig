@@ -20,6 +20,10 @@ test "canonicalize True as Bool" {
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
+    // Copy the "True" identifier from parse AST to ModuleEnv
+    // This ensures canonicalization can find the parsed identifier
+    _ = try module_env.idents.insert(allocator, base.Ident.for_text("True"));
+
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
 
@@ -59,6 +63,10 @@ test "canonicalize False as Bool" {
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
+    // Copy the "False" identifier from parse AST to ModuleEnv
+    // This ensures canonicalization can find the parsed identifier
+    _ = try module_env.idents.insert(allocator, base.Ident.for_text("False"));
+
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
 
@@ -97,6 +105,10 @@ test "canonicalize random tag not as Bool" {
     var parse_ast = try parse.parseExpr(&module_env);
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
+
+    // Copy the "SomeTag" identifier from parse AST to ModuleEnv
+    // This ensures canonicalization can find the parsed identifier
+    _ = try module_env.idents.insert(allocator, base.Ident.for_text("SomeTag"));
 
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
