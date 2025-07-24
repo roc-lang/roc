@@ -107,7 +107,7 @@ test "tuple destructure patterns" {
 }
 
 test "mixed destructure patterns" {
-    try helpers.runExpectInt("(|{ a, x: (b, c), y: { d, e } }| a + b + c + d + e)({ a: 1, x: (2, 3), y: { d: 4, e: 5 } })", 15, .trace);
+    try helpers.runExpectInt("(|{ a, x: (b, c), y: { d, e } }| a + b + c + d + e)({ a: 1, x: (2, 3), y: { d: 4, e: 5 } })", 15, .no_trace);
 }
 
 test "tuple literal" {

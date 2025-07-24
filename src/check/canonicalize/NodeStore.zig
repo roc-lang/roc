@@ -1470,11 +1470,11 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
     // Store kind in extra_data
     switch (record_destruct.kind) {
         .Required => |pattern_idx| {
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
             // Store kind tag (0 for Required)
-            try store.extra_data.append(store.gpa, 0);
+            _ = try store.extra_data.append(store.gpa, 0);
             // Store pattern index
-            try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
             node.data_3 = extra_data_start;
         },
         .SubPattern => |sub_pattern| {
