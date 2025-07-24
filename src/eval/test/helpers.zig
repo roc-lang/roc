@@ -90,6 +90,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     try testing.expectEqual(expected_int, int_val);
 }
 
+/// A record field we expect to see in our unit test results
 pub const ExpectedField = struct {
     name: []const u8,
     value: i128,
