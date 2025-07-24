@@ -1760,7 +1760,7 @@ test "NodeStore - init and deinit" {
     defer store.deinit();
 
     try testing.expect(store.nodes.len() == 0);
-    try testing.expect(store.extra_data.items.len == 0);
+    try testing.expect(store.extra_data.len() == 0);
 }
 
 /// Returns diagnostic position information for the given region.
