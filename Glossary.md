@@ -65,7 +65,7 @@ LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1)
 A memory optimization technique where only one copy of each distinct value is stored in memory, regardless of how many times it appears in a program or [IR](#ir). For example, a function named `foo` may be called many times in a Roc file, but we store `foo` once and use an index to refer to `foo` at the call sites.
 
 Uses of interning:
-- new compiler: [base/SmallStringInterner.zig](src/base/SmallStringInterner.zig), [ident.zig](src/base/Ident.zig), [ModuleEnv.zig](src/base/ModuleEnv.zig), [tokenize.zig](src/check/parse/tokenize.zig), ...
+- new compiler: TODO
 - old compiler: [small_string_interner.rs](crates/compiler/collections/src/small_string_interner.rs), [mono_module.rs](crates/build/specialize_types/src/mono_module.rs), [format.rs](crates/cli/src/format.rs), ...
 - There are many more uses of interning, I recommend searching for "interner" (case-insensitive).
 
@@ -398,7 +398,7 @@ In general, the rank tracks the number of [let-bindings](#let) a variable is "un
 have rank 1. A [let](#let) inside a top-level definition gets rank 2, and so on.
 
 An example:
-```roc 
+```roc
 foo = 3
 
 plus_five = |arg|
@@ -409,7 +409,7 @@ Here the rank of `foo` is 1 because it is at the top level and the rank of `x` i
 
 Imported variables get rank 2.
 
-Rank 0 is special, it is used for variables that are [generalized](#generalized). 
+Rank 0 is special, it is used for variables that are [generalized](#generalized).
 
 Keeping track of ranks makes type inference faster. You can see how ranks are used [here](crates/compiler/solve/src/solve.rs) (old compiler).
 
@@ -618,7 +618,7 @@ make_cat_or_dog_sound = |is_dog|
             "Woof"
         else
             "Miauw"
-            
+
     Str.concat sound "!"
 ```
 

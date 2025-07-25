@@ -1,3 +1,5 @@
+//! Functionality for rendering pretty reports, Errors and Warnings etc.
+
 pub const Report = @import("report.zig").Report;
 pub const Document = @import("document.zig").Document;
 pub const DocumentElement = @import("document.zig").DocumentElement;

@@ -89,7 +89,6 @@ test "SYNTAX_PROBLEM report along with all four render types" {
 
     // let's forget about comparing with ansi escape codes present... doesn't seem worth the effort.
     // we'll have to QA the old fashioned way.
-
 }
 
 fn buildSyntaxProblemReport(allocator: Allocator) !Document {
