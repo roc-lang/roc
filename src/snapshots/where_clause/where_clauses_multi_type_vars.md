@@ -59,12 +59,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @4.1-4.8 (ident "process"))
-		(e-closure @4.11-4.21
-			(e-lambda @4.11-4.21
-				(args
-					(p-underscore @4.12-4.13)
-					(p-underscore @4.15-4.16))
-				(e-not-implemented @1.1-1.1)))
+		(e-lambda @4.11-4.21
+			(args
+				(p-underscore @4.12-4.13)
+				(p-underscore @4.15-4.16))
+			(e-not-implemented @1.1-1.1))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.20 (effectful false)

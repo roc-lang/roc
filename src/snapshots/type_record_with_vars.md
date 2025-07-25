@@ -75,14 +75,13 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign @4.1-4.9 (ident "getField"))
-		(e-closure @4.12-4.33
-			(e-lambda @4.12-4.33
-				(args
-					(p-assign @4.13-4.19 (ident "record")))
-				(e-dot-access @4.21-4.33 (field "field")
-					(receiver
-						(e-lookup-local @4.21-4.27
-							(p-assign @4.13-4.19 (ident "record")))))))
+		(e-lambda @4.12-4.33
+			(args
+				(p-assign @4.13-4.19 (ident "record")))
+			(e-dot-access @4.21-4.33 (field "field")
+				(receiver
+					(e-lookup-local @4.21-4.27
+						(p-assign @4.13-4.19 (ident "record"))))))
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.40 (effectful false)
@@ -94,11 +93,10 @@ main! = |_| {}
 					(ty-var @3.39-3.40 (name "a"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
-		(e-closure @6.9-6.15
-			(e-lambda @6.9-6.15
-				(args
-					(p-underscore @6.10-6.11))
-				(e-empty_record @6.13-6.15)))))
+		(e-lambda @6.9-6.15
+			(args
+				(p-underscore @6.10-6.11))
+			(e-empty_record @6.13-6.15))))
 ~~~
 # TYPES
 ~~~clojure

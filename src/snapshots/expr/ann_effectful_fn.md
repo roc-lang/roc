@@ -68,12 +68,11 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 		(e-tag @2.40-2.53 (name "LaunchNukeErr")))
 	(s-let @3.5-3.30
 		(p-assign @3.5-3.19 (ident "launchTheNukes"))
-		(e-closure @3.22-3.30
-			(e-lambda @3.22-3.30
-				(args
-					(p-record-destructure @3.23-3.25
-						(destructs)))
-				(e-not-implemented @1.1-1.1))))
+		(e-lambda @3.22-3.30
+			(args
+				(p-record-destructure @3.23-3.25
+					(destructs)))
+			(e-not-implemented @1.1-1.1)))
 	(e-call @5.5-5.23
 		(e-lookup-local @5.5-5.19
 			(p-assign @3.5-3.19 (ident "launchTheNukes")))

@@ -117,15 +117,14 @@ is_ok = |result| match result {
 (can-ir
 	(d-let
 		(p-assign @6.1-6.3 (ident "ok"))
-		(e-closure @6.6-6.24
-			(e-lambda @6.6-6.24
-				(args
-					(p-assign @6.7-6.8 (ident "a")))
-				(e-nominal @6.10-6.18 (nominal "MyResult")
-					(e-tag @6.10-6.21 (name "Ok")
-						(args
-							(e-lookup-local @6.22-6.23
-								(p-assign @6.7-6.8 (ident "a"))))))))
+		(e-lambda @6.6-6.24
+			(args
+				(p-assign @6.7-6.8 (ident "a")))
+			(e-nominal @6.10-6.18 (nominal "MyResult")
+				(e-tag @6.10-6.21 (name "Ok")
+					(args
+						(e-lookup-local @6.22-6.23
+							(p-assign @6.7-6.8 (ident "a")))))))
 		(annotation @6.1-6.3
 			(declared-type
 				(ty-fn @5.6-5.27 (effectful false)
@@ -135,32 +134,31 @@ is_ok = |result| match result {
 						(ty-underscore @1.1-1.1))))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "is_ok"))
-		(e-closure @9.9-12.2
-			(e-lambda @9.9-12.2
-				(args
-					(p-assign @9.10-9.16 (ident "result")))
-				(e-match @9.18-12.2
-					(match @9.18-12.2
-						(cond
-							(e-lookup-local @9.24-9.30
-								(p-assign @9.10-9.16 (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal @10.5-10.13
-											(p-applied-tag @10.5-10.19))))
-								(value
-									(e-nominal @10.23-10.27 (nominal "Bool")
-										(e-tag @10.23-10.32 (name "True")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal @11.5-11.13
-											(p-applied-tag @11.5-11.20))))
-								(value
-									(e-nominal @11.24-11.28 (nominal "Bool")
-										(e-tag @11.24-11.34 (name "False"))))))))))
+		(e-lambda @9.9-12.2
+			(args
+				(p-assign @9.10-9.16 (ident "result")))
+			(e-match @9.18-12.2
+				(match @9.18-12.2
+					(cond
+						(e-lookup-local @9.24-9.30
+							(p-assign @9.10-9.16 (ident "result"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal @10.5-10.13
+										(p-applied-tag @10.5-10.19))))
+							(value
+								(e-nominal @10.23-10.27 (nominal "Bool")
+									(e-tag @10.23-10.32 (name "True")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal @11.5-11.13
+										(p-applied-tag @11.5-11.20))))
+							(value
+								(e-nominal @11.24-11.28 (nominal "Bool")
+									(e-tag @11.24-11.34 (name "False")))))))))
 		(annotation @9.1-9.6
 			(declared-type
 				(ty-fn @8.9-8.36 (effectful false)

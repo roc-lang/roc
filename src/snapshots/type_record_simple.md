@@ -75,14 +75,13 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign @4.1-4.9 (ident "get_name"))
-		(e-closure @4.12-4.32
-			(e-lambda @4.12-4.32
-				(args
-					(p-assign @4.13-4.19 (ident "person")))
-				(e-dot-access @4.21-4.32 (field "name")
-					(receiver
-						(e-lookup-local @4.21-4.27
-							(p-assign @4.13-4.19 (ident "person")))))))
+		(e-lambda @4.12-4.32
+			(args
+				(p-assign @4.13-4.19 (ident "person")))
+			(e-dot-access @4.21-4.32 (field "name")
+				(receiver
+					(e-lookup-local @4.21-4.27
+						(p-assign @4.13-4.19 (ident "person"))))))
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.42 (effectful false)
@@ -94,19 +93,18 @@ main! = |_| {}
 					(ty @3.39-3.42 (name "Str"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
-		(e-closure @6.9-6.15
-			(e-lambda @6.9-6.15
-				(args
-					(p-underscore @6.10-6.11))
-				(e-empty_record @6.13-6.15)))))
+		(e-lambda @6.9-6.15
+			(args
+				(p-underscore @6.10-6.11))
+			(e-empty_record @6.13-6.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.9 (type "{ name: Str, age: U64 } -> Str"))
+		(patt @4.1-4.9 (type "{ age: U64, name: Str } -> Str"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
 	(expressions
-		(expr @4.12-4.32 (type "{ name: Str, age: U64 } -> Str"))
+		(expr @4.12-4.32 (type "{ age: U64, name: Str } -> Str"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~

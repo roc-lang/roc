@@ -64,14 +64,13 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @4.1-4.8 (ident "add_one"))
-		(e-closure @4.11-4.20
-			(e-lambda @4.11-4.20
-				(args
+		(e-lambda @4.11-4.20
+			(args
+				(p-assign @4.12-4.13 (ident "x")))
+			(e-binop @4.15-4.20 (op "add")
+				(e-lookup-local @4.15-4.16
 					(p-assign @4.12-4.13 (ident "x")))
-				(e-binop @4.15-4.20 (op "add")
-					(e-lookup-local @4.15-4.16
-						(p-assign @4.12-4.13 (ident "x")))
-					(e-int @4.19-4.20 (value "1")))))
+				(e-int @4.19-4.20 (value "1"))))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.21 (effectful false)

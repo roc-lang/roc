@@ -172,40 +172,39 @@ processColor = |color| {
 (can-ir
 	(d-let
 		(p-assign @6.1-6.13 (ident "processColor"))
-		(e-closure @6.16-16.2
-			(e-lambda @6.16-16.2
-				(args
-					(p-assign @6.17-6.22 (ident "color")))
-				(e-block @6.24-16.2
-					(s-expr @9.12-9.21
-						(e-runtime-error (tag "ident_not_in_scope")))
-					(e-match @11.5-15.6
-						(match @11.5-15.6
-							(cond
-								(e-lookup-local @11.11-11.16
-									(p-assign @6.17-6.22 (ident "color"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-runtime-error @12.9-12.12 (tag "ident_not_in_scope"))))
-									(value
-										(e-nominal @12.20-12.31 (nominal "LocalStatus")
-											(e-tag @12.20-12.39 (name "Pending")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-runtime-error @13.9-13.12 (tag "ident_not_in_scope"))))
-									(value
-										(e-nominal @13.22-13.33 (nominal "LocalStatus")
-											(e-tag @13.22-13.42 (name "Complete")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-runtime-error @14.9-14.12 (tag "ident_not_in_scope"))))
-									(value
-										(e-nominal @14.21-14.32 (nominal "LocalStatus")
-											(e-tag @14.21-14.40 (name "Pending")))))))))))
+		(e-lambda @6.16-16.2
+			(args
+				(p-assign @6.17-6.22 (ident "color")))
+			(e-block @6.24-16.2
+				(s-expr @9.12-9.21
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(e-match @11.5-15.6
+					(match @11.5-15.6
+						(cond
+							(e-lookup-local @11.11-11.16
+								(p-assign @6.17-6.22 (ident "color"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error @12.9-12.12 (tag "ident_not_in_scope"))))
+								(value
+									(e-nominal @12.20-12.31 (nominal "LocalStatus")
+										(e-tag @12.20-12.39 (name "Pending")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error @13.9-13.12 (tag "ident_not_in_scope"))))
+								(value
+									(e-nominal @13.22-13.33 (nominal "LocalStatus")
+										(e-tag @13.22-13.42 (name "Complete")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error @14.9-14.12 (tag "ident_not_in_scope"))))
+								(value
+									(e-nominal @14.21-14.32 (nominal "LocalStatus")
+										(e-tag @14.21-14.40 (name "Pending"))))))))))
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.32 (effectful false)

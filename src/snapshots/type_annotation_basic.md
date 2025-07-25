@@ -184,12 +184,11 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign @5.1-5.9 (ident "identity"))
-		(e-closure @5.12-5.17
-			(e-lambda @5.12-5.17
-				(args
-					(p-assign @5.13-5.14 (ident "x")))
-				(e-lookup-local @5.16-5.17
-					(p-assign @5.13-5.14 (ident "x")))))
+		(e-lambda @5.12-5.17
+			(args
+				(p-assign @5.13-5.14 (ident "x")))
+			(e-lookup-local @5.16-5.17
+				(p-assign @5.13-5.14 (ident "x"))))
 		(annotation @5.1-5.9
 			(declared-type
 				(ty-fn @4.12-4.18 (effectful false)
@@ -197,17 +196,16 @@ main! = |_| {
 					(ty-var @4.17-4.18 (name "a"))))))
 	(d-let
 		(p-assign @9.1-9.8 (ident "combine"))
-		(e-closure @9.11-9.42
-			(e-lambda @9.11-9.42
-				(args
-					(p-assign @9.12-9.17 (ident "first"))
-					(p-assign @9.19-9.25 (ident "second")))
-				(e-tuple @9.27-9.42
-					(elems
-						(e-lookup-local @9.28-9.33
-							(p-assign @9.12-9.17 (ident "first")))
-						(e-lookup-local @9.35-9.41
-							(p-assign @9.19-9.25 (ident "second")))))))
+		(e-lambda @9.11-9.42
+			(args
+				(p-assign @9.12-9.17 (ident "first"))
+				(p-assign @9.19-9.25 (ident "second")))
+			(e-tuple @9.27-9.42
+				(elems
+					(e-lookup-local @9.28-9.33
+						(p-assign @9.12-9.17 (ident "first")))
+					(e-lookup-local @9.35-9.41
+						(p-assign @9.19-9.25 (ident "second"))))))
 		(annotation @9.1-9.8
 			(declared-type
 				(ty-fn @8.11-8.25 (effectful false)
@@ -218,14 +216,13 @@ main! = |_| {
 						(ty-var @8.23-8.24 (name "b")))))))
 	(d-let
 		(p-assign @13.1-13.7 (ident "addOne"))
-		(e-closure @13.10-13.19
-			(e-lambda @13.10-13.19
-				(args
+		(e-lambda @13.10-13.19
+			(args
+				(p-assign @13.11-13.12 (ident "n")))
+			(e-binop @13.14-13.19 (op "add")
+				(e-lookup-local @13.14-13.15
 					(p-assign @13.11-13.12 (ident "n")))
-				(e-binop @13.14-13.19 (op "add")
-					(e-lookup-local @13.14-13.15
-						(p-assign @13.11-13.12 (ident "n")))
-					(e-int @13.18-13.19 (value "1")))))
+				(e-int @13.18-13.19 (value "1"))))
 		(annotation @13.1-13.7
 			(declared-type
 				(ty-fn @12.10-12.20 (effectful false)
@@ -235,9 +232,9 @@ main! = |_| {
 		(p-assign @15.1-15.6 (ident "main!"))
 		(e-closure @15.9-27.2
 			(captures
-				(capture @13.1-13.7 (ident "addOne"))
 				(capture @9.1-9.8 (ident "combine"))
-				(capture @5.1-5.9 (ident "identity")))
+				(capture @5.1-5.9 (ident "identity"))
+				(capture @13.1-13.7 (ident "addOne")))
 			(e-lambda @15.9-27.2
 				(args
 					(p-underscore @15.10-15.11))

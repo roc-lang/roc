@@ -267,7 +267,7 @@ UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
 UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
 UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
-TYPE MISMATCH - fuzz_crash_023.md:67:11:67:21
+TYPE MISMATCH - fuzz_crash_023.md:67:11:67:14
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
 TYPE MISMATCH - fuzz_crash_023.md:155:2:155:12
 # PROBLEMS
@@ -795,17 +795,17 @@ tuple : Value((a, b, c))
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_023.md:67:11:67:21:**
+**fuzz_crash_023.md:67:11:67:14:**
 ```roc
 add_one : U64 -> U64
 ```
-          ^^^^^^^^^^
+          ^^^
 
 It is of type:
-    _U64 -> U64_
+    _U64_
 
 But you are trying to use it as:
-    _Bool -> Num(_size)_
+    _Bool_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -1824,44 +1824,42 @@ expect {
 (can-ir
 	(d-let
 		(p-assign @65.1-65.16 (ident "add_one_oneline"))
-		(e-closure @65.19-65.40
-			(e-lambda @65.19-65.40
-				(args
-					(p-assign @65.20-65.23 (ident "num")))
-				(e-if @65.25-65.40
-					(if-branches
-						(if-branch
-							(e-lookup-local @65.28-65.31
-								(p-assign @65.20-65.23 (ident "num")))
-							(e-int @65.32-65.33 (value "2"))))
-					(if-else
-						(e-int @65.39-65.40 (value "5")))))))
+		(e-lambda @65.19-65.40
+			(args
+				(p-assign @65.20-65.23 (ident "num")))
+			(e-if @65.25-65.40
+				(if-branches
+					(if-branch
+						(e-lookup-local @65.28-65.31
+							(p-assign @65.20-65.23 (ident "num")))
+						(e-int @65.32-65.33 (value "2"))))
+				(if-else
+					(e-int @65.39-65.40 (value "5"))))))
 	(d-let
 		(p-assign @68.1-68.8 (ident "add_one"))
-		(e-closure @68.11-78.2
-			(e-lambda @68.11-78.2
-				(args
-					(p-assign @68.12-68.15 (ident "num")))
-				(e-block @68.17-78.2
-					(s-let @69.2-69.11
-						(p-assign @69.2-69.7 (ident "other"))
-						(e-int @69.10-69.11 (value "1")))
-					(e-if @70.2-77.3
-						(if-branches
-							(if-branch
-								(e-lookup-local @70.5-70.8
-									(p-assign @68.12-68.15 (ident "num")))
-								(e-block @70.9-74.3
-									(s-dbg @71.3-72.15
-										(e-call @72.4-72.15
-											(e-runtime-error (tag "ident_not_in_scope"))))
-									(e-int @73.3-73.4 (value "0")))))
-						(if-else
-							(e-block @74.9-77.3
-								(s-dbg @75.3-75.10
-									(e-int @75.7-75.10 (value "123")))
-								(e-lookup-local @76.3-76.8
-									(p-assign @69.2-69.7 (ident "other")))))))))
+		(e-lambda @68.11-78.2
+			(args
+				(p-assign @68.12-68.15 (ident "num")))
+			(e-block @68.17-78.2
+				(s-let @69.2-69.11
+					(p-assign @69.2-69.7 (ident "other"))
+					(e-int @69.10-69.11 (value "1")))
+				(e-if @70.2-77.3
+					(if-branches
+						(if-branch
+							(e-lookup-local @70.5-70.8
+								(p-assign @68.12-68.15 (ident "num")))
+							(e-block @70.9-74.3
+								(s-dbg @71.3-72.15
+									(e-call @72.4-72.15
+										(e-runtime-error (tag "ident_not_in_scope"))))
+								(e-int @73.3-73.4 (value "0")))))
+					(if-else
+						(e-block @74.9-77.3
+							(s-dbg @75.3-75.10
+								(e-int @75.7-75.10 (value "123")))
+							(e-lookup-local @76.3-76.8
+								(p-assign @69.2-69.7 (ident "other"))))))))
 		(annotation @68.1-68.8
 			(declared-type
 				(ty-fn @67.11-67.21 (effectful false)
@@ -2393,7 +2391,7 @@ expect {
 (inferred-types
 	(defs
 		(patt @65.1-65.16 (type "Bool -> Num(_size)"))
-		(patt @68.1-68.8 (type "Error"))
+		(patt @68.1-68.8 (type "Error -> Error"))
 		(patt @80.1-80.11 (type "Error"))
 		(patt @144.1-144.6 (type "Error -> Error"))
 		(patt @199.1-199.6 (type "{}")))
@@ -2438,7 +2436,7 @@ expect {
 					(ty-var @63.10-63.11 (name "a"))))))
 	(expressions
 		(expr @65.19-65.40 (type "Bool -> Num(_size)"))
-		(expr @68.11-78.2 (type "Error"))
+		(expr @68.11-78.2 (type "Error -> Error"))
 		(expr @80.14-138.3 (type "Error"))
 		(expr @144.9-196.2 (type "Error -> Error"))
 		(expr @199.9-199.11 (type "{}"))))

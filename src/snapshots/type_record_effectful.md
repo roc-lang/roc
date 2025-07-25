@@ -95,24 +95,23 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign @6.1-6.10 (ident "printName"))
-		(e-closure @6.13-9.2
-			(e-lambda @6.13-9.2
-				(args
-					(p-assign @6.14-6.20 (ident "person")))
-				(e-block @6.22-9.2
-					(s-expr @7.5-7.30
-						(e-call @7.5-7.30
-							(e-lookup-external @7.5-7.17
-								(module-idx "0")
-								(target-node-idx "0"))
-							(e-dot-access @7.18-7.29 (field "name")
-								(receiver
-									(e-lookup-local @7.18-7.24
-										(p-assign @6.14-6.20 (ident "person")))))))
-					(e-dot-access @8.5-8.16 (field "name")
-						(receiver
-							(e-lookup-local @8.5-8.11
-								(p-assign @6.14-6.20 (ident "person"))))))))
+		(e-lambda @6.13-9.2
+			(args
+				(p-assign @6.14-6.20 (ident "person")))
+			(e-block @6.22-9.2
+				(s-expr @7.5-7.30
+					(e-call @7.5-7.30
+						(e-lookup-external @7.5-7.17
+							(module-idx "0")
+							(target-node-idx "0"))
+						(e-dot-access @7.18-7.29 (field "name")
+							(receiver
+								(e-lookup-local @7.18-7.24
+									(p-assign @6.14-6.20 (ident "person")))))))
+				(e-dot-access @8.5-8.16 (field "name")
+					(receiver
+						(e-lookup-local @8.5-8.11
+							(p-assign @6.14-6.20 (ident "person")))))))
 		(annotation @6.1-6.10
 			(declared-type
 				(ty-fn @5.13-5.43 (effectful true)
@@ -124,11 +123,10 @@ main! = |_| {}
 					(ty @5.40-5.43 (name "Str"))))))
 	(d-let
 		(p-assign @10.1-10.6 (ident "main!"))
-		(e-closure @10.9-10.15
-			(e-lambda @10.9-10.15
-				(args
-					(p-underscore @10.10-10.11))
-				(e-empty_record @10.13-10.15))))
+		(e-lambda @10.9-10.15
+			(args
+				(p-underscore @10.10-10.11))
+			(e-empty_record @10.13-10.15)))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))
 ~~~
@@ -136,9 +134,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.10 (type "{ name: Str, age: U64 } => Str"))
+		(patt @6.1-6.10 (type "{ age: U64, name: Str } => Str"))
 		(patt @10.1-10.6 (type "_arg -> {}")))
 	(expressions
-		(expr @6.13-9.2 (type "{ name: Str, age: U64 } => Str"))
+		(expr @6.13-9.2 (type "{ age: U64, name: Str } => Str"))
 		(expr @10.9-10.15 (type "_arg -> {}"))))
 ~~~

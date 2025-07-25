@@ -369,12 +369,11 @@ transform = |_, b| b
 (can-ir
 	(d-let
 		(p-assign @4.1-4.5 (ident "main"))
-		(e-closure @4.8-4.13
-			(e-lambda @4.8-4.13
-				(args
-					(p-assign @4.9-4.10 (ident "x")))
-				(e-lookup-local @4.12-4.13
-					(p-assign @4.9-4.10 (ident "x")))))
+		(e-lambda @4.8-4.13
+			(args
+				(p-assign @4.9-4.10 (ident "x")))
+			(e-lookup-local @4.12-4.13
+				(p-assign @4.9-4.10 (ident "x"))))
 		(annotation @4.1-4.5
 			(declared-type
 				(ty-fn @3.8-3.14 (effectful false)
@@ -382,12 +381,11 @@ transform = |_, b| b
 					(ty-underscore @1.1-1.1)))))
 	(d-let
 		(p-assign @7.1-7.9 (ident "identity"))
-		(e-closure @7.12-7.17
-			(e-lambda @7.12-7.17
-				(args
-					(p-assign @7.13-7.14 (ident "x")))
-				(e-lookup-local @7.16-7.17
-					(p-assign @7.13-7.14 (ident "x")))))
+		(e-lambda @7.12-7.17
+			(args
+				(p-assign @7.13-7.14 (ident "x")))
+			(e-lookup-local @7.16-7.17
+				(p-assign @7.13-7.14 (ident "x"))))
 		(annotation @7.1-7.9
 			(declared-type
 				(ty-fn @6.12-6.18 (effectful false)
@@ -395,12 +393,11 @@ transform = |_, b| b
 					(ty-var @6.17-6.18 (name "a"))))))
 	(d-let
 		(p-assign @11.1-11.8 (ident "process"))
-		(e-closure @11.11-11.29
-			(e-lambda @11.11-11.29
-				(args
-					(p-assign @11.12-11.16 (ident "list")))
-				(e-string @11.18-11.29
-					(e-literal @11.19-11.28 (string "processed")))))
+		(e-lambda @11.11-11.29
+			(args
+				(p-assign @11.12-11.16 (ident "list")))
+			(e-string @11.18-11.29
+				(e-literal @11.19-11.28 (string "processed"))))
 		(annotation @11.1-11.8
 			(declared-type
 				(ty-fn @10.11-10.25 (effectful false)
@@ -409,14 +406,13 @@ transform = |_, b| b
 					(ty @10.22-10.25 (name "Str"))))))
 	(d-let
 		(p-assign @15.1-15.9 (ident "get_data"))
-		(e-closure @15.12-15.33
-			(e-lambda @15.12-15.33
-				(args
-					(p-assign @15.13-15.19 (ident "record")))
-				(e-dot-access @15.21-15.33 (field "other")
-					(receiver
-						(e-lookup-local @15.21-15.27
-							(p-assign @15.13-15.19 (ident "record")))))))
+		(e-lambda @15.12-15.33
+			(args
+				(p-assign @15.13-15.19 (ident "record")))
+			(e-dot-access @15.21-15.33 (field "other")
+				(receiver
+					(e-lookup-local @15.21-15.27
+						(p-assign @15.13-15.19 (ident "record"))))))
 		(annotation @15.1-15.9
 			(declared-type
 				(ty-fn @14.12-14.43 (effectful false)
@@ -463,13 +459,12 @@ transform = |_, b| b
 					(ty @18.35-18.38 (name "Str"))))))
 	(d-let
 		(p-assign @31.1-31.10 (ident "transform"))
-		(e-closure @31.13-31.21
-			(e-lambda @31.13-31.21
-				(args
-					(p-underscore @31.14-31.15)
-					(p-assign @31.17-31.18 (ident "b")))
-				(e-lookup-local @31.20-31.21
-					(p-assign @31.17-31.18 (ident "b")))))))
+		(e-lambda @31.13-31.21
+			(args
+				(p-underscore @31.14-31.15)
+				(p-assign @31.17-31.18 (ident "b")))
+			(e-lookup-local @31.20-31.21
+				(p-assign @31.17-31.18 (ident "b"))))))
 ~~~
 # TYPES
 ~~~clojure

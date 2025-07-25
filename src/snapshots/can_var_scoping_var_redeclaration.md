@@ -85,22 +85,21 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @4.1-4.14 (ident "redeclareTest"))
-		(e-closure @4.17-9.2
-			(e-lambda @4.17-9.2
-				(args
-					(p-underscore @4.18-4.19))
-				(e-block @4.21-9.2
-					(s-var @5.2-5.12
-						(p-assign @5.2-5.12 (ident "x_"))
-						(e-int @5.11-5.12 (value "5")))
-					(s-var @6.2-6.13
-						(p-assign @6.2-6.13 (ident "x_"))
-						(e-int @6.11-6.13 (value "10")))
-					(s-reassign @7.2-7.4
-						(p-assign @6.2-6.13 (ident "x_"))
-						(e-int @7.7-7.9 (value "15")))
-					(e-lookup-local @8.2-8.4
-						(p-assign @6.2-6.13 (ident "x_")))))))
+		(e-lambda @4.17-9.2
+			(args
+				(p-underscore @4.18-4.19))
+			(e-block @4.21-9.2
+				(s-var @5.2-5.12
+					(p-assign @5.2-5.12 (ident "x_"))
+					(e-int @5.11-5.12 (value "5")))
+				(s-var @6.2-6.13
+					(p-assign @6.2-6.13 (ident "x_"))
+					(e-int @6.11-6.13 (value "10")))
+				(s-reassign @7.2-7.4
+					(p-assign @6.2-6.13 (ident "x_"))
+					(e-int @7.7-7.9 (value "15")))
+				(e-lookup-local @8.2-8.4
+					(p-assign @6.2-6.13 (ident "x_"))))))
 	(d-let
 		(p-assign @11.1-11.7 (ident "result"))
 		(e-call @11.10-11.27

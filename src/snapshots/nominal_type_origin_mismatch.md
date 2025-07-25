@@ -97,12 +97,11 @@ main =
 (can-ir
 	(d-let
 		(p-assign @6.1-6.14 (ident "expectsPerson"))
-		(e-closure @6.17-6.35
-			(e-lambda @6.17-6.35
-				(args
-					(p-assign @6.18-6.19 (ident "p")))
-				(e-string @6.21-6.35
-					(e-literal @6.22-6.34 (string "Got a person")))))
+		(e-lambda @6.17-6.35
+			(args
+				(p-assign @6.18-6.19 (ident "p")))
+			(e-string @6.21-6.35
+				(e-literal @6.22-6.34 (string "Got a person"))))
 		(annotation @6.1-6.14
 			(declared-type
 				(ty-fn @5.17-5.30 (effectful false)

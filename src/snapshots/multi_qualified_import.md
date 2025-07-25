@@ -302,12 +302,11 @@ data = json
 				(ty @5.16-5.23 (name "Encoder")))))
 	(d-let
 		(p-assign @10.1-10.8 (ident "process"))
-		(e-closure @10.11-10.33
-			(e-lambda @10.11-10.33
-				(args
-					(p-assign @10.12-10.19 (ident "encoder")))
-				(e-string @10.21-10.33
-					(e-literal @10.22-10.32 (string "processing")))))
+		(e-lambda @10.11-10.33
+			(args
+				(p-assign @10.12-10.19 (ident "encoder")))
+			(e-string @10.21-10.33
+				(e-literal @10.22-10.32 (string "processing"))))
 		(annotation @10.1-10.8
 			(declared-type
 				(ty-fn @9.11-9.40 (effectful false)
