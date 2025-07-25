@@ -2,23 +2,22 @@
 
 const std = @import("std");
 const base = @import("base");
-const parse = @import("check/parse.zig");
+const parse = @import("parse");
 const collections = @import("collections");
 const compile = @import("compile");
+
 const Filesystem = @import("fs/Filesystem.zig");
-
-const tracy = @import("tracy.zig");
-const tokenize = @import("check/parse/tokenize.zig");
-
-const Parser = @import("check/parse/Parser.zig").Parser;
+const tracy = @import("tracy");
 
 const ModuleEnv = compile.ModuleEnv;
 const Token = tokenize.Token;
+const Parser = parse.Parser;
 const AST = parse.AST;
 const Node = parse.Node;
 const NodeStore = parse.NodeStore;
 const SafeList = collections.SafeList;
 
+const tokenize = parse.tokenize;
 const fatal = collections.utils.fatal;
 
 const FormatFlags = enum {

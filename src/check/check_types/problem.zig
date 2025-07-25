@@ -2,8 +2,9 @@
 
 const std = @import("std");
 const base = @import("base");
-const tracy = @import("../../tracy.zig");
+const tracy = @import("tracy");
 const collections = @import("collections");
+
 const can = @import("../canonicalize.zig");
 const types_mod = @import("types");
 const snapshot = @import("./snapshot.zig");

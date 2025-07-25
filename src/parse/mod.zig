@@ -5,23 +5,31 @@
 
 const std = @import("std");
 const base = @import("base");
-const tracy = @import("../tracy.zig");
-const tokenize = @import("parse/tokenize.zig");
+const compile = @import("compile");
+const tracy = @import("tracy");
+
+pub const tokenize = @import("tokenize.zig");
+
 const TokenIndex = tokenize.TokenIndex;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const NodeList = AST.NodeList;
 const Diagnostic = AST.Diagnostic;
-const Parser = @import("parse/Parser.zig");
-const ModuleEnv = @import("compile").ModuleEnv;
+const ModuleEnv = compile.ModuleEnv;
 
-pub const Node = @import("parse/Node.zig");
-pub const NodeStore = @import("parse/NodeStore.zig");
+/// **AST.Parser**
+pub const Parser = @import("Parser.zig");
+
+/// **AST.Node**
+pub const Node = @import("Node.zig");
+
+/// **AST.NodeStore**
+pub const NodeStore = @import("NodeStore.zig");
 
 /// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
-pub const AST = @import("parse/AST.zig");
+pub const AST = @import("AST.zig");
 
 test {
-    _ = @import("parse/test/ast_node_store_test.zig");
+    _ = @import("test/ast_node_store_test.zig");
 }
 
 fn runParse(env: *ModuleEnv, parserCall: *const fn (*Parser) std.mem.Allocator.Error!u32) std.mem.Allocator.Error!AST {

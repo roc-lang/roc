@@ -80,8 +80,8 @@ That ID is used in [IRs](#ir) instead of the actual text to save memory.
 Identifier in the compiler:
 - new compiler:
     - [Ident](src/base/Ident.zig)
-    - [Ident tokenization](src/check/parse/tokenize.zig): check the functions `chompIdentLower` and `chompIdentGeneral`, and their uses.
-    - [Ident parsing](src/check/parse/Parser.zig): search `Ident`
+    - [Ident tokenization](src/parse/tokenize.zig): check the functions `chompIdentLower` and `chompIdentGeneral`, and their uses.
+    - [Ident parsing](src/parse/Parser.zig): search `Ident`
 - old compiler:
     - [IdentStr](crates/compiler/ident/src/lib.rs)
     - [module/ident.rs](crates/compiler/module/src/ident.rs)
@@ -94,7 +94,7 @@ Many keywords can not be used as a variable name.
 We have an [overview of all Roc keywords](https://www.roc-lang.org/tutorial#reserved-keywords).
 
 Keywords in the compiler:
-- [new compiler](src/check/parse/tokenize.zig)
+- [new compiler](src/parse/tokenize.zig)
 - [old compiler](crates/compiler/parse/src/keyword.rs)
 
 ## Operator
@@ -104,7 +104,7 @@ Some examples: `+`, `=`, `==`, `>`. [A table of all operators in Roc](https://ww
 `+` is an example of binary operator because it works with two operands, e.g. `1 + 1`. Similarly `!` (e.g. `!Bool.false`) is a unary operator.
 
 Operators in the compiler:
-- New compiler: search `Op` in [tokenize.zig](src/check/parse/tokenize.zig)
+- New compiler: search `Op` in [tokenize.zig](src/parse/tokenize.zig)
 - Old compiler: search `operator_help` in [expr.rs](crates/compiler/parse/src/expr.rs)
 
 ## Syntax
@@ -112,7 +112,7 @@ Operators in the compiler:
 The set of rules that define the correct structure and format of statements, expressions, and code blocks. It specifies how code should be written so that it can be interpreted and executed correctly. In other words, syntax determines how symbols, keywords, and punctuation must be arranged to form valid source code.
 
 Syntax in the compiler:
-- New compiler: determined by the [tokenizer and parser](src/check/parse).
+- New compiler: determined by the [tokenizer and parser](src/parse).
 - Old compiler: determined by the [parser](crates/compiler/parse).
 
 ## Syntactic Sugar
@@ -142,7 +142,7 @@ In the compiler, the type signature specified in the source code has priority ov
 Type annotations are basically the same thing as type signatures and both terms are used interchangeably throughout the compiler.
 
 Type signature in the code base:
-- New compiler: [Parser.zig](src/check/parse/Parser.zig) (search signature)
+- New compiler: [Parser.zig](src/parse/Parser.zig) (search signature)
 - Old compiler: [ast.rs](crates/compiler/parse/src/ast.rs) (search TypeAnnotation)
 
 ## Type Alias
@@ -176,7 +176,7 @@ Graph a := Dict a (List a) where a implements Eq
 Type variables don't have to be a single letter, they just have to start with a lowercase letter.
 
 Parsing of type vars:
-- new compiler: search `ty_var` in [Parser.zig](src/check/parse/Parser.zig)
+- new compiler: search `ty_var` in [Parser.zig](src/parse/Parser.zig)
 - old compiler: search `parse_type_variable` in [type_annotation.rs](crates/compiler/parse/src/type_annotation.rs)
 
 ## Builtin
@@ -221,7 +221,7 @@ LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1)
 ```
 
 New compiler:
-- [tokenize.zig](src/check/parse/tokenize.zig)
+- [tokenize.zig](src/parse/tokenize.zig)
 
 Old compiler:
 - We did not do a separate tokenization step, everything happened in the [parser](crates/compiler/parse/src/parser.rs).
@@ -253,7 +253,7 @@ Compared to raw source code, this structured format is much easier to analyze an
 The AST is created by the [parser](#parsing).
 
 New compiler:
-- See the `Node` struct in [this file](src/check/parse/AST.zig).
+- See the `Node` struct in [this file](src/parse/AST.zig).
 - You can see examples of ASTs in the .txt files in [this folder](src/snapshots).
 
 Old compiler:
@@ -266,7 +266,7 @@ Old compiler:
 The step where the compiler checks if the source code follows the correct structure or “grammar” of the programming language. It takes the tokens produced by [tokenization](#tokenization) and organizes them to see if they make sense together, like checking the structure of sentences in a language. If the code is correct, the parser builds a tree-like structure ([AST](#ast)) that shows how the code is organized. If not, it reports errors.
 
 Parser implementation:
-- new compiler: [src/check/parse](src/check/parse)
+- new compiler: [src/parse](src/parse)
 - old compiler: [crates/compiler/parse](crates/compiler/parse) (tokenization is not a separate step here)
 
 ## Symbol

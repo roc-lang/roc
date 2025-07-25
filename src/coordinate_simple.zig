@@ -4,20 +4,21 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const base = @import("base");
-const tracy = @import("tracy.zig");
-const parse = @import("check/parse.zig");
+const parse = @import("parse");
+const reporting = @import("reporting");
+const compile = @import("compile");
+
+const tracy = @import("tracy");
 const canonicalize = @import("check/canonicalize.zig");
 const Solver = @import("check/check_types.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
-const reporting = @import("reporting");
 const Filesystem = @import("fs/Filesystem.zig");
-
-const ModuleEnv = @import("compile").ModuleEnv;
-const AST = parse.AST;
 const cache_mod = @import("cache/mod.zig");
+
+const ModuleEnv = compile.ModuleEnv;
+const AST = parse.AST;
 const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
-
 const CacheResult = cache_mod.CacheResult;
 const CacheHit = cache_mod.CacheHit;
 

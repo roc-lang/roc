@@ -14,18 +14,20 @@
 
 const std = @import("std");
 const base = @import("base");
-const parse = @import("check/parse.zig");
 const build_options = @import("build_options");
+const parse = @import("parse");
+const reporting = @import("reporting");
+const types = @import("types");
+const compile = @import("compile");
+
 const can = @import("check/canonicalize.zig");
 const check_types = @import("check/check_types.zig");
 const WasmFilesystem = @import("playground/WasmFilesystem.zig");
-const reporting = @import("reporting");
 const snapshot = @import("snapshot.zig");
-const types = @import("types");
 const problem = @import("check/check_types/problem.zig");
 
 const SExprTree = base.SExprTree;
-const ModuleEnv = @import("compile").ModuleEnv;
+const ModuleEnv = compile.ModuleEnv;
 const Allocator = std.mem.Allocator;
 
 const allocator: Allocator = .{

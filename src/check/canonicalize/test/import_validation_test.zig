@@ -8,9 +8,11 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
-const parse = @import("../../parse.zig");
+const parse = @import("parse");
+const compile = @import("compile");
+
 const canonicalize = @import("../../canonicalize.zig");
-const ModuleEnv = @import("compile").ModuleEnv;
+const ModuleEnv = compile.ModuleEnv;
 const expectEqual = testing.expectEqual;
 const collections = @import("collections");
 

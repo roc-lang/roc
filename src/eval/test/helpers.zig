@@ -1,20 +1,22 @@
 //! Tests for the expression evaluator
 const std = @import("std");
-const testing = std.testing;
-const eval = @import("../interpreter.zig");
+const parse = @import("parse");
+const types = @import("types");
 const base = @import("base");
-const parse = @import("../../check/parse.zig");
+const compile = @import("compile");
+
+const eval = @import("../interpreter.zig");
 const canonicalize = @import("../../check/canonicalize.zig");
 const check_types = @import("../../check/check_types.zig");
-const ModuleEnv = @import("compile").ModuleEnv;
-const types = @import("types");
 const stack = @import("../stack.zig");
 const layout_store = @import("../../layout/store.zig");
 const layout = @import("../../layout/layout.zig");
 
-const test_allocator = testing.allocator;
+const ModuleEnv = compile.ModuleEnv;
 const Layout = layout.Layout;
 const Closure = eval.Closure;
+const testing = std.testing;
+const test_allocator = testing.allocator;
 
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_trace: enum { trace, no_trace }) !void {

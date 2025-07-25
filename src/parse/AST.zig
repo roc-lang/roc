@@ -13,20 +13,22 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
-const tokenize = @import("tokenize.zig");
+const parse = @import("parse");
 const collections = @import("collections");
 const reporting = @import("reporting");
+const compile = @import("compile");
 
-const Node = @import("Node.zig");
-const NodeStore = @import("NodeStore.zig");
+const Node = parse.Node;
+const NodeStore = parse.NodeStore;
 pub const Token = tokenize.Token;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
-
 const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const Ident = base.Ident;
 const Allocator = std.mem.Allocator;
-const ModuleEnv = @import("compile").ModuleEnv;
+const ModuleEnv = compile.ModuleEnv;
+const tokenize = parse.tokenize;
+
 const AST = @This();
 
 env: *ModuleEnv,

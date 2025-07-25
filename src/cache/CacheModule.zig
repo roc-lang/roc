@@ -8,7 +8,7 @@ const base = @import("base");
 const canonicalize = @import("../check/canonicalize.zig");
 const collections = @import("collections");
 const types = @import("types");
-const parse = @import("../check/parse.zig").parse;
+const parse = @import("parse");
 const compile = @import("compile");
 const SExprTree = base.SExprTree;
 const Filesystem = @import("../fs/Filesystem.zig");
@@ -697,7 +697,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     const cir = &module_env;
 
     // Parse and canonicalize
-    var ast = try parse(&module_env);
+    var ast = try parse.parse(&module_env);
     defer ast.deinit(gpa);
 
     var canonicalizer = try canonicalize.init(cir, &ast, null);

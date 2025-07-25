@@ -9,8 +9,8 @@ const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
 const compile = @import("compile");
+const parse = @import("parse");
 
-const parse = @import("../../parse.zig");
 const canonicalize = @import("../../canonicalize.zig");
 
 const ModuleEnv = compile.ModuleEnv;
