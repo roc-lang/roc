@@ -380,7 +380,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
 const Self = @This();
 
 /// The intermediate representation of a canonicalized Roc program.
-/// After parsing a Roc program, the [ParseIR](src/check/parse/AST.zig) is transformed into a [canonical
+/// After parsing a Roc program, the [ParseIR](src/parse/AST.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
 ///
 /// Canonicalization performs analysis to catch user errors, and sets up the state necessary to solve the types in a
