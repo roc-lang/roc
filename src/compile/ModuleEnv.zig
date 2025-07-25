@@ -29,7 +29,7 @@ pub const IntValue = CIR.IntValue;
 
 pub const RocDec = CIR.RocDec;
 
-pub const Diagnostic = CIR.Diagnostic;
+pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 pub const NodeStore = CIR.NodeStore;
 pub const Node = CIR.Node;
 pub const Expr = CIR.Expr;

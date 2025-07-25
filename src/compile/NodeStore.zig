@@ -10,6 +10,7 @@ const RocDec = ModuleEnv.RocDec;
 
 const SERIALIZATION_ALIGNMENT = 16;
 
+const SafeList = collections.SafeList;
 const DataSpan = base.DataSpan;
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
@@ -23,10 +24,9 @@ const NodeStore = @This();
 gpa: std.mem.Allocator,
 nodes: Node.List,
 regions: Region.List,
-extra_data: std.ArrayListUnmanaged(u32),
+extra_data: collections.SafeList(u32),
 scratch_statements: base.Scratch(ModuleEnv.Statement.Idx),
 scratch_exprs: base.Scratch(ModuleEnv.Expr.Idx),
-scratch_captures: base.Scratch(ModuleEnv.Expr.Capture.Idx),
 scratch_record_fields: base.Scratch(ModuleEnv.RecordField.Idx),
 scratch_match_branches: base.Scratch(ModuleEnv.Expr.Match.Branch.Idx),
 scratch_match_branch_patterns: base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx),
@@ -40,6 +40,7 @@ scratch_anno_record_fields: base.Scratch(ModuleEnv.TypeAnno.RecordField.Idx),
 scratch_exposed_items: base.Scratch(ModuleEnv.ExposedItem.Idx),
 scratch_defs: base.Scratch(ModuleEnv.Def.Idx),
 scratch_diagnostics: base.Scratch(ModuleEnv.Diagnostic.Idx),
+scratch_captures: base.Scratch(ModuleEnv.Expr.Capture.Idx),
 
 /// Initializes the NodeStore
 pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!NodeStore {
@@ -54,10 +55,9 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .gpa = gpa,
         .nodes = try Node.List.initCapacity(gpa, capacity),
         .regions = try Region.List.initCapacity(gpa, capacity),
-        .extra_data = try std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2),
+        .extra_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 2),
         .scratch_statements = try base.Scratch(ModuleEnv.Statement.Idx).init(gpa),
         .scratch_exprs = try base.Scratch(ModuleEnv.Expr.Idx).init(gpa),
-        .scratch_captures = try base.Scratch(ModuleEnv.Expr.Capture.Idx).init(gpa),
         .scratch_patterns = try base.Scratch(ModuleEnv.Pattern.Idx).init(gpa),
         .scratch_record_fields = try base.Scratch(ModuleEnv.RecordField.Idx).init(gpa),
         .scratch_pattern_record_fields = try base.Scratch(ModuleEnv.PatternRecordField.Idx).init(gpa),
@@ -71,6 +71,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_defs = try base.Scratch(ModuleEnv.Def.Idx).init(gpa),
         .scratch_where_clauses = try base.Scratch(ModuleEnv.WhereClause.Idx).init(gpa),
         .scratch_diagnostics = try base.Scratch(ModuleEnv.Diagnostic.Idx).init(gpa),
+        .scratch_captures = try base.Scratch(ModuleEnv.Expr.Capture.Idx).init(gpa),
     };
 }
 
@@ -216,7 +217,7 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
         } },
         .statement_import => {
             const extra_start = node.data_2;
-            const extra_data = store.extra_data.items[extra_start..];
+            const extra_data = store.extra_data.items.items[extra_start..];
 
             const alias_data = extra_data[0];
             const qualifier_data = extra_data[1];
@@ -238,7 +239,7 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
         },
         .statement_alias_decl => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
+            const extra_data = store.extra_data.items.items[extra_start..];
 
             const anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[0]));
             const anno_var = @as(types.Var, @enumFromInt(extra_data[1]));
@@ -262,7 +263,7 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
         },
         .statement_nominal_decl => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
+            const extra_data = store.extra_data.items.items[extra_start..];
 
             const anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[0]));
             const anno_var = @as(types.Var, @enumFromInt(extra_data[1]));
@@ -286,7 +287,7 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
         },
         .statement_type_anno => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
+            const extra_data = store.extra_data.items.items[extra_start..];
 
             const anno: ModuleEnv.TypeAnno.Idx = @enumFromInt(extra_data[0]);
             const name: Ident.Idx = @bitCast(extra_data[1]);
@@ -335,7 +336,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         },
         .expr_int => {
             // Read i128 from extra_data (stored as 4 u32s in data_1)
-            const value_as_u32s = store.extra_data.items[node.data_1..][0..4];
+            const value_as_u32s = store.extra_data.items.items[node.data_1..][0..4];
 
             // Retrieve type variable from data_2 and requirements from data_3
             return ModuleEnv.Expr{
@@ -362,7 +363,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         .expr_call => {
             // Retrieve args span from extra_data
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
+            const extra_data = store.extra_data.items.items[extra_start..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -377,7 +378,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         .expr_frac_f64 => {
             // Get value from extra_data
             const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..2];
+            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..2];
             const value_as_u64: u64 = @bitCast(value_as_u32s.*);
             const value: f64 = @bitCast(value_as_u64);
 
@@ -390,7 +391,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         .expr_frac_dec => {
             // Get value from extra_data
             const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
+            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return ModuleEnv.Expr{
@@ -456,7 +457,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         .expr_lambda => {
             // Retrieve lambda data from extra_data
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
+            const extra_data = store.extra_data.items.items[extra_start..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -488,7 +489,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         },
         .expr_record => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
+            const extra_data = store.extra_data.items.items[extra_start..];
 
             const fields_start = extra_data[0];
             const fields_len = extra_data[1];
@@ -505,7 +506,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         },
         .expr_match => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
+            const extra_data = store.extra_data.items.items[extra_start..];
 
             const cond = @as(ModuleEnv.Expr.Idx, @enumFromInt(extra_data[0]));
             const branches_start = extra_data[1];
@@ -522,7 +523,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         },
         .expr_zero_argument_tag => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
+            const extra_data = store.extra_data.items.items[extra_start..];
 
             const closure_name = @as(Ident.Idx, @bitCast(extra_data[0]));
             const variant_var = @as(types.Var, @enumFromInt(extra_data[1]));
@@ -573,7 +574,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         },
         .expr_if_then_else => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
+            const extra_data = store.extra_data.items.items[extra_start..];
 
             const branches_span_start: u32 = extra_data[0];
             const branches_span_end: u32 = extra_data[1];
@@ -644,7 +645,7 @@ pub fn getMatchBranch(store: *const NodeStore, branch: ModuleEnv.Expr.Match.Bran
 
     // Retrieve when branch data from extra_data
     const extra_start = node.data_1;
-    const extra_data = store.extra_data.items[extra_start..];
+    const extra_data = store.extra_data.items.items[extra_start..];
 
     const patterns: ModuleEnv.Expr.Match.BranchPattern.Span = .{ .span = .{ .start = extra_data[0], .len = extra_data[1] } };
     const value_idx: ModuleEnv.Expr.Idx = @enumFromInt(extra_data[2]);
@@ -674,7 +675,7 @@ pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: ModuleEnv.Expr
 
 /// Returns a slice of match branches from the given span.
 pub fn matchBranchSlice(store: *const NodeStore, span: ModuleEnv.Expr.Match.Branch.Span) []ModuleEnv.Expr.Match.Branch.Idx {
-    const slice = store.extra_data.items[span.span.start..(span.span.start + span.span.len)];
+    const slice = store.extra_data.items.items[span.span.start..(span.span.start + span.span.len)];
     const result: []ModuleEnv.Expr.Match.Branch.Idx = @ptrCast(@alignCast(slice));
     return result;
 }
@@ -688,7 +689,7 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: ModuleEnv.WhereClaus
 
     // Retrieve where clause data from extra_data
     const extra_start = node.data_1;
-    const extra_data = store.extra_data.items[extra_start..];
+    const extra_data = store.extra_data.items.items[extra_start..];
 
     const discriminant = extra_data[0];
 
@@ -779,7 +780,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
         },
         .pattern_record_destructure => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
+            const extra_data = store.extra_data.items.items[extra_start..];
 
             const destructs_start = extra_data[0];
             const destructs_len = extra_data[1];
@@ -796,7 +797,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
         },
         .pattern_list => {
             const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
+            const extra_data = store.extra_data.items.items[extra_start..];
 
             const patterns_start = extra_data[0];
             const patterns_len = extra_data[1];
@@ -834,7 +835,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
         },
         .pattern_num_literal => {
             const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
+            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return ModuleEnv.Pattern{
@@ -845,7 +846,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
         },
         .pattern_int_literal => {
             const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
+            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return ModuleEnv.Pattern{
@@ -856,7 +857,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
         },
         .pattern_dec_literal => {
             const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
+            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return ModuleEnv.Pattern{
@@ -1072,27 +1073,27 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
             node.data_1 = @bitCast(s.module_name_tok);
 
             // Store optional fields in extra_data
-            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+            const extra_start = store.extra_data.len();
 
             // Store alias_tok (nullable)
             const alias_data = if (s.alias_tok) |alias| @as(u32, @bitCast(alias)) else 0;
-            try store.extra_data.append(store.gpa, alias_data);
+            _ = try store.extra_data.append(store.gpa, alias_data);
 
             // Store qualifier_tok (nullable)
             const qualifier_data = if (s.qualifier_tok) |qualifier| @as(u32, @bitCast(qualifier)) else 0;
-            try store.extra_data.append(store.gpa, qualifier_data);
+            _ = try store.extra_data.append(store.gpa, qualifier_data);
 
             // Store flags indicating which fields are present
             var flags: u32 = 0;
             if (s.alias_tok != null) flags |= 1;
             if (s.qualifier_tok != null) flags |= 2;
-            try store.extra_data.append(store.gpa, flags);
+            _ = try store.extra_data.append(store.gpa, flags);
 
             // Store extra_start in one of the remaining data fields
             // We need to reorganize data storage since all 3 data fields are used
             // Let's put extra_start where exposes span is, and move span to extra_data
-            try store.extra_data.append(store.gpa, s.exposes.span.start);
-            try store.extra_data.append(store.gpa, s.exposes.span.len);
+            _ = try store.extra_data.append(store.gpa, s.exposes.span.start);
+            _ = try store.extra_data.append(store.gpa, s.exposes.span.len);
 
             node.data_2 = extra_start; // Point to extra_data
             node.data_3 = 0; // SPARE
@@ -1102,22 +1103,22 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
             node.tag = .statement_alias_decl;
 
             // Store type_decl data in extra_data
-            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+            const extra_start = store.extra_data.len();
 
             // Store anno idx
-            try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
             // Store anno var
-            try store.extra_data.append(store.gpa, @intFromEnum(s.anno_var));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno_var));
             // Store header idx
-            try store.extra_data.append(store.gpa, @intFromEnum(s.header));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.header));
             // Store where clause information
             if (s.where) |where_clause| {
                 // Store where clause span start and len
-                try store.extra_data.append(store.gpa, @intFromBool(true));
-                try store.extra_data.append(store.gpa, where_clause.span.start);
-                try store.extra_data.append(store.gpa, where_clause.span.len);
+                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
+                _ = try store.extra_data.append(store.gpa, where_clause.span.start);
+                _ = try store.extra_data.append(store.gpa, where_clause.span.len);
             } else {
-                try store.extra_data.append(store.gpa, @intFromBool(false));
+                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
             }
 
             // Store the extra data start position in the node
@@ -1127,22 +1128,22 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
             node.tag = .statement_nominal_decl;
 
             // Store type_decl data in extra_data
-            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+            const extra_start = store.extra_data.len();
 
             // Store anno idx
-            try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
             // Store anno var
-            try store.extra_data.append(store.gpa, @intFromEnum(s.anno_var));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno_var));
             // Store header idx
-            try store.extra_data.append(store.gpa, @intFromEnum(s.header));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.header));
             // Store where clause information
             if (s.where) |where_clause| {
                 // Store where clause span start and len
-                try store.extra_data.append(store.gpa, @intFromBool(true));
-                try store.extra_data.append(store.gpa, where_clause.span.start);
-                try store.extra_data.append(store.gpa, where_clause.span.len);
+                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
+                _ = try store.extra_data.append(store.gpa, where_clause.span.start);
+                _ = try store.extra_data.append(store.gpa, where_clause.span.len);
             } else {
-                try store.extra_data.append(store.gpa, @intFromBool(false));
+                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
             }
 
             // Store the extra data start position in the node
@@ -1152,22 +1153,22 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
             node.tag = .statement_type_anno;
 
             // Store type_anno data in extra_data
-            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+            const extra_start = store.extra_data.len();
 
             // Store anno idx
-            try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
             // Store name
-            try store.extra_data.append(store.gpa, @bitCast(s.name));
+            _ = try store.extra_data.append(store.gpa, @bitCast(s.name));
             // Store where clause information
             if (s.where) |where_clause| {
                 // Store flag indicating where clause is present
-                try store.extra_data.append(store.gpa, 1);
+                _ = try store.extra_data.append(store.gpa, 1);
                 // Store where clause span start and len
-                try store.extra_data.append(store.gpa, where_clause.span.start);
-                try store.extra_data.append(store.gpa, where_clause.span.len);
+                _ = try store.extra_data.append(store.gpa, where_clause.span.start);
+                _ = try store.extra_data.append(store.gpa, where_clause.span.len);
             } else {
                 // Store flag indicating where clause is not present
-                try store.extra_data.append(store.gpa, 0);
+                _ = try store.extra_data.append(store.gpa, 0);
             }
 
             // Store the extra data start position in the node
@@ -1207,14 +1208,14 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             node.tag = .expr_int;
 
             // Store i128 value in extra_data
-            const extra_data_start = store.extra_data.items.len;
+            const extra_data_start = store.extra_data.len();
 
             // Store the IntLiteralValue as i128 (16 bytes = 4 u32s)
             // We always store as i128 internally
             const value_as_i128: i128 = @bitCast(e.value.bytes);
             const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
             for (value_as_u32s) |word| {
-                try store.extra_data.append(store.gpa, word);
+                _ = try store.extra_data.append(store.gpa, word);
             }
 
             // Store the extra_data index in data_1
@@ -1238,11 +1239,11 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             node.tag = .expr_frac_f64;
 
             // Store the f64 value in extra_data
-            const extra_data_start = store.extra_data.items.len;
+            const extra_data_start = store.extra_data.len();
             const value_as_u64: u64 = @bitCast(e.value);
             const value_as_u32s: [2]u32 = @bitCast(value_as_u64);
             for (value_as_u32s) |word| {
-                try store.extra_data.append(store.gpa, word);
+                _ = try store.extra_data.append(store.gpa, word);
             }
 
             // Store the extra_data index in data_1
@@ -1252,11 +1253,11 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             node.tag = .expr_frac_dec;
 
             // Store the RocDec value in extra_data
-            const extra_data_start = store.extra_data.items.len;
+            const extra_data_start = store.extra_data.len();
             const value_as_i128: i128 = e.value.num;
             const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
             for (value_as_u32s) |word| {
-                try store.extra_data.append(store.gpa, word);
+                _ = try store.extra_data.append(store.gpa, word);
             }
 
             // Store the extra_data index in data_1
@@ -1324,11 +1325,11 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             node.tag = .expr_match;
 
             // Store when data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, @intFromEnum(e.cond));
-            try store.extra_data.append(store.gpa, e.branches.span.start);
-            try store.extra_data.append(store.gpa, e.branches.span.len);
-            try store.extra_data.append(store.gpa, @intFromEnum(e.exhaustive));
+            const extra_data_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.cond));
+            _ = try store.extra_data.append(store.gpa, e.branches.span.start);
+            _ = try store.extra_data.append(store.gpa, e.branches.span.len);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.exhaustive));
             node.data_1 = extra_data_start;
         },
         .e_if => |e| {
@@ -1336,28 +1337,28 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             // 1. Branches span start
             // 2. Branches span end
             // 3. Final else expr idx
-            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+            const extra_start = store.extra_data.len();
             const num_extra_items = 3;
-            try store.extra_data.append(store.gpa, e.branches.span.start);
-            try store.extra_data.append(store.gpa, e.branches.span.len);
-            try store.extra_data.append(store.gpa, @intFromEnum(e.final_else));
+            _ = try store.extra_data.append(store.gpa, e.branches.span.start);
+            _ = try store.extra_data.append(store.gpa, e.branches.span.len);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.final_else));
 
             node.tag = .expr_if_then_else;
             node.data_1 = extra_start;
             node.data_2 = extra_start + num_extra_items;
 
-            std.debug.assert(node.data_2 == store.extra_data.items.len);
+            std.debug.assert(node.data_2 == store.extra_data.len());
         },
         .e_call => |e| {
             node.tag = .expr_call;
 
             // Store call data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            const extra_data_start = store.extra_data.len();
 
             // Store args span start
-            try store.extra_data.append(store.gpa, e.args.span.start);
+            _ = try store.extra_data.append(store.gpa, e.args.span.start);
             // Store args span length
-            try store.extra_data.append(store.gpa, e.args.span.len);
+            _ = try store.extra_data.append(store.gpa, e.args.span.len);
 
             node.data_1 = extra_data_start;
             node.data_2 = @intFromEnum(e.called_via);
@@ -1365,15 +1366,15 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
         .e_record => |e| {
             node.tag = .expr_record;
 
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            const extra_data_start = store.extra_data.len();
 
             // Store fields span start
-            try store.extra_data.append(store.gpa, e.fields.span.start);
+            _ = try store.extra_data.append(store.gpa, e.fields.span.start);
             // Store fields span length
-            try store.extra_data.append(store.gpa, e.fields.span.len);
+            _ = try store.extra_data.append(store.gpa, e.fields.span.len);
             // Store extension (0 if null)
             const ext_value = if (e.ext) |ext| @intFromEnum(ext) else 0;
-            try store.extra_data.append(store.gpa, ext_value);
+            _ = try store.extra_data.append(store.gpa, ext_value);
 
             node.data_1 = extra_data_start;
             node.data_2 = 0; // Unused
@@ -1385,29 +1386,29 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             node.tag = .expr_zero_argument_tag;
 
             // Store zero argument tag data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, @bitCast(e.closure_name));
-            try store.extra_data.append(store.gpa, @intFromEnum(e.variant_var));
-            try store.extra_data.append(store.gpa, @intFromEnum(e.ext_var));
-            try store.extra_data.append(store.gpa, @bitCast(e.name));
+            const extra_data_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, @bitCast(e.closure_name));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.variant_var));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.ext_var));
+            _ = try store.extra_data.append(store.gpa, @bitCast(e.name));
             node.data_1 = extra_data_start;
         },
         .e_lambda => |e| {
             node.tag = .expr_lambda;
 
             // Store lambda data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            const extra_data_start = store.extra_data.len();
 
             // Store args span start
-            try store.extra_data.append(store.gpa, e.args.span.start);
+            _ = try store.extra_data.append(store.gpa, e.args.span.start);
             // Store args span length
-            try store.extra_data.append(store.gpa, e.args.span.len);
+            _ = try store.extra_data.append(store.gpa, e.args.span.len);
             // Store body index
-            try store.extra_data.append(store.gpa, @intFromEnum(e.body));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.body));
             // Store captures span start
-            try store.extra_data.append(store.gpa, e.captures.span.start);
+            _ = try store.extra_data.append(store.gpa, e.captures.span.start);
             // Store captures span length
-            try store.extra_data.append(store.gpa, e.captures.span.len);
+            _ = try store.extra_data.append(store.gpa, e.captures.span.len);
 
             node.data_1 = extra_data_start;
         },
@@ -1472,19 +1473,23 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: ModuleEnv.Pattern.R
         .tag = .record_destruct,
     };
 
-    // Store kind in extra_data if it's not Required
+    // Store kind in extra_data
     switch (record_destruct.kind) {
-        .Required => {
-            // No extra data needed
+        .Required => |pattern_idx| {
+            const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
+            // Store kind tag (0 for Required)
+            _ = try store.extra_data.append(store.gpa, 0);
+            // Store pattern index
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
+            node.data_3 = extra_data_start;
         },
-
         .SubPattern => |sub_pattern| {
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            const extra_data_start = store.extra_data.len();
 
             // Store kind tag (1 for SubPattern)
-            try store.extra_data.append(store.gpa, 1);
+            _ = try store.extra_data.append(store.gpa, 1);
             // Store sub-pattern index
-            try store.extra_data.append(store.gpa, @intFromEnum(sub_pattern));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(sub_pattern));
 
             node.data_3 = extra_data_start;
         },
@@ -1525,13 +1530,13 @@ pub fn addMatchBranch(store: *NodeStore, branch: ModuleEnv.Expr.Match.Branch, re
     };
 
     // Store when branch data in extra_data
-    const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-    try store.extra_data.append(store.gpa, branch.patterns.span.start);
-    try store.extra_data.append(store.gpa, branch.patterns.span.len);
-    try store.extra_data.append(store.gpa, @intFromEnum(branch.value));
+    const extra_data_start = store.extra_data.len();
+    _ = try store.extra_data.append(store.gpa, branch.patterns.span.start);
+    _ = try store.extra_data.append(store.gpa, branch.patterns.span.len);
+    _ = try store.extra_data.append(store.gpa, @intFromEnum(branch.value));
     const guard_idx = if (branch.guard) |g| @intFromEnum(g) else 0;
-    try store.extra_data.append(store.gpa, guard_idx);
-    try store.extra_data.append(store.gpa, @intFromEnum(branch.redundant));
+    _ = try store.extra_data.append(store.gpa, guard_idx);
+    _ = try store.extra_data.append(store.gpa, @intFromEnum(branch.redundant));
     node.data_1 = extra_data_start;
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -1568,30 +1573,30 @@ pub fn addWhereClause(store: *NodeStore, whereClause: ModuleEnv.WhereClause, reg
     };
 
     // Store where clause data in extra_data
-    const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+    const extra_data_start = store.extra_data.len();
 
     switch (whereClause) {
         .mod_method => |mod_method| {
             // Store discriminant (0 for mod_method)
-            try store.extra_data.append(store.gpa, 0);
-            try store.extra_data.append(store.gpa, @bitCast(mod_method.var_name));
-            try store.extra_data.append(store.gpa, @bitCast(mod_method.method_name));
-            try store.extra_data.append(store.gpa, mod_method.args.span.start);
-            try store.extra_data.append(store.gpa, mod_method.args.span.len);
-            try store.extra_data.append(store.gpa, @intFromEnum(mod_method.ret_anno));
-            try store.extra_data.append(store.gpa, @intFromEnum(mod_method.external_decl));
+            _ = try store.extra_data.append(store.gpa, 0);
+            _ = try store.extra_data.append(store.gpa, @bitCast(mod_method.var_name));
+            _ = try store.extra_data.append(store.gpa, @bitCast(mod_method.method_name));
+            _ = try store.extra_data.append(store.gpa, mod_method.args.span.start);
+            _ = try store.extra_data.append(store.gpa, mod_method.args.span.len);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(mod_method.ret_anno));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(mod_method.external_decl));
         },
         .mod_alias => |mod_alias| {
             // Store discriminant (1 for mod_alias)
-            try store.extra_data.append(store.gpa, 1);
-            try store.extra_data.append(store.gpa, @bitCast(mod_alias.var_name));
-            try store.extra_data.append(store.gpa, @bitCast(mod_alias.alias_name));
-            try store.extra_data.append(store.gpa, @intFromEnum(mod_alias.external_decl));
+            _ = try store.extra_data.append(store.gpa, 1);
+            _ = try store.extra_data.append(store.gpa, @bitCast(mod_alias.var_name));
+            _ = try store.extra_data.append(store.gpa, @bitCast(mod_alias.alias_name));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(mod_alias.external_decl));
         },
         .malformed => |malformed| {
             // Store discriminant (2 for malformed)
-            try store.extra_data.append(store.gpa, 2);
-            try store.extra_data.append(store.gpa, @intFromEnum(malformed.diagnostic));
+            _ = try store.extra_data.append(store.gpa, 2);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(malformed.diagnostic));
         },
     }
 
@@ -1640,35 +1645,35 @@ pub fn addPattern(store: *NodeStore, pattern: ModuleEnv.Pattern, region: base.Re
             node.tag = .pattern_record_destructure;
 
             // Store record destructure data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, p.destructs.span.start);
-            try store.extra_data.append(store.gpa, p.destructs.span.len);
-            try store.extra_data.append(store.gpa, @intFromEnum(p.ext_var));
-            try store.extra_data.append(store.gpa, @intFromEnum(p.whole_var));
+            const extra_data_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, p.destructs.span.start);
+            _ = try store.extra_data.append(store.gpa, p.destructs.span.len);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(p.ext_var));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(p.whole_var));
             node.data_1 = extra_data_start;
         },
         .list => |p| {
             node.tag = .pattern_list;
 
             // Store list pattern data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, p.patterns.span.start);
-            try store.extra_data.append(store.gpa, p.patterns.span.len);
-            try store.extra_data.append(store.gpa, @intFromEnum(p.elem_var));
-            try store.extra_data.append(store.gpa, @intFromEnum(p.list_var));
+            const extra_data_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, p.patterns.span.start);
+            _ = try store.extra_data.append(store.gpa, p.patterns.span.len);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(p.elem_var));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(p.list_var));
 
             // Store rest_info
             if (p.rest_info) |rest| {
-                try store.extra_data.append(store.gpa, 1); // has rest_info
-                try store.extra_data.append(store.gpa, rest.index);
+                _ = try store.extra_data.append(store.gpa, 1); // has rest_info
+                _ = try store.extra_data.append(store.gpa, rest.index);
                 if (rest.pattern) |pattern_idx| {
-                    try store.extra_data.append(store.gpa, 1); // has pattern
-                    try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
+                    _ = try store.extra_data.append(store.gpa, 1); // has pattern
+                    _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
                 } else {
-                    try store.extra_data.append(store.gpa, 0); // no pattern
+                    _ = try store.extra_data.append(store.gpa, 0); // no pattern
                 }
             } else {
-                try store.extra_data.append(store.gpa, 0); // no rest_info
+                _ = try store.extra_data.append(store.gpa, 0); // no rest_info
             }
 
             node.data_1 = extra_data_start;
@@ -1681,10 +1686,10 @@ pub fn addPattern(store: *NodeStore, pattern: ModuleEnv.Pattern, region: base.Re
         .int_literal => |p| {
             node.tag = .pattern_int_literal;
             // Store the value in extra_data
-            const extra_data_start = store.extra_data.items.len;
+            const extra_data_start = store.extra_data.len();
             const value_as_u32s: [4]u32 = @bitCast(p.value.bytes);
             for (value_as_u32s) |word| {
-                try store.extra_data.append(store.gpa, word);
+                _ = try store.extra_data.append(store.gpa, word);
             }
             node.data_1 = @intCast(extra_data_start);
         },
@@ -1699,10 +1704,10 @@ pub fn addPattern(store: *NodeStore, pattern: ModuleEnv.Pattern, region: base.Re
         .dec_literal => |p| {
             node.tag = .pattern_dec_literal;
             // Store the RocDec value in extra_data
-            const extra_data_start = store.extra_data.items.len;
+            const extra_data_start = store.extra_data.len();
             const value_as_u32s: [4]u32 = @bitCast(p.value.num);
             for (value_as_u32s) |word| {
-                try store.extra_data.append(store.gpa, word);
+                _ = try store.extra_data.append(store.gpa, word);
             }
             node.data_1 = @intCast(extra_data_start);
         },
@@ -1885,19 +1890,19 @@ pub fn addDef(store: *NodeStore, def: ModuleEnv.Def, region: base.Region) std.me
     };
 
     // Store def data in extra_data
-    const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+    const extra_start = store.extra_data.len();
 
     // Store pattern idx
-    try store.extra_data.append(store.gpa, @intFromEnum(def.pattern));
+    _ = try store.extra_data.append(store.gpa, @intFromEnum(def.pattern));
     // Store expr idx
-    try store.extra_data.append(store.gpa, @intFromEnum(def.expr));
+    _ = try store.extra_data.append(store.gpa, @intFromEnum(def.expr));
     // Store kind tag as two u32's
     const kind_encoded = def.kind.encode();
-    try store.extra_data.append(store.gpa, kind_encoded[0]);
-    try store.extra_data.append(store.gpa, kind_encoded[1]);
+    _ = try store.extra_data.append(store.gpa, kind_encoded[0]);
+    _ = try store.extra_data.append(store.gpa, kind_encoded[1]);
     // Store annotation idx (0 if null)
     const anno_idx = if (def.annotation) |anno| @intFromEnum(anno) else 0;
-    try store.extra_data.append(store.gpa, anno_idx);
+    _ = try store.extra_data.append(store.gpa, anno_idx);
 
     // Store the extra data range in the node
     node.data_1 = extra_start;
@@ -1916,7 +1921,7 @@ pub fn getDef(store: *const NodeStore, def_idx: ModuleEnv.Def.Idx) ModuleEnv.Def
     std.debug.assert(node.tag == .def);
 
     const extra_start = node.data_1;
-    const extra_data = store.extra_data.items[extra_start..];
+    const extra_data = store.extra_data.items.items[extra_start..];
 
     const pattern: ModuleEnv.Pattern.Idx = @enumFromInt(extra_data[0]);
     const expr: ModuleEnv.Expr.Idx = @enumFromInt(extra_data[1]);
@@ -1964,15 +1969,19 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
     // Retrieve kind from extra_data if it exists
     const kind = if (node.data_3 != 0) blk: {
         const extra_start = node.data_3;
-        const extra_data = store.extra_data.items[extra_start..];
+        const extra_data = store.extra_data.items.items[extra_start..];
         const kind_tag = extra_data[0];
 
         break :blk switch (kind_tag) {
-            0 => ModuleEnv.Pattern.RecordDestruct.Kind.Required,
+            0 => ModuleEnv.Pattern.RecordDestruct.Kind{ .Required = @enumFromInt(extra_data[1]) },
             1 => ModuleEnv.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
             else => unreachable,
         };
-    } else ModuleEnv.Pattern.RecordDestruct.Kind.Required;
+    } else blk: {
+        // Backwards compatibility for old format where Required had no payload
+        const dummy_pattern_idx: ModuleEnv.Pattern.Idx = @enumFromInt(0);
+        break :blk ModuleEnv.Pattern.RecordDestruct.Kind{ .Required = dummy_pattern_idx };
+    };
 
     return ModuleEnv.Pattern.RecordDestruct{
         .label = @bitCast(node.data_1),
@@ -2015,10 +2024,10 @@ pub fn spanFrom(store: *NodeStore, comptime field_name: []const u8, comptime Spa
     const end = scratch_field.top();
     defer scratch_field.clearFrom(start);
     var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    const ed_start = store.extra_data.len();
     std.debug.assert(end >= i);
     while (i < end) {
-        try store.extra_data.append(store.gpa, @intFromEnum(scratch_field.items.items[i]));
+        _ = try store.extra_data.append(store.gpa, @intFromEnum(scratch_field.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2212,7 +2221,7 @@ pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
 
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
-    return @ptrCast(store.extra_data.items[span.start..][0..span.len]);
+    return @ptrCast(store.extra_data.items.items[span.start..][0..span.len]);
 }
 
 /// Returns a slice of definitions from the store.
@@ -2396,9 +2405,9 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
             node.data_1 = @bitCast(r.ident);
 
             // Store original region in extra_data
-            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, r.original_region.start.offset);
-            try store.extra_data.append(store.gpa, r.original_region.end.offset);
+            const extra_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, r.original_region.start.offset);
+            _ = try store.extra_data.append(store.gpa, r.original_region.end.offset);
             node.data_2 = extra_start;
         },
         .ident_not_in_scope => |r| {
@@ -2540,7 +2549,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
             region = r.region;
             node.data_1 = @bitCast(r.name);
             node.data_2 = @bitCast(r.parameter_name);
-            node.data_3 = r.original_region.start.offset;
+            const extra_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, r.original_region.start.offset);
+            _ = try store.extra_data.append(store.gpa, r.original_region.end.offset);
+            node.data_3 = extra_start;
         },
         .unused_variable => |r| {
             node.tag = .diag_unused_variable;
@@ -2660,7 +2672,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             .region = store.getRegionAt(node_idx),
         } },
         .diag_redundant_exposed => {
-            const extra_data = store.extra_data.items[node.data_2..];
+            const extra_data = store.extra_data.items.items[node.data_2..];
             const original_start = extra_data[0];
             const original_end = extra_data[1];
             return ModuleEnv.Diagnostic{ .redundant_exposed = .{
@@ -2778,7 +2790,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = @intCast(node.data_2) },
-                .end = .{ .offset = @intCast(node.data_3 & 0x7FFFFFFF) },
+                .end = .{ .offset = @intCast(node.data_3) },
             },
         } },
         .diag_type_shadowed_warning => return ModuleEnv.Diagnostic{ .type_shadowed_warning = .{
@@ -2790,15 +2802,20 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             },
             .cross_scope = (node.data_3 & 0x80000000) != 0,
         } },
-        .diag_type_parameter_conflict => return ModuleEnv.Diagnostic{ .type_parameter_conflict = .{
-            .name = @bitCast(node.data_1),
-            .parameter_name = @bitCast(node.data_2),
-            .region = store.getRegionAt(node_idx),
-            .original_region = .{
-                .start = .{ .offset = @intCast(node.data_3) },
-                .end = .{ .offset = @intCast(node.data_3) },
-            },
-        } },
+        .diag_type_parameter_conflict => {
+            const extra_data = store.extra_data.items.items[node.data_3..];
+            const original_start = extra_data[0];
+            const original_end = extra_data[1];
+            return ModuleEnv.Diagnostic{ .type_parameter_conflict = .{
+                .name = @bitCast(node.data_1),
+                .parameter_name = @bitCast(node.data_2),
+                .region = store.getRegionAt(node_idx),
+                .original_region = .{
+                    .start = .{ .offset = original_start },
+                    .end = .{ .offset = original_end },
+                },
+            } };
+        },
         .diag_unused_variable => return ModuleEnv.Diagnostic{ .unused_variable = .{
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
@@ -2928,8 +2945,7 @@ pub fn serializedSize(self: *const NodeStore) usize {
     // We only serialize nodes, regions, and extra_data (the scratch arrays are transient)
     const raw_size = self.nodes.serializedSize() +
         self.regions.serializedSize() +
-        @sizeOf(u32) + // extra_data length
-        (self.extra_data.items.len * @sizeOf(u32));
+        self.extra_data.serializedSize();
     // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
     return std.mem.alignForward(usize, raw_size, SERIALIZATION_ALIGNMENT);
 }
@@ -2950,17 +2966,9 @@ pub fn serializeInto(self: *const NodeStore, buffer: []align(SERIALIZATION_ALIGN
     const regions_slice = try self.regions.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
     offset += regions_slice.len;
 
-    // Serialize extra_data length
-    const extra_len_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset)));
-    extra_len_ptr.* = @intCast(self.extra_data.items.len);
-    offset += @sizeOf(u32);
-
     // Serialize extra_data items
-    if (self.extra_data.items.len > 0) {
-        const extra_ptr = @as([*]u32, @ptrCast(@alignCast(buffer.ptr + offset)));
-        @memcpy(extra_ptr, self.extra_data.items);
-        offset += self.extra_data.items.len * @sizeOf(u32);
-    }
+    const extra_data_slice = try self.extra_data.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
+    offset += extra_data_slice.len;
 
     // Zero out any padding bytes
     if (offset < size) {
@@ -2984,28 +2992,17 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
     const regions = try Region.List.deserializeFrom(regions_buffer, allocator);
     offset += regions.serializedSize();
 
-    // Deserialize extra_data length
-    if (buffer.len < offset + @sizeOf(u32)) return error.BufferTooSmall;
-    const extra_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-    offset += @sizeOf(u32);
-
     // Deserialize extra_data items
-    var extra_data = try std.ArrayListUnmanaged(u32).initCapacity(allocator, extra_len);
-    if (extra_len > 0) {
-        const remaining = buffer.len - offset;
-        const expected = extra_len * @sizeOf(u32);
-        if (remaining < expected) return error.BufferTooSmall;
-
-        const extra_ptr = @as([*]const u32, @ptrCast(@alignCast(buffer.ptr + offset)));
-        extra_data.appendSliceAssumeCapacity(extra_ptr[0..extra_len]);
-    }
+    const extra_data_buffer = @as([]align(@alignOf(u32)) const u8, @alignCast(buffer[offset..]));
+    const extra_data = try SafeList(u32).deserializeFrom(extra_data_buffer, allocator);
+    offset += extra_data.serializedSize();
 
     // Create NodeStore with empty scratch arrays
     return NodeStore{
         .gpa = allocator,
         .nodes = nodes,
         .regions = regions,
-        .extra_data = extra_data,
+        .extra_data = extra_data, // This is now a SafeList
         // All scratch arrays start empty
         .scratch_statements = base.Scratch(ModuleEnv.Statement.Idx){ .items = .{} },
         .scratch_exprs = base.Scratch(ModuleEnv.Expr.Idx){ .items = .{} },

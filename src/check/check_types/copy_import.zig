@@ -28,21 +28,7 @@ const VarMapping = std.AutoHashMap(Var, Var);
 
 /// Copy a type from one module's type store to another module's type store.
 /// This creates a completely fresh copy with new variable indices in the destination store.
-pub fn copyImportedType(
-    source_store: *const TypesStore,
-    dest_store: *TypesStore,
-    source_var: Var,
-    source_idents: *const base.Ident.Store,
-    dest_idents: *base.Ident.Store,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!Var {
-    var var_mapping = VarMapping.init(allocator);
-    defer var_mapping.deinit();
-
-    return copyVar(source_store, dest_store, source_var, &var_mapping, source_idents, dest_idents, allocator);
-}
-
-fn copyVar(
+pub fn copyVar(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     source_var: Var,
@@ -248,8 +234,10 @@ fn copyRecordFields(
     defer fresh_fields.deinit();
 
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
+        const name_str = source_idents.getText(name);
+        const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_str));
         _ = try fresh_fields.append(.{
-            .name = name, // Field names are local to the record type
+            .name = translated_name, // Field names are local to the record type
             .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
     }
@@ -266,19 +254,16 @@ fn copyRecord(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Record {
-    const fields_slice = source_store.getRecordFieldsSlice(record.fields);
+    const fields_range = try copyRecordFields(
+        source_store,
+        dest_store,
+        record.fields,
+        var_mapping,
+        source_idents,
+        dest_idents,
+        allocator,
+    );
 
-    var fresh_fields = std.ArrayList(RecordField).init(allocator);
-    defer fresh_fields.deinit();
-
-    for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
-        _ = try fresh_fields.append(RecordField{
-            .name = name, // Field names are local to the record type
-            .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
-        });
-    }
-
-    const fields_range = try dest_store.appendRecordFields(fresh_fields.items);
     return Record{
         .fields = fields_range,
         .ext = try copyVar(source_store, dest_store, record.ext, var_mapping, source_idents, dest_idents, allocator),
@@ -312,8 +297,11 @@ fn copyTagUnion(
 
         const dest_args_range = try dest_store.appendVars(dest_args.items);
 
+        const name_str = source_idents.getText(name);
+        const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_str));
+
         _ = try fresh_tags.append(.{
-            .name = name, // Tag names are local to the union type
+            .name = translated_name, // Tag names are local to the union type
             .args = dest_args_range,
         });
     }

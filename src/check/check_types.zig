@@ -72,7 +72,7 @@ snapshots: snapshot.Store,
 problems: problem.Store,
 unify_scratch: unifier.Scratch,
 occurs_scratch: occurs.Scratch,
-instantiate_subs: instantiate.VarSubstitution,
+var_map: instantiate.VarSubstitution,
 /// Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
@@ -96,7 +96,7 @@ pub fn init(
         .problems = try problem.Store.initCapacity(gpa, 64),
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
-        .instantiate_subs = instantiate.VarSubstitution.init(gpa),
+        .var_map = instantiate.VarSubstitution.init(gpa),
         .import_cache = ImportCache{},
     };
 }
@@ -107,7 +107,7 @@ pub fn deinit(self: *Self) void {
     self.snapshots.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
-    self.instantiate_subs.deinit();
+    self.var_map.deinit();
     self.import_cache.deinit(self.gpa);
 }
 
@@ -154,19 +154,19 @@ const InstantiateRegionBehavior = union(enum) {
 
 /// Instantiate a variable, writing su
 fn instantiateVar(self: *Self, var_to_instantiate: Var, region_behavior: InstantiateRegionBehavior) std.mem.Allocator.Error!Var {
-    self.instantiate_subs.clearRetainingCapacity();
+    self.var_map.clearRetainingCapacity();
     const instantiated_var = try instantiate.instantiateVar(
         self.types,
         var_to_instantiate,
-        &self.instantiate_subs,
+        &self.var_map,
     );
 
     const root_instantiated_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
 
     // If we had to insert any new type variables, ensure that we have
     // corresponding regions for them. This is essential for error reporting.
-    if (self.instantiate_subs.count() > 0) {
-        var iterator = self.instantiate_subs.iterator();
+    if (self.var_map.count() > 0) {
+        var iterator = self.var_map.iterator();
         while (iterator.next()) |x| {
             // Get the newly created var
             const fresh_var = x.value_ptr.*;
@@ -192,6 +192,44 @@ fn instantiateVar(self: *Self, var_to_instantiate: Var, region_behavior: Instant
     self.debugAssertArraysInSync();
 
     return instantiated_var;
+}
+
+// copy from import //
+
+/// Instantiate a variable, writing su
+fn copyVar(
+    self: *Self,
+    other_module_var: Var,
+    other_module_env: *const ModuleEnv,
+) std.mem.Allocator.Error!Var {
+    self.var_map.clearRetainingCapacity();
+    const copied_var = try copy_import.copyVar(
+        &other_module_env.*.types,
+        self.types,
+        other_module_var,
+        &self.var_map,
+        &other_module_env.*.idents,
+        @constCast(&self.cir.idents),
+        self.gpa,
+    );
+
+    // If we had to insert any new type variables, ensure that we have
+    // corresponding regions for them. This is essential for error reporting.
+    if (self.var_map.count() > 0) {
+        var iterator = self.var_map.iterator();
+        while (iterator.next()) |x| {
+            // Get the newly created var
+            const fresh_var = x.value_ptr.*;
+            try self.fillInRegionsThrough(fresh_var);
+
+            self.setRegionAt(fresh_var, base.Region.zero());
+        }
+    }
+
+    // Assert that we have regions for every type variable
+    self.debugAssertArraysInSync();
+
+    return copied_var;
 }
 
 // regions //
@@ -432,28 +470,18 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
 
                 const copied_var = if (self.import_cache.get(cache_key)) |cached_var|
                     // Reuse the previously copied type.
-                    // This is safe because imported types are never modified (preserve mode)
                     cached_var
                 else blk: {
                     // First time importing this type - copy it and cache the result
                     const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
-                    const new_copy = try copy_import.copyImportedType(
-                        &other_module_env.*.types,
-                        self.types,
-                        imported_var,
-                        &other_module_env.*.idents,
-                        @constCast(&self.cir.idents),
-                        self.gpa,
-                    );
+                    const new_copy = try self.copyVar(imported_var, other_module_env);
                     try self.import_cache.put(self.gpa, cache_key, new_copy);
                     break :blk new_copy;
                 };
+                const instantiated_copy = try self.instantiateVar(copied_var, .use_last_var);
 
                 // Unify our expression with the copied type
-                // Note: This unification uses "preserve" mode internally (via copy_import),
-                // which means the imported type (copied_var) is read-only. This is why
-                // we can safely cache and reuse copied_var for multiple imports.
-                const result = try self.unify(expr_var, copied_var);
+                const result = try self.unify(expr_var, instantiated_copy);
                 if (result.isProblem()) {
                     self.setProblemTypeMismatchDetail(result.problem, .{
                         .cross_module_import = .{
@@ -840,17 +868,11 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                                     else blk: {
                                         // Copy the method's type from the origin module to our type store
                                         const source_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
-                                        const new_copy = try copy_import.copyImportedType(
-                                            &module.types,
-                                            self.types,
-                                            source_var,
-                                            &module.idents,
-                                            @constCast(&self.cir.idents),
-                                            self.gpa,
-                                        );
+                                        const new_copy = try self.copyVar(source_var, module);
                                         try self.import_cache.put(self.gpa, cache_key, new_copy);
                                         break :blk new_copy;
                                     };
+                                    const method_instantiated = try self.instantiateVar(method_var, .use_last_var);
 
                                     // Check all arguments
                                     var i: u32 = 0;
@@ -880,7 +902,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                                     const expected_func_var = try self.freshFromContent(func_content, expr_region);
 
                                     // Unify with the imported method type
-                                    _ = try self.unify(expected_func_var, method_var);
+                                    _ = try self.unify(expected_func_var, method_instantiated);
 
                                     // Store the resolved method info for code generation
                                     // This will be used by the code generator to emit the correct function call

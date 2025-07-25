@@ -60,11 +60,14 @@ NO CHANGE
 			(p-record-destructure @1.2-1.20
 				(destructs
 					(record-destruct @1.4-1.8 (label "name") (ident "name")
-						(required))
+						(required
+							(p-assign @1.4-1.8 (ident "name"))))
 					(record-destruct @1.10-1.13 (label "age") (ident "age")
-						(required))
+						(required
+							(p-assign @1.10-1.13 (ident "age"))))
 					(record-destruct @1.15-1.18 (label "a") (ident "a")
-						(required))))))
+						(required
+							(p-assign @1.15-1.18 (ident "a"))))))))
 	(captures
 		(capture @1.4-1.8 (ident "name"))
 		(capture @1.2-1.23 (ident "person"))
@@ -83,11 +86,14 @@ NO CHANGE
 						(p-record-destructure @1.2-1.20
 							(destructs
 								(record-destruct @1.4-1.8 (label "name") (ident "name")
-									(required))
+									(required
+										(p-assign @1.4-1.8 (ident "name"))))
 								(record-destruct @1.10-1.13 (label "age") (ident "age")
-									(required))
+									(required
+										(p-assign @1.10-1.13 (ident "age"))))
 								(record-destruct @1.15-1.18 (label "a") (ident "a")
-									(required)))))))
+									(required
+										(p-assign @1.15-1.18 (ident "a")))))))))
 			(field (name "is_adult")
 				(e-binop @1.92-1.101 (op "ge")
 					(e-lookup-local @1.92-1.95

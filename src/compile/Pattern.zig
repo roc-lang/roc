@@ -218,7 +218,7 @@ pub const Pattern = union(enum) {
             /// ```roc
             /// { name, age } => ... # Both name and age are Required
             /// ```
-            Required,
+            Required: Pattern.Idx,
             /// Nested pattern for record field destructuring.
             /// ```roc
             /// { address: { city } } => ... # address field has a SubPattern
@@ -227,10 +227,12 @@ pub const Pattern = union(enum) {
 
             pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree) std.mem.Allocator.Error!void {
                 switch (self.*) {
-                    .Required => {
+                    .Required => |pattern_idx| {
                         const begin = tree.beginNode();
                         try tree.pushStaticAtom("required");
                         const attrs = tree.beginNode();
+                        const pattern = ir.store.getPattern(pattern_idx);
+                        try pattern.pushToSExprTree(ir, tree, pattern_idx);
                         try tree.endNode(begin, attrs);
                     },
                     .SubPattern => |pattern_idx| {

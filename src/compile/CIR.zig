@@ -302,76 +302,7 @@ pub const RocDec = builtins.RocDec;
     }
 
 // Diagnostic types for compilation errors
-pub const Diagnostic = union(enum) {
-    pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
-    
-    not_implemented: struct { feature: StringLiteral.Idx, region: Region },
-    exposed_but_not_implemented: struct { ident: Ident.Idx, region: Region },
-    redundant_exposed: struct { ident: Ident.Idx, region: Region, original_region: Region },
-    invalid_num_literal: struct { region: Region },
-    ident_already_in_scope: struct { ident: Ident.Idx, region: Region },
-    ident_not_in_scope: struct { ident: Ident.Idx, region: Region },
-    invalid_top_level_statement: struct { stmt: StringLiteral.Idx, region: Region },
-    f64_pattern_literal: struct { region: Region },
-    invalid_single_quote: struct { region: Region },
-    crash_expects_string: struct { region: Region },
-    empty_tuple: struct { region: Region },
-    expr_not_canonicalized: struct { region: Region },
-    invalid_string_interpolation: struct { region: Region },
-    pattern_arg_invalid: struct { region: Region },
-    pattern_not_canonicalized: struct { region: Region },
-    can_lambda_not_implemented: struct { region: Region },
-    lambda_body_not_canonicalized: struct { region: Region },
-    if_condition_not_canonicalized: struct { region: Region },
-    if_then_not_canonicalized: struct { region: Region },
-    if_else_not_canonicalized: struct { region: Region },
-    var_across_function_boundary: struct { region: Region },
-    malformed_type_annotation: struct { region: Region },
-    malformed_where_clause: struct { region: Region },
-    shadowing_warning: struct { ident: Ident.Idx, region: Region, original_region: Region },
-    type_redeclared: struct { name: Ident.Idx, original_region: Region, redeclared_region: Region },
-    tuple_elem_not_canonicalized: struct { region: Region },
-    module_not_found: struct { module_name: Ident.Idx, region: Region },
-    value_not_exposed: struct { module_name: Ident.Idx, value_name: Ident.Idx, region: Region },
-    type_not_exposed: struct { module_name: Ident.Idx, type_name: Ident.Idx, region: Region },
-    module_not_imported: struct { module_name: Ident.Idx, region: Region },
-    too_many_exports: struct { count: u32, region: Region },
-    undeclared_type: struct { name: Ident.Idx, region: Region },
-    undeclared_type_var: struct { name: Ident.Idx, region: Region },
-    type_alias_redeclared: struct { name: Ident.Idx, original_region: Region, redeclared_region: Region },
-    nominal_type_redeclared: struct { name: Ident.Idx, original_region: Region, redeclared_region: Region },
-    type_shadowed_warning: struct { name: Ident.Idx, region: Region, original_region: Region, cross_scope: bool },
-    type_parameter_conflict: struct { name: Ident.Idx, parameter_name: Ident.Idx, region: Region, original_region: Region },
-    unused_variable: struct { region: Region, ident: Ident.Idx },
-    used_underscore_variable: struct { region: Region, ident: Ident.Idx },
-    duplicate_record_field: struct { field_name: Ident.Idx, duplicate_region: Region, original_region: Region },
-    unused_type_var_name: struct { name: Ident.Idx, suggested_name: Ident.Idx, region: Region },
-    type_var_marked_unused: struct { name: Ident.Idx, suggested_name: Ident.Idx, region: Region },
-    type_var_ending_in_underscore: struct { name: Ident.Idx, suggested_name: Ident.Idx, region: Region },
-    underscore_in_type_declaration: struct { is_alias: bool, region: Region },
-    
-    pub fn buildInvalidNumLiteralReport(
-        allocator: std.mem.Allocator,
-        region_info: RegionInfo,
-        source: []const u8,
-        filename: []const u8,
-        _: []const u8,
-        line_starts: []const u32,
-    ) !Report {
-        var report = Report.init(allocator, "Invalid number literal", .runtime_error);
-        try report.addHeader("Invalid Number Literal");
-        
-        try report.document.addText("The number literal is invalid or too large to represent:");
-        try report.document.addLineBreak();
-        
-        // Add source context with location
-        const owned_filename = try report.addOwnedString(filename);
-        try report.addSourceContext(region_info, owned_filename, source, line_starts);
-        
-        return report;
-    }
-};
+pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
 // Import type definition
 pub const Import = struct {

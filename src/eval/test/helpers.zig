@@ -90,6 +90,128 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     try testing.expectEqual(expected_int, int_val);
 }
 
+/// A record field we expect to see in our unit test results
+pub const ExpectedField = struct {
+    name: []const u8,
+    value: i128,
+};
+
+/// A tuple element we expect to see in our unit test results
+pub const ExpectedElement = struct {
+    index: u32,
+    value: i128,
+};
+
+/// Helpers to setup and run an interpreter expecting a tuple result.
+pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElement, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+    defer eval_stack.deinit();
+
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
+
+    var interpreter = try eval.Interpreter.init(
+        test_allocator,
+        resources.module_env,
+        &eval_stack,
+        &layout_cache,
+        &resources.module_env.types,
+    );
+    defer interpreter.deinit();
+
+    if (should_trace == .trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
+    }
+
+    const result = try interpreter.eval(resources.expr_idx);
+
+    if (should_trace == .trace) {
+        interpreter.endTrace();
+    }
+
+    // Verify we got a tuple layout
+    try testing.expect(result.layout.tag == .tuple);
+
+    const tuple_data = layout_cache.getTupleData(result.layout.data.tuple.idx);
+    const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+
+    try testing.expectEqual(expected_elements.len, element_layouts.len);
+
+    for (expected_elements) |expected_element| {
+        const element_layout_info = element_layouts.get(expected_element.index);
+        const element_layout = layout_cache.getLayout(element_layout_info.layout);
+        try testing.expect(element_layout.tag == .scalar and element_layout.data.scalar.tag == .int);
+
+        const offset = layout_cache.getTupleElementOffset(result.layout.data.tuple.idx, @intCast(expected_element.index));
+        const element_ptr = @as([*]u8, @ptrCast(result.ptr.?)) + offset;
+        const int_val = eval.readIntFromMemory(element_ptr, element_layout.data.scalar.data.int);
+        try testing.expectEqual(expected_element.value, int_val);
+    }
+}
+
+/// Helpers to setup and run an interpreter expecting a record result.
+pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+    defer eval_stack.deinit();
+
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
+
+    var interpreter = try eval.Interpreter.init(
+        test_allocator,
+        resources.module_env,
+        &eval_stack,
+        &layout_cache,
+        &resources.module_env.types,
+    );
+    defer interpreter.deinit();
+
+    if (should_trace == .trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
+    }
+
+    const result = try interpreter.eval(resources.expr_idx);
+
+    if (should_trace == .trace) {
+        interpreter.endTrace();
+    }
+
+    // Verify we got a record layout
+    try testing.expect(result.layout.tag == .record);
+
+    const record_data = layout_cache.getRecordData(result.layout.data.record.idx);
+    const sorted_fields = layout_cache.record_fields.sliceRange(record_data.getFields());
+
+    try testing.expectEqual(expected_fields.len, sorted_fields.len);
+
+    for (expected_fields) |expected_field| {
+        var found = false;
+        var i: u32 = 0;
+        while (i < sorted_fields.len) : (i += 1) {
+            const sorted_field = sorted_fields.get(i);
+            const field_name = resources.module_env.idents.getText(sorted_field.name);
+            if (std.mem.eql(u8, field_name, expected_field.name)) {
+                found = true;
+                const field_layout = layout_cache.getLayout(sorted_field.layout);
+                try testing.expect(field_layout.tag == .scalar and field_layout.data.scalar.tag == .int);
+
+                const offset = layout_cache.getRecordFieldOffset(result.layout.data.record.idx, i);
+                const field_ptr = @as([*]u8, @ptrCast(result.ptr.?)) + offset;
+                const int_val = eval.readIntFromMemory(field_ptr, field_layout.data.scalar.data.int);
+                try testing.expectEqual(expected_field.value, int_val);
+                break;
+            }
+        }
+        try testing.expect(found);
+    }
+}
+
 fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,

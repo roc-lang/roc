@@ -65,7 +65,8 @@ match person {
 						(p-record-destructure @2.5-2.13
 							(destructs
 								(record-destruct @2.7-2.11 (label "name") (ident "name")
-									(required))))))
+									(required
+										(p-assign @2.7-2.11 (ident "name"))))))))
 				(value
 					(e-lookup-local @2.17-2.21
 						(p-assign @2.7-2.11 (ident "name")))))
@@ -75,7 +76,8 @@ match person {
 						(p-record-destructure @3.5-3.12
 							(destructs
 								(record-destruct @3.7-3.10 (label "age") (ident "age")
-									(required))))))
+									(required
+										(p-assign @3.7-3.10 (ident "age"))))))))
 				(value
 					(e-lookup-local @3.16-3.19
 						(p-assign @3.7-3.10 (ident "age"))))))))
