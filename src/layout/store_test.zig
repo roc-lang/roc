@@ -7,7 +7,7 @@ const types = @import("types");
 const layout = @import("layout.zig");
 const layout_store_ = @import("store.zig");
 const collections = @import("collections");
-const ModuleEnv = @import("../compile/ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 
 const types_store = types.store;
 const Ident = base.Ident;

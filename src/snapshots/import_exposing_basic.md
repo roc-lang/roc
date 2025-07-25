@@ -124,7 +124,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "_b")))
+		(patt @5.1-5.5 (type "_a")))
 	(expressions
-		(expr @5.8-10.2 (type "_b"))))
+		(expr @5.8-10.2 (type "_a"))))
 ~~~

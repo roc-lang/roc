@@ -4,14 +4,15 @@ const std = @import("std");
 const base = @import("base");
 const parse = @import("check/parse.zig");
 const collections = @import("collections");
+const compile = @import("compile");
 const Filesystem = @import("fs/Filesystem.zig");
-const ModuleEnv = @import("compile/ModuleEnv.zig");
 
 const tracy = @import("tracy.zig");
 const tokenize = @import("check/parse/tokenize.zig");
 
 const Parser = @import("check/parse/Parser.zig").Parser;
 
+const ModuleEnv = compile.ModuleEnv;
 const Token = tokenize.Token;
 const AST = parse.AST;
 const Node = parse.Node;
@@ -2142,7 +2143,7 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = try @import("compile/ModuleEnv.zig").init(gpa, try gpa.dupe(u8, input));
+    var module_env = try ModuleEnv.init(gpa, try gpa.dupe(u8, input));
     defer module_env.deinit();
 
     var parse_ast = try parse.parse(&module_env);

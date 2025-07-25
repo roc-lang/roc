@@ -19,13 +19,13 @@ const build_options = @import("build_options");
 const can = @import("check/canonicalize.zig");
 const check_types = @import("check/check_types.zig");
 const WasmFilesystem = @import("playground/WasmFilesystem.zig");
-const reporting = @import("reporting.zig");
+const reporting = @import("reporting");
 const snapshot = @import("snapshot.zig");
 const types = @import("types");
 const problem = @import("check/check_types/problem.zig");
 
 const SExprTree = base.SExprTree;
-const ModuleEnv = @import("compile/ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 const Allocator = std.mem.Allocator;
 
 const allocator: Allocator = .{

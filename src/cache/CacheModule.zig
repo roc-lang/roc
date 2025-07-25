@@ -9,6 +9,7 @@ const canonicalize = @import("../check/canonicalize.zig");
 const collections = @import("collections");
 const types = @import("types");
 const parse = @import("../check/parse.zig").parse;
+const compile = @import("compile");
 const SExprTree = base.SExprTree;
 const Filesystem = @import("../fs/Filesystem.zig");
 
@@ -16,7 +17,7 @@ const SERIALIZATION_ALIGNMENT = 16;
 
 const Allocator = std.mem.Allocator;
 const TypeStore = types.Store;
-const ModuleEnv = @import("../compile/ModuleEnv.zig");
+const ModuleEnv = compile.ModuleEnv;
 const Node = ModuleEnv.Node;
 const NodeStore = ModuleEnv.NodeStore;
 const SafeList = collections.SafeList;
@@ -108,7 +109,7 @@ pub const CacheModule = struct {
     /// Create a cache by serializing ModuleEnv and CIR data
     pub fn create(
         allocator: Allocator,
-        module_env: *const canonicalize.ModuleEnv,
+        module_env: *const ModuleEnv,
         _: *const ModuleEnv, // ModuleEnv contains the canonical IR
         error_count: u32,
         warning_count: u32,
@@ -260,10 +261,10 @@ pub const CacheModule = struct {
 
     /// Restored data from cache
     pub const RestoredData = struct {
-        module_env: canonicalize.ModuleEnv,
+        module_env: ModuleEnv,
         // CIR is now just an alias for ModuleEnv, so we only need one field
         // For backward compatibility, provide a getter
-        pub fn cir(self: *const RestoredData) *const canonicalize.ModuleEnv {
+        pub fn cir(self: *const RestoredData) *const ModuleEnv {
             return &self.module_env;
         }
     };
@@ -306,7 +307,7 @@ pub const CacheModule = struct {
         errdefer exposed_nodes.deinit(allocator);
 
         // Create ModuleEnv from deserialized components
-        var module_env = canonicalize.ModuleEnv{
+        var module_env = ModuleEnv{
             .gpa = allocator,
             .idents = idents,
             .ident_ids_for_slicing = ident_ids_for_slicing,
@@ -616,7 +617,7 @@ test "create and restore cache" {
     ;
 
     // Parse the source
-    var module_env = try canonicalize.ModuleEnv.init(gpa, source);
+    var module_env = try ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 
     try module_env.initCIRFields(gpa, "TestModule");
@@ -688,7 +689,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     ;
 
     // Parse the source
-    var module_env = try canonicalize.ModuleEnv.init(gpa, source);
+    var module_env = try ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 
     try module_env.initCIRFields(gpa, "TestModule");

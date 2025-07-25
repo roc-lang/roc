@@ -9,8 +9,11 @@ const std = @import("std");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
-const reporting = @import("reporting");
-pub const CIR = @import("CIR.zig");
+const compile = @import("compile");
+
+const TypeWriter = types_mod.TypeWriter;
+
+pub const CIR = compile.CIR;
 
 // Re-export types from CIR module
 /// Definition type for value and function definitions
@@ -1364,7 +1367,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExpr
     const gpa = self.gpa;
 
     // Create TypeWriter for converting types to strings
-    var type_writer = try @import("type_writers.zig").TypeWriter.init(gpa, self);
+    var type_writer = try TypeWriter.init(gpa, self);
     defer type_writer.deinit();
 
     if (maybe_expr_idx) |expr_idx| {

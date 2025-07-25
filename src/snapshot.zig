@@ -11,13 +11,13 @@ const base = @import("base");
 const canonicalize = @import("check/canonicalize.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const cache = @import("cache/mod.zig");
-const ModuleEnv = @import("compile/ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 
 const Solver = @import("check/check_types.zig");
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
 const types = @import("types");
-const reporting = @import("reporting.zig");
+const reporting = @import("reporting");
 const tokenize = @import("check/parse/tokenize.zig");
 const repl = @import("repl/eval.zig");
 

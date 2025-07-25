@@ -5,14 +5,15 @@
 //! of the compiler's reporting system.
 
 const std = @import("std");
+const reporting = @import("reporting");
+
 const Allocator = std.mem.Allocator;
 const CacheStats = @import("CacheConfig.zig").CacheStats;
-const Report = @import("../reporting/report.zig").Report;
-const Document = @import("../reporting/document.zig").Document;
-const Severity = @import("../reporting/severity.zig").Severity;
-const renderer = @import("../reporting/renderer.zig");
-const RenderTarget = renderer.RenderTarget;
-const ReportingConfig = @import("../reporting/config.zig").ReportingConfig;
+const Report = reporting.Report;
+const Document = reporting.Document;
+const Severity = reporting.Severity;
+const RenderTarget = reporting.RenderTarget;
+const ReportingConfig = reporting.ReportingConfig;
 
 /// Data size unit for formatting
 const DataSizeUnit = enum {
@@ -141,7 +142,7 @@ pub fn renderCacheStats(allocator: Allocator, stats: CacheStats, writer: anytype
     var report = try createCacheStatsReport(allocator, stats);
     defer report.deinit();
 
-    try renderer.renderReport(&report, writer, target);
+    try reporting.renderReport(&report, writer, target);
 }
 
 /// Render cache statistics to the terminal (convenience function).

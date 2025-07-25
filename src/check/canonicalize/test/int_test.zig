@@ -7,10 +7,13 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
+const types = @import("types");
+const compile = @import("compile");
+
 const parse = @import("../../parse.zig");
 const canonicalize = @import("../../canonicalize.zig");
-const ModuleEnv = canonicalize.ModuleEnv;
-const types = @import("types");
+
+const ModuleEnv = compile.ModuleEnv;
 
 // Note: Each test should create its own GPA to avoid memory leak detection issues
 

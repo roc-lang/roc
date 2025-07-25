@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const compile = @import("../compile/ModuleEnv.zig");
+const compile = @import("compile");
 const parse = @import("../check/parse.zig");
 const canonicalize = @import("../check/canonicalize.zig");
 const check_types = @import("../check/check_types.zig");
@@ -16,7 +16,7 @@ const stack = @import("../eval/stack.zig");
 const writers = types.writers;
 const Allocator = std.mem.Allocator;
 const target = base.target;
-const ModuleEnv = @import("../compile/ModuleEnv.zig");
+const ModuleEnv = compile.ModuleEnv;
 const AST = parse.AST;
 
 /// Type of definition stored in the REPL history
@@ -172,7 +172,7 @@ pub const Repl = struct {
 
     /// Try to parse input as a statement
     fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
-        var module_env = try compile.init(self.allocator, input);
+        var module_env = try ModuleEnv.init(self.allocator, input);
         defer module_env.deinit();
 
         // Try statement parsing
@@ -253,7 +253,7 @@ pub const Repl = struct {
         }
 
         // Create module environment for the expression
-        var module_env = try compile.init(self.allocator, expr_source);
+        var module_env = try ModuleEnv.init(self.allocator, expr_source);
         defer module_env.deinit();
 
         // Parse as expression
@@ -478,7 +478,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 1: Create module environment
     const source = "42";
-    var module_env = try compile.init(allocator, source);
+    var module_env = try ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Step 2: Parse as expression

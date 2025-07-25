@@ -473,14 +473,14 @@ transform = |_, b| b
 		(patt @4.1-4.5 (type "_arg -> _ret"))
 		(patt @7.1-7.9 (type "a -> a"))
 		(patt @11.1-11.8 (type "Error -> Str"))
-		(patt @15.1-15.9 (type "{ field: _field, other: U32 } -> U32"))
+		(patt @15.1-15.9 (type "{ field: _field2, other: U32 } -> U32"))
 		(patt @19.1-19.14 (type "Error -> Str"))
 		(patt @31.1-31.10 (type "_arg, _arg2 -> _ret")))
 	(expressions
 		(expr @4.8-4.13 (type "_arg -> _ret"))
 		(expr @7.12-7.17 (type "a -> a"))
 		(expr @11.11-11.29 (type "Error -> Str"))
-		(expr @15.12-15.33 (type "{ field: _field, other: U32 } -> U32"))
+		(expr @15.12-15.33 (type "{ field: _field2, other: U32 } -> U32"))
 		(expr @19.17-23.6 (type "Error -> Str"))
 		(expr @31.13-31.21 (type "_arg, _arg2 -> _ret"))))
 ~~~

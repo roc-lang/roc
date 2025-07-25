@@ -3,7 +3,7 @@
 const std = @import("std");
 const base = @import("base");
 const canonicalize = @import("../check/canonicalize.zig");
-const reporting = @import("../reporting.zig");
+const reporting = @import("reporting");
 const Filesystem = @import("../fs/Filesystem.zig");
 const cache_mod = @import("mod.zig");
 const Cache = cache_mod.CacheModule;
@@ -14,7 +14,7 @@ const SERIALIZATION_ALIGNMENT = 16;
 const coordinate_simple = @import("../coordinate_simple.zig");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = canonicalize.ModuleEnv;
+const ModuleEnv = @import("compile").ModuleEnv;
 
 /// Cache hit result containing the process result and diagnostic counts
 /// Result of a cache load operation

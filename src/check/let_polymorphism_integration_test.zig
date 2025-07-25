@@ -7,8 +7,9 @@ const base = @import("base");
 const parse = @import("parse.zig");
 const canonicalize = @import("canonicalize.zig");
 const check_types = @import("check_types.zig");
-const ModuleEnv = @import("../compile/ModuleEnv.zig");
+const compile = @import("compile");
 
+const ModuleEnv = compile.ModuleEnv;
 const CanonicalizedExpr = canonicalize.CanonicalizedExpr;
 const test_allocator = testing.allocator;
 

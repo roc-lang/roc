@@ -2,7 +2,6 @@
 
 Provides core data structures and utilities that are shared across the Roc compiler.
 
-- [src/base/ModuleEnv.zig](./ModuleEnv.zig): Centralized store for a module's state that lives for the full lifetime of a compilation (i.e. lives beyond any individual intermediate representation).
 - [src/base/Ident.zig](./Ident.zig): Efficient interning and deduplication of identifiers.
 - [src/base/StringLiteral.zig](./StringLiteral.zig): Efficient interning and deduplication of string literals.
 - [src/base/Region.zig](./Region.zig) and [src/base/RegionInfo.zig](./RegionInfo.zig): Efficiently represent source code regions for diagnostic reporting and debug information.

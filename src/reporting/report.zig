@@ -7,19 +7,17 @@
 
 const std = @import("std");
 const base = @import("base");
-const config = @import("config.zig");
-const document = @import("document.zig");
-const renderer = @import("renderer.zig");
+const reporting = @import("reporting");
 
 const Allocator = std.mem.Allocator;
-const Severity = @import("severity.zig").Severity;
-const Document = document.Document;
-const Annotation = document.Annotation;
-const RenderTarget = renderer.RenderTarget;
-const ReportingConfig = config.ReportingConfig;
+const Severity = reporting.Severity;
+const Document = reporting.Document;
+const Annotation = reporting.Annotation;
+const RenderTarget = reporting.RenderTarget;
+const ReportingConfig = reporting.ReportingConfig;
 const RegionInfo = base.RegionInfo;
 
-const validateUtf8 = config.validateUtf8;
+const validateUtf8 = reporting.validateUtf8;
 
 /// Default maximum message size in bytes for truncation
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 4096;
@@ -60,7 +58,7 @@ pub const Report = struct {
 
     /// Render the report to the specified writer and target format.
     pub fn render(self: *const Report, writer: anytype, target: RenderTarget) !void {
-        try renderer.renderReport(self, writer, target);
+        try reporting.renderReport(self, writer, target);
     }
 
     /// Add a section header to the report.
@@ -72,7 +70,7 @@ pub const Report = struct {
 
     /// Add a code snippet with proper formatting and UTF-8 validation.
     pub fn addCodeSnippet(self: *Report, code: []const u8, line_number: ?u32) !void {
-        @import("config.zig").validateUtf8(code) catch |err| switch (err) {
+        reporting.validateUtf8(code) catch |err| switch (err) {
             error.InvalidUtf8 => {
                 try self.document.addError("[Invalid UTF-8 in code snippet]");
                 try self.document.addLineBreak();
@@ -116,7 +114,7 @@ pub const Report = struct {
 
     /// Add a suggestion with proper formatting and UTF-8 validation.
     pub fn addSuggestion(self: *Report, suggestion: []const u8) !void {
-        @import("config.zig").validateUtf8(suggestion) catch |err| switch (err) {
+        reporting.validateUtf8(suggestion) catch |err| switch (err) {
             error.InvalidUtf8 => {
                 try self.document.addError("[Invalid UTF-8 in suggestion]");
                 try self.document.addLineBreak();
@@ -125,7 +123,7 @@ pub const Report = struct {
         };
 
         const truncated_suggestion = if (suggestion.len > DEFAULT_MAX_MESSAGE_BYTES) blk: {
-            const truncated = @import("config.zig").truncateUtf8(self.allocator, suggestion, DEFAULT_MAX_MESSAGE_BYTES) catch suggestion;
+            const truncated = reporting.truncateUtf8(self.allocator, suggestion, DEFAULT_MAX_MESSAGE_BYTES) catch suggestion;
             if (truncated.ptr != suggestion.ptr) {
                 try self.owned_strings.append(truncated);
             }

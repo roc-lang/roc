@@ -29,7 +29,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const ModuleEnv = @import("../compile/ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 const types = @import("types");
 const layout = @import("../layout/layout.zig");
 const layout_ = @import("../layout/layout.zig");

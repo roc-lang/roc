@@ -33,3 +33,5 @@ pub const ResolvedVarDesc = store.ResolvedVarDesc;
 pub const ResolvedVarDescs = store.ResolvedVarDescs;
 pub const Store = store.Store;
 pub const DescStoreIdx = store.DescStoreIdx;
+
+pub const TypeWriter = writers.TypeWriter;

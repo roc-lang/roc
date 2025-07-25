@@ -17,10 +17,10 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const ModuleEnv = @import("ModuleEnv.zig");
+const compile = @import("compile");
 const collections = @import("collections");
-const Diagnostic = ModuleEnv.Diagnostic;
 
+const ModuleEnv = compile.ModuleEnv;
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
@@ -28,6 +28,7 @@ const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
+const Diagnostic = ModuleEnv.Diagnostic;
 const Expr = ModuleEnv.Expr;
 const IntValue = ModuleEnv.IntValue;
 const RocDec = ModuleEnv.RocDec;

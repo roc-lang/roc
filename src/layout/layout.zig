@@ -7,7 +7,7 @@ const std = @import("std");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
-const ModuleEnv = @import("../compile/ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 
 const Ident = base.Ident;
 const target = base.target;
