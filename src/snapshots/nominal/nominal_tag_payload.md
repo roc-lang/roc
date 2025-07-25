@@ -101,14 +101,15 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.6 (ident "some1"))
-		(e-lambda @6.9-6.26
-			(args
-				(p-assign @6.10-6.11 (ident "a")))
-			(e-nominal @6.13-6.18 (nominal "Maybe")
-				(e-tag @6.13-6.23 (name "Some")
-					(args
-						(e-lookup-local @6.24-6.25
-							(p-assign @6.10-6.11 (ident "a")))))))
+		(e-closure @6.9-6.26
+			(e-lambda @6.9-6.26
+				(args
+					(p-assign @6.10-6.11 (ident "a")))
+				(e-nominal @6.13-6.18 (nominal "Maybe")
+					(e-tag @6.13-6.23 (name "Some")
+						(args
+							(e-lookup-local @6.24-6.25
+								(p-assign @6.10-6.11 (ident "a"))))))))
 		(annotation @6.1-6.6
 			(declared-type
 				(ty-fn @5.9-5.22 (effectful false)
@@ -125,14 +126,15 @@ NO CHANGE
 					(ty-var @8.15-8.17 (name "_a"))))))
 	(d-let
 		(p-assign @11.1-11.6 (ident "some2"))
-		(e-lambda @11.9-11.26
-			(args
-				(p-assign @11.10-11.11 (ident "a")))
-			(e-nominal @11.13-11.18 (nominal "Maybe")
-				(e-tag @11.13-11.23 (name "Some")
-					(args
-						(e-lookup-local @11.24-11.25
-							(p-assign @11.10-11.11 (ident "a"))))))))
+		(e-closure @11.9-11.26
+			(e-lambda @11.9-11.26
+				(args
+					(p-assign @11.10-11.11 (ident "a")))
+				(e-nominal @11.13-11.18 (nominal "Maybe")
+					(e-tag @11.13-11.23 (name "Some")
+						(args
+							(e-lookup-local @11.24-11.25
+								(p-assign @11.10-11.11 (ident "a")))))))))
 	(d-let
 		(p-assign @13.1-13.6 (ident "none2"))
 		(e-nominal @13.9-13.14 (nominal "Maybe")

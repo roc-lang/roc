@@ -143,35 +143,37 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign @4.1-4.6 (ident "curry"))
-		(e-lambda @4.9-4.30
-			(args
-				(p-assign @4.10-4.12 (ident "fn")))
-			(e-closure @4.14-4.30
-				(captures
-					(capture @4.10-4.12 (ident "fn")))
-				(e-lambda @4.14-4.30
-					(args
-						(p-assign @4.15-4.16 (ident "x")))
-					(e-closure @4.18-4.30
-						(captures
-							(capture @4.15-4.16 (ident "x"))
-							(capture @4.10-4.12 (ident "fn")))
-						(e-lambda @4.18-4.30
-							(args
-								(p-assign @4.19-4.20 (ident "y")))
-							(e-call @4.22-4.30
-								(e-lookup-local @4.22-4.24
-									(p-assign @4.10-4.12 (ident "fn")))
-								(e-lookup-local @4.25-4.26
-									(p-assign @4.15-4.16 (ident "x")))
-								(e-lookup-local @4.28-4.29
-									(p-assign @4.19-4.20 (ident "y"))))))))))
+		(e-closure @4.9-4.30
+			(e-lambda @4.9-4.30
+				(args
+					(p-assign @4.10-4.12 (ident "fn")))
+				(e-closure @4.14-4.30
+					(captures
+						(capture @4.10-4.12 (ident "fn")))
+					(e-lambda @4.14-4.30
+						(args
+							(p-assign @4.15-4.16 (ident "x")))
+						(e-closure @4.18-4.30
+							(captures
+								(capture @4.15-4.16 (ident "x"))
+								(capture @4.10-4.12 (ident "fn")))
+							(e-lambda @4.18-4.30
+								(args
+									(p-assign @4.19-4.20 (ident "y")))
+								(e-call @4.22-4.30
+									(e-lookup-local @4.22-4.24
+										(p-assign @4.10-4.12 (ident "fn")))
+									(e-lookup-local @4.25-4.26
+										(p-assign @4.15-4.16 (ident "x")))
+									(e-lookup-local @4.28-4.29
+										(p-assign @4.19-4.20 (ident "y")))))))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.15
-			(args
-				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+		(e-closure @6.9-6.15
+			(e-lambda @6.9-6.15
+				(args
+					(p-underscore @6.10-6.11))
+				(e-empty_record @6.13-6.15)))))
 ~~~
 # TYPES
 ~~~clojure

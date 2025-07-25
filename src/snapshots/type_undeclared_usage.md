@@ -114,12 +114,13 @@ AnotherType : SomeModule.MissingType
 (can-ir
 	(d-let
 		(p-assign @6.1-6.13 (ident "processValue"))
-		(e-lambda @6.16-8.2
-			(args
-				(p-assign @6.17-6.22 (ident "value")))
-			(e-block @6.24-8.2
-				(e-string @7.5-7.16
-					(e-literal @7.6-7.15 (string "processed")))))
+		(e-closure @6.16-8.2
+			(e-lambda @6.16-8.2
+				(args
+					(p-assign @6.17-6.22 (ident "value")))
+				(e-block @6.24-8.2
+					(e-string @7.5-7.16
+						(e-literal @7.6-7.15 (string "processed"))))))
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.39 (effectful false)

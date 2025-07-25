@@ -230,10 +230,11 @@ getUser = |id| if  "big" else "l"
 (can-ir
 	(d-let
 		(p-assign @6.1-6.8 (ident "getUser"))
-		(e-lambda @6.11-6.43
-			(args
-				(p-assign @6.12-6.14 (ident "id")))
-			(e-runtime-error (tag "if_condition_not_canonicalized"))))
+		(e-closure @6.11-6.43
+			(e-lambda @6.11-6.43
+				(args
+					(p-assign @6.12-6.14 (ident "id")))
+				(e-runtime-error (tag "if_condition_not_canonicalized")))))
 	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64"))))

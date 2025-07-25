@@ -251,10 +251,11 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 (e-block @1.1-19.2
 	(s-let @3.5-3.21
 		(p-assign @3.5-3.12 (ident "add_one"))
-		(e-lambda @3.15-3.21
-			(args
-				(p-underscore @3.16-3.17))
-			(e-empty_record @3.19-3.21)))
+		(e-closure @3.15-3.21
+			(e-lambda @3.15-3.21
+				(args
+					(p-underscore @3.16-3.17))
+				(e-empty_record @3.19-3.21))))
 	(s-let @4.5-4.11
 		(p-assign @4.5-4.6 (ident "x"))
 		(e-int @4.9-4.11 (value "10")))
@@ -326,13 +327,14 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(p-assign @16.2-16.13 (ident "with_lambda"))
 		(e-tuple @16.16-16.31
 			(elems
-				(e-lambda @16.17-16.26
-					(args
-						(p-assign @16.18-16.19 (ident "n")))
-					(e-binop @16.21-16.26 (op "add")
-						(e-lookup-local @16.21-16.22
+				(e-closure @16.17-16.26
+					(e-lambda @16.17-16.26
+						(args
 							(p-assign @16.18-16.19 (ident "n")))
-						(e-int @16.25-16.26 (value "1"))))
+						(e-binop @16.21-16.26 (op "add")
+							(e-lookup-local @16.21-16.22
+								(p-assign @16.18-16.19 (ident "n")))
+							(e-int @16.25-16.26 (value "1")))))
 				(e-int @16.28-16.30 (value "42")))))
 	(e-lookup-local @18.2-18.7
 		(p-assign @9.2-9.7 (ident "empty"))))

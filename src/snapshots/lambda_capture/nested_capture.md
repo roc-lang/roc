@@ -61,20 +61,21 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 (e-block @1.1-5.2
 	(s-let @2.5-2.24
 		(p-assign @2.5-2.6 (ident "f"))
-		(e-lambda @2.10-2.23
-			(args
-				(p-assign @2.11-2.12 (ident "a")))
-			(e-closure @2.14-2.23
-				(captures
-					(capture @2.11-2.12 (ident "a")))
-				(e-lambda @2.14-2.23
-					(args
-						(p-assign @2.15-2.16 (ident "b")))
-					(e-binop @2.18-2.23 (op "add")
-						(e-lookup-local @2.18-2.19
-							(p-assign @2.11-2.12 (ident "a")))
-						(e-lookup-local @2.22-2.23
-							(p-assign @2.15-2.16 (ident "b"))))))))
+		(e-closure @2.10-2.23
+			(e-lambda @2.10-2.23
+				(args
+					(p-assign @2.11-2.12 (ident "a")))
+				(e-closure @2.14-2.23
+					(captures
+						(capture @2.11-2.12 (ident "a")))
+					(e-lambda @2.14-2.23
+						(args
+							(p-assign @2.15-2.16 (ident "b")))
+						(e-binop @2.18-2.23 (op "add")
+							(e-lookup-local @2.18-2.19
+								(p-assign @2.11-2.12 (ident "a")))
+							(e-lookup-local @2.22-2.23
+								(p-assign @2.15-2.16 (ident "b")))))))))
 	(s-let @3.5-3.14
 		(p-assign @3.5-3.6 (ident "g"))
 		(e-call @3.9-3.14

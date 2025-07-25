@@ -378,10 +378,11 @@ main = |_| {
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(d-let
 		(p-assign @17.1-17.10 (ident "get_empty"))
-		(e-lambda @17.13-17.19
-			(args
-				(p-underscore @17.14-17.15))
-			(e-empty_list @17.17-17.19)))
+		(e-closure @17.13-17.19
+			(e-lambda @17.13-17.19
+				(args
+					(p-underscore @17.14-17.15))
+				(e-empty_list @17.17-17.19))))
 	(d-let
 		(p-assign @20.1-20.15 (ident "empty_int_list"))
 		(e-call @20.18-20.31

@@ -287,16 +287,17 @@ main = |_| {
 					(p-assign @5.1-5.5 (ident "frac"))))))
 	(d-let
 		(p-assign @11.1-11.15 (ident "make_container"))
-		(e-lambda @11.18-11.51
-			(args
-				(p-assign @11.19-11.24 (ident "value")))
-			(e-record @11.26-11.51
-				(fields
-					(field (name "data")
-						(e-lookup-local @11.34-11.39
-							(p-assign @11.19-11.24 (ident "value"))))
-					(field (name "count")
-						(e-int @11.48-11.49 (value "1")))))))
+		(e-closure @11.18-11.51
+			(e-lambda @11.18-11.51
+				(args
+					(p-assign @11.19-11.24 (ident "value")))
+				(e-record @11.26-11.51
+					(fields
+						(field (name "data")
+							(e-lookup-local @11.34-11.39
+								(p-assign @11.19-11.24 (ident "value"))))
+						(field (name "count")
+							(e-int @11.48-11.49 (value "1"))))))))
 	(d-let
 		(p-assign @14.1-14.14 (ident "int_container"))
 		(e-call @14.17-14.36
@@ -320,17 +321,18 @@ main = |_| {
 				(p-assign @7.1-7.14 (ident "my_empty_list")))))
 	(d-let
 		(p-assign @19.1-19.12 (ident "update_data"))
-		(e-lambda @19.15-19.69
-			(args
-				(p-assign @19.16-19.25 (ident "container"))
-				(p-assign @19.27-19.36 (ident "new_value")))
-			(e-block @19.38-19.69
-				(s-expr @19.40-19.49
-					(e-lookup-local @19.40-19.49
-						(p-assign @19.16-19.25 (ident "container"))))
-				(s-type-anno @19.52-19.67 (name "data")
-					(ty-var @19.58-19.67 (name "new_value")))
-				(e-empty_record @19.38-19.69))))
+		(e-closure @19.15-19.69
+			(e-lambda @19.15-19.69
+				(args
+					(p-assign @19.16-19.25 (ident "container"))
+					(p-assign @19.27-19.36 (ident "new_value")))
+				(e-block @19.38-19.69
+					(s-expr @19.40-19.49
+						(e-lookup-local @19.40-19.49
+							(p-assign @19.16-19.25 (ident "container"))))
+					(s-type-anno @19.52-19.67 (name "data")
+						(ty-var @19.58-19.67 (name "new_value")))
+					(e-empty_record @19.38-19.69)))))
 	(d-let
 		(p-assign @22.1-22.12 (ident "updated_int"))
 		(e-call @22.15-22.46
@@ -350,14 +352,15 @@ main = |_| {
 				(e-literal @23.43-23.48 (string "world")))))
 	(d-let
 		(p-assign @26.1-26.16 (ident "identity_record"))
-		(e-lambda @26.19-26.35
-			(args
-				(p-assign @26.20-26.21 (ident "x")))
-			(e-record @26.23-26.35
-				(fields
-					(field (name "value")
-						(e-lookup-local @26.32-26.33
-							(p-assign @26.20-26.21 (ident "x"))))))))
+		(e-closure @26.19-26.35
+			(e-lambda @26.19-26.35
+				(args
+					(p-assign @26.20-26.21 (ident "x")))
+				(e-record @26.23-26.35
+					(fields
+						(field (name "value")
+							(e-lookup-local @26.32-26.33
+								(p-assign @26.20-26.21 (ident "x")))))))))
 	(d-let
 		(p-assign @29.1-29.11 (ident "int_record"))
 		(e-call @29.14-29.33

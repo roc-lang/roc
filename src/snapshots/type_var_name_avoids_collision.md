@@ -404,11 +404,12 @@ main! = |_| {
 		(e-int @4.5-4.7 (value "42")))
 	(d-let
 		(p-assign @7.1-7.9 (ident "identity"))
-		(e-lambda @7.12-7.17
-			(args
-				(p-assign @7.13-7.14 (ident "x")))
-			(e-lookup-local @7.16-7.17
-				(p-assign @7.13-7.14 (ident "x")))))
+		(e-closure @7.12-7.17
+			(e-lambda @7.12-7.17
+				(args
+					(p-assign @7.13-7.14 (ident "x")))
+				(e-lookup-local @7.16-7.17
+					(p-assign @7.13-7.14 (ident "x"))))))
 	(d-let
 		(p-assign @10.1-10.2 (ident "b"))
 		(e-string @10.5-10.12
@@ -426,23 +427,25 @@ main! = |_| {
 			(e-tag @13.5-13.10 (name "False"))))
 	(d-let
 		(p-assign @16.1-16.16 (ident "anotherIdentity"))
-		(e-lambda @16.19-16.24
-			(args
-				(p-assign @16.20-16.21 (ident "y")))
-			(e-lookup-local @16.23-16.24
-				(p-assign @16.20-16.21 (ident "y")))))
+		(e-closure @16.19-16.24
+			(e-lambda @16.19-16.24
+				(args
+					(p-assign @16.20-16.21 (ident "y")))
+				(e-lookup-local @16.23-16.24
+					(p-assign @16.20-16.21 (ident "y"))))))
 	(d-let
 		(p-assign @20.1-20.8 (ident "combine"))
-		(e-lambda @20.11-20.42
-			(args
-				(p-assign @20.12-20.17 (ident "first"))
-				(p-assign @20.19-20.25 (ident "second")))
-			(e-tuple @20.27-20.42
-				(elems
-					(e-lookup-local @20.28-20.33
-						(p-assign @20.12-20.17 (ident "first")))
-					(e-lookup-local @20.35-20.41
-						(p-assign @20.19-20.25 (ident "second")))))))
+		(e-closure @20.11-20.42
+			(e-lambda @20.11-20.42
+				(args
+					(p-assign @20.12-20.17 (ident "first"))
+					(p-assign @20.19-20.25 (ident "second")))
+				(e-tuple @20.27-20.42
+					(elems
+						(e-lookup-local @20.28-20.33
+							(p-assign @20.12-20.17 (ident "first")))
+						(e-lookup-local @20.35-20.41
+							(p-assign @20.19-20.25 (ident "second"))))))))
 	(d-let
 		(p-assign @23.1-23.2 (ident "f"))
 		(e-int @23.5-23.6 (value "1")))
@@ -508,11 +511,12 @@ main! = |_| {
 		(e-int @43.5-43.7 (value "21")))
 	(d-let
 		(p-assign @46.1-46.19 (ident "yetAnotherIdentity"))
-		(e-lambda @46.22-46.31
-			(args
-				(p-assign @46.23-46.26 (ident "arg")))
-			(e-lookup-local @46.28-46.31
-				(p-assign @46.23-46.26 (ident "arg")))))
+		(e-closure @46.22-46.31
+			(e-lambda @46.22-46.31
+				(args
+					(p-assign @46.23-46.26 (ident "arg")))
+				(e-lookup-local @46.28-46.31
+					(p-assign @46.23-46.26 (ident "arg"))))))
 	(d-let
 		(p-assign @49.1-49.3 (ident "aa"))
 		(e-int @49.6-49.9 (value "100")))
@@ -521,22 +525,23 @@ main! = |_| {
 		(e-int @50.6-50.9 (value "200")))
 	(d-let
 		(p-assign @53.1-53.14 (ident "finalIdentity"))
-		(e-lambda @53.17-53.30
-			(args
-				(p-assign @53.18-53.23 (ident "param")))
-			(e-lookup-local @53.25-53.30
-				(p-assign @53.18-53.23 (ident "param")))))
+		(e-closure @53.17-53.30
+			(e-lambda @53.17-53.30
+				(args
+					(p-assign @53.18-53.23 (ident "param")))
+				(e-lookup-local @53.25-53.30
+					(p-assign @53.18-53.23 (ident "param"))))))
 	(d-let
 		(p-assign @55.1-55.6 (ident "main!"))
 		(e-closure @55.9-65.2
 			(captures
-				(capture @20.1-20.8 (ident "combine"))
 				(capture @46.1-46.19 (ident "yetAnotherIdentity"))
-				(capture @16.1-16.16 (ident "anotherIdentity"))
-				(capture @4.1-4.2 (ident "a"))
-				(capture @23.1-23.2 (ident "f"))
 				(capture @53.1-53.14 (ident "finalIdentity"))
-				(capture @7.1-7.9 (ident "identity")))
+				(capture @4.1-4.2 (ident "a"))
+				(capture @20.1-20.8 (ident "combine"))
+				(capture @7.1-7.9 (ident "identity"))
+				(capture @23.1-23.2 (ident "f"))
+				(capture @16.1-16.16 (ident "anotherIdentity")))
 			(e-lambda @55.9-65.2
 				(args
 					(p-underscore @55.10-55.11))

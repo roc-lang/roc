@@ -244,10 +244,11 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign @5.1-5.13 (ident "testEllipsis"))
-		(e-lambda @5.16-5.23
-			(args
-				(p-underscore @5.17-5.18))
-			(e-not-implemented @1.1-1.1))
+		(e-closure @5.16-5.23
+			(e-lambda @5.16-5.23
+				(args
+					(p-underscore @5.17-5.18))
+				(e-not-implemented @1.1-1.1)))
 		(annotation @5.1-5.13
 			(declared-type
 				(ty-fn @4.16-4.26 (effectful false)
@@ -273,9 +274,9 @@ main! = |_| {
 		(p-assign @15.1-15.6 (ident "main!"))
 		(e-closure @15.9-20.2
 			(captures
-				(capture @5.1-5.13 (ident "testEllipsis"))
+				(capture @9.1-9.10 (ident "testCrash"))
 				(capture @13.1-13.16 (ident "testCrashSimple"))
-				(capture @9.1-9.10 (ident "testCrash")))
+				(capture @5.1-5.13 (ident "testEllipsis")))
 			(e-lambda @15.9-20.2
 				(args
 					(p-underscore @15.10-15.11))

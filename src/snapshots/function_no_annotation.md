@@ -92,26 +92,28 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.9 (ident "multiply"))
-		(e-lambda @6.12-6.24
-			(args
-				(p-assign @6.13-6.14 (ident "x"))
-				(p-assign @6.16-6.17 (ident "y")))
-			(e-binop @6.19-6.24 (op "mul")
-				(e-lookup-local @6.19-6.20
-					(p-assign @6.13-6.14 (ident "x")))
-				(e-lookup-local @6.23-6.24
-					(p-assign @6.16-6.17 (ident "y"))))))
+		(e-closure @6.12-6.24
+			(e-lambda @6.12-6.24
+				(args
+					(p-assign @6.13-6.14 (ident "x"))
+					(p-assign @6.16-6.17 (ident "y")))
+				(e-binop @6.19-6.24 (op "mul")
+					(e-lookup-local @6.19-6.20
+						(p-assign @6.13-6.14 (ident "x")))
+					(e-lookup-local @6.23-6.24
+						(p-assign @6.16-6.17 (ident "y")))))))
 	(d-let
 		(p-assign @9.1-9.14 (ident "print_number!"))
-		(e-lambda @9.17-9.36
-			(args
-				(p-assign @9.18-9.19 (ident "n")))
-			(e-call @9.21-9.36
-				(e-lookup-external @9.21-9.33
-					(module-idx "0")
-					(target-node-idx "0"))
-				(e-lookup-local @9.34-9.35
-					(p-assign @9.18-9.19 (ident "n"))))))
+		(e-closure @9.17-9.36
+			(e-lambda @9.17-9.36
+				(args
+					(p-assign @9.18-9.19 (ident "n")))
+				(e-call @9.21-9.36
+					(e-lookup-external @9.21-9.33
+						(module-idx "0")
+						(target-node-idx "0"))
+					(e-lookup-local @9.34-9.35
+						(p-assign @9.18-9.19 (ident "n")))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "process!"))
 		(e-closure @12.12-12.45

@@ -588,15 +588,16 @@ combineResults = |jsonResult, httpStatus|
 (can-ir
 	(d-let
 		(p-assign @9.1-9.10 (ident "parseJson"))
-		(e-lambda @9.13-9.38
-			(args
-				(p-assign @9.14-9.19 (ident "input")))
-			(e-call @9.21-9.38
-				(e-lookup-external @9.21-9.31
-					(module-idx "0")
-					(target-node-idx "0"))
-				(e-lookup-local @9.32-9.37
-					(p-assign @9.14-9.19 (ident "input")))))
+		(e-closure @9.13-9.38
+			(e-lambda @9.13-9.38
+				(args
+					(p-assign @9.14-9.19 (ident "input")))
+				(e-call @9.21-9.38
+					(e-lookup-external @9.21-9.31
+						(module-idx "0")
+						(target-node-idx "0"))
+					(e-lookup-local @9.32-9.37
+						(p-assign @9.14-9.19 (ident "input"))))))
 		(annotation @9.1-9.10
 			(declared-type
 				(ty-fn @8.13-8.40 (effectful false)
@@ -608,8 +609,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign @13.1-13.14 (ident "handleRequest"))
 		(e-closure @13.17-19.2
 			(captures
-				(capture @16.12-16.17 (ident "value"))
-				(capture @17.13-17.18 (ident "error")))
+				(capture @17.13-17.18 (ident "error"))
+				(capture @16.12-16.17 (ident "value")))
 			(e-lambda @13.17-19.2
 				(args
 					(p-assign @13.18-13.21 (ident "req")))
@@ -659,28 +660,29 @@ combineResults = |jsonResult, httpStatus|
 					(ty @12.28-12.36 (name "Response"))))))
 	(d-let
 		(p-assign @23.1-23.12 (ident "processData"))
-		(e-lambda @23.15-27.6
-			(args
-				(p-assign @23.16-23.22 (ident "config"))
-				(p-assign @23.24-23.30 (ident "values")))
-			(e-call @24.5-27.6
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @25.9-25.15
+		(e-closure @23.15-27.6
+			(e-lambda @23.15-27.6
+				(args
+					(p-assign @23.16-23.22 (ident "config"))
 					(p-assign @23.24-23.30 (ident "values")))
-				(e-closure @26.9-26.41
-					(captures
-						(capture @23.16-23.22 (ident "config")))
-					(e-lambda @26.9-26.41
-						(args
-							(p-assign @26.10-26.11 (ident "v")))
-						(e-call @26.13-26.41
-							(e-lookup-external @26.13-26.30
-								(module-idx "0")
-								(target-node-idx "0"))
-							(e-lookup-local @26.31-26.37
-								(p-assign @23.16-23.22 (ident "config")))
-							(e-lookup-local @26.39-26.40
-								(p-assign @26.10-26.11 (ident "v"))))))))
+				(e-call @24.5-27.6
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local @25.9-25.15
+						(p-assign @23.24-23.30 (ident "values")))
+					(e-closure @26.9-26.41
+						(captures
+							(capture @23.16-23.22 (ident "config")))
+						(e-lambda @26.9-26.41
+							(args
+								(p-assign @26.10-26.11 (ident "v")))
+							(e-call @26.13-26.41
+								(e-lookup-external @26.13-26.30
+									(module-idx "0")
+									(target-node-idx "0"))
+								(e-lookup-local @26.31-26.37
+									(p-assign @23.16-23.22 (ident "config")))
+								(e-lookup-local @26.39-26.40
+									(p-assign @26.10-26.11 (ident "v")))))))))
 		(annotation @23.1-23.12
 			(declared-type
 				(ty-fn @22.15-22.64 (effectful false)
@@ -693,15 +695,16 @@ combineResults = |jsonResult, httpStatus|
 						(ty @22.58-22.63 (name "Error")))))))
 	(d-let
 		(p-assign @38.1-38.13 (ident "createClient"))
-		(e-lambda @38.16-38.48
-			(args
-				(p-assign @38.17-38.23 (ident "config")))
-			(e-call @38.25-38.48
-				(e-lookup-external @38.25-38.40
-					(module-idx "1")
-					(target-node-idx "0"))
-				(e-lookup-local @38.41-38.47
-					(p-assign @38.17-38.23 (ident "config")))))
+		(e-closure @38.16-38.48
+			(e-lambda @38.16-38.48
+				(args
+					(p-assign @38.17-38.23 (ident "config")))
+				(e-call @38.25-38.48
+					(e-lookup-external @38.25-38.40
+						(module-idx "1")
+						(target-node-idx "0"))
+					(e-lookup-local @38.41-38.47
+						(p-assign @38.17-38.23 (ident "config"))))))
 		(annotation @38.1-38.13
 			(declared-type
 				(ty-fn @37.16-37.37 (effectful false)

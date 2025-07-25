@@ -208,13 +208,14 @@ main = |_| {
 			(e-dec-small @17.24-17.27 (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
 	(d-let
 		(p-assign @20.1-20.7 (ident "double"))
-		(e-lambda @20.10-20.19
-			(args
-				(p-assign @20.11-20.12 (ident "x")))
-			(e-binop @20.14-20.19 (op "mul")
-				(e-lookup-local @20.14-20.15
+		(e-closure @20.10-20.19
+			(e-lambda @20.10-20.19
+				(args
 					(p-assign @20.11-20.12 (ident "x")))
-				(e-int @20.18-20.19 (value "2")))))
+				(e-binop @20.14-20.19 (op "mul")
+					(e-lookup-local @20.14-20.15
+						(p-assign @20.11-20.12 (ident "x")))
+					(e-int @20.18-20.19 (value "2"))))))
 	(d-let
 		(p-assign @23.1-23.12 (ident "int_doubled"))
 		(e-call @23.15-23.24

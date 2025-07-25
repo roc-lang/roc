@@ -81,11 +81,12 @@ main! = |_| getName({ name: "luke", age: 21 })
 (can-ir
 	(d-let
 		(p-assign @4.1-4.8 (ident "getName"))
-		(e-lambda @4.11-4.28
-			(args
-				(p-assign @4.12-4.19 (ident "_person")))
-			(e-string @4.21-4.28
-				(e-literal @4.22-4.27 (string "hello"))))
+		(e-closure @4.11-4.28
+			(e-lambda @4.11-4.28
+				(args
+					(p-assign @4.12-4.19 (ident "_person")))
+				(e-string @4.21-4.28
+					(e-literal @4.22-4.27 (string "hello")))))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.41 (effectful false)
@@ -118,9 +119,9 @@ main! = |_| getName({ name: "luke", age: 21 })
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "{ age: U64, name: Str } -> Str"))
+		(patt @4.1-4.8 (type "{ name: Str, age: U64 } -> Str"))
 		(patt @6.1-6.6 (type "_arg -> Str")))
 	(expressions
-		(expr @4.11-4.28 (type "{ age: U64, name: Str } -> Str"))
+		(expr @4.11-4.28 (type "{ name: Str, age: U64 } -> Str"))
 		(expr @6.9-6.44 (type "_arg -> Str"))))
 ~~~

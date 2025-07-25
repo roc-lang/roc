@@ -92,20 +92,21 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @5.1-5.4 (ident "add"))
-		(e-lambda @5.7-5.30
-			(args
-				(p-assign @5.8-5.9 (ident "x"))
-				(p-assign @5.11-5.12 (ident "y")))
-			(e-dot-access @5.14-5.30 (field "x")
-				(receiver
-					(e-record @5.14-5.28
-						(fields
-							(field (name "x")
-								(e-lookup-local @5.19-5.20
-									(p-assign @5.8-5.9 (ident "x"))))
-							(field (name "y")
-								(e-lookup-local @5.25-5.26
-									(p-assign @5.11-5.12 (ident "y")))))))))
+		(e-closure @5.7-5.30
+			(e-lambda @5.7-5.30
+				(args
+					(p-assign @5.8-5.9 (ident "x"))
+					(p-assign @5.11-5.12 (ident "y")))
+				(e-dot-access @5.14-5.30 (field "x")
+					(receiver
+						(e-record @5.14-5.28
+							(fields
+								(field (name "x")
+									(e-lookup-local @5.19-5.20
+										(p-assign @5.8-5.9 (ident "x"))))
+								(field (name "y")
+									(e-lookup-local @5.25-5.26
+										(p-assign @5.11-5.12 (ident "y"))))))))))
 		(annotation @5.1-5.4
 			(declared-type
 				(ty-fn @4.7-4.22 (effectful false)

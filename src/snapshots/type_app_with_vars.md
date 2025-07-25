@@ -101,17 +101,18 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 (can-ir
 	(d-let
 		(p-assign @4.1-4.8 (ident "mapList"))
-		(e-lambda @4.11-4.34
-			(args
-				(p-assign @4.12-4.16 (ident "list"))
-				(p-assign @4.18-4.20 (ident "fn")))
-			(e-dot-access @4.22-4.34 (field "map")
-				(receiver
-					(e-lookup-local @4.22-4.26
-						(p-assign @4.12-4.16 (ident "list"))))
+		(e-closure @4.11-4.34
+			(e-lambda @4.11-4.34
 				(args
-					(e-lookup-local @4.31-4.33
-						(p-assign @4.18-4.20 (ident "fn"))))))
+					(p-assign @4.12-4.16 (ident "list"))
+					(p-assign @4.18-4.20 (ident "fn")))
+				(e-dot-access @4.22-4.34 (field "map")
+					(receiver
+						(e-lookup-local @4.22-4.26
+							(p-assign @4.12-4.16 (ident "list"))))
+					(args
+						(e-lookup-local @4.31-4.33
+							(p-assign @4.18-4.20 (ident "fn")))))))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.39 (effectful false)

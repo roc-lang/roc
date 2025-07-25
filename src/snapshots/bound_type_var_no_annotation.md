@@ -175,23 +175,25 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign @3.1-3.9 (ident "identity"))
-		(e-lambda @3.12-3.17
-			(args
-				(p-assign @3.13-3.14 (ident "x")))
-			(e-lookup-local @3.16-3.17
-				(p-assign @3.13-3.14 (ident "x")))))
+		(e-closure @3.12-3.17
+			(e-lambda @3.12-3.17
+				(args
+					(p-assign @3.13-3.14 (ident "x")))
+				(e-lookup-local @3.16-3.17
+					(p-assign @3.13-3.14 (ident "x"))))))
 	(d-let
 		(p-assign @7.1-7.8 (ident "combine"))
-		(e-lambda @7.11-7.42
-			(args
-				(p-assign @7.12-7.17 (ident "first"))
-				(p-assign @7.19-7.25 (ident "second")))
-			(e-tuple @7.27-7.42
-				(elems
-					(e-lookup-local @7.28-7.33
-						(p-assign @7.12-7.17 (ident "first")))
-					(e-lookup-local @7.35-7.41
-						(p-assign @7.19-7.25 (ident "second"))))))
+		(e-closure @7.11-7.42
+			(e-lambda @7.11-7.42
+				(args
+					(p-assign @7.12-7.17 (ident "first"))
+					(p-assign @7.19-7.25 (ident "second")))
+				(e-tuple @7.27-7.42
+					(elems
+						(e-lookup-local @7.28-7.33
+							(p-assign @7.12-7.17 (ident "first")))
+						(e-lookup-local @7.35-7.41
+							(p-assign @7.19-7.25 (ident "second")))))))
 		(annotation @7.1-7.8
 			(declared-type
 				(ty-fn @6.11-6.25 (effectful false)
@@ -202,13 +204,14 @@ main! = |_| {
 						(ty-var @6.23-6.24 (name "b")))))))
 	(d-let
 		(p-assign @11.1-11.7 (ident "addOne"))
-		(e-lambda @11.10-11.19
-			(args
-				(p-assign @11.11-11.12 (ident "n")))
-			(e-binop @11.14-11.19 (op "add")
-				(e-lookup-local @11.14-11.15
+		(e-closure @11.10-11.19
+			(e-lambda @11.10-11.19
+				(args
 					(p-assign @11.11-11.12 (ident "n")))
-				(e-int @11.18-11.19 (value "1"))))
+				(e-binop @11.14-11.19 (op "add")
+					(e-lookup-local @11.14-11.15
+						(p-assign @11.11-11.12 (ident "n")))
+					(e-int @11.18-11.19 (value "1")))))
 		(annotation @11.1-11.7
 			(declared-type
 				(ty-fn @10.10-10.20 (effectful false)
@@ -218,8 +221,8 @@ main! = |_| {
 		(p-assign @13.1-13.6 (ident "main!"))
 		(e-closure @13.9-25.2
 			(captures
-				(capture @3.1-3.9 (ident "identity"))
 				(capture @7.1-7.8 (ident "combine"))
+				(capture @3.1-3.9 (ident "identity"))
 				(capture @11.1-11.7 (ident "addOne")))
 			(e-lambda @13.9-25.2
 				(args

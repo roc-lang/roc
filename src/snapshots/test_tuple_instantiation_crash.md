@@ -88,18 +88,19 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @5.1-5.5 (ident "swap"))
-		(e-lambda @5.8-5.23
-			(args
-				(p-tuple @5.9-5.15
-					(patterns
-						(p-assign @5.10-5.11 (ident "x"))
-						(p-assign @5.13-5.14 (ident "y")))))
-			(e-tuple @5.17-5.23
-				(elems
-					(e-lookup-local @5.18-5.19
-						(p-assign @5.13-5.14 (ident "y")))
-					(e-lookup-local @5.21-5.22
-						(p-assign @5.10-5.11 (ident "x"))))))
+		(e-closure @5.8-5.23
+			(e-lambda @5.8-5.23
+				(args
+					(p-tuple @5.9-5.15
+						(patterns
+							(p-assign @5.10-5.11 (ident "x"))
+							(p-assign @5.13-5.14 (ident "y")))))
+				(e-tuple @5.17-5.23
+					(elems
+						(e-lookup-local @5.18-5.19
+							(p-assign @5.13-5.14 (ident "y")))
+						(e-lookup-local @5.21-5.22
+							(p-assign @5.10-5.11 (ident "x")))))))
 		(annotation @5.1-5.5
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)

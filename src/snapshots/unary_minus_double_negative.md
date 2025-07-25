@@ -35,13 +35,14 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call @1.1-1.15
-	(e-lambda @1.2-1.11
-		(args
-			(p-assign @1.3-1.4 (ident "x")))
-		(e-unary-minus @1.6-1.11
-			(e-unary-minus @1.8-1.10
-				(e-lookup-local @1.9-1.10
-					(p-assign @1.3-1.4 (ident "x"))))))
+	(e-closure @1.2-1.11
+		(e-lambda @1.2-1.11
+			(args
+				(p-assign @1.3-1.4 (ident "x")))
+			(e-unary-minus @1.6-1.11
+				(e-unary-minus @1.8-1.10
+					(e-lookup-local @1.9-1.10
+						(p-assign @1.3-1.4 (ident "x")))))))
 	(e-int @1.13-1.14 (value "5")))
 ~~~
 # TYPES

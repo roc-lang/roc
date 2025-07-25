@@ -823,19 +823,20 @@ main = |_| {
 						(e-literal @55.12-55.18 (string "fruits")))))))
 	(d-let
 		(p-assign @59.1-59.15 (ident "make_container"))
-		(e-lambda @59.18-59.54
-			(args
-				(p-assign @59.19-59.22 (ident "val")))
-			(e-record @59.24-59.54
-				(fields
-					(field (name "value")
-						(e-lookup-local @59.33-59.36
-							(p-assign @59.19-59.22 (ident "val"))))
-					(field (name "wrapper")
-						(e-list @59.47-59.52
-							(elems
-								(e-lookup-local @59.48-59.51
-									(p-assign @59.19-59.22 (ident "val"))))))))))
+		(e-closure @59.18-59.54
+			(e-lambda @59.18-59.54
+				(args
+					(p-assign @59.19-59.22 (ident "val")))
+				(e-record @59.24-59.54
+					(fields
+						(field (name "value")
+							(e-lookup-local @59.33-59.36
+								(p-assign @59.19-59.22 (ident "val"))))
+						(field (name "wrapper")
+							(e-list @59.47-59.52
+								(elems
+									(e-lookup-local @59.48-59.51
+										(p-assign @59.19-59.22 (ident "val")))))))))))
 	(d-let
 		(p-assign @60.1-60.11 (ident "container1"))
 		(e-call @60.14-60.33

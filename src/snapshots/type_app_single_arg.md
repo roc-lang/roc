@@ -80,14 +80,15 @@ main! = |_| processList(["one", "two"])
 (can-ir
 	(d-let
 		(p-assign @4.1-4.12 (ident "processList"))
-		(e-lambda @4.15-4.32
-			(args
-				(p-assign @4.16-4.20 (ident "list")))
-			(e-dot-access @4.22-4.32 (field "len")
-				(receiver
-					(e-lookup-local @4.22-4.26
-						(p-assign @4.16-4.20 (ident "list"))))
-				(args)))
+		(e-closure @4.15-4.32
+			(e-lambda @4.15-4.32
+				(args
+					(p-assign @4.16-4.20 (ident "list")))
+				(e-dot-access @4.22-4.32 (field "len")
+					(receiver
+						(e-lookup-local @4.22-4.26
+							(p-assign @4.16-4.20 (ident "list"))))
+					(args))))
 		(annotation @4.1-4.12
 			(declared-type
 				(ty-fn @3.15-3.31 (effectful false)

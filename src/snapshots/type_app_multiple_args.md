@@ -88,10 +88,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @4.1-4.12 (ident "processDict"))
-		(e-lambda @4.15-4.25
-			(args
-				(p-assign @4.16-4.21 (ident "_dict")))
-			(e-empty_list @4.23-4.25))
+		(e-closure @4.15-4.25
+			(e-lambda @4.15-4.25
+				(args
+					(p-assign @4.16-4.21 (ident "_dict")))
+				(e-empty_list @4.23-4.25)))
 		(annotation @4.1-4.12
 			(declared-type
 				(ty-fn @3.15-3.42 (effectful false)

@@ -70,11 +70,12 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 				(ty @2.29-2.32 (name "Str")))))
 	(s-let @3.5-3.14
 		(p-assign @3.5-3.6 (ident "f"))
-		(e-lambda @3.9-3.14
-			(args
-				(p-assign @3.10-3.11 (ident "x")))
-			(e-lookup-local @3.13-3.14
-				(p-assign @3.10-3.11 (ident "x")))))
+		(e-closure @3.9-3.14
+			(e-lambda @3.9-3.14
+				(args
+					(p-assign @3.10-3.11 (ident "x")))
+				(e-lookup-local @3.13-3.14
+					(p-assign @3.10-3.11 (ident "x"))))))
 	(e-call @5.5-5.14
 		(e-lookup-local @5.5-5.6
 			(p-assign @3.5-3.6 (ident "f")))

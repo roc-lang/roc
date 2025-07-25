@@ -38,27 +38,28 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1.1-1.67
-	(args
-		(p-record-destructure @1.2-1.15
-			(destructs
-				(record-destruct @1.4-1.8 (label "name") (ident "name")
-					(required
-						(p-assign @1.4-1.8 (ident "name"))))
-				(record-destruct @1.10-1.13 (label "age") (ident "age")
-					(required
-						(p-assign @1.10-1.13 (ident "age")))))))
-	(e-string @1.17-1.67
-		(e-literal @1.18-1.24 (string "Hello "))
-		(e-lookup-local @1.26-1.30
-			(p-assign @1.4-1.8 (ident "name")))
-		(e-literal @1.31-1.41 (string ", you are "))
-		(e-dot-access @1.43-1.55 (field "to_str")
-			(receiver
-				(e-lookup-local @1.43-1.46
-					(p-assign @1.10-1.13 (ident "age"))))
-			(args))
-		(e-literal @1.56-1.66 (string " years old"))))
+(e-closure @1.1-1.67
+	(e-lambda @1.1-1.67
+		(args
+			(p-record-destructure @1.2-1.15
+				(destructs
+					(record-destruct @1.4-1.8 (label "name") (ident "name")
+						(required
+							(p-assign @1.4-1.8 (ident "name"))))
+					(record-destruct @1.10-1.13 (label "age") (ident "age")
+						(required
+							(p-assign @1.10-1.13 (ident "age")))))))
+		(e-string @1.17-1.67
+			(e-literal @1.18-1.24 (string "Hello "))
+			(e-lookup-local @1.26-1.30
+				(p-assign @1.4-1.8 (ident "name")))
+			(e-literal @1.31-1.41 (string ", you are "))
+			(e-dot-access @1.43-1.55 (field "to_str")
+				(receiver
+					(e-lookup-local @1.43-1.46
+						(p-assign @1.10-1.13 (ident "age"))))
+				(args))
+			(e-literal @1.56-1.66 (string " years old")))))
 ~~~
 # TYPES
 ~~~clojure

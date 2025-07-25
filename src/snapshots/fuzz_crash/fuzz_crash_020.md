@@ -1410,146 +1410,149 @@ expect {
 (can-ir
 	(d-let
 		(p-assign @35.1-35.4 (ident "ane"))
-		(e-lambda @35.7-35.28
-			(args
-				(p-assign @35.8-35.11 (ident "num")))
-			(e-if @35.13-35.28
-				(if-branches
-					(if-branch
-						(e-lookup-local @35.16-35.19
-							(p-assign @35.8-35.11 (ident "num")))
-						(e-int @35.20-35.21 (value "2"))))
-				(if-else
-					(e-int @35.27-35.28 (value "5"))))))
-	(d-let
-		(p-assign @38.1-38.4 (ident "add"))
-		(e-lambda @38.7-47.2
-			(args
-				(p-applied-tag @38.8-38.11))
-			(e-block @38.13-47.2
-				(s-expr @39.2-39.3
-					(e-int @39.2-39.3 (value "1")))
-				(e-if @40.2-46.3
+		(e-closure @35.7-35.28
+			(e-lambda @35.7-35.28
+				(args
+					(p-assign @35.8-35.11 (ident "num")))
+				(e-if @35.13-35.28
 					(if-branches
 						(if-branch
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-block @40.9-43.3
-								(s-dbg @41.3-42.5
-									(e-runtime-error (tag "ident_not_in_scope")))
-								(e-runtime-error (tag "ident_not_in_scope")))))
+							(e-lookup-local @35.16-35.19
+								(p-assign @35.8-35.11 (ident "num")))
+							(e-int @35.20-35.21 (value "2"))))
 					(if-else
-						(e-block @43.9-46.3
-							(s-dbg @44.3-44.10
-								(e-int @44.7-44.10 (value "123")))
-							(e-runtime-error (tag "ident_not_in_scope"))))))))
+						(e-int @35.27-35.28 (value "5")))))))
+	(d-let
+		(p-assign @38.1-38.4 (ident "add"))
+		(e-closure @38.7-47.2
+			(e-lambda @38.7-47.2
+				(args
+					(p-applied-tag @38.8-38.11))
+				(e-block @38.13-47.2
+					(s-expr @39.2-39.3
+						(e-int @39.2-39.3 (value "1")))
+					(e-if @40.2-46.3
+						(if-branches
+							(if-branch
+								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-block @40.9-43.3
+									(s-dbg @41.3-42.5
+										(e-runtime-error (tag "ident_not_in_scope")))
+									(e-runtime-error (tag "ident_not_in_scope")))))
+						(if-else
+							(e-block @43.9-46.3
+								(s-dbg @44.3-44.10
+									(e-int @44.7-44.10 (value "123")))
+								(e-runtime-error (tag "ident_not_in_scope")))))))))
 	(d-let
 		(p-assign @49.1-49.3 (ident "me"))
-		(e-lambda @49.6-69.3
-			(args
-				(p-assign @50.2-50.3 (ident "a")))
-			(e-match @52.2-69.3
-				(match @52.2-69.3
-					(cond
-						(e-lookup-local @52.8-52.9
-							(p-assign @50.2-50.3 (ident "a"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign @52.11-52.14 (ident "lue"))))
-							(value
-								(e-block @52.16-54.4
-									(e-runtime-error (tag "ident_not_in_scope")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @55.3-55.7)))
-							(value
-								(e-block @55.10-56.5
-									(e-runtime-error (tag "ident_not_in_scope")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign @57.2-57.4 (ident "er"))))
-							(value
-								(e-int @58.4-58.5 (value "1"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str @58.6-58.11 (text """))))
-							(value
-								(e-int @58.15-58.17 (value "20"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list @58.17-58.22
-										(patterns
-											(p-int @58.18-58.19 (value "1"))))))
-							(value
-								(e-runtime-error (tag "ident_not_in_scope"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list @60.3-60.16
-										(patterns
-											(p-int @60.4-60.5 (value "1"))
-											(p-int @60.7-60.8 (value "2"))
-											(p-int @60.10-60.11 (value "3"))
-											(p-assign @60.12-60.15 (ident "est"))))))
-							(value
-								(e-int @60.16-60.19 (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list @61.3-62.4
-										(patterns))))
-							(value
-								(e-int @62.5-62.7 (value "23"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec @63.3-63.6)))
-							(value
-								(e-int @63.7-63.10 (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec @64.3-64.7))
-								(pattern (degenerate false)
-									(p-small-dec @64.10-64.14)))
-							(value
-								(e-int @64.18-64.21 (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple @65.3-65.8
-										(patterns
-											(p-int @65.4-65.5 (value "1"))))))
-							(value
-								(e-int @65.12-65.15 (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple @66.3-66.12
-										(patterns
-											(p-int @66.4-66.5 (value "1"))
-											(p-int @66.7-66.8 (value "2"))
-											(p-int @66.10-66.11 (value "3"))))))
-							(value
-								(e-int @66.12-66.15 (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure @67.3-67.7
-										(destructs))))
-							(value
-								(e-int @67.11-67.13 (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @68.3-68.10)))
-							(value
-								(e-int @68.14-68.16 (value "12")))))))))
+		(e-closure @49.6-69.3
+			(e-lambda @49.6-69.3
+				(args
+					(p-assign @50.2-50.3 (ident "a")))
+				(e-match @52.2-69.3
+					(match @52.2-69.3
+						(cond
+							(e-lookup-local @52.8-52.9
+								(p-assign @50.2-50.3 (ident "a"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-assign @52.11-52.14 (ident "lue"))))
+								(value
+									(e-block @52.16-54.4
+										(e-runtime-error (tag "ident_not_in_scope")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @55.3-55.7)))
+								(value
+									(e-block @55.10-56.5
+										(e-runtime-error (tag "ident_not_in_scope")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-assign @57.2-57.4 (ident "er"))))
+								(value
+									(e-int @58.4-58.5 (value "1"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-str @58.6-58.11 (text """))))
+								(value
+									(e-int @58.15-58.17 (value "20"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-list @58.17-58.22
+											(patterns
+												(p-int @58.18-58.19 (value "1"))))))
+								(value
+									(e-runtime-error (tag "ident_not_in_scope"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-list @60.3-60.16
+											(patterns
+												(p-int @60.4-60.5 (value "1"))
+												(p-int @60.7-60.8 (value "2"))
+												(p-int @60.10-60.11 (value "3"))
+												(p-assign @60.12-60.15 (ident "est"))))))
+								(value
+									(e-int @60.16-60.19 (value "123"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-list @61.3-62.4
+											(patterns))))
+								(value
+									(e-int @62.5-62.7 (value "23"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-small-dec @63.3-63.6)))
+								(value
+									(e-int @63.7-63.10 (value "314"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-small-dec @64.3-64.7))
+									(pattern (degenerate false)
+										(p-small-dec @64.10-64.14)))
+								(value
+									(e-int @64.18-64.21 (value "314"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-tuple @65.3-65.8
+											(patterns
+												(p-int @65.4-65.5 (value "1"))))))
+								(value
+									(e-int @65.12-65.15 (value "123"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-tuple @66.3-66.12
+											(patterns
+												(p-int @66.4-66.5 (value "1"))
+												(p-int @66.7-66.8 (value "2"))
+												(p-int @66.10-66.11 (value "3"))))))
+								(value
+									(e-int @66.12-66.15 (value "123"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-record-destructure @67.3-67.7
+											(destructs))))
+								(value
+									(e-int @67.11-67.13 (value "12"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @68.3-68.10)))
+								(value
+									(e-int @68.14-68.16 (value "12"))))))))))
 	(d-let
 		(p-assign @75.1-75.3 (ident "ma"))
 		(e-closure @75.5-111.2

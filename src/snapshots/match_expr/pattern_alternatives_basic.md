@@ -92,37 +92,38 @@ kind = |color| match color {
 (can-ir
 	(d-let
 		(p-assign @6.1-6.5 (ident "kind"))
-		(e-lambda @6.8-9.2
-			(args
-				(p-assign @6.9-6.14 (ident "color")))
-			(e-match @6.16-9.2
-				(match @6.16-9.2
-					(cond
-						(e-lookup-local @6.22-6.27
-							(p-assign @6.9-6.14 (ident "color"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @7.5-7.8))
-								(pattern (degenerate false)
-									(p-applied-tag @7.11-7.16))
-								(pattern (degenerate false)
-									(p-applied-tag @7.19-7.23)))
-							(value
-								(e-string @7.27-7.36
-									(e-literal @7.28-7.35 (string "primary")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @8.5-8.11))
-								(pattern (degenerate false)
-									(p-applied-tag @8.14-8.20))
-								(pattern (degenerate false)
-									(p-applied-tag @8.23-8.29)))
-							(value
-								(e-string @8.33-8.44
-									(e-literal @8.34-8.43 (string "secondary")))))))))
+		(e-closure @6.8-9.2
+			(e-lambda @6.8-9.2
+				(args
+					(p-assign @6.9-6.14 (ident "color")))
+				(e-match @6.16-9.2
+					(match @6.16-9.2
+						(cond
+							(e-lookup-local @6.22-6.27
+								(p-assign @6.9-6.14 (ident "color"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @7.5-7.8))
+									(pattern (degenerate false)
+										(p-applied-tag @7.11-7.16))
+									(pattern (degenerate false)
+										(p-applied-tag @7.19-7.23)))
+								(value
+									(e-string @7.27-7.36
+										(e-literal @7.28-7.35 (string "primary")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @8.5-8.11))
+									(pattern (degenerate false)
+										(p-applied-tag @8.14-8.20))
+									(pattern (degenerate false)
+										(p-applied-tag @8.23-8.29)))
+								(value
+									(e-string @8.33-8.44
+										(e-literal @8.34-8.43 (string "secondary"))))))))))
 		(annotation @6.1-6.5
 			(declared-type
 				(ty-fn @5.8-5.20 (effectful false)

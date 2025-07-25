@@ -158,11 +158,12 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign @5.1-5.9 (ident "identity"))
-		(e-lambda @5.12-5.17
-			(args
-				(p-assign @5.13-5.14 (ident "x")))
-			(e-lookup-local @5.16-5.17
-				(p-assign @5.13-5.14 (ident "x"))))
+		(e-closure @5.12-5.17
+			(e-lambda @5.12-5.17
+				(args
+					(p-assign @5.13-5.14 (ident "x")))
+				(e-lookup-local @5.16-5.17
+					(p-assign @5.13-5.14 (ident "x")))))
 		(annotation @5.1-5.9
 			(declared-type
 				(ty-fn @4.12-4.18 (effectful false)

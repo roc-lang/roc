@@ -84,11 +84,12 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 			(ty-var @2.21-2.22 (name "a"))))
 	(s-let @3.5-3.21
 		(p-assign @3.5-3.13 (ident "identity"))
-		(e-lambda @3.16-3.21
-			(args
-				(p-assign @3.17-3.18 (ident "x")))
-			(e-lookup-local @3.20-3.21
-				(p-assign @3.17-3.18 (ident "x")))))
+		(e-closure @3.16-3.21
+			(e-lambda @3.16-3.21
+				(args
+					(p-assign @3.17-3.18 (ident "x")))
+				(e-lookup-local @3.20-3.21
+					(p-assign @3.17-3.18 (ident "x"))))))
 	(s-type-anno @5.5-5.41 (name "needs_string")
 		(ty-parens @5.20-5.41
 			(ty-fn @5.21-5.40 (effectful false)
@@ -99,16 +100,17 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 				(ty @5.37-5.40 (name "Str")))))
 	(s-let @6.5-6.36
 		(p-assign @6.5-6.17 (ident "needs_string"))
-		(e-lambda @6.20-6.36
-			(args
-				(p-assign @6.21-6.22 (ident "f")))
-			(e-call @6.24-6.36
-				(e-lookup-local @6.24-6.25
+		(e-closure @6.20-6.36
+			(e-lambda @6.20-6.36
+				(args
 					(p-assign @6.21-6.22 (ident "f")))
-				(e-list @6.26-6.35
-					(elems
-						(e-string @6.27-6.34
-							(e-literal @6.28-6.33 (string "hello"))))))))
+				(e-call @6.24-6.36
+					(e-lookup-local @6.24-6.25
+						(p-assign @6.21-6.22 (ident "f")))
+					(e-list @6.26-6.35
+						(elems
+							(e-string @6.27-6.34
+								(e-literal @6.28-6.33 (string "hello")))))))))
 	(e-call @8.5-8.27
 		(e-lookup-local @8.5-8.17
 			(p-assign @6.5-6.17 (ident "needs_string")))

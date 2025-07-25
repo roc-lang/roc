@@ -128,13 +128,14 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 					(e-string @5.17-5.23
 						(e-literal @5.18-5.22 (string "oops"))))))
 		(field (name "addOne")
-			(e-lambda @6.13-6.22
-				(args
-					(p-assign @6.14-6.15 (ident "x")))
-				(e-binop @6.17-6.22 (op "add")
-					(e-lookup-local @6.17-6.18
+			(e-closure @6.13-6.22
+				(e-lambda @6.13-6.22
+					(args
 						(p-assign @6.14-6.15 (ident "x")))
-					(e-int @6.21-6.22 (value "1")))))
+					(e-binop @6.17-6.22 (op "add")
+						(e-lookup-local @6.17-6.18
+							(p-assign @6.14-6.15 (ident "x")))
+						(e-int @6.21-6.22 (value "1"))))))
 		(field (name "result")
 			(e-call @7.13-7.22
 				(e-runtime-error (tag "ident_not_in_scope"))

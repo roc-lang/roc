@@ -49,36 +49,37 @@ NO CHANGE
 (can-ir
 	(s-let @1.1-1.109
 		(p-assign @1.1-1.11 (ident "formatUser"))
-		(e-lambda @1.14-1.109
-			(args
-				(p-record-destructure @1.15-1.35
-					(destructs
-						(record-destruct @1.17-1.21 (label "name") (ident "name")
-							(required
-								(p-assign @1.17-1.21 (ident "name"))))
-						(record-destruct @1.23-1.26 (label "age") (ident "age")
-							(required
+		(e-closure @1.14-1.109
+			(e-lambda @1.14-1.109
+				(args
+					(p-record-destructure @1.15-1.35
+						(destructs
+							(record-destruct @1.17-1.21 (label "name") (ident "name")
+								(required
+									(p-assign @1.17-1.21 (ident "name"))))
+							(record-destruct @1.23-1.26 (label "age") (ident "age")
+								(required
+									(p-assign @1.23-1.26 (ident "age"))))
+							(record-destruct @1.28-1.33 (label "email") (ident "email")
+								(required
+									(p-assign @1.28-1.33 (ident "email")))))))
+				(e-string @1.37-1.109
+					(e-literal @1.38-1.44 (string "User: "))
+					(e-lookup-local @1.46-1.50
+						(p-assign @1.17-1.21 (ident "name")))
+					(e-literal @1.51-1.53 (string " ("))
+					(e-dot-access @1.55-1.66 (field "toStr")
+						(receiver
+							(e-lookup-local @1.55-1.58
 								(p-assign @1.23-1.26 (ident "age"))))
-						(record-destruct @1.28-1.33 (label "email") (ident "email")
-							(required
-								(p-assign @1.28-1.33 (ident "email")))))))
-			(e-string @1.37-1.109
-				(e-literal @1.38-1.44 (string "User: "))
-				(e-lookup-local @1.46-1.50
-					(p-assign @1.17-1.21 (ident "name")))
-				(e-literal @1.51-1.53 (string " ("))
-				(e-dot-access @1.55-1.66 (field "toStr")
-					(receiver
-						(e-lookup-local @1.55-1.58
-							(p-assign @1.23-1.26 (ident "age"))))
-					(args))
-				(e-literal @1.67-1.90 (string " years old) - Contact: "))
-				(e-dot-access @1.92-1.107 (field "display")
-					(receiver
-						(e-lookup-local @1.92-1.97
-							(p-assign @1.28-1.33 (ident "email"))))
-					(args))
-				(e-literal @1.108-1.108 (string ""))))))
+						(args))
+					(e-literal @1.67-1.90 (string " years old) - Contact: "))
+					(e-dot-access @1.92-1.107 (field "display")
+						(receiver
+							(e-lookup-local @1.92-1.97
+								(p-assign @1.28-1.33 (ident "email"))))
+						(args))
+					(e-literal @1.108-1.108 (string "")))))))
 ~~~
 # TYPES
 ~~~clojure

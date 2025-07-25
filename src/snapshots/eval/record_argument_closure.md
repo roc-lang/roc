@@ -40,21 +40,22 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call @1.1-1.37
-	(e-lambda @1.2-1.18
-		(args
-			(p-record-destructure @1.3-1.11
-				(destructs
-					(record-destruct @1.5-1.6 (label "x") (ident "x")
-						(required
-							(p-assign @1.5-1.6 (ident "x"))))
-					(record-destruct @1.8-1.9 (label "y") (ident "y")
-						(required
-							(p-assign @1.8-1.9 (ident "y")))))))
-		(e-binop @1.13-1.18 (op "mul")
-			(e-lookup-local @1.13-1.14
-				(p-assign @1.5-1.6 (ident "x")))
-			(e-lookup-local @1.17-1.18
-				(p-assign @1.8-1.9 (ident "y")))))
+	(e-closure @1.2-1.18
+		(e-lambda @1.2-1.18
+			(args
+				(p-record-destructure @1.3-1.11
+					(destructs
+						(record-destruct @1.5-1.6 (label "x") (ident "x")
+							(required
+								(p-assign @1.5-1.6 (ident "x"))))
+						(record-destruct @1.8-1.9 (label "y") (ident "y")
+							(required
+								(p-assign @1.8-1.9 (ident "y")))))))
+			(e-binop @1.13-1.18 (op "mul")
+				(e-lookup-local @1.13-1.14
+					(p-assign @1.5-1.6 (ident "x")))
+				(e-lookup-local @1.17-1.18
+					(p-assign @1.8-1.9 (ident "y"))))))
 	(e-record @1.20-1.36
 		(fields
 			(field (name "x")

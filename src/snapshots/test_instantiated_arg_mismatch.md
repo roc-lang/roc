@@ -71,16 +71,17 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 				(ty-var @2.24-2.25 (name "a")))))
 	(s-let @3.5-3.25
 		(p-assign @3.5-3.9 (ident "pair"))
-		(e-lambda @3.12-3.25
-			(args
-				(p-assign @3.13-3.14 (ident "x"))
-				(p-assign @3.16-3.17 (ident "y")))
-			(e-tuple @3.19-3.25
-				(elems
-					(e-lookup-local @3.20-3.21
-						(p-assign @3.13-3.14 (ident "x")))
-					(e-lookup-local @3.23-3.24
-						(p-assign @3.16-3.17 (ident "y")))))))
+		(e-closure @3.12-3.25
+			(e-lambda @3.12-3.25
+				(args
+					(p-assign @3.13-3.14 (ident "x"))
+					(p-assign @3.16-3.17 (ident "y")))
+				(e-tuple @3.19-3.25
+					(elems
+						(e-lookup-local @3.20-3.21
+							(p-assign @3.13-3.14 (ident "x")))
+						(e-lookup-local @3.23-3.24
+							(p-assign @3.16-3.17 (ident "y"))))))))
 	(e-call @5.5-5.22
 		(e-lookup-local @5.5-5.9
 			(p-assign @3.5-3.9 (ident "pair")))

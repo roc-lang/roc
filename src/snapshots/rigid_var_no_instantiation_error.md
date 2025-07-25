@@ -204,23 +204,24 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign @5.1-5.5 (ident "swap"))
-		(e-lambda @5.8-8.2
-			(args
-				(p-assign @5.9-5.13 (ident "pair")))
-			(e-block @5.15-8.2
-				(s-let @6.5-6.18
-					(p-tuple @6.5-6.11
-						(patterns
-							(p-assign @6.6-6.7 (ident "x"))
-							(p-assign @6.9-6.10 (ident "y"))))
-					(e-lookup-local @6.14-6.18
-						(p-assign @5.9-5.13 (ident "pair"))))
-				(e-tuple @7.5-7.11
-					(elems
-						(e-lookup-local @7.6-7.7
-							(p-assign @6.9-6.10 (ident "y")))
-						(e-lookup-local @7.9-7.10
-							(p-assign @6.6-6.7 (ident "x")))))))
+		(e-closure @5.8-8.2
+			(e-lambda @5.8-8.2
+				(args
+					(p-assign @5.9-5.13 (ident "pair")))
+				(e-block @5.15-8.2
+					(s-let @6.5-6.18
+						(p-tuple @6.5-6.11
+							(patterns
+								(p-assign @6.6-6.7 (ident "x"))
+								(p-assign @6.9-6.10 (ident "y"))))
+						(e-lookup-local @6.14-6.18
+							(p-assign @5.9-5.13 (ident "pair"))))
+					(e-tuple @7.5-7.11
+						(elems
+							(e-lookup-local @7.6-7.7
+								(p-assign @6.9-6.10 (ident "y")))
+							(e-lookup-local @7.9-7.10
+								(p-assign @6.6-6.7 (ident "x"))))))))
 		(annotation @5.1-5.5
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)

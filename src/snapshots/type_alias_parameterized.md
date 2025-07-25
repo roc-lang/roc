@@ -101,18 +101,19 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.9 (ident "swapPair"))
-		(e-lambda @6.12-6.27
-			(args
-				(p-tuple @6.13-6.19
-					(patterns
-						(p-assign @6.14-6.15 (ident "x"))
-						(p-assign @6.17-6.18 (ident "y")))))
-			(e-tuple @6.21-6.27
-				(elems
-					(e-lookup-local @6.22-6.23
-						(p-assign @6.17-6.18 (ident "y")))
-					(e-lookup-local @6.25-6.26
-						(p-assign @6.14-6.15 (ident "x"))))))
+		(e-closure @6.12-6.27
+			(e-lambda @6.12-6.27
+				(args
+					(p-tuple @6.13-6.19
+						(patterns
+							(p-assign @6.14-6.15 (ident "x"))
+							(p-assign @6.17-6.18 (ident "y")))))
+				(e-tuple @6.21-6.27
+					(elems
+						(e-lookup-local @6.22-6.23
+							(p-assign @6.17-6.18 (ident "y")))
+						(e-lookup-local @6.25-6.26
+							(p-assign @6.14-6.15 (ident "x")))))))
 		(annotation @6.1-6.9
 			(declared-type
 				(ty-fn @5.12-5.36 (effectful false)
