@@ -215,7 +215,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
-        can: *canonicalize,
+    can: *canonicalize,
     checker: *check_types,
     expr_idx: ModuleEnv.Expr.Idx,
 } {
@@ -343,29 +343,29 @@ test "eval runtime error - returns crash error" {
 test "eval tag - already primitive" {
     // Try to see if tag_union layout is now implemented
     const source = "True";
-    
+
     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
     defer cleanupParseAndCanonical(test_allocator, resources);
-    
+
     // Create a stack for evaluation
     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
     defer eval_stack.deinit();
-    
-    // Create layout store  
+
+    // Create layout store
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
-    
+
     // Create interpreter
     var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
     defer interpreter.deinit();
-    
+
     // Try to evaluate - if tag_union layout is not implemented, this might fail
     const result = interpreter.eval(resources.expr_idx) catch |err| {
         std.debug.print("Tag evaluation failed with error: {}\n", .{err});
         // If evaluation fails for any reason, skip for now
         return error.SkipZigTest;
     };
-    
+
     // If we get here, check if we have a valid result
     // True/False are optimized to scalar values in the current implementation
     try testing.expect(result.layout.tag == .scalar);

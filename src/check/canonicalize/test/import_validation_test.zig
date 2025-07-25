@@ -22,16 +22,16 @@ fn parseAndCanonicalizeSource(allocator: std.mem.Allocator, source: []const u8, 
 } {
     const parse_env = try allocator.create(ModuleEnv);
     parse_env.* = try ModuleEnv.init(allocator, source);
-    
+
     const ast = try allocator.create(parse.AST);
     ast.* = try parse.parse(parse_env);
-    
+
     // Initialize CIR fields
     try parse_env.initCIRFields(allocator, "Test");
-    
+
     const can = try allocator.create(canonicalize);
     can.* = try canonicalize.init(parse_env, ast, module_envs);
-    
+
     return .{
         .parse_env = parse_env,
         .ast = ast,
@@ -105,13 +105,13 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         parse_env.deinit();
         allocator.destroy(parse_env);
     }
-    
+
     var ast = try parse.parse(parse_env);
     defer ast.deinit(allocator);
-    
+
     // Initialize CIR fields
     try parse_env.initCIRFields(allocator, "Test");
-    
+
     // Canonicalize with module validation
     var can = try canonicalize.init(parse_env, &ast, &module_envs);
     defer can.deinit();
@@ -128,7 +128,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
 
     const diagnostics = try parse_env.getDiagnostics();
     defer allocator.free(diagnostics);
-    
+
     for (diagnostics) |diagnostic| {
         switch (diagnostic) {
             .module_not_found => |d| {
@@ -190,23 +190,23 @@ test "import validation - no module_envs provided" {
         parse_env.deinit();
         allocator.destroy(parse_env);
     }
-    
+
     var ast = try parse.parse(parse_env);
     defer ast.deinit(allocator);
-    
+
     // Initialize CIR fields
     try parse_env.initCIRFields(allocator, "Test");
-    
+
     // Create canonicalizer with null module_envs
     var can = try canonicalize.init(parse_env, &ast, null);
     defer can.deinit();
-    
+
     _ = try can.canonicalizeFile();
 
     // When module_envs is null, no import validation errors should be generated
     const diagnostics = try parse_env.getDiagnostics();
     defer allocator.free(diagnostics);
-    
+
     for (diagnostics) |diagnostic| {
         switch (diagnostic) {
             .module_not_found, .value_not_exposed, .type_not_exposed => {
@@ -365,7 +365,7 @@ test "Import.Idx is u32" {
     // Verify that Import.Idx is indeed a u32 enum
     // Import.Idx is defined as: pub const Idx = enum(u32) { _ };
     // So we know it's backed by u32
-    
+
     // Verify we can create Import.Idx values from u32
     const test_idx: u32 = 42;
     const import_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(test_idx));
@@ -418,14 +418,14 @@ test "module scopes - imports work in module scope" {
     // Verify that List and Dict imports were processed correctly
     const imports = result.parse_env.imports.imports.items;
     try testing.expect(imports.len >= 2); // List and Dict
-    
+
     var has_list = false;
     var has_dict = false;
     for (imports) |import_name| {
         if (std.mem.eql(u8, import_name, "List")) has_list = true;
         if (std.mem.eql(u8, import_name, "Dict")) has_dict = true;
     }
-    
+
     try testing.expect(has_list);
     try testing.expect(has_dict);
 }
@@ -473,7 +473,7 @@ test "module-qualified lookups with e_lookup_external" {
     // For now, let's verify that the imports were registered correctly
     const imports_list = result.parse_env.imports.imports.items;
     try testing.expect(imports_list.len >= 2); // List and Dict
-    
+
     // Verify the module names are correct
     var has_list = false;
     var has_dict = false;
@@ -483,7 +483,7 @@ test "module-qualified lookups with e_lookup_external" {
     }
     try testing.expect(has_list);
     try testing.expect(has_dict);
-    
+
     // TODO: Once we have proper expression traversal, verify the e_lookup_external nodes
     // For now, we'll skip counting the actual lookup expressions
     external_lookup_count = 4; // Expected count
@@ -572,7 +572,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
         }
     }
     try testing.expect(has_mathutils);
-    
+
     // TODO: Once we have proper expression traversal, verify the target_node_idx values
     // For now, we'll assume they work correctly
     found_add_with_idx_100 = true;
@@ -617,7 +617,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
 
     // Verify that undefined gets target_node_idx = 0 (not found)
     var found_undefined_with_idx_0 = false;
-    
+
     // Verify EmptyModule was imported
     const imports_list2 = result2.parse_env.imports.imports.items;
     var has_empty_module = false;
@@ -628,7 +628,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
         }
     }
     try testing.expect(has_empty_module);
-    
+
     // TODO: Once we have proper expression traversal, verify target_node_idx = 0
     // For now, we'll assume it works correctly
     found_undefined_with_idx_0 = true;

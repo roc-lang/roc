@@ -36,18 +36,14 @@ fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct 
     can.* = try canonicalize.init(module_env, parse_ast, null);
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    
+
     // Check if parsing produced an error
     if (parse_ast.parse_diagnostics.items.len > 0 or parse_ast.tokenize_diagnostics.items.len > 0) {
         // Parsing failed, create a runtime error
         const diagnostic_idx = try module_env.addDiagnostic(.{ .invalid_num_literal = .{
             .region = base.Region.zero(),
         } });
-        const error_expr_idx = try module_env.addExprAndTypeVar(
-            ModuleEnv.Expr{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } },
-            types.Content{ .err = {} },
-            base.Region.zero()
-        );
+        const error_expr_idx = try module_env.addExprAndTypeVar(ModuleEnv.Expr{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, types.Content{ .err = {} }, base.Region.zero());
         return .{
             .module_env = module_env,
             .parse_ast = parse_ast,
@@ -55,7 +51,7 @@ fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct 
             .expr_idx = error_expr_idx,
         };
     }
-    
+
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse unreachable;
 
     return .{
@@ -79,7 +75,7 @@ test "fractional literal - basic decimal" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "3.14");
     defer cleanup(gpa, result);
 
@@ -152,7 +148,7 @@ test "fractional literal - scientific notation small" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "1.23e-10");
     defer cleanup(gpa, result);
 
@@ -162,7 +158,7 @@ test "fractional literal - scientific notation small" {
             // Very small numbers may round to zero when parsed as small decimal
             // This is expected behavior when the value is too small for i16 representation
             try testing.expectEqual(dec.numerator, 0);
-            
+
             // Still check type requirements
             const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
             const resolved = result.module_env.types.resolveVar(expr_as_type_var);
@@ -257,7 +253,7 @@ test "fractional literal - scientific notation large (near f64 max)" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "1e308");
     defer cleanup(gpa, result);
 
@@ -297,7 +293,7 @@ test "fractional literal - scientific notation at f32 boundary" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     // f32 max is approximately 3.4028235e38
     // 3.4e38 is actually within the range, but let's test with 3.5e38 which is above
     const result = try parseAndCreateFrac(gpa, "3.5e38");
@@ -320,7 +316,7 @@ test "fractional literal - negative zero" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "-0.0");
     defer cleanup(gpa, result);
 
@@ -354,7 +350,7 @@ test "fractional literal - positive zero" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "0.0");
     defer cleanup(gpa, result);
 
@@ -376,7 +372,7 @@ test "fractional literal - very small scientific notation" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     // Test a value that's smaller than f32 min positive normal (approximately 1.2e-38)
     const result = try parseAndCreateFrac(gpa, "1e-40");
     defer cleanup(gpa, result);
@@ -399,7 +395,7 @@ test "fractional literal - NaN handling" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     // Note: NaN is not a valid numeric literal in Roc
     // The parser will fail before canonicalization
     // This test verifies that behavior
@@ -425,7 +421,7 @@ test "fractional literal - infinity handling" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     // Note: Infinity is not a valid numeric literal in Roc
     // The parser will fail before canonicalization
     // This test verifies that behavior
@@ -451,7 +447,7 @@ test "fractional literal - scientific notation with capital E" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "2.5E10");
     defer cleanup(gpa, result);
 
@@ -472,7 +468,7 @@ test "fractional literal - negative scientific notation" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "-1.5e-5");
     defer cleanup(gpa, result);
 
@@ -518,7 +514,7 @@ test "negative zero forced to f64 parsing" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     // Test that when we force parsing through f64 path (e.g., with scientific notation),
     // negative zero now uses dec_small and loses sign
     const result = try parseAndCreateFrac(gpa, "-0.0e0");
@@ -558,7 +554,7 @@ test "small dec - basic positive decimal" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "3.14");
     defer cleanup(gpa, result);
 
@@ -579,7 +575,7 @@ test "negative zero preservation - uses f64" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "-0.0");
     defer cleanup(gpa, result);
 
@@ -607,7 +603,7 @@ test "negative zero with scientific notation - preserves sign via f64" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     // Scientific notation now uses dec_small for zero, loses sign
     const result = try parseAndCreateFrac(gpa, "-0.0e0");
     defer cleanup(gpa, result);
@@ -628,7 +624,7 @@ test "small dec - positive zero" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "0.0");
     defer cleanup(gpa, result);
 
@@ -651,7 +647,7 @@ test "small dec - precision preservation for 0.1" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "0.1");
     defer cleanup(gpa, result);
 
@@ -671,7 +667,7 @@ test "small dec - trailing zeros" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "1.100");
     defer cleanup(gpa, result);
 
@@ -691,7 +687,7 @@ test "small dec - negative number" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "-5.25");
     defer cleanup(gpa, result);
 
@@ -711,7 +707,7 @@ test "small dec - max i8 value" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "127.99");
     defer cleanup(gpa, result);
 
@@ -731,7 +727,7 @@ test "small dec - min i8 value" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "-128.0");
     defer cleanup(gpa, result);
 
@@ -751,7 +747,7 @@ test "small dec - 128.0 now fits with new representation" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "128.0");
     defer cleanup(gpa, result);
 
@@ -772,7 +768,7 @@ test "small dec - exceeds i16 range falls back to Dec" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "32768.0");
     defer cleanup(gpa, result);
 
@@ -795,7 +791,7 @@ test "small dec - too many fractional digits falls back to Dec" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "1.234");
     defer cleanup(gpa, result);
 
@@ -815,7 +811,7 @@ test "small dec - complex example 0.001" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "0.001");
     defer cleanup(gpa, result);
 
@@ -835,7 +831,7 @@ test "small dec - negative example -0.05" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "-0.05");
     defer cleanup(gpa, result);
 
@@ -856,7 +852,7 @@ test "negative zero with scientific notation preserves sign" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     // Scientific notation now uses dec_small for zero, loses sign
     const result = try parseAndCreateFrac(gpa, "-0.0e0");
     defer cleanup(gpa, result);
@@ -878,7 +874,7 @@ test "fractional literal - simple 1.0 uses small dec" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCreateFrac(gpa, "1.0");
     defer cleanup(gpa, result);
 

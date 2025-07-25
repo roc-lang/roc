@@ -38,7 +38,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .bytes = std.ArrayListUnmanaged(u8){},
         .strings = std.StringHashMapUnmanaged(Idx){},
     };
-    
+
     // Properly initialize the bytes array to ensure clean state
     try self.bytes.ensureTotalCapacity(gpa, capacity * bytes_per_string);
 

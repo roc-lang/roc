@@ -35,7 +35,7 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
     can.* = try canonicalize.init(module_env, parse_ast, null);
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    
+
     // Check if parsing produced an error
     if (parse_ast.parse_diagnostics.items.len > 0 or parse_ast.tokenize_diagnostics.items.len > 0) {
         // Parsing failed, return with a valid but empty expression index
@@ -47,7 +47,7 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
             .expr_idx = undefined, // Don't use this when there are parse errors
         };
     }
-    
+
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse unreachable;
 
     return .{
@@ -87,7 +87,7 @@ test "canonicalize simple positive integer" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const source = "42";
     const resources = try parseAndCanonicalizeInt(gpa, source);
     defer cleanup(gpa, resources);
@@ -100,7 +100,7 @@ test "canonicalize simple negative integer" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const source = "-42";
     const resources = try parseAndCanonicalizeInt(gpa, source);
     defer cleanup(gpa, resources);
@@ -113,7 +113,7 @@ test "canonicalize zero" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const source = "0";
     const resources = try parseAndCanonicalizeInt(gpa, source);
     defer cleanup(gpa, resources);
@@ -126,7 +126,7 @@ test "canonicalize large positive integer" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const source = "9223372036854775807"; // i64 max
     const resources = try parseAndCanonicalizeInt(gpa, source);
     defer cleanup(gpa, resources);
@@ -139,7 +139,7 @@ test "canonicalize large negative integer" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const source = "-9223372036854775808"; // i64 min
     const resources = try parseAndCanonicalizeInt(gpa, source);
     defer cleanup(gpa, resources);
@@ -152,7 +152,7 @@ test "canonicalize very large integer" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const source = "170141183460469231731687303715884105727"; // i128 max
     const resources = try parseAndCanonicalizeInt(gpa, source);
     defer cleanup(gpa, resources);
@@ -165,7 +165,7 @@ test "canonicalize very large negative integer" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const source = "-170141183460469231731687303715884105728"; // i128 min
     const resources = try parseAndCanonicalizeInt(gpa, source);
     defer cleanup(gpa, resources);
@@ -178,7 +178,7 @@ test "canonicalize small integers" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const test_cases = [_]struct { source: []const u8, expected: i128 }{
         .{ .source = "1", .expected = 1 },
         .{ .source = "-1", .expected = -1 },
@@ -207,7 +207,7 @@ test "canonicalize integer literals with underscores" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const test_cases = [_]struct { source: []const u8, expected: i128 }{
         .{ .source = "1_000", .expected = 1000 },
         .{ .source = "1_000_000", .expected = 1000000 },
@@ -229,7 +229,7 @@ test "canonicalize integer with specific requirements" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const test_cases = [_]struct {
         source: []const u8,
         expected_value: i128,
@@ -261,7 +261,7 @@ test "canonicalize integer literal creates correct type variables" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const source = "42";
     const resources = try parseAndCanonicalizeInt(gpa, source);
     defer cleanup(gpa, resources);
@@ -280,7 +280,7 @@ test "canonicalize invalid integer literal" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     // Test individual cases since some might fail during parsing vs canonicalization
 
     // "12abc" - invalid characters in number
@@ -288,17 +288,18 @@ test "canonicalize invalid integer literal" {
         const resources = try parseAndCanonicalizeInt(gpa, "12abc");
         defer cleanup(gpa, resources);
         // Should have parse errors
-        try testing.expect(resources.parse_ast.parse_diagnostics.items.len > 0 or 
-                          resources.parse_ast.tokenize_diagnostics.items.len > 0);
+        try testing.expect(resources.parse_ast.parse_diagnostics.items.len > 0 or
+            resources.parse_ast.tokenize_diagnostics.items.len > 0);
     }
 
-    // Leading zeros with digits  
+    // Leading zeros with digits
     {
         const resources = try parseAndCanonicalizeInt(gpa, "0123");
         defer cleanup(gpa, resources);
         // This might actually parse as 123, check if we have diagnostics
-        if (resources.parse_ast.parse_diagnostics.items.len == 0 and 
-            resources.parse_ast.tokenize_diagnostics.items.len == 0) {
+        if (resources.parse_ast.parse_diagnostics.items.len == 0 and
+            resources.parse_ast.tokenize_diagnostics.items.len == 0)
+        {
             // No errors, so it should have parsed as 123
             const value = try getIntValue(resources.module_env, resources.expr_idx);
             try testing.expectEqual(@as(i128, 123), value);
@@ -310,7 +311,7 @@ test "canonicalize integer preserves all bytes correctly" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     // Test specific bit patterns to ensure bytes are preserved correctly
     const test_cases = [_]struct {
         source: []const u8,
@@ -352,7 +353,7 @@ test "canonicalize integer round trip through NodeStore" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     // Test that integers survive storage and retrieval from NodeStore
     const test_values = [_]i128{
         0,      1,     -1,     42,         -42,
@@ -378,7 +379,7 @@ test "canonicalize integer with maximum digits" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     // Test very long digit sequences
     const test_cases = [_]struct { source: []const u8, expected: i128 }{
         .{ .source = "000000000000000000000000000000000000000001", .expected = 1 },
@@ -391,9 +392,9 @@ test "canonicalize integer with maximum digits" {
         defer cleanup(gpa, resources);
 
         // Check if parsing succeeded (leading zeros might be treated specially)
-        const has_errors = resources.parse_ast.parse_diagnostics.items.len > 0 or 
-                          resources.parse_ast.tokenize_diagnostics.items.len > 0;
-        
+        const has_errors = resources.parse_ast.parse_diagnostics.items.len > 0 or
+            resources.parse_ast.tokenize_diagnostics.items.len > 0;
+
         if (!has_errors) {
             const value = try getIntValue(resources.module_env, resources.expr_idx);
             try testing.expectEqual(tc.expected, value);
@@ -409,7 +410,7 @@ test "canonicalize integer requirements determination" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const test_cases = [_]struct {
         source: []const u8,
         expected_value: i128,
@@ -442,7 +443,7 @@ test "canonicalize integer literals outside supported range" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     // Test integer literals that are too big to be represented
     const test_cases = [_][]const u8{
         // Negative number slightly lower than i128 min
@@ -466,7 +467,7 @@ test "invalid number literal - too large for u128" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
-    
+
     const source = "999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999";
 
     const resources = try parseAndCanonicalizeInt(allocator, source);
@@ -476,13 +477,13 @@ test "invalid number literal - too large for u128" {
     // Very large numbers might be caught during parsing or canonicalization
     const parse_errors = resources.parse_ast.parse_diagnostics.items.len > 0;
     const tokenize_errors = resources.parse_ast.tokenize_diagnostics.items.len > 0;
-    
+
     // Only check canon diagnostics if parsing succeeded
     if (!parse_errors and !tokenize_errors) {
         const canon_diagnostics = try resources.module_env.getDiagnostics();
         defer allocator.free(canon_diagnostics);
         const canon_errors = canon_diagnostics.len > 0;
-        
+
         if (!canon_errors) {
             // If no errors at all, check the expression type
             const expr = resources.module_env.store.getExpr(resources.expr_idx);
@@ -499,7 +500,7 @@ test "invalid number literal - negative too large for i128" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
-    
+
     const source = "-999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999";
 
     const resources = try parseAndCanonicalizeInt(allocator, source);
@@ -509,13 +510,13 @@ test "invalid number literal - negative too large for i128" {
     // Very large negative numbers might be caught during parsing or canonicalization
     const parse_errors = resources.parse_ast.parse_diagnostics.items.len > 0;
     const tokenize_errors = resources.parse_ast.tokenize_diagnostics.items.len > 0;
-    
+
     // Only check canon diagnostics if parsing succeeded
     if (!parse_errors and !tokenize_errors) {
         const canon_diagnostics = try resources.module_env.getDiagnostics();
         defer allocator.free(canon_diagnostics);
         const canon_errors = canon_diagnostics.len > 0;
-        
+
         if (!canon_errors) {
             // If no errors at all, check the expression type
             const expr = resources.module_env.store.getExpr(resources.expr_idx);
@@ -532,7 +533,7 @@ test "integer literal - negative zero" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCanonicalizeInt(gpa, "-0");
     defer cleanup(gpa, result);
 
@@ -553,7 +554,7 @@ test "integer literal - positive zero" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
-    
+
     const result = try parseAndCanonicalizeInt(gpa, "0");
     defer cleanup(gpa, result);
 

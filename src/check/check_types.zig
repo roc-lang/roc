@@ -426,10 +426,10 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
     var does_fx = false; // Does this expression potentially perform any side effects?
     switch (expr) {
         .e_int => |_| {
-            // Integer literals have their type constraints (bits_needed, sign_needed) 
-            // created during canonicalization. Here we just need to ensure those 
+            // Integer literals have their type constraints (bits_needed, sign_needed)
+            // created during canonicalization. Here we just need to ensure those
             // constraints will be checked when unified with expected types.
-            // The type variable for this expression was already created with the 
+            // The type variable for this expression was already created with the
             // appropriate num_unbound or int_unbound content during canonicalization.
         },
         .e_frac_f64 => |_| {
@@ -1979,7 +1979,6 @@ test "call site unification order matters for concrete vs flexible types" {
         }
     }
 }
-
 
 test {
     _ = @import("check_types/cross_module_test.zig");

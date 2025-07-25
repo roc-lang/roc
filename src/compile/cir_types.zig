@@ -37,7 +37,7 @@ pub const ExternalDecl = struct {
     pub const Span = ExternalDeclSpan;
     /// A safe list of external declarations
     pub const SafeList = collections.SafeList(ExternalDecl);
-    
+
     pub fn pushToSExprTree(self: *const ExternalDecl, cir: anytype, tree: anytype) !void {
         _ = self;
         _ = cir;
@@ -74,7 +74,7 @@ pub const Import = struct {
             if (self.map.get(module_name)) |idx| {
                 return idx;
             }
-            
+
             const idx = @as(Import.Idx, @enumFromInt(self.imports.items.len));
             const owned_name = try allocator.dupe(u8, module_name);
             try self.imports.append(allocator, owned_name);

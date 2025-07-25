@@ -242,10 +242,10 @@ fn processSourceInternal(
         basename[0..dot_idx]
     else
         basename;
-    
+
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(gpa, module_name);
-    
+
     // CIR is now just an alias for ModuleEnv
     const cir = module_env;
 
