@@ -13,9 +13,6 @@ const compile = @import("compile");
 const types = @import("types");
 const reporting = @import("reporting");
 
-// we re-export build options for tracy
-pub const build_options = @import("build_options");
-
 const Solver = @import("check/check_types.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");

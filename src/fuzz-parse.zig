@@ -13,9 +13,6 @@ const base = @import("base");
 
 const fmt = @import("fmt.zig");
 
-// we re-export build options for tracy
-pub const build_options = @import("build_options");
-
 /// Hook for AFL++ to initialize the fuzz test environment.
 pub export fn zig_fuzz_init() void {}
 

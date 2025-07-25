@@ -3,15 +3,13 @@
 //! Result is at `./zig-out/bin/roc`
 
 const std = @import("std");
+const build_options = @import("build_options");
 const builtin = @import("builtin");
 const base = @import("base");
 const collections = @import("collections");
 const reporting = @import("reporting");
 const parse = @import("parse");
 const tracy = @import("tracy");
-
-// we re-export build options for tracy
-pub const build_options = @import("build_options");
 
 const fmt = @import("fmt.zig");
 const coordinate_simple = @import("coordinate_simple.zig");

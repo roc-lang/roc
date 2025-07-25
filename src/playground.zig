@@ -14,13 +14,11 @@
 
 const std = @import("std");
 const base = @import("base");
+const build_options = @import("build_options");
 const parse = @import("parse");
 const reporting = @import("reporting");
 const types = @import("types");
 const compile = @import("compile");
-
-// we re-export build options for tracy
-pub const build_options = @import("build_options");
 
 const can = @import("check/canonicalize.zig");
 const check_types = @import("check/check_types.zig");
