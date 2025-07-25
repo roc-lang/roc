@@ -3,16 +3,18 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("./parse.zig");
-const canonicalize = @import("./canonicalize.zig");
 const types = @import("types");
-const CIR = @import("./canonicalize/CIR.zig");
+const ModuleEnv = canonicalize.ModuleEnv;
+const canonicalize = @import("./canonicalize.zig");
 
 test "canonicalize True as Bool" {
-    const allocator = testing.allocator;
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const allocator = gpa_state.allocator();
     const source = "True";
 
     // Initialize ModuleEnv
-    var module_env = try base.ModuleEnv.init(allocator, source);
+    var module_env = try ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Parse
@@ -20,27 +22,29 @@ test "canonicalize True as Bool" {
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
-    // Create CIR
-    var cir = try CIR.init(&module_env, "test");
-    defer cir.deinit();
+    // The tokenizer should have inserted the identifier "True" during parsing
+    // No manual insertion needed anymore since we fixed the tokenizer to use a pointer
+
+    // Initialize CIR fields in ModuleEnv
+    try module_env.initCIRFields(allocator, "test");
 
     // Canonicalize
-    var can = try canonicalize.init(&cir, &parse_ast, null);
+    var can = try canonicalize.init(&module_env, &parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse unreachable;
 
     // Get the expression
-    const expr = cir.store.getExpr(canonical_expr_idx);
+    const expr = module_env.store.getExpr(canonical_expr_idx);
 
     // Check if it's a nominal expression (Bool)
     try testing.expectEqual(.e_nominal, std.meta.activeTag(expr));
 
     // The backing expression should be a tag
-    const backing_expr = cir.store.getExpr(expr.e_nominal.backing_expr);
+    const backing_expr = module_env.store.getExpr(expr.e_nominal.backing_expr);
     try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(CIR.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
+    try testing.expectEqual(canonicalize.ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
 
     // The tag should be "True"
     const tag_name = module_env.idents.getText(backing_expr.e_tag.name);
@@ -48,11 +52,13 @@ test "canonicalize True as Bool" {
 }
 
 test "canonicalize False as Bool" {
-    const allocator = testing.allocator;
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const allocator = gpa_state.allocator();
     const source = "False";
 
     // Initialize ModuleEnv
-    var module_env = try base.ModuleEnv.init(allocator, source);
+    var module_env = try ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Parse
@@ -60,27 +66,29 @@ test "canonicalize False as Bool" {
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
-    // Create CIR
-    var cir = try CIR.init(&module_env, "test");
-    defer cir.deinit();
+    // The tokenizer should have inserted the identifier "False" during parsing
+    // No manual insertion needed anymore since we fixed the tokenizer to use a pointer
+
+    // Initialize CIR fields in ModuleEnv
+    try module_env.initCIRFields(allocator, "test");
 
     // Canonicalize
-    var can = try canonicalize.init(&cir, &parse_ast, null);
+    var can = try canonicalize.init(&module_env, &parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse unreachable;
 
     // Get the expression
-    const expr = cir.store.getExpr(canonical_expr_idx);
+    const expr = module_env.store.getExpr(canonical_expr_idx);
 
     // Check if it's a nominal expression (Bool)
     try testing.expectEqual(.e_nominal, std.meta.activeTag(expr));
 
     // The backing expression should be a tag
-    const backing_expr = cir.store.getExpr(expr.e_nominal.backing_expr);
+    const backing_expr = module_env.store.getExpr(expr.e_nominal.backing_expr);
     try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(CIR.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
+    try testing.expectEqual(canonicalize.ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
 
     // The tag should be "False"
     const tag_name = module_env.idents.getText(backing_expr.e_tag.name);
@@ -88,11 +96,13 @@ test "canonicalize False as Bool" {
 }
 
 test "canonicalize random tag not as Bool" {
-    const allocator = testing.allocator;
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const allocator = gpa_state.allocator();
     const source = "SomeTag";
 
     // Initialize ModuleEnv
-    var module_env = try base.ModuleEnv.init(allocator, source);
+    var module_env = try ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Parse
@@ -100,19 +110,21 @@ test "canonicalize random tag not as Bool" {
     defer parse_ast.deinit(allocator);
     parse_ast.store.emptyScratch();
 
-    // Create CIR
-    var cir = try CIR.init(&module_env, "test");
-    defer cir.deinit();
+    // The tokenizer should have inserted the identifier "SomeTag" during parsing
+    // No manual insertion needed anymore since we fixed the tokenizer to use a pointer
+
+    // Initialize CIR fields in ModuleEnv
+    try module_env.initCIRFields(allocator, "test");
 
     // Canonicalize
-    var can = try canonicalize.init(&cir, &parse_ast, null);
+    var can = try canonicalize.init(&module_env, &parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse unreachable;
 
     // Get the expression
-    const expr = cir.store.getExpr(canonical_expr_idx);
+    const expr = module_env.store.getExpr(canonical_expr_idx);
 
     // Check that it's NOT a nominal expression - just a plain tag
     try testing.expectEqual(.e_tag, std.meta.activeTag(expr));

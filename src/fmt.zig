@@ -5,6 +5,7 @@ const base = @import("base");
 const parse = @import("check/parse.zig");
 const collections = @import("collections");
 const Filesystem = @import("fs/Filesystem.zig");
+const ModuleEnv = @import("compile/ModuleEnv.zig");
 
 const tracy = @import("tracy.zig");
 const tokenize = @import("check/parse/tokenize.zig");
@@ -160,7 +161,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
         }
     };
 
-    var module_env = try base.ModuleEnv.init(gpa, contents);
+    var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
     var parse_ast: AST = try parse.parse(&module_env);
@@ -168,7 +169,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -193,7 +194,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 pub fn formatStdin(gpa: std.mem.Allocator) !void {
     const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
     // ModuleEnv takes ownership of contents
-    var module_env = try base.ModuleEnv.init(gpa, contents);
+    var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
     var parse_ast: AST = try parse.parse(&module_env);
@@ -201,7 +202,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -2042,7 +2043,7 @@ const Formatter = struct {
 fn moduleFmtsSame(source: []const u8) !void {
     const gpa = std.testing.allocator;
 
-    var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var env = try ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
     var parse_ast = parse(&env, source);
@@ -2071,7 +2072,7 @@ fn exprFmtsSame(source: []const u8, flags: FormatFlags) !void {
 fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !void {
     const gpa = std.testing.allocator;
 
-    var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    var env = try ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
     var messages: [1]tokenize.Diagnostic = undefined;
@@ -2141,7 +2142,7 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, input));
+    var module_env = try @import("compile/ModuleEnv.zig").init(gpa, try gpa.dupe(u8, input));
     defer module_env.deinit();
 
     var parse_ast = try parse.parse(&module_env);
@@ -2153,7 +2154,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         parse_ast.store.emptyScratch();
 
         std.debug.print("Parsed SExpr:\n==========\n", .{});
-        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
         std.debug.print("\n==========\n\n", .{});
     }
 

@@ -11,6 +11,7 @@ const base = @import("base");
 const canonicalize = @import("check/canonicalize.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const cache = @import("cache/mod.zig");
+const ModuleEnv = @import("compile/ModuleEnv.zig");
 
 const Solver = @import("check/check_types.zig");
 const parse = @import("check/parse.zig");
@@ -23,7 +24,6 @@ const repl = @import("repl/eval.zig");
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const parallel = base.parallel;
-const CIR = canonicalize.CIR;
 const AST = parse.AST;
 const Report = reporting.Report;
 
@@ -437,10 +437,10 @@ fn problemsEqual(a: ProblemEntry, b: ProblemEntry) bool {
 fn generateAllReports(
     allocator: std.mem.Allocator,
     parse_ast: *AST,
-    can_ir: *CIR,
+    can_ir: *ModuleEnv,
     solver: *Solver,
     snapshot_path: []const u8,
-    module_env: *base.ModuleEnv,
+    module_env: *ModuleEnv,
 ) !std.ArrayList(reporting.Report) {
     var reports = std.ArrayList(reporting.Report).init(allocator);
     errdefer reports.deinit();
@@ -455,7 +455,7 @@ fn generateAllReports(
 
     // Generate parse reports
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(module_env, diagnostic, allocator, snapshot_path) catch |err| {
+        const report = parse_ast.parseDiagnosticToReport(module_env.*, diagnostic, allocator, snapshot_path) catch |err| {
             std.debug.panic("Failed to create parse report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
         };
         try reports.append(report);
@@ -463,6 +463,7 @@ fn generateAllReports(
 
     // Generate canonicalization reports
     const diagnostics = try can_ir.getDiagnostics();
+    defer allocator.free(diagnostics);
     for (diagnostics) |diagnostic| {
         const report = can_ir.diagnosticToReport(diagnostic, allocator, snapshot_path) catch |err| {
             std.debug.panic("Failed to create canonicalization report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
@@ -474,7 +475,7 @@ fn generateAllReports(
     var problems_itr = solver.problems.problems.iterIndices();
     while (problems_itr.next()) |problem_idx| {
         const problem = solver.problems.problems.get(problem_idx);
-        const empty_modules: []const *CIR = &.{};
+        const empty_modules: []const *ModuleEnv = &.{};
         var report_builder = types_problem_mod.ReportBuilder.init(
             allocator,
             module_env,
@@ -1017,7 +1018,7 @@ fn processSnapshotContent(
     }
 
     // Process the content through the compilation pipeline
-    var module_env = try base.ModuleEnv.init(allocator, content.source);
+    var module_env = try ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
 
     // Parse the source code based on node type
@@ -1041,13 +1042,13 @@ fn processSnapshotContent(
         basename[0..dot_idx]
     else
         basename;
-    var can_ir = try CIR.init(&module_env, module_name);
-    defer can_ir.deinit();
+    const can_ir = &module_env; // ModuleEnv contains the canonical IR
+    try can_ir.initCIRFields(allocator, module_name);
 
-    var can = try canonicalize.init(&can_ir, &parse_ast, null);
+    var can = try canonicalize.init(can_ir, &parse_ast, null);
     defer can.deinit();
 
-    var maybe_expr_idx: ?CIR.Expr.Idx = null;
+    var maybe_expr_idx: ?ModuleEnv.Expr.Idx = null;
 
     switch (content.meta.node_type) {
         .file => try can.canonicalizeFile(),
@@ -1075,11 +1076,11 @@ fn processSnapshotContent(
     can_ir.debugAssertArraysInSync();
 
     // Types
-    const empty_modules: []const *CIR = &.{};
+    const empty_modules: []const *ModuleEnv = &.{};
     var solver = try Solver.init(
         allocator,
-        &can_ir.env.types,
-        &can_ir,
+        &can_ir.types,
+        can_ir,
         empty_modules,
         &can_ir.store.regions,
     );
@@ -1099,30 +1100,27 @@ fn processSnapshotContent(
         // Generate original S-expression for comparison
         var original_tree = SExprTree.init(allocator);
         defer original_tree.deinit();
-        try CIR.pushToSExprTree(&can_ir, null, &original_tree);
+        try ModuleEnv.pushToSExprTree(can_ir, null, &original_tree);
 
         var original_sexpr = std.ArrayList(u8).init(allocator);
         defer original_sexpr.deinit();
         try original_tree.toStringPretty(original_sexpr.writer().any());
 
         // Create and serialize MmapCache
-        const cache_data = try cache.CacheModule.create(allocator, &module_env, &can_ir, 0, 0);
+        const cache_data = try cache.CacheModule.create(allocator, &module_env, can_ir, 0, 0);
         defer allocator.free(cache_data);
 
         // Deserialize back
         var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
 
-        // Restore ModuleEnv and CIR
+        // Restore ModuleEnv
         var restored = try loaded_cache.restore(allocator, module_name, content.source);
         defer restored.module_env.deinit();
-        defer restored.cir.deinit();
-
-        restored.cir.env = &restored.module_env;
 
         // Generate S-expression from restored CIR
         var restored_tree = SExprTree.init(allocator);
         defer restored_tree.deinit();
-        try CIR.pushToSExprTree(&restored.cir, null, &restored_tree);
+        try ModuleEnv.pushToSExprTree(&restored.module_env, null, &restored_tree);
 
         var restored_sexpr = std.ArrayList(u8).init(allocator);
         defer restored_sexpr.deinit();
@@ -1152,7 +1150,7 @@ fn processSnapshotContent(
     try generateHtmlWrapper(&output, &content);
 
     // Generate reports once and use for both EXPECTED and PROBLEMS sections
-    var generated_reports = try generateAllReports(allocator, &parse_ast, &can_ir, &solver, output_path, &module_env);
+    var generated_reports = try generateAllReports(allocator, &parse_ast, can_ir, &solver, output_path, &module_env);
     defer {
         for (generated_reports.items) |*report| {
             report.deinit();
@@ -1168,8 +1166,8 @@ fn processSnapshotContent(
     try generateTokensSection(&output, &parse_ast, &content, &module_env);
     try generateParseSection(&output, &content, &parse_ast, &module_env);
     try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, &can_ir, maybe_expr_idx);
-    try generateTypesSection(&output, &can_ir, maybe_expr_idx);
+    try generateCanonicalizeSection(&output, can_ir, maybe_expr_idx);
+    try generateTypesSection(&output, can_ir, maybe_expr_idx);
 
     try generateHtmlClosing(&output);
 
@@ -1842,7 +1840,7 @@ fn generateProblemsSection(output: *DualOutput, reports: *const std.ArrayList(re
 }
 
 /// Generate TOKENS section for both markdown and HTML
-pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const Content, module_env: *base.ModuleEnv) !void {
+pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Content, module_env: *ModuleEnv) !void {
     try output.begin_section("TOKENS");
     try output.begin_code_block("zig");
 
@@ -1860,7 +1858,7 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *con
     const tokens = tokenizedBuffer.tokens.items(.tag);
     for (tokens, 0..) |tok, i| {
         const region = tokenizedBuffer.resolve(@intCast(i));
-        const info = try module_env.calcRegionInfo(content.source, region.start.offset, region.end.offset);
+        const info = module_env.calcRegionInfo(region);
 
         // Markdown token output
         try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
@@ -1919,7 +1917,7 @@ fn source_contains_newline_in_range(source: []const u8, start: usize, end: usize
 }
 
 /// Generate PARSE2 section using SExprTree for both markdown and HTML
-fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *base.ModuleEnv) !void {
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *ModuleEnv) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
 
@@ -1927,31 +1925,31 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
     switch (content.meta.node_type) {
         .file => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(env.*, parse_ast, &tree);
         },
         .header => {
             const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
-            try header.pushToSExprTree(env, parse_ast, &tree);
+            try header.pushToSExprTree(env.*, parse_ast, &tree);
         },
         .expr => {
             const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
-            try expr.pushToSExprTree(env, parse_ast, &tree);
+            try expr.pushToSExprTree(env.*, parse_ast, &tree);
         },
         .statement => {
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
-            try stmt.pushToSExprTree(env, parse_ast, &tree);
+            try stmt.pushToSExprTree(env.*, parse_ast, &tree);
         },
         .package => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(env.*, parse_ast, &tree);
         },
         .platform => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(env.*, parse_ast, &tree);
         },
         .app => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(env.*, parse_ast, &tree);
         },
         .repl => {
             // REPL doesn't use parse trees
@@ -2049,7 +2047,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 }
 
 /// Generate CANONICALIZE section for both markdown and HTML
-fn generateCanonicalizeSection(output: *DualOutput, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?ModuleEnv.Expr.Idx) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
     try can_ir.pushToSExprTree(maybe_expr_idx, &tree);
@@ -2076,7 +2074,7 @@ fn generateCanonicalizeSection(output: *DualOutput, can_ir: *CIR, maybe_expr_idx
 }
 
 /// Generate TYPES section for both markdown and HTML
-fn generateTypesSection(output: *DualOutput, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?ModuleEnv.Expr.Idx) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
     try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree);
@@ -2103,7 +2101,7 @@ fn generateTypesSection(output: *DualOutput, can_ir: *CIR, maybe_expr_idx: ?CIR.
 
 /// Generate TYPES section displaying types store for both markdown and HTML
 /// This is used for debugging.
-fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *CIR) !void {
+fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *ModuleEnv) !void {
     var solved = std.ArrayList(u8).init(output.gpa);
     defer solved.deinit();
 

@@ -172,6 +172,11 @@ pub const Store = struct {
         return self.interner.getText(@enumFromInt(@as(u32, idx.idx)));
     }
 
+    /// Check if an identifier text already exists in the store.
+    pub fn contains(self: *const Store, text: []const u8) bool {
+        return self.interner.contains(text);
+    }
+
     /// Calculate the size needed to serialize this Ident.Store
     pub fn serializedSize(self: *const Store) usize {
         var size: usize = 0;

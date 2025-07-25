@@ -1,13 +1,12 @@
-//! Unit tests to verify `CIR.Statement` are correctly stored in `NodeStore`
+//! Unit tests to verify `ModuleEnv.Statement` are correctly stored in `NodeStore`
 
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
 const RocDec = @import("builtins").RocDec;
-const Node = @import("../Node.zig");
-const NodeStore = @import("../NodeStore.zig");
-const CIR = @import("../CIR.zig");
+const ModuleEnv = @import("../../../compile/ModuleEnv.zig");
+const NodeStore = @import("../../../compile/NodeStore.zig");
 
 const from_raw_offsets = base.Region.from_raw_offsets;
 const StringLiteral = base.StringLiteral;
@@ -57,98 +56,98 @@ test "NodeStore round trip - Statements" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var statements = std.ArrayList(CIR.Statement).init(gpa);
+    var statements = std.ArrayList(ModuleEnv.Statement).init(gpa);
     defer statements.deinit();
 
-    try statements.append(CIR.Statement{
+    try statements.append(ModuleEnv.Statement{
         .s_decl = .{
-            .pattern = rand_idx(CIR.Pattern.Idx),
-            .expr = rand_idx(CIR.Expr.Idx),
+            .pattern = rand_idx(ModuleEnv.Pattern.Idx),
+            .expr = rand_idx(ModuleEnv.Expr.Idx),
         },
     });
 
-    try statements.append(CIR.Statement{
+    try statements.append(ModuleEnv.Statement{
         .s_var = .{
-            .pattern_idx = rand_idx(CIR.Pattern.Idx),
-            .expr = rand_idx(CIR.Expr.Idx),
+            .pattern_idx = rand_idx(ModuleEnv.Pattern.Idx),
+            .expr = rand_idx(ModuleEnv.Expr.Idx),
         },
     });
 
-    try statements.append(CIR.Statement{
+    try statements.append(ModuleEnv.Statement{
         .s_reassign = .{
-            .pattern_idx = rand_idx(CIR.Pattern.Idx),
-            .expr = rand_idx(CIR.Expr.Idx),
+            .pattern_idx = rand_idx(ModuleEnv.Pattern.Idx),
+            .expr = rand_idx(ModuleEnv.Expr.Idx),
         },
     });
 
-    try statements.append(CIR.Statement{
+    try statements.append(ModuleEnv.Statement{
         .s_expr = .{
-            .expr = rand_idx(CIR.Expr.Idx),
+            .expr = rand_idx(ModuleEnv.Expr.Idx),
         },
     });
 
-    try statements.append(CIR.Statement{
+    try statements.append(ModuleEnv.Statement{
         .s_crash = .{
             .msg = rand_idx(StringLiteral.Idx),
         },
     });
 
-    try statements.append(CIR.Statement{
+    try statements.append(ModuleEnv.Statement{
         .s_dbg = .{
-            .expr = rand_idx(CIR.Expr.Idx),
+            .expr = rand_idx(ModuleEnv.Expr.Idx),
         },
     });
 
-    try statements.append(CIR.Statement{
+    try statements.append(ModuleEnv.Statement{
         .s_expect = .{
-            .body = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(ModuleEnv.Expr.Idx),
         },
     });
 
-    try statements.append(CIR.Statement{
+    try statements.append(ModuleEnv.Statement{
         .s_for = .{
-            .patt = rand_idx(CIR.Pattern.Idx),
-            .expr = rand_idx(CIR.Expr.Idx),
-            .body = rand_idx(CIR.Expr.Idx),
+            .patt = rand_idx(ModuleEnv.Pattern.Idx),
+            .expr = rand_idx(ModuleEnv.Expr.Idx),
+            .body = rand_idx(ModuleEnv.Expr.Idx),
         },
     });
 
-    try statements.append(CIR.Statement{
+    try statements.append(ModuleEnv.Statement{
         .s_return = .{
-            .expr = rand_idx(CIR.Expr.Idx),
+            .expr = rand_idx(ModuleEnv.Expr.Idx),
         },
     });
 
-    try statements.append(CIR.Statement{
+    try statements.append(ModuleEnv.Statement{
         .s_import = .{
             .module_name_tok = rand_ident_idx(),
             .qualifier_tok = rand_ident_idx(),
             .alias_tok = rand_ident_idx(),
-            .exposes = CIR.ExposedItem.Span{ .span = rand_span() },
+            .exposes = ModuleEnv.ExposedItem.Span{ .span = rand_span() },
         },
     });
 
-    try statements.append(CIR.Statement{
+    try statements.append(ModuleEnv.Statement{
         .s_alias_decl = .{
-            .header = rand_idx(CIR.TypeHeader.Idx),
-            .anno = rand_idx(CIR.TypeAnno.Idx),
+            .header = rand_idx(ModuleEnv.TypeHeader.Idx),
+            .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
             .anno_var = rand_idx(TypeVar),
             .where = null,
         },
     });
 
-    try statements.append(CIR.Statement{
+    try statements.append(ModuleEnv.Statement{
         .s_nominal_decl = .{
-            .header = rand_idx(CIR.TypeHeader.Idx),
-            .anno = rand_idx(CIR.TypeAnno.Idx),
+            .header = rand_idx(ModuleEnv.TypeHeader.Idx),
+            .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
             .anno_var = rand_idx(TypeVar),
             .where = null,
         },
     });
 
-    try statements.append(CIR.Statement{ .s_type_anno = .{
+    try statements.append(ModuleEnv.Statement{ .s_type_anno = .{
         .name = rand_ident_idx(),
-        .anno = rand_idx(CIR.TypeAnno.Idx),
+        .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
         .where = null,
     } });
 
@@ -165,8 +164,8 @@ test "NodeStore round trip - Statements" {
     }
 
     const actual_test_count = statements.items.len;
-    if (actual_test_count < NodeStore.CIR_STATEMENT_NODE_COUNT) {
-        std.debug.print("Statement test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_STATEMENT_NODE_COUNT, actual_test_count });
+    if (actual_test_count < NodeStore.MODULEENV_STATEMENT_NODE_COUNT) {
+        std.debug.print("Statement test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_STATEMENT_NODE_COUNT, actual_test_count });
         std.debug.print("Please add test cases for missing statement variants.\n", .{});
         return error.IncompleteStatementTestCoverage;
     }
@@ -177,111 +176,111 @@ test "NodeStore round trip - Expressions" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var expressions = std.ArrayList(CIR.Expr).init(gpa);
+    var expressions = std.ArrayList(ModuleEnv.Expr).init(gpa);
     defer expressions.deinit();
 
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_int = .{
             .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_frac_f64 = .{
             .value = 3.14,
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_frac_dec = .{
-            .value = CIR.RocDec{ .num = 314 },
+            .value = ModuleEnv.RocDec{ .num = 314 },
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_dec_small = .{
             .numerator = rand.random().int(i16),
             .denominator_power_of_ten = rand.random().int(u8),
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_str_segment = .{
             .literal = rand_idx(StringLiteral.Idx),
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_str = .{
-            .span = CIR.Expr.Span{ .span = rand_span() },
+            .span = ModuleEnv.Expr.Span{ .span = rand_span() },
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_lookup_local = .{
-            .pattern_idx = rand_idx(CIR.Pattern.Idx),
+            .pattern_idx = rand_idx(ModuleEnv.Pattern.Idx),
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_lookup_external = .{
-            .module_idx = rand_idx_u16(CIR.Import.Idx),
+            .module_idx = rand_idx_u16(ModuleEnv.Import.Idx),
             .target_node_idx = rand.random().int(u16),
             .region = rand_region(),
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_list = .{
             .elem_var = rand_idx(TypeVar),
-            .elems = CIR.Expr.Span{ .span = rand_span() },
+            .elems = ModuleEnv.Expr.Span{ .span = rand_span() },
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_tuple = .{
-            .elems = CIR.Expr.Span{ .span = rand_span() },
+            .elems = ModuleEnv.Expr.Span{ .span = rand_span() },
         },
     });
-    try expressions.append(CIR.Expr{
-        .e_match = CIR.Expr.Match{
-            .cond = rand_idx(CIR.Expr.Idx),
-            .branches = CIR.Expr.Match.Branch.Span{ .span = rand_span() },
+    try expressions.append(ModuleEnv.Expr{
+        .e_match = ModuleEnv.Expr.Match{
+            .cond = rand_idx(ModuleEnv.Expr.Idx),
+            .branches = ModuleEnv.Expr.Match.Branch.Span{ .span = rand_span() },
             .exhaustive = rand_idx(TypeVar),
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_if = .{
-            .branches = CIR.Expr.IfBranch.Span{ .span = rand_span() },
-            .final_else = rand_idx(CIR.Expr.Idx),
+            .branches = ModuleEnv.Expr.IfBranch.Span{ .span = rand_span() },
+            .final_else = rand_idx(ModuleEnv.Expr.Idx),
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_call = .{
-            .args = CIR.Expr.Span{ .span = rand_span() },
+            .args = ModuleEnv.Expr.Span{ .span = rand_span() },
             .called_via = CalledVia.apply,
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_record = .{
-            .fields = CIR.RecordField.Span{ .span = rand_span() },
+            .fields = ModuleEnv.RecordField.Span{ .span = rand_span() },
             .ext = null,
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_empty_list = .{},
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_block = .{
-            .stmts = CIR.Statement.Span{ .span = rand_span() },
-            .final_expr = rand_idx(CIR.Expr.Idx),
+            .stmts = ModuleEnv.Statement.Span{ .span = rand_span() },
+            .final_expr = rand_idx(ModuleEnv.Expr.Idx),
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_tag = .{
             .name = rand_ident_idx(),
-            .args = CIR.Expr.Span{ .span = rand_span() },
+            .args = ModuleEnv.Expr.Span{ .span = rand_span() },
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_nominal = .{
-            .nominal_type_decl = rand_idx(CIR.Statement.Idx),
-            .backing_expr = rand_idx(CIR.Expr.Idx),
+            .nominal_type_decl = rand_idx(ModuleEnv.Statement.Idx),
+            .backing_expr = rand_idx(ModuleEnv.Expr.Idx),
             .backing_type = .tag,
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_zero_argument_tag = .{
             .closure_name = rand_ident_idx(),
             .variant_var = rand_idx(TypeVar),
@@ -289,58 +288,59 @@ test "NodeStore round trip - Expressions" {
             .name = rand_ident_idx(),
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_lambda = .{
-            .args = CIR.Pattern.Span{ .span = rand_span() },
-            .body = rand_idx(CIR.Expr.Idx),
-            .captures = CIR.Expr.Capture.Span{ .span = rand_span() },
+            .args = ModuleEnv.Pattern.Span{ .span = rand_span() },
+            .body = rand_idx(ModuleEnv.Expr.Idx),
+            .captures = ModuleEnv.Expr.Capture.Span{ .span = rand_span() },
         },
     });
-    try expressions.append(CIR.Expr{
-        .e_binop = CIR.Expr.Binop.init(
+    try expressions.append(ModuleEnv.Expr{
+        .e_binop = ModuleEnv.Expr.Binop.init(
             .add,
-            rand_idx(CIR.Expr.Idx),
-            rand_idx(CIR.Expr.Idx),
+            rand_idx(ModuleEnv.Expr.Idx),
+            rand_idx(ModuleEnv.Expr.Idx),
         ),
     });
-    try expressions.append(CIR.Expr{
-        .e_unary_minus = CIR.Expr.UnaryMinus.init(rand_idx(CIR.Expr.Idx)),
+    try expressions.append(ModuleEnv.Expr{
+        .e_unary_minus = ModuleEnv.Expr.UnaryMinus.init(rand_idx(ModuleEnv.Expr.Idx)),
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_dot_access = .{
-            .receiver = rand_idx(CIR.Expr.Idx),
+            .receiver = rand_idx(ModuleEnv.Expr.Idx),
             .field_name = rand_ident_idx(),
             .args = null,
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_runtime_error = .{
-            .diagnostic = rand_idx(CIR.Diagnostic.Idx),
+            .diagnostic = rand_idx(ModuleEnv.Diagnostic.Idx),
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_crash = .{
             .msg = rand_idx(StringLiteral.Idx),
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_dbg = .{
-            .expr = rand_idx(CIR.Expr.Idx),
+            .expr = rand_idx(ModuleEnv.Expr.Idx),
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_empty_record = .{},
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_expect = .{
-            .body = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(ModuleEnv.Expr.Idx),
         },
     });
-    try expressions.append(CIR.Expr{
+    try expressions.append(ModuleEnv.Expr{
         .e_frac_dec = .{
-            .value = CIR.RocDec{ .num = 123456789 },
+            .value = ModuleEnv.RocDec{ .num = 123456789 },
         },
     });
+
     for (expressions.items, 0..) |expr, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));
         const idx = try store.addExpr(expr, region);
@@ -354,8 +354,8 @@ test "NodeStore round trip - Expressions" {
     }
 
     const actual_test_count = expressions.items.len;
-    if (actual_test_count < NodeStore.CIR_EXPR_NODE_COUNT) {
-        std.debug.print("Expression test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_EXPR_NODE_COUNT, actual_test_count });
+    if (actual_test_count < NodeStore.MODULEENV_EXPR_NODE_COUNT) {
+        std.debug.print("Expression test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_EXPR_NODE_COUNT, actual_test_count });
         std.debug.print("Please add test cases for missing expression variants.\n", .{});
         return error.IncompleteExpressionTestCoverage;
     }
@@ -366,111 +366,111 @@ test "NodeStore round trip - Diagnostics" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var diagnostics = std.ArrayList(CIR.Diagnostic).init(gpa);
+    var diagnostics = std.ArrayList(ModuleEnv.Diagnostic).init(gpa);
     defer diagnostics.deinit();
 
     // Test all diagnostic types to ensure complete coverage
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .not_implemented = .{
             .feature = rand_idx(StringLiteral.Idx),
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .invalid_num_literal = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .ident_already_in_scope = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .crash_expects_string = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .ident_not_in_scope = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .invalid_top_level_statement = .{
             .stmt = rand_idx(StringLiteral.Idx),
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .expr_not_canonicalized = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .invalid_string_interpolation = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .pattern_arg_invalid = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .pattern_not_canonicalized = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .can_lambda_not_implemented = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .lambda_body_not_canonicalized = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .if_condition_not_canonicalized = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .if_then_not_canonicalized = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .if_else_not_canonicalized = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .var_across_function_boundary = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .shadowing_warning = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),
@@ -478,7 +478,7 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .type_redeclared = .{
             .name = rand_ident_idx(),
             .redeclared_region = rand_region(),
@@ -486,47 +486,47 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .undeclared_type = .{
             .name = rand_ident_idx(),
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .undeclared_type_var = .{
             .name = rand_ident_idx(),
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .malformed_type_annotation = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .malformed_where_clause = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .unused_variable = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .used_underscore_variable = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .type_alias_redeclared = .{
             .name = rand_ident_idx(),
             .original_region = rand_region(),
@@ -534,7 +534,7 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .nominal_type_redeclared = .{
             .name = rand_ident_idx(),
             .original_region = rand_region(),
@@ -542,7 +542,7 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .type_shadowed_warning = .{
             .name = rand_ident_idx(),
             .region = rand_region(),
@@ -551,7 +551,7 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .type_parameter_conflict = .{
             .name = rand_ident_idx(),
             .parameter_name = rand_ident_idx(),
@@ -560,7 +560,7 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .duplicate_record_field = .{
             .field_name = rand_ident_idx(),
             .duplicate_region = rand_region(),
@@ -568,19 +568,19 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .invalid_single_quote = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .f64_pattern_literal = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .unused_type_var_name = .{
             .name = rand_ident_idx(),
             .suggested_name = rand_ident_idx(),
@@ -588,7 +588,7 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .type_var_marked_unused = .{
             .name = rand_ident_idx(),
             .suggested_name = rand_ident_idx(),
@@ -596,7 +596,7 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .type_var_ending_in_underscore = .{
             .name = rand_ident_idx(),
             .suggested_name = rand_ident_idx(),
@@ -604,33 +604,33 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .underscore_in_type_declaration = .{
             .is_alias = rand.random().boolean(),
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .tuple_elem_not_canonicalized = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .empty_tuple = .{
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .exposed_but_not_implemented = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .redundant_exposed = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),
@@ -638,14 +638,14 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .module_not_found = .{
             .module_name = rand_ident_idx(),
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .value_not_exposed = .{
             .module_name = rand_ident_idx(),
             .value_name = rand_ident_idx(),
@@ -653,7 +653,7 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .type_not_exposed = .{
             .module_name = rand_ident_idx(),
             .type_name = rand_ident_idx(),
@@ -661,14 +661,14 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .module_not_imported = .{
             .module_name = rand_ident_idx(),
             .region = rand_region(),
         },
     });
 
-    try diagnostics.append(CIR.Diagnostic{
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .too_many_exports = .{
             .count = rand.random().int(u32),
             .region = rand_region(),
@@ -688,8 +688,8 @@ test "NodeStore round trip - Diagnostics" {
     }
 
     const actual_test_count = diagnostics.items.len;
-    if (actual_test_count < NodeStore.CIR_DIAGNOSTIC_NODE_COUNT) {
-        std.debug.print("Diagnostic test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_DIAGNOSTIC_NODE_COUNT, actual_test_count });
+    if (actual_test_count < NodeStore.MODULEENV_DIAGNOSTIC_NODE_COUNT) {
+        std.debug.print("Diagnostic test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_DIAGNOSTIC_NODE_COUNT, actual_test_count });
         std.debug.print("Please add test cases for missing diagnostic variants.\n", .{});
         return error.IncompleteDiagnosticTestCoverage;
     }
@@ -700,87 +700,87 @@ test "NodeStore round trip - TypeAnno" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var type_annos = std.ArrayList(CIR.TypeAnno).init(gpa);
+    var type_annos = std.ArrayList(ModuleEnv.TypeAnno).init(gpa);
     defer type_annos.deinit();
 
     // Test all TypeAnno variants to ensure complete coverage
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .apply = .{
             .symbol = rand_ident_idx(),
-            .args = CIR.TypeAnno.Span{ .span = rand_span() },
+            .args = ModuleEnv.TypeAnno.Span{ .span = rand_span() },
         },
     });
 
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .ty_var = .{
             .name = rand_ident_idx(),
         },
     });
 
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .underscore = {},
     });
 
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .ty = .{
             .symbol = rand_ident_idx(),
         },
     });
 
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .ty = .{
             .symbol = rand_ident_idx(),
         },
     });
 
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .tag_union = .{
-            .tags = CIR.TypeAnno.Span{ .span = rand_span() },
-            .ext = rand_idx(CIR.TypeAnno.Idx),
+            .tags = ModuleEnv.TypeAnno.Span{ .span = rand_span() },
+            .ext = rand_idx(ModuleEnv.TypeAnno.Idx),
         },
     });
 
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .tuple = .{
-            .elems = CIR.TypeAnno.Span{ .span = rand_span() },
+            .elems = ModuleEnv.TypeAnno.Span{ .span = rand_span() },
         },
     });
 
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .record = .{
-            .fields = CIR.TypeAnno.RecordField.Span{ .span = rand_span() },
+            .fields = ModuleEnv.TypeAnno.RecordField.Span{ .span = rand_span() },
         },
     });
 
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .@"fn" = .{
-            .args = CIR.TypeAnno.Span{ .span = rand_span() },
-            .ret = rand_idx(CIR.TypeAnno.Idx),
+            .args = ModuleEnv.TypeAnno.Span{ .span = rand_span() },
+            .ret = rand_idx(ModuleEnv.TypeAnno.Idx),
             .effectful = rand.random().boolean(),
         },
     });
 
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .parens = .{
-            .anno = rand_idx(CIR.TypeAnno.Idx),
+            .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
         },
     });
 
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .ty = .{
             .symbol = rand_ident_idx(),
         },
     });
 
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .ty_lookup_external = .{
-            .external_decl = rand_idx(CIR.ExternalDecl.Idx),
+            .external_decl = rand_idx(ModuleEnv.ExternalDecl.Idx),
         },
     });
 
-    try type_annos.append(CIR.TypeAnno{
+    try type_annos.append(ModuleEnv.TypeAnno{
         .malformed = .{
-            .diagnostic = rand_idx(CIR.Diagnostic.Idx),
+            .diagnostic = rand_idx(ModuleEnv.Diagnostic.Idx),
         },
     });
 
@@ -798,8 +798,8 @@ test "NodeStore round trip - TypeAnno" {
     }
 
     const actual_test_count = type_annos.items.len;
-    if (actual_test_count < NodeStore.CIR_TYPE_ANNO_NODE_COUNT) {
-        std.debug.print("CIR.TypeAnno test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_TYPE_ANNO_NODE_COUNT, actual_test_count });
+    if (actual_test_count < NodeStore.MODULEENV_TYPE_ANNO_NODE_COUNT) {
+        std.debug.print("ModuleEnv.TypeAnno test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_TYPE_ANNO_NODE_COUNT, actual_test_count });
         std.debug.print("Please add test cases for missing type annotation variants.\n", .{});
         return error.IncompleteTypeAnnoTestCoverage;
     }
@@ -810,82 +810,82 @@ test "NodeStore round trip - Pattern" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var patterns = std.ArrayList(CIR.Pattern).init(gpa);
+    var patterns = std.ArrayList(ModuleEnv.Pattern).init(gpa);
     defer patterns.deinit();
 
     // Test all Pattern variants to ensure complete coverage
-    try patterns.append(CIR.Pattern{
+    try patterns.append(ModuleEnv.Pattern{
         .assign = .{
             .ident = rand_ident_idx(),
         },
     });
-    try patterns.append(CIR.Pattern{
+    try patterns.append(ModuleEnv.Pattern{
         .as = .{
-            .pattern = rand_idx(CIR.Pattern.Idx),
+            .pattern = rand_idx(ModuleEnv.Pattern.Idx),
             .ident = rand_ident_idx(),
         },
     });
-    try patterns.append(CIR.Pattern{
+    try patterns.append(ModuleEnv.Pattern{
         .applied_tag = .{
             .name = rand_ident_idx(),
-            .args = CIR.Pattern.Span{ .span = rand_span() },
+            .args = ModuleEnv.Pattern.Span{ .span = rand_span() },
         },
     });
-    try patterns.append(CIR.Pattern{
+    try patterns.append(ModuleEnv.Pattern{
         .record_destructure = .{
             .whole_var = rand_idx(TypeVar),
             .ext_var = rand_idx(TypeVar),
-            .destructs = CIR.Pattern.RecordDestruct.Span{ .span = rand_span() },
+            .destructs = ModuleEnv.Pattern.RecordDestruct.Span{ .span = rand_span() },
         },
     });
-    try patterns.append(CIR.Pattern{
+    try patterns.append(ModuleEnv.Pattern{
         .list = .{
             .list_var = rand_idx(TypeVar),
             .elem_var = rand_idx(TypeVar),
-            .patterns = CIR.Pattern.Span{ .span = rand_span() },
-            .rest_info = .{ .index = rand.random().int(u32), .pattern = rand_idx(CIR.Pattern.Idx) },
+            .patterns = ModuleEnv.Pattern.Span{ .span = rand_span() },
+            .rest_info = .{ .index = rand.random().int(u32), .pattern = rand_idx(ModuleEnv.Pattern.Idx) },
         },
     });
-    try patterns.append(CIR.Pattern{
+    try patterns.append(ModuleEnv.Pattern{
         .tuple = .{
-            .patterns = CIR.Pattern.Span{ .span = rand_span() },
+            .patterns = ModuleEnv.Pattern.Span{ .span = rand_span() },
         },
     });
-    try patterns.append(CIR.Pattern{
+    try patterns.append(ModuleEnv.Pattern{
         .int_literal = .{
-            .value = CIR.IntValue{
+            .value = ModuleEnv.IntValue{
                 .bytes = @bitCast(rand.random().int(i128)),
                 .kind = .i128,
             },
         },
     });
-    try patterns.append(CIR.Pattern{
+    try patterns.append(ModuleEnv.Pattern{
         .small_dec_literal = .{
             .numerator = rand.random().int(i16),
             .denominator_power_of_ten = rand.random().int(u8),
         },
     });
-    try patterns.append(CIR.Pattern{
+    try patterns.append(ModuleEnv.Pattern{
         .dec_literal = .{
             .value = RocDec.fromU64(rand.random().int(u64)),
         },
     });
-    try patterns.append(CIR.Pattern{
+    try patterns.append(ModuleEnv.Pattern{
         .str_literal = .{
             .literal = rand_idx(StringLiteral.Idx),
         },
     });
 
-    try patterns.append(CIR.Pattern{ .underscore = {} });
-    try patterns.append(CIR.Pattern{
+    try patterns.append(ModuleEnv.Pattern{ .underscore = {} });
+    try patterns.append(ModuleEnv.Pattern{
         .runtime_error = .{
-            .diagnostic = rand_idx(CIR.Diagnostic.Idx),
+            .diagnostic = rand_idx(ModuleEnv.Diagnostic.Idx),
         },
     });
-    try patterns.append(CIR.Pattern{
+    try patterns.append(ModuleEnv.Pattern{
         .nominal = .{
-            .nominal_type_decl = rand_idx(CIR.Statement.Idx),
-            .backing_pattern = rand_idx(CIR.Pattern.Idx),
+            .nominal_type_decl = rand_idx(ModuleEnv.Statement.Idx),
+            .backing_pattern = rand_idx(ModuleEnv.Pattern.Idx),
             .backing_type = .tag,
         },
     });
@@ -916,8 +916,8 @@ test "NodeStore round trip - Pattern" {
     }
 
     const actual_test_count = patterns.items.len;
-    if (actual_test_count < NodeStore.CIR_PATTERN_NODE_COUNT) {
-        std.debug.print("CIR.Pattern test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_PATTERN_NODE_COUNT, actual_test_count });
+    if (actual_test_count < NodeStore.MODULEENV_PATTERN_NODE_COUNT) {
+        std.debug.print("ModuleEnv.Pattern test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_PATTERN_NODE_COUNT, actual_test_count });
         std.debug.print("Please add test cases for missing pattern variants.\n", .{});
         return error.IncompletePatternTestCoverage;
     }

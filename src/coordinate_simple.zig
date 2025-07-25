@@ -12,8 +12,7 @@ const types_problem_mod = @import("check/check_types/problem.zig");
 const reporting = @import("reporting.zig");
 const Filesystem = @import("fs/Filesystem.zig");
 
-const ModuleEnv = base.ModuleEnv;
-const CIR = canonicalize.CIR;
+const ModuleEnv = @import("compile/ModuleEnv.zig");
 const AST = parse.AST;
 const cache_mod = @import("cache/mod.zig");
 const CacheManager = cache_mod.CacheManager;
@@ -44,7 +43,7 @@ pub const TimingInfo = struct {
 /// The reports contain references to the source text, so ProcessResult
 /// must outlive any usage of the reports.
 pub const ProcessResult = struct {
-    cir: *CIR,
+    cir: *ModuleEnv,
     source: []const u8,
     own_source: bool, // Whether we own the source text (true if processed from file)
     reports: []reporting.Report,
@@ -61,11 +60,9 @@ pub const ProcessResult = struct {
 
         // Clean up the heap-allocated ModuleEnv (only when loaded from cache)
         if (self.was_cached) {
-            self.cir.env.deinit();
-            gpa.destroy(self.cir.env);
+            self.cir.deinit();
+            gpa.destroy(self.cir);
         }
-
-        self.cir.deinit();
         if (self.own_source) {
             // If we own the source, we need to free it
             gpa.free(self.source);
@@ -233,21 +230,24 @@ fn processSourceInternal(
 
     // Get parser diagnostic Reports
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(module_env, diagnostic, gpa, "<source>") catch continue;
+        const report = parse_ast.parseDiagnosticToReport(module_env.*, diagnostic, gpa, "<source>") catch continue;
         reports.append(report) catch continue;
     }
 
     collectTiming(config, &timer, &timing_info, "tokenize_parse_ns");
 
-    // Initialize the Can IR (heap-allocated)
-    var cir = try gpa.create(CIR);
     // Extract module name from filename (remove path and extension)
     const basename = std.fs.path.basename(filename);
     const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
         basename[0..dot_idx]
     else
         basename;
-    cir.* = try CIR.init(module_env, module_name);
+
+    // Initialize CIR fields in ModuleEnv
+    try module_env.initCIRFields(gpa, module_name);
+
+    // CIR is now just an alias for ModuleEnv
+    const cir = module_env;
 
     // Create scope for semantic analysis
     // Canonicalize the AST
@@ -271,8 +271,8 @@ fn processSourceInternal(
     collectTiming(config, &timer, &timing_info, "canonicalize_diagnostics_ns");
 
     // Type checking
-    const empty_modules: []const *CIR = &.{};
-    var solver = try Solver.init(gpa, &module_env.types, cir, empty_modules, &cir.store.regions);
+    const empty_modules: []const *ModuleEnv = &.{};
+    var solver = try Solver.init(gpa, &cir.types, cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 
     // Check for type errors

@@ -25,7 +25,7 @@ const types = @import("types");
 const problem = @import("check/check_types/problem.zig");
 
 const SExprTree = base.SExprTree;
-const ModuleEnv = base.ModuleEnv;
+const ModuleEnv = @import("compile/ModuleEnv.zig");
 const Allocator = std.mem.Allocator;
 
 const allocator: Allocator = .{
@@ -101,7 +101,6 @@ const Diagnostic = struct {
 const CompilerStageData = struct {
     module_env: *ModuleEnv,
     parse_ast: ?parse.AST = null,
-    can_ir: ?can.CIR = null,
     solver: ?check_types = null,
 
     // Diagnostic reports from each stage
@@ -123,10 +122,6 @@ const CompilerStageData = struct {
     pub fn deinit(self: *CompilerStageData) void {
         if (self.parse_ast) |*ast| {
             ast.deinit(allocator);
-        }
-
-        if (self.can_ir) |*ir| {
-            ir.deinit();
         }
 
         if (self.solver) |*s| {
@@ -338,7 +333,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Collect parse diagnostics with additional error handling
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(module_env, diagnostic, allocator, "main.roc") catch {
+        const report = parse_ast.parseDiagnosticToReport(module_env.*, diagnostic, allocator, "main.roc") catch {
             // Log the error and continue processing other diagnostics
             // This prevents crashes on malformed diagnostics or empty input
             continue;
@@ -348,9 +343,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Stage 2: Canonicalization (always run, even with parse errors)
     // The canonicalizer handles malformed parse nodes and continues processing
-    // Initialize CIR directly in result to ensure stable pointer
-    result.can_ir = try can.CIR.init(module_env, "main");
-    var can_ir = &result.can_ir.?;
+    const can_ir = result.module_env;
+    try can_ir.initCIRFields(allocator, "main");
 
     var canonicalizer = try can.init(can_ir, &parse_ast, null);
     defer canonicalizer.deinit();
@@ -365,6 +359,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Collect canonicalization diagnostics
     const can_diags = can_ir.getDiagnostics() catch &.{};
+    defer if (can_diags.len > 0) allocator.free(can_diags);
     for (can_diags) |diag| {
         const report = can_ir.diagnosticToReport(diag, allocator, "main.roc") catch continue;
         result.can_reports.append(report) catch continue;
@@ -372,10 +367,11 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)
     // The type checker works with malformed canonical nodes to provide partial type information
-    if (result.can_ir) |*type_can_ir| {
-        const empty_modules: []const *can.CIR = &.{};
+    {
+        const type_can_ir = result.module_env;
+        const empty_modules: []const *ModuleEnv = &.{};
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try check_types.init(allocator, &module_env.types, type_can_ir, empty_modules, &type_can_ir.store.regions);
+        var solver = try check_types.init(allocator, &type_can_ir.types, type_can_ir, empty_modules, &type_can_ir.store.regions);
         result.solver = solver;
 
         solver.checkDefs() catch {};
@@ -383,7 +379,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         // Collect type checking problems and convert them to reports using ReportBuilder
         var report_builder = problem.ReportBuilder.init(
             allocator,
-            module_env,
+            result.module_env,
             type_can_ir,
             &solver.snapshots,
             "main.roc",
@@ -635,7 +631,7 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) usize {
 
         var sexpr_writer = sexpr_buffer.writer();
 
-        parse.AST.toSExprHtml(&mut_ast, data.module_env, sexpr_writer.any()) catch {
+        parse.AST.toSExprHtml(&mut_ast, data.module_env.*, sexpr_writer.any()) catch {
             return writeErrorResponse(response_buffer, .ERROR, "Failed to generate AST S-expression");
         };
 
@@ -650,18 +646,8 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) usize {
 
 /// Write canonicalized CIR response in S-expression format
 fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) usize {
-    // Check for error conditions first
-    if (data.can_ir == null) {
-        // CIR is only created if parsing succeeded, so if it's null, there were parse errors
-        if (data.parse_reports.items.len > 0) {
-            return writeErrorResponse(response_buffer, .ERROR, "Canonicalization skipped due to parsing errors.");
-        } else {
-            return writeErrorResponse(response_buffer, .ERROR, "Canonicalization failed");
-        }
-    }
-
     // We have CIR data, proceed with generation
-    const cir = data.can_ir.?;
+    const cir = data.module_env;
 
     // Create a new arena for this query
     var local_arena = std.heap.ArenaAllocator.init(allocator);
@@ -689,8 +675,8 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) usize {
         tree.endNode(debug_begin, debug_attrs) catch {};
     }
 
-    const mutable_cir = @constCast(&cir);
-    can.CIR.pushToSExprTree(mutable_cir, null, &tree) catch {};
+    const mutable_cir = @constCast(cir);
+    ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
     tree.toHtml(sexpr_writer) catch {};
 
     // Success case - write the response
@@ -728,11 +714,6 @@ fn writeTypeInfoResponse(response_buffer: []u8, data: CompilerStageData, message
         .string => |s| s,
         else => return writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid identifier parameter"),
     };
-
-    // Check for error conditions first
-    if (data.can_ir == null) {
-        return writeErrorResponse(response_buffer, .ERROR, "Canonicalization not completed.");
-    }
 
     if (data.solver == null) {
         return writeErrorResponse(response_buffer, .ERROR, "Type checking not completed.");
@@ -775,11 +756,11 @@ fn writeTypeInfoResponse(response_buffer: []u8, data: CompilerStageData, message
 
 /// Find type information for an identifier at a specific byte position
 fn findTypeInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier: []const u8) !?[]const u8 {
-    const cir = data.can_ir.?;
-    const gpa = cir.env.gpa;
+    const cir = data.module_env;
+    const gpa = cir.gpa;
 
     // Create TypeWriter for converting types to strings
-    var type_writer = types.writers.TypeWriter.init(gpa, cir.env) catch return null;
+    var type_writer = types.writers.TypeWriter.init(gpa, @ptrCast(cir)) catch return null;
     defer type_writer.deinit();
 
     // Iterate through all definitions to find one that contains this position
@@ -798,7 +779,7 @@ fn findTypeInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier:
             switch (pattern) {
                 .assign => |assign| {
                     // Get the identifier text
-                    const ident_text = cir.env.idents.getText(assign.ident);
+                    const ident_text = cir.idents.getText(assign.ident);
 
                     // Check if this matches our target identifier
                     if (std.mem.eql(u8, ident_text, identifier)) {
@@ -828,16 +809,12 @@ fn findTypeInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier:
 /// Write types response in S-expression format
 fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) usize {
     // Check for error conditions first
-    if (data.can_ir == null) {
-        return writeErrorResponse(response_buffer, .ERROR, "Canonicalization not completed.");
-    }
-
     if (data.solver == null) {
         return writeErrorResponse(response_buffer, .ERROR, "Type checking not completed.");
     }
 
     // We have both CIR and solver data, proceed with type generation
-    const cir = data.can_ir.?;
+    const cir = data.module_env;
 
     // Create a new arena for this query to avoid allocation issues
     var local_arena = std.heap.ArenaAllocator.init(allocator);
@@ -853,7 +830,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) usize {
     defer tree.deinit();
 
     // Use the same as snapshot system
-    const mutable_cir = @constCast(&cir);
+    const mutable_cir = @constCast(cir);
     mutable_cir.pushTypesToSExprTree(null, &tree) catch |err| {
         // If type generation fails, return an error message
         const error_msg = switch (err) {

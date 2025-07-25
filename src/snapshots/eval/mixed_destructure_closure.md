@@ -84,10 +84,6 @@ OpenRound(1:1-1:2),OpBar(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:5-1:6),Comma(1
 									(record-destruct @1.27-1.28 (label "e") (ident "e")
 										(required
 											(p-assign @1.27-1.28 (ident "e")))))))))))
-		(captures
-			(capture @1.5-1.6 (ident "a"))
-			(capture @1.24-1.25 (ident "d"))
-			(capture @1.27-1.28 (ident "e")))
 		(e-binop @1.33-1.50 (op "add")
 			(e-lookup-local @1.33-1.34
 				(p-assign @1.5-1.6 (ident "a")))

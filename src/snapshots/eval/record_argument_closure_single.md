@@ -42,8 +42,6 @@ OpenRound(1:1-1:2),OpBar(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:5-1:6),CloseCu
 					(record-destruct @1.5-1.6 (label "x") (ident "x")
 						(required
 							(p-assign @1.5-1.6 (ident "x")))))))
-		(captures
-			(capture @1.5-1.6 (ident "x")))
 		(e-lookup-local @1.10-1.11
 			(p-assign @1.5-1.6 (ident "x"))))
 	(e-record @1.14-1.24

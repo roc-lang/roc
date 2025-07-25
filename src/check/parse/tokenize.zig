@@ -9,6 +9,7 @@ const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
 const tracy = @import("../../tracy.zig");
+const ModuleEnv = @import("../../compile/ModuleEnv.zig");
 
 /// representation of a token in the source code, like '+', 'foo', '=', '{'
 /// these are represented by an offset into the bytes of the source code
@@ -412,9 +413,9 @@ pub const Token = struct {
 /// The buffer that accumulates tokens.
 pub const TokenizedBuffer = struct {
     tokens: Token.List,
-    env: *base.ModuleEnv,
+    env: *ModuleEnv,
 
-    pub fn initCapacity(env: *base.ModuleEnv, capacity: usize) std.mem.Allocator.Error!TokenizedBuffer {
+    pub fn initCapacity(env: *ModuleEnv, capacity: usize) std.mem.Allocator.Error!TokenizedBuffer {
         var tokens = Token.List{};
         try tokens.ensureTotalCapacity(env.gpa, capacity);
         return TokenizedBuffer{
@@ -1014,11 +1015,11 @@ pub const Tokenizer = struct {
     cursor: Cursor,
     output: TokenizedBuffer,
     stack: std.ArrayListUnmanaged(BraceKind),
-    env: *base.ModuleEnv,
+    env: *ModuleEnv,
 
     /// Creates a new Tokenizer.
     /// Note that the caller must also provide a pre-allocated messages buffer.
-    pub fn init(env: *base.ModuleEnv, text: []const u8, messages: []Diagnostic) std.mem.Allocator.Error!Tokenizer {
+    pub fn init(env: *ModuleEnv, text: []const u8, messages: []Diagnostic) std.mem.Allocator.Error!Tokenizer {
         const cursor = Cursor.init(text, messages);
         // TODO: tune this more. Syntax grab bag is 3:1.
         // Generally, roc code will be less dense than that.
@@ -1578,7 +1579,7 @@ pub const Tokenizer = struct {
 fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) !void {
     var messages: [10]Diagnostic = undefined;
 
-    var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var env = try @import("../../compile/ModuleEnv.zig").init(gpa, try gpa.dupe(u8, ""));
     defer env.deinit();
 
     var tokenizer = try Tokenizer.init(&env, input, &messages);
@@ -1596,7 +1597,7 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
 
 /// Assert the invariants of the tokenizer are held.
 pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug: bool) std.mem.Allocator.Error!void {
-    var env = try base.ModuleEnv.init(gpa, gpa.dupe(u8, "") catch unreachable);
+    var env = try @import("../../compile/ModuleEnv.zig").init(gpa, gpa.dupe(u8, "") catch unreachable);
     defer env.deinit();
 
     // Initial tokenization.
@@ -2237,7 +2238,7 @@ test "tokenizer with invalid UTF-8" {
         const invalid_utf8 = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xFF, ' ', 'w', 'o', 'r', 'l', 'd', '"' };
         var diagnostics: [10]Diagnostic = undefined;
 
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try @import("../../compile/ModuleEnv.zig").init(gpa, try gpa.dupe(u8, ""));
         defer env.deinit();
 
         var tokenizer = try Tokenizer.init(&env, &invalid_utf8, &diagnostics);
@@ -2255,7 +2256,7 @@ test "tokenizer with invalid UTF-8" {
         const incomplete_utf8 = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xC3, '"' }; // 0xC3 expects another byte
         var diagnostics: [10]Diagnostic = undefined;
 
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try @import("../../compile/ModuleEnv.zig").init(gpa, try gpa.dupe(u8, ""));
         defer env.deinit();
 
         var tokenizer = try Tokenizer.init(&env, &incomplete_utf8, &diagnostics);
@@ -2277,7 +2278,7 @@ test "non-printable characters in string literal" {
         const non_printable = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', '\x01', 'w', 'o', 'r', 'l', 'd', '"' }; // 0x01 is SOH (non-printable)
         var diagnostics: [10]Diagnostic = undefined;
 
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try @import("../../compile/ModuleEnv.zig").init(gpa, try gpa.dupe(u8, ""));
         defer env.deinit();
 
         var tokenizer = try Tokenizer.init(&env, &non_printable, &diagnostics);
@@ -2295,7 +2296,7 @@ test "non-printable characters in string literal" {
         const control_char = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xC2, 0x80, ' ', 'w', 'o', 'r', 'l', 'd', '"' }; // U+0080 (C1 control)
         var diagnostics: [10]Diagnostic = undefined;
 
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try @import("../../compile/ModuleEnv.zig").init(gpa, try gpa.dupe(u8, ""));
         defer env.deinit();
 
         var tokenizer = try Tokenizer.init(&env, &control_char, &diagnostics);
@@ -2312,7 +2313,7 @@ test "non-printable characters in string literal" {
         const valid_chars = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', '\t', ' ', 'w', 'o', 'r', 'l', 'd', '"' };
         var diagnostics: [10]Diagnostic = undefined;
 
-        var env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        var env = try @import("../../compile/ModuleEnv.zig").init(gpa, try gpa.dupe(u8, ""));
         defer env.deinit();
 
         var tokenizer = try Tokenizer.init(&env, &valid_chars, &diagnostics);

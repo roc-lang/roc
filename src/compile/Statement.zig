@@ -14,7 +14,7 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const CIR = @import("CIR.zig");
+const ModuleEnv = @import("ModuleEnv.zig");
 
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
@@ -22,8 +22,8 @@ const Ident = base.Ident;
 const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
-const Pattern = CIR.Pattern;
-const Expr = CIR.Expr;
+const Pattern = ModuleEnv.Pattern;
+const Expr = ModuleEnv.Expr;
 
 /// A single statement - either at the top-level or within a block expression.
 pub const Statement = union(enum) {
@@ -124,25 +124,25 @@ pub const Statement = union(enum) {
         module_name_tok: Ident.Idx,
         qualifier_tok: ?Ident.Idx,
         alias_tok: ?Ident.Idx,
-        exposes: CIR.ExposedItem.Span,
+        exposes: ModuleEnv.ExposedItem.Span,
     },
     /// An alias type declaration, e.g., `Foo : Str`
     ///
     /// Only valid at the top level of a module
     s_alias_decl: struct {
-        header: CIR.TypeHeader.Idx,
-        anno: CIR.TypeAnno.Idx,
+        header: ModuleEnv.TypeHeader.Idx,
+        anno: ModuleEnv.TypeAnno.Idx,
         anno_var: types.Var,
-        where: ?CIR.WhereClause.Span,
+        where: ?ModuleEnv.WhereClause.Span,
     },
     /// A nominal type declaration, e.g., `Foo := (U64, Str)`
     ///
     /// Only valid at the top level of a module
     s_nominal_decl: struct {
-        header: CIR.TypeHeader.Idx,
-        anno: CIR.TypeAnno.Idx,
+        header: ModuleEnv.TypeHeader.Idx,
+        anno: ModuleEnv.TypeAnno.Idx,
         anno_var: types.Var,
-        where: ?CIR.WhereClause.Span,
+        where: ?ModuleEnv.WhereClause.Span,
     },
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     ///
@@ -151,14 +151,14 @@ pub const Statement = union(enum) {
     /// ```
     s_type_anno: struct {
         name: Ident.Idx,
-        anno: CIR.TypeAnno.Idx,
-        where: ?CIR.WhereClause.Span,
+        anno: ModuleEnv.TypeAnno.Idx,
+        where: ?ModuleEnv.WhereClause.Span,
     },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, stmt_idx: Statement.Idx) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, stmt_idx: Statement.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .s_decl => |d| {
                 const begin = tree.beginNode();
@@ -201,7 +201,7 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-crash");
                 const region = ir.store.getStatementRegion(stmt_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("msg", ir.env.strings.get(c.msg));
+                try tree.pushStringPair("msg", ir.strings.get(c.msg));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -267,7 +267,7 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-import");
                 const region = ir.store.getStatementRegion(stmt_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("module", ir.env.idents.getText(s.module_name_tok));
+                try tree.pushStringPair("module", ir.idents.getText(s.module_name_tok));
 
                 if (s.qualifier_tok) |qualifier| {
                     try tree.pushStringPair("qualifier", ir.getIdentText(qualifier));
@@ -284,7 +284,7 @@ pub const Statement = union(enum) {
                 const exposes_attrs = tree.beginNode();
                 const exposes_slice = ir.store.sliceExposedItems(s.exposes);
                 for (exposes_slice) |exposed_idx| {
-                    try ir.store.getExposedItem(exposed_idx).pushToSExprTree(ir.env, ir, tree);
+                    try ir.store.getExposedItem(exposed_idx).pushToSExprTree(undefined, ir, tree);
                 }
                 try tree.endNode(exposes_begin, exposes_attrs);
 
