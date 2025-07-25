@@ -1979,7 +1979,6 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
         };
     } else blk: {
         // This should not happen with properly canonicalized code
-        std.debug.print("WARNING: RecordDestruct with no extra_data (backwards compat triggered)\n", .{});
         const dummy_pattern_idx: ModuleEnv.Pattern.Idx = @enumFromInt(0);
         break :blk ModuleEnv.Pattern.RecordDestruct.Kind{ .Required = dummy_pattern_idx };
     };
