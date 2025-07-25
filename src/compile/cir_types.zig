@@ -8,21 +8,30 @@ const collections = @import("collections");
 const DataSpan = base.DataSpan;
 
 // Simple span types used throughout CIR
+/// Represents a contiguous span of data in the store
 pub const Span = struct { span: DataSpan };
+/// Represents a range with start index and length
 pub const Range = struct { start: u32, len: u32 };
 
 // Index types for various CIR nodes
+/// Index to a definition in the store
 pub const DefIdx = enum(u32) { _ };
+/// Index to a statement in the store
 pub const StatementIdx = enum(u32) { _ };
+/// Index to an external declaration in the store
 pub const ExternalDeclIdx = enum(u32) { _ };
+/// Index to a diagnostic message in the store
 pub const DiagnosticIdx = enum(u32) { _ };
 
 // Span types for collections
+/// Span of definitions in the store
 pub const DefSpan = struct { span: DataSpan };
+/// Span of statements in the store
 pub const StatementSpan = struct { span: DataSpan };
+/// Span of external declarations in the store
 pub const ExternalDeclSpan = struct { span: DataSpan };
 
-// External declaration type
+/// Represents an external declaration from another module
 pub const ExternalDecl = struct {
     /// Fully qualified name (e.g., "json.Json.utf8")
     qualified_name: base.Ident.Idx,
@@ -38,6 +47,7 @@ pub const ExternalDecl = struct {
     /// A safe list of external declarations
     pub const SafeList = collections.SafeList(ExternalDecl);
 
+    /// Converts this external declaration to an S-expression tree representation for debugging
     pub fn pushToSExprTree(self: *const ExternalDecl, cir: anytype, tree: anytype) !void {
         _ = self;
         _ = cir;
@@ -45,7 +55,7 @@ pub const ExternalDecl = struct {
     }
 };
 
-// Import store for managing module imports
+/// Manages module imports and their metadata
 pub const Import = struct {
     pub const Idx = enum(u16) { _ };
     /// A store for interning imported module names

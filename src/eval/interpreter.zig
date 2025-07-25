@@ -671,7 +671,6 @@ pub const Interpreter = struct {
             .e_lambda => |lambda_expr| {
                 _ = try self.getLayoutIdx(expr_idx);
 
-
                 // Calculate environment size based on captures
                 var env_size: u16 = 0;
                 var capture_layouts = std.ArrayList(Layout).init(self.allocator);
@@ -681,7 +680,7 @@ pub const Interpreter = struct {
                     const captures = self.cir.store.sliceCaptures(lambda_expr.captures);
                     for (captures) |capture_idx| {
                         const capture = self.cir.store.getCapture(capture_idx);
-                        
+
                         // Find the binding for this capture
                         var found = false;
                         var reversed_bindings = std.mem.reverseIterator(self.bindings_stack.items);
@@ -708,7 +707,6 @@ pub const Interpreter = struct {
                     }
                 }
 
-
                 const closure_ptr = try self.pushStackValue(Layout.closure(env_size));
                 const closure: *Closure = @ptrCast(@alignCast(closure_ptr));
 
@@ -720,7 +718,6 @@ pub const Interpreter = struct {
                     .env_size = env_size,
                 };
 
-
                 // Copy captured values into the closure's environment
                 if (lambda_expr.captures.span.len > 0) {
                     const env_base = @as([*]u8, @ptrCast(closure)) + CLOSURE_HEADER_SIZE; // Skip closure header
@@ -731,15 +728,12 @@ pub const Interpreter = struct {
                         const capture = self.cir.store.getCapture(capture_idx);
                         const capture_layout = capture_layouts.items[i];
 
-
                         const capture_size = self.layout_cache.layoutSize(capture_layout);
                         const capture_align = @intFromEnum(capture_layout.alignment(target_usize));
                         const align_mask = capture_align - 1;
 
-
                         // Align the offset
                         offset = (offset + align_mask) & ~align_mask;
-
 
                         // Find and copy the captured value
                         var reversed_bindings = std.mem.reverseIterator(self.bindings_stack.items);
@@ -749,7 +743,6 @@ pub const Interpreter = struct {
                                     const src = @as([*]const u8, @ptrCast(binding.value_ptr));
                                     const dest = env_base + offset;
                                     std.mem.copyForwards(u8, dest[0..capture_size], src[0..capture_size]);
-
                                 }
                                 offset += capture_size;
                                 break;
@@ -1049,7 +1042,6 @@ pub const Interpreter = struct {
 
                 // Align the offset
                 offset = (offset + align_mask) & ~align_mask;
-
 
                 const capture_ptr = @as(*const anyopaque, @ptrCast(env_base + offset));
 
@@ -1412,7 +1404,6 @@ pub const Interpreter = struct {
             writer.print("LAYOUT STACK items={}\n", .{self.value_stack.items.len}) catch {};
         }
     }
-
 
     fn bindPattern(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx, value: StackValue) EvalError!void {
         const pattern = self.cir.store.getPattern(pattern_idx);

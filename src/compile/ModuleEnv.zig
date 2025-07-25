@@ -13,31 +13,41 @@ const reporting = @import("reporting");
 pub const CIR = @import("CIR.zig");
 
 // Re-export types from CIR module
+/// Definition type for value and function definitions
 pub const Def = CIR.Def;
-
+/// Type header for type declarations
 pub const TypeHeader = CIR.TypeHeader;
-
+/// Where clause for type constraints
 pub const WhereClause = CIR.WhereClause;
-
+/// Type annotation with position information
 pub const Annotation = CIR.Annotation;
-
+/// Items exposed by a module's interface
 pub const ExposedItem = CIR.ExposedItem;
-
+/// Fields in record patterns for pattern matching
 pub const PatternRecordField = CIR.PatternRecordField;
-
+/// Arbitrary precision integer values
 pub const IntValue = CIR.IntValue;
-
+/// Roc decimal type representation
 pub const RocDec = CIR.RocDec;
-
+/// Diagnostic messages for compilation errors and warnings
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
+/// Store for all nodes in the CIR
 pub const NodeStore = CIR.NodeStore;
+/// Node type representing various AST elements
 pub const Node = CIR.Node;
+/// Expression type for Roc expressions
 pub const Expr = CIR.Expr;
+/// Pattern type for pattern matching
 pub const Pattern = CIR.Pattern;
+/// Statement type for module-level statements
 pub const Statement = CIR.Statement;
+/// Type annotation representation
 pub const TypeAnno = CIR.TypeAnno;
+/// Import statements
 pub const Import = CIR.Import;
+/// Fields in record expressions
 pub const RecordField = CIR.RecordField;
+/// External declarations from other modules
 pub const ExternalDecl = CIR.ExternalDecl;
 
 const Ident = base.Ident;
@@ -212,6 +222,7 @@ fn getDiagnosticRegion(diagnostic: Diagnostic) Region {
 
 /// Import helper functions from CIR
 const isCastable = CIR.isCastable;
+/// Cast function for safely converting between compatible index types
 pub const castIdx = CIR.castIdx;
 
 // ===== Module compilation functions =====
@@ -228,7 +239,7 @@ pub fn getDiagnostics(self: *Self) std.mem.Allocator.Error![]Diagnostic {
     return diagnostics;
 }
 
-// Real Report type from the reporting module
+/// Compilation error report type for user-friendly error messages
 pub const Report = CIR.Report;
 
 /// Convert a canonicalization diagnostic to a Report for rendering.

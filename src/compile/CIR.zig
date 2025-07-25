@@ -26,7 +26,7 @@ pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
 
 // Type definitions for module compilation
 
-// Def type definition
+/// Represents a definition (binding of a pattern to an expression) in the CIR
 pub const Def = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -85,7 +85,7 @@ pub const Def = struct {
     }
 };
 
-// TypeHeader type definition
+/// Represents a type header (e.g., 'Maybe a' or 'Result err ok') in type annotations
 pub const TypeHeader = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { start: u32, len: u32 };
@@ -121,7 +121,7 @@ pub const TypeHeader = struct {
     }
 };
 
-// WhereClause type definition
+/// Represents a where clause constraint in type definitions
 pub const WhereClause = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -210,7 +210,7 @@ pub const WhereClause = union(enum) {
     }
 };
 
-// Annotation type definition
+/// Represents a type annotation associated with definitions
 pub const Annotation = struct {
     pub const Idx = enum(u32) { _ };
 
@@ -238,7 +238,7 @@ pub const Annotation = struct {
     }
 };
 
-// ExposedItem type definition
+/// Represents an item exposed by a module's interface
 pub const ExposedItem = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -266,13 +266,13 @@ pub const ExposedItem = struct {
     }
 };
 
-// PatternRecordField type definition with proper Idx and Span types
+/// Represents a field in a record pattern for pattern matching
 pub const PatternRecordField = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { start: u32, len: u32 };
 };
 
-// IntValue type definition (for missing export)
+/// Represents an arbitrary precision integer value
 pub const IntValue = struct {
     bytes: [16]u8,
     kind: enum {
@@ -291,10 +291,12 @@ pub const IntValue = struct {
 // Must match the structure of builtins.RocDec
 pub const RocDec = builtins.RocDec;
 
+/// Converts a RocDec to an i128 integer
 pub fn toI128(self: RocDec) i128 {
     return self.num;
 }
 
+/// Creates a RocDec from an f64 value, returns null if conversion fails
 pub fn fromF64(f: f64) ?RocDec {
     // Simple conversion - the real implementation is in builtins/dec.zig
     const scaled = @as(i128, @intFromFloat(f * 1_000_000_000_000_000_000.0));
@@ -304,7 +306,7 @@ pub fn fromF64(f: f64) ?RocDec {
 // Diagnostic types for compilation errors
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
-// Import type definition
+/// Represents an import statement in a module
 pub const Import = struct {
     pub const Idx = enum(u32) { _ };
 
@@ -342,7 +344,7 @@ pub const Import = struct {
     };
 };
 
-// RecordField type definition (for expression records)
+/// Represents a field in a record expression
 pub const RecordField = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -360,7 +362,7 @@ pub const RecordField = struct {
     }
 };
 
-// ExternalDecl type definition
+/// Represents an external declaration from another module
 pub const ExternalDecl = struct {
     /// Fully qualified name (e.g., "json.Json.utf8")
     qualified_name: base.Ident.Idx,
@@ -420,7 +422,7 @@ pub const ExternalDecl = struct {
 // Real Report type from the reporting module
 pub const Report = reporting.Report;
 
-// Helper function to check if a type is castable
+/// Checks if a type is castable for index type conversions
 pub fn isCastable(comptime T: type) bool {
     return switch (T) {
         Expr.Idx,
@@ -446,7 +448,7 @@ pub fn isCastable(comptime T: type) bool {
     };
 }
 
-// Helper function to cast between index types
+/// Safely casts between compatible index types
 pub fn castIdx(comptime From: type, comptime To: type, idx: From) To {
     return @as(To, @enumFromInt(@intFromEnum(idx)));
 }
