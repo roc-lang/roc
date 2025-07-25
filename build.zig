@@ -93,6 +93,11 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/tracy.zig"),
     });
 
+    const module_build_options = b.addModule("build_options", .{
+        .root_source_file = build_options.getOutput(),
+    });
+    module_tracy.addImport("build_options", module_build_options);
+
     // Configure module dependencies
     module_collections.addImport("serialization", module_serialization);
 
@@ -125,7 +130,7 @@ pub fn build(b: *std.Build) void {
     module_tracy.addImport("builtins", module_builtins);
 
     // add main roc exe
-    const roc_exe = addMainExe(b, build_options, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, module_builtins) orelse return;
+    const roc_exe = addMainExe(b, module_build_options, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, module_builtins) orelse return;
     roc_exe.root_module.addImport("base", module_base);
     roc_exe.root_module.addImport("collections", module_collections);
     roc_exe.root_module.addImport("types", module_types);
@@ -152,7 +157,7 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.root_module.addImport("reporting", module_reporting);
     snapshot_exe.root_module.addImport("parse", module_parse);
     snapshot_exe.root_module.addImport("tracy", module_tracy);
-    add_tracy(b, build_options, snapshot_exe, target, false, flag_enable_tracy);
+    add_tracy(b, module_build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 
     // Add playground WASM executable
@@ -169,7 +174,7 @@ pub fn build(b: *std.Build) void {
     playground_exe.rdynamic = true;
     playground_exe.root_module.addImport("base", module_base);
     playground_exe.root_module.addImport("builtins", module_builtins);
-    playground_exe.root_module.addOptions("build_options", build_options);
+    playground_exe.root_module.addImport("build_options", module_build_options);
     playground_exe.root_module.addImport("types", module_types);
     playground_exe.root_module.addImport("collections", module_collections);
     playground_exe.root_module.addImport("compile", module_compile);
@@ -177,7 +182,7 @@ pub fn build(b: *std.Build) void {
     playground_exe.root_module.addImport("parse", module_parse);
     playground_exe.root_module.addImport("tracy", module_tracy);
 
-    add_tracy(b, build_options, playground_exe, b.resolveTargetQuery(.{
+    add_tracy(b, module_build_options, playground_exe, b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
     }), false, null);
@@ -191,7 +196,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    all_tests.root_module.addOptions("build_options", build_options);
+    all_tests.root_module.addImport("build_options", module_build_options);
     all_tests.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
     all_tests.root_module.addImport("base", module_base);
     all_tests.root_module.addImport("builtins", module_builtins);
@@ -210,7 +215,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     builtins_tests.root_module.stack_check = false;
-    builtins_tests.root_module.addOptions("build_options", build_options);
+    builtins_tests.root_module.addImport("build_options", module_build_options);
 
     b.default_step.dependOn(&all_tests.step);
     b.default_step.dependOn(playground_step);
@@ -278,7 +283,7 @@ pub fn build(b: *std.Build) void {
             no_bin,
             target,
             optimize,
-            build_options,
+            module_build_options,
             flag_enable_tracy,
             name,
             module_builtins,
@@ -301,7 +306,7 @@ fn add_fuzz_target(
     no_bin: bool,
     target: ResolvedTarget,
     optimize: OptimizeMode,
-    build_options: *Step.Options,
+    module_build_options: *std.Build.Module,
     tracy: ?[]const u8,
     name: []const u8,
     builtins_module: *std.Build.Module,
@@ -331,7 +336,7 @@ fn add_fuzz_target(
     fuzz_obj.root_module.addImport("reporting", module_reporting);
     fuzz_obj.root_module.addImport("parse", module_parse);
     fuzz_obj.root_module.addImport("tracy", module_tracy);
-    add_tracy(b, build_options, fuzz_obj, target, false, tracy);
+    add_tracy(b, module_build_options, fuzz_obj, target, false, tracy);
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
     const name_repro = b.fmt("repro-{s}", .{name});
@@ -361,7 +366,7 @@ fn add_fuzz_target(
 
 fn addMainExe(
     b: *std.Build,
-    build_options: *Step.Options,
+    module_build_options: *std.Build.Module,
     target: ResolvedTarget,
     optimize: OptimizeMode,
     strip: ?bool,
@@ -427,7 +432,7 @@ fn addMainExe(
         try addStaticLlvmOptionsToModule(exe.root_module);
     }
 
-    add_tracy(b, build_options, exe, target, enable_llvm, tracy);
+    add_tracy(b, module_build_options, exe, target, enable_llvm, tracy);
     return exe;
 }
 
@@ -461,13 +466,13 @@ fn install_and_run(
 
 fn add_tracy(
     b: *std.Build,
-    build_options: *Step.Options,
+    module_build_options: *std.Build.Module,
     base: *Step.Compile,
     target: ResolvedTarget,
     links_llvm: bool,
     tracy: ?[]const u8,
 ) void {
-    base.root_module.addOptions("build_options", build_options);
+    base.root_module.addImport("build_options", module_build_options);
     if (tracy) |tracy_path| {
         const client_cpp = b.pathJoin(
             &[_][]const u8{ tracy_path, "public", "TracyClient.cpp" },
