@@ -810,10 +810,28 @@ pub const Interpreter = struct {
 
             .e_closure => |closure_expr| try self.createClosure(expr_idx, closure_expr),
 
-            .e_lambda => |_| {
-                // A pure lambda cannot be evaluated as a value on its own.
-                // It must be wrapped in a closure. This indicates a compiler bug.
-                return error.LayoutError;
+            .e_lambda => |lambda_expr| {
+                // This is a pure lambda with no captures. We still create a closure
+                // structure for it on the stack so that the calling convention is uniform.
+                const captures_layout_idx = try self.createClosureLayout(&.{});
+                const closure_layout = Layout.closure();
+                const total_size = @sizeOf(Closure);
+                const closure_alignment = closure_layout.alignment(target_usize);
+                const closure_ptr = try self.stack_memory.alloca(total_size, closure_alignment);
+
+                try self.value_stack.append(Value{
+                    .layout = closure_layout,
+                    .offset = @as(u32, @truncate(@intFromPtr(closure_ptr) - @intFromPtr(@as(*const u8, @ptrCast(self.stack_memory.start))))),
+                });
+
+                const closure: *Closure = @ptrCast(@alignCast(closure_ptr));
+                closure.* = Closure{
+                    .body_idx = lambda_expr.body,
+                    .params = lambda_expr.args,
+                    .captures_pattern_idx = @enumFromInt(0),
+                    .captures_layout_idx = captures_layout_idx,
+                    .lambda_expr_idx = expr_idx,
+                };
             },
 
             .e_tuple => |tuple_expr| {
@@ -1688,7 +1706,7 @@ pub const Interpreter = struct {
         try self.collectAndFilterCaptures(closure_expr, &final_captures);
 
         // Create closure layout for captures
-        const captures_layout_idx = try self.createClosureLayout(&final_captures);
+        const captures_layout_idx = try self.createClosureLayout(final_captures.items);
 
         // Allocate and initialize closure
         const closure_layout = Layout.closure();
@@ -1753,18 +1771,18 @@ pub const Interpreter = struct {
     }
 
     /// Creates the layout for closure captures
-    fn createClosureLayout(self: *Interpreter, captures: *const std.ArrayList(ModuleEnv.Expr.Capture)) EvalError!layout.Idx {
-        if (captures.items.len > MAX_CAPTURE_FIELDS) {
+    fn createClosureLayout(self: *Interpreter, captures: []const ModuleEnv.Expr.Capture) EvalError!layout.Idx {
+        if (captures.len > MAX_CAPTURE_FIELDS) {
             return error.LayoutError;
         }
 
         // Use dynamic allocation for field layouts and names
-        var field_layouts = try self.allocator.alloc(layout.Layout, captures.items.len);
+        var field_layouts = try self.allocator.alloc(layout.Layout, captures.len);
         defer self.allocator.free(field_layouts);
-        var field_names = try self.allocator.alloc(base.Ident.Idx, captures.items.len);
+        var field_names = try self.allocator.alloc(base.Ident.Idx, captures.len);
         defer self.allocator.free(field_names);
 
-        for (captures.items, 0..) |capture, i| {
+        for (captures, 0..) |capture, i| {
             self.traceInfo("Processing capture: pattern_idx={}, name={s}", .{ @intFromEnum(capture.pattern_idx), self.env.getIdentText(capture.name) });
 
             // Get the layout for this capture
