@@ -56,15 +56,14 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @4.1-4.10 (ident "stringify"))
-		(e-closure @4.13-4.35
-			(e-lambda @4.13-4.35
-				(args
-					(p-assign @4.14-4.19 (ident "value")))
-				(e-dot-access @4.21-4.35 (field "to_str")
-					(receiver
-						(e-lookup-local @4.21-4.26
-							(p-assign @4.14-4.19 (ident "value"))))
-					(args))))
+		(e-lambda @4.13-4.35
+			(args
+				(p-assign @4.14-4.19 (ident "value")))
+			(e-dot-access @4.21-4.35 (field "to_str")
+				(receiver
+					(e-lookup-local @4.21-4.26
+						(p-assign @4.14-4.19 (ident "value"))))
+				(args)))
 		(annotation @4.1-4.10
 			(declared-type
 				(ty-fn @3.13-3.21 (effectful false)

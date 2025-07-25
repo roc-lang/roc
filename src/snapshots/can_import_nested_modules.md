@@ -451,14 +451,13 @@ validateAuth = |creds| HttpAuth.validate(creds)
 (can-ir
 	(d-let
 		(p-assign @9.1-9.12 (ident "parseConfig"))
-		(e-closure @9.15-9.51
-			(e-lambda @9.15-9.51
-				(args
-					(p-assign @9.16-9.24 (ident "settings")))
-				(e-call @9.26-9.51
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local @9.42-9.50
-						(p-assign @9.16-9.24 (ident "settings"))))))
+		(e-lambda @9.15-9.51
+			(args
+				(p-assign @9.16-9.24 (ident "settings")))
+			(e-call @9.26-9.51
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local @9.42-9.50
+					(p-assign @9.16-9.24 (ident "settings")))))
 		(annotation @9.1-9.12
 			(declared-type
 				(ty-fn @8.15-8.37 (effectful false)
@@ -467,17 +466,16 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(ty @8.34-8.37 (name "Str"))))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "authenticate"))
-		(e-closure @13.16-13.55
-			(e-lambda @13.16-13.55
-				(args
-					(p-assign @13.17-13.21 (ident "user"))
-					(p-assign @13.23-13.27 (ident "pass")))
-				(e-call @13.29-13.55
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local @13.44-13.48
-						(p-assign @13.17-13.21 (ident "user")))
-					(e-lookup-local @13.50-13.54
-						(p-assign @13.23-13.27 (ident "pass"))))))
+		(e-lambda @13.16-13.55
+			(args
+				(p-assign @13.17-13.21 (ident "user"))
+				(p-assign @13.23-13.27 (ident "pass")))
+			(e-call @13.29-13.55
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local @13.44-13.48
+					(p-assign @13.17-13.21 (ident "user")))
+				(e-lookup-local @13.50-13.54
+					(p-assign @13.23-13.27 (ident "pass")))))
 		(annotation @13.1-13.13
 			(declared-type
 				(ty-fn @12.16-12.42 (effectful false)
@@ -487,17 +485,16 @@ validateAuth = |creds| HttpAuth.validate(creds)
 						(ext-decl @12.28-12.42 (ident "HttpAuth.Token") (kind "type")))))))
 	(d-let
 		(p-assign @17.1-17.12 (ident "processData"))
-		(e-closure @17.15-18.60
-			(e-lambda @17.15-18.60
-				(args
-					(p-assign @17.16-17.30 (ident "advancedConfig"))
-					(p-assign @17.32-17.37 (ident "input")))
-				(e-call @18.5-18.60
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local @18.38-18.52
-						(p-assign @17.16-17.30 (ident "advancedConfig")))
-					(e-lookup-local @18.54-18.59
-						(p-assign @17.32-17.37 (ident "input"))))))
+		(e-lambda @17.15-18.60
+			(args
+				(p-assign @17.16-17.30 (ident "advancedConfig"))
+				(p-assign @17.32-17.37 (ident "input")))
+			(e-call @18.5-18.60
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local @18.38-18.52
+					(p-assign @17.16-17.30 (ident "advancedConfig")))
+				(e-lookup-local @18.54-18.59
+					(p-assign @17.32-17.37 (ident "input")))))
 		(annotation @17.1-17.12
 			(declared-type
 				(ty-fn @16.15-16.78 (effectful false)
@@ -510,15 +507,14 @@ validateAuth = |creds| HttpAuth.validate(creds)
 							(ext-decl @16.58-16.77 (ident "Config.Parser.Error") (kind "type"))))))))
 	(d-let
 		(p-assign @22.1-22.13 (ident "formatOutput"))
-		(e-closure @22.16-22.59
-			(e-lambda @22.16-22.59
-				(args
+		(e-lambda @22.16-22.59
+			(args
+				(p-assign @22.17-22.21 (ident "text")))
+			(e-call @22.23-22.59
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local @22.31-22.35
 					(p-assign @22.17-22.21 (ident "text")))
-				(e-call @22.23-22.59
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local @22.31-22.35
-						(p-assign @22.17-22.21 (ident "text")))
-					(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation @22.1-22.13
 			(declared-type
 				(ty-fn @21.16-21.26 (effectful false)
@@ -526,14 +522,13 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(ty @21.23-21.26 (name "Str"))))))
 	(d-let
 		(p-assign @26.1-26.13 (ident "validateAuth"))
-		(e-closure @26.16-26.48
-			(e-lambda @26.16-26.48
-				(args
-					(p-assign @26.17-26.22 (ident "creds")))
-				(e-call @26.24-26.48
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local @26.42-26.47
-						(p-assign @26.17-26.22 (ident "creds"))))))
+		(e-lambda @26.16-26.48
+			(args
+				(p-assign @26.17-26.22 (ident "creds")))
+			(e-call @26.24-26.48
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local @26.42-26.47
+					(p-assign @26.17-26.22 (ident "creds")))))
 		(annotation @26.1-26.13
 			(declared-type
 				(ty-fn @25.16-25.78 (effectful false)

@@ -57,30 +57,29 @@ CloseCurly(4:1-4:2),CloseRound(4:2-4:3),NoSpaceOpenRound(4:3-4:4),Int(4:4-4:5),C
 # CANONICALIZE
 ~~~clojure
 (e-call @1.1-4.6
-	(e-closure @1.2-4.2
-		(e-lambda @1.2-4.2
-			(args
-				(p-assign @1.3-1.7 (ident "base")))
-			(e-block @1.9-4.2
-				(s-let @2.3-2.28
-					(p-assign @2.3-2.9 (ident "simple"))
-					(e-closure @2.12-2.28
-						(captures
-							(capture @1.3-1.7 (ident "base")))
-						(e-lambda @2.12-2.28
-							(args
-								(p-assign @2.13-2.14 (ident "x")))
-							(e-binop @2.16-2.28 (op "add")
-								(e-lookup-local @2.16-2.20
-									(p-assign @1.3-1.7 (ident "base")))
-								(e-binop @2.23-2.28 (op "add")
-									(e-lookup-local @2.23-2.24
-										(p-assign @2.13-2.14 (ident "x")))
-									(e-int @2.27-2.28 (value "1")))))))
-				(e-call @3.3-3.12
-					(e-lookup-local @3.3-3.9
-						(p-assign @2.3-2.9 (ident "simple")))
-					(e-int @3.10-3.11 (value "1"))))))
+	(e-lambda @1.2-4.2
+		(args
+			(p-assign @1.3-1.7 (ident "base")))
+		(e-block @1.9-4.2
+			(s-let @2.3-2.28
+				(p-assign @2.3-2.9 (ident "simple"))
+				(e-closure @2.12-2.28
+					(captures
+						(capture @1.3-1.7 (ident "base")))
+					(e-lambda @2.12-2.28
+						(args
+							(p-assign @2.13-2.14 (ident "x")))
+						(e-binop @2.16-2.28 (op "add")
+							(e-lookup-local @2.16-2.20
+								(p-assign @1.3-1.7 (ident "base")))
+							(e-binop @2.23-2.28 (op "add")
+								(e-lookup-local @2.23-2.24
+									(p-assign @2.13-2.14 (ident "x")))
+								(e-int @2.27-2.28 (value "1")))))))
+			(e-call @3.3-3.12
+				(e-lookup-local @3.3-3.9
+					(p-assign @2.3-2.9 (ident "simple")))
+				(e-int @3.10-3.11 (value "1")))))
 	(e-int @4.4-4.5 (value "1")))
 ~~~
 # TYPES

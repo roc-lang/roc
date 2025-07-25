@@ -132,57 +132,56 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @4.1-4.13 (ident "processItems"))
-		(e-closure @4.16-21.2
-			(e-lambda @4.16-21.2
-				(args
-					(p-assign @4.17-4.22 (ident "items")))
-				(e-block @4.24-21.2
-					(s-var @5.2-5.16
-						(p-assign @5.2-5.16 (ident "count_"))
-						(e-int @5.15-5.16 (value "0")))
-					(s-var @6.2-6.16
-						(p-assign @6.2-6.16 (ident "total_"))
-						(e-int @6.15-6.16 (value "0")))
-					(s-reassign @9.2-9.8
-						(p-assign @5.2-5.16 (ident "count_"))
-						(e-binop @9.11-9.21 (op "add")
-							(e-lookup-local @9.11-9.17
-								(p-assign @5.2-5.16 (ident "count_")))
-							(e-int @9.20-9.21 (value "1"))))
-					(s-reassign @10.2-10.8
-						(p-assign @6.2-6.16 (ident "total_"))
-						(e-binop @10.11-10.22 (op "add")
-							(e-lookup-local @10.11-10.17
-								(p-assign @6.2-6.16 (ident "total_")))
-							(e-int @10.20-10.22 (value "10"))))
-					(s-let @13.2-17.3
-						(p-assign @13.2-13.12 (ident "nestedFunc"))
-						(e-closure @13.15-17.3
-							(captures
-								(capture @5.2-5.16 (ident "count_")))
-							(e-lambda @13.15-17.3
-								(args
-									(p-underscore @13.16-13.17))
-								(e-block @13.19-17.3
-									(s-reassign @14.3-14.9
-										(p-assign @5.2-5.16 (ident "count_"))
-										(e-runtime-error (tag "var_across_function_boundary")))
-									(s-reassign @15.3-15.9
-										(p-assign @6.2-6.16 (ident "total_"))
-										(e-runtime-error (tag "var_across_function_boundary")))
-									(e-lookup-local @16.3-16.9
-										(p-assign @5.2-5.16 (ident "count_")))))))
-					(s-let @19.2-19.25
-						(p-assign @19.2-19.8 (ident "result"))
-						(e-call @19.11-19.25
-							(e-lookup-local @19.11-19.21
-								(p-assign @13.2-13.12 (ident "nestedFunc")))
-							(e-empty_record @19.22-19.24)))
-					(e-binop @20.2-20.17 (op "add")
-						(e-lookup-local @20.2-20.8
+		(e-lambda @4.16-21.2
+			(args
+				(p-assign @4.17-4.22 (ident "items")))
+			(e-block @4.24-21.2
+				(s-var @5.2-5.16
+					(p-assign @5.2-5.16 (ident "count_"))
+					(e-int @5.15-5.16 (value "0")))
+				(s-var @6.2-6.16
+					(p-assign @6.2-6.16 (ident "total_"))
+					(e-int @6.15-6.16 (value "0")))
+				(s-reassign @9.2-9.8
+					(p-assign @5.2-5.16 (ident "count_"))
+					(e-binop @9.11-9.21 (op "add")
+						(e-lookup-local @9.11-9.17
+							(p-assign @5.2-5.16 (ident "count_")))
+						(e-int @9.20-9.21 (value "1"))))
+				(s-reassign @10.2-10.8
+					(p-assign @6.2-6.16 (ident "total_"))
+					(e-binop @10.11-10.22 (op "add")
+						(e-lookup-local @10.11-10.17
 							(p-assign @6.2-6.16 (ident "total_")))
-						(e-lookup-local @20.11-20.17
-							(p-assign @19.2-19.8 (ident "result")))))))))
+						(e-int @10.20-10.22 (value "10"))))
+				(s-let @13.2-17.3
+					(p-assign @13.2-13.12 (ident "nestedFunc"))
+					(e-closure @13.15-17.3
+						(captures
+							(capture @5.2-5.16 (ident "count_")))
+						(e-lambda @13.15-17.3
+							(args
+								(p-underscore @13.16-13.17))
+							(e-block @13.19-17.3
+								(s-reassign @14.3-14.9
+									(p-assign @5.2-5.16 (ident "count_"))
+									(e-runtime-error (tag "var_across_function_boundary")))
+								(s-reassign @15.3-15.9
+									(p-assign @6.2-6.16 (ident "total_"))
+									(e-runtime-error (tag "var_across_function_boundary")))
+								(e-lookup-local @16.3-16.9
+									(p-assign @5.2-5.16 (ident "count_")))))))
+				(s-let @19.2-19.25
+					(p-assign @19.2-19.8 (ident "result"))
+					(e-call @19.11-19.25
+						(e-lookup-local @19.11-19.21
+							(p-assign @13.2-13.12 (ident "nestedFunc")))
+						(e-empty_record @19.22-19.24)))
+				(e-binop @20.2-20.17 (op "add")
+					(e-lookup-local @20.2-20.8
+						(p-assign @6.2-6.16 (ident "total_")))
+					(e-lookup-local @20.11-20.17
+						(p-assign @19.2-19.8 (ident "result"))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -314,13 +314,12 @@ combineResults = |result1, result2|
 (can-ir
 	(d-let
 		(p-assign @8.1-8.15 (ident "processRequest"))
-		(e-closure @8.18-8.44
-			(e-lambda @8.18-8.44
-				(args
-					(p-assign @8.19-8.22 (ident "req")))
-				(e-lookup-external @8.24-8.44
-					(module-idx "0")
-					(target-node-idx "0"))))
+		(e-lambda @8.18-8.44
+			(args
+				(p-assign @8.19-8.22 (ident "req")))
+			(e-lookup-external @8.24-8.44
+				(module-idx "0")
+				(target-node-idx "0")))
 		(annotation @8.1-8.15
 			(declared-type
 				(ty-fn @7.18-7.37 (effectful false)
@@ -328,16 +327,15 @@ combineResults = |result1, result2|
 					(ty @7.29-7.37 (name "Response"))))))
 	(d-let
 		(p-assign @11.1-11.10 (ident "parseJson"))
-		(e-closure @11.13-11.38
-			(e-lambda @11.13-11.38
-				(args
-					(p-assign @11.14-11.19 (ident "input")))
-				(e-call @11.21-11.38
-					(e-lookup-external @11.21-11.31
-						(module-idx "1")
-						(target-node-idx "0"))
-					(e-lookup-local @11.32-11.37
-						(p-assign @11.14-11.19 (ident "input"))))))
+		(e-lambda @11.13-11.38
+			(args
+				(p-assign @11.14-11.19 (ident "input")))
+			(e-call @11.21-11.38
+				(e-lookup-external @11.21-11.31
+					(module-idx "1")
+					(target-node-idx "0"))
+				(e-lookup-local @11.32-11.37
+					(p-assign @11.14-11.19 (ident "input")))))
 		(annotation @11.1-11.10
 			(declared-type
 				(ty-fn @10.13-10.30 (effectful false)
@@ -348,8 +346,8 @@ combineResults = |result1, result2|
 		(p-assign @14.1-14.10 (ident "handleApi"))
 		(e-closure @14.13-20.2
 			(captures
-				(capture @18.13-18.16 (ident "err"))
-				(capture @17.12-17.16 (ident "data")))
+				(capture @17.12-17.16 (ident "data"))
+				(capture @18.13-18.16 (ident "err")))
 			(e-lambda @14.13-20.2
 				(args
 					(p-assign @14.14-14.21 (ident "request")))
@@ -413,19 +411,18 @@ combineResults = |result1, result2|
 					(ext-decl @22.10-22.21 (ident "Json.Config") (kind "type"))))))
 	(d-let
 		(p-assign @27.1-27.15 (ident "advancedParser"))
-		(e-closure @27.18-27.82
-			(e-lambda @27.18-27.82
-				(args
-					(p-assign @27.19-27.31 (ident "parserConfig"))
-					(p-assign @27.33-27.38 (ident "input")))
-				(e-call @27.40-27.82
-					(e-lookup-external @27.40-27.61
-						(module-idx "1")
-						(target-node-idx "0"))
-					(e-lookup-local @27.62-27.74
-						(p-assign @27.19-27.31 (ident "parserConfig")))
-					(e-lookup-local @27.76-27.81
-						(p-assign @27.33-27.38 (ident "input"))))))
+		(e-lambda @27.18-27.82
+			(args
+				(p-assign @27.19-27.31 (ident "parserConfig"))
+				(p-assign @27.33-27.38 (ident "input")))
+			(e-call @27.40-27.82
+				(e-lookup-external @27.40-27.61
+					(module-idx "1")
+					(target-node-idx "0"))
+				(e-lookup-local @27.62-27.74
+					(p-assign @27.19-27.31 (ident "parserConfig")))
+				(e-lookup-local @27.76-27.81
+					(p-assign @27.33-27.38 (ident "input")))))
 		(annotation @27.1-27.15
 			(declared-type
 				(ty-fn @26.18-26.82 (effectful false)
@@ -441,10 +438,10 @@ combineResults = |result1, result2|
 		(p-assign @31.1-31.15 (ident "combineResults"))
 		(e-closure @31.18-39.6
 			(captures
-				(capture @38.13-38.16 (ident "err"))
-				(capture @33.12-33.18 (ident "value1"))
 				(capture @36.21-36.24 (ident "err"))
-				(capture @35.20-35.26 (ident "value2")))
+				(capture @35.20-35.26 (ident "value2"))
+				(capture @33.12-33.18 (ident "value1"))
+				(capture @38.13-38.16 (ident "err")))
 			(e-lambda @31.18-39.6
 				(args
 					(p-assign @31.19-31.26 (ident "result1"))

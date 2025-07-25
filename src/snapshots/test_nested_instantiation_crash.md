@@ -130,18 +130,17 @@ answer = composed([42])
 (can-ir
 	(d-let
 		(p-assign @6.1-6.12 (ident "make_record"))
-		(e-closure @6.15-6.44
-			(e-lambda @6.15-6.44
-				(args
-					(p-assign @6.16-6.17 (ident "x")))
-				(e-record @6.19-6.44
-					(fields
-						(field (name "value")
-							(e-lookup-local @6.28-6.29
-								(p-assign @6.16-6.17 (ident "x"))))
-						(field (name "tag")
-							(e-string @6.36-6.42
-								(e-literal @6.37-6.41 (string "data"))))))))
+		(e-lambda @6.15-6.44
+			(args
+				(p-assign @6.16-6.17 (ident "x")))
+			(e-record @6.19-6.44
+				(fields
+					(field (name "value")
+						(e-lookup-local @6.28-6.29
+							(p-assign @6.16-6.17 (ident "x"))))
+					(field (name "tag")
+						(e-string @6.36-6.42
+							(e-literal @6.37-6.41 (string "data")))))))
 		(annotation @6.1-6.12
 			(declared-type
 				(ty-fn @5.15-5.42 (effectful false)
@@ -153,14 +152,13 @@ answer = composed([42])
 							(ty @5.37-5.40 (name "Str"))))))))
 	(d-let
 		(p-assign @9.1-9.10 (ident "get_value"))
-		(e-closure @9.13-9.24
-			(e-lambda @9.13-9.24
-				(args
-					(p-assign @9.14-9.15 (ident "r")))
-				(e-dot-access @9.17-9.24 (field "value")
-					(receiver
-						(e-lookup-local @9.17-9.18
-							(p-assign @9.14-9.15 (ident "r")))))))
+		(e-lambda @9.13-9.24
+			(args
+				(p-assign @9.14-9.15 (ident "r")))
+			(e-dot-access @9.17-9.24 (field "value")
+				(receiver
+					(e-lookup-local @9.17-9.18
+						(p-assign @9.14-9.15 (ident "r"))))))
 		(annotation @9.1-9.10
 			(declared-type
 				(ty-fn @8.13-8.40 (effectful false)
@@ -206,13 +204,13 @@ answer = composed([42])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.12 (type "a -> { value: a, tag: Str }"))
-		(patt @9.1-9.10 (type "{ value: a, tag: Str } -> a"))
+		(patt @6.1-6.12 (type "a -> { tag: Str, value: a }"))
+		(patt @9.1-9.10 (type "{ tag: Str, value: a } -> a"))
 		(patt @12.1-12.9 (type "Error -> Str"))
 		(patt @14.1-14.7 (type "Str")))
 	(expressions
-		(expr @6.15-6.44 (type "a -> { value: a, tag: Str }"))
-		(expr @9.13-9.24 (type "{ value: a, tag: Str } -> a"))
+		(expr @6.15-6.44 (type "a -> { tag: Str, value: a }"))
+		(expr @9.13-9.24 (type "{ tag: Str, value: a } -> a"))
 		(expr @12.12-12.41 (type "Error -> Str"))
 		(expr @14.10-14.24 (type "Str"))))
 ~~~

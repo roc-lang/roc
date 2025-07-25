@@ -101,28 +101,26 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign @5.1-5.6 (ident "outer"))
-		(e-closure @5.9-11.2
-			(e-lambda @5.9-11.2
-				(args
-					(p-assign @5.10-5.11 (ident "x")))
-				(e-block @5.13-11.2
-					(s-type-anno @7.5-7.19 (name "inner")
-						(ty-fn @7.13-7.19 (effectful false)
-							(ty-var @7.13-7.14 (name "a"))
-							(ty-var @7.18-7.19 (name "a"))))
-					(s-let @8.5-8.18
-						(p-assign @8.5-8.10 (ident "inner"))
-						(e-closure @8.13-8.18
-							(e-lambda @8.13-8.18
-								(args
-									(p-assign @8.14-8.15 (ident "y")))
-								(e-lookup-local @8.17-8.18
-									(p-assign @8.14-8.15 (ident "y"))))))
-					(e-call @10.5-10.13
-						(e-lookup-local @10.5-10.10
-							(p-assign @8.5-8.10 (ident "inner")))
-						(e-lookup-local @10.11-10.12
-							(p-assign @5.10-5.11 (ident "x")))))))
+		(e-lambda @5.9-11.2
+			(args
+				(p-assign @5.10-5.11 (ident "x")))
+			(e-block @5.13-11.2
+				(s-type-anno @7.5-7.19 (name "inner")
+					(ty-fn @7.13-7.19 (effectful false)
+						(ty-var @7.13-7.14 (name "a"))
+						(ty-var @7.18-7.19 (name "a"))))
+				(s-let @8.5-8.18
+					(p-assign @8.5-8.10 (ident "inner"))
+					(e-lambda @8.13-8.18
+						(args
+							(p-assign @8.14-8.15 (ident "y")))
+						(e-lookup-local @8.17-8.18
+							(p-assign @8.14-8.15 (ident "y")))))
+				(e-call @10.5-10.13
+					(e-lookup-local @10.5-10.10
+						(p-assign @8.5-8.10 (ident "inner")))
+					(e-lookup-local @10.11-10.12
+						(p-assign @5.10-5.11 (ident "x"))))))
 		(annotation @5.1-5.6
 			(declared-type
 				(ty-fn @4.9-4.15 (effectful false)
@@ -130,11 +128,10 @@ main! = |_| {}
 					(ty-var @4.14-4.15 (name "a"))))))
 	(d-let
 		(p-assign @13.1-13.6 (ident "main!"))
-		(e-closure @13.9-13.15
-			(e-lambda @13.9-13.15
-				(args
-					(p-underscore @13.10-13.11))
-				(e-empty_record @13.13-13.15)))))
+		(e-lambda @13.9-13.15
+			(args
+				(p-underscore @13.10-13.11))
+			(e-empty_record @13.13-13.15))))
 ~~~
 # TYPES
 ~~~clojure

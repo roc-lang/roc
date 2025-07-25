@@ -71,16 +71,15 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @7.1-7.13 (ident "bad_function"))
-		(e-closure @7.16-7.39
-			(e-lambda @7.16-7.39
-				(args
-					(p-assign @7.17-7.20 (ident "msg")))
-				(e-call @7.22-7.39
-					(e-lookup-external @7.22-7.34
-						(module-idx "0")
-						(target-node-idx "0"))
-					(e-lookup-local @7.35-7.38
-						(p-assign @7.17-7.20 (ident "msg"))))))
+		(e-lambda @7.16-7.39
+			(args
+				(p-assign @7.17-7.20 (ident "msg")))
+			(e-call @7.22-7.39
+				(e-lookup-external @7.22-7.34
+					(module-idx "0")
+					(target-node-idx "0"))
+				(e-lookup-local @7.35-7.38
+					(p-assign @7.17-7.20 (ident "msg")))))
 		(annotation @7.1-7.13
 			(declared-type
 				(ty-fn @6.16-6.25 (effectful false)

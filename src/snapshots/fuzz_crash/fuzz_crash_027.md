@@ -224,7 +224,7 @@ UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
 UNUSED VARIABLE - fuzz_crash_027.md:151:1:151:6
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
-TYPE MISMATCH - fuzz_crash_027.md:47:11:47:21
+TYPE MISMATCH - fuzz_crash_027.md:47:11:47:14
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:111:2:111:12
 # PROBLEMS
@@ -799,17 +799,17 @@ The unused variable is declared here:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_027.md:47:11:47:21:**
+**fuzz_crash_027.md:47:11:47:14:**
 ```roc
 add_one : U64 -> U64
 ```
-          ^^^^^^^^^^
+          ^^^
 
 It is of type:
-    _U64 -> U64_
+    _U64_
 
 But you are trying to use it as:
-    _Bool -> Num(_size)_
+    _Bool_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the third branch of this `match` differs from previous ones:
@@ -1648,43 +1648,41 @@ main! = |_| { # Yeah Ie
 (can-ir
 	(d-let
 		(p-assign @45.1-45.4 (ident "ane"))
-		(e-closure @45.7-45.28
-			(e-lambda @45.7-45.28
-				(args
-					(p-assign @45.8-45.11 (ident "num")))
-				(e-if @45.13-45.28
-					(if-branches
-						(if-branch
-							(e-lookup-local @45.16-45.19
-								(p-assign @45.8-45.11 (ident "num")))
-							(e-int @45.20-45.21 (value "2"))))
-					(if-else
-						(e-int @45.27-45.28 (value "5")))))))
+		(e-lambda @45.7-45.28
+			(args
+				(p-assign @45.8-45.11 (ident "num")))
+			(e-if @45.13-45.28
+				(if-branches
+					(if-branch
+						(e-lookup-local @45.16-45.19
+							(p-assign @45.8-45.11 (ident "num")))
+						(e-int @45.20-45.21 (value "2"))))
+				(if-else
+					(e-int @45.27-45.28 (value "5"))))))
 	(d-let
 		(p-assign @48.1-48.8 (ident "add_one"))
-		(e-closure @48.11-58.2
-			(e-lambda @48.11-58.2
-				(args
-					(p-assign @48.12-48.15 (ident "num")))
-				(e-block @48.17-58.2
-					(s-let @49.2-49.11
-						(p-assign @49.2-49.7 (ident "other"))
-						(e-int @49.10-49.11 (value "1")))
-					(e-if @50.2-57.3
-						(if-branches
-							(if-branch
-								(e-lookup-local @50.5-50.8
-									(p-assign @48.12-48.15 (ident "num")))
-								(e-block @50.9-54.3
-									(s-dbg @51.3-52.3
-										(e-runtime-error (tag "empty_tuple")))
-									(e-int @53.3-53.4 (value "0")))))
-						(if-else
-							(e-block @54.9-57.3
-								(s-dbg @55.3-55.10
-									(e-int @55.7-55.10 (value "123")))
-								(e-lookup-local @56.3-56.8
-									(p-assign @49.2-49.7 (ident "other")))))))))
+		(e-lambda @48.11-58.2
+			(args
+				(p-assign @48.12-48.15 (ident "num")))
+			(e-block @48.17-58.2
+				(s-let @49.2-49.11
+					(p-assign @49.2-49.7 (ident "other"))
+					(e-int @49.10-49.11 (value "1")))
+				(e-if @50.2-57.3
+					(if-branches
+						(if-branch
+							(e-lookup-local @50.5-50.8
+								(p-assign @48.12-48.15 (ident "num")))
+							(e-block @50.9-54.3
+								(s-dbg @51.3-52.3
+									(e-runtime-error (tag "empty_tuple")))
+								(e-int @53.3-53.4 (value "0")))))
+					(if-else
+						(e-block @54.9-57.3
+							(s-dbg @55.3-55.10
+								(e-int @55.7-55.10 (value "123")))
+							(e-lookup-local @56.3-56.8
+								(p-assign @49.2-49.7 (ident "other"))))))))
 		(annotation @48.1-48.8
 			(declared-type
 				(ty-fn @47.11-47.21 (effectful false)
@@ -1692,165 +1690,164 @@ main! = |_| { # Yeah Ie
 					(ty @47.18-47.21 (name "U64"))))))
 	(d-let
 		(p-assign @60.1-60.11 (ident "match_time"))
-		(e-closure @60.14-94.3
-			(e-lambda @60.14-94.3
-				(args
-					(p-assign @61.2-61.3 (ident "a"))
-					(p-assign @62.2-62.3 (ident "b")))
-				(e-match @64.2-94.3
-					(match @64.2-94.3
-						(cond
-							(e-lookup-local @64.8-64.9
-								(p-assign @61.2-61.3 (ident "a"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-assign @64.11-64.14 (ident "lue")))
-									(pattern (degenerate false)
-										(p-applied-tag @64.17-64.20)))
-								(value
-									(e-block @64.24-66.4
-										(s-expr @65.4-65.5
-											(e-runtime-error (tag "ident_not_in_scope")))
-										(e-runtime-error (tag "ident_not_in_scope")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @67.3-67.7)))
-								(value
-									(e-int @67.12-67.13 (value "1"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-str @68.3-68.8 (text """))))
-								(value
-									(e-int @69.1-69.3 (value "0"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-str @70.3-70.8 (text """)))
-									(pattern (degenerate false)
-										(p-str @70.11-70.16 (text """))))
-								(value
-									(e-int @70.20-70.22 (value "20"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-list @70.22-70.43
-											(patterns
-												(p-int @70.23-70.24 (value "1"))
-												(p-int @70.26-70.27 (value "2"))
-												(p-int @70.29-70.30 (value "3")))
-											(rest-at (index 3)
-												(p-assign @1.1-1.1 (ident "rest"))))))
-								(value
-									(e-runtime-error (tag "ident_not_in_scope"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-list @74.3-74.28
-											(patterns
-												(p-int @74.4-74.5 (value "1"))
-												(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-												(p-int @74.14-74.15 (value "3")))
-											(rest-at (index 3)
-												(p-assign @1.1-1.1 (ident "rest"))))))
-								(value
-									(e-int @74.32-74.35 (value "123"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-list @75.3-77.4
-											(patterns
-												(p-assign @76.1-76.4 (ident "ist"))))))
-								(value
-									(e-int @77.8-77.11 (value "123"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-small-dec @78.3-78.7)))
-								(value
-									(e-int @78.11-78.14 (value "314"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-small-dec @79.3-79.7))
-									(pattern (degenerate false)
-										(p-small-dec @79.10-79.14)))
-								(value
-									(e-int @79.18-79.21 (value "314"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-tuple @80.3-80.12
-											(patterns
-												(p-int @80.4-80.5 (value "1"))
-												(p-int @80.7-80.8 (value "2"))
-												(p-int @80.10-80.11 (value "3"))))))
-								(value
-									(e-int @80.16-80.19 (value "123"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-tuple @81.3-81.16
-											(patterns
-												(p-int @81.4-81.5 (value "1"))
-												(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-												(p-int @81.14-81.15 (value "3"))))))
-								(value
-									(e-int @81.20-81.23 (value "123"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-record-destructure @82.3-82.29
-											(destructs
-												(record-destruct @82.5-82.11 (label "foo") (ident "foo")
-													(sub-pattern
-														(p-int @82.10-82.11 (value "1"))))
-												(record-destruct @82.13-82.19 (label "bar") (ident "bar")
-													(sub-pattern
-														(p-int @82.18-82.19 (value "2"))))
-												(record-destruct @82.21-82.27 (label "rest") (ident "rest")
-													(required
-														(p-assign @82.21-82.27 (ident "rest"))))))))
-								(value
-									(e-runtime-error (tag "not_implemented"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error @88.4-88.6 (tag "not_implemented"))))
-								(value
-									(e-int @88.11-88.13 (value "12"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-record-destructure @89.3-89.25
-											(destructs
-												(record-destruct @89.5-89.11 (label "foo") (ident "foo")
-													(sub-pattern
-														(p-int @89.10-89.11 (value "1"))))
-												(record-destruct @89.13-89.23 (label "bar") (ident "bar")
-													(sub-pattern
-														(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
-								(value
-									(e-int @89.29-89.31 (value "12"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-record-destructure @90.3-92.5
-											(destructs
-												(record-destruct @91.4-91.10 (label "foo") (ident "foo")
-													(sub-pattern
-														(p-int @91.9-91.10 (value "1"))))))))
-								(value
-									(e-int @92.9-92.11 (value "12"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @93.3-93.10)))
-								(value
-									(e-int @93.14-93.20 (value "121000"))))))))))
+		(e-lambda @60.14-94.3
+			(args
+				(p-assign @61.2-61.3 (ident "a"))
+				(p-assign @62.2-62.3 (ident "b")))
+			(e-match @64.2-94.3
+				(match @64.2-94.3
+					(cond
+						(e-lookup-local @64.8-64.9
+							(p-assign @61.2-61.3 (ident "a"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-assign @64.11-64.14 (ident "lue")))
+								(pattern (degenerate false)
+									(p-applied-tag @64.17-64.20)))
+							(value
+								(e-block @64.24-66.4
+									(s-expr @65.4-65.5
+										(e-runtime-error (tag "ident_not_in_scope")))
+									(e-runtime-error (tag "ident_not_in_scope")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag @67.3-67.7)))
+							(value
+								(e-int @67.12-67.13 (value "1"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-str @68.3-68.8 (text """))))
+							(value
+								(e-int @69.1-69.3 (value "0"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-str @70.3-70.8 (text """)))
+								(pattern (degenerate false)
+									(p-str @70.11-70.16 (text """))))
+							(value
+								(e-int @70.20-70.22 (value "20"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-list @70.22-70.43
+										(patterns
+											(p-int @70.23-70.24 (value "1"))
+											(p-int @70.26-70.27 (value "2"))
+											(p-int @70.29-70.30 (value "3")))
+										(rest-at (index 3)
+											(p-assign @1.1-1.1 (ident "rest"))))))
+							(value
+								(e-runtime-error (tag "ident_not_in_scope"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-list @74.3-74.28
+										(patterns
+											(p-int @74.4-74.5 (value "1"))
+											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+											(p-int @74.14-74.15 (value "3")))
+										(rest-at (index 3)
+											(p-assign @1.1-1.1 (ident "rest"))))))
+							(value
+								(e-int @74.32-74.35 (value "123"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-list @75.3-77.4
+										(patterns
+											(p-assign @76.1-76.4 (ident "ist"))))))
+							(value
+								(e-int @77.8-77.11 (value "123"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-small-dec @78.3-78.7)))
+							(value
+								(e-int @78.11-78.14 (value "314"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-small-dec @79.3-79.7))
+								(pattern (degenerate false)
+									(p-small-dec @79.10-79.14)))
+							(value
+								(e-int @79.18-79.21 (value "314"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-tuple @80.3-80.12
+										(patterns
+											(p-int @80.4-80.5 (value "1"))
+											(p-int @80.7-80.8 (value "2"))
+											(p-int @80.10-80.11 (value "3"))))))
+							(value
+								(e-int @80.16-80.19 (value "123"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-tuple @81.3-81.16
+										(patterns
+											(p-int @81.4-81.5 (value "1"))
+											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+											(p-int @81.14-81.15 (value "3"))))))
+							(value
+								(e-int @81.20-81.23 (value "123"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-record-destructure @82.3-82.29
+										(destructs
+											(record-destruct @82.5-82.11 (label "foo") (ident "foo")
+												(sub-pattern
+													(p-int @82.10-82.11 (value "1"))))
+											(record-destruct @82.13-82.19 (label "bar") (ident "bar")
+												(sub-pattern
+													(p-int @82.18-82.19 (value "2"))))
+											(record-destruct @82.21-82.27 (label "rest") (ident "rest")
+												(required
+													(p-assign @82.21-82.27 (ident "rest"))))))))
+							(value
+								(e-runtime-error (tag "not_implemented"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-runtime-error @88.4-88.6 (tag "not_implemented"))))
+							(value
+								(e-int @88.11-88.13 (value "12"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-record-destructure @89.3-89.25
+										(destructs
+											(record-destruct @89.5-89.11 (label "foo") (ident "foo")
+												(sub-pattern
+													(p-int @89.10-89.11 (value "1"))))
+											(record-destruct @89.13-89.23 (label "bar") (ident "bar")
+												(sub-pattern
+													(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
+							(value
+								(e-int @89.29-89.31 (value "12"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-record-destructure @90.3-92.5
+										(destructs
+											(record-destruct @91.4-91.10 (label "foo") (ident "foo")
+												(sub-pattern
+													(p-int @91.9-91.10 (value "1"))))))))
+							(value
+								(e-int @92.9-92.11 (value "12"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag @93.3-93.10)))
+							(value
+								(e-int @93.14-93.20 (value "121000")))))))))
 	(d-let
 		(p-assign @100.1-100.6 (ident "main!"))
 		(e-closure @100.9-159.2
@@ -2146,7 +2143,7 @@ main! = |_| { # Yeah Ie
 (inferred-types
 	(defs
 		(patt @45.1-45.4 (type "Bool -> Num(_size)"))
-		(patt @48.1-48.8 (type "Error"))
+		(patt @48.1-48.8 (type "Error -> Error"))
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error")))
 	(type_decls
@@ -2182,7 +2179,7 @@ main! = |_| { # Yeah Ie
 					(ty-var @43.6-43.7 (name "a"))))))
 	(expressions
 		(expr @45.7-45.28 (type "Bool -> Num(_size)"))
-		(expr @48.11-58.2 (type "Error"))
+		(expr @48.11-58.2 (type "Error -> Error"))
 		(expr @60.14-94.3 (type "Error"))
 		(expr @100.9-159.2 (type "Error -> Error"))))
 ~~~

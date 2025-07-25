@@ -38,18 +38,17 @@ OpenRound(1:1-1:2),OpBar(1:2-1:3),NoSpaceOpenRound(1:3-1:4),LowerIdent(1:4-1:5),
 # CANONICALIZE
 ~~~clojure
 (e-call @1.1-1.24
-	(e-closure @1.2-1.15
-		(e-lambda @1.2-1.15
-			(args
-				(p-tuple @1.3-1.8
-					(patterns
-						(p-assign @1.4-1.5 (ident "x"))
-						(p-assign @1.6-1.7 (ident "y")))))
-			(e-binop @1.10-1.15 (op "mul")
-				(e-lookup-local @1.10-1.11
-					(p-assign @1.4-1.5 (ident "x")))
-				(e-lookup-local @1.14-1.15
-					(p-assign @1.6-1.7 (ident "y"))))))
+	(e-lambda @1.2-1.15
+		(args
+			(p-tuple @1.3-1.8
+				(patterns
+					(p-assign @1.4-1.5 (ident "x"))
+					(p-assign @1.6-1.7 (ident "y")))))
+		(e-binop @1.10-1.15 (op "mul")
+			(e-lookup-local @1.10-1.11
+				(p-assign @1.4-1.5 (ident "x")))
+			(e-lookup-local @1.14-1.15
+				(p-assign @1.6-1.7 (ident "y")))))
 	(e-tuple @1.18-1.23
 		(elems
 			(e-int @1.19-1.20 (value "1"))

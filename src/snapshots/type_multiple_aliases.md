@@ -137,23 +137,22 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @9.1-9.12 (ident "create_user"))
-		(e-closure @9.15-9.48
-			(e-lambda @9.15-9.48
-				(args
-					(p-assign @9.16-9.18 (ident "id"))
-					(p-assign @9.20-9.24 (ident "name"))
-					(p-assign @9.26-9.29 (ident "age")))
-				(e-record @9.31-9.48
-					(fields
-						(field (name "id")
-							(e-lookup-local @9.33-9.35
-								(p-assign @9.16-9.18 (ident "id"))))
-						(field (name "name")
-							(e-lookup-local @9.37-9.41
-								(p-assign @9.20-9.24 (ident "name"))))
-						(field (name "age")
-							(e-lookup-local @9.43-9.46
-								(p-assign @9.26-9.29 (ident "age"))))))))
+		(e-lambda @9.15-9.48
+			(args
+				(p-assign @9.16-9.18 (ident "id"))
+				(p-assign @9.20-9.24 (ident "name"))
+				(p-assign @9.26-9.29 (ident "age")))
+			(e-record @9.31-9.48
+				(fields
+					(field (name "id")
+						(e-lookup-local @9.33-9.35
+							(p-assign @9.16-9.18 (ident "id"))))
+					(field (name "name")
+						(e-lookup-local @9.37-9.41
+							(p-assign @9.20-9.24 (ident "name"))))
+					(field (name "age")
+						(e-lookup-local @9.43-9.46
+							(p-assign @9.26-9.29 (ident "age")))))))
 		(annotation @9.1-9.12
 			(declared-type
 				(ty-fn @8.15-8.48 (effectful false)
@@ -163,14 +162,13 @@ NO CHANGE
 					(ty @8.44-8.48 (name "User"))))))
 	(d-let
 		(p-assign @12.1-12.14 (ident "get_user_name"))
-		(e-closure @12.17-12.33
-			(e-lambda @12.17-12.33
-				(args
-					(p-assign @12.18-12.22 (ident "user")))
-				(e-dot-access @12.24-12.33 (field "name")
-					(receiver
-						(e-lookup-local @12.24-12.28
-							(p-assign @12.18-12.22 (ident "user")))))))
+		(e-lambda @12.17-12.33
+			(args
+				(p-assign @12.18-12.22 (ident "user")))
+			(e-dot-access @12.24-12.33 (field "name")
+				(receiver
+					(e-lookup-local @12.24-12.28
+						(p-assign @12.18-12.22 (ident "user"))))))
 		(annotation @12.1-12.14
 			(declared-type
 				(ty-fn @11.17-11.33 (effectful false)

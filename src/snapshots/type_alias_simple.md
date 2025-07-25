@@ -81,22 +81,21 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.8 (ident "getUser"))
-		(e-closure @6.11-6.47
-			(e-lambda @6.11-6.47
-				(args
-					(p-assign @6.12-6.14 (ident "id")))
-				(e-if @6.16-6.47
-					(if-branches
-						(if-branch
-							(e-binop @6.20-6.27 (op "gt")
-								(e-lookup-local @6.20-6.22
-									(p-assign @6.12-6.14 (ident "id")))
-								(e-int @6.25-6.27 (value "10")))
-							(e-string @6.29-6.34
-								(e-literal @6.30-6.33 (string "big")))))
-					(if-else
-						(e-string @6.40-6.47
-							(e-literal @6.41-6.46 (string "small")))))))
+		(e-lambda @6.11-6.47
+			(args
+				(p-assign @6.12-6.14 (ident "id")))
+			(e-if @6.16-6.47
+				(if-branches
+					(if-branch
+						(e-binop @6.20-6.27 (op "gt")
+							(e-lookup-local @6.20-6.22
+								(p-assign @6.12-6.14 (ident "id")))
+							(e-int @6.25-6.27 (value "10")))
+						(e-string @6.29-6.34
+							(e-literal @6.30-6.33 (string "big")))))
+				(if-else
+					(e-string @6.40-6.47
+						(e-literal @6.41-6.46 (string "small"))))))
 		(annotation @6.1-6.8
 			(declared-type
 				(ty-fn @5.11-5.24 (effectful false)

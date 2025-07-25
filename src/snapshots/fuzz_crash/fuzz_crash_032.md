@@ -264,45 +264,44 @@ olor = |color| {
 (can-ir
 	(d-let
 		(p-assign @6.1-6.5 (ident "olor"))
-		(e-closure @6.8-12.2
-			(e-lambda @6.8-12.2
-				(args
-					(p-assign @6.9-6.14 (ident "color")))
-				(e-block @6.16-12.2
-					(s-expr @6.25-6.34
-						(e-runtime-error (tag "ident_not_in_scope")))
-					(e-match @8.5-11.6
-						(match @8.5-11.6
-							(cond
-								(e-lookup-local @8.11-8.16
-									(p-assign @6.9-6.14 (ident "color"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag @8.19-8.22)))
-									(value
-										(e-nominal @8.26-8.37 (nominal "<malformed>")
-											(e-tag @8.26-8.45 (name "Pending")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag @9.1-9.6)))
-									(value
-										(e-tag @9.10-9.21 (name "LocalStatus"))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-runtime-error @9.21-9.22 (tag "pattern_not_canonicalized"))))
-									(value
-										(e-tag @9.22-9.30 (name "Complete"))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-runtime-error @10.3-10.4 (tag "ident_not_in_scope"))))
-									(value
-										(e-nominal @10.13-10.24 (nominal "<malformed>")
-											(e-tag @10.13-10.32 (name "Pending")))))))))))
+		(e-lambda @6.8-12.2
+			(args
+				(p-assign @6.9-6.14 (ident "color")))
+			(e-block @6.16-12.2
+				(s-expr @6.25-6.34
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(e-match @8.5-11.6
+					(match @8.5-11.6
+						(cond
+							(e-lookup-local @8.11-8.16
+								(p-assign @6.9-6.14 (ident "color"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @8.19-8.22)))
+								(value
+									(e-nominal @8.26-8.37 (nominal "<malformed>")
+										(e-tag @8.26-8.45 (name "Pending")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @9.1-9.6)))
+								(value
+									(e-tag @9.10-9.21 (name "LocalStatus"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error @9.21-9.22 (tag "pattern_not_canonicalized"))))
+								(value
+									(e-tag @9.22-9.30 (name "Complete"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error @10.3-10.4 (tag "ident_not_in_scope"))))
+								(value
+									(e-nominal @10.13-10.24 (nominal "<malformed>")
+										(e-tag @10.13-10.32 (name "Pending"))))))))))
 		(annotation @6.1-6.5
 			(declared-type
 				(ty-fn @5.8-5.16 (effectful false)

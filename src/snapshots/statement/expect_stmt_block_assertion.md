@@ -66,19 +66,18 @@ foo = |a| {
 (can-ir
 	(d-let
 		(p-assign @4.1-4.4 (ident "foo"))
-		(e-closure @4.7-7.2
-			(e-lambda @4.7-7.2
-				(args
-					(p-assign @4.8-4.9 (ident "a")))
-				(e-block @4.11-7.2
-					(s-expect @5.5-5.26
-						(e-binop @5.12-5.26 (op "eq")
-							(e-lookup-local @5.12-5.13
-								(p-assign @4.8-4.9 (ident "a")))
-							(e-nominal @5.17-5.21 (nominal "Bool")
-								(e-tag @5.17-5.26 (name "True")))))
-					(e-lookup-local @6.5-6.6
-						(p-assign @4.8-4.9 (ident "a"))))))
+		(e-lambda @4.7-7.2
+			(args
+				(p-assign @4.8-4.9 (ident "a")))
+			(e-block @4.11-7.2
+				(s-expect @5.5-5.26
+					(e-binop @5.12-5.26 (op "eq")
+						(e-lookup-local @5.12-5.13
+							(p-assign @4.8-4.9 (ident "a")))
+						(e-nominal @5.17-5.21 (nominal "Bool")
+							(e-tag @5.17-5.26 (name "True")))))
+				(e-lookup-local @6.5-6.6
+					(p-assign @4.8-4.9 (ident "a")))))
 		(annotation @4.1-4.4
 			(declared-type
 				(ty-fn @3.7-3.19 (effectful false)

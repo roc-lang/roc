@@ -31,16 +31,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-closure @1.1-1.13
-	(e-lambda @1.1-1.13
-		(args
-			(p-assign @1.2-1.3 (ident "x"))
-			(p-assign @1.5-1.6 (ident "y")))
-		(e-binop @1.8-1.13 (op "add")
-			(e-lookup-local @1.8-1.9
-				(p-assign @1.2-1.3 (ident "x")))
-			(e-lookup-local @1.12-1.13
-				(p-assign @1.5-1.6 (ident "y"))))))
+(e-lambda @1.1-1.13
+	(args
+		(p-assign @1.2-1.3 (ident "x"))
+		(p-assign @1.5-1.6 (ident "y")))
+	(e-binop @1.8-1.13 (op "add")
+		(e-lookup-local @1.8-1.9
+			(p-assign @1.2-1.3 (ident "x")))
+		(e-lookup-local @1.12-1.13
+			(p-assign @1.5-1.6 (ident "y")))))
 ~~~
 # TYPES
 ~~~clojure

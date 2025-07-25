@@ -308,12 +308,11 @@ quux = ("hello", 42)
 				(ty @15.7-15.16 (name "BadRecord")))))
 	(d-let
 		(p-assign @21.1-21.4 (ident "qux"))
-		(e-closure @21.7-21.12
-			(e-lambda @21.7-21.12
-				(args
-					(p-assign @21.8-21.9 (ident "x")))
-				(e-lookup-local @21.11-21.12
-					(p-assign @21.8-21.9 (ident "x")))))
+		(e-lambda @21.7-21.12
+			(args
+				(p-assign @21.8-21.9 (ident "x")))
+			(e-lookup-local @21.11-21.12
+				(p-assign @21.8-21.9 (ident "x"))))
 		(annotation @21.1-21.4
 			(declared-type
 				(ty @20.7-20.18 (name "BadFunction")))))

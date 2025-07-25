@@ -56,15 +56,14 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @4.1-4.8 (ident "convert"))
-		(e-closure @4.11-4.23
-			(e-lambda @4.11-4.23
-				(args
-					(p-assign @4.12-4.13 (ident "a")))
-				(e-dot-access @4.15-4.23 (field "to_b")
-					(receiver
-						(e-lookup-local @4.15-4.16
-							(p-assign @4.12-4.13 (ident "a"))))
-					(args))))
+		(e-lambda @4.11-4.23
+			(args
+				(p-assign @4.12-4.13 (ident "a")))
+			(e-dot-access @4.15-4.23 (field "to_b")
+				(receiver
+					(e-lookup-local @4.15-4.16
+						(p-assign @4.12-4.13 (ident "a"))))
+				(args)))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.17 (effectful false)

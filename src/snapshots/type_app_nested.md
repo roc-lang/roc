@@ -92,16 +92,15 @@ main! = |_| processNested([])
 (can-ir
 	(d-let
 		(p-assign @4.1-4.14 (ident "processNested"))
-		(e-closure @4.17-4.38
-			(e-lambda @4.17-4.38
-				(args
-					(p-assign @4.18-4.23 (ident "_list")))
-				(e-list @4.25-4.38
-					(elems
-						(e-string @4.26-4.31
-							(e-literal @4.27-4.30 (string "one")))
-						(e-string @4.32-4.37
-							(e-literal @4.33-4.36 (string "two")))))))
+		(e-lambda @4.17-4.38
+			(args
+				(p-assign @4.18-4.23 (ident "_list")))
+			(e-list @4.25-4.38
+				(elems
+					(e-string @4.26-4.31
+						(e-literal @4.27-4.30 (string "one")))
+					(e-string @4.32-4.37
+						(e-literal @4.33-4.36 (string "two"))))))
 		(annotation @4.1-4.14
 			(declared-type
 				(ty-fn @3.17-3.52 (effectful false)

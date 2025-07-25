@@ -48,31 +48,30 @@ NO CHANGE
 ~~~clojure
 (e-call @1.1-1.44
 	(e-call @1.1-1.41
-		(e-closure @1.2-1.29
-			(e-lambda @1.2-1.29
-				(args
-					(p-assign @1.3-1.4 (ident "a"))
-					(p-assign @1.6-1.7 (ident "b"))
-					(p-assign @1.9-1.10 (ident "c")))
-				(e-closure @1.12-1.29
-					(captures
-						(capture @1.9-1.10 (ident "c"))
-						(capture @1.3-1.4 (ident "a"))
-						(capture @1.6-1.7 (ident "b")))
-					(e-lambda @1.12-1.29
-						(args
-							(p-assign @1.13-1.14 (ident "x")))
-						(e-binop @1.16-1.29 (op "add")
-							(e-lookup-local @1.16-1.17
-								(p-assign @1.3-1.4 (ident "a")))
-							(e-binop @1.20-1.29 (op "add")
-								(e-lookup-local @1.20-1.21
-									(p-assign @1.6-1.7 (ident "b")))
-								(e-binop @1.24-1.29 (op "add")
-									(e-lookup-local @1.24-1.25
-										(p-assign @1.9-1.10 (ident "c")))
-									(e-lookup-local @1.28-1.29
-										(p-assign @1.13-1.14 (ident "x"))))))))))
+		(e-lambda @1.2-1.29
+			(args
+				(p-assign @1.3-1.4 (ident "a"))
+				(p-assign @1.6-1.7 (ident "b"))
+				(p-assign @1.9-1.10 (ident "c")))
+			(e-closure @1.12-1.29
+				(captures
+					(capture @1.9-1.10 (ident "c"))
+					(capture @1.3-1.4 (ident "a"))
+					(capture @1.6-1.7 (ident "b")))
+				(e-lambda @1.12-1.29
+					(args
+						(p-assign @1.13-1.14 (ident "x")))
+					(e-binop @1.16-1.29 (op "add")
+						(e-lookup-local @1.16-1.17
+							(p-assign @1.3-1.4 (ident "a")))
+						(e-binop @1.20-1.29 (op "add")
+							(e-lookup-local @1.20-1.21
+								(p-assign @1.6-1.7 (ident "b")))
+							(e-binop @1.24-1.29 (op "add")
+								(e-lookup-local @1.24-1.25
+									(p-assign @1.9-1.10 (ident "c")))
+								(e-lookup-local @1.28-1.29
+									(p-assign @1.13-1.14 (ident "x")))))))))
 		(e-int @1.31-1.33 (value "10"))
 		(e-int @1.35-1.37 (value "20"))
 		(e-int @1.39-1.40 (value "5")))

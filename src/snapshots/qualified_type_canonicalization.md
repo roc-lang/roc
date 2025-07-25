@@ -463,11 +463,10 @@ transform = |result|
 					(ty @26.33-26.36 (name "Str"))))))
 	(d-let
 		(p-assign @31.1-31.9 (ident "getColor"))
-		(e-closure @31.12-31.49
-			(e-lambda @31.12-31.49
-				(args
-					(p-underscore @31.13-31.14))
-				(e-runtime-error (tag "ident_not_in_scope"))))
+		(e-lambda @31.12-31.49
+			(args
+				(p-underscore @31.13-31.14))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(annotation @31.1-31.9
 			(declared-type
 				(ty-fn @30.12-30.27 (effectful false)
@@ -476,12 +475,11 @@ transform = |result|
 						(ext-decl @30.18-30.27 (ident "Color.RGB") (kind "type")))))))
 	(d-let
 		(p-assign @35.1-35.13 (ident "processColor"))
-		(e-closure @35.16-36.22
-			(e-lambda @35.16-36.22
-				(args
-					(p-assign @35.17-35.22 (ident "color")))
-				(e-string @36.5-36.22
-					(e-literal @36.6-36.21 (string "Color processed")))))
+		(e-lambda @35.16-36.22
+			(args
+				(p-assign @35.17-35.22 (ident "color")))
+			(e-string @36.5-36.22
+				(e-literal @36.6-36.21 (string "Color processed"))))
 		(annotation @35.1-35.13
 			(declared-type
 				(ty-fn @34.16-34.32 (effectful false)

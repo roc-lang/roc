@@ -207,12 +207,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @5.1-5.11 (ident "single_use"))
-		(e-closure @5.14-5.25
-			(e-lambda @5.14-5.25
-				(args
-					(p-assign @5.15-5.16 (ident "x")))
-				(e-string @5.18-5.25
-					(e-literal @5.19-5.24 (string "hello")))))
+		(e-lambda @5.14-5.25
+			(args
+				(p-assign @5.15-5.16 (ident "x")))
+			(e-string @5.18-5.25
+				(e-literal @5.19-5.24 (string "hello"))))
 		(annotation @5.1-5.11
 			(declared-type
 				(ty-fn @4.14-4.31 (effectful false)
@@ -221,12 +220,11 @@ NO CHANGE
 					(ty @4.28-4.31 (name "Str"))))))
 	(d-let
 		(p-assign @9.1-9.18 (ident "ending_underscore"))
-		(e-closure @9.21-9.37
-			(e-lambda @9.21-9.37
-				(args
-					(p-assign @9.22-9.26 (ident "list")))
-				(e-string @9.28-9.37
-					(e-literal @9.29-9.36 (string "default")))))
+		(e-lambda @9.21-9.37
+			(args
+				(p-assign @9.22-9.26 (ident "list")))
+			(e-string @9.28-9.37
+				(e-literal @9.29-9.36 (string "default"))))
 		(annotation @9.1-9.18
 			(declared-type
 				(ty-fn @8.21-8.41 (effectful false)
@@ -235,12 +233,11 @@ NO CHANGE
 					(ty-var @8.36-8.41 (name "elem_"))))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "combo_single"))
-		(e-closure @13.16-13.27
-			(e-lambda @13.16-13.27
-				(args
-					(p-assign @13.17-13.18 (ident "x")))
-				(e-string @13.20-13.27
-					(e-literal @13.21-13.26 (string "combo")))))
+		(e-lambda @13.16-13.27
+			(args
+				(p-assign @13.17-13.18 (ident "x")))
+			(e-string @13.20-13.27
+				(e-literal @13.21-13.26 (string "combo"))))
 		(annotation @13.1-13.13
 			(declared-type
 				(ty-fn @12.16-12.33 (effectful false)
@@ -249,12 +246,11 @@ NO CHANGE
 					(ty @12.30-12.33 (name "Str"))))))
 	(d-let
 		(p-assign @17.1-17.13 (ident "valid_single"))
-		(e-closure @17.16-17.27
-			(e-lambda @17.16-17.27
-				(args
-					(p-assign @17.17-17.18 (ident "x")))
-				(e-string @17.20-17.27
-					(e-literal @17.21-17.26 (string "valid")))))
+		(e-lambda @17.16-17.27
+			(args
+				(p-assign @17.17-17.18 (ident "x")))
+			(e-string @17.20-17.27
+				(e-literal @17.21-17.26 (string "valid"))))
 		(annotation @17.1-17.13
 			(declared-type
 				(ty-fn @16.16-16.34 (effectful false)
@@ -263,14 +259,13 @@ NO CHANGE
 					(ty @16.31-16.34 (name "Str"))))))
 	(d-let
 		(p-assign @20.1-20.12 (ident "valid_multi"))
-		(e-closure @20.15-20.22
-			(e-lambda @20.15-20.22
-				(args
-					(p-assign @20.16-20.17 (ident "x")))
-				(e-list @20.19-20.22
-					(elems
-						(e-lookup-local @20.20-20.21
-							(p-assign @20.16-20.17 (ident "x")))))))
+		(e-lambda @20.15-20.22
+			(args
+				(p-assign @20.16-20.17 (ident "x")))
+			(e-list @20.19-20.22
+				(elems
+					(e-lookup-local @20.20-20.21
+						(p-assign @20.16-20.17 (ident "x"))))))
 		(annotation @20.1-20.12
 			(declared-type
 				(ty-fn @19.15-19.33 (effectful false)
@@ -279,12 +274,11 @@ NO CHANGE
 						(ty-var @19.28-19.32 (name "elem")))))))
 	(d-let
 		(p-assign @22.1-22.5 (ident "main"))
-		(e-closure @22.8-22.18
-			(e-lambda @22.8-22.18
-				(args
-					(p-assign @22.9-22.10 (ident "x")))
-				(e-string @22.12-22.18
-					(e-literal @22.13-22.17 (string "done")))))))
+		(e-lambda @22.8-22.18
+			(args
+				(p-assign @22.9-22.10 (ident "x")))
+			(e-string @22.12-22.18
+				(e-literal @22.13-22.17 (string "done"))))))
 ~~~
 # TYPES
 ~~~clojure

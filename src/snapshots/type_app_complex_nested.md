@@ -273,28 +273,27 @@ main! = |_| processComplex(Ok([Some(42), None]))
 (can-ir
 	(d-let
 		(p-assign @5.1-5.15 (ident "processComplex"))
-		(e-closure @5.18-9.6
-			(e-lambda @5.18-9.6
-				(args
-					(p-assign @5.19-5.25 (ident "result")))
-				(e-match @6.5-9.6
-					(match @6.5-9.6
-						(cond
-							(e-lookup-local @6.11-6.17
-								(p-assign @5.19-5.25 (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @7.9-7.22)))
-								(value
-									(e-empty_list @7.26-7.28)))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @8.9-8.15)))
-								(value
-									(e-empty_list @8.19-8.21))))))))
+		(e-lambda @5.18-9.6
+			(args
+				(p-assign @5.19-5.25 (ident "result")))
+			(e-match @6.5-9.6
+				(match @6.5-9.6
+					(cond
+						(e-lookup-local @6.11-6.17
+							(p-assign @5.19-5.25 (ident "result"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag @7.9-7.22)))
+							(value
+								(e-empty_list @7.26-7.28)))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag @8.9-8.15)))
+							(value
+								(e-empty_list @8.19-8.21)))))))
 		(annotation @5.1-5.15
 			(declared-type
 				(ty-fn @4.18-4.73 (effectful false)

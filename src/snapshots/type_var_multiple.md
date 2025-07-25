@@ -93,24 +93,23 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign @5.1-5.5 (ident "swap"))
-		(e-closure @5.8-8.2
-			(e-lambda @5.8-8.2
-				(args
-					(p-assign @5.9-5.13 (ident "pair")))
-				(e-block @5.15-8.2
-					(s-let @6.5-6.27
-						(p-tuple @6.5-6.20
-							(patterns
-								(p-assign @6.6-6.11 (ident "first"))
-								(p-assign @6.13-6.19 (ident "second"))))
-						(e-lookup-local @6.23-6.27
-							(p-assign @5.9-5.13 (ident "pair"))))
-					(e-tuple @7.5-7.20
-						(elems
-							(e-lookup-local @7.6-7.12
-								(p-assign @6.13-6.19 (ident "second")))
-							(e-lookup-local @7.14-7.19
-								(p-assign @6.6-6.11 (ident "first"))))))))
+		(e-lambda @5.8-8.2
+			(args
+				(p-assign @5.9-5.13 (ident "pair")))
+			(e-block @5.15-8.2
+				(s-let @6.5-6.27
+					(p-tuple @6.5-6.20
+						(patterns
+							(p-assign @6.6-6.11 (ident "first"))
+							(p-assign @6.13-6.19 (ident "second"))))
+					(e-lookup-local @6.23-6.27
+						(p-assign @5.9-5.13 (ident "pair"))))
+				(e-tuple @7.5-7.20
+					(elems
+						(e-lookup-local @7.6-7.12
+							(p-assign @6.13-6.19 (ident "second")))
+						(e-lookup-local @7.14-7.19
+							(p-assign @6.6-6.11 (ident "first")))))))
 		(annotation @5.1-5.5
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)
@@ -122,11 +121,10 @@ main! = |_| {}
 						(ty-var @4.22-4.23 (name "a")))))))
 	(d-let
 		(p-assign @10.1-10.6 (ident "main!"))
-		(e-closure @10.9-10.15
-			(e-lambda @10.9-10.15
-				(args
-					(p-underscore @10.10-10.11))
-				(e-empty_record @10.13-10.15)))))
+		(e-lambda @10.9-10.15
+			(args
+				(p-underscore @10.10-10.11))
+			(e-empty_record @10.13-10.15))))
 ~~~
 # TYPES
 ~~~clojure

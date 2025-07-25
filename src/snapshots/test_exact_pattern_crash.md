@@ -218,19 +218,18 @@ main = {
 (can-ir
 	(d-let
 		(p-assign @8.1-8.10 (ident "swap_pair"))
-		(e-closure @8.13-8.28
-			(e-lambda @8.13-8.28
-				(args
-					(p-tuple @8.14-8.20
-						(patterns
-							(p-assign @8.15-8.16 (ident "x"))
-							(p-assign @8.18-8.19 (ident "y")))))
-				(e-tuple @8.22-8.28
-					(elems
-						(e-lookup-local @8.23-8.24
-							(p-assign @8.18-8.19 (ident "y")))
-						(e-lookup-local @8.26-8.27
-							(p-assign @8.15-8.16 (ident "x")))))))
+		(e-lambda @8.13-8.28
+			(args
+				(p-tuple @8.14-8.20
+					(patterns
+						(p-assign @8.15-8.16 (ident "x"))
+						(p-assign @8.18-8.19 (ident "y")))))
+			(e-tuple @8.22-8.28
+				(elems
+					(e-lookup-local @8.23-8.24
+						(p-assign @8.18-8.19 (ident "y")))
+					(e-lookup-local @8.26-8.27
+						(p-assign @8.15-8.16 (ident "x"))))))
 		(annotation @8.1-8.10
 			(declared-type
 				(ty-fn @7.13-7.37 (effectful false)
@@ -242,27 +241,26 @@ main = {
 						(ty-var @7.35-7.36 (name "a")))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "map_pair"))
-		(e-closure @12.12-12.39
-			(e-lambda @12.12-12.39
-				(args
-					(p-tuple @12.13-12.19
-						(patterns
-							(p-assign @12.14-12.15 (ident "x"))
-							(p-assign @12.17-12.18 (ident "y"))))
-					(p-assign @12.21-12.22 (ident "f"))
-					(p-assign @12.24-12.25 (ident "g")))
-				(e-tuple @12.27-12.39
-					(elems
-						(e-call @12.28-12.32
-							(e-lookup-local @12.28-12.29
-								(p-assign @12.21-12.22 (ident "f")))
-							(e-lookup-local @12.30-12.31
-								(p-assign @12.14-12.15 (ident "x"))))
-						(e-call @12.34-12.38
-							(e-lookup-local @12.34-12.35
-								(p-assign @12.24-12.25 (ident "g")))
-							(e-lookup-local @12.36-12.37
-								(p-assign @12.17-12.18 (ident "y"))))))))
+		(e-lambda @12.12-12.39
+			(args
+				(p-tuple @12.13-12.19
+					(patterns
+						(p-assign @12.14-12.15 (ident "x"))
+						(p-assign @12.17-12.18 (ident "y"))))
+				(p-assign @12.21-12.22 (ident "f"))
+				(p-assign @12.24-12.25 (ident "g")))
+			(e-tuple @12.27-12.39
+				(elems
+					(e-call @12.28-12.32
+						(e-lookup-local @12.28-12.29
+							(p-assign @12.21-12.22 (ident "f")))
+						(e-lookup-local @12.30-12.31
+							(p-assign @12.14-12.15 (ident "x"))))
+					(e-call @12.34-12.38
+						(e-lookup-local @12.34-12.35
+							(p-assign @12.24-12.25 (ident "g")))
+						(e-lookup-local @12.36-12.37
+							(p-assign @12.17-12.18 (ident "y")))))))
 		(annotation @12.1-12.9
 			(declared-type
 				(ty-fn @11.12-11.56 (effectful false)
@@ -299,22 +297,20 @@ main = {
 						(p-assign @12.1-12.9 (ident "map_pair")))
 					(e-int @23.19-23.20 (value "3"))
 					(e-int @23.22-23.23 (value "4"))
-					(e-closure @23.26-23.35
-						(e-lambda @23.26-23.35
-							(args
+					(e-lambda @23.26-23.35
+						(args
+							(p-assign @23.27-23.28 (ident "x")))
+						(e-binop @23.30-23.35 (op "add")
+							(e-lookup-local @23.30-23.31
 								(p-assign @23.27-23.28 (ident "x")))
-							(e-binop @23.30-23.35 (op "add")
-								(e-lookup-local @23.30-23.31
-									(p-assign @23.27-23.28 (ident "x")))
-								(e-int @23.34-23.35 (value "1")))))
-					(e-closure @23.39-23.48
-						(e-lambda @23.39-23.48
-							(args
+							(e-int @23.34-23.35 (value "1"))))
+					(e-lambda @23.39-23.48
+						(args
+							(p-assign @23.40-23.41 (ident "y")))
+						(e-binop @23.43-23.48 (op "mul")
+							(e-lookup-local @23.43-23.44
 								(p-assign @23.40-23.41 (ident "y")))
-							(e-binop @23.43-23.48 (op "mul")
-								(e-lookup-local @23.43-23.44
-									(p-assign @23.40-23.41 (ident "y")))
-								(e-int @23.47-23.48 (value "2")))))))
+							(e-int @23.47-23.48 (value "2"))))))
 			(e-lookup-local @25.5-25.7
 				(p-assign @23.5-23.7 (ident "p2")))))
 	(s-alias-decl @4.1-4.20

@@ -71,16 +71,15 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @4.1-4.6 (ident "addU8"))
-		(e-closure @4.9-4.21
-			(e-lambda @4.9-4.21
-				(args
-					(p-assign @4.10-4.11 (ident "a"))
-					(p-assign @4.13-4.14 (ident "b")))
-				(e-binop @4.16-4.21 (op "add")
-					(e-lookup-local @4.16-4.17
-						(p-assign @4.10-4.11 (ident "a")))
-					(e-lookup-local @4.20-4.21
-						(p-assign @4.13-4.14 (ident "b"))))))
+		(e-lambda @4.9-4.21
+			(args
+				(p-assign @4.10-4.11 (ident "a"))
+				(p-assign @4.13-4.14 (ident "b")))
+			(e-binop @4.16-4.21 (op "add")
+				(e-lookup-local @4.16-4.17
+					(p-assign @4.10-4.11 (ident "a")))
+				(e-lookup-local @4.20-4.21
+					(p-assign @4.13-4.14 (ident "b")))))
 		(annotation @4.1-4.6
 			(declared-type
 				(ty-fn @3.9-3.21 (effectful false)

@@ -175,44 +175,40 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign @4.1-4.15 (ident "unused_regular"))
-		(e-closure @4.18-4.24
-			(e-lambda @4.18-4.24
-				(args
-					(p-assign @4.19-4.20 (ident "x")))
-				(e-int @4.22-4.24 (value "42")))))
+		(e-lambda @4.18-4.24
+			(args
+				(p-assign @4.19-4.20 (ident "x")))
+			(e-int @4.22-4.24 (value "42"))))
 	(d-let
 		(p-assign @7.1-7.16 (ident "used_underscore"))
-		(e-closure @7.19-7.34
-			(e-lambda @7.19-7.34
-				(args
-					(p-assign @7.20-7.26 (ident "_value")))
-				(e-lookup-local @7.28-7.34
-					(p-assign @7.20-7.26 (ident "_value"))))))
+		(e-lambda @7.19-7.34
+			(args
+				(p-assign @7.20-7.26 (ident "_value")))
+			(e-lookup-local @7.28-7.34
+				(p-assign @7.20-7.26 (ident "_value")))))
 	(d-let
 		(p-assign @10.1-10.18 (ident "unused_underscore"))
-		(e-closure @10.21-10.35
-			(e-lambda @10.21-10.35
-				(args
-					(p-assign @10.22-10.30 (ident "_ignored")))
-				(e-int @10.32-10.35 (value "100")))))
+		(e-lambda @10.21-10.35
+			(args
+				(p-assign @10.22-10.30 (ident "_ignored")))
+			(e-int @10.32-10.35 (value "100"))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "used_regular"))
-		(e-closure @13.16-13.35
-			(e-lambda @13.16-13.35
-				(args
+		(e-lambda @13.16-13.35
+			(args
+				(p-assign @13.17-13.23 (ident "number")))
+			(e-binop @13.25-13.35 (op "add")
+				(e-lookup-local @13.25-13.31
 					(p-assign @13.17-13.23 (ident "number")))
-				(e-binop @13.25-13.35 (op "add")
-					(e-lookup-local @13.25-13.31
-						(p-assign @13.17-13.23 (ident "number")))
-					(e-int @13.34-13.35 (value "1"))))))
+				(e-int @13.34-13.35 (value "1")))))
 	(d-let
 		(p-assign @15.1-15.6 (ident "main!"))
 		(e-closure @15.9-21.2
 			(captures
-				(capture @10.1-10.18 (ident "unused_underscore"))
 				(capture @13.1-13.13 (ident "used_regular"))
+				(capture @4.1-4.15 (ident "unused_regular"))
 				(capture @7.1-7.16 (ident "used_underscore"))
-				(capture @4.1-4.15 (ident "unused_regular")))
+				(capture @10.1-10.18 (ident "unused_underscore")))
 			(e-lambda @15.9-21.2
 				(args
 					(p-underscore @15.10-15.11))

@@ -2309,6 +2309,26 @@ pub fn canonicalizeExpr(
             // from the scratch buffer.
             self.scratch_free_vars.clearFrom(body_free_vars_start);
 
+            // Create the pure lambda expression first
+            const lambda_expr = Expr{
+                .e_lambda = .{
+                    .args = args_span,
+                    .body = can_body.idx,
+                },
+            };
+            const lambda_type_content = try self.env.types.mkFuncUnbound(
+                @ptrCast(self.env.store.slicePatterns(args_span)),
+                ModuleEnv.varFrom(can_body.idx),
+            );
+            const lambda_idx = try self.env.addExprAndTypeVar(lambda_expr, lambda_type_content, region);
+
+            // If there are no captures, this is a pure lambda.
+            // Otherwise, it's a closure.
+            if (captures_set.count() == 0) {
+                // A pure lambda has no free variables.
+                return CanonicalizedExpr{ .idx = lambda_idx, .free_vars = null };
+            }
+
             const capture_info: Expr.Capture.Span = blk: {
                 const scratch_start = self.env.store.scratch_captures.top();
                 var cap_it = captures_set.iterator();
@@ -2330,19 +2350,6 @@ pub fn canonicalizeExpr(
 
                 break :blk try self.env.store.capturesSpanFrom(scratch_start);
             };
-
-            // Create the pure lambda expression first
-            const lambda_expr = Expr{
-                .e_lambda = .{
-                    .args = args_span,
-                    .body = can_body.idx,
-                },
-            };
-            const lambda_type_content = try self.env.types.mkFuncUnbound(
-                @ptrCast(self.env.store.slicePatterns(args_span)),
-                ModuleEnv.varFrom(can_body.idx),
-            );
-            const lambda_idx = try self.env.addExprAndTypeVar(lambda_expr, lambda_type_content, region);
 
             // Now, create the closure that captures the environment
             const closure_expr = Expr{

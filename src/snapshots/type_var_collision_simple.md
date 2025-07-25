@@ -175,33 +175,30 @@ main! = |_| {
 		(e-int @6.5-6.6 (value "3")))
 	(d-let
 		(p-assign @9.1-9.9 (ident "identity"))
-		(e-closure @9.12-9.17
-			(e-lambda @9.12-9.17
-				(args
-					(p-assign @9.13-9.14 (ident "x")))
-				(e-lookup-local @9.16-9.17
-					(p-assign @9.13-9.14 (ident "x"))))))
+		(e-lambda @9.12-9.17
+			(args
+				(p-assign @9.13-9.14 (ident "x")))
+			(e-lookup-local @9.16-9.17
+				(p-assign @9.13-9.14 (ident "x")))))
 	(d-let
 		(p-assign @12.1-12.10 (ident "identity2"))
-		(e-closure @12.13-12.18
-			(e-lambda @12.13-12.18
-				(args
-					(p-assign @12.14-12.15 (ident "y")))
-				(e-lookup-local @12.17-12.18
-					(p-assign @12.14-12.15 (ident "y"))))))
+		(e-lambda @12.13-12.18
+			(args
+				(p-assign @12.14-12.15 (ident "y")))
+			(e-lookup-local @12.17-12.18
+				(p-assign @12.14-12.15 (ident "y")))))
 	(d-let
 		(p-assign @15.1-15.5 (ident "pair"))
-		(e-closure @15.8-15.39
-			(e-lambda @15.8-15.39
-				(args
-					(p-assign @15.9-15.14 (ident "first"))
-					(p-assign @15.16-15.22 (ident "second")))
-				(e-tuple @15.24-15.39
-					(elems
-						(e-lookup-local @15.25-15.30
-							(p-assign @15.9-15.14 (ident "first")))
-						(e-lookup-local @15.32-15.38
-							(p-assign @15.16-15.22 (ident "second"))))))))
+		(e-lambda @15.8-15.39
+			(args
+				(p-assign @15.9-15.14 (ident "first"))
+				(p-assign @15.16-15.22 (ident "second")))
+			(e-tuple @15.24-15.39
+				(elems
+					(e-lookup-local @15.25-15.30
+						(p-assign @15.9-15.14 (ident "first")))
+					(e-lookup-local @15.32-15.38
+						(p-assign @15.16-15.22 (ident "second")))))))
 	(d-let
 		(p-assign @17.1-17.6 (ident "main!"))
 		(e-closure @17.9-23.2
