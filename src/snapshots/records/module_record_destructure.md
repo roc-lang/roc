@@ -85,8 +85,6 @@ extract_age = |person| {
 		(e-lambda @4.15-8.2
 			(args
 				(p-assign @4.16-4.22 (ident "person")))
-			(captures
-				(capture @5.7-5.10 (ident "age")))
 			(e-block @4.24-8.2
 				(s-let @5.5-5.21
 					(p-record-destructure @5.5-5.12

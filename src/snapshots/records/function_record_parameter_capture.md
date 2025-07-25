@@ -69,9 +69,7 @@ NO CHANGE
 						(required
 							(p-assign @1.15-1.18 (ident "a"))))))))
 	(captures
-		(capture @1.4-1.8 (ident "name"))
-		(capture @1.2-1.23 (ident "person"))
-		(capture @1.10-1.13 (ident "age")))
+		(capture @1.2-1.23 (ident "person")))
 	(e-record @1.32-1.103
 		(fields
 			(field (name "greeting")

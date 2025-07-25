@@ -3092,6 +3092,9 @@ fn canonicalizePattern(
                         const assign_pattern = Pattern{ .assign = .{ .ident = field_name_ident } };
                         const assign_pattern_idx = try self.env.addPatternAndTypeVar(assign_pattern, .{ .flex_var = null }, field_region);
 
+                        // Record the function context depth for capture analysis
+                        try self.recordPatternFunctionContext(assign_pattern_idx);
+
                         const record_destruct = ModuleEnv.Pattern.RecordDestruct{
                             .label = field_name_ident,
                             .ident = field_name_ident,

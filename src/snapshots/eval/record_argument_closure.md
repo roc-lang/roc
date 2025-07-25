@@ -50,9 +50,6 @@ NO CHANGE
 					(record-destruct @1.8-1.9 (label "y") (ident "y")
 						(required
 							(p-assign @1.8-1.9 (ident "y")))))))
-		(captures
-			(capture @1.5-1.6 (ident "x"))
-			(capture @1.8-1.9 (ident "y")))
 		(e-binop @1.13-1.18 (op "mul")
 			(e-lookup-local @1.13-1.14
 				(p-assign @1.5-1.6 (ident "x")))
