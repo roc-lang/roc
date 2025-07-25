@@ -424,29 +424,32 @@ transform = |_, b| b
 					(ty @14.40-14.43 (name "U32"))))))
 	(d-let
 		(p-assign @19.1-19.14 (ident "handle_result"))
-		(e-lambda @19.17-23.6
-			(args
-				(p-assign @19.18-19.24 (ident "result")))
-			(e-match @20.5-23.6
-				(match @20.5-23.6
-					(cond
-						(e-lookup-local @20.11-20.17
-							(p-assign @19.18-19.24 (ident "result"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @21.9-21.14)))
-							(value
-								(e-string @21.18-21.27
-									(e-literal @21.19-21.26 (string "success")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @22.9-22.17)))
-							(value
-								(e-lookup-local @22.21-22.24
-									(p-assign @22.13-22.16 (ident "msg")))))))))
+		(e-closure @19.17-23.6
+			(captures
+				(capture @22.13-22.16 (ident "msg")))
+			(e-lambda @19.17-23.6
+				(args
+					(p-assign @19.18-19.24 (ident "result")))
+				(e-match @20.5-23.6
+					(match @20.5-23.6
+						(cond
+							(e-lookup-local @20.11-20.17
+								(p-assign @19.18-19.24 (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @21.9-21.14)))
+								(value
+									(e-string @21.18-21.27
+										(e-literal @21.19-21.26 (string "success")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @22.9-22.17)))
+								(value
+									(e-lookup-local @22.21-22.24
+										(p-assign @22.13-22.16 (ident "msg"))))))))))
 		(annotation @19.1-19.14
 			(declared-type
 				(ty-fn @18.17-18.38 (effectful false)

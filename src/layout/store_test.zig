@@ -3517,3 +3517,59 @@ test "idxFromScalar - arithmetic mapping with no branches" {
     try testing.expectEqual(@as(u28, 14), @intFromEnum(layout.Idx.f64)); // 13 + (3 - 2)
     try testing.expectEqual(@as(u28, 15), @intFromEnum(layout.Idx.dec)); // 13 + (4 - 2)
 }
+
+test "putRecord and getRecordFieldOffsetByName" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = try ModuleEnv.init(gpa, "");
+    defer module_env.deinit();
+
+    var type_store = try types_store.Store.init(gpa);
+    defer type_store.deinit();
+
+    var layout_store = try Store.init(&module_env, &type_store);
+    defer layout_store.deinit();
+
+    // Create a record with out-of-order fields
+    const field_layouts = &[_]layout.Layout{
+        layout.Layout.int(.u8),
+        layout.Layout.int(.u64),
+        layout.Layout.int(.u32),
+    };
+
+    const b_ident = try module_env.idents.insert(gpa, base.Ident.for_text("b"));
+    const a_ident = try module_env.idents.insert(gpa, base.Ident.for_text("a"));
+    const c_ident = try module_env.idents.insert(gpa, base.Ident.for_text("c"));
+
+    const field_names = &[_]Ident.Idx{
+        b_ident,
+        a_ident,
+        c_ident,
+    };
+
+    const record_layout_idx = try layout_store.putRecord(field_layouts, field_names);
+    const record_layout = layout_store.getLayout(record_layout_idx);
+
+    try testing.expect(record_layout.tag == .record);
+
+    const record_idx = record_layout.data.record.idx;
+
+    // Fields should be sorted by alignment, then name.
+    // Expected order: a (u64), c (u32), b (u8)
+    // Offsets:
+    // a: 0
+    // c: 8
+    // b: 12
+    const offset_a = layout_store.getRecordFieldOffsetByName(record_idx, "a").?;
+    try testing.expectEqual(@as(u32, 0), offset_a);
+
+    const offset_c = layout_store.getRecordFieldOffsetByName(record_idx, "c").?;
+    try testing.expectEqual(@as(u32, 8), offset_c);
+
+    const offset_b = layout_store.getRecordFieldOffsetByName(record_idx, "b").?;
+    try testing.expectEqual(@as(u32, 12), offset_b);
+
+    // Test non-existent field
+    try testing.expectEqual(null, layout_store.getRecordFieldOffsetByName(record_idx, "d"));
+}

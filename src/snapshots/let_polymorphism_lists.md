@@ -48,9 +48,6 @@ INVALID STATEMENT - let_polymorphism_lists.md:14:32:14:45
 UNDEFINED VARIABLE - let_polymorphism_lists.md:25:12:25:20
 UNDEFINED VARIABLE - let_polymorphism_lists.md:26:12:26:20
 UNDEFINED VARIABLE - let_polymorphism_lists.md:27:12:27:20
-TYPE MISMATCH - let_polymorphism_lists.md:12:16:12:27
-TYPE MISMATCH - let_polymorphism_lists.md:13:16:13:27
-TYPE MISMATCH - let_polymorphism_lists.md:14:18:14:31
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+** is not expected in an expression.
@@ -186,48 +183,6 @@ Is there an `import` or `exposing` missing up-top?
 ```
            ^^^^^^^^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**let_polymorphism_lists.md:12:16:12:27:**
-```roc
-all_int_list = int_list ++ my_empty_list
-```
-               ^^^^^^^^^^^
-
-It is of type:
-    _Num(_size2)_
-
-But you are trying to use it as:
-    _List(Num(_size))_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**let_polymorphism_lists.md:13:16:13:27:**
-```roc
-all_str_list = str_list ++ my_empty_list
-```
-               ^^^^^^^^^^^
-
-It is of type:
-    _Num(_size)_
-
-But you are trying to use it as:
-    _List(Str)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**let_polymorphism_lists.md:14:18:14:31:**
-```roc
-all_float_list = float_list ++ my_empty_list
-```
-                 ^^^^^^^^^^^^^
-
-It is of type:
-    _Num(_size2)_
-
-But you are trying to use it as:
-    _List(Frac(_size))_
 
 # TOKENS
 ~~~zig
@@ -414,22 +369,13 @@ main = |_| {
 				(e-dec-small @9.25-9.28 (numerator "33") (denominator-power-of-ten "1") (value "3.3")))))
 	(d-let
 		(p-assign @12.1-12.13 (ident "all_int_list"))
-		(e-binop @12.16-12.27 (op "add")
-			(e-lookup-local @12.16-12.24
-				(p-assign @7.1-7.9 (ident "int_list")))
-			(e-runtime-error (tag "expr_not_canonicalized"))))
+		(e-runtime-error (tag "expr_not_canonicalized")))
 	(d-let
 		(p-assign @13.1-13.13 (ident "all_str_list"))
-		(e-binop @13.16-13.27 (op "add")
-			(e-lookup-local @13.16-13.24
-				(p-assign @8.1-8.9 (ident "str_list")))
-			(e-runtime-error (tag "expr_not_canonicalized"))))
+		(e-runtime-error (tag "expr_not_canonicalized")))
 	(d-let
 		(p-assign @14.1-14.15 (ident "all_float_list"))
-		(e-binop @14.18-14.31 (op "add")
-			(e-lookup-local @14.18-14.28
-				(p-assign @9.1-9.11 (ident "float_list")))
-			(e-runtime-error (tag "expr_not_canonicalized"))))
+		(e-runtime-error (tag "expr_not_canonicalized")))
 	(d-let
 		(p-assign @17.1-17.10 (ident "get_empty"))
 		(e-lambda @17.13-17.19
@@ -451,40 +397,41 @@ main = |_| {
 				(e-literal @21.29-21.33 (string "test")))))
 	(d-let
 		(p-assign @23.1-23.5 (ident "main"))
-		(e-lambda @23.8-29.2
-			(args
-				(p-underscore @23.9-23.10))
+		(e-closure @23.8-29.2
 			(captures
 				(capture @12.1-12.13 (ident "all_int_list"))
 				(capture @13.1-13.13 (ident "all_str_list"))
 				(capture @14.1-14.15 (ident "all_float_list")))
-			(e-block @23.12-29.2
-				(s-let @25.5-25.34
-					(p-assign @25.5-25.9 (ident "len1"))
-					(e-call @25.12-25.34
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-lookup-local @25.21-25.33
-							(p-assign @12.1-12.13 (ident "all_int_list")))))
-				(s-let @26.5-26.34
-					(p-assign @26.5-26.9 (ident "len2"))
-					(e-call @26.12-26.34
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-lookup-local @26.21-26.33
-							(p-assign @13.1-13.13 (ident "all_str_list")))))
-				(s-let @27.5-27.36
-					(p-assign @27.5-27.9 (ident "len3"))
-					(e-call @27.12-27.36
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-lookup-local @27.21-27.35
-							(p-assign @14.1-14.15 (ident "all_float_list")))))
-				(e-binop @28.5-28.23 (op "add")
-					(e-lookup-local @28.5-28.9
-						(p-assign @25.5-25.9 (ident "len1")))
-					(e-binop @28.12-28.23 (op "add")
-						(e-lookup-local @28.12-28.16
-							(p-assign @26.5-26.9 (ident "len2")))
-						(e-lookup-local @28.19-28.23
-							(p-assign @27.5-27.9 (ident "len3")))))))))
+			(e-lambda @23.8-29.2
+				(args
+					(p-underscore @23.9-23.10))
+				(e-block @23.12-29.2
+					(s-let @25.5-25.34
+						(p-assign @25.5-25.9 (ident "len1"))
+						(e-call @25.12-25.34
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-lookup-local @25.21-25.33
+								(p-assign @12.1-12.13 (ident "all_int_list")))))
+					(s-let @26.5-26.34
+						(p-assign @26.5-26.9 (ident "len2"))
+						(e-call @26.12-26.34
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-lookup-local @26.21-26.33
+								(p-assign @13.1-13.13 (ident "all_str_list")))))
+					(s-let @27.5-27.36
+						(p-assign @27.5-27.9 (ident "len3"))
+						(e-call @27.12-27.36
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-lookup-local @27.21-27.35
+								(p-assign @14.1-14.15 (ident "all_float_list")))))
+					(e-binop @28.5-28.23 (op "add")
+						(e-lookup-local @28.5-28.9
+							(p-assign @25.5-25.9 (ident "len1")))
+						(e-binop @28.12-28.23 (op "add")
+							(e-lookup-local @28.12-28.16
+								(p-assign @26.5-26.9 (ident "len2")))
+							(e-lookup-local @28.19-28.23
+								(p-assign @27.5-27.9 (ident "len3"))))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -508,99 +508,104 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @60.1-60.2 (ident "h"))
-		(e-lambda @60.5-110.2
-			(args
-				(p-assign @60.6-60.7 (ident "x"))
-				(p-assign @60.9-60.10 (ident "y")))
+		(e-closure @60.5-110.2
 			(captures
+				(capture @89.5-89.6 (ident "a"))
+				(capture @94.4-94.5 (ident "a"))
+				(capture @99.5-99.6 (ident "a"))
+				(capture @105.5-105.6 (ident "a"))
 				(capture @60.1-60.2 (ident "h")))
-			(e-block @60.12-110.2
-				(s-let @61.2-68.3
-					(p-assign @61.2-61.4 (ident "h1"))
-					(e-record @61.7-68.3
-						(fields
-							(field (name "h11")
-								(e-lookup-local @62.8-62.9
+			(e-lambda @60.5-110.2
+				(args
+					(p-assign @60.6-60.7 (ident "x"))
+					(p-assign @60.9-60.10 (ident "y")))
+				(e-block @60.12-110.2
+					(s-let @61.2-68.3
+						(p-assign @61.2-61.4 (ident "h1"))
+						(e-record @61.7-68.3
+							(fields
+								(field (name "h11")
+									(e-lookup-local @62.8-62.9
+										(p-assign @60.6-60.7 (ident "x"))))
+								(field (name "h12")
+									(e-lookup-local @63.8-63.9
+										(p-assign @60.6-60.7 (ident "x"))))
+								(field (name "h13")
+									(e-record @64.8-67.4
+										(fields
+											(field (name "h131")
+												(e-lookup-local @65.10-65.11
+													(p-assign @60.6-60.7 (ident "x"))))
+											(field (name "h132")
+												(e-lookup-local @66.10-66.11
+													(p-assign @60.9-60.10 (ident "y"))))))))))
+					(s-let @69.2-72.3
+						(p-assign @69.2-69.4 (ident "h2"))
+						(e-call @69.7-72.3
+							(e-lookup-local @69.7-69.8
+								(p-assign @60.1-60.2 (ident "h")))
+							(e-lookup-local @70.3-70.4
+								(p-assign @60.6-60.7 (ident "x")))
+							(e-lookup-local @71.3-71.4
+								(p-assign @60.9-60.10 (ident "y")))))
+					(s-let @73.2-76.3
+						(p-assign @73.2-73.4 (ident "h3"))
+						(e-tag @73.7-73.8 (name "A")
+							(args
+								(e-lookup-local @74.3-74.4
+									(p-assign @60.6-60.7 (ident "x")))
+								(e-lookup-local @75.3-75.4
+									(p-assign @60.9-60.10 (ident "y"))))))
+					(s-let @77.2-80.3
+						(p-assign @77.2-77.4 (ident "h4"))
+						(e-list @77.7-80.3
+							(elems
+								(e-lookup-local @78.3-78.4
+									(p-assign @60.6-60.7 (ident "x")))
+								(e-lookup-local @79.3-79.4
+									(p-assign @60.9-60.10 (ident "y"))))))
+					(s-let @81.2-84.3
+						(p-assign @81.2-81.4 (ident "h5"))
+						(e-tuple @81.7-84.3
+							(elems
+								(e-lookup-local @82.3-82.4
+									(p-assign @60.6-60.7 (ident "x")))
+								(e-lookup-local @83.3-83.4
+									(p-assign @60.9-60.10 (ident "y"))))))
+					(e-match @86.2-109.3
+						(match @86.2-109.3
+							(cond
+								(e-lookup-local @86.8-86.9
 									(p-assign @60.6-60.7 (ident "x"))))
-							(field (name "h12")
-								(e-lookup-local @63.8-63.9
-									(p-assign @60.6-60.7 (ident "x"))))
-							(field (name "h13")
-								(e-record @64.8-67.4
-									(fields
-										(field (name "h131")
-											(e-lookup-local @65.10-65.11
-												(p-assign @60.6-60.7 (ident "x"))))
-										(field (name "h132")
-											(e-lookup-local @66.10-66.11
-												(p-assign @60.9-60.10 (ident "y"))))))))))
-				(s-let @69.2-72.3
-					(p-assign @69.2-69.4 (ident "h2"))
-					(e-call @69.7-72.3
-						(e-lookup-local @69.7-69.8
-							(p-assign @60.1-60.2 (ident "h")))
-						(e-lookup-local @70.3-70.4
-							(p-assign @60.6-60.7 (ident "x")))
-						(e-lookup-local @71.3-71.4
-							(p-assign @60.9-60.10 (ident "y")))))
-				(s-let @73.2-76.3
-					(p-assign @73.2-73.4 (ident "h3"))
-					(e-tag @73.7-73.8 (name "A")
-						(args
-							(e-lookup-local @74.3-74.4
-								(p-assign @60.6-60.7 (ident "x")))
-							(e-lookup-local @75.3-75.4
-								(p-assign @60.9-60.10 (ident "y"))))))
-				(s-let @77.2-80.3
-					(p-assign @77.2-77.4 (ident "h4"))
-					(e-list @77.7-80.3
-						(elems
-							(e-lookup-local @78.3-78.4
-								(p-assign @60.6-60.7 (ident "x")))
-							(e-lookup-local @79.3-79.4
-								(p-assign @60.9-60.10 (ident "y"))))))
-				(s-let @81.2-84.3
-					(p-assign @81.2-81.4 (ident "h5"))
-					(e-tuple @81.7-84.3
-						(elems
-							(e-lookup-local @82.3-82.4
-								(p-assign @60.6-60.7 (ident "x")))
-							(e-lookup-local @83.3-83.4
-								(p-assign @60.9-60.10 (ident "y"))))))
-				(e-match @86.2-109.3
-					(match @86.2-109.3
-						(cond
-							(e-lookup-local @86.8-86.9
-								(p-assign @60.6-60.7 (ident "x"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @87.3-92.4)))
-								(value
-									(e-lookup-local @92.8-92.9
-										(p-assign @89.5-89.6 (ident "a")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @93.3-96.4)))
-								(value
-									(e-lookup-local @96.8-96.9
-										(p-assign @94.4-94.5 (ident "a")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @97.3-102.4)))
-								(value
-									(e-lookup-local @102.8-102.9
-										(p-assign @99.5-99.6 (ident "a")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @103.3-108.4)))
-								(value
-									(e-lookup-local @108.8-108.9
-										(p-assign @105.5-105.6 (ident "a")))))))))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @87.3-92.4)))
+									(value
+										(e-lookup-local @92.8-92.9
+											(p-assign @89.5-89.6 (ident "a")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @93.3-96.4)))
+									(value
+										(e-lookup-local @96.8-96.9
+											(p-assign @94.4-94.5 (ident "a")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @97.3-102.4)))
+									(value
+										(e-lookup-local @102.8-102.9
+											(p-assign @99.5-99.6 (ident "a")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @103.3-108.4)))
+									(value
+										(e-lookup-local @108.8-108.9
+											(p-assign @105.5-105.6 (ident "a"))))))))))))
 	(s-alias-decl @14.1-23.11
 		(ty-header @14.1-14.5 (name "A")
 			(ty-args

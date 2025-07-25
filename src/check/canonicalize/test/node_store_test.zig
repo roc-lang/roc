@@ -289,10 +289,15 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(ModuleEnv.Expr{
+        .e_closure = .{
+            .lambda_idx = rand_idx(ModuleEnv.Expr.Idx),
+            .captures = ModuleEnv.Expr.Capture.Span{ .span = rand_span() },
+        },
+    });
+    try expressions.append(ModuleEnv.Expr{
         .e_lambda = .{
             .args = ModuleEnv.Pattern.Span{ .span = rand_span() },
             .body = rand_idx(ModuleEnv.Expr.Idx),
-            .captures = ModuleEnv.Expr.Capture.Span{ .span = rand_span() },
         },
     });
     try expressions.append(ModuleEnv.Expr{

@@ -217,38 +217,42 @@ main = |_| "done"
 (can-ir
 	(d-let
 		(p-assign @5.1-5.11 (ident "map_result"))
-		(e-lambda @5.14-10.2
-			(args
-				(p-assign @5.15-5.21 (ident "result"))
-				(p-assign @5.23-5.32 (ident "transform")))
-			(e-block @5.34-10.2
-				(e-match @6.5-9.6
-					(match @6.5-9.6
-						(cond
-							(e-lookup-local @6.11-6.17
-								(p-assign @5.15-5.21 (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @7.9-7.18)))
-								(value
-									(e-tag @7.22-7.24 (name "Ok")
-										(args
-											(e-call @7.25-7.41
-												(e-lookup-local @7.25-7.34
-													(p-assign @5.23-5.32 (ident "transform")))
-												(e-lookup-local @7.35-7.40
-													(p-assign @7.12-7.17 (ident "value"))))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @8.9-8.19)))
-								(value
-									(e-tag @8.23-8.26 (name "Err")
-										(args
-											(e-lookup-local @8.27-8.32
-												(p-assign @8.13-8.18 (ident "error"))))))))))))
+		(e-closure @5.14-10.2
+			(captures
+				(capture @7.12-7.17 (ident "value"))
+				(capture @8.13-8.18 (ident "error")))
+			(e-lambda @5.14-10.2
+				(args
+					(p-assign @5.15-5.21 (ident "result"))
+					(p-assign @5.23-5.32 (ident "transform")))
+				(e-block @5.34-10.2
+					(e-match @6.5-9.6
+						(match @6.5-9.6
+							(cond
+								(e-lookup-local @6.11-6.17
+									(p-assign @5.15-5.21 (ident "result"))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @7.9-7.18)))
+									(value
+										(e-tag @7.22-7.24 (name "Ok")
+											(args
+												(e-call @7.25-7.41
+													(e-lookup-local @7.25-7.34
+														(p-assign @5.23-5.32 (ident "transform")))
+													(e-lookup-local @7.35-7.40
+														(p-assign @7.12-7.17 (ident "value"))))))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @8.9-8.19)))
+									(value
+										(e-tag @8.23-8.26 (name "Err")
+											(args
+												(e-lookup-local @8.27-8.32
+													(p-assign @8.13-8.18 (ident "error")))))))))))))
 		(annotation @5.1-5.11
 			(declared-type
 				(ty-fn @4.14-4.52 (effectful false)

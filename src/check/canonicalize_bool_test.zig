@@ -36,7 +36,7 @@ test "canonicalize True as Bool" {
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse unreachable;
 
     // Get the expression
-    const expr = module_env.store.getExpr(canonical_expr_idx);
+    const expr = module_env.store.getExpr(canonical_expr_idx.get_idx());
 
     // Check if it's a nominal expression (Bool)
     try testing.expectEqual(.e_nominal, std.meta.activeTag(expr));
@@ -80,7 +80,7 @@ test "canonicalize False as Bool" {
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse unreachable;
 
     // Get the expression
-    const expr = module_env.store.getExpr(canonical_expr_idx);
+    const expr = module_env.store.getExpr(canonical_expr_idx.get_idx());
 
     // Check if it's a nominal expression (Bool)
     try testing.expectEqual(.e_nominal, std.meta.activeTag(expr));
@@ -124,7 +124,7 @@ test "canonicalize random tag not as Bool" {
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse unreachable;
 
     // Get the expression
-    const expr = module_env.store.getExpr(canonical_expr_idx);
+    const expr = module_env.store.getExpr(canonical_expr_idx.get_idx());
 
     // Check that it's NOT a nominal expression - just a plain tag
     try testing.expectEqual(.e_tag, std.meta.activeTag(expr));

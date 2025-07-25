@@ -1559,145 +1559,146 @@ expect {
 								(e-int @68.14-68.16 (value "12")))))))))
 	(d-let
 		(p-assign @75.1-75.3 (ident "ma"))
-		(e-lambda @75.5-111.2
-			(args
-				(p-underscore @75.6-75.7))
+		(e-closure @75.5-111.2
 			(captures
 				(capture @49.1-49.3 (ident "me"))
-				(capture @77.2-77.14 (ident "er")))
-			(e-block @75.9-111.2
-				(s-expr @75.11-75.12
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-let @76.2-76.9
-					(p-assign @76.2-76.3 (ident "w"))
-					(e-string @76.6-76.9
-						(e-literal @76.7-76.8 (string "d"))))
-				(s-var @77.2-77.14
-					(p-assign @77.2-77.14 (ident "er"))
-					(e-int @77.11-77.14 (value "123")))
-				(s-expect @78.2-78.14
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-return @79.2-80.6
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-expr @83.2-83.5
-					(e-not-implemented @1.1-1.1))
-				(s-expr @84.2-86.3
-					(e-call @84.2-86.3
-						(e-lookup-local @84.2-84.4
-							(p-assign @49.1-49.3 (ident "me")))
-						(e-not-implemented @1.1-1.1)))
-				(s-expr @86.11-86.17
-					(e-string @86.11-86.17
-						(e-literal @86.12-86.16 (string "Unr!"))))
-				(s-let @87.2-87.14
-					(p-assign @87.2-87.3 (ident "i"))
-					(e-string @87.5-87.14
-						(e-literal @87.6-87.9 (string "H, "))
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-literal @87.13-87.13 (string ""))))
-				(s-let @88.1-91.3
-					(p-assign @88.1-88.2 (ident "t"))
-					(e-list @88.5-91.3
-						(elems
-							(e-call @89.3-89.14
-								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-lookup-local @89.7-89.9
-									(p-assign @77.2-77.14 (ident "er"))))
-							(e-int @89.16-89.19 (value "456"))
-							(e-int @90.1-90.2 (value "9")))))
-				(s-let @96.2-96.59
-					(p-assign @96.2-96.4 (ident "rd"))
-					(e-record @96.7-96.59
-						(fields
-							(field (name "foo")
-								(e-int @96.14-96.17 (value "123")))
-							(field (name "bar")
-								(e-string @96.24-96.27
-									(e-literal @96.25-96.26 (string "H"))))
-							(field (name "baz")
-								(e-runtime-error (tag "ident_not_in_scope")))
-							(field (name "qux")
-								(e-tag @96.44-96.46 (name "Ok")
-									(args
-										(e-runtime-error (tag "ident_not_in_scope")))))
-							(field (name "ned")
-								(e-runtime-error (tag "ident_not_in_scope"))))))
-				(s-let @97.2-97.48
-					(p-assign @97.2-97.3 (ident "t"))
-					(e-tuple @97.6-97.48
-						(elems
-							(e-int @97.7-97.10 (value "123"))
-							(e-string @97.12-97.19
-								(e-literal @97.13-97.18 (string "World")))
+				(capture @97.2-97.3 (ident "t")))
+			(e-lambda @75.5-111.2
+				(args
+					(p-underscore @75.6-75.7))
+				(e-block @75.9-111.2
+					(s-expr @75.11-75.12
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(s-let @76.2-76.9
+						(p-assign @76.2-76.3 (ident "w"))
+						(e-string @76.6-76.9
+							(e-literal @76.7-76.8 (string "d"))))
+					(s-var @77.2-77.14
+						(p-assign @77.2-77.14 (ident "er"))
+						(e-int @77.11-77.14 (value "123")))
+					(s-expect @78.2-78.14
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(s-return @79.2-80.6
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(s-expr @83.2-83.5
+						(e-not-implemented @1.1-1.1))
+					(s-expr @84.2-86.3
+						(e-call @84.2-86.3
+							(e-lookup-local @84.2-84.4
+								(p-assign @49.1-49.3 (ident "me")))
+							(e-not-implemented @1.1-1.1)))
+					(s-expr @86.11-86.17
+						(e-string @86.11-86.17
+							(e-literal @86.12-86.16 (string "Unr!"))))
+					(s-let @87.2-87.14
+						(p-assign @87.2-87.3 (ident "i"))
+						(e-string @87.5-87.14
+							(e-literal @87.6-87.9 (string "H, "))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @97.26-97.27 (name "O"))
-							(e-tuple @97.29-97.36
-								(elems
+							(e-literal @87.13-87.13 (string ""))))
+					(s-let @88.1-91.3
+						(p-assign @88.1-88.2 (ident "t"))
+						(e-list @88.5-91.3
+							(elems
+								(e-call @89.3-89.14
 									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local @97.34-97.35
-										(p-assign @97.2-97.3 (ident "t")))))
-							(e-list @97.38-97.47
-								(elems
-									(e-int @97.39-97.40 (value "1"))
-									(e-int @97.42-97.43 (value "2"))
-									(e-int @97.45-97.46 (value "3")))))))
-				(s-expr @98.2-98.3
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-expr @98.4-104.3
-					(e-tuple @98.4-104.3
-						(elems
-							(e-int @99.3-99.6 (value "123"))
-							(e-string @100.3-100.10
-								(e-literal @100.4-100.9 (string "World")))
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @101.3-101.4 (name "O"))
-							(e-tuple @102.3-102.14
-								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-runtime-error (tag "ident_not_in_scope"))))
-							(e-list @103.3-103.12
-								(elems
-									(e-int @103.4-103.5 (value "1"))
-									(e-int @103.7-103.8 (value "2"))
-									(e-int @103.10-103.11 (value "3")))))))
-				(s-expr @105.2-105.54
-					(e-binop @105.2-105.54 (op "or")
-						(e-binop @105.2-105.43 (op "or")
-							(e-binop @105.2-105.12 (op "gt")
-								(e-binop @105.2-105.8 (op "null_coalesce")
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-int @105.6-105.8 (value "12")))
-								(e-int @105.11-105.12 (value "5")))
-							(e-binop @105.16-105.43 (op "and")
-								(e-binop @105.16-105.26 (op "lt")
-									(e-binop @105.16-105.22 (op "add")
-										(e-int @105.16-105.18 (value "13"))
-										(e-int @105.21-105.22 (value "2")))
-									(e-int @105.25-105.26 (value "5")))
-								(e-binop @105.31-105.43 (op "ge")
-									(e-binop @105.31-105.37 (op "sub")
-										(e-int @105.31-105.33 (value "10"))
-										(e-int @105.36-105.37 (value "1")))
-									(e-int @105.41-105.43 (value "16")))))
-						(e-binop @105.47-105.54 (op "le")
-							(e-int @105.47-105.49 (value "12"))
-							(e-int @105.53-105.54 (value "3")))))
-				(s-expr @105.55-105.85
-					(e-dot-access @105.55-105.85 (field "unknown")
-						(receiver
-							(e-dot-access @105.55-105.79 (field "unknown")
-								(receiver
-									(e-dot-access @105.55-105.72 (field "unknown")
-										(receiver
-											(e-runtime-error (tag "not_implemented")))))))))
-				(e-tag @106.2-106.7 (name "Stdo!")
-					(args
-						(e-string @107.3-109.6
-							(e-literal @107.4-107.6 (string "Ho"))
-							(e-call @108.4-108.9
+									(e-lookup-local @89.7-89.9
+										(p-assign @77.2-77.14 (ident "er"))))
+								(e-int @89.16-89.19 (value "456"))
+								(e-int @90.1-90.2 (value "9")))))
+					(s-let @96.2-96.59
+						(p-assign @96.2-96.4 (ident "rd"))
+						(e-record @96.7-96.59
+							(fields
+								(field (name "foo")
+									(e-int @96.14-96.17 (value "123")))
+								(field (name "bar")
+									(e-string @96.24-96.27
+										(e-literal @96.25-96.26 (string "H"))))
+								(field (name "baz")
+									(e-runtime-error (tag "ident_not_in_scope")))
+								(field (name "qux")
+									(e-tag @96.44-96.46 (name "Ok")
+										(args
+											(e-runtime-error (tag "ident_not_in_scope")))))
+								(field (name "ned")
+									(e-runtime-error (tag "ident_not_in_scope"))))))
+					(s-let @97.2-97.48
+						(p-assign @97.2-97.3 (ident "t"))
+						(e-tuple @97.6-97.48
+							(elems
+								(e-int @97.7-97.10 (value "123"))
+								(e-string @97.12-97.19
+									(e-literal @97.13-97.18 (string "World")))
 								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-runtime-error (tag "ident_not_in_scope")))
-							(e-literal @109.4-109.5 (string " "))))))))
+								(e-tag @97.26-97.27 (name "O"))
+								(e-tuple @97.29-97.36
+									(elems
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local @97.34-97.35
+											(p-assign @97.2-97.3 (ident "t")))))
+								(e-list @97.38-97.47
+									(elems
+										(e-int @97.39-97.40 (value "1"))
+										(e-int @97.42-97.43 (value "2"))
+										(e-int @97.45-97.46 (value "3")))))))
+					(s-expr @98.2-98.3
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(s-expr @98.4-104.3
+						(e-tuple @98.4-104.3
+							(elems
+								(e-int @99.3-99.6 (value "123"))
+								(e-string @100.3-100.10
+									(e-literal @100.4-100.9 (string "World")))
+								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-tag @101.3-101.4 (name "O"))
+								(e-tuple @102.3-102.14
+									(elems
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-runtime-error (tag "ident_not_in_scope"))))
+								(e-list @103.3-103.12
+									(elems
+										(e-int @103.4-103.5 (value "1"))
+										(e-int @103.7-103.8 (value "2"))
+										(e-int @103.10-103.11 (value "3")))))))
+					(s-expr @105.2-105.54
+						(e-binop @105.2-105.54 (op "or")
+							(e-binop @105.2-105.43 (op "or")
+								(e-binop @105.2-105.12 (op "gt")
+									(e-binop @105.2-105.8 (op "null_coalesce")
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-int @105.6-105.8 (value "12")))
+									(e-int @105.11-105.12 (value "5")))
+								(e-binop @105.16-105.43 (op "and")
+									(e-binop @105.16-105.26 (op "lt")
+										(e-binop @105.16-105.22 (op "add")
+											(e-int @105.16-105.18 (value "13"))
+											(e-int @105.21-105.22 (value "2")))
+										(e-int @105.25-105.26 (value "5")))
+									(e-binop @105.31-105.43 (op "ge")
+										(e-binop @105.31-105.37 (op "sub")
+											(e-int @105.31-105.33 (value "10"))
+											(e-int @105.36-105.37 (value "1")))
+										(e-int @105.41-105.43 (value "16")))))
+							(e-binop @105.47-105.54 (op "le")
+								(e-int @105.47-105.49 (value "12"))
+								(e-int @105.53-105.54 (value "3")))))
+					(s-expr @105.55-105.85
+						(e-dot-access @105.55-105.85 (field "unknown")
+							(receiver
+								(e-dot-access @105.55-105.79 (field "unknown")
+									(receiver
+										(e-dot-access @105.55-105.72 (field "unknown")
+											(receiver
+												(e-runtime-error (tag "not_implemented")))))))))
+					(e-tag @106.2-106.7 (name "Stdo!")
+						(args
+							(e-string @107.3-109.6
+								(e-literal @107.4-107.6 (string "Ho"))
+								(e-call @108.4-108.9
+									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-runtime-error (tag "ident_not_in_scope")))
+								(e-literal @109.4-109.5 (string " ")))))))))
 	(d-let
 		(p-assign @114.1-114.2 (ident "e"))
 		(e-empty_record @114.5-114.7))

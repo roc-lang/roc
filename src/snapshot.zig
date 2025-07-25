@@ -1042,13 +1042,13 @@ fn processSnapshotContent(
         basename[0..dot_idx]
     else
         basename;
-    const can_ir = &module_env; // ModuleEnv contains the canonical IR
+    var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
     var can = try canonicalize.init(can_ir, &parse_ast, null);
     defer can.deinit();
 
-    var maybe_expr_idx: ?ModuleEnv.Expr.Idx = null;
+    var maybe_expr_idx: ?canonicalize.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
         .file => try can.canonicalizeFile(),
@@ -1090,7 +1090,7 @@ fn processSnapshotContent(
     solver.debugAssertArraysInSync();
 
     if (maybe_expr_idx) |expr_idx| {
-        _ = try solver.checkExpr(expr_idx);
+        _ = try solver.checkExpr(expr_idx.idx);
     } else {
         try solver.checkDefs();
     }
@@ -1166,8 +1166,8 @@ fn processSnapshotContent(
     try generateTokensSection(&output, &parse_ast, &content, &module_env);
     try generateParseSection(&output, &content, &parse_ast, &module_env);
     try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, can_ir, maybe_expr_idx);
-    try generateTypesSection(&output, can_ir, maybe_expr_idx);
+    try generateCanonicalizeSection(&output, can_ir, canonicalize.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
+    try generateTypesSection(&output, can_ir, canonicalize.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
 
     try generateHtmlClosing(&output);
 

@@ -330,8 +330,7 @@ main = |_| {
 						(p-assign @19.16-19.25 (ident "container"))))
 				(s-type-anno @19.52-19.67 (name "data")
 					(ty-var @19.58-19.67 (name "new_value")))
-				(e-tuple @19.52-19.67
-					(elems)))))
+				(e-empty_record @19.38-19.69))))
 	(d-let
 		(p-assign @22.1-22.12 (ident "updated_int"))
 		(e-call @22.15-22.46
@@ -384,22 +383,23 @@ main = |_| {
 					(e-int @31.38-31.39 (value "3"))))))
 	(d-let
 		(p-assign @33.1-33.5 (ident "main"))
-		(e-lambda @33.8-36.2
-			(args
-				(p-underscore @33.9-33.10))
+		(e-closure @33.8-36.2
 			(captures
-				(capture @14.1-14.14 (ident "int_container"))
-				(capture @15.1-15.14 (ident "str_container")))
-			(e-block @33.12-36.2
-				(e-binop @35.5-35.46 (op "add")
-					(e-dot-access @35.5-35.24 (field "count")
-						(receiver
-							(e-lookup-local @35.5-35.18
-								(p-assign @14.1-14.14 (ident "int_container")))))
-					(e-dot-access @35.27-35.46 (field "count")
-						(receiver
-							(e-lookup-local @35.27-35.40
-								(p-assign @15.1-15.14 (ident "str_container"))))))))))
+				(capture @15.1-15.14 (ident "str_container"))
+				(capture @14.1-14.14 (ident "int_container")))
+			(e-lambda @33.8-36.2
+				(args
+					(p-underscore @33.9-33.10))
+				(e-block @33.12-36.2
+					(e-binop @35.5-35.46 (op "add")
+						(e-dot-access @35.5-35.24 (field "count")
+							(receiver
+								(e-lookup-local @35.5-35.18
+									(p-assign @14.1-14.14 (ident "int_container")))))
+						(e-dot-access @35.27-35.46 (field "count")
+							(receiver
+								(e-lookup-local @35.27-35.40
+									(p-assign @15.1-15.14 (ident "str_container")))))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -414,9 +414,9 @@ main = |_| {
 		(patt @14.1-14.14 (type "{ data: _field, count: Num(_size) }"))
 		(patt @15.1-15.14 (type "{ data: _field, count: Num(_size) }"))
 		(patt @16.1-16.15 (type "{ data: _field, count: Num(_size) }"))
-		(patt @19.1-19.12 (type "_arg, _arg2 -> _ret"))
-		(patt @22.1-22.12 (type "_a"))
-		(patt @23.1-23.12 (type "_a"))
+		(patt @19.1-19.12 (type "_arg, _arg2 -> {}"))
+		(patt @22.1-22.12 (type "{}"))
+		(patt @23.1-23.12 (type "{}"))
 		(patt @26.1-26.16 (type "_arg -> { value: _field }"))
 		(patt @29.1-29.11 (type "{ value: _field }"))
 		(patt @30.1-30.11 (type "{ value: _field }"))
@@ -432,9 +432,9 @@ main = |_| {
 		(expr @14.17-14.36 (type "{ data: _field, count: Num(_size) }"))
 		(expr @15.17-15.36 (type "{ data: _field, count: Num(_size) }"))
 		(expr @16.18-16.47 (type "{ data: _field, count: Num(_size) }"))
-		(expr @19.15-19.69 (type "_arg, _arg2 -> _ret"))
-		(expr @22.15-22.46 (type "_a"))
-		(expr @23.15-23.50 (type "_a"))
+		(expr @19.15-19.69 (type "_arg, _arg2 -> {}"))
+		(expr @22.15-22.46 (type "{}"))
+		(expr @23.15-23.50 (type "{}"))
 		(expr @26.19-26.35 (type "_arg -> { value: _field }"))
 		(expr @29.14-29.33 (type "{ value: _field }"))
 		(expr @30.14-30.37 (type "{ value: _field }"))

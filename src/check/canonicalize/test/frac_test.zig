@@ -58,7 +58,7 @@ fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct 
         .module_env = module_env,
         .parse_ast = parse_ast,
         .can = can,
-        .expr_idx = canonical_expr_idx,
+        .expr_idx = (canonical_expr_idx.get_idx()),
     };
 }
 

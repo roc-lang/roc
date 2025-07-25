@@ -238,21 +238,13 @@ pub const Expr = union(enum) {
         ext_var: TypeVar,
         name: Ident.Idx,
     },
-    /// Lambda (anonymous function) expression.
-    /// Creates a closure that captures definitions from the parent scope.
-    /// Arguments are patterns that can destructure the input.
-    ///
-    /// ```roc
-    /// |x| x + 1                           # Simple lambda
-    /// |(x, y)| x * y                      # Lambda with tuple parameter
-    /// |{ name }| "Hello, " ++ name        # Lambda with record destructuring
-    /// |list| list.map(|x| x * 2)          # Nested lambdas
-    /// ```
-    e_lambda: struct {
-        args: Pattern.Span,
-        body: Expr.Idx,
-        captures: Expr.Capture.Span,
-    },
+    /// A closure, which is a lambda expression that captures variables
+    /// from its environment.
+    e_closure: Closure,
+
+    /// A pure lambda expression, with no captures. This represents the
+    /// function's code before it's closed over.
+    e_lambda: Lambda,
     /// Binary operation between two expressions.
     /// Includes arithmetic, comparison, logical, and pipe operators.
     ///
@@ -356,6 +348,20 @@ pub const Expr = union(enum) {
 
         pub const Idx = enum(u32) { _ };
         pub const Span = struct { span: base.DataSpan };
+    };
+
+    /// A closure, which is a lambda expression that captures variables
+    /// from its environment.
+    pub const Closure = struct {
+        lambda_idx: Expr.Idx, // An index pointing to an `e_lambda` expression
+        captures: Expr.Capture.Span,
+    };
+
+    /// A pure lambda expression, with no captures. This represents the
+    /// function's code before it's closed over.
+    pub const Lambda = struct {
+        args: Pattern.Span,
+        body: Expr.Idx,
     };
 
     pub fn initStr(expr_span: Expr.Span) Expr {
@@ -773,6 +779,37 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
+            .e_closure => |closure_expr| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-closure");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                // Display capture information if present
+                if (closure_expr.captures.span.len > 0) {
+                    const captures_begin = tree.beginNode();
+                    try tree.pushStaticAtom("captures");
+                    const captures_attrs = tree.beginNode();
+                    for (ir.store.sliceCaptures(closure_expr.captures)) |captured_var_idx| {
+                        const captured_var = ir.store.getCapture(captured_var_idx);
+                        const capture_begin = tree.beginNode();
+                        try tree.pushStaticAtom("capture");
+
+                        const capture_region = ir.store.getPatternRegion(captured_var.pattern_idx);
+                        try ir.appendRegionInfoToSExprTreeFromRegion(tree, capture_region);
+
+                        try tree.pushStringPair("ident", ir.getIdentText(captured_var.name));
+                        const capture_attrs = tree.beginNode();
+                        try tree.endNode(capture_begin, capture_attrs);
+                    }
+                    try tree.endNode(captures_begin, captures_attrs);
+                }
+
+                try ir.store.getExpr(closure_expr.lambda_idx).pushToSExprTree(ir, tree, closure_expr.lambda_idx);
+
+                try tree.endNode(begin, attrs);
+            },
             .e_lambda => |lambda_expr| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-lambda");
@@ -787,26 +824,6 @@ pub const Expr = union(enum) {
                     try ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
                 try tree.endNode(args_begin, args_attrs);
-
-                // Display capture information if present
-                if (lambda_expr.captures.span.len > 0) {
-                    const captures_begin = tree.beginNode();
-                    try tree.pushStaticAtom("captures");
-                    const captures_attrs = tree.beginNode();
-                    for (ir.store.sliceCaptures(lambda_expr.captures)) |captured_var_idx| {
-                        const captured_var = ir.store.getCapture(captured_var_idx);
-                        const capture_begin = tree.beginNode();
-                        try tree.pushStaticAtom("capture");
-
-                        const capture_region = ir.store.getPatternRegion(captured_var.pattern_idx);
-                        try ir.appendRegionInfoToSExprTreeFromRegion(tree, capture_region);
-
-                        try tree.pushStringPair("ident", ir.getIdentText(captured_var.name));
-                        const capture_attrs = tree.beginNode();
-                        try tree.endNode(capture_begin, capture_attrs);
-                    }
-                    try tree.endNode(captures_begin, captures_attrs);
-                }
 
                 try ir.store.getExpr(lambda_expr.body).pushToSExprTree(ir, tree, lambda_expr.body);
 

@@ -68,8 +68,6 @@ NO CHANGE
 					(record-destruct @1.15-1.18 (label "a") (ident "a")
 						(required
 							(p-assign @1.15-1.18 (ident "a"))))))))
-	(captures
-		(capture @1.2-1.23 (ident "person")))
 	(e-record @1.32-1.103
 		(fields
 			(field (name "greeting")
