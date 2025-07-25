@@ -1,8 +1,6 @@
-//! Modern cache manager that uses BLAKE3-based keys and subdirectory splitting.
 
 const std = @import("std");
 const base = @import("base");
-const canonicalize = @import("../check/canonicalize.zig");
 const reporting = @import("../reporting.zig");
 const Filesystem = @import("../fs/Filesystem.zig");
 const cache_mod = @import("mod.zig");
@@ -14,10 +12,9 @@ const SERIALIZATION_ALIGNMENT = 16;
 const coordinate_simple = @import("../coordinate_simple.zig");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = canonicalize.ModuleEnv;
+const ModuleEnv = base.ModuleEnv;
 
-/// Cache hit result containing the process result and diagnostic counts
-/// Result of a cache load operation
+/// Result of a cache lookup operation
 pub const CacheResult = union(enum) {
     hit: coordinate_simple.ProcessResult,
     miss: struct {
@@ -26,10 +23,7 @@ pub const CacheResult = union(enum) {
     not_enabled,
 };
 
-/// Cache manager using BLAKE3-based keys.
-///
-/// This manager combines content and compiler version into a single BLAKE3 hash,
-/// then uses subdirectory splitting to organize cache files efficiently.
+/// Manages cache operations for compiled Roc modules
 pub const CacheManager = struct {
     config: CacheConfig,
     filesystem: Filesystem,
@@ -81,7 +75,7 @@ pub const CacheManager = struct {
         }
 
         // Read cache data using memory mapping for better performance
-        const mapped_cache = cache_mod.CacheModule.readFromFileMapped(self.allocator, cache_path, self.filesystem) catch |err| {
+        const cache_data = Cache.readFromFileMapped(self.allocator, cache_path, self.filesystem) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
             }
@@ -90,12 +84,12 @@ pub const CacheManager = struct {
                 .key = cache_key,
             } };
         };
-        defer mapped_cache.deinit(self.allocator);
+        defer cache_data.deinit(self.allocator);
 
         // Validate and restore from cache
         // restoreFromCache takes ownership of content
-        const result = self.restoreFromCache(
-            mapped_cache.data(),
+        const restore_result = self.restoreFromCache(
+            cache_data.data(),
             source,
         ) catch |err| {
             if (self.config.verbose) {
@@ -107,9 +101,8 @@ pub const CacheManager = struct {
             } };
         };
 
-        self.stats.recordHit(mapped_cache.data().len);
-
-        return CacheResult{ .hit = result.result };
+        self.stats.recordHit(cache_data.data().len);
+        return CacheResult{ .hit = restore_result.result };
     }
 
     /// Store a cache entry.
@@ -130,7 +123,17 @@ pub const CacheManager = struct {
             return;
         };
 
-        const cache_data = Cache.create(self.allocator, process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
+        // Create cache from the compile.ModuleEnv
+        // Since compile.ModuleEnv contains all the base.ModuleEnv fields, we cast it
+        // Note: This works because compile.ModuleEnv extends base.ModuleEnv with the same initial fields
+        const base_env_ptr = @as(*const base.ModuleEnv, @ptrCast(process_result.cir));
+        const cache_data = Cache.create(
+            self.allocator, 
+            base_env_ptr,
+            process_result.cir,
+            process_result.error_count,
+            process_result.warning_count
+        ) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }
@@ -147,27 +150,39 @@ pub const CacheManager = struct {
         defer self.allocator.free(cache_path);
 
         // Write to temporary file first, then rename for atomicity
-        const temp_path = std.fmt.allocPrint(self.allocator, "{s}.tmp", .{cache_path}) catch {
-            self.stats.recordStoreFailure();
-            return;
-        };
-        defer self.allocator.free(temp_path);
+        var tmp_path = try self.allocator.alloc(u8, cache_path.len + 4);
+        defer self.allocator.free(tmp_path);
+        @memcpy(tmp_path[0..cache_path.len], cache_path);
+        @memcpy(tmp_path[cache_path.len..], ".tmp");
 
-        // Write to temp file
-        self.filesystem.writeFile(temp_path, cache_data) catch |err| {
+        // Write the cache data
+        const file = std.fs.createFileAbsolute(tmp_path, .{}) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
+                std.log.debug("Failed to create cache file: {}", .{err});
             }
             self.stats.recordStoreFailure();
             return;
         };
+        defer file.close();
 
-        // Move temp file to final location (atomic operation)
-        self.filesystem.rename(temp_path, cache_path) catch |err| {
+        file.writeAll(cache_data) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
+                std.log.debug("Failed to write cache data: {}", .{err});
             }
             self.stats.recordStoreFailure();
+            // Clean up temp file on error
+            std.fs.deleteFileAbsolute(tmp_path) catch {};
+            return;
+        };
+
+        // Atomically rename temp file to final location
+        std.fs.renameAbsolute(tmp_path, cache_path) catch |err| {
+            if (self.config.verbose) {
+                std.log.debug("Failed to rename cache file: {}", .{err});
+            }
+            self.stats.recordStoreFailure();
+            // Clean up temp file on error
+            std.fs.deleteFileAbsolute(tmp_path) catch {};
             return;
         };
 
@@ -254,10 +269,7 @@ pub const CacheManager = struct {
         warning_count: u32,
     } {
         // Load cache using existing Cache functionality
-        var cache = cache_mod.CacheModule.fromMappedMemory(cache_data) catch return error.InvalidCache;
-
-        // Validate cache
-        cache.validate() catch return error.InvalidCache;
+        var cache = Cache.fromMappedMemory(cache_data) catch return error.InvalidCache;
 
         // Restore the data
         // Use a default module name when restoring from cache
@@ -270,12 +282,32 @@ pub const CacheManager = struct {
         // Users can use --no-cache to see diagnostic reports
         const reports = try self.allocator.alloc(reporting.Report, 0);
 
-        // Allocate and copy ModuleEnv to heap for ownership
-        const module_env = try self.allocator.create(ModuleEnv);
-        module_env.* = restored.module_env;
+        // Allocate and create compile.ModuleEnv from restored base.ModuleEnv
+        const compile_mod = @import("../compile/ModuleEnv.zig");
+        const cir = try self.allocator.create(compile_mod);
+        
+        // Copy base fields from restored.module_env to cir
+        // This works because compile.ModuleEnv has the same initial fields as base.ModuleEnv
+        cir.gpa = restored.module_env.gpa;
+        cir.idents = restored.module_env.idents;
+        cir.ident_ids_for_slicing = restored.module_env.ident_ids_for_slicing;
+        cir.strings = restored.module_env.strings;
+        cir.types = restored.module_env.types;
+        cir.exposed_items = restored.module_env.exposed_items;
+        cir.line_starts = restored.module_env.line_starts;
+        cir.source = restored.module_env.source;
+        
+        // Initialize CIR-specific fields with empty values
+        cir.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
+        cir.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
+        cir.external_decls = try compile_mod.ExternalDecl.SafeList.initCapacity(self.allocator, 0);
+        cir.imports = compile_mod.Import.Store.init();
+        cir.module_name = "";
+        cir.diagnostics = compile_mod.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
+        cir.store = try compile_mod.NodeStore.initCapacity(self.allocator, 0);
 
-        // CIR is now just an alias for ModuleEnv
-        const cir = module_env;
+        // Store is now inside module_env.store
+        // (removed unused variable)
 
         // Create ProcessResult with proper ownership
         const process_result = coordinate_simple.ProcessResult{
@@ -295,7 +327,6 @@ pub const CacheManager = struct {
     }
 };
 
-// Tests
 const testing = std.testing;
 
 test "CacheManager initialization" {

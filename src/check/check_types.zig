@@ -852,8 +852,8 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                                 // Look up the method in the origin module's exports
                                 const method_name_str = self.cir.idents.getText(dot_access.field_name);
 
-                                // Search through the module's exposed nodes
-                                if (module.exposed_nodes.get(method_name_str)) |node_idx| {
+                                // Search through the module's exposed items
+                                if (module.exposed_items.getNodeIndex(self.gpa, method_name_str)) |node_idx| {
                                     // Found the method!
                                     const target_expr_idx = @as(ModuleEnv.Expr.Idx, @enumFromInt(node_idx));
 

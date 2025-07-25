@@ -68,99 +68,49 @@ pub fn SafeStringHashMap(comptime V: type) type {
             return self.map.containsContext(key, std.hash_map.StringContext{});
         }
 
-        /// Calculate the size needed to serialize this hash map
-        pub fn serializedSize(self: *const Self) usize {
-            var size: usize = @sizeOf(u32); // count
 
-            var iter = self.map.iterator();
-            while (iter.next()) |entry| {
-                size += @sizeOf(u32); // key length
-                size += entry.key_ptr.len; // key bytes
-                if (V != void) {
-                    size += @sizeOf(V); // value bytes
-                }
-            }
 
-            return size;
-        }
-
-        /// Serialize this hash map into the provided buffer
-        pub fn serializeInto(self: *const Self, buffer: []u8) ![]u8 {
-            const size = self.serializedSize();
-            if (buffer.len < size) return error.BufferTooSmall;
-
-            var offset: usize = 0;
-
-            // Write count
-            std.mem.writeInt(u32, buffer[offset..][0..4], @intCast(self.map.count()), .little);
-            offset += @sizeOf(u32);
-
-            // Write entries
-            var iter = self.map.iterator();
-            while (iter.next()) |entry| {
-                // Write key length
-                const key_len: u32 = @intCast(entry.key_ptr.len);
-                std.mem.writeInt(u32, buffer[offset..][0..4], key_len, .little);
-                offset += @sizeOf(u32);
-
-                // Write key bytes
-                @memcpy(buffer[offset .. offset + entry.key_ptr.len], entry.key_ptr.*);
-                offset += entry.key_ptr.len;
-
-                // Write value bytes (if not void)
-                if (V != void) {
-                    @memcpy(buffer[offset .. offset + @sizeOf(V)], std.mem.asBytes(entry.value_ptr));
-                    offset += @sizeOf(V);
-                }
-            }
-
-            return buffer[0..offset];
-        }
-
-        /// Deserialize a hash map from the provided buffer
-        pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
-            if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
-
-            var offset: usize = 0;
-
-            // Read count
-            const entry_count = std.mem.readInt(u32, buffer[offset..][0..4], .little);
-            offset += @sizeOf(u32);
-
-            // Create hash map with capacity
-            var result = try Self.initCapacity(allocator, entry_count);
-            errdefer result.deinit(allocator);
-
-            // Read entries
-            for (0..entry_count) |_| {
-                // Read key length
-                if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
-                const key_len = std.mem.readInt(u32, buffer[offset..][0..4], .little);
-                offset += @sizeOf(u32);
-
-                // Read key bytes
-                if (offset + key_len > buffer.len) return error.BufferTooSmall;
-                const key = buffer[offset .. offset + key_len];
-                offset += key_len;
-
-                // Read value (if not void)
-                const value = if (V != void) blk: {
-                    if (offset + @sizeOf(V) > buffer.len) return error.BufferTooSmall;
-                    const value_bytes = buffer[offset .. offset + @sizeOf(V)];
-                    offset += @sizeOf(V);
-                    break :blk std.mem.bytesAsValue(V, value_bytes).*;
-                } else {};
-
-                // Insert into map
-                try result.put(allocator, key, value);
-            }
-
-            return result;
-        }
 
         /// Get an iterator over the hash map
         pub fn iterator(self: *const Self) std.StringHashMapUnmanaged(V).Iterator {
             return self.map.iterator();
+        }
+
+        /// Append this SafeStringHashMap to an iovec writer for serialization
+        pub fn appendToIovecs(self: *const Self, writer: anytype) !usize {
+            // For now, we serialize as entries only and rebuild on deserialization
+            // This is a limitation we need to address later
+            const start_offset = writer.getOffset();
+            
+            // Write count
+            const entry_count: u32 = @intCast(self.map.count());
+            _ = try writer.appendStruct(entry_count);
+            
+            // Write all entries
+            var iter = self.map.iterator();
+            while (iter.next()) |entry| {
+                // Write key length and key data
+                const key_len: u32 = @intCast(entry.key_ptr.len);
+                _ = try writer.appendStruct(key_len);
+                _ = try writer.appendBytes(u8, entry.key_ptr.*);
+                
+                // Write value (if not void)
+                if (V != void) {
+                    _ = try writer.appendStruct(entry.value_ptr.*);
+                }
+            }
+            
+            return start_offset;
+        }
+
+        /// Relocate all pointers in this SafeStringHashMap by the given offset
+        pub fn relocate(self: *Self, offset: isize) void {
+            // Since we serialize hash maps as individual entries (not the internal structure),
+            // and rebuild them during deserialization, we don't need to relocate the
+            // internal hash map pointers. The hash map will be empty after deserialization
+            // and entries will be re-inserted.
+            _ = self;
+            _ = offset;
         }
     };
 }
@@ -198,99 +148,9 @@ test "SafeStringHashMap(u16) basic operations" {
     try testing.expect(map.get("missing") == null);
 }
 
-test "SafeStringHashMap(void) serialization round-trip" {
-    const gpa = testing.allocator;
 
-    var original = SafeStringHashMap(void).init();
-    defer original.deinit(gpa);
 
-    try original.put(gpa, "first", {});
-    try original.put(gpa, "second", {});
-    try original.put(gpa, "third", {});
 
-    // Serialize
-    const size = original.serializedSize();
-    const buffer = try gpa.alloc(u8, size);
-    defer gpa.free(buffer);
-
-    const serialized = try original.serializeInto(buffer);
-    try testing.expectEqual(size, serialized.len);
-
-    // Deserialize
-    var deserialized = try SafeStringHashMap(void).deserializeFrom(serialized, gpa);
-    defer deserialized.deinit(gpa);
-
-    // Verify
-    try testing.expectEqual(original.count(), deserialized.count());
-    try testing.expect(deserialized.get("first") != null);
-    try testing.expect(deserialized.get("second") != null);
-    try testing.expect(deserialized.get("third") != null);
-    try testing.expect(deserialized.get("missing") == null);
-}
-
-test "SafeStringHashMap(u16) serialization round-trip" {
-    const gpa = testing.allocator;
-
-    var original = SafeStringHashMap(u16).init();
-    defer original.deinit(gpa);
-
-    try original.put(gpa, "alpha", 100);
-    try original.put(gpa, "beta", 200);
-    try original.put(gpa, "gamma", 300);
-
-    // Serialize
-    const size = original.serializedSize();
-    const buffer = try gpa.alloc(u8, size);
-    defer gpa.free(buffer);
-
-    const serialized = try original.serializeInto(buffer);
-
-    // Deserialize
-    var deserialized = try SafeStringHashMap(u16).deserializeFrom(serialized, gpa);
-    defer deserialized.deinit(gpa);
-
-    // Verify
-    try testing.expectEqual(original.count(), deserialized.count());
-    try testing.expectEqual(@as(u16, 100), deserialized.get("alpha").?);
-    try testing.expectEqual(@as(u16, 200), deserialized.get("beta").?);
-    try testing.expectEqual(@as(u16, 300), deserialized.get("gamma").?);
-}
-
-test "SafeStringHashMap empty serialization" {
-    const gpa = testing.allocator;
-
-    var empty = SafeStringHashMap(u32).init();
-    defer empty.deinit(gpa);
-
-    // Serialize empty map
-    const size = empty.serializedSize();
-    try testing.expectEqual(@sizeOf(u32), size); // Just the count
-
-    const buffer = try gpa.alloc(u8, size);
-    defer gpa.free(buffer);
-
-    const serialized = try empty.serializeInto(buffer);
-
-    // Deserialize
-    var deserialized = try SafeStringHashMap(u32).deserializeFrom(serialized, gpa);
-    defer deserialized.deinit(gpa);
-
-    try testing.expectEqual(@as(usize, 0), deserialized.count());
-}
-
-test "SafeStringHashMap deserialization buffer too small error" {
-    const gpa = testing.allocator;
-
-    // Buffer too small to even contain count
-    var tiny_buffer: [2]u8 = undefined;
-    try testing.expectError(error.BufferTooSmall, SafeStringHashMap(void).deserializeFrom(&tiny_buffer, gpa));
-
-    // Buffer with count but insufficient data
-    var partial_buffer: [8]u8 = undefined;
-    std.mem.writeInt(u32, partial_buffer[0..4], 1, .little); // Claims 1 item
-    std.mem.writeInt(u32, partial_buffer[4..8], 10, .little); // Claims key length 10, but no space for key
-    try testing.expectError(error.BufferTooSmall, SafeStringHashMap(void).deserializeFrom(&partial_buffer, gpa));
-}
 
 test "SafeStringHashMap duplicate key handling" {
     const gpa = testing.allocator;

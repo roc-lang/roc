@@ -112,6 +112,7 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.root_module.addImport("builtins", module_builtins);
     snapshot_exe.root_module.addImport("types", module_types);
     snapshot_exe.root_module.addImport("collections", module_collections);
+    snapshot_exe.root_module.addImport("serialization", module_serialization);
     add_tracy(b, build_options, snapshot_exe, target, false, tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 

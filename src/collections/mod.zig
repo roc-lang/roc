@@ -17,6 +17,9 @@ pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
 
 pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 
+pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
+pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
+
 /// A range that must have at least one element
 pub const NonEmptyRange = struct {
     /// Starting index (inclusive)

@@ -177,92 +177,62 @@ pub const Store = struct {
         return self.interner.contains(text);
     }
 
-    /// Calculate the size needed to serialize this Ident.Store
-    pub fn serializedSize(self: *const Store) usize {
-        var size: usize = 0;
 
-        // SmallStringInterner components
-        size += @sizeOf(u32); // bytes_len
-        size += self.interner.bytes.items.len; // bytes data
-        size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
 
-        size += @sizeOf(u32); // next_unique_name
-
-        // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
-        return std.mem.alignForward(usize, size, serialization.SERIALIZATION_ALIGNMENT);
-    }
-
-    /// Serialize this Ident.Store into the provided buffer
-    pub fn serializeInto(self: *const Store, buffer: []u8, gpa: std.mem.Allocator) ![]u8 {
-        const size = self.serializedSize();
-        if (buffer.len < size) return error.BufferTooSmall;
-
-        var offset: usize = 0;
-
-        // Serialize interner bytes
-        const bytes_len = @as(u32, @intCast(self.interner.bytes.items.len));
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = bytes_len;
-        offset += @sizeOf(u32);
-        if (bytes_len > 0) {
-            @memcpy(buffer[offset .. offset + bytes_len], self.interner.bytes.items);
-            offset += bytes_len;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Serialize next_unique_name
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = self.next_unique_name;
-        offset += @sizeOf(u32);
-
-        _ = gpa; // suppress unused parameter warning
-
-        // Zero out any padding bytes
-        if (offset < size) {
-            @memset(buffer[offset..size], 0);
-        }
-
-        return buffer[0..size];
-    }
-
-    /// Deserialize an Ident.Store from the provided buffer
-    pub fn deserializeFrom(buffer: []const u8, gpa: std.mem.Allocator) !Store {
-        if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
-
-        var offset: usize = 0;
-
-        // Deserialize interner bytes
-        const bytes_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-        var bytes = std.ArrayListUnmanaged(u8){};
-        if (bytes_len > 0) {
-            if (offset + bytes_len > buffer.len) return error.BufferTooSmall;
-            try bytes.appendSlice(gpa, buffer[offset .. offset + bytes_len]);
-            offset += bytes_len;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Deserialize next_unique_name
-        if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
-        const next_unique_name = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-
-        // Create empty strings hash table (used only for deduplication during insertion)
-        const strings = std.StringHashMapUnmanaged(SmallStringInterner.Idx){};
-
-        // Construct the interner
-        const interner = SmallStringInterner{
-            .bytes = bytes,
-            .strings = strings,
-            .frozen = if (std.debug.runtime_safety) false else {},
-        };
-
-        return Store{
-            .interner = interner,
-            .next_unique_name = next_unique_name,
-        };
-    }
 
     /// Freeze the identifier store, preventing any new entries from being added.
     pub fn freeze(self: *Store) void {
         self.interner.freeze();
+    }
+
+    /// Append this Ident.Store to an iovec writer for serialization
+    pub fn appendToIovecs(self: *const Store, writer: anytype) !usize {
+        // Create a mutable copy of self as a regular byte buffer
+        const store_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Store));
+        @memcpy(store_copy_buffer, std.mem.asBytes(self));
+        
+        // Track this allocation so it gets freed when writer is deinitialized
+        try writer.owned_buffers.append(store_copy_buffer);
+        
+        // Get access to the struct in the buffer for easier manipulation
+        const store_copy = @as(*Store, @ptrCast(@alignCast(store_copy_buffer.ptr)));
+        
+        // Serialize interner (it handles its own pointers)
+        _ = try self.interner.appendToIovecs(writer);
+        
+        // Serialize attributes array
+        const attributes_offset = if (self.attributes.items.len > 0) blk: {
+            const bytes = std.mem.sliceAsBytes(self.attributes.items);
+            const offset = try writer.appendBytes(u8, bytes);
+            break :blk offset;
+        } else 0;
+        
+        // Update pointers in the copy to use offsets
+        store_copy.attributes.items.ptr = if (attributes_offset == 0)
+            @ptrFromInt(serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL)
+        else
+            @ptrFromInt(attributes_offset);
+        store_copy.attributes.items.len = self.attributes.items.len;
+        
+        // NOW add the copy to iovecs after all pointers have been converted to offsets
+        const struct_offset = try writer.appendBytes(Store, store_copy_buffer);
+        
+        return struct_offset;
+    }
+
+    /// Relocate all pointers in this Ident.Store by the given offset
+    pub fn relocate(self: *Store, offset: isize) void {
+        self.interner.relocate(offset);
+        
+        // Relocate attributes array
+        if (self.attributes.items.len > 0) {
+            const old_ptr = @intFromPtr(self.attributes.items.ptr);
+            // Skip relocation if this is a sentinel value
+            if (old_ptr != serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL) {
+                const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+                self.attributes.items.ptr = @ptrFromInt(new_ptr);
+            }
+        }
     }
 };
 
@@ -317,51 +287,6 @@ test "from_bytes creates ignored identifier" {
     try std.testing.expect(result.attributes.reassignable == false);
 }
 
-test "Ident.Store serialization round-trip" {
-    const gpa = std.testing.allocator;
-
-    // Create original store and add some identifiers
-    var original_store = try Store.initCapacity(gpa, 16);
-    defer original_store.deinit(gpa);
-
-    const ident1 = Ident.for_text("hello");
-    const ident2 = Ident.for_text("world!");
-    const ident3 = Ident.for_text("_ignored");
-
-    const idx1 = try original_store.insert(gpa, ident1, Region.zero());
-    const idx2 = try original_store.insert(gpa, ident2, Region.zero());
-    const idx3 = try original_store.insert(gpa, ident3, Region.zero());
-
-    // Serialize
-    const serialized_size = original_store.serializedSize();
-    const buffer = try gpa.alignedAlloc(u8, @alignOf(u32), serialized_size);
-    defer gpa.free(buffer);
-
-    const serialized = try original_store.serializeInto(buffer, gpa);
-    try std.testing.expectEqual(serialized_size, serialized.len);
-
-    // Deserialize
-    var restored_store = try Store.deserializeFrom(serialized, gpa);
-    defer restored_store.deinit(gpa);
-
-    // Verify the identifiers are identical
-    try std.testing.expectEqualStrings("hello", restored_store.getText(idx1));
-    try std.testing.expectEqualStrings("world!", restored_store.getText(idx2));
-    try std.testing.expectEqualStrings("_ignored", restored_store.getText(idx3));
-
-    // Verify attributes are preserved
-    try std.testing.expect(restored_store.getText(idx1)[0] != '_'); // not ignored
-    try std.testing.expect(restored_store.getText(idx2)[restored_store.getText(idx2).len - 1] == '!'); // effectful
-    try std.testing.expect(restored_store.getText(idx3)[0] == '_'); // ignored
-
-    // Verify next_unique_name is preserved
-    try std.testing.expectEqual(original_store.next_unique_name, restored_store.next_unique_name);
-
-    // Verify structural integrity
-    try std.testing.expectEqual(original_store.attributes.items.len, restored_store.attributes.items.len);
-    try std.testing.expectEqual(original_store.interner.bytes.items.len, restored_store.interner.bytes.items.len);
-    try std.testing.expectEqual(original_store.interner.outer_indices.items.len, restored_store.interner.outer_indices.items.len);
-}
 
 test "Ident.Store serialization comprehensive" {
     const gpa = std.testing.allocator;

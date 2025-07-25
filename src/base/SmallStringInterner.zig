@@ -104,3 +104,57 @@ pub fn freeze(self: *Self) void {
         self.frozen = true;
     }
 }
+
+/// Append this SmallStringInterner to an iovec writer for serialization
+pub fn appendToIovecs(self: *const Self, writer: anytype) !usize {
+    const serialization = @import("serialization");
+    
+    // Create a mutable copy of self as a regular byte buffer
+    const interner_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Self));
+    @memcpy(interner_copy_buffer, std.mem.asBytes(self));
+    
+    // Track this allocation so it gets freed when writer is deinitialized
+    try writer.owned_buffers.append(interner_copy_buffer);
+    
+    // Get access to the struct in the buffer for easier manipulation
+    const interner_copy = @as(*Self, @ptrCast(@alignCast(interner_copy_buffer.ptr)));
+    
+    // Serialize bytes array
+    const bytes_offset = if (self.bytes.items.len > 0) blk: {
+        const offset = try writer.appendBytes(u8, self.bytes.items);
+        break :blk offset;
+    } else 0;
+    
+    // Update pointer in the copy to use offset
+    interner_copy.bytes.items.ptr = if (bytes_offset == 0)
+        @ptrFromInt(serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL)
+    else
+        @ptrFromInt(bytes_offset);
+    interner_copy.bytes.items.len = self.bytes.items.len;
+    
+    // Clear strings hash map - it's only used for deduplication during insertion
+    // and can be rebuilt on demand after deserialization
+    interner_copy.strings = .{};
+    
+    // NOW add the copy to iovecs after all pointers have been converted to offsets
+    const struct_offset = try writer.appendBytes(Self, interner_copy_buffer);
+    
+    return struct_offset;
+}
+
+/// Relocate all pointers in this SmallStringInterner by the given offset
+pub fn relocate(self: *Self, offset: isize) void {
+    const serialization = @import("serialization");
+    
+    // Relocate bytes array
+    if (self.bytes.items.len > 0) {
+        const old_ptr = @intFromPtr(self.bytes.items.ptr);
+        // Skip relocation if this is a sentinel value
+        if (old_ptr != serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL) {
+            const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+            self.bytes.items.ptr = @ptrFromInt(new_ptr);
+        }
+    }
+    
+    // strings hash map is empty after deserialization, so no need to relocate
+}

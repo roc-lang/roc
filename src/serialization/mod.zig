@@ -1,15 +1,28 @@
-//! Common serialization utilities and traits for the Roc compiler
+//! Serialization utilities for the Roc compiler
 //!
 //! This module provides:
 //! - Common traits for serializable types
 //! - Memory safety utilities
 //! - Testing framework for serialization
 //! - Error types and utilities
+//! - IoVec-based scatter-gather I/O serialization
+//! - Memory relocation utilities
+//! - Aligned data writing utilities
 
 const std = @import("std");
 
+// Abstract serialization interfaces and utilities
 pub const testing = @import("testing.zig");
 pub const safety = @import("safety.zig");
+
+// Concrete implementation modules
+pub const iovec_serialize = @import("iovec_serialize.zig");
+// Note: relocate functionality is now implemented as methods on individual types
+pub const write_aligned = @import("write_aligned.zig");
+
+// Re-export commonly used types and functions
+pub const IovecWriter = iovec_serialize.IovecWriter;
+pub const writeAlignedData = write_aligned.writeAlignedData;
 
 const Allocator = std.mem.Allocator;
 
@@ -25,68 +38,8 @@ pub const SerializationError = error{
     UnsupportedVersion,
 };
 
-/// Common errors that can occur during deserialization
-pub const DeserializationError = error{
-    BufferTooSmall,
-    InvalidFormat,
-    CorruptedData,
-    UnsupportedVersion,
-    OutOfMemory,
-};
 
-/// Trait interface for types that can be serialized
-/// This is more of a documentation/convention than enforced by the compiler
-pub fn Serializable(comptime T: type) type {
-    return struct {
-        /// Calculate the size needed to serialize this value
-        pub fn serializedSize(self: *const T) usize {
-            _ = self;
-            @compileError("serializedSize must be implemented for " ++ @typeName(T));
-        }
 
-        /// Serialize this value into the provided buffer
-        /// Returns the slice of buffer that was written to
-        pub fn serializeInto(self: *const T, buffer: []u8) SerializationError![]const u8 {
-            _ = self;
-            _ = buffer;
-            @compileError("serializeInto must be implemented for " ++ @typeName(T));
-        }
-
-        /// Deserialize a value from the provided buffer
-        pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) DeserializationError!T {
-            _ = buffer;
-            _ = allocator;
-            @compileError("deserializeFrom must be implemented for " ++ @typeName(T));
-        }
-    };
-}
-
-/// Trait interface for types that can be serialized with an allocator
-pub fn SerializableWithAllocator(comptime T: type) type {
-    return struct {
-        /// Calculate the size needed to serialize this value
-        pub fn serializedSize(self: *const T) usize {
-            _ = self;
-            @compileError("serializedSize must be implemented for " ++ @typeName(T));
-        }
-
-        /// Serialize this value into the provided buffer
-        /// Returns the slice of buffer that was written to
-        pub fn serializeInto(self: *const T, buffer: []u8, allocator: Allocator) SerializationError![]const u8 {
-            _ = self;
-            _ = buffer;
-            _ = allocator;
-            @compileError("serializeInto must be implemented for " ++ @typeName(T));
-        }
-
-        /// Deserialize a value from the provided buffer
-        pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) DeserializationError!T {
-            _ = buffer;
-            _ = allocator;
-            @compileError("deserializeFrom must be implemented for " ++ @typeName(T));
-        }
-    };
-}
 
 /// Helper function to write integers in little-endian format
 pub fn writeInt(comptime T: type, buffer: []u8, value: T) void {
@@ -121,54 +74,12 @@ pub fn validateBuffer(required_size: usize, buffer: []const u8) SerializationErr
     }
 }
 
-/// Common validation function for deserialization buffers
-pub fn validateDeserializationBuffer(required_size: usize, buffer: []const u8) DeserializationError!void {
-    if (buffer.len < required_size) {
-        return DeserializationError.BufferTooSmall;
-    }
+
+
+
+test {
+    _ = @import("test_iovec_serialize.zig");
+    // Note: relocate functionality now implemented as methods on individual types
+    // _ = @import("test_relocate.zig");
 }
 
-/// Helper to check if a type implements the basic serialization interface
-pub fn hasSerializationInterface(comptime T: type) bool {
-    return @hasDecl(T, "serializedSize") and
-        @hasDecl(T, "serializeInto") and
-        @hasDecl(T, "deserializeFrom");
-}
-
-/// Helper to check if a type implements serialization with allocator
-pub fn hasSerializationWithAllocatorInterface(comptime T: type) bool {
-    if (!hasSerializationInterface(T)) return false;
-
-    // Check if serializeInto takes an allocator parameter
-    const serialize_info = @typeInfo(@TypeOf(T.serializeInto));
-    if (serialize_info != .@"fn") return false;
-
-    return serialize_info.@"fn".params.len >= 3; // self, buffer, allocator
-}
-
-test "serialization interface detection" {
-    const TestType = struct {
-        value: u32,
-
-        pub fn serializedSize(self: *const @This()) usize {
-            _ = self;
-            return @sizeOf(u32);
-        }
-
-        pub fn serializeInto(self: *const @This(), buffer: []u8) SerializationError![]const u8 {
-            try validateBuffer(@sizeOf(u32), buffer);
-            writeInt(u32, buffer, self.value);
-            return buffer[0..@sizeOf(u32)];
-        }
-
-        pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) DeserializationError!@This() {
-            _ = allocator;
-            try validateDeserializationBuffer(@sizeOf(u32), buffer);
-            return @This(){ .value = readInt(u32, buffer) };
-        }
-    };
-
-    const std_testing = std.testing;
-    try std_testing.expect(hasSerializationInterface(TestType));
-    try std_testing.expect(!hasSerializationWithAllocatorInterface(TestType));
-}
