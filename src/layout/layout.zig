@@ -7,7 +7,7 @@ const std = @import("std");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
-const CIR = @import("../check/canonicalize/CIR.zig");
+const ModuleEnv = @import("../compile/ModuleEnv.zig");
 
 const Ident = base.Ident;
 const target = base.target;
@@ -107,13 +107,13 @@ pub const Idx = enum(@Type(.{
 
 /// Represents a closure with its captured environment
 pub const Closure = struct {
-    body_idx: CIR.Expr.Idx,
-    params: CIR.Pattern.Span,
-    captures_pattern_idx: CIR.Pattern.Idx,
+    body_idx: ModuleEnv.Expr.Idx,
+    params: ModuleEnv.Pattern.Span,
+    captures_pattern_idx: ModuleEnv.Pattern.Idx,
     // Layout index for the captured environment record
     captures_layout_idx: Idx,
     // Original lambda expression index for accessing captures
-    lambda_expr_idx: CIR.Expr.Idx,
+    lambda_expr_idx: ModuleEnv.Expr.Idx,
 };
 
 /// The union portion of the Layout packed tagged union (the tag being LayoutTag).

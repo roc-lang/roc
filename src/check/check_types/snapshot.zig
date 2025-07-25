@@ -4,6 +4,7 @@ const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
 const types = @import("types");
+const ModuleEnv = @import("../../compile/ModuleEnv.zig");
 
 const TypesStore = types.Store;
 const Allocator = std.mem.Allocator;
@@ -507,8 +508,8 @@ pub const SnapshotWriter = struct {
     snapshots: *const Store,
     idents: *const Ident.Store,
     current_module_name: ?[]const u8,
-    can_ir: ?*const @import("../canonicalize/CIR.zig"),
-    other_modules: ?[]const *const @import("../canonicalize/CIR.zig"),
+    can_ir: ?*const @import("../../compile/ModuleEnv.zig"),
+    other_modules: ?[]const *const @import("../../compile/ModuleEnv.zig"),
     next_name_index: u32,
     name_counters: std.EnumMap(TypeContext, u32),
 
@@ -530,8 +531,8 @@ pub const SnapshotWriter = struct {
         snapshots: *const Store,
         idents: *const Ident.Store,
         current_module_name: []const u8,
-        can_ir: *const @import("../canonicalize/CIR.zig"),
-        other_modules: []const *const @import("../canonicalize/CIR.zig"),
+        can_ir: *const @import("../../compile/ModuleEnv.zig"),
+        other_modules: []const *const @import("../../compile/ModuleEnv.zig"),
     ) Self {
         return .{
             .writer = writer,

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const compile = @import("../compile/ModuleEnv.zig");
 const parse = @import("../check/parse.zig");
 const canonicalize = @import("../check/canonicalize.zig");
 const check_types = @import("../check/check_types.zig");
@@ -15,7 +16,7 @@ const stack = @import("../eval/stack.zig");
 const writers = types.writers;
 const Allocator = std.mem.Allocator;
 const target = base.target;
-const CIR = canonicalize.CIR;
+const ModuleEnv = @import("../compile/ModuleEnv.zig");
 const AST = parse.AST;
 
 /// Type of definition stored in the REPL history
@@ -171,7 +172,7 @@ pub const Repl = struct {
 
     /// Try to parse input as a statement
     fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
-        var module_env = try base.ModuleEnv.init(self.allocator, input);
+        var module_env = try compile.init(self.allocator, input);
         defer module_env.deinit();
 
         // Try statement parsing
@@ -252,7 +253,7 @@ pub const Repl = struct {
         }
 
         // Create module environment for the expression
-        var module_env = try base.ModuleEnv.init(self.allocator, expr_source);
+        var module_env = try compile.init(self.allocator, expr_source);
         defer module_env.deinit();
 
         // Parse as expression
@@ -265,13 +266,11 @@ pub const Repl = struct {
         parse_ast.store.emptyScratch();
 
         // Create CIR
-        var cir = CIR.init(&module_env, "repl") catch |err| {
-            return try std.fmt.allocPrint(self.allocator, "CIR init error: {}", .{err});
-        };
-        defer cir.deinit();
+        const cir = &module_env; // CIR is now just ModuleEnv
+        try cir.initCIRFields(self.allocator, "repl");
 
         // Create canonicalizer
-        var can = canonicalize.init(&cir, &parse_ast, null) catch |err| {
+        var can = canonicalize.init(cir, &parse_ast, null) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
         };
         defer can.deinit();
@@ -285,7 +284,7 @@ pub const Repl = struct {
         };
 
         // Type check
-        var checker = check_types.init(self.allocator, &module_env.types, &cir, &.{}, &cir.store.regions) catch |err| {
+        var checker = check_types.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };
         defer checker.deinit();
@@ -301,7 +300,7 @@ pub const Repl = struct {
         defer layout_cache.deinit();
 
         // Create interpreter
-        var interpreter = eval.Interpreter.init(self.allocator, &cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
+        var interpreter = eval.Interpreter.init(self.allocator, cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinit();
@@ -479,7 +478,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 1: Create module environment
     const source = "42";
-    var module_env = try base.ModuleEnv.init(allocator, source);
+    var module_env = try compile.init(allocator, source);
     defer module_env.deinit();
 
     // Step 2: Parse as expression
@@ -490,11 +489,11 @@ test "Repl - minimal interpreter integration" {
     parse_ast.store.emptyScratch();
 
     // Step 3: Create CIR
-    var cir = try CIR.init(&module_env, "test");
-    defer cir.deinit();
+    const cir = &module_env; // CIR is now just ModuleEnv
+    try cir.initCIRFields(allocator, "test");
 
     // Step 4: Canonicalize
-    var can = try canonicalize.init(&cir, &parse_ast, null);
+    var can = try canonicalize.init(cir, &parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -503,7 +502,7 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 5: Type check
-    var checker = try check_types.init(allocator, &module_env.types, &cir, &.{}, &cir.store.regions);
+    var checker = try check_types.init(allocator, &module_env.types, cir, &.{}, &cir.store.regions);
     defer checker.deinit();
 
     _ = try checker.checkExpr(canonical_expr_idx.get_idx());
@@ -517,7 +516,7 @@ test "Repl - minimal interpreter integration" {
     defer layout_cache.deinit();
 
     // Step 8: Create interpreter
-    var interpreter = try eval.Interpreter.init(allocator, &cir, &eval_stack, &layout_cache, &module_env.types);
+    var interpreter = try eval.Interpreter.init(allocator, cir, &eval_stack, &layout_cache, &module_env.types);
     defer interpreter.deinit();
 
     // Step 9: Evaluate

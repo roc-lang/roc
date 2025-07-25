@@ -1,11 +1,11 @@
-//! Representation of type annotations in the CIR.
+//! Representation of type annotations in the Canonical Intermediate Representation (CIR).
 //!
 //! Includes formatting of type annotations to s-expression debug format.
 
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const CIR = @import("CIR.zig");
+const ModuleEnv = @import("ModuleEnv.zig");
 const collections = @import("collections");
 const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
@@ -16,9 +16,9 @@ const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
-const Expr = CIR.Expr;
-const IntValue = CIR.IntValue;
-const RocDec = CIR.RocDec;
+const Expr = ModuleEnv.Expr;
+const IntValue = ModuleEnv.IntValue;
+const RocDec = ModuleEnv.RocDec;
 
 /// Canonical representation of type annotations in Roc.
 ///
@@ -70,7 +70,7 @@ pub const TypeAnno = union(enum) {
     ///
     /// Examples: `Json.Value`, `Http.Request` - types that will be resolved when dependencies are available
     ty_lookup_external: struct {
-        external_decl: CIR.ExternalDecl.Idx,
+        external_decl: ModuleEnv.ExternalDecl.Idx,
     },
     /// Malformed type annotation: represents a type that couldn't be parsed correctly.
     /// This follows the "Inform Don't Block" principle - compilation continues with
@@ -82,7 +82,7 @@ pub const TypeAnno = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn pushToSExprTree(self: *const @This(), ir: *const CIR, tree: *SExprTree, type_anno_idx: TypeAnno.Idx) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, type_anno_idx: TypeAnno.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .apply => |a| {
                 const begin = tree.beginNode();

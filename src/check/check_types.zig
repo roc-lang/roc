@@ -14,11 +14,10 @@ const problem = @import("check_types/problem.zig");
 const snapshot = @import("check_types/snapshot.zig");
 const instantiate = @import("check_types/instantiate.zig");
 const copy_import = @import("check_types/copy_import.zig");
-const CIR = @import("./canonicalize/CIR.zig");
+const ModuleEnv = @import("../compile/ModuleEnv.zig");
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
-const ModuleEnv = base.ModuleEnv;
 const Ident = base.Ident;
 const Region = base.Region;
 const Func = types_mod.Func;
@@ -29,8 +28,8 @@ const Self = @This();
 
 /// Key for the import cache: module index + expression index in that module
 const ImportCacheKey = struct {
-    module_idx: CIR.Import.Idx,
-    expr_idx: CIR.Expr.Idx,
+    module_idx: ModuleEnv.Import.Idx,
+    expr_idx: ModuleEnv.Expr.Idx,
 };
 
 /// Cache for imported types to avoid repeated copying
@@ -65,15 +64,15 @@ const ImportCache = std.HashMapUnmanaged(ImportCacheKey, Var, struct {
 gpa: std.mem.Allocator,
 // not owned
 types: *types_mod.Store,
-cir: *const CIR,
+cir: *const ModuleEnv,
 regions: *Region.List,
-other_modules: []const *CIR,
+other_modules: []const *ModuleEnv,
 // owned
 snapshots: snapshot.Store,
 problems: problem.Store,
 unify_scratch: unifier.Scratch,
 occurs_scratch: occurs.Scratch,
-instantiate_subs: instantiate.VarSubstitution,
+var_map: instantiate.VarSubstitution,
 /// Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
@@ -83,8 +82,8 @@ import_cache: ImportCache,
 pub fn init(
     gpa: std.mem.Allocator,
     types: *types_mod.Store,
-    cir: *const CIR,
-    other_modules: []const *CIR,
+    cir: *const ModuleEnv,
+    other_modules: []const *ModuleEnv,
     regions: *Region.List,
 ) std.mem.Allocator.Error!Self {
     return .{
@@ -97,7 +96,7 @@ pub fn init(
         .problems = try problem.Store.initCapacity(gpa, 64),
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
-        .instantiate_subs = instantiate.VarSubstitution.init(gpa),
+        .var_map = instantiate.VarSubstitution.init(gpa),
         .import_cache = ImportCache{},
     };
 }
@@ -108,7 +107,7 @@ pub fn deinit(self: *Self) void {
     self.snapshots.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
-    self.instantiate_subs.deinit();
+    self.var_map.deinit();
     self.import_cache.deinit(self.gpa);
 }
 
@@ -134,7 +133,7 @@ pub fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result
     defer trace.end();
 
     return try unifier.unify(
-        self.cir.env,
+        self.cir,
         self.types,
         &self.problems,
         &self.snapshots,
@@ -155,19 +154,19 @@ const InstantiateRegionBehavior = union(enum) {
 
 /// Instantiate a variable, writing su
 fn instantiateVar(self: *Self, var_to_instantiate: Var, region_behavior: InstantiateRegionBehavior) std.mem.Allocator.Error!Var {
-    self.instantiate_subs.clearRetainingCapacity();
+    self.var_map.clearRetainingCapacity();
     const instantiated_var = try instantiate.instantiateVar(
         self.types,
         var_to_instantiate,
-        &self.instantiate_subs,
+        &self.var_map,
     );
 
     const root_instantiated_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
 
     // If we had to insert any new type variables, ensure that we have
     // corresponding regions for them. This is essential for error reporting.
-    if (self.instantiate_subs.count() > 0) {
-        var iterator = self.instantiate_subs.iterator();
+    if (self.var_map.count() > 0) {
+        var iterator = self.var_map.iterator();
         while (iterator.next()) |x| {
             // Get the newly created var
             const fresh_var = x.value_ptr.*;
@@ -193,6 +192,44 @@ fn instantiateVar(self: *Self, var_to_instantiate: Var, region_behavior: Instant
     self.debugAssertArraysInSync();
 
     return instantiated_var;
+}
+
+// copy from import //
+
+/// Instantiate a variable, writing su
+fn copyVar(
+    self: *Self,
+    other_module_var: Var,
+    other_module_env: *const ModuleEnv,
+) std.mem.Allocator.Error!Var {
+    self.var_map.clearRetainingCapacity();
+    const copied_var = try copy_import.copyVar(
+        &other_module_env.*.types,
+        self.types,
+        other_module_var,
+        &self.var_map,
+        &other_module_env.*.idents,
+        @constCast(&self.cir.idents),
+        self.gpa,
+    );
+
+    // If we had to insert any new type variables, ensure that we have
+    // corresponding regions for them. This is essential for error reporting.
+    if (self.var_map.count() > 0) {
+        var iterator = self.var_map.iterator();
+        while (iterator.next()) |x| {
+            // Get the newly created var
+            const fresh_var = x.value_ptr.*;
+            try self.fillInRegionsThrough(fresh_var);
+
+            self.setRegionAt(fresh_var, base.Region.zero());
+        }
+    }
+
+    // Assert that we have regions for every type variable
+    self.debugAssertArraysInSync();
+
+    return copied_var;
 }
 
 // regions //
@@ -248,19 +285,19 @@ pub fn checkDefs(self: *Self) std.mem.Allocator.Error!void {
 }
 
 /// Check the types for a single definition
-fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+fn checkDef(self: *Self, def_idx: ModuleEnv.Def.Idx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const def = self.cir.store.getDef(def_idx);
-    const expr_var: Var = CIR.varFrom(def.expr);
-    const expr_region = self.cir.store.getNodeRegion(CIR.nodeIdxFrom(def.expr));
+    const expr_var: Var = ModuleEnv.varFrom(def.expr);
+    const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.expr));
 
     try self.checkPattern(def.pattern);
     _ = try self.checkExpr(def.expr);
 
     // Ensure the def has a type variable slot
-    const def_var = CIR.varFrom(def_idx);
+    const def_var = ModuleEnv.varFrom(def_idx);
 
     // Special handling for lambda expressions with annotations
     if (def.annotation) |anno_idx| {
@@ -278,24 +315,26 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
         }
 
         // Unify the expression with its annotation
+        // This is where numeric literal constraints should be checked against
+        // the annotation type (e.g., 500 against U8)
         _ = try self.unify(expr_var, annotation.signature);
     }
 
     // Unify the def with its expression
-    _ = try self.unify(def_var, CIR.varFrom(def.expr));
+    _ = try self.unify(def_var, ModuleEnv.varFrom(def.expr));
 
     // Also unify the pattern with the def - needed so lookups work correctly
     // TODO could we unify directly with the pattern elsewhere, to save a type var and unify() here?
-    _ = try self.unify(CIR.varFrom(def.pattern), def_var);
+    _ = try self.unify(ModuleEnv.varFrom(def.pattern), def_var);
 }
 
 /// Check the types for the provided pattern
-pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
+pub fn checkPattern(self: *Self, pattern_idx: ModuleEnv.Pattern.Idx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const pattern = self.cir.store.getPattern(pattern_idx);
-    const pattern_region = self.cir.store.getNodeRegion(CIR.nodeIdxFrom(pattern_idx));
+    const pattern_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
     switch (pattern) {
         .nominal => |nominal| {
             // We are unifying against a nominal type. The way this works is:
@@ -308,11 +347,11 @@ pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator
             // We have to do all this instantiating to avoid propagating `.err`
             // types across the module in the event of failure
 
-            const pattern_var = CIR.varFrom(pattern_idx);
-            const pattern_backing_var = CIR.varFrom(nominal.backing_pattern);
+            const pattern_var = ModuleEnv.varFrom(pattern_idx);
+            const pattern_backing_var = ModuleEnv.varFrom(nominal.backing_pattern);
 
             // First, get the qualified variable and check if it's a nominal type
-            const nominal_var = CIR.varFrom(nominal.nominal_type_decl);
+            const nominal_var = ModuleEnv.varFrom(nominal.nominal_type_decl);
             const nominal_content = self.types.resolveVar(nominal_var).desc.content;
 
             // Handle cases where the nominal type is malformed or in an error state
@@ -365,23 +404,44 @@ pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator
                 },
             }
         },
+        .int_literal => |_| {
+            // Integer literal patterns have their type constraints (bits_needed, sign_needed)
+            // created during canonicalization. The type variable for this pattern was already
+            // created with the appropriate num_unbound or int_unbound content.
+            // When this pattern is unified with the match scrutinee, the numeric constraints
+            // will be checked and produce NumberDoesNotFit or NegativeUnsignedInt errors
+            // if there's a mismatch.
+        },
         else => {},
     }
 }
 
 /// Check the types for an exprexpression. Returns whether evaluating the expr might perform side effects.
-pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
+pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const expr = self.cir.store.getExpr(expr_idx);
-    const expr_region = self.cir.store.getNodeRegion(CIR.nodeIdxFrom(expr_idx));
+    const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
     var does_fx = false; // Does this expression potentially perform any side effects?
     switch (expr) {
-        .e_int => |_| {},
-        .e_frac_f64 => |_| {},
-        .e_frac_dec => |_| {},
-        .e_dec_small => |_| {},
+        .e_int => |_| {
+            // Integer literals have their type constraints (bits_needed, sign_needed)
+            // created during canonicalization. Here we just need to ensure those
+            // constraints will be checked when unified with expected types.
+            // The type variable for this expression was already created with the
+            // appropriate num_unbound or int_unbound content during canonicalization.
+        },
+        .e_frac_f64 => |_| {
+            // Fractional literals have their type constraints (fits_in_f32, fits_in_dec)
+            // created during canonicalization. No additional checking needed here.
+        },
+        .e_frac_dec => |_| {
+            // Decimal literals are similar to frac_f64.
+        },
+        .e_dec_small => |_| {
+            // Small decimal literals are similar to frac_f64.
+        },
         .e_str_segment => |_| {},
         .e_str => |_| {},
         .e_lookup_local => |local| {
@@ -397,10 +457,10 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             const module_idx = @intFromEnum(e.module_idx);
             if (module_idx < self.other_modules.len) {
                 const other_module_cir = self.other_modules[module_idx];
-                const other_module_env = &other_module_cir.env;
+                const other_module_env = other_module_cir;
 
                 // The idx of the expression in the other module
-                const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(e.target_node_idx));
+                const target_expr_idx = @as(ModuleEnv.Expr.Idx, @enumFromInt(e.target_node_idx));
 
                 // Check if we've already copied this import
                 const cache_key = ImportCacheKey{
@@ -410,28 +470,18 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
                 const copied_var = if (self.import_cache.get(cache_key)) |cached_var|
                     // Reuse the previously copied type.
-                    // This is safe because imported types are never modified (preserve mode)
                     cached_var
                 else blk: {
                     // First time importing this type - copy it and cache the result
                     const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
-                    const new_copy = try copy_import.copyImportedType(
-                        &other_module_env.*.types,
-                        self.types,
-                        imported_var,
-                        &other_module_env.*.idents,
-                        &self.cir.env.idents,
-                        self.gpa,
-                    );
+                    const new_copy = try self.copyVar(imported_var, other_module_env);
                     try self.import_cache.put(self.gpa, cache_key, new_copy);
                     break :blk new_copy;
                 };
+                const instantiated_copy = try self.instantiateVar(copied_var, .use_last_var);
 
                 // Unify our expression with the copied type
-                // Note: This unification uses "preserve" mode internally (via copy_import),
-                // which means the imported type (copied_var) is read-only. This is why
-                // we can safely cache and reuse copied_var for multiple imports.
-                const result = try self.unify(expr_var, copied_var);
+                const result = try self.unify(expr_var, instantiated_copy);
                 if (result.isProblem()) {
                     self.setProblemTypeMismatchDetail(result.problem, .{
                         .cross_module_import = .{
@@ -456,7 +506,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // We need to type-check the first element, but we don't need to unify it with
             // anything because we already pre-unified the list's elem var with it.
             const first_elem_idx = elems[0];
-            var last_elem_idx: CIR.Expr.Idx = first_elem_idx;
+            var last_elem_idx: ModuleEnv.Expr.Idx = first_elem_idx;
             does_fx = try self.checkExpr(first_elem_idx) or does_fx;
 
             for (elems[1..], 1..) |elem_expr_id, i| {
@@ -508,7 +558,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // Don't try to unify with the function if the function is a runtime error.
             const func_expr = self.cir.store.getExpr(func_expr_idx);
             if (func_expr != .e_runtime_error) {
-                const func_expr_region = self.cir.store.getRegionAt(CIR.nodeIdxFrom(func_expr_idx));
+                const func_expr_region = self.cir.store.getRegionAt(ModuleEnv.nodeIdxFrom(func_expr_idx));
 
                 const call_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
                 const func_var = @as(Var, @enumFromInt(@intFromEnum(func_expr_idx)));
@@ -648,11 +698,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // We have to do all this instantiating to avoid propagating `.err`
             // types across the module in the event of failure
 
-            const expr_var = CIR.varFrom(expr_idx);
-            const expr_backing_var = CIR.varFrom(nominal.backing_expr);
+            const expr_var = ModuleEnv.varFrom(expr_idx);
+            const expr_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
             // First, get the qualified variable and check if it's a nominal type
-            const nominal_var = CIR.varFrom(nominal.nominal_type_decl);
+            const nominal_var = ModuleEnv.varFrom(nominal.nominal_type_decl);
             const nominal_content = self.types.resolveVar(nominal_var).desc.content;
 
             // Handle cases where the nominal type is malformed or in an error state
@@ -754,8 +804,8 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // The lambda's type is determined by its arguments and body.
             // We need to check the lambda expression itself to get its type.
             does_fx = try self.checkExpr(closure.lambda_idx);
-            const lambda_var = CIR.varFrom(closure.lambda_idx);
-            const closure_var = CIR.varFrom(expr_idx);
+            const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
+            const closure_var = ModuleEnv.varFrom(expr_idx);
             _ = try self.unify(closure_var, lambda_var);
         },
         .e_lambda => |lambda| {
@@ -787,11 +837,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         if (dot_access.args) |args_span| {
                             // Method call with arguments
                             // Get the origin module path
-                            const origin_module_path = self.cir.env.idents.getText(nominal.origin_module);
+                            const origin_module_path = self.cir.idents.getText(nominal.origin_module);
 
                             // Find which imported module matches this path
-                            var origin_module_idx: ?CIR.Import.Idx = null;
-                            var origin_module: ?*const CIR = null;
+                            var origin_module_idx: ?ModuleEnv.Import.Idx = null;
+                            var origin_module: ?*const ModuleEnv = null;
 
                             // Check if it's the current module
                             if (std.mem.eql(u8, origin_module_path, self.cir.module_name)) {
@@ -809,12 +859,12 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
                             if (origin_module) |module| {
                                 // Look up the method in the origin module's exports
-                                const method_name_str = self.cir.env.idents.getText(dot_access.field_name);
+                                const method_name_str = self.cir.idents.getText(dot_access.field_name);
 
                                 // Search through the module's exposed nodes
-                                if (module.env.exposed_nodes.get(method_name_str)) |node_idx| {
+                                if (module.exposed_nodes.get(method_name_str)) |node_idx| {
                                     // Found the method!
-                                    const target_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(node_idx));
+                                    const target_expr_idx = @as(ModuleEnv.Expr.Idx, @enumFromInt(node_idx));
 
                                     // Check if we've already copied this import
                                     const cache_key = ImportCacheKey{
@@ -827,22 +877,16 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                                     else blk: {
                                         // Copy the method's type from the origin module to our type store
                                         const source_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
-                                        const new_copy = try copy_import.copyImportedType(
-                                            &module.env.types,
-                                            self.types,
-                                            source_var,
-                                            &module.env.idents,
-                                            &self.cir.env.idents,
-                                            self.gpa,
-                                        );
+                                        const new_copy = try self.copyVar(source_var, module);
                                         try self.import_cache.put(self.gpa, cache_key, new_copy);
                                         break :blk new_copy;
                                     };
+                                    const method_instantiated = try self.instantiateVar(method_var, .use_last_var);
 
                                     // Check all arguments
                                     var i: u32 = 0;
                                     while (i < args_span.span.len) : (i += 1) {
-                                        const arg_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(args_span.span.start + i));
+                                        const arg_expr_idx = @as(ModuleEnv.Expr.Idx, @enumFromInt(args_span.span.start + i));
                                         does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
                                     }
 
@@ -856,7 +900,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                                     // Add the remaining arguments
                                     i = 0;
                                     while (i < args_span.span.len) : (i += 1) {
-                                        const arg_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(args_span.span.start + i));
+                                        const arg_expr_idx = @as(ModuleEnv.Expr.Idx, @enumFromInt(args_span.span.start + i));
                                         const arg_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
                                         try args.append(arg_var);
                                     }
@@ -867,7 +911,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                                     const expected_func_var = try self.freshFromContent(func_content, expr_region);
 
                                     // Unify with the imported method type
-                                    _ = try self.unify(expected_func_var, method_var);
+                                    _ = try self.unify(expected_func_var, method_instantiated);
 
                                     // Store the resolved method info for code generation
                                     // This will be used by the code generator to emit the correct function call
@@ -974,7 +1018,7 @@ fn unifyCallWithFunc(
     self: *Self,
     call_var: Var,
     func: types_mod.Func,
-    call_args: []const CIR.Expr.Idx,
+    call_args: []const ModuleEnv.Expr.Idx,
     original_func_var: Var,
     region: Region,
 ) std.mem.Allocator.Error!void {
@@ -1002,9 +1046,9 @@ fn unifyCallWithFunc(
 /// Check a lambda expression with an optional expected type
 fn checkLambdaWithExpected(
     self: *Self,
-    expr_idx: CIR.Expr.Idx,
+    expr_idx: ModuleEnv.Expr.Idx,
     _: Region,
-    lambda: std.meta.FieldType(CIR.Expr, .e_lambda),
+    lambda: std.meta.FieldType(ModuleEnv.Expr, .e_lambda),
     expected_type: ?Var,
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
@@ -1021,7 +1065,7 @@ fn checkLambdaWithExpected(
     const arg_vars: []Var = @ptrCast(@alignCast(arg_patterns));
 
     // The root expr will be the entire functions var
-    const fn_var = CIR.varFrom(expr_idx);
+    const fn_var = ModuleEnv.varFrom(expr_idx);
 
     // The return type var is just the body's var
     const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
@@ -1049,7 +1093,7 @@ fn checkLambdaWithExpected(
                     // Unify each pattern with its expected type before checking body
                     if (expected_args.len == arg_patterns.len) {
                         for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
-                            const pattern_var = CIR.varFrom(pattern_idx);
+                            const pattern_var = ModuleEnv.varFrom(pattern_idx);
                             _ = try self.unify(pattern_var, expected_arg);
                         }
                         _ = try self.unify(return_var, func.ret);
@@ -1072,7 +1116,7 @@ fn checkLambdaWithExpected(
 // binop //
 
 /// Check the types for an if-else expr
-fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, binop: CIR.Expr.Binop) Allocator.Error!bool {
+fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region, binop: ModuleEnv.Expr.Binop) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1099,11 +1143,11 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
         .lt, .gt, .le, .ge, .eq, .ne => {
             // Comparison operators always return Bool
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-            const fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+            const fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             _ = try self.unify(expr_var, fresh_bool);
         },
         .@"and" => {
-            const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+            const lhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -1112,7 +1156,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+                const rhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -1122,7 +1166,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             }
         },
         .@"or" => {
-            const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+            const lhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -1131,7 +1175,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+                const rhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -1147,7 +1191,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
     return does_fx;
 }
 
-fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
+fn checkUnaryMinusExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region, unary: ModuleEnv.Expr.UnaryMinus) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1174,9 +1218,9 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
 /// Check the types for an if-else expr
 fn checkIfElseExpr(
     self: *Self,
-    if_expr_idx: CIR.Expr.Idx,
+    if_expr_idx: ModuleEnv.Expr.Idx,
     expr_region: Region,
-    if_: std.meta.FieldType(CIR.Expr, .e_if),
+    if_: std.meta.FieldType(ModuleEnv.Expr, .e_if),
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -1193,7 +1237,7 @@ fn checkIfElseExpr(
     // Check the condition of the 1st branch
     var does_fx = try self.checkExpr(first_branch.cond);
     const first_cond_var: Var = @enumFromInt(@intFromEnum(first_branch.cond));
-    const bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+    const bool_var = try self.instantiateVar(ModuleEnv.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
     const first_cond_result = try self.unify(bool_var, first_cond_var);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
@@ -1213,7 +1257,7 @@ fn checkIfElseExpr(
         // Check the branches condition
         does_fx = try self.checkExpr(branch.cond) or does_fx;
         const cond_var: Var = @enumFromInt(@intFromEnum(branch.cond));
-        const branch_bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+        const branch_bool_var = try self.instantiateVar(ModuleEnv.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
         const cond_result = try self.unify(branch_bool_var, cond_var);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
@@ -1236,7 +1280,7 @@ fn checkIfElseExpr(
                 does_fx = try self.checkExpr(remaining_branch.cond) or does_fx;
                 const remaining_cond_var: Var = @enumFromInt(@intFromEnum(remaining_branch.cond));
 
-                const fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), .{ .explicit = expr_region });
+                const fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 
@@ -1272,13 +1316,13 @@ fn checkIfElseExpr(
 // match //
 
 /// Check the types for an if-else expr
-fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Allocator.Error!bool {
+fn checkMatchExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, match: ModuleEnv.Expr.Match) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Check the match's condition
     var does_fx = try self.checkExpr(match.cond);
-    const cond_var = CIR.varFrom(match.cond);
+    const cond_var = ModuleEnv.varFrom(match.cond);
 
     // Bail if we somehow have 0 branches
     // TODO: Should this be an error? Here or in Can?
@@ -1298,7 +1342,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
     for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         try self.checkPattern(branch_ptrn.pattern);
-        const branch_ptrn_var = CIR.varFrom(branch_ptrn.pattern);
+        const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
 
         const ptrn_result = try self.unify(cond_var, branch_ptrn_var);
         self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
@@ -1312,7 +1356,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
     // Check the first branch's value, then use that at the branch_var
     does_fx = try self.checkExpr(first_branch.value) or does_fx;
-    const branch_var = CIR.varFrom(first_branch.value);
+    const branch_var = ModuleEnv.varFrom(first_branch.value);
 
     // Then iterate over the rest of the branches
     for (branch_idxs[1..], 1..) |branch_idx, branch_cur_index| {
@@ -1326,7 +1370,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
             try self.checkPattern(branch_ptrn.pattern);
 
             // Check the pattern against the cond
-            const branch_ptrn_var = CIR.varFrom(branch_ptrn.pattern);
+            const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
             const ptrn_result = try self.unify(cond_var, branch_ptrn_var);
             self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                 .match_expr = expr_idx,
@@ -1339,7 +1383,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
         // Then, check the body
         does_fx = try self.checkExpr(branch.value) or does_fx;
-        const branch_result = try self.unify(branch_var, CIR.varFrom(branch.value));
+        const branch_result = try self.unify(branch_var, ModuleEnv.varFrom(branch.value));
         self.setDetailIfTypeMismatch(branch_result, problem.TypeMismatchDetail{ .incompatible_match_branches = .{
             .match_expr = expr_idx,
             .num_branches = @intCast(match.branches.span.len),
@@ -1360,7 +1404,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
                     try self.checkPattern(other_branch_ptrn.pattern);
 
                     // Check the pattern against the cond
-                    const other_branch_ptrn_var = CIR.varFrom(other_branch_ptrn.pattern);
+                    const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
                     const ptrn_result = try self.unify(cond_var, other_branch_ptrn_var);
                     self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                         .match_expr = expr_idx,
@@ -1373,7 +1417,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 
                 // Then check the other branch's exprs
                 does_fx = try self.checkExpr(other_branch.value) or does_fx;
-                try self.types.setVarContent(CIR.varFrom(other_branch.value), .err);
+                try self.types.setVarContent(ModuleEnv.varFrom(other_branch.value), .err);
             }
 
             // Then stop type checking for this branch
@@ -1437,7 +1481,8 @@ test "minimum signed values fit in their respective types" {
 
     const gpa = std.testing.allocator;
 
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var module_env = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    try module_env.initModuleEnvFields(gpa, "Test");
     defer module_env.deinit();
 
     var problems = try problem.Store.initCapacity(gpa, 16);
@@ -1587,14 +1632,14 @@ test "lambda with record field access infers correct type" {
     const gpa = std.testing.allocator;
 
     // Create a minimal environment for testing
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var module_env = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
-    var cir = try CIR.init(&module_env, "Test");
-    defer cir.deinit();
+    try module_env.initModuleEnvFields(gpa, "Test");
+    const cir = &module_env;
 
-    const empty_modules: []const *CIR = &.{};
-    var solver = try Self.init(gpa, &module_env.types, &cir, empty_modules, &cir.store.regions);
+    const empty_modules: []const *ModuleEnv = &.{};
+    var solver = try Self.init(gpa, &module_env.types, cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 
     // Create type variables for the lambda parameters
@@ -1692,14 +1737,14 @@ test "dot access properly unifies field types with parameters" {
     const gpa = std.testing.allocator;
 
     // Create a minimal environment for testing
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var module_env = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
-    var cir = try CIR.init(&module_env, "Test");
-    defer cir.deinit();
+    try module_env.initModuleEnvFields(gpa, "Test");
+    const cir = &module_env;
 
-    const empty_modules: []const *CIR = &.{};
-    var solver = try Self.init(gpa, &module_env.types, &cir, empty_modules, &cir.store.regions);
+    const empty_modules: []const *ModuleEnv = &.{};
+    var solver = try Self.init(gpa, &module_env.types, cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 
     // Create a parameter type variable
@@ -1800,14 +1845,14 @@ test "call site unification order matters for concrete vs flexible types" {
     const gpa = std.testing.allocator;
 
     // Create a minimal environment for testing
-    var module_env = try base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+    var module_env = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
     defer module_env.deinit();
 
-    var cir = try CIR.init(&module_env, "Test");
-    defer cir.deinit();
+    try module_env.initModuleEnvFields(gpa, "Test");
+    const cir = &module_env;
 
-    const empty_modules: []const *CIR = &.{};
-    var solver = try Self.init(gpa, &module_env.types, &cir, empty_modules, &cir.store.regions);
+    const empty_modules: []const *ModuleEnv = &.{};
+    var solver = try Self.init(gpa, &module_env.types, cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 
     // First, verify basic number unification works as expected

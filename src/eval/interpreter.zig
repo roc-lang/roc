@@ -29,7 +29,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const CIR = @import("../check/canonicalize/CIR.zig");
+const ModuleEnv = @import("../compile/ModuleEnv.zig");
 const types = @import("types");
 const layout = @import("../layout/layout.zig");
 const layout_ = @import("../layout/layout.zig");
@@ -125,7 +125,7 @@ pub const WorkItem = struct {
     /// The type of work to be performed
     kind: WorkKind,
     /// The expression index this work item operates on
-    expr_idx: CIR.Expr.Idx,
+    expr_idx: ModuleEnv.Expr.Idx,
     /// Optional extra data for e.g. if-expressions and lambda call
     extra: u32 = 0,
 };
@@ -137,15 +137,15 @@ pub const WorkItem = struct {
 /// `if condition then body` clause.
 const BranchData = struct {
     /// Expression index for the branch condition (must evaluate to Bool)
-    cond: CIR.Expr.Idx,
+    cond: ModuleEnv.Expr.Idx,
     /// Expression index for the branch body (evaluated if condition is true)
-    body: CIR.Expr.Idx,
+    body: ModuleEnv.Expr.Idx,
 };
 
 /// Tracks execution context for function calls
 pub const CallFrame = struct {
     /// this function's body expression
-    body_idx: CIR.Expr.Idx,
+    body_idx: ModuleEnv.Expr.Idx,
     /// Offset into the `stack_memory` of the interpreter where this frame's values start
     stack_base: u32,
     /// Offset into the `layout_cache` of the interpreter where this frame's layouts start
@@ -172,7 +172,7 @@ pub const CallFrame = struct {
 /// the function call completes as this may have been freed or overwritten.
 const Binding = struct {
     /// Pattern index that this binding satisfies (for pattern matching)
-    pattern_idx: CIR.Pattern.Idx,
+    pattern_idx: ModuleEnv.Pattern.Idx,
     /// Index of the argument's value in stack memory (points to the start of the value)
     value_ptr: *anyopaque,
     /// Type and layout information for the argument value
@@ -192,7 +192,7 @@ pub const Interpreter = struct {
     /// Memory allocator for dynamic data structures
     allocator: std.mem.Allocator,
     /// Canonicalized Intermediate Representation containing expressions to evaluate
-    cir: *const CIR,
+    env: *const ModuleEnv,
     /// Stack memory for storing expression values during evaluation
     stack_memory: *stack.Stack,
     /// Cache for type layout information and size calculations
@@ -219,14 +219,14 @@ pub const Interpreter = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        cir: *CIR,
+        cir: *const ModuleEnv,
         stack_memory: *stack.Stack,
         layout_cache: *layout_store.Store,
         type_store: *types_store.Store,
     ) !Interpreter {
         return Interpreter{
             .allocator = allocator,
-            .cir = cir,
+            .env = cir,
             .stack_memory = stack_memory,
             .layout_cache = layout_cache,
             .type_store = type_store,
@@ -250,7 +250,7 @@ pub const Interpreter = struct {
     ///
     /// This is the main entry point for expression evaluation. Uses an iterative
     /// work queue approach to evaluate complex expressions without recursion.
-    pub fn eval(self: *Interpreter, expr_idx: CIR.Expr.Idx) EvalError!StackValue {
+    pub fn eval(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx) EvalError!StackValue {
         // Ensure work_stack and value_stack are empty before we start. (stack_memory might not be, and that's fine!)
         std.debug.assert(self.work_stack.items.len == 0);
         std.debug.assert(self.value_stack.items.len == 0);
@@ -280,7 +280,7 @@ pub const Interpreter = struct {
                     // The expr_idx encodes both the if expression and the branch index
                     // Lower 16 bits: if expression index
                     // Upper 16 bits: branch index
-                    const if_expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(work.expr_idx) & 0xFFFF);
+                    const if_expr_idx: ModuleEnv.Expr.Idx = @enumFromInt(@intFromEnum(work.expr_idx) & 0xFFFF);
                     const branch_index: u16 = @intCast((@intFromEnum(work.expr_idx) >> 16) & 0xFFFF);
                     try self.checkIfCondition(if_expr_idx, branch_index);
                 },
@@ -298,7 +298,7 @@ pub const Interpreter = struct {
                     work.extra, // stores the current_element_idx
                 ),
                 .w_let_bind => {
-                    const pattern_idx: CIR.Pattern.Idx = @enumFromInt(work.extra);
+                    const pattern_idx: ModuleEnv.Pattern.Idx = @enumFromInt(work.extra);
                     const value = try self.peekStackValue(1); // Don't pop!
                     try self.bindPattern(pattern_idx, value); // Value stays on stack for the block's lifetime
                 },
@@ -387,7 +387,7 @@ pub const Interpreter = struct {
                     .{@tagName(work.kind)},
                 ) catch {};
             } else {
-                const expr = self.cir.store.getExpr(work.expr_idx);
+                const expr = self.env.store.getExpr(work.expr_idx);
                 self.printTraceIndent();
                 writer.print(
                     "🏗️  scheduling {s} for ({s})\n",
@@ -410,7 +410,7 @@ pub const Interpreter = struct {
                         .{@tagName(work.kind)},
                     ) catch {};
                 } else {
-                    const expr = self.cir.store.getExpr(work.expr_idx);
+                    const expr = self.env.store.getExpr(work.expr_idx);
                     self.printTraceIndent();
                     writer.print(
                         "🏗️  starting {s} for ({s})\n",
@@ -423,7 +423,7 @@ pub const Interpreter = struct {
     }
 
     /// Helper to get the layout for an expression
-    fn getLayoutIdx(self: *Interpreter, expr_idx: CIR.Expr.Idx) EvalError!layout.Idx {
+    fn getLayoutIdx(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx) EvalError!layout.Idx {
         const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
         const layout_idx = self.layout_cache.addTypeVar(expr_var) catch |err| switch (err) {
             error.ZeroSizedType => return error.ZeroSizedType,
@@ -443,8 +443,8 @@ pub const Interpreter = struct {
     /// # Error Handling
     /// Malformed expressions result in runtime error placeholders rather
     /// than evaluation failure.
-    fn evalExpr(self: *Interpreter, expr_idx: CIR.Expr.Idx) EvalError!void {
-        const expr = self.cir.store.getExpr(expr_idx);
+    fn evalExpr(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx) EvalError!void {
+        const expr = self.env.store.getExpr(expr_idx);
 
         self.traceEnter("evalExpr {s}", .{@tagName(expr)});
         defer self.traceExit("", .{});
@@ -493,7 +493,7 @@ pub const Interpreter = struct {
                 const result_ptr = (try self.pushStackValue(expr_layout)).?;
 
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                const tag_name = self.cir.env.idents.getText(tag.name);
+                const tag_name = self.env.idents.getText(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
                     tag_ptr.* = 1;
                 } else if (std.mem.eql(u8, tag_name, "False")) {
@@ -552,8 +552,8 @@ pub const Interpreter = struct {
                     self.schedule_work(WorkItem{ .kind = .w_if_check_condition, .expr_idx = expr_idx });
 
                     // Push work to evaluate the first condition
-                    const branches = self.cir.store.sliceIfBranches(if_expr.branches);
-                    const branch = self.cir.store.getIfBranch(branches[0]);
+                    const branches = self.env.store.sliceIfBranches(if_expr.branches);
+                    const branch = self.env.store.getIfBranch(branches[0]);
 
                     self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = branch.cond });
                 } else {
@@ -600,12 +600,12 @@ pub const Interpreter = struct {
                         const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
                         const captures_ptr = @as([*]u8, @ptrCast(closure_ptr)) + @sizeOf(Closure);
 
-                        const pattern = self.cir.store.getPattern(lookup.pattern_idx);
+                        const pattern = self.env.store.getPattern(lookup.pattern_idx);
                         const ident_idx = switch (pattern) {
                             .assign => |a| a.ident,
                             else => return error.LayoutError,
                         };
-                        const capture_name_text = self.cir.env.idents.getText(ident_idx);
+                        const capture_name_text = self.env.idents.getText(ident_idx);
 
                         if (captures_layout.tag == .record) {
                             const record_data = self.layout_cache.getRecordData(captures_layout.data.record.idx);
@@ -641,9 +641,9 @@ pub const Interpreter = struct {
                 }
 
                 // 3. If not found, fall back to global definitions
-                const defs = self.cir.store.sliceDefs(self.cir.all_defs);
+                const defs = self.env.store.sliceDefs(self.env.all_defs);
                 for (defs) |def_idx| {
-                    const def = self.cir.store.getDef(def_idx);
+                    const def = self.env.store.getDef(def_idx);
                     if (@intFromEnum(def.pattern) == @intFromEnum(lookup.pattern_idx)) {
                         self.traceInfo("Found global definition for pattern_idx={}", .{@intFromEnum(lookup.pattern_idx)});
                         try self.work_stack.append(.{
@@ -675,7 +675,7 @@ pub const Interpreter = struct {
 
                 // For now, handle boolean tags (True/False) as u8
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                const tag_name = self.cir.env.idents.getText(tag.name);
+                const tag_name = self.env.idents.getText(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
                     tag_ptr.* = 1;
                 } else if (std.mem.eql(u8, tag_name, "False")) {
@@ -689,7 +689,7 @@ pub const Interpreter = struct {
 
             .e_call => |call| {
                 // Get function and arguments from the call
-                const all_exprs = self.cir.store.sliceExpr(call.args);
+                const all_exprs = self.env.store.sliceExpr(call.args);
 
                 if (all_exprs.len == 0) {
                     return error.LayoutError; // No function to call
@@ -758,12 +758,12 @@ pub const Interpreter = struct {
                 });
 
                 // Schedule evaluation of statements in reverse order.
-                const stmts = self.cir.store.sliceStatements(block.stmts);
+                const stmts = self.env.store.sliceStatements(block.stmts);
                 var i = stmts.len;
                 while (i > 0) {
                     i -= 1;
                     const stmt_idx = stmts[i];
-                    const stmt = self.cir.store.getStatement(stmt_idx);
+                    const stmt = self.env.store.getStatement(stmt_idx);
                     switch (stmt) {
                         .s_decl => |decl| {
                             // Schedule binding after expression is evaluated.
@@ -790,7 +790,7 @@ pub const Interpreter = struct {
             .e_record => |record_expr| {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
-                const fields = self.cir.store.sliceRecordFields(record_expr.fields);
+                const fields = self.env.store.sliceRecordFields(record_expr.fields);
                 if (fields.len == 0) {
                     // Per the test, `{}` should be a zero-sized type error.
                     return error.ZeroSizedType;
@@ -819,7 +819,7 @@ pub const Interpreter = struct {
             .e_tuple => |tuple_expr| {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
-                const elements = self.cir.store.sliceExpr(tuple_expr.elems);
+                const elements = self.env.store.sliceExpr(tuple_expr.elems);
                 if (elements.len == 0) {
                     // Empty tuple has no bytes, but we still need to push its layout.
                     _ = try self.pushStackValue(expr_layout);
@@ -965,7 +965,7 @@ pub const Interpreter = struct {
         self.writeIntToMemoryAndTrace(operand_value.ptr.?, result_val, operand_scalar.data.int);
     }
 
-    fn checkIfCondition(self: *Interpreter, expr_idx: CIR.Expr.Idx, branch_index: u16) EvalError!void {
+    fn checkIfCondition(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, branch_index: u16) EvalError!void {
         // Pop the condition layout
         const condition = try self.peekStackValue(1);
 
@@ -976,18 +976,18 @@ pub const Interpreter = struct {
         _ = try self.popStackValue();
 
         // Get the if expression
-        const if_expr = switch (self.cir.store.getExpr(expr_idx)) {
+        const if_expr = switch (self.env.store.getExpr(expr_idx)) {
             .e_if => |e| e,
             else => return error.InvalidBranchNode,
         };
 
-        const branches = self.cir.store.sliceIfBranches(if_expr.branches);
+        const branches = self.env.store.sliceIfBranches(if_expr.branches);
 
         if (branch_index >= branches.len) {
             return error.InvalidBranchNode;
         }
 
-        const branch = self.cir.store.getIfBranch(branches[branch_index]);
+        const branch = self.env.store.getIfBranch(branches[branch_index]);
 
         if (cond_val == 1) {
             // Condition is true, evaluate this branch's body
@@ -997,10 +997,10 @@ pub const Interpreter = struct {
             if (branch_index + 1 < branches.len) {
                 // Evaluate the next branch
                 const next_branch_idx = branch_index + 1;
-                const next_branch = self.cir.store.getIfBranch(branches[next_branch_idx]);
+                const next_branch = self.env.store.getIfBranch(branches[next_branch_idx]);
 
                 // Encode branch index in upper 16 bits
-                const encoded_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx) | (@as(u32, next_branch_idx) << 16));
+                const encoded_idx: ModuleEnv.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx) | (@as(u32, next_branch_idx) << 16));
 
                 // Push work to check next condition after it's evaluated
                 self.schedule_work(WorkItem{ .kind = .w_if_check_condition, .expr_idx = encoded_idx });
@@ -1014,7 +1014,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn handleLambdaCall(self: *Interpreter, expr_idx: CIR.Expr.Idx, arg_count: u32) !void {
+    fn handleLambdaCall(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, arg_count: u32) !void {
         self.traceEnter("handleLambdaCall {}", .{expr_idx});
         defer self.traceExit("", .{});
 
@@ -1058,7 +1058,7 @@ pub const Interpreter = struct {
         });
 
         // 2. Bind the explicit parameters to their arguments.
-        const param_ids = self.cir.store.slicePatterns(closure.params);
+        const param_ids = self.env.store.slicePatterns(closure.params);
         std.debug.assert(param_ids.len == arg_count);
 
         // Arguments are on the stack in evaluation order, so the last argument is at the top.
@@ -1140,7 +1140,7 @@ pub const Interpreter = struct {
         self.traceInfo("Lambda return: stack cleaned and return value pushed", .{});
     }
 
-    fn handleRecordFields(self: *Interpreter, record_expr_idx: CIR.Expr.Idx, current_field_idx: u32) EvalError!void {
+    fn handleRecordFields(self: *Interpreter, record_expr_idx: ModuleEnv.Expr.Idx, current_field_idx: u32) EvalError!void {
         self.traceEnter("handleRecordFields record_expr_idx={}, current_field_idx={}", .{ record_expr_idx, current_field_idx });
         defer self.traceExit("", .{});
 
@@ -1176,7 +1176,7 @@ pub const Interpreter = struct {
                 const src_ptr = @as([*]const u8, @ptrCast(prev_field_value.ptr.?));
                 std.mem.copyForwards(u8, dest_ptr[0..prev_field_size], src_ptr[0..prev_field_size]);
 
-                self.traceInfo("Copied field '{s}' (size={}) to offset {}", .{ self.cir.env.idents.getText(prev_field_layout_info.name), prev_field_size, prev_field_offset });
+                self.traceInfo("Copied field '{s}' (size={}) to offset {}", .{ self.env.idents.getText(prev_field_layout_info.name), prev_field_size, prev_field_offset });
             }
         }
 
@@ -1195,16 +1195,16 @@ pub const Interpreter = struct {
             const current_field_info = sorted_fields.get(current_field_idx);
             const current_field_name = current_field_info.name;
 
-            const record_expr = self.cir.store.getExpr(record_expr_idx);
+            const record_expr = self.env.store.getExpr(record_expr_idx);
             const cir_fields = switch (record_expr) {
-                .e_record => |r| self.cir.store.sliceRecordFields(r.fields),
+                .e_record => |r| self.env.store.sliceRecordFields(r.fields),
                 else => unreachable, // Should only be called for e_record
             };
 
-            // Look for the current field CIR.Expr.Idx
-            var value_expr_idx: ?CIR.Expr.Idx = null;
+            // Look for the current field ModuleEnv.Expr.Idx
+            var value_expr_idx: ?ModuleEnv.Expr.Idx = null;
             for (cir_fields) |field_idx| {
-                const field = self.cir.store.getRecordField(field_idx);
+                const field = self.env.store.getRecordField(field_idx);
                 if (field.name == current_field_name) {
                     value_expr_idx = field.value;
                     break;
@@ -1213,7 +1213,7 @@ pub const Interpreter = struct {
 
             const current_field_value_expr_idx = value_expr_idx orelse {
                 // This should be impossible if the CIR and layout are consistent.
-                self.traceError("Could not find value for field '{s}'", .{self.cir.env.idents.getText(current_field_name)});
+                self.traceError("Could not find value for field '{s}'", .{self.env.idents.getText(current_field_name)});
                 return error.LayoutError;
             };
 
@@ -1229,7 +1229,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn handleTupleElements(self: *Interpreter, tuple_expr_idx: CIR.Expr.Idx, current_element_idx: u32) EvalError!void {
+    fn handleTupleElements(self: *Interpreter, tuple_expr_idx: ModuleEnv.Expr.Idx, current_element_idx: u32) EvalError!void {
         self.traceEnter("handleTupleElements tuple_expr_idx={}, current_element_idx={}", .{ tuple_expr_idx, current_element_idx });
         defer self.traceExit("", .{});
 
@@ -1268,9 +1268,9 @@ pub const Interpreter = struct {
                 .extra = current_element_idx + 1,
             });
 
-            const tuple_expr = self.cir.store.getExpr(tuple_expr_idx);
+            const tuple_expr = self.env.store.getExpr(tuple_expr_idx);
             const cir_elements = switch (tuple_expr) {
-                .e_tuple => |t| self.cir.store.sliceExpr(t.elems),
+                .e_tuple => |t| self.env.store.sliceExpr(t.elems),
                 else => unreachable,
             };
 
@@ -1366,15 +1366,15 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Helper to pretty print a CIR.Expression in a trace
-    pub fn traceExpression(self: *const Interpreter, expression_idx: CIR.Expr.Idx) void {
+    /// Helper to pretty print a ModuleEnv.Expression in a trace
+    pub fn traceExpression(self: *const Interpreter, expression_idx: ModuleEnv.Expr.Idx) void {
         if (self.trace_writer) |writer| {
-            const expression = self.cir.store.getExpr(expression_idx);
+            const expression = self.env.store.getExpr(expression_idx);
 
-            var tree = SExprTree.init(self.cir.env.gpa);
+            var tree = SExprTree.init(self.env.gpa);
             defer tree.deinit();
 
-            expression.pushToSExprTree(self.cir, &tree, expression_idx) catch {};
+            expression.pushToSExprTree(self.env, &tree, expression_idx) catch {};
 
             self.printTraceIndent();
 
@@ -1384,15 +1384,15 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Helper to pretty print a CIR.Pattern in a trace
-    pub fn tracePattern(self: *const Interpreter, pattern_idx: CIR.Pattern.Idx) void {
+    /// Helper to pretty print a ModuleEnv.Pattern in a trace
+    pub fn tracePattern(self: *const Interpreter, pattern_idx: ModuleEnv.Pattern.Idx) void {
         if (self.trace_writer) |writer| {
-            const pattern = self.cir.store.getPattern(pattern_idx);
+            const pattern = self.env.store.getPattern(pattern_idx);
 
-            var tree = SExprTree.init(self.cir.env.gpa);
+            var tree = SExprTree.init(self.env.gpa);
             defer tree.deinit();
 
-            pattern.pushToSExprTree(self.cir, &tree, pattern_idx) catch {};
+            pattern.pushToSExprTree(self.env, &tree, pattern_idx) catch {};
 
             self.printTraceIndent();
 
@@ -1488,8 +1488,8 @@ pub const Interpreter = struct {
         }
     }
 
-    fn bindPattern(self: *Interpreter, pattern_idx: CIR.Pattern.Idx, value: StackValue) EvalError!void {
-        const pattern = self.cir.store.getPattern(pattern_idx);
+    fn bindPattern(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx, value: StackValue) EvalError!void {
+        const pattern = self.env.store.getPattern(pattern_idx);
         switch (pattern) {
             .assign => |assign_pattern| {
                 // For a variable pattern, we create a binding for the variable
@@ -1499,7 +1499,7 @@ pub const Interpreter = struct {
                     .layout = value.layout,
                 };
                 self.traceInfo("Binding '{s}' (pattern_idx={}) to ptr {}", .{
-                    self.cir.env.idents.getText(assign_pattern.ident),
+                    self.env.idents.getText(assign_pattern.ident),
                     @intFromEnum(pattern_idx),
                     @intFromPtr(binding.value_ptr),
                 });
@@ -1507,7 +1507,7 @@ pub const Interpreter = struct {
                 try self.bindings_stack.append(binding);
             },
             .record_destructure => |record_destruct| {
-                const destructs = self.cir.store.sliceRecordDestructs(record_destruct.destructs);
+                const destructs = self.env.store.sliceRecordDestructs(record_destruct.destructs);
                 const record_ptr = @as([*]u8, @ptrCast(@alignCast(value.ptr.?)));
 
                 // Get the record layout
@@ -1519,14 +1519,14 @@ pub const Interpreter = struct {
 
                 // For each field in the pattern
                 for (destructs) |destruct_idx| {
-                    const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-                    const field_name = self.cir.env.idents.getText(destruct.label);
+                    const destruct = self.env.store.getRecordDestruct(destruct_idx);
+                    const field_name = self.env.idents.getText(destruct.label);
                     // Find the field in the record layout by name
                     var field_index: ?usize = null;
 
                     for (0..record_fields.len) |idx| {
                         const field = record_fields.get(idx);
-                        if (std.mem.eql(u8, self.cir.env.idents.getText(field.name), field_name)) {
+                        if (std.mem.eql(u8, self.env.idents.getText(field.name), field_name)) {
                             field_index = idx;
                             break;
                         }
@@ -1550,7 +1550,7 @@ pub const Interpreter = struct {
                 }
             },
             .tuple => |tuple_pattern| {
-                const patterns = self.cir.store.slicePatterns(tuple_pattern.patterns);
+                const patterns = self.env.store.slicePatterns(tuple_pattern.patterns);
                 const tuple_ptr = @as([*]u8, @ptrCast(@alignCast(value.ptr.?)));
 
                 if (value.layout.tag != .tuple) {
@@ -1671,18 +1671,18 @@ pub const Interpreter = struct {
     }
 
     /// Creates a closure from a lambda expression with proper capture handling
-    fn createClosure(self: *Interpreter, expr_idx: CIR.Expr.Idx, closure_expr: CIR.Expr.Closure) EvalError!void {
+    fn createClosure(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, closure_expr: ModuleEnv.Expr.Closure) EvalError!void {
         self.traceEnter("createClosure for closure expr_idx={}", .{expr_idx});
         defer self.traceExit("", .{});
 
         // Get the underlying lambda expression
-        const lambda_expr = switch (self.cir.store.getExpr(closure_expr.lambda_idx)) {
+        const lambda_expr = switch (self.env.store.getExpr(closure_expr.lambda_idx)) {
             .e_lambda => |l| l,
             else => return error.LayoutError, // Should always be a lambda
         };
 
         // Collect and filter captures
-        var final_captures = std.ArrayList(CIR.Capture).init(self.allocator);
+        var final_captures = std.ArrayList(ModuleEnv.Expr.Capture).init(self.allocator);
         defer final_captures.deinit();
 
         try self.collectAndFilterCaptures(closure_expr, &final_captures);
@@ -1739,13 +1739,13 @@ pub const Interpreter = struct {
     /// It re-analyzes the lambda body to find all free variables.
     fn collectAndFilterCaptures(
         self: *Interpreter,
-        closure_expr: CIR.Expr.Closure,
-        final_captures: *std.ArrayList(CIR.Capture),
+        closure_expr: ModuleEnv.Expr.Closure,
+        final_captures: *std.ArrayList(ModuleEnv.Expr.Capture),
     ) EvalError!void {
         // The canonicalization step now provides the definitive list of captures.
-        const captures = self.cir.store.sliceCaptures(closure_expr.captures);
+        const captures = self.env.store.sliceCaptures(closure_expr.captures);
         for (captures) |capture_idx| {
-            const capture = self.cir.store.getCapture(capture_idx);
+            const capture = self.env.store.getCapture(capture_idx);
             try final_captures.append(capture);
         }
 
@@ -1753,7 +1753,7 @@ pub const Interpreter = struct {
     }
 
     /// Creates the layout for closure captures
-    fn createClosureLayout(self: *Interpreter, captures: *const std.ArrayList(CIR.Capture)) EvalError!layout.Idx {
+    fn createClosureLayout(self: *Interpreter, captures: *const std.ArrayList(ModuleEnv.Expr.Capture)) EvalError!layout.Idx {
         if (captures.items.len > MAX_CAPTURE_FIELDS) {
             return error.LayoutError;
         }
@@ -1765,7 +1765,7 @@ pub const Interpreter = struct {
         defer self.allocator.free(field_names);
 
         for (captures.items, 0..) |capture, i| {
-            self.traceInfo("Processing capture: pattern_idx={}, name={s}", .{ @intFromEnum(capture.pattern_idx), self.cir.getIdentText(capture.name) });
+            self.traceInfo("Processing capture: pattern_idx={}, name={s}", .{ @intFromEnum(capture.pattern_idx), self.env.getIdentText(capture.name) });
 
             // Get the layout for this capture
             const capture_var: types.Var = @enumFromInt(@intFromEnum(capture.pattern_idx));
@@ -1785,11 +1785,11 @@ pub const Interpreter = struct {
 
     /// Interpreter-specific capture information that doesn't modify the CIR
     const CaptureBindingInfo = struct {
-        captures: []const CIR.Capture,
+        captures: []const ModuleEnv.Expr.Capture,
         layout_idx: layout.Idx,
 
-        pub fn init(allocator: std.mem.Allocator, captures: *const std.ArrayList(CIR.Capture), layout_idx: layout.Idx) !CaptureBindingInfo {
-            const captures_copy = try allocator.dupe(CIR.Capture, captures.items);
+        pub fn init(allocator: std.mem.Allocator, captures: *const std.ArrayList(ModuleEnv.Expr.Capture), layout_idx: layout.Idx) !CaptureBindingInfo {
+            const captures_copy = try allocator.dupe(ModuleEnv.Expr.Capture, captures.items);
             return CaptureBindingInfo{
                 .captures = captures_copy,
                 .layout_idx = layout_idx,
@@ -1802,11 +1802,11 @@ pub const Interpreter = struct {
     };
 
     /// Gets the variable name from a pattern (for assign patterns)
-    fn getPatternVariableName(self: *Interpreter, pattern_idx: CIR.Pattern.Idx) ?[]const u8 {
-        const pattern = self.cir.store.getPattern(pattern_idx);
+    fn getPatternVariableName(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx) ?[]const u8 {
+        const pattern = self.env.store.getPattern(pattern_idx);
         switch (pattern) {
             .assign => |assign_pattern| {
-                return self.cir.env.idents.getText(assign_pattern.ident);
+                return self.env.idents.getText(assign_pattern.ident);
             },
             else => return null,
         }
@@ -1833,7 +1833,7 @@ pub const Interpreter = struct {
     fn copyCapturesToClosure(
         self: *Interpreter,
         closure_ptr: *anyopaque,
-        captures: *const std.ArrayList(CIR.Capture),
+        captures: *const std.ArrayList(ModuleEnv.Expr.Capture),
         captures_record_layout: Layout,
     ) EvalError!void {
         const captures_ptr = @as([*]u8, @ptrCast(closure_ptr)) + @sizeOf(Closure);
@@ -1849,7 +1849,7 @@ pub const Interpreter = struct {
         }
 
         for (captures.items) |capture| {
-            const capture_name_text = self.cir.getIdentText(capture.name);
+            const capture_name_text = self.env.getIdentText(capture.name);
 
             // First try to find in local bindings by variable name
             var copied = false;
@@ -1904,7 +1904,7 @@ pub const Interpreter = struct {
     fn copyFromOuterClosures(
         self: *Interpreter,
         captures_ptr: [*]u8,
-        capture: CIR.Capture,
+        capture: ModuleEnv.Expr.Capture,
         captures_record_layout: Layout,
     ) EvalError!bool {
         var frame_idx = self.frame_stack.items.len;
@@ -1918,7 +1918,7 @@ pub const Interpreter = struct {
                 const outer_closure: *const Closure = @ptrCast(@alignCast(outer_closure_ptr));
                 const outer_captures_layout = self.layout_cache.getLayout(outer_closure.captures_layout_idx);
                 const outer_captures_ptr = @as([*]u8, @ptrCast(outer_closure_ptr)) + @sizeOf(Closure);
-                const capture_name_text = self.cir.getIdentText(capture.name);
+                const capture_name_text = self.env.getIdentText(capture.name);
 
                 const record_data = self.layout_cache.getRecordData(outer_captures_layout.data.record.idx);
                 if (record_data.fields.count > 0) {
