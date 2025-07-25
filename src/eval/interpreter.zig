@@ -547,10 +547,10 @@ pub const Interpreter = struct {
                                         if (binding.layout.data.scalar.data.int != .i128 and
                                             binding.layout.data.scalar.data.int != .u128)
                                         {
-                                            const val = readIntFromMemory(@constCast(@ptrCast(binding.value_ptr)), binding.layout.data.scalar.data.int);
-                                            std.debug.print("Pattern lookup: pattern_idx={}, value={}, from_ptr={}, to_ptr={}\n", .{ @intFromEnum(binding.pattern_idx), val, @intFromPtr(binding.value_ptr), @intFromPtr(dest) });
+                                            // const val = readIntFromMemory(@constCast(@ptrCast(binding.value_ptr)), binding.layout.data.scalar.data.int);
+                                            // std.debug.print("Pattern lookup: pattern_idx={}, value={}, from_ptr={}, to_ptr={}\n", .{ @intFromEnum(binding.pattern_idx), val, @intFromPtr(binding.value_ptr), @intFromPtr(dest) });
                                         } else {
-                                            std.debug.print("Pattern lookup: pattern_idx={} (i128/u128 - skipping value read), from_ptr={}, to_ptr={}\n", .{ @intFromEnum(binding.pattern_idx), @intFromPtr(binding.value_ptr), @intFromPtr(dest) });
+                                            // std.debug.print("Pattern lookup: pattern_idx={} (i128/u128 - skipping value read), from_ptr={}, to_ptr={}\n", .{ @intFromEnum(binding.pattern_idx), @intFromPtr(binding.value_ptr), @intFromPtr(dest) });
                                         }
                                     }
                                 }
