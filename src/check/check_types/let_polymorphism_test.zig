@@ -13,18 +13,19 @@ const canonicalize = @import("../canonicalize.zig");
 
 const TypesStore = types.Store;
 const CIR = canonicalize.CIR;
+const ModuleEnv = @import("compile").ModuleEnv;
 
 const test_allocator = testing.allocator;
 
 const TestEnv = struct {
-    module_env: *base.ModuleEnv,
+    module_env: *ModuleEnv,
     store: *TypesStore,
     regions: *base.Region.List,
 };
 
 fn setupTestEnvironment(allocator: std.mem.Allocator) !TestEnv {
-    const module_env = try allocator.create(base.ModuleEnv);
-    module_env.* = try base.ModuleEnv.init(allocator, "");
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "");
 
     const store = try allocator.create(TypesStore);
     store.* = try TypesStore.init(allocator);

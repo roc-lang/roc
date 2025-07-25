@@ -5,7 +5,7 @@ const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
 const Node = @import("Node.zig");
-const ModuleEnv = @import("ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 const RocDec = ModuleEnv.RocDec;
 
 const SERIALIZATION_ALIGNMENT = 16;
@@ -14,7 +14,7 @@ const SafeList = collections.SafeList;
 const DataSpan = base.DataSpan;
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
-const Diagnostic = @import("Diagnostic.zig");
+const Diagnostic = @import("compile").Diagnostic;
 const Ident = base.Ident;
 const PackedDataSpan = base.PackedDataSpan;
 const FunctionArgs = base.FunctionArgs;

@@ -14,7 +14,7 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const ModuleEnv = @import("ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;

@@ -21,7 +21,7 @@ test {
     testing.refAllDeclsRecursive(@import("cache/CacheModule.zig"));
 
     // TODO: Remove after hooking up
-    testing.refAllDeclsRecursive(@import("reporting.zig"));
+    testing.refAllDeclsRecursive(@import("reporting"));
     testing.refAllDeclsRecursive(@import("reporting/test.zig"));
     testing.refAllDeclsRecursive(@import("eval/interpreter.zig"));
     testing.refAllDeclsRecursive(@import("eval/test/eval_test.zig"));

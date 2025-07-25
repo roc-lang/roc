@@ -8,14 +8,15 @@ const tracy = @import("../tracy.zig");
 const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("canonicalize.zig");
+const compile = @import("compile");
 const unifier = @import("check_types/unify.zig");
 const occurs = @import("check_types/occurs.zig");
 const problem = @import("check_types/problem.zig");
 const snapshot = @import("check_types/snapshot.zig");
 const instantiate = @import("check_types/instantiate.zig");
 const copy_import = @import("check_types/copy_import.zig");
-const ModuleEnv = @import("../compile/ModuleEnv.zig");
 
+const ModuleEnv = compile.ModuleEnv;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
