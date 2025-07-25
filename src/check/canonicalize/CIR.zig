@@ -29,6 +29,7 @@ pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
 pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
+pub const Capture = Expr.Capture;
 
 const Allocator = std.mem.Allocator;
 

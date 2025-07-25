@@ -208,13 +208,14 @@ main = |_| {
 			(e-dec-small @17.24-17.27 (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
 	(d-let
 		(p-assign @20.1-20.7 (ident "double"))
-		(e-lambda @20.10-20.19
-			(args
-				(p-assign @20.11-20.12 (ident "x")))
-			(e-binop @20.14-20.19 (op "mul")
-				(e-lookup-local @20.14-20.15
+		(e-closure @20.10-20.19
+			(e-lambda @20.10-20.19
+				(args
 					(p-assign @20.11-20.12 (ident "x")))
-				(e-int @20.18-20.19 (value "2")))))
+				(e-binop @20.14-20.19 (op "mul")
+					(e-lookup-local @20.14-20.15
+						(p-assign @20.11-20.12 (ident "x")))
+					(e-int @20.18-20.19 (value "2"))))))
 	(d-let
 		(p-assign @23.1-23.12 (ident "int_doubled"))
 		(e-call @23.15-23.24
@@ -229,18 +230,19 @@ main = |_| {
 			(e-dec-small @24.24-24.27 (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
 	(d-let
 		(p-assign @26.1-26.5 (ident "main"))
-		(e-lambda @26.8-29.2
-			(args
-				(p-underscore @26.9-26.10))
+		(e-closure @26.8-29.2
 			(captures
-				(capture @12.1-12.8 (ident "int_add"))
-				(capture @13.1-13.13 (ident "int_multiply")))
-			(e-block @26.12-29.2
-				(e-binop @28.5-28.27 (op "add")
-					(e-lookup-local @28.5-28.12
-						(p-assign @12.1-12.8 (ident "int_add")))
-					(e-lookup-local @28.15-28.27
-						(p-assign @13.1-13.13 (ident "int_multiply"))))))))
+				(capture @13.1-13.13 (ident "int_multiply"))
+				(capture @12.1-12.8 (ident "int_add")))
+			(e-lambda @26.8-29.2
+				(args
+					(p-underscore @26.9-26.10))
+				(e-block @26.12-29.2
+					(e-binop @28.5-28.27 (op "add")
+						(e-lookup-local @28.5-28.12
+							(p-assign @12.1-12.8 (ident "int_add")))
+						(e-lookup-local @28.15-28.27
+							(p-assign @13.1-13.13 (ident "int_multiply")))))))))
 ~~~
 # TYPES
 ~~~clojure

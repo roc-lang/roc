@@ -161,13 +161,16 @@ test "lambdas closures" {
     try runExpectInt("(|a| |b| a * b)(5)(10)", 50, .no_trace);
     try runExpectInt("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
     try runExpectInt("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
-
-    // Test out-of-order captures to ensure canonical layout is respected.
-    // `y` is bound before `x`, but the capture record should be sorted as {x, y}.
     try runExpectInt("(|y| (|x| (|z| x + y + z)(3))(2))(1)", 6, .no_trace);
-
-    // A more complex out-of-order capture test.
-    // Captures created in order y, z, x, w.
-    // Alphabetical order is w, x, y, z.
     try runExpectInt("(|y, z| (|x, w| (|a| a + w + x + y + z)(5))(2, 4))(1, 3)", 15, .no_trace);
+
+    try runExpectInt(
+        \\(((|a| {
+        \\    a_loc = a * 2;
+        \\    |b| {
+        \\        b_loc = a_loc + b;
+        \\        |c| b_loc + c
+        \\    }
+        \\})(100))(20))(3)
+    , 223, .trace);
 }

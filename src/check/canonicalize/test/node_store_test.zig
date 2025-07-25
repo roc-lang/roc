@@ -290,10 +290,15 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(CIR.Expr{
+        .e_closure = .{
+            .lambda_idx = rand_idx(CIR.Expr.Idx),
+            .captures = CIR.Expr.Capture.Span{ .span = rand_span() },
+        },
+    });
+    try expressions.append(CIR.Expr{
         .e_lambda = .{
             .args = CIR.Pattern.Span{ .span = rand_span() },
             .body = rand_idx(CIR.Expr.Idx),
-            .captures = CIR.Expr.Capture.Span{ .span = rand_span() },
         },
     });
     try expressions.append(CIR.Expr{

@@ -314,12 +314,13 @@ combineResults = |result1, result2|
 (can-ir
 	(d-let
 		(p-assign @8.1-8.15 (ident "processRequest"))
-		(e-lambda @8.18-8.44
-			(args
-				(p-assign @8.19-8.22 (ident "req")))
-			(e-lookup-external @8.24-8.44
-				(module-idx "0")
-				(target-node-idx "0")))
+		(e-closure @8.18-8.44
+			(e-lambda @8.18-8.44
+				(args
+					(p-assign @8.19-8.22 (ident "req")))
+				(e-lookup-external @8.24-8.44
+					(module-idx "0")
+					(target-node-idx "0"))))
 		(annotation @8.1-8.15
 			(declared-type
 				(ty-fn @7.18-7.37 (effectful false)
@@ -327,15 +328,16 @@ combineResults = |result1, result2|
 					(ty @7.29-7.37 (name "Response"))))))
 	(d-let
 		(p-assign @11.1-11.10 (ident "parseJson"))
-		(e-lambda @11.13-11.38
-			(args
-				(p-assign @11.14-11.19 (ident "input")))
-			(e-call @11.21-11.38
-				(e-lookup-external @11.21-11.31
-					(module-idx "1")
-					(target-node-idx "0"))
-				(e-lookup-local @11.32-11.37
-					(p-assign @11.14-11.19 (ident "input")))))
+		(e-closure @11.13-11.38
+			(e-lambda @11.13-11.38
+				(args
+					(p-assign @11.14-11.19 (ident "input")))
+				(e-call @11.21-11.38
+					(e-lookup-external @11.21-11.31
+						(module-idx "1")
+						(target-node-idx "0"))
+					(e-lookup-local @11.32-11.37
+						(p-assign @11.14-11.19 (ident "input"))))))
 		(annotation @11.1-11.10
 			(declared-type
 				(ty-fn @10.13-10.30 (effectful false)
@@ -344,48 +346,52 @@ combineResults = |result1, result2|
 						(ext-decl @10.20-10.30 (ident "Json.Value") (kind "type")))))))
 	(d-let
 		(p-assign @14.1-14.10 (ident "handleApi"))
-		(e-lambda @14.13-20.2
-			(args
-				(p-assign @14.14-14.21 (ident "request")))
-			(e-block @14.23-20.2
-				(s-let @15.5-15.39
-					(p-assign @15.5-15.11 (ident "result"))
-					(e-call @15.14-15.39
-						(e-lookup-external @15.14-15.25
-							(module-idx "1")
-							(target-node-idx "0"))
-						(e-dot-access @15.26-15.38 (field "body")
-							(receiver
-								(e-lookup-local @15.26-15.33
-									(p-assign @14.14-14.21 (ident "request")))))))
-				(e-match @16.5-19.6
-					(match @16.5-19.6
-						(cond
-							(e-lookup-local @16.11-16.17
-								(p-assign @15.5-15.11 (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @17.9-17.17)))
-								(value
-									(e-tag @17.21-17.23 (name "Ok")
-										(args
-											(e-call @17.24-17.42
-												(e-lookup-external @17.24-17.36
-													(module-idx "0")
-													(target-node-idx "0"))
-												(e-lookup-local @17.37-17.41
-													(p-assign @17.12-17.16 (ident "data"))))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @18.9-18.17)))
-								(value
-									(e-tag @18.21-18.24 (name "Err")
-										(args
-											(e-lookup-local @18.25-18.28
-												(p-assign @18.13-18.16 (ident "err"))))))))))))
+		(e-closure @14.13-20.2
+			(captures
+				(capture @18.13-18.16 (ident "err"))
+				(capture @17.12-17.16 (ident "data")))
+			(e-lambda @14.13-20.2
+				(args
+					(p-assign @14.14-14.21 (ident "request")))
+				(e-block @14.23-20.2
+					(s-let @15.5-15.39
+						(p-assign @15.5-15.11 (ident "result"))
+						(e-call @15.14-15.39
+							(e-lookup-external @15.14-15.25
+								(module-idx "1")
+								(target-node-idx "0"))
+							(e-dot-access @15.26-15.38 (field "body")
+								(receiver
+									(e-lookup-local @15.26-15.33
+										(p-assign @14.14-14.21 (ident "request")))))))
+					(e-match @16.5-19.6
+						(match @16.5-19.6
+							(cond
+								(e-lookup-local @16.11-16.17
+									(p-assign @15.5-15.11 (ident "result"))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @17.9-17.17)))
+									(value
+										(e-tag @17.21-17.23 (name "Ok")
+											(args
+												(e-call @17.24-17.42
+													(e-lookup-external @17.24-17.36
+														(module-idx "0")
+														(target-node-idx "0"))
+													(e-lookup-local @17.37-17.41
+														(p-assign @17.12-17.16 (ident "data"))))))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @18.9-18.17)))
+									(value
+										(e-tag @18.21-18.24 (name "Err")
+											(args
+												(e-lookup-local @18.25-18.28
+													(p-assign @18.13-18.16 (ident "err")))))))))))))
 		(annotation @14.1-14.10
 			(declared-type
 				(ty-fn @13.13-13.62 (effectful false)
@@ -407,18 +413,19 @@ combineResults = |result1, result2|
 					(ext-decl @22.10-22.21 (ident "Json.Config") (kind "type"))))))
 	(d-let
 		(p-assign @27.1-27.15 (ident "advancedParser"))
-		(e-lambda @27.18-27.82
-			(args
-				(p-assign @27.19-27.31 (ident "parserConfig"))
-				(p-assign @27.33-27.38 (ident "input")))
-			(e-call @27.40-27.82
-				(e-lookup-external @27.40-27.61
-					(module-idx "1")
-					(target-node-idx "0"))
-				(e-lookup-local @27.62-27.74
-					(p-assign @27.19-27.31 (ident "parserConfig")))
-				(e-lookup-local @27.76-27.81
-					(p-assign @27.33-27.38 (ident "input")))))
+		(e-closure @27.18-27.82
+			(e-lambda @27.18-27.82
+				(args
+					(p-assign @27.19-27.31 (ident "parserConfig"))
+					(p-assign @27.33-27.38 (ident "input")))
+				(e-call @27.40-27.82
+					(e-lookup-external @27.40-27.61
+						(module-idx "1")
+						(target-node-idx "0"))
+					(e-lookup-local @27.62-27.74
+						(p-assign @27.19-27.31 (ident "parserConfig")))
+					(e-lookup-local @27.76-27.81
+						(p-assign @27.33-27.38 (ident "input"))))))
 		(annotation @27.1-27.15
 			(declared-type
 				(ty-fn @26.18-26.82 (effectful false)
@@ -432,58 +439,64 @@ combineResults = |result1, result2|
 							(ext-decl @26.64-26.81 (ident "Json.Parser.Error") (kind "type"))))))))
 	(d-let
 		(p-assign @31.1-31.15 (ident "combineResults"))
-		(e-lambda @31.18-39.6
-			(args
-				(p-assign @31.19-31.26 (ident "result1"))
-				(p-assign @31.28-31.35 (ident "result2")))
-			(e-match @32.5-39.6
-				(match @32.5-39.6
-					(cond
-						(e-lookup-local @32.11-32.18
-							(p-assign @31.19-31.26 (ident "result1"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @33.9-33.19)))
-							(value
-								(e-match @34.13-37.14
-									(match @34.13-37.14
-										(cond
-											(e-lookup-local @34.19-34.26
-												(p-assign @31.28-31.35 (ident "result2"))))
-										(branches
-											(branch
-												(patterns
-													(pattern (degenerate false)
-														(p-applied-tag @35.17-35.27)))
-												(value
-													(e-tag @35.31-35.33 (name "Ok")
-														(args
-															(e-tuple @35.34-35.50
-																(elems
-																	(e-lookup-local @35.35-35.41
-																		(p-assign @33.12-33.18 (ident "value1")))
-																	(e-lookup-local @35.43-35.49
-																		(p-assign @35.20-35.26 (ident "value2")))))))))
-											(branch
-												(patterns
-													(pattern (degenerate false)
-														(p-applied-tag @36.17-36.25)))
-												(value
-													(e-tag @36.29-36.32 (name "Err")
-														(args
-															(e-lookup-local @36.33-36.36
-																(p-assign @36.21-36.24 (ident "err"))))))))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @38.9-38.17)))
-							(value
-								(e-tag @38.21-38.24 (name "Err")
-									(args
-										(e-lookup-local @38.25-38.28
-											(p-assign @38.13-38.16 (ident "err")))))))))))
+		(e-closure @31.18-39.6
+			(captures
+				(capture @38.13-38.16 (ident "err"))
+				(capture @33.12-33.18 (ident "value1"))
+				(capture @36.21-36.24 (ident "err"))
+				(capture @35.20-35.26 (ident "value2")))
+			(e-lambda @31.18-39.6
+				(args
+					(p-assign @31.19-31.26 (ident "result1"))
+					(p-assign @31.28-31.35 (ident "result2")))
+				(e-match @32.5-39.6
+					(match @32.5-39.6
+						(cond
+							(e-lookup-local @32.11-32.18
+								(p-assign @31.19-31.26 (ident "result1"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @33.9-33.19)))
+								(value
+									(e-match @34.13-37.14
+										(match @34.13-37.14
+											(cond
+												(e-lookup-local @34.19-34.26
+													(p-assign @31.28-31.35 (ident "result2"))))
+											(branches
+												(branch
+													(patterns
+														(pattern (degenerate false)
+															(p-applied-tag @35.17-35.27)))
+													(value
+														(e-tag @35.31-35.33 (name "Ok")
+															(args
+																(e-tuple @35.34-35.50
+																	(elems
+																		(e-lookup-local @35.35-35.41
+																			(p-assign @33.12-33.18 (ident "value1")))
+																		(e-lookup-local @35.43-35.49
+																			(p-assign @35.20-35.26 (ident "value2")))))))))
+												(branch
+													(patterns
+														(pattern (degenerate false)
+															(p-applied-tag @36.17-36.25)))
+													(value
+														(e-tag @36.29-36.32 (name "Err")
+															(args
+																(e-lookup-local @36.33-36.36
+																	(p-assign @36.21-36.24 (ident "err"))))))))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @38.9-38.17)))
+								(value
+									(e-tag @38.21-38.24 (name "Err")
+										(args
+											(e-lookup-local @38.25-38.28
+												(p-assign @38.13-38.16 (ident "err"))))))))))))
 		(annotation @31.1-31.15
 			(declared-type
 				(ty-fn @30.18-30.71 (effectful false)

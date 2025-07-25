@@ -81,11 +81,12 @@ main! = |_| getName({ name: "luke", age: 21 })
 (can-ir
 	(d-let
 		(p-assign @4.1-4.8 (ident "getName"))
-		(e-lambda @4.11-4.28
-			(args
-				(p-assign @4.12-4.19 (ident "_person")))
-			(e-string @4.21-4.28
-				(e-literal @4.22-4.27 (string "hello"))))
+		(e-closure @4.11-4.28
+			(e-lambda @4.11-4.28
+				(args
+					(p-assign @4.12-4.19 (ident "_person")))
+				(e-string @4.21-4.28
+					(e-literal @4.22-4.27 (string "hello")))))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.41 (effectful false)
@@ -97,29 +98,30 @@ main! = |_| getName({ name: "luke", age: 21 })
 					(ty @3.38-3.41 (name "Str"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.44
-			(args
-				(p-underscore @6.10-6.11))
+		(e-closure @6.9-6.44
 			(captures
 				(capture @4.1-4.8 (ident "getName")))
-			(e-call @6.13-6.44
-				(e-lookup-local @6.13-6.20
-					(p-assign @4.1-4.8 (ident "getName")))
-				(e-record @6.21-6.43
-					(fields
-						(field (name "name")
-							(e-string @6.28-6.34
-								(e-literal @6.29-6.33 (string "luke"))))
-						(field (name "age")
-							(e-int @6.40-6.42 (value "21")))))))))
+			(e-lambda @6.9-6.44
+				(args
+					(p-underscore @6.10-6.11))
+				(e-call @6.13-6.44
+					(e-lookup-local @6.13-6.20
+						(p-assign @4.1-4.8 (ident "getName")))
+					(e-record @6.21-6.43
+						(fields
+							(field (name "name")
+								(e-string @6.28-6.34
+									(e-literal @6.29-6.33 (string "luke"))))
+							(field (name "age")
+								(e-int @6.40-6.42 (value "21"))))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "{ age: U64, name: Str } -> Str"))
+		(patt @4.1-4.8 (type "{ name: Str, age: U64 } -> Str"))
 		(patt @6.1-6.6 (type "_arg -> Str")))
 	(expressions
-		(expr @4.11-4.28 (type "{ age: U64, name: Str } -> Str"))
+		(expr @4.11-4.28 (type "{ name: Str, age: U64 } -> Str"))
 		(expr @6.9-6.44 (type "_arg -> Str"))))
 ~~~

@@ -101,17 +101,18 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 (can-ir
 	(d-let
 		(p-assign @4.1-4.8 (ident "mapList"))
-		(e-lambda @4.11-4.34
-			(args
-				(p-assign @4.12-4.16 (ident "list"))
-				(p-assign @4.18-4.20 (ident "fn")))
-			(e-dot-access @4.22-4.34 (field "map")
-				(receiver
-					(e-lookup-local @4.22-4.26
-						(p-assign @4.12-4.16 (ident "list"))))
+		(e-closure @4.11-4.34
+			(e-lambda @4.11-4.34
 				(args
-					(e-lookup-local @4.31-4.33
-						(p-assign @4.18-4.20 (ident "fn"))))))
+					(p-assign @4.12-4.16 (ident "list"))
+					(p-assign @4.18-4.20 (ident "fn")))
+				(e-dot-access @4.22-4.34 (field "map")
+					(receiver
+						(e-lookup-local @4.22-4.26
+							(p-assign @4.12-4.16 (ident "list"))))
+					(args
+						(e-lookup-local @4.31-4.33
+							(p-assign @4.18-4.20 (ident "fn")))))))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.39 (effectful false)
@@ -125,21 +126,22 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 						(ty-var @3.37-3.38 (name "b")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.33
-			(args
-				(p-underscore @6.10-6.11))
+		(e-closure @6.9-6.33
 			(captures
 				(capture @4.1-4.8 (ident "mapList")))
-			(e-call @6.13-6.33
-				(e-lookup-local @6.13-6.20
-					(p-assign @4.1-4.8 (ident "mapList")))
-				(e-list @6.21-6.32
-					(elems
-						(e-int @6.22-6.23 (value "1"))
-						(e-int @6.24-6.25 (value "2"))
-						(e-int @6.26-6.27 (value "3"))
-						(e-int @6.28-6.29 (value "4"))
-						(e-int @6.30-6.31 (value "5"))))))))
+			(e-lambda @6.9-6.33
+				(args
+					(p-underscore @6.10-6.11))
+				(e-call @6.13-6.33
+					(e-lookup-local @6.13-6.20
+						(p-assign @4.1-4.8 (ident "mapList")))
+					(e-list @6.21-6.32
+						(elems
+							(e-int @6.22-6.23 (value "1"))
+							(e-int @6.24-6.25 (value "2"))
+							(e-int @6.26-6.27 (value "3"))
+							(e-int @6.28-6.29 (value "4"))
+							(e-int @6.30-6.31 (value "5")))))))))
 ~~~
 # TYPES
 ~~~clojure

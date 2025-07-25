@@ -64,11 +64,12 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @4.1-4.9 (ident "identity"))
-		(e-lambda @4.12-4.17
-			(args
-				(p-assign @4.13-4.14 (ident "x")))
-			(e-lookup-local @4.16-4.17
-				(p-assign @4.13-4.14 (ident "x"))))
+		(e-closure @4.12-4.17
+			(e-lambda @4.12-4.17
+				(args
+					(p-assign @4.13-4.14 (ident "x")))
+				(e-lookup-local @4.16-4.17
+					(p-assign @4.13-4.14 (ident "x")))))
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.18 (effectful false)
@@ -76,10 +77,11 @@ NO CHANGE
 					(ty-var @3.17-3.18 (name "a"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.15
-			(args
-				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+		(e-closure @6.9-6.15
+			(e-lambda @6.9-6.15
+				(args
+					(p-underscore @6.10-6.11))
+				(e-empty_record @6.13-6.15)))))
 ~~~
 # TYPES
 ~~~clojure

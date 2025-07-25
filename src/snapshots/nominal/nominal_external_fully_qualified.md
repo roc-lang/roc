@@ -123,30 +123,33 @@ handleResult = |result| {
 (can-ir
 	(d-let
 		(p-assign @6.1-6.13 (ident "handleResult"))
-		(e-lambda @6.16-11.2
-			(args
-				(p-assign @6.17-6.23 (ident "result")))
-			(e-block @6.25-11.2
-				(e-match @7.5-10.6
-					(match @7.5-10.6
-						(cond
-							(e-lookup-local @7.11-7.17
-								(p-assign @6.17-6.23 (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error @8.23-8.36 (tag "ident_not_in_scope"))))
-								(value
-									(e-lookup-local @8.50-8.55
-										(p-assign @8.40-8.45 (ident "value")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error @9.23-9.36 (tag "ident_not_in_scope"))))
-								(value
-									(e-string @9.50-9.74
-										(e-literal @9.51-9.73 (string "Error: $(code.toStr())"))))))))))
+		(e-closure @6.16-11.2
+			(captures
+				(capture @8.40-8.45 (ident "value")))
+			(e-lambda @6.16-11.2
+				(args
+					(p-assign @6.17-6.23 (ident "result")))
+				(e-block @6.25-11.2
+					(e-match @7.5-10.6
+						(match @7.5-10.6
+							(cond
+								(e-lookup-local @7.11-7.17
+									(p-assign @6.17-6.23 (ident "result"))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-runtime-error @8.23-8.36 (tag "ident_not_in_scope"))))
+									(value
+										(e-lookup-local @8.50-8.55
+											(p-assign @8.40-8.45 (ident "value")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-runtime-error @9.23-9.36 (tag "ident_not_in_scope"))))
+									(value
+										(e-string @9.50-9.74
+											(e-literal @9.51-9.73 (string "Error: $(code.toStr())")))))))))))
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.60 (effectful false)

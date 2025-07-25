@@ -29,11 +29,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1.1-1.10
-	(args
-		(p-underscore @1.2-1.3)
-		(p-underscore @1.5-1.6))
-	(e-int @1.8-1.10 (value "42")))
+(e-closure @1.1-1.10
+	(e-lambda @1.1-1.10
+		(args
+			(p-underscore @1.2-1.3)
+			(p-underscore @1.5-1.6))
+		(e-int @1.8-1.10 (value "42"))))
 ~~~
 # TYPES
 ~~~clojure

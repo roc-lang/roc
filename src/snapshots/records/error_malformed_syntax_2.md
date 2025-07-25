@@ -85,10 +85,9 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:6),OpColon(1:6-1:7),Int(1:8-1:10),Comma(1:10
 		(p-assign @1.12-1.16 (ident "name"))
 		(e-string @1.19-1.26
 			(e-literal @1.20-1.25 (string "Alice"))))
-	(e-string @1.19-1.26
-		(e-literal @1.20-1.25 (string "Alice"))))
+	(e-empty_record @1.1-1.28))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.28 (type "Str"))
+(expr @1.1-1.28 (type "{}"))
 ~~~

@@ -137,22 +137,23 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @9.1-9.12 (ident "create_user"))
-		(e-lambda @9.15-9.48
-			(args
-				(p-assign @9.16-9.18 (ident "id"))
-				(p-assign @9.20-9.24 (ident "name"))
-				(p-assign @9.26-9.29 (ident "age")))
-			(e-record @9.31-9.48
-				(fields
-					(field (name "id")
-						(e-lookup-local @9.33-9.35
-							(p-assign @9.16-9.18 (ident "id"))))
-					(field (name "name")
-						(e-lookup-local @9.37-9.41
-							(p-assign @9.20-9.24 (ident "name"))))
-					(field (name "age")
-						(e-lookup-local @9.43-9.46
-							(p-assign @9.26-9.29 (ident "age")))))))
+		(e-closure @9.15-9.48
+			(e-lambda @9.15-9.48
+				(args
+					(p-assign @9.16-9.18 (ident "id"))
+					(p-assign @9.20-9.24 (ident "name"))
+					(p-assign @9.26-9.29 (ident "age")))
+				(e-record @9.31-9.48
+					(fields
+						(field (name "id")
+							(e-lookup-local @9.33-9.35
+								(p-assign @9.16-9.18 (ident "id"))))
+						(field (name "name")
+							(e-lookup-local @9.37-9.41
+								(p-assign @9.20-9.24 (ident "name"))))
+						(field (name "age")
+							(e-lookup-local @9.43-9.46
+								(p-assign @9.26-9.29 (ident "age"))))))))
 		(annotation @9.1-9.12
 			(declared-type
 				(ty-fn @8.15-8.48 (effectful false)
@@ -162,13 +163,14 @@ NO CHANGE
 					(ty @8.44-8.48 (name "User"))))))
 	(d-let
 		(p-assign @12.1-12.14 (ident "get_user_name"))
-		(e-lambda @12.17-12.33
-			(args
-				(p-assign @12.18-12.22 (ident "user")))
-			(e-dot-access @12.24-12.33 (field "name")
-				(receiver
-					(e-lookup-local @12.24-12.28
-						(p-assign @12.18-12.22 (ident "user"))))))
+		(e-closure @12.17-12.33
+			(e-lambda @12.17-12.33
+				(args
+					(p-assign @12.18-12.22 (ident "user")))
+				(e-dot-access @12.24-12.33 (field "name")
+					(receiver
+						(e-lookup-local @12.24-12.28
+							(p-assign @12.18-12.22 (ident "user")))))))
 		(annotation @12.1-12.14
 			(declared-type
 				(ty-fn @11.17-11.33 (effectful false)
@@ -176,27 +178,28 @@ NO CHANGE
 					(ty @11.25-11.33 (name "UserName"))))))
 	(d-let
 		(p-assign @14.1-14.6 (ident "main!"))
-		(e-lambda @14.9-17.2
-			(args
-				(p-underscore @14.10-14.11))
+		(e-closure @14.9-17.2
 			(captures
-				(capture @9.1-9.12 (ident "create_user"))
-				(capture @12.1-12.14 (ident "get_user_name")))
-			(e-block @14.13-17.2
-				(s-let @15.2-15.38
-					(p-assign @15.2-15.6 (ident "user"))
-					(e-call @15.9-15.38
-						(e-lookup-local @15.9-15.20
-							(p-assign @9.1-9.12 (ident "create_user")))
-						(e-int @15.21-15.24 (value "123"))
-						(e-string @15.26-15.33
-							(e-literal @15.27-15.32 (string "Alice")))
-						(e-int @15.35-15.37 (value "25"))))
-				(e-call @16.2-16.21
-					(e-lookup-local @16.2-16.15
-						(p-assign @12.1-12.14 (ident "get_user_name")))
-					(e-lookup-local @16.16-16.20
-						(p-assign @15.2-15.6 (ident "user")))))))
+				(capture @12.1-12.14 (ident "get_user_name"))
+				(capture @9.1-9.12 (ident "create_user")))
+			(e-lambda @14.9-17.2
+				(args
+					(p-underscore @14.10-14.11))
+				(e-block @14.13-17.2
+					(s-let @15.2-15.38
+						(p-assign @15.2-15.6 (ident "user"))
+						(e-call @15.9-15.38
+							(e-lookup-local @15.9-15.20
+								(p-assign @9.1-9.12 (ident "create_user")))
+							(e-int @15.21-15.24 (value "123"))
+							(e-string @15.26-15.33
+								(e-literal @15.27-15.32 (string "Alice")))
+							(e-int @15.35-15.37 (value "25"))))
+					(e-call @16.2-16.21
+						(e-lookup-local @16.2-16.15
+							(p-assign @12.1-12.14 (ident "get_user_name")))
+						(e-lookup-local @16.16-16.20
+							(p-assign @15.2-15.6 (ident "user"))))))))
 	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64")))

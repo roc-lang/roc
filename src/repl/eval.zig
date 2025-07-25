@@ -290,7 +290,7 @@ pub const Repl = struct {
         };
         defer checker.deinit();
 
-        _ = checker.checkExpr(canonical_expr_idx) catch |err| {
+        _ = checker.checkExpr(canonical_expr_idx.get_idx()) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check error: {}", .{err});
         };
 
@@ -307,7 +307,7 @@ pub const Repl = struct {
         defer interpreter.deinit();
 
         // Evaluate the expression
-        const result = interpreter.eval(canonical_expr_idx) catch |err| {
+        const result = interpreter.eval(canonical_expr_idx.get_idx()) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
         };
 
@@ -506,7 +506,7 @@ test "Repl - minimal interpreter integration" {
     var checker = try check_types.init(allocator, &module_env.types, &cir, &.{}, &cir.store.regions);
     defer checker.deinit();
 
-    _ = try checker.checkExpr(canonical_expr_idx);
+    _ = try checker.checkExpr(canonical_expr_idx.get_idx());
 
     // Step 6: Create evaluation stack
     var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
@@ -521,7 +521,7 @@ test "Repl - minimal interpreter integration" {
     defer interpreter.deinit();
 
     // Step 9: Evaluate
-    const result = try interpreter.eval(canonical_expr_idx);
+    const result = try interpreter.eval(canonical_expr_idx.get_idx());
 
     // Step 10: Verify result
     try testing.expect(result.layout.tag == .scalar);

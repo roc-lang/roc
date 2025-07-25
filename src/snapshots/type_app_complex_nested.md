@@ -273,27 +273,28 @@ main! = |_| processComplex(Ok([Some(42), None]))
 (can-ir
 	(d-let
 		(p-assign @5.1-5.15 (ident "processComplex"))
-		(e-lambda @5.18-9.6
-			(args
-				(p-assign @5.19-5.25 (ident "result")))
-			(e-match @6.5-9.6
-				(match @6.5-9.6
-					(cond
-						(e-lookup-local @6.11-6.17
-							(p-assign @5.19-5.25 (ident "result"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @7.9-7.22)))
-							(value
-								(e-empty_list @7.26-7.28)))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @8.9-8.15)))
-							(value
-								(e-empty_list @8.19-8.21)))))))
+		(e-closure @5.18-9.6
+			(e-lambda @5.18-9.6
+				(args
+					(p-assign @5.19-5.25 (ident "result")))
+				(e-match @6.5-9.6
+					(match @6.5-9.6
+						(cond
+							(e-lookup-local @6.11-6.17
+								(p-assign @5.19-5.25 (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @7.9-7.22)))
+								(value
+									(e-empty_list @7.26-7.28)))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @8.9-8.15)))
+								(value
+									(e-empty_list @8.19-8.21))))))))
 		(annotation @5.1-5.15
 			(declared-type
 				(ty-fn @4.18-4.73 (effectful false)
@@ -309,10 +310,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 						(ty-var @4.71-4.72 (name "a")))))))
 	(d-let
 		(p-assign @13.1-13.11 (ident "deepNested"))
-		(e-lambda @13.14-13.23
-			(args
-				(p-underscore @13.15-13.16))
-			(e-runtime-error (tag "lambda_body_not_canonicalized")))
+		(e-runtime-error (tag "lambda_body_not_canonicalized"))
 		(annotation @13.1-13.11
 			(declared-type
 				(ty-fn @12.14-12.56 (effectful false)
@@ -326,22 +324,23 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-var @12.55-12.56 (name "a"))))))
 	(d-let
 		(p-assign @18.1-18.6 (ident "main!"))
-		(e-lambda @18.9-18.49
-			(args
-				(p-underscore @18.10-18.11))
+		(e-closure @18.9-18.49
 			(captures
 				(capture @5.1-5.15 (ident "processComplex")))
-			(e-call @18.13-18.49
-				(e-lookup-local @18.13-18.27
-					(p-assign @5.1-5.15 (ident "processComplex")))
-				(e-tag @18.28-18.30 (name "Ok")
-					(args
-						(e-list @18.31-18.47
-							(elems
-								(e-tag @18.32-18.36 (name "Some")
-									(args
-										(e-int @18.37-18.39 (value "42"))))
-								(e-tag @18.42-18.46 (name "None")))))))))
+			(e-lambda @18.9-18.49
+				(args
+					(p-underscore @18.10-18.11))
+				(e-call @18.13-18.49
+					(e-lookup-local @18.13-18.27
+						(p-assign @5.1-5.15 (ident "processComplex")))
+					(e-tag @18.28-18.30 (name "Ok")
+						(args
+							(e-list @18.31-18.47
+								(elems
+									(e-tag @18.32-18.36 (name "Some")
+										(args
+											(e-int @18.37-18.39 (value "42"))))
+									(e-tag @18.42-18.46 (name "None"))))))))))
 	(s-alias-decl @16.1-16.64
 		(ty-header @16.1-16.18 (name "ComplexType")
 			(ty-args
@@ -361,7 +360,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 (inferred-types
 	(defs
 		(patt @5.1-5.15 (type "Error -> Error"))
-		(patt @13.1-13.11 (type "Error -> Error"))
+		(patt @13.1-13.11 (type "Error"))
 		(patt @18.1-18.6 (type "_arg -> Error")))
 	(type_decls
 		(alias @16.1-16.64 (type "Error")
@@ -371,6 +370,6 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-var @16.16-16.17 (name "b"))))))
 	(expressions
 		(expr @5.18-9.6 (type "Error -> Error"))
-		(expr @13.14-13.23 (type "Error -> Error"))
+		(expr @13.18-13.23 (type "Error"))
 		(expr @18.9-18.49 (type "_arg -> Error"))))
 ~~~

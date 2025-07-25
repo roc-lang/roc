@@ -269,11 +269,11 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     checker.* = try check_types.init(allocator, &module_env.types, cir, &.{}, &cir.store.regions);
 
     // Type check the expression
-    _ = try checker.checkExpr(canonical_expr_idx);
+    _ = try checker.checkExpr(canonical_expr_idx.get_idx());
 
     // WORKAROUND: The type checker doesn't set types for binop expressions yet.
     // For numeric binops, manually set the type to match the operands.
-    const expr = cir.store.getExpr(canonical_expr_idx);
+    const expr = cir.store.getExpr(canonical_expr_idx.get_idx());
     if (expr == .e_binop) {
         const binop = expr.e_binop;
         // For arithmetic ops, use the type of the left operand
@@ -281,12 +281,12 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
             .add, .sub, .mul, .div, .rem, .pow, .div_trunc => {
                 const left_var = @as(types.Var, @enumFromInt(@intFromEnum(binop.lhs)));
                 const left_resolved = module_env.types.resolveVar(left_var);
-                const result_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx)));
+                const result_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
                 try module_env.types.setVarContent(result_var, left_resolved.desc.content);
             },
             .lt, .gt, .le, .ge, .eq, .ne => {
                 // Comparison ops return Bool
-                const result_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx)));
+                const result_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
                 const bool_content = try module_env.types.mkBool(allocator, &module_env.idents, @enumFromInt(0));
                 try module_env.types.setVarContent(result_var, bool_content);
             },
@@ -300,7 +300,7 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
         .cir = cir,
         .can = can,
         .checker = checker,
-        .expr_idx = canonical_expr_idx,
+        .expr_idx = canonical_expr_idx.get_idx(),
     };
 }
 

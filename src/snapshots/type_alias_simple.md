@@ -81,21 +81,22 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.8 (ident "getUser"))
-		(e-lambda @6.11-6.47
-			(args
-				(p-assign @6.12-6.14 (ident "id")))
-			(e-if @6.16-6.47
-				(if-branches
-					(if-branch
-						(e-binop @6.20-6.27 (op "gt")
-							(e-lookup-local @6.20-6.22
-								(p-assign @6.12-6.14 (ident "id")))
-							(e-int @6.25-6.27 (value "10")))
-						(e-string @6.29-6.34
-							(e-literal @6.30-6.33 (string "big")))))
-				(if-else
-					(e-string @6.40-6.47
-						(e-literal @6.41-6.46 (string "small"))))))
+		(e-closure @6.11-6.47
+			(e-lambda @6.11-6.47
+				(args
+					(p-assign @6.12-6.14 (ident "id")))
+				(e-if @6.16-6.47
+					(if-branches
+						(if-branch
+							(e-binop @6.20-6.27 (op "gt")
+								(e-lookup-local @6.20-6.22
+									(p-assign @6.12-6.14 (ident "id")))
+								(e-int @6.25-6.27 (value "10")))
+							(e-string @6.29-6.34
+								(e-literal @6.30-6.33 (string "big")))))
+					(if-else
+						(e-string @6.40-6.47
+							(e-literal @6.41-6.46 (string "small")))))))
 		(annotation @6.1-6.8
 			(declared-type
 				(ty-fn @5.11-5.24 (effectful false)
@@ -103,15 +104,16 @@ NO CHANGE
 					(ty @5.21-5.24 (name "Str"))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "main!"))
-		(e-lambda @8.9-8.25
-			(args
-				(p-underscore @8.10-8.11))
+		(e-closure @8.9-8.25
 			(captures
 				(capture @6.1-6.8 (ident "getUser")))
-			(e-call @8.13-8.25
-				(e-lookup-local @8.13-8.20
-					(p-assign @6.1-6.8 (ident "getUser")))
-				(e-int @8.21-8.24 (value "100")))))
+			(e-lambda @8.9-8.25
+				(args
+					(p-underscore @8.10-8.11))
+				(e-call @8.13-8.25
+					(e-lookup-local @8.13-8.20
+						(p-assign @6.1-6.8 (ident "getUser")))
+					(e-int @8.21-8.24 (value "100"))))))
 	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64"))))

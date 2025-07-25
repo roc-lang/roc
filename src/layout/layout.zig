@@ -112,6 +112,8 @@ pub const Closure = struct {
     captures_pattern_idx: CIR.Pattern.Idx,
     // Layout index for the captured environment record
     captures_layout_idx: Idx,
+    // Original lambda expression index for accessing captures
+    lambda_expr_idx: CIR.Expr.Idx,
 };
 
 /// The union portion of the Layout packed tagged union (the tag being LayoutTag).

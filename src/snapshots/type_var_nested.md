@@ -217,38 +217,42 @@ main = |_| "done"
 (can-ir
 	(d-let
 		(p-assign @5.1-5.11 (ident "map_result"))
-		(e-lambda @5.14-10.2
-			(args
-				(p-assign @5.15-5.21 (ident "result"))
-				(p-assign @5.23-5.32 (ident "transform")))
-			(e-block @5.34-10.2
-				(e-match @6.5-9.6
-					(match @6.5-9.6
-						(cond
-							(e-lookup-local @6.11-6.17
-								(p-assign @5.15-5.21 (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @7.9-7.18)))
-								(value
-									(e-tag @7.22-7.24 (name "Ok")
-										(args
-											(e-call @7.25-7.41
-												(e-lookup-local @7.25-7.34
-													(p-assign @5.23-5.32 (ident "transform")))
-												(e-lookup-local @7.35-7.40
-													(p-assign @7.12-7.17 (ident "value"))))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @8.9-8.19)))
-								(value
-									(e-tag @8.23-8.26 (name "Err")
-										(args
-											(e-lookup-local @8.27-8.32
-												(p-assign @8.13-8.18 (ident "error"))))))))))))
+		(e-closure @5.14-10.2
+			(captures
+				(capture @7.12-7.17 (ident "value"))
+				(capture @8.13-8.18 (ident "error")))
+			(e-lambda @5.14-10.2
+				(args
+					(p-assign @5.15-5.21 (ident "result"))
+					(p-assign @5.23-5.32 (ident "transform")))
+				(e-block @5.34-10.2
+					(e-match @6.5-9.6
+						(match @6.5-9.6
+							(cond
+								(e-lookup-local @6.11-6.17
+									(p-assign @5.15-5.21 (ident "result"))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @7.9-7.18)))
+									(value
+										(e-tag @7.22-7.24 (name "Ok")
+											(args
+												(e-call @7.25-7.41
+													(e-lookup-local @7.25-7.34
+														(p-assign @5.23-5.32 (ident "transform")))
+													(e-lookup-local @7.35-7.40
+														(p-assign @7.12-7.17 (ident "value"))))))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @8.9-8.19)))
+									(value
+										(e-tag @8.23-8.26 (name "Err")
+											(args
+												(e-lookup-local @8.27-8.32
+													(p-assign @8.13-8.18 (ident "error")))))))))))))
 		(annotation @5.1-5.11
 			(declared-type
 				(ty-fn @4.14-4.52 (effectful false)
@@ -264,11 +268,12 @@ main = |_| "done"
 						(ty-var @4.50-4.51 (name "e")))))))
 	(d-let
 		(p-assign @14.1-14.9 (ident "identity"))
-		(e-lambda @14.12-14.17
-			(args
-				(p-assign @14.13-14.14 (ident "x")))
-			(e-lookup-local @14.16-14.17
-				(p-assign @14.13-14.14 (ident "x"))))
+		(e-closure @14.12-14.17
+			(e-lambda @14.12-14.17
+				(args
+					(p-assign @14.13-14.14 (ident "x")))
+				(e-lookup-local @14.16-14.17
+					(p-assign @14.13-14.14 (ident "x")))))
 		(annotation @14.1-14.9
 			(declared-type
 				(ty-fn @13.12-13.18 (effectful false)
@@ -276,18 +281,19 @@ main = |_| "done"
 					(ty-var @13.17-13.18 (name "a"))))))
 	(d-let
 		(p-assign @18.1-18.10 (ident "make_pair"))
-		(e-lambda @18.13-18.43
-			(args
-				(p-assign @18.14-18.15 (ident "x"))
-				(p-assign @18.17-18.18 (ident "y")))
-			(e-record @18.20-18.43
-				(fields
-					(field (name "first")
-						(e-lookup-local @18.29-18.30
-							(p-assign @18.14-18.15 (ident "x"))))
-					(field (name "second")
-						(e-lookup-local @18.40-18.41
-							(p-assign @18.17-18.18 (ident "y")))))))
+		(e-closure @18.13-18.43
+			(e-lambda @18.13-18.43
+				(args
+					(p-assign @18.14-18.15 (ident "x"))
+					(p-assign @18.17-18.18 (ident "y")))
+				(e-record @18.20-18.43
+					(fields
+						(field (name "first")
+							(e-lookup-local @18.29-18.30
+								(p-assign @18.14-18.15 (ident "x"))))
+						(field (name "second")
+							(e-lookup-local @18.40-18.41
+								(p-assign @18.17-18.18 (ident "y"))))))))
 		(annotation @18.1-18.10
 			(declared-type
 				(ty-fn @17.13-17.44 (effectful false)
@@ -300,10 +306,11 @@ main = |_| "done"
 							(ty-var @17.41-17.42 (name "b"))))))))
 	(d-let
 		(p-assign @22.1-22.12 (ident "list_length"))
-		(e-lambda @22.15-22.24
-			(args
-				(p-assign @22.16-22.20 (ident "_lst")))
-			(e-int @22.22-22.24 (value "42")))
+		(e-closure @22.15-22.24
+			(e-lambda @22.15-22.24
+				(args
+					(p-assign @22.16-22.20 (ident "_lst")))
+				(e-int @22.22-22.24 (value "42"))))
 		(annotation @22.1-22.12
 			(declared-type
 				(ty-fn @21.15-21.30 (effectful false)
@@ -312,15 +319,16 @@ main = |_| "done"
 					(ty @21.27-21.30 (name "U64"))))))
 	(d-let
 		(p-assign @26.1-26.15 (ident "wrap_in_result"))
-		(e-lambda @26.18-26.39
-			(args
-				(p-assign @26.19-26.24 (ident "value")))
-			(e-tag @26.26-26.28 (name "Ok")
+		(e-closure @26.18-26.39
+			(e-lambda @26.18-26.39
 				(args
-					(e-tag @26.29-26.31 (name "Ok")
-						(args
-							(e-lookup-local @26.32-26.37
-								(p-assign @26.19-26.24 (ident "value"))))))))
+					(p-assign @26.19-26.24 (ident "value")))
+				(e-tag @26.26-26.28 (name "Ok")
+					(args
+						(e-tag @26.29-26.31 (name "Ok")
+							(args
+								(e-lookup-local @26.32-26.37
+									(p-assign @26.19-26.24 (ident "value")))))))))
 		(annotation @26.1-26.15
 			(declared-type
 				(ty-fn @25.18-25.50 (effectful false)
@@ -332,11 +340,12 @@ main = |_| "done"
 						(ty @25.46-25.49 (name "Str")))))))
 	(d-let
 		(p-assign @28.1-28.5 (ident "main"))
-		(e-lambda @28.8-28.18
-			(args
-				(p-underscore @28.9-28.10))
-			(e-string @28.12-28.18
-				(e-literal @28.13-28.17 (string "done"))))))
+		(e-closure @28.8-28.18
+			(e-lambda @28.8-28.18
+				(args
+					(p-underscore @28.9-28.10))
+				(e-string @28.12-28.18
+					(e-literal @28.13-28.17 (string "done")))))))
 ~~~
 # TYPES
 ~~~clojure

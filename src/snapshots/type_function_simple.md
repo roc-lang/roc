@@ -123,21 +123,23 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign @4.1-4.6 (ident "apply"))
-		(e-lambda @4.9-4.22
-			(args
-				(p-assign @4.10-4.12 (ident "fn"))
-				(p-assign @4.14-4.15 (ident "x")))
-			(e-call @4.17-4.22
-				(e-lookup-local @4.17-4.19
-					(p-assign @4.10-4.12 (ident "fn")))
-				(e-lookup-local @4.20-4.21
-					(p-assign @4.14-4.15 (ident "x"))))))
+		(e-closure @4.9-4.22
+			(e-lambda @4.9-4.22
+				(args
+					(p-assign @4.10-4.12 (ident "fn"))
+					(p-assign @4.14-4.15 (ident "x")))
+				(e-call @4.17-4.22
+					(e-lookup-local @4.17-4.19
+						(p-assign @4.10-4.12 (ident "fn")))
+					(e-lookup-local @4.20-4.21
+						(p-assign @4.14-4.15 (ident "x")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.15
-			(args
-				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+		(e-closure @6.9-6.15
+			(e-lambda @6.9-6.15
+				(args
+					(p-underscore @6.10-6.11))
+				(e-empty_record @6.13-6.15)))))
 ~~~
 # TYPES
 ~~~clojure

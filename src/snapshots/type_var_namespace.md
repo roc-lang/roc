@@ -149,28 +149,29 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign @5.1-5.8 (ident "process"))
-		(e-lambda @5.11-14.2
-			(args
-				(p-assign @5.12-5.16 (ident "list")))
-			(e-block @5.18-14.2
-				(s-let @7.5-7.14
-					(p-assign @7.5-7.9 (ident "elem"))
-					(e-int @7.12-7.14 (value "42")))
-				(s-type-anno @10.5-10.18 (name "result")
-					(ty-var @10.14-10.18 (name "elem")))
-				(s-let @11.5-11.30
-					(p-assign @11.5-11.11 (ident "result"))
-					(e-call @11.14-11.30
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-lookup-local @11.25-11.29
-							(p-assign @5.12-5.16 (ident "list")))))
-				(s-expr @11.34-11.58
-					(e-call @11.34-11.58
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-lookup-local @11.53-11.57
-							(p-assign @7.5-7.9 (ident "elem")))))
-				(e-lookup-local @13.5-13.11
-					(p-assign @11.5-11.11 (ident "result")))))
+		(e-closure @5.11-14.2
+			(e-lambda @5.11-14.2
+				(args
+					(p-assign @5.12-5.16 (ident "list")))
+				(e-block @5.18-14.2
+					(s-let @7.5-7.14
+						(p-assign @7.5-7.9 (ident "elem"))
+						(e-int @7.12-7.14 (value "42")))
+					(s-type-anno @10.5-10.18 (name "result")
+						(ty-var @10.14-10.18 (name "elem")))
+					(s-let @11.5-11.30
+						(p-assign @11.5-11.11 (ident "result"))
+						(e-call @11.14-11.30
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-lookup-local @11.25-11.29
+								(p-assign @5.12-5.16 (ident "list")))))
+					(s-expr @11.34-11.58
+						(e-call @11.34-11.58
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-lookup-local @11.53-11.57
+								(p-assign @7.5-7.9 (ident "elem")))))
+					(e-lookup-local @13.5-13.11
+						(p-assign @11.5-11.11 (ident "result"))))))
 		(annotation @5.1-5.8
 			(declared-type
 				(ty-fn @4.11-4.29 (effectful false)
@@ -179,10 +180,11 @@ main! = |_| {}
 					(ty-var @4.25-4.29 (name "elem"))))))
 	(d-let
 		(p-assign @16.1-16.6 (ident "main!"))
-		(e-lambda @16.9-16.15
-			(args
-				(p-underscore @16.10-16.11))
-			(e-empty_record @16.13-16.15))))
+		(e-closure @16.9-16.15
+			(e-lambda @16.9-16.15
+				(args
+					(p-underscore @16.10-16.11))
+				(e-empty_record @16.13-16.15)))))
 ~~~
 # TYPES
 ~~~clojure

@@ -293,7 +293,7 @@ pub const Store = struct {
         return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_field_alignment.toByteUnits()))));
     }
 
-    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name: []const u8) !u32 {
+    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name: []const u8) ?u32 {
         const target_usize = self.targetUsize();
         const record_data = self.getRecordData(record_idx);
         const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
@@ -316,7 +316,7 @@ pub const Store = struct {
             current_offset += field_size;
         }
 
-        return error.PatternNotFound;
+        return null;
     }
 
     pub fn getTupleElementOffset(self: *const Self, tuple_idx: TupleIdx, element_index_in_sorted_elements: u32) u32 {

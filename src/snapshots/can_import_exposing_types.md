@@ -588,15 +588,16 @@ combineResults = |jsonResult, httpStatus|
 (can-ir
 	(d-let
 		(p-assign @9.1-9.10 (ident "parseJson"))
-		(e-lambda @9.13-9.38
-			(args
-				(p-assign @9.14-9.19 (ident "input")))
-			(e-call @9.21-9.38
-				(e-lookup-external @9.21-9.31
-					(module-idx "0")
-					(target-node-idx "0"))
-				(e-lookup-local @9.32-9.37
-					(p-assign @9.14-9.19 (ident "input")))))
+		(e-closure @9.13-9.38
+			(e-lambda @9.13-9.38
+				(args
+					(p-assign @9.14-9.19 (ident "input")))
+				(e-call @9.21-9.38
+					(e-lookup-external @9.21-9.31
+						(module-idx "0")
+						(target-node-idx "0"))
+					(e-lookup-local @9.32-9.37
+						(p-assign @9.14-9.19 (ident "input"))))))
 		(annotation @9.1-9.10
 			(declared-type
 				(ty-fn @8.13-8.40 (effectful false)
@@ -606,48 +607,52 @@ combineResults = |jsonResult, httpStatus|
 						(ty @8.34-8.39 (name "Error")))))))
 	(d-let
 		(p-assign @13.1-13.14 (ident "handleRequest"))
-		(e-lambda @13.17-19.2
-			(args
-				(p-assign @13.18-13.21 (ident "req")))
-			(e-block @13.23-19.2
-				(s-let @14.5-14.35
-					(p-assign @14.5-14.11 (ident "result"))
-					(e-call @14.14-14.35
-						(e-lookup-external @14.14-14.25
-							(module-idx "0")
-							(target-node-idx "0"))
-						(e-dot-access @14.26-14.34 (field "body")
-							(receiver
-								(e-lookup-local @14.26-14.29
-									(p-assign @13.18-13.21 (ident "req")))))))
-				(e-match @15.5-18.6
-					(match @15.5-18.6
-						(cond
-							(e-lookup-local @15.11-15.17
-								(p-assign @14.5-14.11 (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @16.9-16.18)))
-								(value
-									(e-call @16.22-16.36
-										(e-lookup-external @16.22-16.29
-											(module-idx "1")
-											(target-node-idx "0"))
-										(e-lookup-local @16.30-16.35
-											(p-assign @16.12-16.17 (ident "value"))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag @17.9-17.19)))
-								(value
-									(e-call @17.23-17.45
-										(e-lookup-external @17.23-17.38
-											(module-idx "1")
-											(target-node-idx "0"))
-										(e-lookup-local @17.39-17.44
-											(p-assign @17.13-17.18 (ident "error")))))))))))
+		(e-closure @13.17-19.2
+			(captures
+				(capture @17.13-17.18 (ident "error"))
+				(capture @16.12-16.17 (ident "value")))
+			(e-lambda @13.17-19.2
+				(args
+					(p-assign @13.18-13.21 (ident "req")))
+				(e-block @13.23-19.2
+					(s-let @14.5-14.35
+						(p-assign @14.5-14.11 (ident "result"))
+						(e-call @14.14-14.35
+							(e-lookup-external @14.14-14.25
+								(module-idx "0")
+								(target-node-idx "0"))
+							(e-dot-access @14.26-14.34 (field "body")
+								(receiver
+									(e-lookup-local @14.26-14.29
+										(p-assign @13.18-13.21 (ident "req")))))))
+					(e-match @15.5-18.6
+						(match @15.5-18.6
+							(cond
+								(e-lookup-local @15.11-15.17
+									(p-assign @14.5-14.11 (ident "result"))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @16.9-16.18)))
+									(value
+										(e-call @16.22-16.36
+											(e-lookup-external @16.22-16.29
+												(module-idx "1")
+												(target-node-idx "0"))
+											(e-lookup-local @16.30-16.35
+												(p-assign @16.12-16.17 (ident "value"))))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag @17.9-17.19)))
+									(value
+										(e-call @17.23-17.45
+											(e-lookup-external @17.23-17.38
+												(module-idx "1")
+												(target-node-idx "0"))
+											(e-lookup-local @17.39-17.44
+												(p-assign @17.13-17.18 (ident "error"))))))))))))
 		(annotation @13.1-13.14
 			(declared-type
 				(ty-fn @12.17-12.36 (effectful false)
@@ -655,27 +660,29 @@ combineResults = |jsonResult, httpStatus|
 					(ty @12.28-12.36 (name "Response"))))))
 	(d-let
 		(p-assign @23.1-23.12 (ident "processData"))
-		(e-lambda @23.15-27.6
-			(args
-				(p-assign @23.16-23.22 (ident "config"))
-				(p-assign @23.24-23.30 (ident "values")))
-			(e-call @24.5-27.6
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @25.9-25.15
+		(e-closure @23.15-27.6
+			(e-lambda @23.15-27.6
+				(args
+					(p-assign @23.16-23.22 (ident "config"))
 					(p-assign @23.24-23.30 (ident "values")))
-				(e-lambda @26.9-26.41
-					(args
-						(p-assign @26.10-26.11 (ident "v")))
-					(captures
-						(capture @23.16-23.22 (ident "config")))
-					(e-call @26.13-26.41
-						(e-lookup-external @26.13-26.30
-							(module-idx "0")
-							(target-node-idx "0"))
-						(e-lookup-local @26.31-26.37
-							(p-assign @23.16-23.22 (ident "config")))
-						(e-lookup-local @26.39-26.40
-							(p-assign @26.10-26.11 (ident "v")))))))
+				(e-call @24.5-27.6
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local @25.9-25.15
+						(p-assign @23.24-23.30 (ident "values")))
+					(e-closure @26.9-26.41
+						(captures
+							(capture @23.16-23.22 (ident "config")))
+						(e-lambda @26.9-26.41
+							(args
+								(p-assign @26.10-26.11 (ident "v")))
+							(e-call @26.13-26.41
+								(e-lookup-external @26.13-26.30
+									(module-idx "0")
+									(target-node-idx "0"))
+								(e-lookup-local @26.31-26.37
+									(p-assign @23.16-23.22 (ident "config")))
+								(e-lookup-local @26.39-26.40
+									(p-assign @26.10-26.11 (ident "v")))))))))
 		(annotation @23.1-23.12
 			(declared-type
 				(ty-fn @22.15-22.64 (effectful false)
@@ -688,15 +695,16 @@ combineResults = |jsonResult, httpStatus|
 						(ty @22.58-22.63 (name "Error")))))))
 	(d-let
 		(p-assign @38.1-38.13 (ident "createClient"))
-		(e-lambda @38.16-38.48
-			(args
-				(p-assign @38.17-38.23 (ident "config")))
-			(e-call @38.25-38.48
-				(e-lookup-external @38.25-38.40
-					(module-idx "1")
-					(target-node-idx "0"))
-				(e-lookup-local @38.41-38.47
-					(p-assign @38.17-38.23 (ident "config")))))
+		(e-closure @38.16-38.48
+			(e-lambda @38.16-38.48
+				(args
+					(p-assign @38.17-38.23 (ident "config")))
+				(e-call @38.25-38.48
+					(e-lookup-external @38.25-38.40
+						(module-idx "1")
+						(target-node-idx "0"))
+					(e-lookup-local @38.41-38.47
+						(p-assign @38.17-38.23 (ident "config"))))))
 		(annotation @38.1-38.13
 			(declared-type
 				(ty-fn @37.16-37.37 (effectful false)
@@ -705,37 +713,41 @@ combineResults = |jsonResult, httpStatus|
 						(ext-decl @37.26-37.37 (ident "Http.Client") (kind "type")))))))
 	(d-let
 		(p-assign @42.1-42.15 (ident "handleResponse"))
-		(e-lambda @42.18-46.6
-			(args
-				(p-assign @42.19-42.27 (ident "response")))
-			(e-match @43.5-46.6
-				(match @43.5-46.6
-					(cond
-						(e-dot-access @43.11-43.26 (field "status")
-							(receiver
-								(e-lookup-local @43.11-43.19
-									(p-assign @42.19-42.27 (ident "response"))))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @44.9-44.19)))
-							(value
-								(e-call @44.23-44.50
-									(e-lookup-external @44.23-44.42
-										(module-idx "1")
-										(target-node-idx "0"))
-									(e-lookup-local @44.43-44.49
-										(p-assign @44.12-44.18 (ident "status"))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @45.9-45.19)))
-							(value
-								(e-call @45.23-45.44
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local @45.38-45.43
-										(p-assign @45.13-45.18 (ident "error"))))))))))
+		(e-closure @42.18-46.6
+			(captures
+				(capture @45.13-45.18 (ident "error"))
+				(capture @44.12-44.18 (ident "status")))
+			(e-lambda @42.18-46.6
+				(args
+					(p-assign @42.19-42.27 (ident "response")))
+				(e-match @43.5-46.6
+					(match @43.5-46.6
+						(cond
+							(e-dot-access @43.11-43.26 (field "status")
+								(receiver
+									(e-lookup-local @43.11-43.19
+										(p-assign @42.19-42.27 (ident "response"))))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @44.9-44.19)))
+								(value
+									(e-call @44.23-44.50
+										(e-lookup-external @44.23-44.42
+											(module-idx "1")
+											(target-node-idx "0"))
+										(e-lookup-local @44.43-44.49
+											(p-assign @44.12-44.18 (ident "status"))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @45.9-45.19)))
+								(value
+									(e-call @45.23-45.44
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local @45.38-45.43
+											(p-assign @45.13-45.18 (ident "error")))))))))))
 		(annotation @42.1-42.15
 			(declared-type
 				(ty-fn @41.18-41.33 (effectful false)
@@ -743,44 +755,48 @@ combineResults = |jsonResult, httpStatus|
 					(ty @41.30-41.33 (name "Str"))))))
 	(d-let
 		(p-assign @50.1-50.15 (ident "combineResults"))
-		(e-lambda @50.18-54.6
-			(args
-				(p-assign @50.19-50.29 (ident "jsonResult"))
-				(p-assign @50.31-50.41 (ident "httpStatus")))
-			(e-match @51.5-54.6
-				(match @51.5-54.6
-					(cond
-						(e-lookup-local @51.11-51.21
-							(p-assign @50.19-50.29 (ident "jsonResult"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @52.9-52.18)))
-							(value
-								(e-tag @52.22-52.24 (name "Ok")
-									(args
-										(e-record @52.25-52.73
-											(fields
-												(field (name "body")
-													(e-call @52.33-52.51
-														(e-lookup-external @52.33-52.44
-															(module-idx "0")
-															(target-node-idx "0"))
-														(e-lookup-local @52.45-52.50
-															(p-assign @52.12-52.17 (ident "value")))))
-												(field (name "status")
-													(e-lookup-local @52.61-52.71
-														(p-assign @50.31-50.41 (ident "httpStatus"))))))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @53.9-53.19)))
-							(value
-								(e-tag @53.23-53.26 (name "Err")
-									(args
-										(e-lookup-local @53.27-53.32
-											(p-assign @53.13-53.18 (ident "error")))))))))))
+		(e-closure @50.18-54.6
+			(captures
+				(capture @52.12-52.17 (ident "value"))
+				(capture @53.13-53.18 (ident "error")))
+			(e-lambda @50.18-54.6
+				(args
+					(p-assign @50.19-50.29 (ident "jsonResult"))
+					(p-assign @50.31-50.41 (ident "httpStatus")))
+				(e-match @51.5-54.6
+					(match @51.5-54.6
+						(cond
+							(e-lookup-local @51.11-51.21
+								(p-assign @50.19-50.29 (ident "jsonResult"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @52.9-52.18)))
+								(value
+									(e-tag @52.22-52.24 (name "Ok")
+										(args
+											(e-record @52.25-52.73
+												(fields
+													(field (name "body")
+														(e-call @52.33-52.51
+															(e-lookup-external @52.33-52.44
+																(module-idx "0")
+																(target-node-idx "0"))
+															(e-lookup-local @52.45-52.50
+																(p-assign @52.12-52.17 (ident "value")))))
+													(field (name "status")
+														(e-lookup-local @52.61-52.71
+															(p-assign @50.31-50.41 (ident "httpStatus"))))))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @53.9-53.19)))
+								(value
+									(e-tag @53.23-53.26 (name "Err")
+										(args
+											(e-lookup-local @53.27-53.32
+												(p-assign @53.13-53.18 (ident "error"))))))))))))
 		(annotation @50.1-50.15
 			(declared-type
 				(ty-fn @49.18-49.73 (effectful false)

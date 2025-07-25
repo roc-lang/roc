@@ -46,11 +46,12 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 		(field (name "answer")
 			(e-int @2.13-2.15 (value "42")))
 		(field (name "launchTheNukes!")
-			(e-lambda @3.22-3.30
-				(args
-					(p-record-destructure @3.23-3.25
-						(destructs)))
-				(e-not-implemented @1.1-1.1)))))
+			(e-closure @3.22-3.30
+				(e-lambda @3.22-3.30
+					(args
+						(p-record-destructure @3.23-3.25
+							(destructs)))
+					(e-not-implemented @1.1-1.1))))))
 ~~~
 # TYPES
 ~~~clojure

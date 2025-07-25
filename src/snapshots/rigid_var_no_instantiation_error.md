@@ -204,23 +204,24 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign @5.1-5.5 (ident "swap"))
-		(e-lambda @5.8-8.2
-			(args
-				(p-assign @5.9-5.13 (ident "pair")))
-			(e-block @5.15-8.2
-				(s-let @6.5-6.18
-					(p-tuple @6.5-6.11
-						(patterns
-							(p-assign @6.6-6.7 (ident "x"))
-							(p-assign @6.9-6.10 (ident "y"))))
-					(e-lookup-local @6.14-6.18
-						(p-assign @5.9-5.13 (ident "pair"))))
-				(e-tuple @7.5-7.11
-					(elems
-						(e-lookup-local @7.6-7.7
-							(p-assign @6.9-6.10 (ident "y")))
-						(e-lookup-local @7.9-7.10
-							(p-assign @6.6-6.7 (ident "x")))))))
+		(e-closure @5.8-8.2
+			(e-lambda @5.8-8.2
+				(args
+					(p-assign @5.9-5.13 (ident "pair")))
+				(e-block @5.15-8.2
+					(s-let @6.5-6.18
+						(p-tuple @6.5-6.11
+							(patterns
+								(p-assign @6.6-6.7 (ident "x"))
+								(p-assign @6.9-6.10 (ident "y"))))
+						(e-lookup-local @6.14-6.18
+							(p-assign @5.9-5.13 (ident "pair"))))
+					(e-tuple @7.5-7.11
+						(elems
+							(e-lookup-local @7.6-7.7
+								(p-assign @6.9-6.10 (ident "y")))
+							(e-lookup-local @7.9-7.10
+								(p-assign @6.6-6.7 (ident "x"))))))))
 		(annotation @5.1-5.5
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)
@@ -232,47 +233,48 @@ main! = |_| {
 						(ty-var @4.22-4.23 (name "a")))))))
 	(d-let
 		(p-assign @11.1-11.6 (ident "main!"))
-		(e-lambda @11.9-24.2
-			(args
-				(p-underscore @11.10-11.11))
+		(e-closure @11.9-24.2
 			(captures
 				(capture @5.1-5.5 (ident "swap")))
-			(e-block @11.13-24.2
-				(s-let @13.5-13.34
-					(p-assign @13.5-13.12 (ident "result1"))
-					(e-call @13.15-13.34
-						(e-lookup-local @13.15-13.19
-							(p-assign @5.1-5.5 (ident "swap")))
-						(e-tuple @13.20-13.33
-							(elems
-								(e-int @13.21-13.23 (value "42"))
-								(e-string @13.25-13.32
-									(e-literal @13.26-13.31 (string "hello")))))))
-				(s-let @17.5-17.43
-					(p-assign @17.5-17.12 (ident "result2"))
-					(e-call @17.15-17.43
-						(e-lookup-local @17.15-17.19
-							(p-assign @5.1-5.5 (ident "swap")))
-						(e-tuple @17.20-17.42
-							(elems
-								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-list @17.32-17.41
-									(elems
-										(e-int @17.33-17.34 (value "1"))
-										(e-int @17.36-17.37 (value "2"))
-										(e-int @17.39-17.40 (value "3"))))))))
-				(s-let @21.5-21.35
-					(p-assign @21.5-21.12 (ident "result3"))
-					(e-call @21.15-21.35
-						(e-lookup-local @21.15-21.19
-							(p-assign @5.1-5.5 (ident "swap")))
-						(e-tuple @21.20-21.34
-							(elems
-								(e-string @21.21-21.26
-									(e-literal @21.22-21.25 (string "foo")))
-								(e-string @21.28-21.33
-									(e-literal @21.29-21.32 (string "bar")))))))
-				(e-empty_record @23.5-23.7)))))
+			(e-lambda @11.9-24.2
+				(args
+					(p-underscore @11.10-11.11))
+				(e-block @11.13-24.2
+					(s-let @13.5-13.34
+						(p-assign @13.5-13.12 (ident "result1"))
+						(e-call @13.15-13.34
+							(e-lookup-local @13.15-13.19
+								(p-assign @5.1-5.5 (ident "swap")))
+							(e-tuple @13.20-13.33
+								(elems
+									(e-int @13.21-13.23 (value "42"))
+									(e-string @13.25-13.32
+										(e-literal @13.26-13.31 (string "hello")))))))
+					(s-let @17.5-17.43
+						(p-assign @17.5-17.12 (ident "result2"))
+						(e-call @17.15-17.43
+							(e-lookup-local @17.15-17.19
+								(p-assign @5.1-5.5 (ident "swap")))
+							(e-tuple @17.20-17.42
+								(elems
+									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-list @17.32-17.41
+										(elems
+											(e-int @17.33-17.34 (value "1"))
+											(e-int @17.36-17.37 (value "2"))
+											(e-int @17.39-17.40 (value "3"))))))))
+					(s-let @21.5-21.35
+						(p-assign @21.5-21.12 (ident "result3"))
+						(e-call @21.15-21.35
+							(e-lookup-local @21.15-21.19
+								(p-assign @5.1-5.5 (ident "swap")))
+							(e-tuple @21.20-21.34
+								(elems
+									(e-string @21.21-21.26
+										(e-literal @21.22-21.25 (string "foo")))
+									(e-string @21.28-21.33
+										(e-literal @21.29-21.32 (string "bar")))))))
+					(e-empty_record @23.5-23.7))))))
 ~~~
 # TYPES
 ~~~clojure

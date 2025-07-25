@@ -173,11 +173,12 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @18.1-18.14 (ident "processResult"))
-		(e-lambda @18.17-18.38
-			(args
-				(p-assign @18.18-18.25 (ident "_result")))
-			(e-string @18.27-18.38
-				(e-literal @18.28-18.37 (string "processed"))))
+		(e-closure @18.17-18.38
+			(e-lambda @18.17-18.38
+				(args
+					(p-assign @18.18-18.25 (ident "_result")))
+				(e-string @18.27-18.38
+					(e-literal @18.28-18.37 (string "processed")))))
 		(annotation @18.1-18.14
 			(declared-type
 				(ty-fn @17.17-17.30 (effectful false)
@@ -185,11 +186,12 @@ NO CHANGE
 					(ty @17.27-17.30 (name "Str"))))))
 	(d-let
 		(p-assign @22.1-22.15 (ident "handleResponse"))
-		(e-lambda @22.18-22.39
-			(args
-				(p-assign @22.19-22.28 (ident "_response")))
-			(e-string @22.30-22.39
-				(e-literal @22.31-22.38 (string "handled"))))
+		(e-closure @22.18-22.39
+			(e-lambda @22.18-22.39
+				(args
+					(p-assign @22.19-22.28 (ident "_response")))
+				(e-string @22.30-22.39
+					(e-literal @22.31-22.38 (string "handled")))))
 		(annotation @22.1-22.15
 			(declared-type
 				(ty-fn @21.18-21.33 (effectful false)
@@ -197,10 +199,11 @@ NO CHANGE
 					(ty @21.30-21.33 (name "Str"))))))
 	(d-let
 		(p-assign @24.1-24.6 (ident "main!"))
-		(e-lambda @24.9-24.15
-			(args
-				(p-underscore @24.10-24.11))
-			(e-empty_record @24.13-24.15)))
+		(e-closure @24.9-24.15
+			(e-lambda @24.9-24.15
+				(args
+					(p-underscore @24.10-24.11))
+				(e-empty_record @24.13-24.15))))
 	(s-alias-decl @4.1-4.37
 		(ty-header @4.1-4.7 (name "Status"))
 		(ty-tag-union @4.10-4.37

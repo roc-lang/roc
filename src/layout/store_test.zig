@@ -3560,15 +3560,15 @@ test "putRecord and getRecordFieldOffsetByName" {
     // a: 0
     // c: 8
     // b: 12
-    const offset_a = try layout_store.getRecordFieldOffsetByName(record_idx, "a");
+    const offset_a = layout_store.getRecordFieldOffsetByName(record_idx, "a").?;
     try testing.expectEqual(@as(u32, 0), offset_a);
 
-    const offset_c = try layout_store.getRecordFieldOffsetByName(record_idx, "c");
+    const offset_c = layout_store.getRecordFieldOffsetByName(record_idx, "c").?;
     try testing.expectEqual(@as(u32, 8), offset_c);
 
-    const offset_b = try layout_store.getRecordFieldOffsetByName(record_idx, "b");
+    const offset_b = layout_store.getRecordFieldOffsetByName(record_idx, "b").?;
     try testing.expectEqual(@as(u32, 12), offset_b);
 
     // Test non-existent field
-    try testing.expectError(error.PatternNotFound, layout_store.getRecordFieldOffsetByName(record_idx, "d"));
+    try testing.expectEqual(null, layout_store.getRecordFieldOffsetByName(record_idx, "d"));
 }

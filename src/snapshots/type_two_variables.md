@@ -72,18 +72,19 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @4.1-4.5 (ident "swap"))
-		(e-lambda @4.8-4.23
-			(args
-				(p-tuple @4.9-4.15
-					(patterns
-						(p-assign @4.10-4.11 (ident "x"))
-						(p-assign @4.13-4.14 (ident "y")))))
-			(e-tuple @4.17-4.23
-				(elems
-					(e-lookup-local @4.18-4.19
-						(p-assign @4.13-4.14 (ident "y")))
-					(e-lookup-local @4.21-4.22
-						(p-assign @4.10-4.11 (ident "x"))))))
+		(e-closure @4.8-4.23
+			(e-lambda @4.8-4.23
+				(args
+					(p-tuple @4.9-4.15
+						(patterns
+							(p-assign @4.10-4.11 (ident "x"))
+							(p-assign @4.13-4.14 (ident "y")))))
+				(e-tuple @4.17-4.23
+					(elems
+						(e-lookup-local @4.18-4.19
+							(p-assign @4.13-4.14 (ident "y")))
+						(e-lookup-local @4.21-4.22
+							(p-assign @4.10-4.11 (ident "x")))))))
 		(annotation @4.1-4.5
 			(declared-type
 				(ty-fn @3.8-3.24 (effectful false)
@@ -95,10 +96,11 @@ NO CHANGE
 						(ty-var @3.22-3.23 (name "a")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.15
-			(args
-				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+		(e-closure @6.9-6.15
+			(e-lambda @6.9-6.15
+				(args
+					(p-underscore @6.10-6.11))
+				(e-empty_record @6.13-6.15)))))
 ~~~
 # TYPES
 ~~~clojure

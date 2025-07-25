@@ -823,19 +823,20 @@ main = |_| {
 						(e-literal @55.12-55.18 (string "fruits")))))))
 	(d-let
 		(p-assign @59.1-59.15 (ident "make_container"))
-		(e-lambda @59.18-59.54
-			(args
-				(p-assign @59.19-59.22 (ident "val")))
-			(e-record @59.24-59.54
-				(fields
-					(field (name "value")
-						(e-lookup-local @59.33-59.36
-							(p-assign @59.19-59.22 (ident "val"))))
-					(field (name "wrapper")
-						(e-list @59.47-59.52
-							(elems
-								(e-lookup-local @59.48-59.51
-									(p-assign @59.19-59.22 (ident "val"))))))))))
+		(e-closure @59.18-59.54
+			(e-lambda @59.18-59.54
+				(args
+					(p-assign @59.19-59.22 (ident "val")))
+				(e-record @59.24-59.54
+					(fields
+						(field (name "value")
+							(e-lookup-local @59.33-59.36
+								(p-assign @59.19-59.22 (ident "val"))))
+						(field (name "wrapper")
+							(e-list @59.47-59.52
+								(elems
+									(e-lookup-local @59.48-59.51
+										(p-assign @59.19-59.22 (ident "val")))))))))))
 	(d-let
 		(p-assign @60.1-60.11 (ident "container1"))
 		(e-call @60.14-60.33
@@ -1039,18 +1040,19 @@ main = |_| {
 											(p-assign @4.1-4.4 (ident "num"))))))))))))
 	(d-let
 		(p-assign @105.1-105.5 (ident "main"))
-		(e-lambda @105.8-108.2
-			(args
-				(p-underscore @105.9-105.10))
+		(e-closure @105.8-108.2
 			(captures
 				(capture @60.1-60.11 (ident "container1")))
-			(e-block @105.12-108.2
-				(e-binop @107.5-107.26 (op "add")
-					(e-dot-access @107.5-107.21 (field "value")
-						(receiver
-							(e-lookup-local @107.5-107.15
-								(p-assign @60.1-60.11 (ident "container1")))))
-					(e-int @107.24-107.26 (value "10")))))))
+			(e-lambda @105.8-108.2
+				(args
+					(p-underscore @105.9-105.10))
+				(e-block @105.12-108.2
+					(e-binop @107.5-107.26 (op "add")
+						(e-dot-access @107.5-107.21 (field "value")
+							(receiver
+								(e-lookup-local @107.5-107.15
+									(p-assign @60.1-60.11 (ident "container1")))))
+						(e-int @107.24-107.26 (value "10"))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -54,51 +54,48 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1.1-1.103
-	(args
-		(p-as @1.2-1.23 (as "person")
-			(p-record-destructure @1.2-1.20
-				(destructs
-					(record-destruct @1.4-1.8 (label "name") (ident "name")
-						(required
-							(p-assign @1.4-1.8 (ident "name"))))
-					(record-destruct @1.10-1.13 (label "age") (ident "age")
-						(required
-							(p-assign @1.10-1.13 (ident "age"))))
-					(record-destruct @1.15-1.18 (label "a") (ident "a")
-						(required
-							(p-assign @1.15-1.18 (ident "a"))))))))
-	(captures
-		(capture @1.4-1.8 (ident "name"))
-		(capture @1.2-1.23 (ident "person"))
-		(capture @1.10-1.13 (ident "age")))
-	(e-record @1.32-1.103
-		(fields
-			(field (name "greeting")
-				(e-string @1.44-1.59
-					(e-literal @1.45-1.51 (string "Hello "))
-					(e-lookup-local @1.53-1.57
-						(p-assign @1.4-1.8 (ident "name")))
-					(e-literal @1.58-1.58 (string ""))))
-			(field (name "full_record")
-				(e-lookup-local @1.74-1.80
-					(p-as @1.2-1.23 (as "person")
-						(p-record-destructure @1.2-1.20
-							(destructs
-								(record-destruct @1.4-1.8 (label "name") (ident "name")
-									(required
-										(p-assign @1.4-1.8 (ident "name"))))
-								(record-destruct @1.10-1.13 (label "age") (ident "age")
-									(required
-										(p-assign @1.10-1.13 (ident "age"))))
-								(record-destruct @1.15-1.18 (label "a") (ident "a")
-									(required
-										(p-assign @1.15-1.18 (ident "a")))))))))
-			(field (name "is_adult")
-				(e-binop @1.92-1.101 (op "ge")
-					(e-lookup-local @1.92-1.95
-						(p-assign @1.10-1.13 (ident "age")))
-					(e-int @1.99-1.101 (value "18")))))))
+(e-closure @1.1-1.103
+	(e-lambda @1.1-1.103
+		(args
+			(p-as @1.2-1.23 (as "person")
+				(p-record-destructure @1.2-1.20
+					(destructs
+						(record-destruct @1.4-1.8 (label "name") (ident "name")
+							(required
+								(p-assign @1.4-1.8 (ident "name"))))
+						(record-destruct @1.10-1.13 (label "age") (ident "age")
+							(required
+								(p-assign @1.10-1.13 (ident "age"))))
+						(record-destruct @1.15-1.18 (label "a") (ident "a")
+							(required
+								(p-assign @1.15-1.18 (ident "a"))))))))
+		(e-record @1.32-1.103
+			(fields
+				(field (name "greeting")
+					(e-string @1.44-1.59
+						(e-literal @1.45-1.51 (string "Hello "))
+						(e-lookup-local @1.53-1.57
+							(p-assign @1.4-1.8 (ident "name")))
+						(e-literal @1.58-1.58 (string ""))))
+				(field (name "full_record")
+					(e-lookup-local @1.74-1.80
+						(p-as @1.2-1.23 (as "person")
+							(p-record-destructure @1.2-1.20
+								(destructs
+									(record-destruct @1.4-1.8 (label "name") (ident "name")
+										(required
+											(p-assign @1.4-1.8 (ident "name"))))
+									(record-destruct @1.10-1.13 (label "age") (ident "age")
+										(required
+											(p-assign @1.10-1.13 (ident "age"))))
+									(record-destruct @1.15-1.18 (label "a") (ident "a")
+										(required
+											(p-assign @1.15-1.18 (ident "a")))))))))
+				(field (name "is_adult")
+					(e-binop @1.92-1.101 (op "ge")
+						(e-lookup-local @1.92-1.95
+							(p-assign @1.10-1.13 (ident "age")))
+						(e-int @1.99-1.101 (value "18"))))))))
 ~~~
 # TYPES
 ~~~clojure

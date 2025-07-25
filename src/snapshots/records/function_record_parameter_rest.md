@@ -37,29 +37,27 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1.1-1.65
-	(args
-		(p-record-destructure @1.2-1.24
-			(destructs
-				(record-destruct @1.4-1.14 (label "first_name") (ident "first_name")
-					(required
-						(p-assign @1.4-1.14 (ident "first_name"))))
-				(record-destruct @1.16-1.22 (label "rest") (ident "rest")
-					(required
-						(p-assign @1.16-1.22 (ident "rest")))))))
-	(captures
-		(capture @1.4-1.14 (ident "first_name"))
-		(capture @1.16-1.22 (ident "rest")))
-	(e-string @1.26-1.65
-		(e-literal @1.27-1.33 (string "Hello "))
-		(e-lookup-local @1.35-1.45
-			(p-assign @1.4-1.14 (ident "first_name")))
-		(e-literal @1.46-1.47 (string " "))
-		(e-dot-access @1.49-1.63 (field "last_name")
-			(receiver
-				(e-lookup-local @1.49-1.53
-					(p-assign @1.16-1.22 (ident "rest")))))
-		(e-literal @1.64-1.64 (string ""))))
+(e-closure @1.1-1.65
+	(e-lambda @1.1-1.65
+		(args
+			(p-record-destructure @1.2-1.24
+				(destructs
+					(record-destruct @1.4-1.14 (label "first_name") (ident "first_name")
+						(required
+							(p-assign @1.4-1.14 (ident "first_name"))))
+					(record-destruct @1.16-1.22 (label "rest") (ident "rest")
+						(required
+							(p-assign @1.16-1.22 (ident "rest")))))))
+		(e-string @1.26-1.65
+			(e-literal @1.27-1.33 (string "Hello "))
+			(e-lookup-local @1.35-1.45
+				(p-assign @1.4-1.14 (ident "first_name")))
+			(e-literal @1.46-1.47 (string " "))
+			(e-dot-access @1.49-1.63 (field "last_name")
+				(receiver
+					(e-lookup-local @1.49-1.53
+						(p-assign @1.16-1.22 (ident "rest")))))
+			(e-literal @1.64-1.64 (string "")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -58,7 +58,7 @@ fn parseAndCanonicalizeFrac(allocator: std.mem.Allocator, source: []const u8) !s
         .parse_ast = parse_ast,
         .cir = cir,
         .can = can,
-        .expr_idx = canonical_expr_idx,
+        .expr_idx = (canonical_expr_idx.get_idx()),
     };
 }
 

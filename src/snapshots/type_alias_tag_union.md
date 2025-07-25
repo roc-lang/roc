@@ -136,11 +136,12 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @8.1-8.8 (ident "process"))
-		(e-lambda @8.11-8.32
-			(args
-				(p-assign @8.12-8.19 (ident "_result")))
-			(e-string @8.21-8.32
-				(e-literal @8.22-8.31 (string "processed"))))
+		(e-closure @8.11-8.32
+			(e-lambda @8.11-8.32
+				(args
+					(p-assign @8.12-8.19 (ident "_result")))
+				(e-string @8.21-8.32
+					(e-literal @8.22-8.31 (string "processed")))))
 		(annotation @8.1-8.8
 			(declared-type
 				(ty-fn @7.11-7.36 (effectful false)
@@ -150,11 +151,12 @@ NO CHANGE
 					(ty @7.33-7.36 (name "Str"))))))
 	(d-let
 		(p-assign @15.1-15.10 (ident "getString"))
-		(e-lambda @15.13-15.29
-			(args
-				(p-assign @15.14-15.18 (ident "_opt")))
-			(e-string @15.20-15.29
-				(e-literal @15.21-15.28 (string "default"))))
+		(e-closure @15.13-15.29
+			(e-lambda @15.13-15.29
+				(args
+					(p-assign @15.14-15.18 (ident "_opt")))
+				(e-string @15.20-15.29
+					(e-literal @15.21-15.28 (string "default")))))
 		(annotation @15.1-15.10
 			(declared-type
 				(ty-fn @14.13-14.31 (effectful false)
@@ -163,10 +165,11 @@ NO CHANGE
 					(ty @14.28-14.31 (name "Str"))))))
 	(d-let
 		(p-assign @18.1-18.10 (ident "getNumber"))
-		(e-lambda @18.13-18.21
-			(args
-				(p-assign @18.14-18.18 (ident "_opt")))
-			(e-int @18.20-18.21 (value "0")))
+		(e-closure @18.13-18.21
+			(e-lambda @18.13-18.21
+				(args
+					(p-assign @18.14-18.18 (ident "_opt")))
+				(e-int @18.20-18.21 (value "0"))))
 		(annotation @18.1-18.10
 			(declared-type
 				(ty-fn @17.13-17.31 (effectful false)
@@ -175,10 +178,11 @@ NO CHANGE
 					(ty @17.28-17.31 (name "I32"))))))
 	(d-let
 		(p-assign @20.1-20.6 (ident "main!"))
-		(e-lambda @20.9-20.15
-			(args
-				(p-underscore @20.10-20.11))
-			(e-empty_record @20.13-20.15)))
+		(e-closure @20.9-20.15
+			(e-lambda @20.9-20.15
+				(args
+					(p-underscore @20.10-20.11))
+				(e-empty_record @20.13-20.15))))
 	(s-alias-decl @4.1-4.41
 		(ty-header @4.1-4.18 (name "MyResult")
 			(ty-args

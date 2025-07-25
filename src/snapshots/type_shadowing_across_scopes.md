@@ -203,11 +203,12 @@ InnerModule :
 (can-ir
 	(d-let
 		(p-assign @6.1-6.12 (ident "processData"))
-		(e-lambda @6.15-7.16
-			(args
-				(p-assign @6.16-6.20 (ident "data")))
-			(e-string @7.5-7.16
-				(e-literal @7.6-7.15 (string "processed"))))
+		(e-closure @6.15-7.16
+			(e-lambda @6.15-7.16
+				(args
+					(p-assign @6.16-6.20 (ident "data")))
+				(e-string @7.5-7.16
+					(e-literal @7.6-7.15 (string "processed")))))
 		(annotation @6.1-6.12
 			(declared-type
 				(ty-fn @5.15-5.25 (effectful false)

@@ -463,10 +463,11 @@ transform = |result|
 					(ty @26.33-26.36 (name "Str"))))))
 	(d-let
 		(p-assign @31.1-31.9 (ident "getColor"))
-		(e-lambda @31.12-31.49
-			(args
-				(p-underscore @31.13-31.14))
-			(e-runtime-error (tag "ident_not_in_scope")))
+		(e-closure @31.12-31.49
+			(e-lambda @31.12-31.49
+				(args
+					(p-underscore @31.13-31.14))
+				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation @31.1-31.9
 			(declared-type
 				(ty-fn @30.12-30.27 (effectful false)
@@ -475,11 +476,12 @@ transform = |result|
 						(ext-decl @30.18-30.27 (ident "Color.RGB") (kind "type")))))))
 	(d-let
 		(p-assign @35.1-35.13 (ident "processColor"))
-		(e-lambda @35.16-36.22
-			(args
-				(p-assign @35.17-35.22 (ident "color")))
-			(e-string @36.5-36.22
-				(e-literal @36.6-36.21 (string "Color processed"))))
+		(e-closure @35.16-36.22
+			(e-lambda @35.16-36.22
+				(args
+					(p-assign @35.17-35.22 (ident "color")))
+				(e-string @36.5-36.22
+					(e-literal @36.6-36.21 (string "Color processed")))))
 		(annotation @35.1-35.13
 			(declared-type
 				(ty-fn @34.16-34.32 (effectful false)
@@ -488,32 +490,35 @@ transform = |result|
 					(ty @34.29-34.32 (name "Str"))))))
 	(d-let
 		(p-assign @40.1-40.10 (ident "transform"))
-		(e-lambda @40.13-44.6
-			(args
-				(p-assign @40.14-40.20 (ident "result")))
-			(e-match @41.5-44.6
-				(match @41.5-44.6
-					(cond
-						(e-lookup-local @41.11-41.17
-							(p-assign @40.14-40.20 (ident "result"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal @42.9-42.15
-										(p-applied-tag @42.9-42.23))))
-							(value
-								(e-call @42.27-42.47
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local @42.43-42.46
-										(p-assign @42.19-42.22 (ident "rgb"))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal @43.9-43.15
-										(p-applied-tag @43.9-43.24))))
-							(value
-								(e-runtime-error (tag "ident_not_in_scope"))))))))
+		(e-closure @40.13-44.6
+			(captures
+				(capture @42.19-42.22 (ident "rgb")))
+			(e-lambda @40.13-44.6
+				(args
+					(p-assign @40.14-40.20 (ident "result")))
+				(e-match @41.5-44.6
+					(match @41.5-44.6
+						(cond
+							(e-lookup-local @41.11-41.17
+								(p-assign @40.14-40.20 (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal @42.9-42.15
+											(p-applied-tag @42.9-42.23))))
+								(value
+									(e-call @42.27-42.47
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local @42.43-42.46
+											(p-assign @42.19-42.22 (ident "rgb"))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal @43.9-43.15
+											(p-applied-tag @43.9-43.24))))
+								(value
+									(e-runtime-error (tag "ident_not_in_scope")))))))))
 		(annotation @40.1-40.10
 			(declared-type
 				(ty-fn @39.13-39.76 (effectful false)

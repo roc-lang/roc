@@ -101,18 +101,19 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.9 (ident "swapPair"))
-		(e-lambda @6.12-6.27
-			(args
-				(p-tuple @6.13-6.19
-					(patterns
-						(p-assign @6.14-6.15 (ident "x"))
-						(p-assign @6.17-6.18 (ident "y")))))
-			(e-tuple @6.21-6.27
-				(elems
-					(e-lookup-local @6.22-6.23
-						(p-assign @6.17-6.18 (ident "y")))
-					(e-lookup-local @6.25-6.26
-						(p-assign @6.14-6.15 (ident "x"))))))
+		(e-closure @6.12-6.27
+			(e-lambda @6.12-6.27
+				(args
+					(p-tuple @6.13-6.19
+						(patterns
+							(p-assign @6.14-6.15 (ident "x"))
+							(p-assign @6.17-6.18 (ident "y")))))
+				(e-tuple @6.21-6.27
+					(elems
+						(e-lookup-local @6.22-6.23
+							(p-assign @6.17-6.18 (ident "y")))
+						(e-lookup-local @6.25-6.26
+							(p-assign @6.14-6.15 (ident "x")))))))
 		(annotation @6.1-6.9
 			(declared-type
 				(ty-fn @5.12-5.36 (effectful false)
@@ -124,16 +125,17 @@ NO CHANGE
 						(ty-var @5.34-5.35 (name "a")))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "main!"))
-		(e-lambda @8.9-8.27
-			(args
-				(p-underscore @8.10-8.11))
+		(e-closure @8.9-8.27
 			(captures
 				(capture @6.1-6.9 (ident "swapPair")))
-			(e-call @8.13-8.27
-				(e-lookup-local @8.13-8.21
-					(p-assign @6.1-6.9 (ident "swapPair")))
-				(e-int @8.22-8.23 (value "1"))
-				(e-int @8.25-8.26 (value "2")))))
+			(e-lambda @8.9-8.27
+				(args
+					(p-underscore @8.10-8.11))
+				(e-call @8.13-8.27
+					(e-lookup-local @8.13-8.21
+						(p-assign @6.1-6.9 (ident "swapPair")))
+					(e-int @8.22-8.23 (value "1"))
+					(e-int @8.25-8.26 (value "2"))))))
 	(s-alias-decl @3.1-3.20
 		(ty-header @3.1-3.11 (name "Pair")
 			(ty-args

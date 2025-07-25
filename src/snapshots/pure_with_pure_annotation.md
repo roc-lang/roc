@@ -92,20 +92,21 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @5.1-5.4 (ident "add"))
-		(e-lambda @5.7-5.30
-			(args
-				(p-assign @5.8-5.9 (ident "x"))
-				(p-assign @5.11-5.12 (ident "y")))
-			(e-dot-access @5.14-5.30 (field "x")
-				(receiver
-					(e-record @5.14-5.28
-						(fields
-							(field (name "x")
-								(e-lookup-local @5.19-5.20
-									(p-assign @5.8-5.9 (ident "x"))))
-							(field (name "y")
-								(e-lookup-local @5.25-5.26
-									(p-assign @5.11-5.12 (ident "y")))))))))
+		(e-closure @5.7-5.30
+			(e-lambda @5.7-5.30
+				(args
+					(p-assign @5.8-5.9 (ident "x"))
+					(p-assign @5.11-5.12 (ident "y")))
+				(e-dot-access @5.14-5.30 (field "x")
+					(receiver
+						(e-record @5.14-5.28
+							(fields
+								(field (name "x")
+									(e-lookup-local @5.19-5.20
+										(p-assign @5.8-5.9 (ident "x"))))
+								(field (name "y")
+									(e-lookup-local @5.25-5.26
+										(p-assign @5.11-5.12 (ident "y"))))))))))
 		(annotation @5.1-5.4
 			(declared-type
 				(ty-fn @4.7-4.22 (effectful false)
@@ -114,18 +115,19 @@ NO CHANGE
 					(ty @4.19-4.22 (name "I32"))))))
 	(d-let
 		(p-assign @9.1-9.7 (ident "double"))
-		(e-lambda @9.10-9.23
-			(args
-				(p-assign @9.11-9.12 (ident "x")))
+		(e-closure @9.10-9.23
 			(captures
 				(capture @5.1-5.4 (ident "add")))
-			(e-call @9.14-9.23
-				(e-lookup-local @9.14-9.17
-					(p-assign @5.1-5.4 (ident "add")))
-				(e-lookup-local @9.18-9.19
+			(e-lambda @9.10-9.23
+				(args
 					(p-assign @9.11-9.12 (ident "x")))
-				(e-lookup-local @9.21-9.22
-					(p-assign @9.11-9.12 (ident "x")))))
+				(e-call @9.14-9.23
+					(e-lookup-local @9.14-9.17
+						(p-assign @5.1-5.4 (ident "add")))
+					(e-lookup-local @9.18-9.19
+						(p-assign @9.11-9.12 (ident "x")))
+					(e-lookup-local @9.21-9.22
+						(p-assign @9.11-9.12 (ident "x"))))))
 		(annotation @9.1-9.7
 			(declared-type
 				(ty-fn @8.10-8.20 (effectful false)

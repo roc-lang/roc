@@ -69,10 +69,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @5.1-5.12 (ident "deserialize"))
-		(e-lambda @5.15-5.22
-			(args
-				(p-underscore @5.16-5.17))
-			(e-not-implemented @1.1-1.1))
+		(e-closure @5.15-5.22
+			(e-lambda @5.15-5.22
+				(args
+					(p-underscore @5.16-5.17))
+				(e-not-implemented @1.1-1.1)))
 		(annotation @5.1-5.12
 			(declared-type
 				(ty-fn @3.15-3.49 (effectful false)

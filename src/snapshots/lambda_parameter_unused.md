@@ -250,10 +250,11 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign @5.1-5.4 (ident "add"))
-		(e-lambda @5.7-5.18
-			(args
-				(p-assign @5.8-5.14 (ident "unused")))
-			(e-int @5.16-5.18 (value "42")))
+		(e-closure @5.7-5.18
+			(e-lambda @5.7-5.18
+				(args
+					(p-assign @5.8-5.14 (ident "unused")))
+				(e-int @5.16-5.18 (value "42"))))
 		(annotation @5.1-5.4
 			(declared-type
 				(ty-fn @4.7-4.17 (effectful false)
@@ -261,13 +262,14 @@ main! = |_| {
 					(ty @4.14-4.17 (name "U64"))))))
 	(d-let
 		(p-assign @9.1-9.9 (ident "multiply"))
-		(e-lambda @9.12-9.33
-			(args
-				(p-assign @9.13-9.20 (ident "_factor")))
-			(e-binop @9.22-9.33 (op "mul")
-				(e-lookup-local @9.22-9.29
+		(e-closure @9.12-9.33
+			(e-lambda @9.12-9.33
+				(args
 					(p-assign @9.13-9.20 (ident "_factor")))
-				(e-int @9.32-9.33 (value "2"))))
+				(e-binop @9.22-9.33 (op "mul")
+					(e-lookup-local @9.22-9.29
+						(p-assign @9.13-9.20 (ident "_factor")))
+					(e-int @9.32-9.33 (value "2")))))
 		(annotation @9.1-9.9
 			(declared-type
 				(ty-fn @8.12-8.22 (effectful false)
@@ -275,10 +277,11 @@ main! = |_| {
 					(ty @8.19-8.22 (name "U64"))))))
 	(d-let
 		(p-assign @13.1-13.8 (ident "process"))
-		(e-lambda @13.11-13.23
-			(args
-				(p-assign @13.12-13.18 (ident "_input")))
-			(e-int @13.20-13.23 (value "100")))
+		(e-closure @13.11-13.23
+			(e-lambda @13.11-13.23
+				(args
+					(p-assign @13.12-13.18 (ident "_input")))
+				(e-int @13.20-13.23 (value "100"))))
 		(annotation @13.1-13.8
 			(declared-type
 				(ty-fn @12.11-12.21 (effectful false)
@@ -286,13 +289,14 @@ main! = |_| {
 					(ty @12.18-12.21 (name "U64"))))))
 	(d-let
 		(p-assign @17.1-17.7 (ident "double"))
-		(e-lambda @17.10-17.27
-			(args
-				(p-assign @17.11-17.16 (ident "value")))
-			(e-binop @17.18-17.27 (op "mul")
-				(e-lookup-local @17.18-17.23
+		(e-closure @17.10-17.27
+			(e-lambda @17.10-17.27
+				(args
 					(p-assign @17.11-17.16 (ident "value")))
-				(e-int @17.26-17.27 (value "2"))))
+				(e-binop @17.18-17.27 (op "mul")
+					(e-lookup-local @17.18-17.23
+						(p-assign @17.11-17.16 (ident "value")))
+					(e-int @17.26-17.27 (value "2")))))
 		(annotation @17.1-17.7
 			(declared-type
 				(ty-fn @16.10-16.20 (effectful false)
@@ -300,50 +304,51 @@ main! = |_| {
 					(ty @16.17-16.20 (name "U64"))))))
 	(d-let
 		(p-assign @19.1-19.6 (ident "main!"))
-		(e-lambda @19.9-25.2
-			(args
-				(p-underscore @19.10-19.11))
+		(e-closure @19.9-25.2
 			(captures
-				(capture @5.1-5.4 (ident "add"))
-				(capture @9.1-9.9 (ident "multiply"))
+				(capture @17.1-17.7 (ident "double"))
 				(capture @13.1-13.8 (ident "process"))
-				(capture @17.1-17.7 (ident "double")))
-			(e-block @19.13-25.2
-				(s-let @20.5-20.21
-					(p-assign @20.5-20.12 (ident "result1"))
-					(e-call @20.15-20.21
-						(e-lookup-local @20.15-20.18
-							(p-assign @5.1-5.4 (ident "add")))
-						(e-int @20.19-20.20 (value "5"))))
-				(s-let @21.5-21.26
-					(p-assign @21.5-21.12 (ident "result2"))
-					(e-call @21.15-21.26
-						(e-lookup-local @21.15-21.23
-							(p-assign @9.1-9.9 (ident "multiply")))
-						(e-int @21.24-21.25 (value "3"))))
-				(s-let @22.5-22.25
-					(p-assign @22.5-22.12 (ident "result3"))
-					(e-call @22.15-22.25
-						(e-lookup-local @22.15-22.22
-							(p-assign @13.1-13.8 (ident "process")))
-						(e-int @22.23-22.24 (value "7"))))
-				(s-let @23.5-23.24
-					(p-assign @23.5-23.12 (ident "result4"))
-					(e-call @23.15-23.24
-						(e-lookup-local @23.15-23.21
-							(p-assign @17.1-17.7 (ident "double")))
-						(e-int @23.22-23.23 (value "4"))))
-				(e-binop @24.5-24.42 (op "add")
-					(e-lookup-local @24.5-24.12
-						(p-assign @20.5-20.12 (ident "result1")))
-					(e-binop @24.15-24.42 (op "add")
-						(e-lookup-local @24.15-24.22
-							(p-assign @21.5-21.12 (ident "result2")))
-						(e-binop @24.25-24.42 (op "add")
-							(e-lookup-local @24.25-24.32
-								(p-assign @22.5-22.12 (ident "result3")))
-							(e-lookup-local @24.35-24.42
-								(p-assign @23.5-23.12 (ident "result4"))))))))))
+				(capture @5.1-5.4 (ident "add"))
+				(capture @9.1-9.9 (ident "multiply")))
+			(e-lambda @19.9-25.2
+				(args
+					(p-underscore @19.10-19.11))
+				(e-block @19.13-25.2
+					(s-let @20.5-20.21
+						(p-assign @20.5-20.12 (ident "result1"))
+						(e-call @20.15-20.21
+							(e-lookup-local @20.15-20.18
+								(p-assign @5.1-5.4 (ident "add")))
+							(e-int @20.19-20.20 (value "5"))))
+					(s-let @21.5-21.26
+						(p-assign @21.5-21.12 (ident "result2"))
+						(e-call @21.15-21.26
+							(e-lookup-local @21.15-21.23
+								(p-assign @9.1-9.9 (ident "multiply")))
+							(e-int @21.24-21.25 (value "3"))))
+					(s-let @22.5-22.25
+						(p-assign @22.5-22.12 (ident "result3"))
+						(e-call @22.15-22.25
+							(e-lookup-local @22.15-22.22
+								(p-assign @13.1-13.8 (ident "process")))
+							(e-int @22.23-22.24 (value "7"))))
+					(s-let @23.5-23.24
+						(p-assign @23.5-23.12 (ident "result4"))
+						(e-call @23.15-23.24
+							(e-lookup-local @23.15-23.21
+								(p-assign @17.1-17.7 (ident "double")))
+							(e-int @23.22-23.23 (value "4"))))
+					(e-binop @24.5-24.42 (op "add")
+						(e-lookup-local @24.5-24.12
+							(p-assign @20.5-20.12 (ident "result1")))
+						(e-binop @24.15-24.42 (op "add")
+							(e-lookup-local @24.15-24.22
+								(p-assign @21.5-21.12 (ident "result2")))
+							(e-binop @24.25-24.42 (op "add")
+								(e-lookup-local @24.25-24.32
+									(p-assign @22.5-22.12 (ident "result3")))
+								(e-lookup-local @24.35-24.42
+									(p-assign @23.5-23.12 (ident "result4")))))))))))
 ~~~
 # TYPES
 ~~~clojure
