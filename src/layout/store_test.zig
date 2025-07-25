@@ -3522,7 +3522,7 @@ test "putRecord and getRecordFieldOffsetByName" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try base.ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "");
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
