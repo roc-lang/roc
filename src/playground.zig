@@ -17,6 +17,7 @@ const base = @import("base");
 const parse = @import("check/parse.zig");
 const build_options = @import("build_options");
 const can = @import("check/canonicalize.zig");
+const CIR = @import("compile/CIR.zig");
 const check_types = @import("check/check_types.zig");
 const WasmFilesystem = @import("playground/WasmFilesystem.zig");
 const reporting = @import("reporting.zig");
@@ -101,7 +102,7 @@ const Diagnostic = struct {
 const CompilerStageData = struct {
     module_env: *ModuleEnv,
     parse_ast: ?parse.AST = null,
-    can_ir: ?can.CIR = null,
+    can_ir: ?CIR = null,
     solver: ?check_types = null,
 
     // Diagnostic reports from each stage
