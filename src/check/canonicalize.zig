@@ -2731,10 +2731,15 @@ pub fn canonicalizeExpr(
             // Keep track of the start position for statements
             const stmt_start = self.env.store.scratch_statements.top();
 
-            // Use a temporary scratch space for the block's free variables
-            const block_free_vars_start = self.scratch_free_vars.top();
+            // TODO Use a temporary scratch space for the block's free variables
+            //
+            // I apologize for leaving these AutoHashMapUnmanaged's here ... but it's a workaround
+            // to land a working closure capture implementation, and we can optimize this later. Forgive me.
             var bound_vars = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
             defer bound_vars.deinit(self.env.gpa);
+
+            var captures = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
+            defer captures.deinit(self.env.gpa);
 
             // Canonicalize all statements in the block
             const statements = self.parse_ir.store.statementSlice(e.statements);
@@ -2769,7 +2774,9 @@ pub fn canonicalizeExpr(
                         // Collect free vars from the statement into the block's scratch space
                         if (can_stmt.free_vars) |fvs| {
                             for (fvs) |fv| {
-                                try self.scratch_free_vars.append(self.env.gpa, fv);
+                                if (!bound_vars.contains(fv)) {
+                                    try captures.put(self.env.gpa, fv, {});
+                                }
                             }
                         }
 
@@ -2800,27 +2807,15 @@ pub fn canonicalizeExpr(
             // Add free vars from the final expression to the block's scratch space
             if (final_expr.free_vars) |fvs| {
                 for (fvs) |fv| {
-                    try self.scratch_free_vars.append(self.env.gpa, fv);
+                    if (!bound_vars.contains(fv)) {
+                        try captures.put(self.env.gpa, fv, {});
+                    }
                 }
             }
-
-            // Now, calculate the actual free variables for the entire block
-            var block_captures = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
-            defer block_captures.deinit(self.env.gpa);
-
-            const all_potential_free_vars = self.scratch_free_vars.slice(block_free_vars_start, self.scratch_free_vars.top());
-            for (all_potential_free_vars) |fv| {
-                if (!bound_vars.contains(fv)) {
-                    try block_captures.put(self.env.gpa, fv, {});
-                }
-            }
-
-            // Clear the temporary scratch space used for the block's free vars
-            self.scratch_free_vars.clearFrom(block_free_vars_start);
 
             // Add the actual free variables (captures) to the parent's scratch space
             const captures_start = self.scratch_free_vars.top();
-            var cap_it = block_captures.iterator();
+            var cap_it = captures.iterator();
             while (cap_it.next()) |entry| {
                 try self.scratch_free_vars.append(self.env.gpa, entry.key_ptr.*);
             }

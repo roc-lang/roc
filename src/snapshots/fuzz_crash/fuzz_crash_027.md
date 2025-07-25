@@ -1852,7 +1852,8 @@ main! = |_| { # Yeah Ie
 		(p-assign @100.1-100.6 (ident "main!"))
 		(e-closure @100.9-159.2
 			(captures
-				(capture @60.1-60.11 (ident "match_time")))
+				(capture @60.1-60.11 (ident "match_time"))
+				(capture @132.2-132.7 (ident "tuple")))
 			(e-lambda @100.9-159.2
 				(args
 					(p-underscore @100.10-100.11))

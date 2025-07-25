@@ -1869,7 +1869,9 @@ expect {
 		(p-assign @80.1-80.11 (ident "match_time"))
 		(e-closure @80.14-138.3
 			(captures
-				(capture @136.11-136.15 (ident "dude")))
+				(capture @94.5-94.6 (ident "x"))
+				(capture @136.11-136.15 (ident "dude"))
+				(capture @86.4-86.5 (ident "x")))
 			(e-lambda @80.14-138.3
 				(args
 					(p-assign @81.2-81.3 (ident "a"))
@@ -2082,7 +2084,8 @@ expect {
 		(e-closure @144.9-196.2
 			(captures
 				(capture @80.1-80.11 (ident "match_time"))
-				(capture @68.1-68.8 (ident "add_one")))
+				(capture @68.1-68.8 (ident "add_one"))
+				(capture @179.2-179.7 (ident "tuple")))
 			(e-lambda @144.9-196.2
 				(args
 					(p-underscore @144.10-144.11))
