@@ -42,27 +42,27 @@ pub fn build(b: *std.Build) void {
     }
 
     // tracy profiler configuration
-    const tracy = b.option([]const u8, "tracy", "Enable Tracy integration. Supply path to Tracy source");
-    const tracy_callstack = b.option(bool, "tracy-callstack", "Include callstack information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
-    const tracy_allocation = b.option(bool, "tracy-allocation", "Include allocation information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
-    const tracy_callstack_depth: u32 = b.option(u32, "tracy-callstack-depth", "Declare callstack depth for Tracy data. Does nothing if -Dtracy_callstack is not provided") orelse 10;
-    if (tracy_callstack) {
+    const flag_enable_tracy = b.option([]const u8, "tracy", "Enable Tracy integration. Supply path to Tracy source");
+    const flag_tracy_callstack = b.option(bool, "tracy-callstack", "Include callstack information with Tracy data. Does nothing if -Dtracy is not provided") orelse (flag_enable_tracy != null);
+    const flag_tracy_allocation = b.option(bool, "tracy-allocation", "Include allocation information with Tracy data. Does nothing if -Dtracy is not provided") orelse (flag_enable_tracy != null);
+    const flag_tracy_callstack_depth: u32 = b.option(u32, "tracy-callstack-depth", "Declare callstack depth for Tracy data. Does nothing if -Dtracy_callstack is not provided") orelse 10;
+    if (flag_tracy_callstack) {
         std.log.warn("Tracy callstack is enable. This can significantly skew timings, but is important for understanding source location. Be cautious when generating timing and analyzing results.", .{});
     }
 
     // Create compile time build options
     const build_options = b.addOptions();
-    build_options.addOption(bool, "enable_tracy", tracy != null);
+    build_options.addOption(bool, "enable_tracy", flag_enable_tracy != null);
     build_options.addOption(bool, "trace_eval", trace_eval);
     build_options.addOption([]const u8, "compiler_version", getCompilerVersion(b, optimize));
-    if (target.result.os.tag == .macos and tracy_callstack) {
+    if (target.result.os.tag == .macos and flag_tracy_callstack) {
         std.log.warn("Tracy callstack does not work on MacOS, disabling.", .{});
         build_options.addOption(bool, "enable_tracy_callstack", false);
     } else {
-        build_options.addOption(bool, "enable_tracy_callstack", tracy_callstack);
+        build_options.addOption(bool, "enable_tracy_callstack", flag_tracy_callstack);
     }
-    build_options.addOption(bool, "enable_tracy_allocation", tracy_allocation);
-    build_options.addOption(u32, "tracy_callstack_depth", tracy_callstack_depth);
+    build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
+    build_options.addOption(u32, "tracy_callstack_depth", flag_tracy_callstack_depth);
 
     // Create common Modules
     const module_serialization = b.addModule("serialization", std.Build.Module.CreateOptions{
@@ -85,6 +85,12 @@ pub fn build(b: *std.Build) void {
     });
     const module_reporting = b.addModule("reporting", std.Build.Module.CreateOptions{
         .root_source_file = b.path("src/reporting/mod.zig"),
+    });
+    const module_parse = b.addModule("parse", std.Build.Module.CreateOptions{
+        .root_source_file = b.path("src/parse/mod.zig"),
+    });
+    const module_tracy = b.addModule("tracy", std.Build.Module.CreateOptions{
+        .root_source_file = b.path("src/tracy.zig"),
     });
 
     // Configure module dependencies
@@ -109,14 +115,25 @@ pub fn build(b: *std.Build) void {
     module_reporting.addImport("reporting", module_reporting);
     module_reporting.addImport("base", module_base);
 
+    module_parse.addImport("parse", module_parse);
+    module_parse.addImport("base", module_base);
+    module_parse.addImport("compile", module_compile);
+    module_parse.addImport("collections", module_collections);
+    module_parse.addImport("tracy", module_tracy);
+    module_parse.addImport("reporting", module_reporting);
+
+    module_tracy.addImport("builtins", module_builtins);
+
     // add main roc exe
-    const roc_exe = addMainExe(b, build_options, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy, module_builtins) orelse return;
+    const roc_exe = addMainExe(b, build_options, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, module_builtins) orelse return;
     roc_exe.root_module.addImport("base", module_base);
     roc_exe.root_module.addImport("collections", module_collections);
     roc_exe.root_module.addImport("types", module_types);
     roc_exe.root_module.addImport("serialization", module_serialization);
     roc_exe.root_module.addImport("compile", module_compile);
     roc_exe.root_module.addImport("reporting", module_reporting);
+    roc_exe.root_module.addImport("parse", module_parse);
+    roc_exe.root_module.addImport("tracy", module_tracy);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step);
 
     // Add snapshot tool
@@ -133,7 +150,9 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.root_module.addImport("collections", module_collections);
     snapshot_exe.root_module.addImport("compile", module_compile);
     snapshot_exe.root_module.addImport("reporting", module_reporting);
-    add_tracy(b, build_options, snapshot_exe, target, false, tracy);
+    snapshot_exe.root_module.addImport("parse", module_parse);
+    snapshot_exe.root_module.addImport("tracy", module_tracy);
+    add_tracy(b, build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 
     // Add playground WASM executable
@@ -155,6 +174,8 @@ pub fn build(b: *std.Build) void {
     playground_exe.root_module.addImport("collections", module_collections);
     playground_exe.root_module.addImport("compile", module_compile);
     playground_exe.root_module.addImport("reporting", module_reporting);
+    playground_exe.root_module.addImport("parse", module_parse);
+    playground_exe.root_module.addImport("tracy", module_tracy);
 
     add_tracy(b, build_options, playground_exe, b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -179,6 +200,8 @@ pub fn build(b: *std.Build) void {
     all_tests.root_module.addImport("serialization", module_serialization);
     all_tests.root_module.addImport("compile", module_compile);
     all_tests.root_module.addImport("reporting", module_reporting);
+    all_tests.root_module.addImport("parse", module_parse);
+    all_tests.root_module.addImport("tracy", module_tracy);
 
     const builtins_tests = b.addTest(.{
         .root_source_file = b.path("src/builtins/main.zig"),
@@ -256,7 +279,7 @@ pub fn build(b: *std.Build) void {
             target,
             optimize,
             build_options,
-            tracy,
+            flag_enable_tracy,
             name,
             module_builtins,
             module_base,
@@ -264,6 +287,8 @@ pub fn build(b: *std.Build) void {
             module_collections,
             module_compile,
             module_reporting,
+            module_parse,
+            module_tracy,
         );
     }
 }
@@ -285,6 +310,8 @@ fn add_fuzz_target(
     module_collections: *std.Build.Module,
     module_compile: *std.Build.Module,
     module_reporting: *std.Build.Module,
+    module_parse: *std.Build.Module,
+    module_tracy: *std.Build.Module,
 ) void {
     // We always include the repro scripts (no dependencies).
     // We only include the fuzzing scripts if `-Dfuzz` is set.
@@ -302,6 +329,8 @@ fn add_fuzz_target(
     fuzz_obj.root_module.addImport("collections", module_collections);
     fuzz_obj.root_module.addImport("compile", module_compile);
     fuzz_obj.root_module.addImport("reporting", module_reporting);
+    fuzz_obj.root_module.addImport("parse", module_parse);
+    fuzz_obj.root_module.addImport("tracy", module_tracy);
     add_tracy(b, build_options, fuzz_obj, target, false, tracy);
 
     const name_exe = b.fmt("fuzz-{s}", .{name});

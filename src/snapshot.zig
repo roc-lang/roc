@@ -8,24 +8,28 @@
 
 const std = @import("std");
 const base = @import("base");
+const parse = @import("parse");
+const compile = @import("compile");
+const types = @import("types");
+const reporting = @import("reporting");
+
+// we re-export build options for tracy
+pub const build_options = @import("build_options");
+
+const Solver = @import("check/check_types.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const cache = @import("cache/mod.zig");
-const ModuleEnv = @import("compile").ModuleEnv;
-
-const Solver = @import("check/check_types.zig");
-const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
-const types = @import("types");
-const reporting = @import("reporting");
-const tokenize = @import("check/parse/tokenize.zig");
 const repl = @import("repl/eval.zig");
 
+const ModuleEnv = compile.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
-const parallel = base.parallel;
 const AST = parse.AST;
 const Report = reporting.Report;
+const tokenize = parse.tokenize;
+const parallel = base.parallel;
 
 var verbose_log: bool = false;
 var prng = std.Random.DefaultPrng.init(1234567890);

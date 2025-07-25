@@ -6,6 +6,9 @@
 const std = @import("std");
 const fuzz_test = @import("fuzz_test");
 
+// we re-export build options for tracy
+pub const build_options = @import("build_options");
+
 // TODO: add a func zig_pretty_print or something to dump the test case in a pretty printed format.
 // For example, for intermediate IRs, would pretty print the input IR.
 // Then make all the fuzzer implement it.

@@ -2,13 +2,13 @@
 //! actual Roc code to ensure polymorphic values work correctly in practice.
 
 const std = @import("std");
-const testing = std.testing;
 const base = @import("base");
-const parse = @import("parse.zig");
+const parse = @import("parse");
 const canonicalize = @import("canonicalize.zig");
 const check_types = @import("check_types.zig");
 const compile = @import("compile");
 
+const testing = std.testing;
 const ModuleEnv = compile.ModuleEnv;
 const CanonicalizedExpr = canonicalize.CanonicalizedExpr;
 const test_allocator = testing.allocator;

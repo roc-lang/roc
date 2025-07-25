@@ -9,8 +9,11 @@
 
 const std = @import("std");
 const base = @import("base");
-const tokenize = @import("check/parse/tokenize.zig");
 const collections = @import("collections");
+const parse = @import("parse");
+
+// we re-export build options for tracy
+pub const build_options = @import("build_options");
 
 /// Hook for AFL++ to initialize the fuzz test environment.
 pub export fn zig_fuzz_init() void {}
@@ -32,7 +35,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     const buf_slice = buf[0..@intCast(len)];
 
-    tokenize.checkTokenizerInvariants(gpa, buf_slice, debug) catch {
+    parse.tokenize.checkTokenizerInvariants(gpa, buf_slice, debug) catch {
         @panic("Out of memory");
     };
 }

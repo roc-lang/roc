@@ -4,8 +4,7 @@ const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
 const compile = @import("compile");
-
-const parse = @import("./parse.zig");
+const parse = @import("parse");
 
 const ModuleEnv = compile.ModuleEnv;
 const canonicalize = @import("./canonicalize.zig");

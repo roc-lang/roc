@@ -3,18 +3,19 @@
 //! with different type instantiations.
 
 const std = @import("std");
-const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
+const parse = @import("parse");
+const compile = @import("compile");
+
 const check_types = @import("../check_types.zig");
 const instantiate = @import("instantiate.zig");
-const parse = @import("../parse.zig");
 const canonicalize = @import("../canonicalize.zig");
 
 const TypesStore = types.Store;
 const CIR = canonicalize.CIR;
-const ModuleEnv = @import("compile").ModuleEnv;
-
+const ModuleEnv = compile.ModuleEnv;
+const testing = std.testing;
 const test_allocator = testing.allocator;
 
 const TestEnv = struct {

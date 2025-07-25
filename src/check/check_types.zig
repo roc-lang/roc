@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const tracy = @import("../tracy.zig");
+const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("canonicalize.zig");

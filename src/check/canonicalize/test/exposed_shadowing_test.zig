@@ -6,14 +6,14 @@
 
 const std = @import("std");
 const compile = @import("compile");
+const parse = @import("parse");
 
-const AST = @import("../../parse/AST.zig");
 const canonicalize = @import("../../canonicalize.zig");
-const parse = @import("../../parse.zig");
-const tokenize = @import("../../parse/tokenize.zig");
 
-const testing = std.testing;
+const AST = parse.AST;
 const ModuleEnv = compile.ModuleEnv;
+const tokenize = parse.tokenize;
+const testing = std.testing;
 
 test "exposed but not implemented - values" {
     const allocator = testing.allocator;

@@ -4,23 +4,26 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
-const fmt = @import("fmt.zig");
 const base = @import("base");
 const collections = @import("collections");
 const reporting = @import("reporting");
-const coordinate_simple = @import("coordinate_simple.zig");
-const tracy = @import("tracy.zig");
+const parse = @import("parse");
+const tracy = @import("tracy");
 
+// we re-export build options for tracy
+pub const build_options = @import("build_options");
+
+const fmt = @import("fmt.zig");
+const coordinate_simple = @import("coordinate_simple.zig");
 const Filesystem = @import("fs/Filesystem.zig");
 const cli_args = @import("cli_args.zig");
 const cache_mod = @import("cache/mod.zig");
-const CacheManager = cache_mod.CacheManager;
-const CacheConfig = cache_mod.CacheConfig;
-const tokenize = @import("check/parse/tokenize.zig");
-const parse = @import("check/parse.zig");
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
+
+const CacheManager = cache_mod.CacheManager;
+const CacheConfig = cache_mod.CacheConfig;
+const tokenize = parse.tokenize;
 
 const read_roc_file_path_shim_lib = if (builtin.is_test) &[_]u8{} else @embedFile("libread_roc_file_path_shim.a");
 const c = std.c;
