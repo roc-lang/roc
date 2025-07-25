@@ -1484,7 +1484,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: ModuleEnv.Pattern.R
             node.data_3 = extra_data_start;
         },
         .SubPattern => |sub_pattern| {
-            const extra_data_start = store.extra_data.len();
+            const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
 
             // Store kind tag (1 for SubPattern)
             _ = try store.extra_data.append(store.gpa, 1);
@@ -1978,7 +1978,8 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
             else => unreachable,
         };
     } else blk: {
-        // Backwards compatibility for old format where Required had no payload
+        // This should not happen with properly canonicalized code
+        std.debug.print("WARNING: RecordDestruct with no extra_data (backwards compat triggered)\n", .{});
         const dummy_pattern_idx: ModuleEnv.Pattern.Idx = @enumFromInt(0);
         break :blk ModuleEnv.Pattern.RecordDestruct.Kind{ .Required = dummy_pattern_idx };
     };
