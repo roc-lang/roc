@@ -170,8 +170,8 @@ pub const CacheModule = struct {
         _ = try Header.initFromBytes(@constCast(mapped_data));
 
         // Get data section (must be aligned)
-        const header_size = std.mem.alignForward(usize, @sizeOf(Header), SERIALIZATION_ALIGNMENT);
-        const data = mapped_data[header_size .. header_size + header.data_size];
+        const header_size: usize = @intCast(std.mem.alignForward(usize, @sizeOf(Header), SERIALIZATION_ALIGNMENT));
+        const data = mapped_data[header_size .. header_size + @as(usize, @intCast(header.data_size))];
 
         // Validate checksum
         const calculated_checksum = calculateChecksum(data);
@@ -222,7 +222,7 @@ pub const CacheModule = struct {
 
         // Copy ModuleEnv bytes from the correct offset to properly aligned memory
         var module_env: ModuleEnv = undefined;
-        const module_env_start = self.header.module_env_offset;
+        const module_env_start: usize = @intCast(self.header.module_env_offset);
         const module_env_end = module_env_start + @sizeOf(ModuleEnv);
         if (module_env_end > self.header.data_size) {
             return error.CacheTooSmall;
