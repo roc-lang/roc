@@ -40,7 +40,6 @@ pub const Slot = union(enum) {
     root: DescStore.Idx,
     redirect: Var,
 
-
     /// Append this Slot to an iovec writer for serialization
     pub fn appendToIovecs(self: *const Slot, writer: anytype) !void {
         // Write tag
@@ -129,7 +128,7 @@ pub const Store = struct {
     /// Used for cache deserialization
     pub fn relocate(self: *Self, offset: isize) void {
         // Note: gpa is not relocated as it's typically a vtable pointer
-        
+
         // Relocate all the storage components
         self.slots.relocate(offset);
         self.descs.relocate(offset);
@@ -665,9 +664,6 @@ pub const Store = struct {
 
     // serialization //
 
-
-
-
     /// Append this Store to an iovec writer for serialization
     pub fn appendToIovecs(self: *const Self, writer: *serialization.IovecWriter) !usize {
         const start_offset = writer.getOffset();
@@ -767,7 +763,6 @@ const SlotStore = struct {
         return self.backing.get(@enumFromInt(@intFromEnum(idx))).*;
     }
 
-
     /// Append this SlotStore to an iovec writer for serialization
     pub fn appendToIovecs(self: *const Self, writer: anytype) !usize {
         return self.backing.appendToIovecs(writer);
@@ -820,7 +815,6 @@ const DescStore = struct {
     fn get(self: *const Self, idx: Idx) Desc {
         return self.backing.get(@intFromEnum(idx));
     }
-
 
     /// Append this DescStore to an iovec writer for serialization
     pub fn appendToIovecs(self: *const Self, writer: anytype) !usize {

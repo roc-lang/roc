@@ -10,6 +10,7 @@ const canonicalize = @import("../check/canonicalize.zig");
 const collections = @import("collections");
 const types = @import("types");
 const parse = @import("../check/parse.zig").parse;
+const compile = @import("compile");
 const SExprTree = base.SExprTree;
 const Filesystem = @import("../fs/Filesystem.zig");
 const serialization = @import("serialization");
@@ -19,7 +20,7 @@ const SERIALIZATION_ALIGNMENT = 16;
 
 const Allocator = std.mem.Allocator;
 const TypeStore = types.Store;
-const ModuleEnv = @import("../compile/ModuleEnv.zig");
+const ModuleEnv = compile.ModuleEnv;
 const Node = ModuleEnv.Node;
 const NodeStore = ModuleEnv.NodeStore;
 const SafeList = collections.SafeList;
@@ -50,8 +51,8 @@ pub const Header = extern struct {
 
     /// Offset to main structure in the data section
     module_env_offset: u64,
-    
-    /// Original memory base address for relocation calculation  
+
+    /// Original memory base address for relocation calculation
     original_memory_base: u64,
 
     /// Diagnostic counts for accurate reporting when loading from cache
@@ -107,19 +108,18 @@ pub const CacheModule = struct {
     /// Create a cache by serializing ModuleEnv and CIR data using iovec serialization
     pub fn create(
         allocator: Allocator,
-        base_env: *const base.ModuleEnv,
-        cir: *const ModuleEnv, // ModuleEnv contains the canonical IR
+        module_env: *const ModuleEnv,
+        _: *const ModuleEnv, // ModuleEnv contains the canonical IR
         error_count: u32,
         warning_count: u32,
     ) ![]align(SERIALIZATION_ALIGNMENT) u8 {
-        _ = cir; // CIR is now embedded in base.ModuleEnv
-        
+
         // Create iovec writer for gathering serialization data
         var writer = IovecWriter.init(allocator);
         defer writer.deinit();
 
         // Serialize ModuleEnv (which now contains CIR) using iovecs
-        const module_env_offset = try base_env.appendToIovecs(&writer);
+        const module_env_offset = try module_env.appendToIovecs(&writer);
 
         // Serialize the data section
         const data_buffer = try writer.serialize(allocator);
@@ -185,8 +185,13 @@ pub const CacheModule = struct {
 
     /// Restored data from cache using relocations
     pub const RestoredData = struct {
-        module_env: base.ModuleEnv,
+        module_env: ModuleEnv,
         // CIR is now stored inside module_env as *anyopaque fields
+
+        // For backward compatibility, provide a getter
+        pub fn cir(self: *const RestoredData) *const ModuleEnv {
+            return &self.module_env;
+        }
     };
 
     /// Restore ModuleEnv and CIR from the cached data using relocations
@@ -195,7 +200,7 @@ pub const CacheModule = struct {
         _ = allocator; // Not needed for relocation-based deserialization
         _ = module_name; // Module name is stored in the cached data
         _ = source; // Source is stored in the cached data
-        
+
         // Validate cache data is present
         if (self.header.data_size == 0) {
             return error.EmptyCache;
@@ -208,25 +213,25 @@ pub const CacheModule = struct {
 
         // Get the data section
         const data_without_footer = self.data;
-        
+
         // Calculate relocation offset based on where data is now vs where it was during serialization
         // During serialization, all offsets were relative to IovecWriter buffer starting at 0
         // Now we need to relocate them to point to the actual data location
         const current_data_base_addr = @intFromPtr(data_without_footer.ptr);
         const relocation_offset = @as(isize, @intCast(current_data_base_addr)) - @as(isize, @intCast(self.header.original_memory_base));
-        
+
         // Copy ModuleEnv bytes from the correct offset to properly aligned memory
-        var module_env: base.ModuleEnv = undefined;
+        var module_env: ModuleEnv = undefined;
         const module_env_start = self.header.module_env_offset;
-        const module_env_end = module_env_start + @sizeOf(base.ModuleEnv);
+        const module_env_end = module_env_start + @sizeOf(ModuleEnv);
         if (module_env_end > self.header.data_size) {
             return error.CacheTooSmall;
         }
         @memcpy(std.mem.asBytes(&module_env), data_without_footer[module_env_start..module_env_end]);
-        
+
         // Apply relocations to fix up all the offset-based pointers
         module_env.relocate(relocation_offset);
-        
+
         // Note: store, diagnostics, external_decls, and imports are not serialized
         // They are heap-allocated during canonicalization and should be recreated
         // after cache restoration if needed
@@ -249,7 +254,7 @@ pub const CacheModule = struct {
         pub fn data(self: *const MappedCache) []align(SERIALIZATION_ALIGNMENT) const u8 {
             return self.cache_data.data();
         }
-        
+
         /// Create a MappedCache from CacheData
         pub fn fromCacheData(cache_data: CacheData) !MappedCache {
             const cache = try CacheModule.fromMappedMemory(cache_data.data());
@@ -265,7 +270,7 @@ pub const CacheModule = struct {
         // Since we use iovec serialization without individual component size tracking,
         // we can estimate component sizes by analyzing the serialized ModuleEnv structure
         const component_sizes = self.estimateComponentSizes();
-        
+
         return Diagnostics{
             .total_size = @sizeOf(Header) + @as(u32, @intCast(self.header.data_size)),
             .header_size = @sizeOf(Header),
@@ -274,32 +279,32 @@ pub const CacheModule = struct {
             .component_sizes = component_sizes,
         };
     }
-    
+
     /// Estimate component sizes based on the serialized data
     /// This provides approximate sizes since exact boundaries aren't stored in the current format
     fn estimateComponentSizes(self: *const CacheModule) ComponentSizes {
         // Since the iovec serialization doesn't store individual component sizes,
         // we provide rough estimates based on typical component relationships
         const data_size = @as(u32, @intCast(self.header.data_size));
-        const module_env_size = @sizeOf(base.ModuleEnv);
-        
+        const module_env_size = @sizeOf(ModuleEnv);
+
         // Reserve space for validation footer (16 bytes)
         const content_size = if (data_size > 16) data_size - 16 else data_size;
         const available_size = if (content_size > module_env_size) content_size - module_env_size else 0;
-        
+
         // Distribute estimated sizes based on typical usage patterns
         // These are rough estimates since exact sizes would require format changes
         const base_estimate = available_size / 8; // Divide among 8 components
-        
+
         return .{
-            .node_store = base_estimate,           // Usually the largest component
-            .string_store = base_estimate / 2,     // Moderate size
+            .node_store = base_estimate, // Usually the largest component
+            .string_store = base_estimate / 2, // Moderate size
             .ident_ids_for_slicing = base_estimate / 4, // Small arrays
-            .ident_store = base_estimate / 2,      // Moderate size  
-            .line_starts = base_estimate / 4,      // Small arrays
-            .types_store = base_estimate,          // Can be large
-            .exposed_items = base_estimate / 8,    // Usually small
-            .external_decls = base_estimate / 4,   // Variable size
+            .ident_store = base_estimate / 2, // Moderate size
+            .line_starts = base_estimate / 4, // Small arrays
+            .types_store = base_estimate, // Can be large
+            .exposed_items = base_estimate / 8, // Usually small
+            .external_decls = base_estimate / 4, // Variable size
         };
     }
 
@@ -493,7 +498,7 @@ test "Header alignment" {
 
 test "create and restore cache" {
     const gpa = std.testing.allocator;
-    
+
     // Real Roc module source for comprehensive testing
     const source =
         \\module [foo]
@@ -501,33 +506,33 @@ test "create and restore cache" {
         \\foo : U64 -> Str
         \\foo = |num| Num.toStr num
     ;
-    
-    // Create base ModuleEnv
-    var base_env = try base.ModuleEnv.init(gpa, source);
-    defer base_env.deinit();
-    
+
+    // Create ModuleEnv
+    var module_env = try ModuleEnv.init(gpa, source);
+    defer module_env.deinit();
+
     // Calculate line starts
-    try base_env.calcLineStarts();
-    
+    try module_env.calcLineStarts();
+
     // Freeze interners after adding all data
-    base_env.freezeInterners();
-    
+    module_env.freezeInterners();
+
     // Create cache from real data
-    const cache_data = try CacheModule.create(gpa, &base_env, undefined, 0, 0);
+    const cache_data = try CacheModule.create(gpa, &module_env, undefined, 0, 0);
     defer gpa.free(cache_data);
-    
+
     // Load cache
     const cache = try CacheModule.fromMappedMemory(cache_data);
-    
+
     // Validate structure
     try cache.validate();
-    
+
     // Restore data
     const restored = try cache.restore(gpa, "test", source);
-    
+
     // Verify restoration
-    try std.testing.expectEqual(base_env.source.len, restored.module_env.source.len);
-    try std.testing.expectEqualStrings(base_env.source, restored.module_env.source);
+    try std.testing.expectEqual(module_env.source.len, restored.module_env.source.len);
+    try std.testing.expectEqualStrings(module_env.source, restored.module_env.source);
 }
 
 test "cache filesystem roundtrip with in-memory storage" {
@@ -541,13 +546,13 @@ test "cache filesystem roundtrip with in-memory storage" {
         \\foo = |num| Num.toStr num
     ;
 
-    // Create base ModuleEnv
-    var module_env = try base.ModuleEnv.init(gpa, source);
+    // Create ModuleEnv
+    var module_env = try ModuleEnv.init(gpa, source);
     defer module_env.deinit();
-    
+
     // Calculate line starts
     try module_env.calcLineStarts();
-    
+
     // Freeze interners after adding all data
     module_env.freezeInterners();
 

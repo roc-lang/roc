@@ -10,7 +10,7 @@ const testing = std.testing;
 const base = @import("base");
 const parse = @import("../../parse.zig");
 const canonicalize = @import("../../canonicalize.zig");
-const ModuleEnv = @import("../../../compile/ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 const expectEqual = testing.expectEqual;
 const collections = @import("collections");
 
@@ -57,10 +57,10 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     }
 
     // Add exposed items to Json module
-    try json_env.exposed_items.addExposed(allocator, "decode");
-    try json_env.exposed_items.addExposed(allocator, "encode");
-    try json_env.exposed_items.addExposed(allocator, "JsonError");
-    try json_env.exposed_items.addExposed(allocator, "DecodeProblem");
+    try json_env.exposed_by_str.put(allocator, "decode", {});
+    try json_env.exposed_by_str.put(allocator, "encode", {});
+    try json_env.exposed_by_str.put(allocator, "JsonError", {});
+    try json_env.exposed_by_str.put(allocator, "DecodeProblem", {});
 
     try module_envs.put("Json", json_env);
 
@@ -73,9 +73,9 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     }
 
     // Add exposed items to Utils module
-    try utils_env.exposed_items.addExposed(allocator, "map");
-    try utils_env.exposed_items.addExposed(allocator, "filter");
-    try utils_env.exposed_items.addExposed(allocator, "Result");
+    try utils_env.exposed_by_str.put(allocator, "map", {});
+    try utils_env.exposed_by_str.put(allocator, "filter", {});
+    try utils_env.exposed_by_str.put(allocator, "Result", {});
 
     try module_envs.put("Utils", utils_env);
 
@@ -518,15 +518,15 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     }
 
     // Add exposed items
-    try math_env.exposed_items.addExposed(allocator, "add");
-    try math_env.exposed_items.addExposed(allocator, "multiply");
-    try math_env.exposed_items.addExposed(allocator, "PI");
+    try math_env.exposed_by_str.put(allocator, "add", {});
+    try math_env.exposed_by_str.put(allocator, "multiply", {});
+    try math_env.exposed_by_str.put(allocator, "PI", {});
 
     // Simulate having CIR node indices for these exposed items
     // In real usage, these would be set during canonicalization of MathUtils
-    try math_env.exposed_items.setNodeIndex(allocator, "add", 100);
-    try math_env.exposed_items.setNodeIndex(allocator, "multiply", 200);
-    try math_env.exposed_items.setNodeIndex(allocator, "PI", 300);
+    try math_env.exposed_nodes.put(allocator, "add", 100);
+    try math_env.exposed_nodes.put(allocator, "multiply", 200);
+    try math_env.exposed_nodes.put(allocator, "PI", 300);
 
     try module_envs.put("MathUtils", math_env);
 
@@ -591,7 +591,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
         empty_env.deinit();
         allocator.destroy(empty_env);
     }
-    try empty_env.exposed_items.addExposed(allocator, "undefined");
+    try empty_env.exposed_by_str.put(allocator, "undefined", {});
     // Don't set node index - should default to 0
     try module_envs.put("EmptyModule", empty_env);
 

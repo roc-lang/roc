@@ -9,10 +9,10 @@ const parse = @import("check/parse.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const Solver = @import("check/check_types.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
-const reporting = @import("reporting.zig");
+const reporting = @import("reporting");
 const Filesystem = @import("fs/Filesystem.zig");
 
-const ModuleEnv = @import("compile/ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 const AST = parse.AST;
 const cache_mod = @import("cache/mod.zig");
 const CacheManager = cache_mod.CacheManager;

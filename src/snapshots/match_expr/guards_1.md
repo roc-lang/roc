@@ -40,23 +40,6 @@ PARSE ERROR - guards_1.md:4:10:4:10
 UNDEFINED VARIABLE - guards_1.md:1:7:1:12
 UNKNOWN OPERATOR - guards_1.md:2:19:2:20
 UNUSED VARIABLE - guards_1.md:2:5:2:6
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - guards_1.md:2:30:2:32
-UNDEFINED VARIABLE - guards_1.md:2:42:2:43
-UNUSED VARIABLE - guards_1.md:2:32:2:41
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - guards_1.md:2:44:2:44
-INVALID PATTERN - :0:0:0:0
-UNDEFINED VARIABLE - guards_1.md:3:5:3:6
-INVALID PATTERN - :0:0:0:0
-UNDEFINED VARIABLE - guards_1.md:3:10:3:11
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - guards_1.md:3:19:3:43
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - guards_1.md:3:44:3:44
-INVALID PATTERN - :0:0:0:0
-UNKNOWN OPERATOR - guards_1.md:4:5:4:6
-INVALID PATTERN - :0:0:0:0
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -392,130 +375,6 @@ The unused variable is declared here:
     ^
 
 
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-
-**guards_1.md:2:30:2:32:**
-```roc
-    x if x > 0 => "positive: ${Num.toStr x}"
-```
-                             ^^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**guards_1.md:2:42:2:43:**
-```roc
-    x if x > 0 => "positive: ${Num.toStr x}"
-```
-                                         ^
-
-
-**UNUSED VARIABLE**
-Variable `toStr` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
-The unused variable is declared here:
-**guards_1.md:2:32:2:41:**
-```roc
-    x if x > 0 => "positive: ${Num.toStr x}"
-```
-                               ^^^^^^^^^
-
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-
-**guards_1.md:2:44:2:44:**
-```roc
-    x if x > 0 => "positive: ${Num.toStr x}"
-```
-                                           
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**guards_1.md:3:5:3:6:**
-```roc
-    x if x < 0 => "negative: ${Num.toStr x}"
-```
-    ^
-
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**guards_1.md:3:10:3:11:**
-```roc
-    x if x < 0 => "negative: ${Num.toStr x}"
-```
-         ^
-
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-
-**guards_1.md:3:19:3:43:**
-```roc
-    x if x < 0 => "negative: ${Num.toStr x}"
-```
-                  ^^^^^^^^^^^^^^^^^^^^^^^^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-
-**guards_1.md:3:44:3:44:**
-```roc
-    x if x < 0 => "negative: ${Num.toStr x}"
-```
-                                           
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-
-**guards_1.md:4:5:4:6:**
-```roc
-    _ => "other"
-```
-    ^
-
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),
@@ -582,76 +441,9 @@ match value {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-5.2
-	(match @1.1-5.2
-		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(branches
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-assign @2.5-2.6 (ident "x"))))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-runtime-error @2.20-2.30 (tag "pattern_not_canonicalized"))))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-assign @2.32-2.41 (ident "toStr"))))
-				(value
-					(e-runtime-error (tag "ident_not_in_scope"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-runtime-error @2.43-2.44 (tag "pattern_not_canonicalized"))))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-runtime-error @2.44-2.45 (tag "pattern_not_canonicalized"))))
-				(value
-					(e-runtime-error (tag "ident_not_in_scope"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-runtime-error @3.7-3.9 (tag "pattern_not_canonicalized"))))
-				(value
-					(e-binop @3.10-3.15 (op "lt")
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-int @3.14-3.15 (value "0")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-runtime-error @3.16-3.18 (tag "pattern_not_canonicalized"))))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-runtime-error @3.43-3.44 (tag "pattern_not_canonicalized"))))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-runtime-error @3.44-3.45 (tag "pattern_not_canonicalized"))))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-runtime-error @4.7-4.9 (tag "pattern_not_canonicalized"))))
-				(value
-					(e-string @4.10-4.17
-						(e-literal @4.11-4.16 (string "other"))))))))
+(e-runtime-error (tag "expr_not_canonicalized"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "Error"))
+(expr @2.19-2.20 (type "Error"))
 ~~~

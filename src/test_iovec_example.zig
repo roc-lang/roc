@@ -34,7 +34,6 @@ pub fn main() !void {
     const file = try std.fs.cwd().createFile("test_iovec_output.bin", .{});
     defer file.close();
 
-
     // Reset file position
     try file.seekTo(0);
 

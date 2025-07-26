@@ -229,28 +229,28 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
         /// Append this SortedArrayBuilder to an iovec writer for serialization
         pub fn appendToIovecs(self: *const Self, writer: *IovecWriter) !usize {
-            
+
             // Must be sorted before serialization
             if (!self.sorted) {
                 @panic("SortedArrayBuilder must be sorted before serialization");
             }
-            
+
             // Create a mutable copy of self that we can modify
             var builder_copy = self.*;
-            
+
             // Create a buffer for the final serialized struct
             const builder_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Self));
-            
+
             // Track this allocation so it gets freed when writer is deinitialized
             try writer.owned_buffers.append(builder_copy_buffer);
-            
+
             // Serialize entries array data
             const entries_offset = if (self.entries.items.len > 0) blk: {
                 const data = std.mem.sliceAsBytes(self.entries.items);
                 const offset = try writer.appendBytes(Entry, data);
                 break :blk offset;
             } else 0;
-            
+
             // Update pointer in the copy to use offset
             // For empty arrays, use sentinel value instead of 0 to avoid null pointer
             builder_copy.entries.items.ptr = if (entries_offset == 0)
@@ -258,22 +258,20 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             else
                 @ptrFromInt(entries_offset);
             builder_copy.entries.items.len = self.entries.items.len;
-            
+
             // Note: For string keys, we don't serialize the string data separately here.
             // This assumes that the strings are already managed elsewhere (e.g., in an interner)
-            // and we're just storing pointers/slices to them. If string keys need to be 
+            // and we're just storing pointers/slices to them. If string keys need to be
             // serialized as well, that would require additional handling.
-            
+
             // Copy the modified struct to the buffer
             @memcpy(builder_copy_buffer, std.mem.asBytes(&builder_copy));
-            
-            // NOW add the copy to iovecs after all pointers have been converted to offsets
+
+            // Now that all pointers have been converted to offsets, add the copy to iovecs
             const struct_offset = try writer.appendBytes(Self, builder_copy_buffer);
-            
+
             return struct_offset;
         }
-
-
     };
 }
 
@@ -303,9 +301,9 @@ test "SortedArrayBuilder basic operations" {
     // Test iovec serialization
     var writer = IovecWriter.init(allocator);
     defer writer.deinit();
-    
+
     _ = try builder.appendToIovecs(&writer);
-    
+
     // Verify we have some iovecs (basic smoke test)
     try testing.expect(writer.iovecs.items.len > 0);
 }
@@ -448,4 +446,3 @@ test "SortedArrayBuilder no duplicates case" {
     try testing.expectEqual(@as(?u16, 2), builder.get(allocator, "unique2"));
     try testing.expectEqual(@as(?u16, 3), builder.get(allocator, "unique3"));
 }
-

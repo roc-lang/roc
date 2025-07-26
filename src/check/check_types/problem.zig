@@ -6,15 +6,16 @@ const tracy = @import("../../tracy.zig");
 const collections = @import("collections");
 const can = @import("../canonicalize.zig");
 const types_mod = @import("types");
-const reporting = @import("../../reporting.zig");
 const snapshot = @import("./snapshot.zig");
+const compile = @import("compile");
+const reporting = @import("reporting");
 
 const Report = reporting.Report;
 const Document = reporting.Document;
-const UnderlineRegion = @import("../../reporting/document.zig").UnderlineRegion;
-const SourceCodeDisplayRegion = @import("../../reporting/document.zig").SourceCodeDisplayRegion;
+const UnderlineRegion = reporting.UnderlineRegion;
+const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
 
-const ModuleEnv = @import("../../compile/ModuleEnv.zig");
+const ModuleEnv = compile.ModuleEnv;
 const TypesStore = types_mod.Store;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -154,22 +155,22 @@ pub const ReportBuilder = struct {
 
     gpa: Allocator,
     buf: std.ArrayList(u8),
-    module_env: *const @import("../../compile/ModuleEnv.zig"),
-    can_ir: *const can.ModuleEnv,
+    module_env: *const ModuleEnv,
+    can_ir: *const ModuleEnv,
     snapshots: *const snapshot.Store,
     source: []const u8,
     filename: []const u8,
-    other_modules: []const *const can.ModuleEnv,
+    other_modules: []const *const ModuleEnv,
 
     /// Init report builder
     /// Only owned field is `buf`
     pub fn init(
         gpa: Allocator,
-        module_env: *const @import("../../compile/ModuleEnv.zig"),
-        can_ir: *const can.ModuleEnv,
+        module_env: *const ModuleEnv,
+        can_ir: *const ModuleEnv,
         snapshots: *const snapshot.Store,
         filename: []const u8,
-        other_modules: []const *const can.ModuleEnv,
+        other_modules: []const *const ModuleEnv,
     ) Self {
         return .{
             .gpa = gpa,

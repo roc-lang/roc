@@ -98,27 +98,24 @@ pub const Store = struct {
         }
     }
 
-
-
-
     /// Append this StringLiteral.Store to an iovec writer for serialization
     pub fn appendToIovecs(self: *const Store, writer: anytype) !usize {
-        
+
         // Create a mutable copy of self that we can modify
         var store_copy = self.*;
-        
+
         // Create a buffer for the final serialized struct
         const store_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Store));
-        
+
         // Track this allocation so it gets freed when writer is deinitialized
         try writer.owned_buffers.append(store_copy_buffer);
-        
+
         // Serialize buffer data
         const buffer_offset = if (self.buffer.items.len > 0) blk: {
             const offset = try writer.appendBytes(u8, self.buffer.items);
             break :blk offset;
         } else 0;
-        
+
         // Update pointer in the copy to use offset
         // For empty arrays, use sentinel value instead of 0 to avoid null pointer
         store_copy.buffer.items.ptr = if (buffer_offset == 0)
@@ -126,17 +123,15 @@ pub const Store = struct {
         else
             @ptrFromInt(buffer_offset);
         store_copy.buffer.items.len = self.buffer.items.len;
-        
+
         // Copy the modified struct to the buffer
         @memcpy(store_copy_buffer, std.mem.asBytes(&store_copy));
-        
-        // NOW add the copy to iovecs after all pointers have been converted to offsets
+
+        // Now that all pointers have been converted to offsets, add the copy to iovecs
         const struct_offset = try writer.appendBytes(Store, store_copy_buffer);
-        
+
         return struct_offset;
     }
-
-
 };
 
 test "insert" {
@@ -183,5 +178,3 @@ test "StringLiteral.Store empty store serialization" {
 
     try serialization.testing.testSerialization(Store, &empty_store, gpa);
 }
-
-

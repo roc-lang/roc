@@ -38,9 +38,6 @@ pub const SerializationError = error{
     UnsupportedVersion,
 };
 
-
-
-
 /// Helper function to write integers in little-endian format
 pub fn writeInt(comptime T: type, buffer: []u8, value: T) void {
     if (buffer.len < @sizeOf(T)) {
@@ -74,12 +71,8 @@ pub fn validateBuffer(required_size: usize, buffer: []const u8) SerializationErr
     }
 }
 
-
-
-
 test {
     _ = @import("test_iovec_serialize.zig");
     // Note: relocate functionality now implemented as methods on individual types
     // _ = @import("test_relocate.zig");
 }
-

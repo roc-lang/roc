@@ -7,8 +7,10 @@ const base = @import("base");
 const parse = @import("parse.zig");
 const canonicalize = @import("canonicalize.zig");
 const check_types = @import("check_types.zig");
-const ModuleEnv = @import("../compile/ModuleEnv.zig");
+const compile = @import("compile");
 
+const ModuleEnv = compile.ModuleEnv;
+const CanonicalizedExpr = canonicalize.CanonicalizedExpr;
 const test_allocator = testing.allocator;
 
 /// Helper to run parsing, canonicalization, and type checking on an expression
@@ -47,7 +49,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
     can.* = try canonicalize.init(cir, parse_ast, null);
 
     // Run canonicalization - for expressions
-    var canon_expr_idx: ?ModuleEnv.Expr.Idx = null;
+    var canon_expr_idx: ?CanonicalizedExpr = null;
     if (parse_ast.root_node_idx != 0) {
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
         canon_expr_idx = try can.canonicalizeExpr(expr_idx);
@@ -61,7 +63,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 
     // For expressions, check the expression directly
     if (canon_expr_idx) |expr_idx| {
-        _ = try checker.checkExpr(expr_idx);
+        _ = try checker.checkExpr(expr_idx.get_idx());
     }
 
     // Check if there are any type errors
@@ -185,7 +187,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
     can.* = try canonicalize.init(cir, parse_ast, null);
 
     // Run canonicalization - for statements
-    var canon_result: ?ModuleEnv.Expr.Idx = null;
+    var canon_result: ?CanonicalizedExpr = null;
     if (parse_ast.root_node_idx != 0) {
         const stmt_idx: parse.AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
         canon_result = try can.canonicalizeStatement(stmt_idx);
@@ -202,7 +204,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
         try checker.checkDefs();
     } else if (canon_result) |expr_idx| {
         // If no defs but we have an expression from the statement, check that
-        _ = try checker.checkExpr(expr_idx);
+        _ = try checker.checkExpr(expr_idx.get_idx());
     }
 
     // Check if there are any type errors

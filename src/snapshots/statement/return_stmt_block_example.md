@@ -36,7 +36,7 @@ The `else` branch has the type:
     _Str_
 
 But the `then` branch has the type:
-    _[Err([TooBig]_others)]_others2_
+    _{}_
 
 All branches in an `if` must have compatible types.
 
@@ -138,9 +138,7 @@ foo = |num| {
 										(e-tag @6.16-6.19 (name "Err")
 											(args
 												(e-tag @6.20-6.26 (name "TooBig")))))
-									(e-tag @6.16-6.19 (name "Err")
-										(args
-											(e-tag @6.20-6.26 (name "TooBig")))))))
+									(e-empty_record @5.25-7.6))))
 						(if-else
 							(e-block @7.12-9.6
 								(e-string @8.9-8.16

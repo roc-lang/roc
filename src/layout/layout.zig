@@ -7,6 +7,7 @@ const std = @import("std");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
+const ModuleEnv = @import("compile").ModuleEnv;
 
 const Ident = base.Ident;
 const target = base.target;
@@ -104,10 +105,15 @@ pub const Idx = enum(@Type(.{
     _,
 };
 
-/// Closure layout - stores environment size
-pub const ClosureLayout = packed struct {
-    /// Size of the captured environment in bytes
-    env_size: u16,
+/// Represents a closure with its captured environment
+pub const Closure = struct {
+    body_idx: ModuleEnv.Expr.Idx,
+    params: ModuleEnv.Pattern.Span,
+    captures_pattern_idx: ModuleEnv.Pattern.Idx,
+    // Layout index for the captured environment record
+    captures_layout_idx: Idx,
+    // Original lambda expression index for accessing captures
+    lambda_expr_idx: ModuleEnv.Expr.Idx,
 };
 
 /// The union portion of the Layout packed tagged union (the tag being LayoutTag).
@@ -121,7 +127,7 @@ pub const LayoutUnion = packed union {
     list_of_zst: void,
     record: RecordLayout,
     tuple: TupleLayout,
-    closure: ClosureLayout,
+    closure: void,
 };
 
 /// Record field layout
@@ -292,7 +298,7 @@ pub const Layout = packed struct {
             .list, .list_of_zst => target_usize.alignment(),
             .record => self.data.record.alignment,
             .tuple => self.data.tuple.alignment,
-            .closure => std.mem.Alignment.@"16", // TODO what should this be?
+            .closure => target_usize.alignment(),
         };
     }
 
@@ -361,9 +367,9 @@ pub const Layout = packed struct {
         return Layout{ .data = .{ .tuple = .{ .alignment = tuple_alignment, .idx = tuple_idx } }, .tag = .tuple };
     }
 
-    pub fn closure(env_size: u16) Layout {
+    pub fn closure() Layout {
         return Layout{
-            .data = .{ .closure = .{ .env_size = env_size } },
+            .data = .{ .closure = {} },
             .tag = .closure,
         };
     }

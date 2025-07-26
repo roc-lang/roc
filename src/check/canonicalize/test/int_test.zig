@@ -7,10 +7,13 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
+const types = @import("types");
+const compile = @import("compile");
+
 const parse = @import("../../parse.zig");
 const canonicalize = @import("../../canonicalize.zig");
-const ModuleEnv = canonicalize.ModuleEnv;
-const types = @import("types");
+
+const ModuleEnv = compile.ModuleEnv;
 
 // Note: Each test should create its own GPA to avoid memory leak detection issues
 
@@ -54,7 +57,7 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
         .module_env = module_env,
         .parse_ast = parse_ast,
         .can = can,
-        .expr_idx = canonical_expr_idx,
+        .expr_idx = canonical_expr_idx.get_idx(),
     };
 }
 

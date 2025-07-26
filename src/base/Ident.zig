@@ -177,9 +177,6 @@ pub const Store = struct {
         return self.interner.contains(text);
     }
 
-
-
-
     /// Freeze the identifier store, preventing any new entries from being added.
     pub fn freeze(self: *Store) void {
         self.interner.freeze();
@@ -190,40 +187,40 @@ pub const Store = struct {
         // Create a mutable copy of self as a regular byte buffer
         const store_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Store));
         @memcpy(store_copy_buffer, std.mem.asBytes(self));
-        
+
         // Track this allocation so it gets freed when writer is deinitialized
         try writer.owned_buffers.append(store_copy_buffer);
-        
+
         // Get access to the struct in the buffer for easier manipulation
         const store_copy = @as(*Store, @ptrCast(@alignCast(store_copy_buffer.ptr)));
-        
+
         // Serialize interner (it handles its own pointers)
         _ = try self.interner.appendToIovecs(writer);
-        
+
         // Serialize attributes array
         const attributes_offset = if (self.attributes.items.len > 0) blk: {
             const bytes = std.mem.sliceAsBytes(self.attributes.items);
             const offset = try writer.appendBytes(u8, bytes);
             break :blk offset;
         } else 0;
-        
+
         // Update pointers in the copy to use offsets
         store_copy.attributes.items.ptr = if (attributes_offset == 0)
             @ptrFromInt(serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL)
         else
             @ptrFromInt(attributes_offset);
         store_copy.attributes.items.len = self.attributes.items.len;
-        
-        // NOW add the copy to iovecs after all pointers have been converted to offsets
+
+        // Now that all pointers have been converted to offsets, add the copy to iovecs
         const struct_offset = try writer.appendBytes(Store, store_copy_buffer);
-        
+
         return struct_offset;
     }
 
     /// Relocate all pointers in this Ident.Store by the given offset
     pub fn relocate(self: *Store, offset: isize) void {
         self.interner.relocate(offset);
-        
+
         // Relocate attributes array
         if (self.attributes.items.len > 0) {
             const old_ptr = @intFromPtr(self.attributes.items.ptr);
@@ -286,7 +283,6 @@ test "from_bytes creates ignored identifier" {
     try std.testing.expect(result.attributes.ignored == true);
     try std.testing.expect(result.attributes.reassignable == false);
 }
-
 
 test "Ident.Store serialization comprehensive" {
     const gpa = std.testing.allocator;

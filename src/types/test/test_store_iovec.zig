@@ -67,7 +67,6 @@ test "Store streaming serialization - with data" {
     try testing.expect(buffer.len > 0);
 }
 
-
 test "Store streaming serialization - alignment verification" {
     const allocator = testing.allocator;
 
@@ -102,7 +101,6 @@ test "Store streaming serialization - alignment verification" {
     offset = std.mem.alignForward(usize, offset, alignment);
     try testing.expectEqual(@as(usize, 0), offset % alignment);
 }
-
 
 test "Store streaming serialization - error handling" {
     const allocator = testing.allocator;

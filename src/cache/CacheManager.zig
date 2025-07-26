@@ -1,7 +1,7 @@
-
 const std = @import("std");
 const base = @import("base");
-const reporting = @import("../reporting.zig");
+const canonicalize = @import("../check/canonicalize.zig");
+const reporting = @import("reporting");
 const Filesystem = @import("../fs/Filesystem.zig");
 const cache_mod = @import("mod.zig");
 const Cache = cache_mod.CacheModule;
@@ -12,7 +12,7 @@ const SERIALIZATION_ALIGNMENT = 16;
 const coordinate_simple = @import("../coordinate_simple.zig");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = base.ModuleEnv;
+const ModuleEnv = @import("compile").ModuleEnv;
 
 /// Result of a cache lookup operation
 pub const CacheResult = union(enum) {
@@ -124,16 +124,7 @@ pub const CacheManager = struct {
         };
 
         // Create cache from the compile.ModuleEnv
-        // Since compile.ModuleEnv contains all the base.ModuleEnv fields, we cast it
-        // Note: This works because compile.ModuleEnv extends base.ModuleEnv with the same initial fields
-        const base_env_ptr = @as(*const base.ModuleEnv, @ptrCast(process_result.cir));
-        const cache_data = Cache.create(
-            self.allocator, 
-            base_env_ptr,
-            process_result.cir,
-            process_result.error_count,
-            process_result.warning_count
-        ) catch |err| {
+        const cache_data = Cache.create(self.allocator, process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }
@@ -282,29 +273,12 @@ pub const CacheManager = struct {
         // Users can use --no-cache to see diagnostic reports
         const reports = try self.allocator.alloc(reporting.Report, 0);
 
-        // Allocate and create compile.ModuleEnv from restored base.ModuleEnv
-        const compile_mod = @import("../compile/ModuleEnv.zig");
-        const cir = try self.allocator.create(compile_mod);
-        
-        // Copy base fields from restored.module_env to cir
-        // This works because compile.ModuleEnv has the same initial fields as base.ModuleEnv
-        cir.gpa = restored.module_env.gpa;
-        cir.idents = restored.module_env.idents;
-        cir.ident_ids_for_slicing = restored.module_env.ident_ids_for_slicing;
-        cir.strings = restored.module_env.strings;
-        cir.types = restored.module_env.types;
-        cir.exposed_items = restored.module_env.exposed_items;
-        cir.line_starts = restored.module_env.line_starts;
-        cir.source = restored.module_env.source;
-        
-        // Initialize CIR-specific fields with empty values
-        cir.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
-        cir.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
-        cir.external_decls = try compile_mod.ExternalDecl.SafeList.initCapacity(self.allocator, 0);
-        cir.imports = compile_mod.Import.Store.init();
-        cir.module_name = "";
-        cir.diagnostics = compile_mod.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
-        cir.store = try compile_mod.NodeStore.initCapacity(self.allocator, 0);
+        // The restored data already contains a compile.ModuleEnv
+        const cir = try self.allocator.create(ModuleEnv);
+        cir.* = restored.module_env;
+
+        // CIR fields should already be initialized from the restored data
+        // No need to reinitialize them here
 
         // Store is now inside module_env.store
         // (removed unused variable)

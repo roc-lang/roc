@@ -27,7 +27,3 @@ fn createStandardAlignedBuffer(allocator: Allocator, size: usize) ![]align(SERIA
 fn createStandardAlignedCanaryBuffer(allocator: Allocator, size: usize) ![]align(SERIALIZATION_ALIGNMENT) u8 {
     return try safety.createStandardAlignedCanaryBuffer(allocator, size);
 }
-
-
-
-

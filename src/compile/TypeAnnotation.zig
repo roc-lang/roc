@@ -5,10 +5,11 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const ModuleEnv = @import("ModuleEnv.zig");
+const compile = @import("compile");
 const collections = @import("collections");
-const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
+const ModuleEnv = compile.ModuleEnv;
+const Diagnostic = compile.Diagnostic;
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;

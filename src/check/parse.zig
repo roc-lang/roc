@@ -12,7 +12,7 @@ const TokenizedBuffer = tokenize.TokenizedBuffer;
 const NodeList = AST.NodeList;
 const Diagnostic = AST.Diagnostic;
 const Parser = @import("parse/Parser.zig");
-const ModuleEnv = @import("../compile/ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 
 pub const Node = @import("parse/Node.zig");
 pub const NodeStore = @import("parse/NodeStore.zig");

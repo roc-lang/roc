@@ -197,20 +197,21 @@ main! = |_| {}
 			(args
 				(p-assign @4.12-4.13 (ident "f"))
 				(p-assign @4.15-4.16 (ident "g")))
-			(e-lambda @4.18-4.29
-				(args
-					(p-assign @4.19-4.20 (ident "x")))
+			(e-closure @4.18-4.29
 				(captures
-					(capture @4.12-4.13 (ident "f"))
-					(capture @4.15-4.16 (ident "g")))
-				(e-call @4.22-4.29
-					(e-lookup-local @4.22-4.23
-						(p-assign @4.12-4.13 (ident "f")))
-					(e-call @4.24-4.28
-						(e-lookup-local @4.24-4.25
-							(p-assign @4.15-4.16 (ident "g")))
-						(e-lookup-local @4.26-4.27
-							(p-assign @4.19-4.20 (ident "x"))))))))
+					(capture @4.15-4.16 (ident "g"))
+					(capture @4.12-4.13 (ident "f")))
+				(e-lambda @4.18-4.29
+					(args
+						(p-assign @4.19-4.20 (ident "x")))
+					(e-call @4.22-4.29
+						(e-lookup-local @4.22-4.23
+							(p-assign @4.12-4.13 (ident "f")))
+						(e-call @4.24-4.28
+							(e-lookup-local @4.24-4.25
+								(p-assign @4.15-4.16 (ident "g")))
+							(e-lookup-local @4.26-4.27
+								(p-assign @4.19-4.20 (ident "x")))))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15

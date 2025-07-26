@@ -4,11 +4,12 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
+const compile = @import("compile");
 const RocDec = @import("builtins").RocDec;
-const ModuleEnv = @import("../../../compile/ModuleEnv.zig");
-const NodeStore = @import("../../../compile/NodeStore.zig");
 
 const from_raw_offsets = base.Region.from_raw_offsets;
+const ModuleEnv = compile.ModuleEnv;
+const NodeStore = compile.NodeStore;
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 const CalledVia = base.CalledVia;
@@ -289,10 +290,15 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(ModuleEnv.Expr{
+        .e_closure = .{
+            .lambda_idx = rand_idx(ModuleEnv.Expr.Idx),
+            .captures = ModuleEnv.Expr.Capture.Span{ .span = rand_span() },
+        },
+    });
+    try expressions.append(ModuleEnv.Expr{
         .e_lambda = .{
             .args = ModuleEnv.Pattern.Span{ .span = rand_span() },
             .body = rand_idx(ModuleEnv.Expr.Idx),
-            .captures = ModuleEnv.Expr.Capture.Span{ .span = rand_span() },
         },
     });
     try expressions.append(ModuleEnv.Expr{

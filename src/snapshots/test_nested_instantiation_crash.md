@@ -170,20 +170,21 @@ answer = composed([42])
 					(ty-var @8.39-8.40 (name "a"))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "composed"))
-		(e-lambda @12.12-12.41
-			(args
-				(p-assign @12.13-12.14 (ident "n")))
+		(e-closure @12.12-12.41
 			(captures
-				(capture @9.1-9.10 (ident "get_value"))
-				(capture @6.1-6.12 (ident "make_record")))
-			(e-call @12.16-12.41
-				(e-lookup-local @12.16-12.25
-					(p-assign @9.1-9.10 (ident "get_value")))
-				(e-call @12.26-12.40
-					(e-lookup-local @12.26-12.37
-						(p-assign @6.1-6.12 (ident "make_record")))
-					(e-lookup-local @12.38-12.39
-						(p-assign @12.13-12.14 (ident "n"))))))
+				(capture @6.1-6.12 (ident "make_record"))
+				(capture @9.1-9.10 (ident "get_value")))
+			(e-lambda @12.12-12.41
+				(args
+					(p-assign @12.13-12.14 (ident "n")))
+				(e-call @12.16-12.41
+					(e-lookup-local @12.16-12.25
+						(p-assign @9.1-9.10 (ident "get_value")))
+					(e-call @12.26-12.40
+						(e-lookup-local @12.26-12.37
+							(p-assign @6.1-6.12 (ident "make_record")))
+						(e-lookup-local @12.38-12.39
+							(p-assign @12.13-12.14 (ident "n")))))))
 		(annotation @12.1-12.9
 			(declared-type
 				(ty-fn @11.12-11.26 (effectful false)

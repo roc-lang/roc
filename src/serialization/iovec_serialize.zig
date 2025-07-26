@@ -38,7 +38,6 @@ pub const IovecWriter = struct {
 
     const Self = @This();
 
-
     pub fn init(allocator: std.mem.Allocator) Self {
         return .{
             .iovecs = std.ArrayList(std.posix.iovec_const).init(allocator),
@@ -76,7 +75,7 @@ pub const IovecWriter = struct {
             try self.appendBytesRaw(padding);
             try self.owned_buffers.append(padding);
         }
-        
+
         const start_offset = self.current_offset;
         try self.appendBytesRaw(data);
         return start_offset;
@@ -91,7 +90,7 @@ pub const IovecWriter = struct {
     pub fn appendStruct(self: *Self, value: anytype) !usize {
         const T = @TypeOf(value);
         const info = @typeInfo(T);
-        
+
         // Handle different types appropriately
         const bytes = switch (info) {
             .pointer => |ptr_info| blk: {
@@ -113,7 +112,7 @@ pub const IovecWriter = struct {
             },
             else => @compileError("appendStruct doesn't support type " ++ @typeName(T)),
         };
-        
+
         // The type alignment we need
         const AlignType = if (info == .pointer and info.pointer.size == .One) info.pointer.child else T;
         return self.appendBytes(AlignType, bytes);
@@ -135,7 +134,6 @@ pub const IovecWriter = struct {
         }
     }
 
-
     /// Get total size that would be written
     pub fn totalSize(self: *const Self) usize {
         return self.current_offset;
@@ -146,17 +144,17 @@ pub const IovecWriter = struct {
     pub fn serialize(self: *const Self, allocator: std.mem.Allocator) ![]u8 {
         // Use current_offset which already tracks the total size correctly
         const buffer = try allocator.alloc(u8, self.current_offset);
-        
+
         // Fill initial padding with zeros
         @memset(buffer[0..MIN_OFFSET], 0);
-        
+
         // Copy all iovec data into the buffer
         var write_offset: usize = MIN_OFFSET;
         for (self.iovecs.items) |iov| {
             @memcpy(buffer[write_offset..][0..iov.len], iov.base[0..iov.len]);
             write_offset += iov.len;
         }
-        
+
         return buffer;
     }
 
@@ -166,7 +164,7 @@ pub const IovecWriter = struct {
             // Windows doesn't have pwritev, so serialize to a buffer and write it
             const buffer = try self.serialize(self.allocator);
             defer self.allocator.free(buffer);
-            
+
             // Write the entire buffer at once
             try file.pwriteAll(buffer, offset);
         } else {
@@ -253,7 +251,7 @@ pub fn SerializableToIovecs(comptime Self: type) type {
     };
 }
 
-/// Helper to create a buffer from iovecs for testing/debugging  
+/// Helper to create a buffer from iovecs for testing/debugging
 pub fn iovecsToBuf(allocator: std.mem.Allocator, iovecs: []const std.posix.iovec_const) ![]u8 {
     var total_size: usize = 0;
     for (iovecs) |iov| {
@@ -354,7 +352,6 @@ test "IovecWriter atomic file write" {
     try testing.expectEqual(@as(usize, 1), count);
 }
 
-
 test "IovecWriter partial write simulation" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -427,11 +424,11 @@ test "IovecWriter serialize method" {
     // Add some data
     _ = try writer.appendBytes(u8, "hello");
     _ = try writer.appendBytes(u8, "world");
-    
+
     // Test the serialize method
     const buffer = try writer.serialize(allocator);
     defer allocator.free(buffer);
-    
+
     try testing.expectEqual(@as(usize, 10), buffer.len);
     try testing.expectEqualStrings("helloworld", buffer);
 }
@@ -452,7 +449,7 @@ test "IovecWriter Windows fallback" {
     // Create temporary file for testing
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    
+
     const tmp_file = try tmp_dir.dir.createFile("test_iovec.bin", .{});
     defer tmp_file.close();
 
@@ -467,4 +464,3 @@ test "IovecWriter Windows fallback" {
     try testing.expectEqual(@as(usize, 10), bytes_read);
     try testing.expectEqualStrings("helloworld", read_buffer[0..bytes_read]);
 }
-

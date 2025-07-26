@@ -8,7 +8,7 @@ const collections = @import("collections");
 
 const tokenize = @import("check/parse/tokenize.zig");
 const parse = @import("check/parse.zig");
-const ModuleEnv = @import("compile/ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 
 const Allocator = std.mem.Allocator;
 

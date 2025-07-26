@@ -5,12 +5,15 @@
 //! of shadowing behavior during the canonicalization process.
 
 const std = @import("std");
-const testing = std.testing;
+const compile = @import("compile");
+
 const AST = @import("../../parse/AST.zig");
 const canonicalize = @import("../../canonicalize.zig");
-const ModuleEnv = canonicalize.ModuleEnv;
 const parse = @import("../../parse.zig");
 const tokenize = @import("../../parse/tokenize.zig");
+
+const testing = std.testing;
+const ModuleEnv = compile.ModuleEnv;
 
 test "exposed but not implemented - values" {
     const allocator = testing.allocator;
@@ -362,13 +365,13 @@ test "exposed_items is populated correctly" {
 
     try canonicalizer.canonicalizeFile();
 
-    // Check that exposed_items contains all exposed items
-    try testing.expect(env.exposed_items.contains(allocator, "foo"));
-    try testing.expect(env.exposed_items.contains(allocator, "bar"));
-    try testing.expect(env.exposed_items.contains(allocator, "MyType"));
+    // Check that exposed_by_str contains all exposed items
+    try testing.expect(env.exposed_by_str.contains("foo"));
+    try testing.expect(env.exposed_by_str.contains("bar"));
+    try testing.expect(env.exposed_by_str.contains("MyType"));
 
     // Should have exactly 3 entries (duplicates not stored)
-    try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
+    try testing.expectEqual(@as(usize, 3), env.exposed_by_str.count());
 }
 
 test "exposed_items persists after canonicalization" {
@@ -394,13 +397,13 @@ test "exposed_items persists after canonicalization" {
 
     try canonicalizer.canonicalizeFile();
 
-    // All exposed items should be in exposed_items, even those not implemented
-    try testing.expect(env.exposed_items.contains(allocator, "x"));
-    try testing.expect(env.exposed_items.contains(allocator, "y"));
-    try testing.expect(env.exposed_items.contains(allocator, "z"));
+    // All exposed items should be in exposed_by_str, even those not implemented
+    try testing.expect(env.exposed_by_str.contains("x"));
+    try testing.expect(env.exposed_by_str.contains("y"));
+    try testing.expect(env.exposed_by_str.contains("z"));
 
     // Verify the map persists in env after canonicalization is complete
-    try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
+    try testing.expectEqual(@as(usize, 3), env.exposed_by_str.count());
 }
 
 test "exposed_items never has entries removed" {
@@ -426,13 +429,13 @@ test "exposed_items never has entries removed" {
 
     try canonicalizer.canonicalizeFile();
 
-    // All exposed items should remain in exposed_items
+    // All exposed items should remain in exposed_by_str
     // Even though foo appears twice and baz is not implemented,
-    // exposed_items should have all unique exposed identifiers
-    try testing.expect(env.exposed_items.contains(allocator, "foo"));
-    try testing.expect(env.exposed_items.contains(allocator, "bar"));
-    try testing.expect(env.exposed_items.contains(allocator, "baz"));
+    // exposed_by_str should have all unique exposed identifiers
+    try testing.expect(env.exposed_by_str.contains("foo"));
+    try testing.expect(env.exposed_by_str.contains("bar"));
+    try testing.expect(env.exposed_by_str.contains("baz"));
 
     // Should have exactly 3 unique entries
-    try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
+    try testing.expectEqual(@as(usize, 3), env.exposed_by_str.count());
 }

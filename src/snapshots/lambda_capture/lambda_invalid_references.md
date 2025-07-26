@@ -59,15 +59,16 @@ NO CHANGE
 (e-lambda @1.1-1.14
 	(args
 		(p-assign @1.2-1.3 (ident "x")))
-	(e-lambda @1.5-1.14
-		(args
-			(p-assign @1.6-1.7 (ident "y")))
+	(e-closure @1.5-1.14
 		(captures
 			(capture @1.2-1.3 (ident "x")))
-		(e-binop @1.9-1.14 (op "add")
-			(e-lookup-local @1.9-1.10
-				(p-assign @1.2-1.3 (ident "x")))
-			(e-runtime-error (tag "ident_not_in_scope")))))
+		(e-lambda @1.5-1.14
+			(args
+				(p-assign @1.6-1.7 (ident "y")))
+			(e-binop @1.9-1.14 (op "add")
+				(e-lookup-local @1.9-1.10
+					(p-assign @1.2-1.3 (ident "x")))
+				(e-runtime-error (tag "ident_not_in_scope"))))))
 ~~~
 # TYPES
 ~~~clojure

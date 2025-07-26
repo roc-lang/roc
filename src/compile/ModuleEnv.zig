@@ -9,8 +9,12 @@ const std = @import("std");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
-const reporting = @import("reporting");
-pub const CIR = @import("CIR.zig");
+const compile = @import("compile");
+const serialization = @import("serialization");
+
+const TypeWriter = types_mod.TypeWriter;
+
+pub const CIR = compile.CIR;
 
 // Re-export types from CIR module
 /// Definition type for value and function definitions
@@ -65,9 +69,12 @@ idents: Ident.Store,
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 types: types_mod.Store,
-/// Tracks exposed items by their names and associated CIR node indices
-/// Uses a sorted array for efficient serialization and relocation
-exposed_items: collections.ExposedItems,
+/// Map of exposed items by their string representation (not interned)
+/// This is built during canonicalization and preserved for later use
+exposed_by_str: collections.SafeStringHashMap(void),
+/// Map of exposed item names to their node indices (stored as u16)
+/// This is populated during canonicalization to allow cross-module lookups
+exposed_nodes: collections.SafeStringHashMap(u16),
 
 /// Line starts for error reporting. We retain only start and offset positions in the IR
 /// and then use these line starts to calculate the line number and column number as required.
@@ -124,7 +131,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .ident_ids_for_slicing = try collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
         .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
         .types = try types_mod.Store.initCapacity(gpa, 2048, 512),
-        .exposed_items = collections.ExposedItems.init(),
+        .exposed_by_str = try collections.SafeStringHashMap(void).initCapacity(gpa, 64),
+        .exposed_nodes = try collections.SafeStringHashMap(u16).initCapacity(gpa, 64),
         .line_starts = try collections.SafeList(u32).initCapacity(gpa, 256),
         .source = source,
         // Initialize compilation fields with empty/default values
@@ -145,7 +153,8 @@ pub fn deinit(self: *Self) void {
     self.strings.deinit(self.gpa);
     self.types.deinit();
     self.line_starts.deinit(self.gpa);
-    self.exposed_items.deinit(self.gpa);
+    self.exposed_by_str.deinit(self.gpa);
+    self.exposed_nodes.deinit(self.gpa);
     // Clean up compilation fields
     self.external_decls.deinit(self.gpa);
     self.imports.deinit(self.gpa);
@@ -186,8 +195,6 @@ pub fn calcLineStarts(self: *Self) !void {
 pub fn freezeInterners(self: *Self) void {
     self.idents.freeze();
     self.strings.freeze();
-    // Sort and deduplicate exposed items at the end of canonicalization
-    self.exposed_items.ensureSorted(self.gpa);
 }
 
 // ===== Module compilation functionality =====
@@ -1361,7 +1368,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExpr
     const gpa = self.gpa;
 
     // Create TypeWriter for converting types to strings
-    var type_writer = try @import("type_writers.zig").TypeWriter.init(gpa, self);
+    var type_writer = try TypeWriter.init(gpa, self);
     defer type_writer.deinit();
 
     if (maybe_expr_idx) |expr_idx| {
@@ -1549,5 +1556,121 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExpr
         try tree.endNode(exprs_begin, exprs_attrs);
 
         try tree.endNode(root_begin, attrs);
+    }
+}
+
+/// Append this ModuleEnv to an iovec writer for serialization
+pub fn appendToIovecs(self: *const Self, writer: *serialization.IovecWriter) !usize {
+    const iovec_serialize = serialization.iovec_serialize;
+
+    // Create a mutable copy of self that we can modify
+    var env_copy = self.*;
+
+    // Create a buffer for the final serialized struct
+    const env_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Self));
+
+    // Track this allocation so it gets freed when writer is deinitialized
+    try writer.owned_buffers.append(env_copy_buffer);
+
+    // Serialize complex structures - they handle their own pointers using duplicate-and-mutate
+    // We don't need to update any pointers for these as they manage themselves
+    _ = try self.idents.appendToIovecs(writer);
+    _ = try self.strings.appendToIovecs(writer);
+    _ = try self.types.appendToIovecs(writer);
+    _ = try self.exposed_by_str.appendToIovecs(writer);
+    _ = try self.exposed_nodes.appendToIovecs(writer);
+    _ = try self.store.appendToIovecs(writer);
+    _ = try self.external_decls.appendToIovecs(writer);
+
+    // Serialize simple array data and update pointers in our copy
+    const ident_ids_offset = if (self.ident_ids_for_slicing.items.items.len > 0) blk: {
+        const bytes = std.mem.sliceAsBytes(self.ident_ids_for_slicing.items.items);
+        // Use Ident.Idx as the type to ensure proper alignment
+        const offset = try writer.appendBytes(Ident.Idx, bytes);
+        break :blk offset;
+    } else 0;
+
+    const line_starts_offset = if (self.line_starts.items.items.len > 0) blk: {
+        const bytes = std.mem.sliceAsBytes(self.line_starts.items.items);
+        // Use u32 as the type to ensure proper alignment
+        const offset = try writer.appendBytes(u32, bytes);
+        break :blk offset;
+    } else 0;
+
+    const source_offset = if (self.source.len > 0) blk: {
+        const offset = try writer.appendBytes(u8, self.source);
+        break :blk offset;
+    } else 0;
+
+    const module_name_offset = if (self.module_name.len > 0) blk: {
+        const offset = try writer.appendBytes(u8, self.module_name);
+        break :blk offset;
+    } else 0;
+
+    // Update pointers in our copy
+    env_copy.ident_ids_for_slicing.items.items.ptr = if (ident_ids_offset == 0)
+        @ptrFromInt(iovec_serialize.EMPTY_ARRAY_SENTINEL)
+    else
+        @ptrFromInt(ident_ids_offset);
+    env_copy.ident_ids_for_slicing.items.items.len = self.ident_ids_for_slicing.items.items.len;
+
+    env_copy.line_starts.items.items.ptr = if (line_starts_offset == 0)
+        @ptrFromInt(iovec_serialize.EMPTY_ARRAY_SENTINEL)
+    else
+        @ptrFromInt(line_starts_offset);
+    env_copy.line_starts.items.items.len = self.line_starts.items.items.len;
+
+    env_copy.source.ptr = if (source_offset == 0)
+        @ptrFromInt(iovec_serialize.EMPTY_ARRAY_SENTINEL)
+    else
+        @ptrFromInt(source_offset);
+    env_copy.source.len = self.source.len;
+
+    env_copy.module_name.ptr = if (module_name_offset == 0)
+        @ptrFromInt(iovec_serialize.EMPTY_ARRAY_SENTINEL)
+    else
+        @ptrFromInt(module_name_offset);
+    env_copy.module_name.len = self.module_name.len;
+
+    // Copy the modified struct into the buffer
+    @memcpy(env_copy_buffer, std.mem.asBytes(&env_copy));
+
+    // Serialize the final struct
+    const struct_offset = try writer.appendBytes(Self, env_copy_buffer);
+
+    return struct_offset;
+}
+
+/// Relocate all pointers in this ModuleEnv by the given offset
+pub fn relocate(self: *Self, offset: isize) void {
+    // Note: gpa is not relocated as it's typically a vtable pointer
+
+    // Relocate ident_ids_for_slicing
+    self.ident_ids_for_slicing.relocate(offset);
+
+    // Relocate other fields
+    self.idents.relocate(offset);
+    self.strings.relocate(offset);
+    self.types.relocate(offset);
+    self.exposed_by_str.relocate(offset);
+    self.exposed_nodes.relocate(offset);
+    self.store.relocate(offset);
+    self.external_decls.relocate(offset);
+
+    // Relocate line_starts
+    self.line_starts.relocate(offset);
+
+    // Relocate slice pointers
+    const iovec_serialize = serialization.iovec_serialize;
+
+    // Only relocate if not a sentinel value
+    if (@intFromPtr(self.source.ptr) != iovec_serialize.EMPTY_ARRAY_SENTINEL and self.source.len > 0) {
+        const new_addr = @as(isize, @intCast(@intFromPtr(self.source.ptr))) + offset;
+        self.source.ptr = @ptrFromInt(@as(usize, @intCast(new_addr)));
+    }
+
+    if (@intFromPtr(self.module_name.ptr) != iovec_serialize.EMPTY_ARRAY_SENTINEL and self.module_name.len > 0) {
+        const new_addr = @as(isize, @intCast(@intFromPtr(self.module_name.ptr))) + offset;
+        self.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_addr)));
     }
 }

@@ -9,9 +9,10 @@ const testing = std.testing;
 const base = @import("base");
 const parse = @import("../../parse.zig");
 const canonicalize = @import("../../canonicalize.zig");
-const ModuleEnv = @import("../../../compile/ModuleEnv.zig");
+const compile = @import("compile");
 const types = @import("types");
 const RocDec = @import("builtins").RocDec;
+const ModuleEnv = compile.ModuleEnv;
 
 // Note: Each test should create its own GPA to avoid memory leak detection issues
 
@@ -40,9 +41,9 @@ fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct 
     // Check if parsing produced an error
     if (parse_ast.parse_diagnostics.items.len > 0 or parse_ast.tokenize_diagnostics.items.len > 0) {
         // Parsing failed, create a runtime error
-        const diagnostic_idx = try module_env.addDiagnostic(.{ .invalid_num_literal = .{
+        const diagnostic_idx = try module_env.addDiagnosticAndTypeVar(.{ .invalid_num_literal = .{
             .region = base.Region.zero(),
-        } });
+        } }, types.Content{ .err = {} });
         const error_expr_idx = try module_env.addExprAndTypeVar(ModuleEnv.Expr{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, types.Content{ .err = {} }, base.Region.zero());
         return .{
             .module_env = module_env,
@@ -58,7 +59,7 @@ fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct 
         .module_env = module_env,
         .parse_ast = parse_ast,
         .can = can,
-        .expr_idx = canonical_expr_idx,
+        .expr_idx = (canonical_expr_idx.get_idx()),
     };
 }
 

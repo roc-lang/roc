@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const compile = @import("../compile/ModuleEnv.zig");
+const compile = @import("compile");
 const parse = @import("../check/parse.zig");
 const canonicalize = @import("../check/canonicalize.zig");
 const check_types = @import("../check/check_types.zig");
@@ -16,7 +16,7 @@ const stack = @import("../eval/stack.zig");
 const writers = types.writers;
 const Allocator = std.mem.Allocator;
 const target = base.target;
-const ModuleEnv = @import("../compile/ModuleEnv.zig");
+const ModuleEnv = compile.ModuleEnv;
 const AST = parse.AST;
 
 /// Type of definition stored in the REPL history
@@ -172,7 +172,7 @@ pub const Repl = struct {
 
     /// Try to parse input as a statement
     fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
-        var module_env = try compile.init(self.allocator, input);
+        var module_env = try ModuleEnv.init(self.allocator, input);
         defer module_env.deinit();
 
         // Try statement parsing
@@ -253,7 +253,7 @@ pub const Repl = struct {
         }
 
         // Create module environment for the expression
-        var module_env = try compile.init(self.allocator, expr_source);
+        var module_env = try ModuleEnv.init(self.allocator, expr_source);
         defer module_env.deinit();
 
         // Parse as expression
@@ -289,7 +289,7 @@ pub const Repl = struct {
         };
         defer checker.deinit();
 
-        _ = checker.checkExpr(canonical_expr_idx) catch |err| {
+        _ = checker.checkExpr(canonical_expr_idx.get_idx()) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check error: {}", .{err});
         };
 
@@ -306,7 +306,7 @@ pub const Repl = struct {
         defer interpreter.deinit();
 
         // Evaluate the expression
-        const result = interpreter.eval(canonical_expr_idx) catch |err| {
+        const result = interpreter.eval(canonical_expr_idx.get_idx()) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
         };
 
@@ -478,7 +478,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 1: Create module environment
     const source = "42";
-    var module_env = try compile.init(allocator, source);
+    var module_env = try ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Step 2: Parse as expression
@@ -505,7 +505,7 @@ test "Repl - minimal interpreter integration" {
     var checker = try check_types.init(allocator, &module_env.types, cir, &.{}, &cir.store.regions);
     defer checker.deinit();
 
-    _ = try checker.checkExpr(canonical_expr_idx);
+    _ = try checker.checkExpr(canonical_expr_idx.get_idx());
 
     // Step 6: Create evaluation stack
     var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
@@ -520,7 +520,7 @@ test "Repl - minimal interpreter integration" {
     defer interpreter.deinit();
 
     // Step 9: Evaluate
-    const result = try interpreter.eval(canonical_expr_idx);
+    const result = try interpreter.eval(canonical_expr_idx.get_idx());
 
     // Step 10: Verify result
     try testing.expect(result.layout.tag == .scalar);

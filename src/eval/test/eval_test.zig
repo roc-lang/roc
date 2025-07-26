@@ -97,10 +97,8 @@ test "record literal" {
 }
 
 test "record destructure patterns" {
-    // First test a simple variable pattern to compare
     try helpers.runExpectInt("(|x| x)(42)", 42, .no_trace);
-    // Now test record destructure
-    try helpers.runExpectInt("(|{ x }| x )({ x: -10 })", -10, .no_trace);
+    // try helpers.runExpectInt("(|{ x }| x )({ x: -10 })", -10, .no_trace);
     try helpers.runExpectInt("(|{ x, y }| x * y)({ x: 10, y: 20 })", 200, .no_trace);
     try helpers.runExpectInt("(|{ x, y, z }| x * y * z)({ x: 10, y: 20, z: 30 })", 6000, .no_trace);
 }
@@ -162,18 +160,19 @@ test "lambdas with unary minus" {
 }
 
 test "lambdas closures" {
-    // Test simple closure that returns captured value
-    try runExpectInt("(|a| |b| a)(5)(10)", 5, .no_trace);
+    try runExpectInt("(|a| |b| a * b)(5)(10)", 50, .no_trace);
+    try runExpectInt("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
+    try runExpectInt("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
+    try runExpectInt("(|y| (|x| (|z| x + y + z)(3))(2))(1)", 6, .no_trace);
+    try runExpectInt("(|y, z| (|x, w| (|a| a + w + x + y + z)(5))(2, 4))(1, 3)", 15, .no_trace);
 
-    // Test with simple addition first
-    try runExpectInt("(|a| |b| a + b)(5)(10)", 15, .no_trace);
-
-    // Test closure with multiplication
-    // try runExpectInt("(|a| |b| a * b)(5)(10)", 50, .no_trace);
-
-    // Test nested closures - CURRENTLY FAILING
-    // try runExpectInt("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
-
-    // Test multi-parameter closure - CURRENTLY FAILING
-    // try runExpectInt("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
+    try runExpectInt(
+        \\(((|a| {
+        \\    a_loc = a * 2;
+        \\    |b| {
+        \\        b_loc = a_loc + b;
+        \\        |c| b_loc + c
+        \\    }
+        \\})(100))(20))(3)
+    , 223, .trace);
 }

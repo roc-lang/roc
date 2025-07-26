@@ -5,7 +5,7 @@ const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
 const Node = @import("Node.zig");
-const ModuleEnv = @import("ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 const RocDec = ModuleEnv.RocDec;
 
 const SERIALIZATION_ALIGNMENT = 16;
@@ -14,7 +14,7 @@ const SafeList = collections.SafeList;
 const DataSpan = base.DataSpan;
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
-const Diagnostic = @import("Diagnostic.zig");
+const Diagnostic = @import("compile").Diagnostic;
 const Ident = base.Ident;
 const PackedDataSpan = base.PackedDataSpan;
 const FunctionArgs = base.FunctionArgs;
@@ -104,7 +104,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 44;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 29;
+pub const MODULEENV_EXPR_NODE_COUNT = 30;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -454,6 +454,22 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
                 ),
             };
         },
+        .expr_closure => {
+            // Retrieve closure data from extra_data
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items.items[extra_start..];
+
+            const lambda_idx = extra_data[0];
+            const capture_start = extra_data[1];
+            const capture_len = extra_data[2];
+
+            return ModuleEnv.Expr{
+                .e_closure = .{
+                    .lambda_idx = @enumFromInt(lambda_idx),
+                    .captures = .{ .span = .{ .start = capture_start, .len = capture_len } },
+                },
+            };
+        },
         .expr_lambda => {
             // Retrieve lambda data from extra_data
             const extra_start = node.data_1;
@@ -462,14 +478,11 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const args_start = extra_data[0];
             const args_len = extra_data[1];
             const body_idx = extra_data[2];
-            const captures_start = extra_data[3];
-            const captures_len = extra_data[4];
 
             return ModuleEnv.Expr{
                 .e_lambda = .{
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
                     .body = @enumFromInt(body_idx),
-                    .captures = .{ .span = .{ .start = captures_start, .len = captures_len } },
                 },
             };
         },
@@ -1393,6 +1406,17 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             _ = try store.extra_data.append(store.gpa, @bitCast(e.name));
             node.data_1 = extra_data_start;
         },
+        .e_closure => |e| {
+            node.tag = .expr_closure;
+
+            const extra_data_start = store.extra_data.len();
+
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.lambda_idx));
+            _ = try store.extra_data.append(store.gpa, e.captures.span.start);
+            _ = try store.extra_data.append(store.gpa, e.captures.span.len);
+
+            node.data_1 = extra_data_start;
+        },
         .e_lambda => |e| {
             node.tag = .expr_lambda;
 
@@ -1405,10 +1429,6 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             _ = try store.extra_data.append(store.gpa, e.args.span.len);
             // Store body index
             _ = try store.extra_data.append(store.gpa, @intFromEnum(e.body));
-            // Store captures span start
-            _ = try store.extra_data.append(store.gpa, e.captures.span.start);
-            // Store captures span length
-            _ = try store.extra_data.append(store.gpa, e.captures.span.len);
 
             node.data_1 = extra_data_start;
         },
@@ -2940,5 +2960,25 @@ pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocat
     return try store.spanFrom("scratch_match_branch_patterns", ModuleEnv.Expr.Match.BranchPattern.Span, start);
 }
 
+/// Append this NodeStore to an iovec writer for serialization
+pub fn appendToIovecs(self: *const NodeStore, writer: anytype) !usize {
+    // Serialize all components of NodeStore
+    _ = try self.nodes.appendToIovecs(writer);
+    _ = try self.regions.appendToIovecs(writer);
+    _ = try self.extra_data.appendToIovecs(writer);
 
+    // Note: Scratch arrays are temporary and don't need to be serialized
 
+    // Return a placeholder offset
+    return 0;
+}
+
+/// Relocate all pointers in this NodeStore by the given offset
+pub fn relocate(self: *NodeStore, offset: isize) void {
+    // Relocate all components
+    self.nodes.relocate(offset);
+    self.regions.relocate(offset);
+    self.extra_data.relocate(offset);
+
+    // Note: Scratch arrays are temporary and don't need relocation
+}

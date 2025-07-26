@@ -11,13 +11,13 @@ const base = @import("base");
 const canonicalize = @import("check/canonicalize.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const cache = @import("cache/mod.zig");
-const ModuleEnv = @import("compile/ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 
 const Solver = @import("check/check_types.zig");
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
 const types = @import("types");
-const reporting = @import("reporting.zig");
+const reporting = @import("reporting");
 const tokenize = @import("check/parse/tokenize.zig");
 const repl = @import("repl/eval.zig");
 
@@ -1021,6 +1021,9 @@ fn processSnapshotContent(
     var module_env = try ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
 
+    // Calculate line starts for error reporting
+    try module_env.calcLineStarts();
+
     // Parse the source code based on node type
     var parse_ast: AST = switch (content.meta.node_type) {
         .file => try parse.parse(&module_env),
@@ -1042,13 +1045,13 @@ fn processSnapshotContent(
         basename[0..dot_idx]
     else
         basename;
-    const can_ir = &module_env; // ModuleEnv contains the canonical IR
+    var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
     var can = try canonicalize.init(can_ir, &parse_ast, null);
     defer can.deinit();
 
-    var maybe_expr_idx: ?ModuleEnv.Expr.Idx = null;
+    var maybe_expr_idx: ?canonicalize.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
         .file => try can.canonicalizeFile(),
@@ -1090,7 +1093,7 @@ fn processSnapshotContent(
     solver.debugAssertArraysInSync();
 
     if (maybe_expr_idx) |expr_idx| {
-        _ = try solver.checkExpr(expr_idx);
+        _ = try solver.checkExpr(expr_idx.idx);
     } else {
         try solver.checkDefs();
     }
@@ -1109,10 +1112,9 @@ fn processSnapshotContent(
         // Create and serialize MmapCache
         // Freeze interners and sort exposed items before serialization
         module_env.freezeInterners();
-        
-        // Cast compile.ModuleEnv to base.ModuleEnv (they share the same initial fields)
-        const base_env_ptr = @as(*const base.ModuleEnv, @ptrCast(&module_env));
-        const cache_data = try cache.CacheModule.create(allocator, base_env_ptr, can_ir, 0, 0);
+
+        // Use compile.ModuleEnv directly now that it's been moved
+        const cache_data = try cache.CacheModule.create(allocator, &module_env, can_ir, 0, 0);
         defer allocator.free(cache_data);
 
         // Deserialize back
@@ -1161,8 +1163,8 @@ fn processSnapshotContent(
     try generateTokensSection(&output, &parse_ast, &content, &module_env);
     try generateParseSection(&output, &content, &parse_ast, &module_env);
     try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, can_ir, maybe_expr_idx);
-    try generateTypesSection(&output, can_ir, maybe_expr_idx);
+    try generateCanonicalizeSection(&output, can_ir, canonicalize.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
+    try generateTypesSection(&output, can_ir, canonicalize.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
 
     try generateHtmlClosing(&output);
 

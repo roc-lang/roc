@@ -79,10 +79,9 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-type-anno @1.12-1.19 (name "age")
 		(ty-malformed @1.17-1.19))
-	(e-tuple @1.12-1.19
-		(elems)))
+	(e-empty_record @1.1-1.21))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.21 (type "_a"))
+(expr @1.1-1.21 (type "{}"))
 ~~~

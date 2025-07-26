@@ -68,9 +68,6 @@ pub fn SafeStringHashMap(comptime V: type) type {
             return self.map.containsContext(key, std.hash_map.StringContext{});
         }
 
-
-
-
         /// Get an iterator over the hash map
         pub fn iterator(self: *const Self) std.StringHashMapUnmanaged(V).Iterator {
             return self.map.iterator();
@@ -81,11 +78,11 @@ pub fn SafeStringHashMap(comptime V: type) type {
             // For now, we serialize as entries only and rebuild on deserialization
             // This is a limitation we need to address later
             const start_offset = writer.getOffset();
-            
+
             // Write count
             const entry_count: u32 = @intCast(self.map.count());
             _ = try writer.appendStruct(entry_count);
-            
+
             // Write all entries
             var iter = self.map.iterator();
             while (iter.next()) |entry| {
@@ -93,13 +90,13 @@ pub fn SafeStringHashMap(comptime V: type) type {
                 const key_len: u32 = @intCast(entry.key_ptr.len);
                 _ = try writer.appendStruct(key_len);
                 _ = try writer.appendBytes(u8, entry.key_ptr.*);
-                
+
                 // Write value (if not void)
                 if (V != void) {
                     _ = try writer.appendStruct(entry.value_ptr.*);
                 }
             }
-            
+
             return start_offset;
         }
 
@@ -147,10 +144,6 @@ test "SafeStringHashMap(u16) basic operations" {
     try testing.expectEqual(@as(u16, 123), map.get("bar").?);
     try testing.expect(map.get("missing") == null);
 }
-
-
-
-
 
 test "SafeStringHashMap duplicate key handling" {
     const gpa = testing.allocator;

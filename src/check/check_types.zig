@@ -8,14 +8,15 @@ const tracy = @import("../tracy.zig");
 const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("canonicalize.zig");
+const compile = @import("compile");
 const unifier = @import("check_types/unify.zig");
 const occurs = @import("check_types/occurs.zig");
 const problem = @import("check_types/problem.zig");
 const snapshot = @import("check_types/snapshot.zig");
 const instantiate = @import("check_types/instantiate.zig");
 const copy_import = @import("check_types/copy_import.zig");
-const ModuleEnv = @import("../compile/ModuleEnv.zig");
 
+const ModuleEnv = compile.ModuleEnv;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -86,7 +87,7 @@ pub fn init(
     other_modules: []const *ModuleEnv,
     regions: *Region.List,
 ) std.mem.Allocator.Error!Self {
-    return .{
+    var self = Self{
         .gpa = gpa,
         .types = types,
         .cir = cir,
@@ -99,6 +100,15 @@ pub fn init(
         .var_map = instantiate.VarSubstitution.init(gpa),
         .import_cache = ImportCache{},
     };
+
+    // Ensure regions array has entries for all existing type variables
+    // This handles type variables created during canonicalization
+    const type_count = types.len();
+    if (type_count > 0) {
+        try self.fillInRegionsThrough(@as(Var, @enumFromInt(type_count - 1)));
+    }
+
+    return self;
 }
 
 /// Deinit owned fields
@@ -112,11 +122,20 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Assert that type vars and regions in sync
-pub inline fn debugAssertArraysInSync(self: *const Self) void {
+pub inline fn debugAssertArraysInSync(self: *Self) void {
     if (std.debug.runtime_safety) {
         const region_nodes = self.regions.len();
         const type_nodes = self.types.len();
-        if (!(region_nodes == type_nodes)) {
+        if (type_nodes > region_nodes) {
+            // Fill in missing regions with zero regions
+            // This handles type variables created during canonicalization
+            self.fillInRegionsThrough(@as(Var, @enumFromInt(type_nodes - 1))) catch {
+                std.debug.panic(
+                    "Failed to sync arrays:\n type_nodes={}\n  region_nodes={}\n ",
+                    .{ type_nodes, region_nodes },
+                );
+            };
+        } else if (region_nodes != type_nodes) {
             std.debug.panic(
                 "Arrays out of sync:\n type_nodes={}\n  region_nodes={}\n ",
                 .{ type_nodes, region_nodes },
@@ -799,6 +818,15 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                 @enumFromInt(@intFromEnum(block.final_expr)),
             );
         },
+        .e_closure => |closure| {
+            // The type of a closure is the type of the lambda it wraps.
+            // The lambda's type is determined by its arguments and body.
+            // We need to check the lambda expression itself to get its type.
+            does_fx = try self.checkExpr(closure.lambda_idx);
+            const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
+            const closure_var = ModuleEnv.varFrom(expr_idx);
+            _ = try self.unify(closure_var, lambda_var);
+        },
         .e_lambda => |lambda| {
             does_fx = try self.checkLambdaWithExpected(expr_idx, expr_region, lambda, null);
         },
@@ -853,7 +881,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                                 const method_name_str = self.cir.idents.getText(dot_access.field_name);
 
                                 // Search through the module's exposed items
-                                if (module.exposed_items.getNodeIndex(self.gpa, method_name_str)) |node_idx| {
+                                if (module.exposed_nodes.get(method_name_str)) |node_idx| {
                                     // Found the method!
                                     const target_expr_idx = @as(ModuleEnv.Expr.Idx, @enumFromInt(node_idx));
 

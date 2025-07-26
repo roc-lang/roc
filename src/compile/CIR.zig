@@ -5,7 +5,7 @@ const std = @import("std");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
-const reporting = @import("../reporting.zig");
+const reporting = @import("reporting");
 const builtins = @import("builtins");
 
 const Ident = base.Ident;
@@ -304,7 +304,7 @@ pub fn fromF64(f: f64) ?RocDec {
 }
 
 // Diagnostic types for compilation errors
-pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
+pub const Diagnostic = @import("compile").Diagnostic;
 
 /// Represents an import statement in a module
 pub const Import = struct {

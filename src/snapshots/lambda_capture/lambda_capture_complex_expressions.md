@@ -49,26 +49,27 @@ NO CHANGE
 		(e-lambda @1.2-1.57
 			(args
 				(p-assign @1.3-1.8 (ident "outer")))
-			(e-lambda @1.10-1.57
-				(args
-					(p-assign @1.11-1.16 (ident "inner")))
+			(e-closure @1.10-1.57
 				(captures
 					(capture @1.3-1.8 (ident "outer")))
-				(e-if @1.18-1.57
-					(if-branches
-						(if-branch
-							(e-binop @1.21-1.30 (op "gt")
-								(e-lookup-local @1.21-1.26
-									(p-assign @1.3-1.8 (ident "outer")))
-								(e-int @1.29-1.30 (value "0")))
-							(e-binop @1.32-1.45 (op "add")
-								(e-lookup-local @1.32-1.37
-									(p-assign @1.3-1.8 (ident "outer")))
-								(e-lookup-local @1.40-1.45
-									(p-assign @1.11-1.16 (ident "inner"))))))
-					(if-else
-						(e-lookup-local @1.52-1.57
-							(p-assign @1.11-1.16 (ident "inner")))))))
+				(e-lambda @1.10-1.57
+					(args
+						(p-assign @1.11-1.16 (ident "inner")))
+					(e-if @1.18-1.57
+						(if-branches
+							(if-branch
+								(e-binop @1.21-1.30 (op "gt")
+									(e-lookup-local @1.21-1.26
+										(p-assign @1.3-1.8 (ident "outer")))
+									(e-int @1.29-1.30 (value "0")))
+								(e-binop @1.32-1.45 (op "add")
+									(e-lookup-local @1.32-1.37
+										(p-assign @1.3-1.8 (ident "outer")))
+									(e-lookup-local @1.40-1.45
+										(p-assign @1.11-1.16 (ident "inner"))))))
+						(if-else
+							(e-lookup-local @1.52-1.57
+								(p-assign @1.11-1.16 (ident "inner"))))))))
 		(e-int @1.59-1.60 (value "1")))
 	(e-int @1.62-1.64 (value "-2")))
 ~~~

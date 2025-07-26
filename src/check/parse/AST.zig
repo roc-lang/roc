@@ -15,7 +15,7 @@ const testing = std.testing;
 const base = @import("base");
 const tokenize = @import("tokenize.zig");
 const collections = @import("collections");
-const reporting = @import("../../reporting.zig");
+const reporting = @import("reporting");
 
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
@@ -26,7 +26,7 @@ const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const Ident = base.Ident;
 const Allocator = std.mem.Allocator;
-const ModuleEnv = @import("../../compile/ModuleEnv.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 const AST = @This();
 
 env: *ModuleEnv,

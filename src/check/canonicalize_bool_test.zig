@@ -2,9 +2,12 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
-const parse = @import("./parse.zig");
 const types = @import("types");
-const ModuleEnv = canonicalize.ModuleEnv;
+const compile = @import("compile");
+
+const parse = @import("./parse.zig");
+
+const ModuleEnv = compile.ModuleEnv;
 const canonicalize = @import("./canonicalize.zig");
 
 test "canonicalize True as Bool" {
@@ -36,7 +39,7 @@ test "canonicalize True as Bool" {
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse unreachable;
 
     // Get the expression
-    const expr = module_env.store.getExpr(canonical_expr_idx);
+    const expr = module_env.store.getExpr(canonical_expr_idx.get_idx());
 
     // Check if it's a nominal expression (Bool)
     try testing.expectEqual(.e_nominal, std.meta.activeTag(expr));
@@ -44,7 +47,7 @@ test "canonicalize True as Bool" {
     // The backing expression should be a tag
     const backing_expr = module_env.store.getExpr(expr.e_nominal.backing_expr);
     try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(canonicalize.ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
+    try testing.expectEqual(ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
 
     // The tag should be "True"
     const tag_name = module_env.idents.getText(backing_expr.e_tag.name);
@@ -80,7 +83,7 @@ test "canonicalize False as Bool" {
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse unreachable;
 
     // Get the expression
-    const expr = module_env.store.getExpr(canonical_expr_idx);
+    const expr = module_env.store.getExpr(canonical_expr_idx.get_idx());
 
     // Check if it's a nominal expression (Bool)
     try testing.expectEqual(.e_nominal, std.meta.activeTag(expr));
@@ -88,7 +91,7 @@ test "canonicalize False as Bool" {
     // The backing expression should be a tag
     const backing_expr = module_env.store.getExpr(expr.e_nominal.backing_expr);
     try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(canonicalize.ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
+    try testing.expectEqual(ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
 
     // The tag should be "False"
     const tag_name = module_env.idents.getText(backing_expr.e_tag.name);
@@ -124,7 +127,7 @@ test "canonicalize random tag not as Bool" {
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse unreachable;
 
     // Get the expression
-    const expr = module_env.store.getExpr(canonical_expr_idx);
+    const expr = module_env.store.getExpr(canonical_expr_idx.get_idx());
 
     // Check that it's NOT a nominal expression - just a plain tag
     try testing.expectEqual(.e_tag, std.meta.activeTag(expr));

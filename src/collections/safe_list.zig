@@ -182,38 +182,37 @@ pub fn SafeList(comptime T: type) type {
             self.items.items[@as(usize, @intFromEnum(id))] = value;
         }
 
-
-
-
         /// Append this SafeList to an iovec writer for serialization
         pub fn appendToIovecs(self: *const SafeList(T), writer: anytype) !usize {
-            // Create a mutable copy of self as a regular byte buffer
+            // Create a mutable copy on the stack (properly aligned)
+            var list_copy = self.*;
+
+            // Create a buffer for the final serialized struct
             const list_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(SafeList(T)));
-            @memcpy(list_copy_buffer, std.mem.asBytes(self));
-            
+
             // Track this allocation so it gets freed when writer is deinitialized
             try writer.owned_buffers.append(list_copy_buffer);
-            
-            // Get access to the struct in the buffer for easier manipulation
-            const list_copy = @as(*SafeList(T), @ptrCast(@alignCast(list_copy_buffer.ptr)));
-            
+
             // Serialize items array
             const items_offset = if (self.items.items.len > 0) blk: {
                 const bytes = std.mem.sliceAsBytes(self.items.items);
                 const offset = try writer.appendBytes(u8, bytes);
                 break :blk offset;
             } else 0;
-            
+
             // Update pointer in the copy to use offset
             list_copy.items.items.ptr = if (items_offset == 0)
                 @ptrFromInt(serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL)
             else
                 @ptrFromInt(items_offset);
             list_copy.items.items.len = self.items.items.len;
-            
-            // NOW add the copy to iovecs after all pointers have been converted to offsets
+
+            // Copy the modified struct into the buffer
+            @memcpy(list_copy_buffer, std.mem.asBytes(&list_copy));
+
+            // Now that all pointers have been converted to offsets, add the copy to iovecs
             const struct_offset = try writer.appendBytes(SafeList(T), list_copy_buffer);
-            
+
             return struct_offset;
         }
 
@@ -469,27 +468,27 @@ pub fn SafeMultiList(comptime T: type) type {
             };
         }
 
-
-
-
         /// Append this SafeMultiList to an iovec writer for serialization
         pub fn appendToIovecs(self: *const SafeMultiList(T), writer: anytype) !usize {
-            // Create a mutable copy of self as a regular byte buffer
+            // Create a mutable copy on the stack (properly aligned)
+            var list_copy = self.*;
+
+            // Create a buffer for the final serialized struct
             const list_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(SafeMultiList(T)));
-            @memcpy(list_copy_buffer, std.mem.asBytes(self));
-            
+
             // Track this allocation so it gets freed when writer is deinitialized
             try writer.owned_buffers.append(list_copy_buffer);
-            
-            // Get access to the struct in the buffer for easier manipulation
-            const list_copy = @as(*SafeMultiList(T), @ptrCast(@alignCast(list_copy_buffer.ptr)));
-            
+
             // Serialize items data
             const data_offset = if (self.items.len > 0) blk: {
-                const offset = try writer.appendBytes(T, self.items.slice().items(.ptr)[0]);
+                // For MultiArrayList, we need to serialize the raw bytes directly
+                const slice = self.items.slice();
+                const bytes_ptr = @as([*]const u8, @ptrCast(slice.ptrs[0]));
+                const bytes_len = @sizeOf(T) * self.items.len;
+                const offset = try writer.appendBytes(u8, bytes_ptr[0..bytes_len]);
                 break :blk offset;
             } else 0;
-            
+
             // Update pointer in the copy to use offset
             // Note: For MultiArrayList, we need to handle the internal structure more carefully
             // This is a simplified approach - a full implementation would need to handle
@@ -498,10 +497,13 @@ pub fn SafeMultiList(comptime T: type) type {
                 // Mark that data is present (actual pointer fixing would be more complex)
                 list_copy.items.len = self.items.len;
             }
-            
-            // NOW add the copy to iovecs after all pointers have been converted to offsets
+
+            // Copy the modified struct into the buffer
+            @memcpy(list_copy_buffer, std.mem.asBytes(&list_copy));
+
+            // Now that all pointers have been converted to offsets, add the copy to iovecs
             const struct_offset = try writer.appendBytes(SafeMultiList(T), list_copy_buffer);
-            
+
             return struct_offset;
         }
 
@@ -650,26 +652,6 @@ test "SafeMultiList empty range at end" {
     const char_slice = empty_slice.items(.char);
     try testing.expectEqual(0, char_slice.len);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 test "SafeList comprehensive serialization framework test" {
     const gpa = testing.allocator;
