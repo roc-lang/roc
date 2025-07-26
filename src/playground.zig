@@ -946,9 +946,18 @@ fn writeJsonString(writer: anytype, str: []const u8) !void {
         switch (char) {
             '"' => try writer.writeAll("\\\""),
             '\\' => try writer.writeAll("\\\\"),
+            // backspace
+            0x08 => try writer.writeAll("\\b"),
+            // form feed
+            0x0c => try writer.writeAll("\\f"),
+            // newline
             '\n' => try writer.writeAll("\\n"),
+            // carriage return
             '\r' => try writer.writeAll("\\r"),
+            // tab
             '\t' => try writer.writeAll("\\t"),
+            // other control characters
+            0x00...0x07, 0x0b, 0x0e...0x1f => try writer.print("\\u{X:0>4}", .{char}),
             else => try writer.writeByte(char),
         }
     }
