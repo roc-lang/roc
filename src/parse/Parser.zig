@@ -7,17 +7,18 @@
 
 const std = @import("std");
 const base = @import("base");
-const tracy = @import("../../tracy.zig");
-const tokenize = @import("tokenize.zig");
+const tracy = @import("tracy");
 const collections = @import("collections");
+const parse = @import("parse");
 
-const AST = @import("AST.zig");
-const Node = @import("Node.zig");
-const NodeStore = @import("NodeStore.zig");
+const AST = parse.AST;
+const Node = parse.Node;
+const NodeStore = parse.NodeStore;
 const NodeList = AST.NodeList;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
 const TokenIdx = Token.Idx;
+const tokenize = parse.tokenize;
 
 const MAX_PARSE_DIAGNOSTICS: usize = 1_000;
 

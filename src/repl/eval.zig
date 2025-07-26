@@ -3,21 +3,22 @@
 const std = @import("std");
 const base = @import("base");
 const compile = @import("compile");
-const parse = @import("../check/parse.zig");
+const parse = @import("parse");
+const types = @import("types");
+
 const canonicalize = @import("../check/canonicalize.zig");
 const check_types = @import("../check/check_types.zig");
-const types = @import("types");
-const types_store = types.store;
 const layout_store = @import("../layout/store.zig");
 const layout = @import("../layout/layout.zig");
 const eval = @import("../eval/interpreter.zig");
 const stack = @import("../eval/stack.zig");
 
-const writers = types.writers;
 const Allocator = std.mem.Allocator;
-const target = base.target;
 const ModuleEnv = compile.ModuleEnv;
 const AST = parse.AST;
+const target = base.target;
+const writers = types.writers;
+const types_store = types.store;
 
 /// Type of definition stored in the REPL history
 const DefKind = union(enum) {

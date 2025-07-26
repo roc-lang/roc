@@ -2,13 +2,15 @@
 
 const std = @import("std");
 const base = @import("base");
-const tracy = @import("tracy.zig");
-const fmt = @import("fmt.zig");
 const collections = @import("collections");
+const parse = @import("parse");
+const compile = @import("compile");
 
-const tokenize = @import("check/parse/tokenize.zig");
-const parse = @import("check/parse.zig");
-const ModuleEnv = @import("compile").ModuleEnv;
+const tracy = @import("tracy");
+const fmt = @import("fmt.zig");
+
+const tokenize = parse.tokenize;
+const ModuleEnv = compile.ModuleEnv;
 
 const Allocator = std.mem.Allocator;
 

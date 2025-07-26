@@ -6,25 +6,23 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
-const parse = @import("parse.zig");
+const parse = @import("parse");
 const collections = @import("collections");
 const compile = @import("compile");
 const types = @import("types");
-const types_mod = types;
-const RocDec = @import("builtins").RocDec;
+const builtins = @import("builtins");
+const tracy = @import("tracy");
 
-const tracy = @import("../tracy.zig");
-const tokenize = @import("parse/tokenize.zig");
 const Scope = @import("./canonicalize/Scope.zig");
 
-// Import from compile module files directly
-const Node = ModuleEnv.Node;
-
-const ModuleEnv = compile.ModuleEnv;
+const tokenize = parse.tokenize;
+const RocDec = builtins.RocDec;
 const CompileNodeStore = compile.NodeStore;
 const AST = parse.AST;
 const Token = tokenize.Token;
 const DataSpan = base.DataSpan;
+const ModuleEnv = compile.ModuleEnv;
+const Node = compile.ModuleEnv.Node;
 
 /// Both the canonicalized expression and any free variables
 ///
@@ -382,7 +380,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
 const Self = @This();
 
 /// The intermediate representation of a canonicalized Roc program.
-/// After parsing a Roc program, the [ParseIR](src/check/parse/AST.zig) is transformed into a [canonical
+/// After parsing a Roc program, the [ParseIR](src/parse/AST.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
 ///
 /// Canonicalization performs analysis to catch user errors, and sets up the state necessary to solve the types in a

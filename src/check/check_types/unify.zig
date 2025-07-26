@@ -42,14 +42,15 @@
 const std = @import("std");
 
 const base = @import("base");
-const can = @import("../canonicalize.zig");
-const tracy = @import("../../tracy.zig");
+const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
+const compile = @import("compile");
+
+const can = @import("../canonicalize.zig");
 const problem_mod = @import("./problem.zig");
 const occurs = @import("./occurs.zig");
 const snapshot_mod = @import("./snapshot.zig");
-const compile = @import("compile");
 
 const ModuleEnv = compile.ModuleEnv;
 

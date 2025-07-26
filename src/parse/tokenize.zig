@@ -8,8 +8,10 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
-const tracy = @import("../../tracy.zig");
-const ModuleEnv = @import("compile").ModuleEnv;
+const tracy = @import("tracy");
+const compile = @import("compile");
+
+const ModuleEnv = compile.ModuleEnv;
 
 /// representation of a token in the source code, like '+', 'foo', '=', '{'
 /// these are represented by an offset into the bytes of the source code

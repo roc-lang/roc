@@ -9,7 +9,7 @@ const base = @import("base");
 const canonicalize = @import("../check/canonicalize.zig");
 const collections = @import("collections");
 const types = @import("types");
-const parse = @import("../check/parse.zig").parse;
+const parse = @import("parse");
 const compile = @import("compile");
 const SExprTree = base.SExprTree;
 const Filesystem = @import("../fs/Filesystem.zig");
@@ -553,8 +553,22 @@ test "cache filesystem roundtrip with in-memory storage" {
     // Calculate line starts
     try module_env.calcLineStarts();
 
-    // Freeze interners after adding all data
-    module_env.freezeInterners();
+    // Parse and canonicalize
+    var ast = try parse.parse(&module_env);
+    defer ast.deinit(gpa);
+
+    var canonicalizer = try canonicalize.init(cir, &ast, null);
+    defer canonicalizer.deinit();
+    try canonicalizer.canonicalizeFile();
+
+    // Generate original S-expression for comparison
+    var original_tree = SExprTree.init(gpa);
+    defer original_tree.deinit();
+    try module_env.pushToSExprTree(null, &original_tree);
+
+    var original_sexpr = std.ArrayList(u8).init(gpa);
+    defer original_sexpr.deinit();
+    try original_tree.toStringPretty(original_sexpr.writer().any());
 
     // Create cache from real data
     const cache_data = try CacheModule.create(gpa, &module_env, undefined, 0, 0);

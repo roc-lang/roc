@@ -1,14 +1,15 @@
 //! Tests for static dispatch on nominal types with method-style syntax
 
 const std = @import("std");
-const testing = std.testing;
 const base = @import("base");
-const parse = @import("../../parse.zig");
+const parse = @import("parse");
+
 const canonicalize = @import("../../canonicalize.zig");
 const check_types = @import("../../check_types.zig");
 const types_mod = @import("../types");
-const CIR = canonicalize.CIR;
 
+const CIR = canonicalize.CIR;
+const testing = std.testing;
 const test_allocator = testing.allocator;
 
 // NOTE: These tests are currently commented out because they depend on nominal type
