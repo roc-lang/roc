@@ -494,38 +494,38 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) usize {
     // Write HTML diagnostics
     writer.writeAll("\"html\":\"") catch return 0;
 
-    // Collect HTML in a buffer first, then escape it for JSON
-    var html_buffer: [32768]u8 = undefined;
-    var html_stream = std.io.fixedBufferStream(&html_buffer);
-    const html_writer = html_stream.writer();
+    // Collect HTML in a dynamically-sized buffer first, then escape it for JSON
+    var html_list = std.ArrayList(u8).init(allocator);
+    defer html_list.deinit();
+    const html_writer = html_list.writer();
 
     // Write diagnostics by stage if any exist
     if (data.tokenize_reports.items.len > 0) {
         for (data.tokenize_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return 0;
+            writeDiagnosticHtml(html_writer, report) catch break;
         }
     }
 
     if (data.parse_reports.items.len > 0) {
         for (data.parse_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return 0;
+            writeDiagnosticHtml(html_writer, report) catch break;
         }
     }
 
     if (data.can_reports.items.len > 0) {
         for (data.can_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return 0;
+            writeDiagnosticHtml(html_writer, report) catch break;
         }
     }
 
     if (data.type_reports.items.len > 0) {
         for (data.type_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return 0;
+            writeDiagnosticHtml(html_writer, report) catch break;
         }
     }
 
     // Write the HTML buffer with proper JSON escaping
-    const html_content = html_stream.getWritten();
+    const html_content = html_list.items;
     writeJsonString(writer, html_content) catch return 0;
     writer.writeAll("\"}}") catch return 0;
 
