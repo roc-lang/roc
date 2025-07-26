@@ -479,23 +479,30 @@ pub fn SafeMultiList(comptime T: type) type {
             // Track this allocation so it gets freed when writer is deinitialized
             try writer.owned_buffers.append(list_copy_buffer);
 
-            // Serialize items data
-            const data_offset = if (self.items.len > 0) blk: {
-                // For MultiArrayList, we need to serialize the raw bytes directly
-                const slice = self.items.slice();
-                const bytes_ptr = @as([*]const u8, @ptrCast(slice.ptrs[0]));
-                const bytes_len = @sizeOf(T) * self.items.len;
-                const offset = try writer.appendBytes(u8, bytes_ptr[0..bytes_len]);
+            // Serialize items data - only serialize the used portion (length, not capacity)
+            const bytes_offset = if (self.items.len > 0) blk: {
+                // MultiArrayList stores all data in a single bytes field
+                // Calculate the actual bytes used for the current length
+                const used_bytes_len = std.MultiArrayList(T).capacityInBytes(self.items.len);
+                const bytes_slice = @as([*]const u8, @ptrCast(self.items.bytes))[0..used_bytes_len];
+                // Use T alignment to ensure proper alignment for the data
+                const offset = try writer.appendBytes(T, bytes_slice);
                 break :blk offset;
             } else 0;
 
-            // Update pointer in the copy to use offset
-            // Note: For MultiArrayList, we need to handle the internal structure more carefully
-            // This is a simplified approach - a full implementation would need to handle
-            // the internal structure of MultiArrayList properly
-            if (data_offset != 0) {
-                // Mark that data is present (actual pointer fixing would be more complex)
+            // Update pointers in the copy to use serialization offsets
+            if (bytes_offset != 0) {
+                // Set the bytes pointer to the serialized offset
+                // Use the same approach as the relocate method
+                list_copy.items.bytes = @ptrFromInt(bytes_offset);
+                // Set capacity equal to length since we only serialize used data
+                list_copy.items.capacity = self.items.len;
                 list_copy.items.len = self.items.len;
+            } else {
+                // Handle empty list case
+                list_copy.items.bytes = @ptrFromInt(serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL);
+                list_copy.items.capacity = 0;
+                list_copy.items.len = 0;
             }
 
             // Copy the modified struct into the buffer
@@ -710,4 +717,74 @@ test "SafeMultiList empty list serialization framework test" {
     defer empty_list.deinit(gpa);
 
     try serialization.testing.testSerialization(SafeMultiList(TestStruct), &empty_list, gpa);
+}
+
+test "SafeMultiList internal pointer verification after serialization" {
+    const gpa = testing.allocator;
+    
+    const TestStruct = struct {
+        a: u16,
+        b: u32,
+        c: u8,
+    };
+    
+    var list = try SafeMultiList(TestStruct).initCapacity(gpa, 5);
+    defer list.deinit(gpa);
+    
+    // Add test data with different values for each field
+    _ = try list.append(gpa, TestStruct{ .a = 100, .b = 1000, .c = 10 });
+    _ = try list.append(gpa, TestStruct{ .a = 200, .b = 2000, .c = 20 });
+    _ = try list.append(gpa, TestStruct{ .a = 300, .b = 3000, .c = 30 });
+    
+    // Serialize and deserialize
+    var writer = serialization.IovecWriter.init(gpa);
+    defer writer.deinit();
+    
+    const list_offset = try list.appendToIovecs(&writer);
+    const serialized_data = try writer.collectIntoBuffer();
+    defer gpa.free(serialized_data);
+    
+    // Get the deserialized list
+    const base_addr = @intFromPtr(serialized_data.ptr);
+    const restored_ptr = @as(*SafeMultiList(TestStruct), @ptrCast(@alignCast(@constCast(serialized_data[list_offset..].ptr))));
+    var restored = restored_ptr.*;
+    
+    // Relocate the pointers
+    restored.relocate(@as(isize, @intCast(base_addr)));
+    
+    // Verify basic properties
+    try testing.expectEqual(@as(u32, 3), restored.len());
+    try testing.expectEqual(restored.len(), restored.items.capacity); // Capacity should equal length
+    
+    // Verify the internal pointers look reasonable
+    const restored_slice = restored.items.slice();
+    
+    // The bytes pointer should point within our serialized buffer
+    const bytes_addr = @intFromPtr(restored.items.bytes);
+    const buffer_start = @intFromPtr(serialized_data.ptr);
+    const buffer_end = buffer_start + serialized_data.len;
+    try testing.expect(bytes_addr >= buffer_start);
+    try testing.expect(bytes_addr < buffer_end);
+    
+    // Verify we can access the fields correctly through the slice
+    const a_values = restored_slice.items(.a);
+    const b_values = restored_slice.items(.b);
+    const c_values = restored_slice.items(.c);
+    
+    try testing.expectEqual(@as(usize, 3), a_values.len);
+    try testing.expectEqual(@as(usize, 3), b_values.len);  
+    try testing.expectEqual(@as(usize, 3), c_values.len);
+    
+    // Verify the data is correct
+    try testing.expectEqual(@as(u16, 100), a_values[0]);
+    try testing.expectEqual(@as(u32, 1000), b_values[0]);
+    try testing.expectEqual(@as(u8, 10), c_values[0]);
+    
+    try testing.expectEqual(@as(u16, 200), a_values[1]);
+    try testing.expectEqual(@as(u32, 2000), b_values[1]);
+    try testing.expectEqual(@as(u8, 20), c_values[1]);
+    
+    try testing.expectEqual(@as(u16, 300), a_values[2]);
+    try testing.expectEqual(@as(u32, 3000), b_values[2]);
+    try testing.expectEqual(@as(u8, 30), c_values[2]);
 }
