@@ -184,23 +184,17 @@ pub const Store = struct {
 
     /// Append this Ident.Store to an iovec writer for serialization
     pub fn appendToIovecs(self: *const Store, writer: anytype) !usize {
-        // Create a mutable copy of self as a regular byte buffer
-        const store_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Store));
-        @memcpy(store_copy_buffer, std.mem.asBytes(self));
+        // Create a mutable copy of self that we can modify
+        var store_copy = self.*;
 
-        // Track this allocation so it gets freed when writer is deinitialized
-        try writer.owned_buffers.append(store_copy_buffer);
-
-        // Get access to the struct in the buffer for easier manipulation
-        const store_copy = @as(*Store, @ptrCast(@alignCast(store_copy_buffer.ptr)));
-
-        // Serialize interner (it handles its own pointers)
+        // The interner has its own appendToIovecs and will be relocated separately.
+        // We don't need to do anything with it here, as it's part of the Store struct.
         _ = try self.interner.appendToIovecs(writer);
 
         // Serialize attributes array
         const attributes_offset = if (self.attributes.items.len > 0) blk: {
             const bytes = std.mem.sliceAsBytes(self.attributes.items);
-            const offset = try writer.appendBytes(u8, bytes);
+            const offset = try writer.appendBytes(Attributes, bytes);
             break :blk offset;
         } else 0;
 
@@ -211,10 +205,12 @@ pub const Store = struct {
             @ptrFromInt(attributes_offset);
         store_copy.attributes.items.len = self.attributes.items.len;
 
-        // Now that all pointers have been converted to offsets, add the copy to iovecs
-        const struct_offset = try writer.appendBytes(Store, store_copy_buffer);
+        // Now that all pointers have been converted to offsets, serialize the copy
+        const store_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Store));
+        @memcpy(store_copy_buffer, std.mem.asBytes(&store_copy));
+        try writer.owned_buffers.append(store_copy_buffer);
 
-        return struct_offset;
+        return writer.appendBytes(Store, store_copy_buffer);
     }
 
     /// Relocate all pointers in this Ident.Store by the given offset
