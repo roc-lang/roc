@@ -196,7 +196,7 @@ pub fn SafeList(comptime T: type) type {
             // Serialize items array
             const items_offset = if (self.items.items.len > 0) blk: {
                 const bytes = std.mem.sliceAsBytes(self.items.items);
-                const offset = try writer.appendBytes(u8, bytes);
+                const offset = try writer.appendBytes(T, bytes);
                 break :blk offset;
             } else 0;
 
@@ -220,11 +220,16 @@ pub fn SafeList(comptime T: type) type {
         pub fn relocate(self: *SafeList(T), offset: isize) void {
             // Relocate items array
             if (self.items.items.len > 0) {
-                const old_ptr = @intFromPtr(self.items.items.ptr);
+                const old_ptr_val = @intFromPtr(self.items.items.ptr);
+
                 // Skip relocation if this is a sentinel value
-                if (old_ptr != serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL) {
-                    const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-                    self.items.items.ptr = @ptrFromInt(new_ptr);
+                if (old_ptr_val != serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL) {
+                    const new_ptr_val = @as(usize, @intCast(@as(isize, @intCast(old_ptr_val)) + offset));
+                    self.items.items.ptr = @ptrFromInt(new_ptr_val);
+
+                    // After relocation, the pointer should have the correct alignment for the type T.
+                    // This catches alignment errors that might have been introduced during serialization.
+                    std.debug.assert((new_ptr_val & (@alignOf(T) - 1)) == 0);
                 }
             }
         }
@@ -471,45 +476,37 @@ pub fn SafeMultiList(comptime T: type) type {
         /// Append this SafeMultiList to an iovec writer for serialization
         pub fn appendToIovecs(self: *const SafeMultiList(T), writer: anytype) !usize {
             // Create a mutable copy on the stack (properly aligned)
-            var list_copy = self.*;
+            var list_items_copy = self.items;
+
+            if (list_items_copy.len == 0) {
+                list_items_copy.bytes = @ptrFromInt(serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL);
+                list_items_copy.capacity = 0;
+            } else {
+                // MultiArrayList stores all data in a single bytes field
+                // Calculate the actual bytes used for the current length
+                const used_bytes_len = std.MultiArrayList(T).capacityInBytes(list_items_copy.len);
+                const bytes_slice = list_items_copy.bytes[0..used_bytes_len];
+
+                // Use T alignment to ensure proper alignment for the data
+                const offset = try writer.appendBytes(T, bytes_slice);
+
+                // Set the bytes pointer to the serialized offset
+                list_items_copy.bytes = @ptrFromInt(offset);
+                // Set capacity equal to length since we only serialize used data
+                list_items_copy.capacity = list_items_copy.len;
+            }
 
             // Create a buffer for the final serialized struct
-            const list_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(SafeMultiList(T)));
+            const list_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(std.MultiArrayList(T)));
 
             // Track this allocation so it gets freed when writer is deinitialized
             try writer.owned_buffers.append(list_copy_buffer);
 
-            // Serialize items data - only serialize the used portion (length, not capacity)
-            const bytes_offset = if (self.items.len > 0) blk: {
-                // MultiArrayList stores all data in a single bytes field
-                // Calculate the actual bytes used for the current length
-                const used_bytes_len = std.MultiArrayList(T).capacityInBytes(self.items.len);
-                const bytes_slice = @as([*]const u8, @ptrCast(self.items.bytes))[0..used_bytes_len];
-                // Use T alignment to ensure proper alignment for the data
-                const offset = try writer.appendBytes(T, bytes_slice);
-                break :blk offset;
-            } else 0;
-
-            // Update pointers in the copy to use serialization offsets
-            if (bytes_offset != 0) {
-                // Set the bytes pointer to the serialized offset
-                // Use the same approach as the relocate method
-                list_copy.items.bytes = @ptrFromInt(bytes_offset);
-                // Set capacity equal to length since we only serialize used data
-                list_copy.items.capacity = self.items.len;
-                list_copy.items.len = self.items.len;
-            } else {
-                // Handle empty list case
-                list_copy.items.bytes = @ptrFromInt(serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL);
-                list_copy.items.capacity = 0;
-                list_copy.items.len = 0;
-            }
-
             // Copy the modified struct into the buffer
-            @memcpy(list_copy_buffer, std.mem.asBytes(&list_copy));
+            @memcpy(list_copy_buffer, std.mem.asBytes(&list_items_copy));
 
             // Now that all pointers have been converted to offsets, add the copy to iovecs
-            const struct_offset = try writer.appendBytes(SafeMultiList(T), list_copy_buffer);
+            const struct_offset = try writer.appendBytes(std.MultiArrayList(T), list_copy_buffer);
 
             return struct_offset;
         }
@@ -519,9 +516,15 @@ pub fn SafeMultiList(comptime T: type) type {
             // MultiArrayList stores all data in a single bytes field
             // The field is: bytes: [*]align(@alignOf(T)) u8
             if (self.items.capacity > 0) {
-                const old_ptr = @intFromPtr(self.items.bytes);
-                const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-                self.items.bytes = @ptrFromInt(new_ptr);
+                const old_ptr_val = @intFromPtr(self.items.bytes);
+
+                if (old_ptr_val != serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL) {
+                    const new_ptr_val = @as(usize, @intCast(@as(isize, @intCast(old_ptr_val)) + offset));
+                    self.items.bytes = @ptrFromInt(new_ptr_val);
+
+                    // After relocation, the pointer should have the correct alignment for the type T.
+                    std.debug.assert((new_ptr_val & (@alignOf(T) - 1)) == 0);
+                }
             }
         }
     };
@@ -746,8 +749,12 @@ test "SafeMultiList internal pointer verification after serialization" {
 
     // Get the deserialized list
     const base_addr = @intFromPtr(serialized_data.ptr);
-    const restored_ptr = @as(*SafeMultiList(TestStruct), @ptrCast(@alignCast(@constCast(serialized_data[list_offset..].ptr))));
-    var restored = restored_ptr.*;
+
+    // The buffer might be misaligned, so we can't just cast a pointer.
+    // We must copy the bytes into an aligned stack variable.
+    var restored: SafeMultiList(TestStruct) = undefined;
+    const list_in_buffer = serialized_data[list_offset..];
+    @memcpy(std.mem.asBytes(&restored), list_in_buffer[0..@sizeOf(SafeMultiList(TestStruct))]);
 
     // Relocate the pointers
     restored.relocate(@as(isize, @intCast(base_addr)));
