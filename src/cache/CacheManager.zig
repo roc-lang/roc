@@ -1,3 +1,5 @@
+//! TODO module comments
+
 const std = @import("std");
 const base = @import("base");
 const canonicalize = @import("../check/canonicalize.zig");

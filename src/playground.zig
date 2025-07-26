@@ -833,7 +833,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) usize {
 
     // Use the same as snapshot system
     const mutable_cir = @constCast(cir);
-    mutable_cir.pushTypesToSExprTree(&tree) catch |err| {
+    mutable_cir.pushTypesToSExprTree(null, &tree) catch |err| {
         // If type generation fails, return an error message
         const error_msg = switch (err) {
             error.OutOfMemory => "Out of memory while generating types",
