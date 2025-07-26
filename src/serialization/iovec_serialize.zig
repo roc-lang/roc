@@ -15,7 +15,7 @@ const builtin = @import("builtin");
 const write_aligned = @import("write_aligned.zig");
 
 /// Standard alignment for all serialization operations
-const SERIALIZATION_ALIGNMENT = 16;
+pub const SERIALIZATION_ALIGNMENT = 16;
 
 /// Sentinel value for empty arrays during serialization
 /// This value is used instead of 0 to avoid null pointers
@@ -27,6 +27,12 @@ pub const EMPTY_ARRAY_SENTINEL: usize = 0x1000; // 4096 - page aligned
 /// This ensures that offset 0 is never used for actual data
 /// which would create null pointers during deserialization
 pub const MIN_OFFSET: usize = 16;
+
+/// Namespace for iovec serialization constants - maintains compatibility
+pub const iovec_serialize = struct {
+    pub const EMPTY_ARRAY_SENTINEL: usize = 0x1000;
+    pub const MIN_OFFSET: usize = 16;
+};
 
 /// Writer that accumulates iovec entries instead of writing to a buffer
 pub const IovecWriter = struct {
@@ -463,4 +469,43 @@ test "IovecWriter Windows fallback" {
 
     try testing.expectEqual(@as(usize, 10), bytes_read);
     try testing.expectEqualStrings("helloworld", read_buffer[0..bytes_read]);
+}
+
+test "IovecWriter stress test - many small iovecs" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var writer = IovecWriter.init(allocator);
+    defer writer.deinit();
+
+    // Add many small iovecs
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        const byte = @as(u8, @intCast(i % 256));
+        try writer.appendBytes(u8, &[_]u8{byte});
+    }
+
+    // Verify total size
+    try testing.expectEqual(@as(usize, 1000), writer.totalSize());
+
+    // Write to file and verify
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writer.writevToFileAtomic(tmp_dir.dir, "stress_test.bin", 0o644);
+
+    // Read back and verify
+    const file = try tmp_dir.dir.openFile("stress_test.bin", .{});
+    defer file.close();
+
+    var buffer: [1000]u8 = undefined;
+    const bytes_read = try file.read(&buffer);
+    try testing.expectEqual(@as(usize, 1000), bytes_read);
+
+    // Verify pattern
+    i = 0;
+    while (i < 1000) : (i += 1) {
+        const expected = @as(u8, @intCast(i % 256));
+        try testing.expectEqual(expected, buffer[i]);
+    }
 }

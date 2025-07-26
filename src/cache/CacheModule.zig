@@ -557,7 +557,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     var ast = try parse.parse(&module_env);
     defer ast.deinit(gpa);
 
-    var canonicalizer = try canonicalize.init(cir, &ast, null);
+    var canonicalizer = try canonicalize.init(&module_env, &ast, null);
     defer canonicalizer.deinit();
     try canonicalizer.canonicalizeFile();
 

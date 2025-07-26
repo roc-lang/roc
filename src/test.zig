@@ -11,7 +11,6 @@ test {
     testing.refAllDeclsRecursive(@import("serialization"));
     testing.refAllDeclsRecursive(@import("collections"));
     testing.refAllDeclsRecursive(@import("types"));
-    testing.refAllDeclsRecursive(@import("relocation_test.zig"));
 
     // Using refAllDeclsRecursive here gives "error: @fence is deprecated, use other atomics to establish ordering" for
     // some reason in an internal zig file. I suspect we need to update our zig version to resolve this

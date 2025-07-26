@@ -4,7 +4,8 @@ const std = @import("std");
 const testing = std.testing;
 const types = @import("../types.zig");
 const Store = @import("../store.zig").Store;
-const IovecWriter = @import("../../base/iovec_serialize.zig").IovecWriter;
+const serialization = @import("serialization");
+const IovecWriter = serialization.IovecWriter;
 
 test "Store streaming serialization - empty store" {
     const allocator = testing.allocator;
@@ -20,7 +21,7 @@ test "Store streaming serialization - empty store" {
 
     // Verify the serialized data has correct structure
     try writer.finalize();
-    const buffer = try @import("../../base/iovec_serialize.zig").iovecsToBuf(allocator, writer.iovecs.items);
+    const buffer = try serialization.iovecsToBuf(allocator, writer.iovecs.items);
     defer allocator.free(buffer);
 
     // Should have 5 size headers (all zeros for empty store)
@@ -55,7 +56,7 @@ test "Store streaming serialization - with data" {
 
     // Finalize and get buffer
     try writer.finalize();
-    const buffer = try @import("../../base/iovec_serialize.zig").iovecsToBuf(allocator, writer.iovecs.items);
+    const buffer = try serialization.iovecsToBuf(allocator, writer.iovecs.items);
     defer allocator.free(buffer);
 
     // Verify size headers
@@ -87,11 +88,11 @@ test "Store streaming serialization - alignment verification" {
 
     // Total size should be aligned
     const total_size = end - start;
-    const alignment = @import("../../serialization/mod.zig").SERIALIZATION_ALIGNMENT;
+    const alignment = serialization.SERIALIZATION_ALIGNMENT;
     try testing.expectEqual(@as(usize, 0), total_size % alignment);
 
     try writer.finalize();
-    const buffer = try @import("../../base/iovec_serialize.zig").iovecsToBuf(allocator, writer.iovecs.items);
+    const buffer = try serialization.iovecsToBuf(allocator, writer.iovecs.items);
     defer allocator.free(buffer);
 
     // Verify internal alignment
