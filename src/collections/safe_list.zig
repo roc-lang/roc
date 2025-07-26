@@ -629,6 +629,49 @@ pub fn SafeMultiList(comptime T: type) type {
 
             return list;
         }
+
+        /// Returns a SafeMultiList that has had its pointers converted to offsets.
+        /// It's only safe to serialize this return value; attempting to call
+        /// methods on it or dereference its internal "pointers" (which are now
+        /// offsets) is illegal behavior!
+        pub fn serialize(
+            self: *const SafeMultiList(T),
+            allocator: Allocator,
+            writer: *CompactWriter,
+        ) Allocator.Error!*const SafeMultiList(T) {
+            self.
+            
+            // First write the data
+            const data_offset = if (self.items.capacity > 0) blk: {
+                // Calculate bytes needed for the entire MultiArrayList storage
+                const bytes_needed = std.MultiArrayList(T).capacityInBytes(self.items.capacity);
+
+                // Write the raw bytes
+                break :blk try writer.appendSlice(allocator, self.items.bytes, bytes_needed);
+            } else writer.total_bytes;
+
+            // Write the SafeMultiList struct
+            const offset_self = try writer.appendAlloc(allocator, SafeMultiList(T));
+
+            // Initialize with offsets
+            offset_self.* = .{
+                .items = .{
+                    .bytes = @ptrFromInt(data_offset),
+                    .len = self.items.len,
+                    .capacity = self.items.capacity,
+                },
+            };
+
+            return @constCast(offset_self);
+        }
+
+        /// Add the given offset to the memory addresses of all pointers in `self`.
+        pub fn relocate(self: *SafeMultiList(T), offset: isize) void {
+            if (self.items.capacity == 0) return;
+
+            const old_addr: isize = @intCast(@intFromPtr(self.items.bytes));
+            self.items.bytes = @ptrFromInt(@as(usize, @intCast(old_addr + offset)));
+        }
     };
 }
 
@@ -1971,6 +2014,396 @@ test "SafeList CompactWriter brute-force alignment verification" {
                 const actual = d2.get(@enumFromInt(i)).*;
                 try testing.expectEqual(expected, actual);
             }
+        }
+    }
+}
+
+test "SafeMultiList CompactWriter roundtrip with file" {
+    const gpa = testing.allocator;
+
+    // Create a SafeMultiList with test data
+    const TestStruct = struct {
+        id: u32,
+        value: u64,
+        flag: bool,
+        data: u8,
+    };
+
+    var original = try SafeMultiList(TestStruct).initCapacity(gpa, 4);
+    defer original.deinit(gpa);
+
+    _ = try original.append(gpa, .{ .id = 100, .value = 1000, .flag = true, .data = 10 });
+    _ = try original.append(gpa, .{ .id = 200, .value = 2000, .flag = false, .data = 20 });
+    _ = try original.append(gpa, .{ .id = 300, .value = 3000, .flag = true, .data = 30 });
+    _ = try original.append(gpa, .{ .id = 400, .value = 4000, .flag = false, .data = 40 });
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_multi.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize using CompactWriter
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.iovecs.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back into aligned buffer
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*SafeMultiList(TestStruct), @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(SafeMultiList(TestStruct)))));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify the data
+    try testing.expectEqual(@as(usize, 4), deserialized.len());
+
+    try testing.expectEqual(@as(u32, 100), deserialized.get(@enumFromInt(0)).id);
+    try testing.expectEqual(@as(u64, 1000), deserialized.get(@enumFromInt(0)).value);
+    try testing.expectEqual(true, deserialized.get(@enumFromInt(0)).flag);
+    try testing.expectEqual(@as(u8, 10), deserialized.get(@enumFromInt(0)).data);
+
+    try testing.expectEqual(@as(u32, 200), deserialized.get(@enumFromInt(1)).id);
+    try testing.expectEqual(@as(u64, 2000), deserialized.get(@enumFromInt(1)).value);
+    try testing.expectEqual(false, deserialized.get(@enumFromInt(1)).flag);
+    try testing.expectEqual(@as(u8, 20), deserialized.get(@enumFromInt(1)).data);
+
+    try testing.expectEqual(@as(u32, 300), deserialized.get(@enumFromInt(2)).id);
+    try testing.expectEqual(@as(u64, 3000), deserialized.get(@enumFromInt(2)).value);
+    try testing.expectEqual(true, deserialized.get(@enumFromInt(2)).flag);
+    try testing.expectEqual(@as(u8, 30), deserialized.get(@enumFromInt(2)).data);
+
+    try testing.expectEqual(@as(u32, 400), deserialized.get(@enumFromInt(3)).id);
+    try testing.expectEqual(@as(u64, 4000), deserialized.get(@enumFromInt(3)).value);
+    try testing.expectEqual(false, deserialized.get(@enumFromInt(3)).flag);
+    try testing.expectEqual(@as(u8, 40), deserialized.get(@enumFromInt(3)).data);
+}
+
+test "SafeMultiList empty list CompactWriter roundtrip" {
+    const gpa = testing.allocator;
+
+    const TestStruct = struct {
+        x: u32,
+        y: u64,
+    };
+
+    // Create an empty SafeMultiList
+    var original = SafeMultiList(TestStruct){};
+    defer original.deinit(gpa);
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_empty_multi.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize using CompactWriter
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.iovecs.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*SafeMultiList(TestStruct), @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(SafeMultiList(TestStruct)))));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify empty
+    try testing.expectEqual(@as(usize, 0), deserialized.len());
+}
+
+test "SafeMultiList CompactWriter multiple lists different alignments" {
+    const gpa = testing.allocator;
+
+    // Create multiple SafeMultiLists with different field types
+    const Type1 = struct {
+        a: u8,
+        b: u16,
+    };
+
+    const Type2 = struct {
+        x: u32,
+        y: u64,
+    };
+
+    const Type3 = struct {
+        id: u64,
+        data: u8,
+        flag: bool,
+    };
+
+    var list1 = try SafeMultiList(Type1).initCapacity(gpa, 3);
+    defer list1.deinit(gpa);
+    _ = try list1.append(gpa, .{ .a = 10, .b = 100 });
+    _ = try list1.append(gpa, .{ .a = 20, .b = 200 });
+    _ = try list1.append(gpa, .{ .a = 30, .b = 300 });
+
+    var list2 = try SafeMultiList(Type2).initCapacity(gpa, 2);
+    defer list2.deinit(gpa);
+    _ = try list2.append(gpa, .{ .x = 1000, .y = 10000 });
+    _ = try list2.append(gpa, .{ .x = 2000, .y = 20000 });
+
+    var list3 = try SafeMultiList(Type3).initCapacity(gpa, 2);
+    defer list3.deinit(gpa);
+    _ = try list3.append(gpa, .{ .id = 999, .data = 42, .flag = true });
+    _ = try list3.append(gpa, .{ .id = 888, .data = 84, .flag = false });
+
+    // Create temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("multi_types.dat", .{ .read = true });
+    defer file.close();
+
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.iovecs.deinit(gpa);
+
+    // Serialize all lists
+    _ = try list1.serialize(gpa, &writer);
+    const offset1 = writer.total_bytes - @sizeOf(SafeMultiList(Type1));
+
+    _ = try list2.serialize(gpa, &writer);
+    const offset2 = writer.total_bytes - @sizeOf(SafeMultiList(Type2));
+
+    _ = try list3.serialize(gpa, &writer);
+    const offset3 = writer.total_bytes - @sizeOf(SafeMultiList(Type3));
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    const base = @intFromPtr(buffer.ptr);
+
+    // Deserialize list1
+    const d1 = @as(*SafeMultiList(Type1), @ptrCast(@alignCast(buffer.ptr + offset1)));
+    d1.relocate(@as(isize, @intCast(base)));
+    try testing.expectEqual(@as(usize, 3), d1.len());
+    try testing.expectEqual(@as(u8, 10), d1.get(@enumFromInt(0)).a);
+    try testing.expectEqual(@as(u16, 100), d1.get(@enumFromInt(0)).b);
+    try testing.expectEqual(@as(u8, 20), d1.get(@enumFromInt(1)).a);
+    try testing.expectEqual(@as(u16, 200), d1.get(@enumFromInt(1)).b);
+
+    // Deserialize list2
+    const d2 = @as(*SafeMultiList(Type2), @ptrCast(@alignCast(buffer.ptr + offset2)));
+    d2.relocate(@as(isize, @intCast(base)));
+    try testing.expectEqual(@as(usize, 2), d2.len());
+    try testing.expectEqual(@as(u32, 1000), d2.get(@enumFromInt(0)).x);
+    try testing.expectEqual(@as(u64, 10000), d2.get(@enumFromInt(0)).y);
+
+    // Deserialize list3
+    const d3 = @as(*SafeMultiList(Type3), @ptrCast(@alignCast(buffer.ptr + offset3)));
+    d3.relocate(@as(isize, @intCast(base)));
+    try testing.expectEqual(@as(usize, 2), d3.len());
+    try testing.expectEqual(@as(u64, 999), d3.get(@enumFromInt(0)).id);
+    try testing.expectEqual(@as(u8, 42), d3.get(@enumFromInt(0)).data);
+    try testing.expectEqual(true, d3.get(@enumFromInt(0)).flag);
+}
+
+test "SafeMultiList CompactWriter field access after deserialization" {
+    const gpa = testing.allocator;
+
+    // Test that we can access individual fields after deserialization
+    const TestStruct = struct {
+        id: u32,
+        value: u64,
+        flag: bool,
+        data: u8,
+    };
+
+    var original = try SafeMultiList(TestStruct).initCapacity(gpa, 3);
+    defer original.deinit(gpa);
+
+    _ = try original.append(gpa, .{ .id = 111, .value = 222, .flag = true, .data = 33 });
+    _ = try original.append(gpa, .{ .id = 444, .value = 555, .flag = false, .data = 66 });
+    _ = try original.append(gpa, .{ .id = 777, .value = 888, .flag = true, .data = 99 });
+
+    // Create temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_field_access.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.iovecs.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Deserialize
+    const deserialized = @as(*SafeMultiList(TestStruct), @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(SafeMultiList(TestStruct)))));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Test field access
+    const ids = deserialized.field(.id);
+    try testing.expectEqual(@as(u32, 111), ids[0]);
+    try testing.expectEqual(@as(u32, 444), ids[1]);
+    try testing.expectEqual(@as(u32, 777), ids[2]);
+
+    const values = deserialized.field(.value);
+    try testing.expectEqual(@as(u64, 222), values[0]);
+    try testing.expectEqual(@as(u64, 555), values[1]);
+    try testing.expectEqual(@as(u64, 888), values[2]);
+
+    const flags = deserialized.field(.flag);
+    try testing.expectEqual(true, flags[0]);
+    try testing.expectEqual(false, flags[1]);
+    try testing.expectEqual(true, flags[2]);
+
+    const data_field = deserialized.field(.data);
+    try testing.expectEqual(@as(u8, 33), data_field[0]);
+    try testing.expectEqual(@as(u8, 66), data_field[1]);
+    try testing.expectEqual(@as(u8, 99), data_field[2]);
+
+    // Test fieldItem access
+    try testing.expectEqual(@as(u32, 111), deserialized.fieldItem(.id, @enumFromInt(0)));
+    try testing.expectEqual(@as(u64, 555), deserialized.fieldItem(.value, @enumFromInt(1)));
+    try testing.expectEqual(true, deserialized.fieldItem(.flag, @enumFromInt(2)));
+    try testing.expectEqual(@as(u8, 66), deserialized.fieldItem(.data, @enumFromInt(1)));
+}
+
+test "SafeMultiList CompactWriter brute-force alignment verification" {
+    const gpa = testing.allocator;
+
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Test with various struct configurations
+    const TestType = struct {
+        a: u8,
+        b: u32,
+        c: u64,
+    };
+
+    // Test all lengths from 0 to 8
+    var length: usize = 0;
+    while (length <= 8) : (length += 1) {
+        const filename = try std.fmt.allocPrint(gpa, "multi_brute_{}.dat", .{length});
+        defer gpa.free(filename);
+
+        const file = try tmp_dir.dir.createFile(filename, .{ .read = true });
+        defer file.close();
+
+        // Create list with specific length
+        var list = SafeMultiList(TestType){};
+        defer list.deinit(gpa);
+
+        var i: usize = 0;
+        while (i < length) : (i += 1) {
+            _ = try list.append(gpa, .{
+                .a = @as(u8, @intCast(i)),
+                .b = @as(u32, @intCast(i * 100)),
+                .c = @as(u64, @intCast(i * 1000)),
+            });
+        }
+
+        // Add another list to test alignment between lists
+        var list2 = SafeMultiList(TestType){};
+        defer list2.deinit(gpa);
+        if (length > 0) {
+            _ = try list2.append(gpa, .{ .a = 255, .b = 999999, .c = 888888888 });
+        }
+
+        // Serialize
+        var writer = CompactWriter{
+            .iovecs = .{},
+            .total_bytes = 0,
+        };
+        defer writer.iovecs.deinit(gpa);
+
+        _ = try list.serialize(gpa, &writer);
+        const offset1 = writer.total_bytes - @sizeOf(SafeMultiList(TestType));
+
+        _ = try list2.serialize(gpa, &writer);
+        const offset2 = writer.total_bytes - @sizeOf(SafeMultiList(TestType));
+
+        // Write to file
+        try writer.writeGather(gpa, file);
+
+        // Read back
+        try file.seekTo(0);
+        const file_size = try file.getEndPos();
+        const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+        defer gpa.free(buffer);
+
+        _ = try file.read(buffer);
+
+        const base = @intFromPtr(buffer.ptr);
+
+        // Verify first list
+        const d1 = @as(*SafeMultiList(TestType), @ptrCast(@alignCast(buffer.ptr + offset1)));
+        d1.relocate(@as(isize, @intCast(base)));
+        try testing.expectEqual(length, d1.len());
+
+        i = 0;
+        while (i < length) : (i += 1) {
+            const item = d1.get(@enumFromInt(i));
+            try testing.expectEqual(@as(u8, @intCast(i)), item.a);
+            try testing.expectEqual(@as(u32, @intCast(i * 100)), item.b);
+            try testing.expectEqual(@as(u64, @intCast(i * 1000)), item.c);
+        }
+
+        // Verify second list
+        const d2 = @as(*SafeMultiList(TestType), @ptrCast(@alignCast(buffer.ptr + offset2)));
+        d2.relocate(@as(isize, @intCast(base)));
+        if (length > 0) {
+            try testing.expectEqual(@as(usize, 1), d2.len());
+            try testing.expectEqual(@as(u8, 255), d2.get(@enumFromInt(0)).a);
+            try testing.expectEqual(@as(u32, 999999), d2.get(@enumFromInt(0)).b);
+            try testing.expectEqual(@as(u64, 888888888), d2.get(@enumFromInt(0)).c);
+        } else {
+            try testing.expectEqual(@as(usize, 0), d2.len());
         }
     }
 }
