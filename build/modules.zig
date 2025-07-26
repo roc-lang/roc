@@ -17,7 +17,7 @@ pub const RocModules = struct {
 
     pub fn create(b: *Build, build_options_step: *Step.Options) RocModules {
         const self = RocModules{
-            .serialization = b.addModule("serialization", .{ .root_source_file = b.path("src/serialization/mod.zig") }),
+            .serialization = b.addModule("serialization", .{ .root_source_file = b.path("src/serialization/iovec_serialize.zig") }),
             .collections = b.addModule("collections", .{ .root_source_file = b.path("src/collections/mod.zig") }),
             .base = b.addModule("base", .{ .root_source_file = b.path("src/base/mod.zig") }),
             .types = b.addModule("types", .{ .root_source_file = b.path("src/types/mod.zig") }),
@@ -48,6 +48,7 @@ pub const RocModules = struct {
         self.compile.addImport("types", self.types);
         self.compile.addImport("builtins", self.builtins);
         self.compile.addImport("reporting", self.reporting);
+        self.compile.addImport("serialization", self.serialization);
 
         self.reporting.addImport("reporting", self.reporting);
         self.reporting.addImport("base", self.base);

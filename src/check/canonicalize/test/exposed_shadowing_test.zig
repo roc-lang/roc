@@ -342,7 +342,7 @@ test "complex case with redundant, shadowing, and not implemented" {
     try testing.expect(found_not_implemented);
 }
 
-test "exposed_by_str is populated correctly" {
+test "exposed_items is populated correctly" {
     const allocator = testing.allocator;
 
     const source =
@@ -374,7 +374,7 @@ test "exposed_by_str is populated correctly" {
     try testing.expectEqual(@as(usize, 3), env.exposed_by_str.count());
 }
 
-test "exposed_by_str persists after canonicalization" {
+test "exposed_items persists after canonicalization" {
     const allocator = testing.allocator;
 
     const source =
@@ -406,7 +406,7 @@ test "exposed_by_str persists after canonicalization" {
     try testing.expectEqual(@as(usize, 3), env.exposed_by_str.count());
 }
 
-test "exposed_by_str never has entries removed" {
+test "exposed_items never has entries removed" {
     const allocator = testing.allocator;
 
     const source =

@@ -42,9 +42,9 @@ fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct 
     // Check if parsing produced an error
     if (parse_ast.parse_diagnostics.items.len > 0 or parse_ast.tokenize_diagnostics.items.len > 0) {
         // Parsing failed, create a runtime error
-        const diagnostic_idx = try module_env.addDiagnostic(.{ .invalid_num_literal = .{
+        const diagnostic_idx = try module_env.addDiagnosticAndTypeVar(.{ .invalid_num_literal = .{
             .region = base.Region.zero(),
-        } });
+        } }, types.Content{ .err = {} });
         const error_expr_idx = try module_env.addExprAndTypeVar(ModuleEnv.Expr{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, types.Content{ .err = {} }, base.Region.zero());
         return .{
             .module_env = module_env,

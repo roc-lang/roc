@@ -502,7 +502,7 @@ test "module-qualified lookups with e_lookup_external" {
     try expectEqual(true, found_dict_empty);
 }
 
-test "exposed_nodes - tracking CIR node indices for exposed items" {
+test "exposed_items - tracking CIR node indices for exposed items" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
@@ -594,7 +594,7 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
         allocator.destroy(empty_env);
     }
     try empty_env.exposed_by_str.put(allocator, "undefined", {});
-    // Don't add to exposed_nodes - should default to 0
+    // Don't set node index - should default to 0
     try module_envs.put("EmptyModule", empty_env);
 
     const source2 =

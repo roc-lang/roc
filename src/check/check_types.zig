@@ -87,7 +87,7 @@ pub fn init(
     other_modules: []const *ModuleEnv,
     regions: *Region.List,
 ) std.mem.Allocator.Error!Self {
-    return .{
+    var self = Self{
         .gpa = gpa,
         .types = types,
         .cir = cir,
@@ -100,6 +100,15 @@ pub fn init(
         .var_map = instantiate.VarSubstitution.init(gpa),
         .import_cache = ImportCache{},
     };
+
+    // Ensure regions array has entries for all existing type variables
+    // This handles type variables created during canonicalization
+    const type_count = types.len();
+    if (type_count > 0) {
+        try self.fillInRegionsThrough(@as(Var, @enumFromInt(type_count - 1)));
+    }
+
+    return self;
 }
 
 /// Deinit owned fields
@@ -113,11 +122,20 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Assert that type vars and regions in sync
-pub inline fn debugAssertArraysInSync(self: *const Self) void {
+pub inline fn debugAssertArraysInSync(self: *Self) void {
     if (std.debug.runtime_safety) {
         const region_nodes = self.regions.len();
         const type_nodes = self.types.len();
-        if (!(region_nodes == type_nodes)) {
+        if (type_nodes > region_nodes) {
+            // Fill in missing regions with zero regions
+            // This handles type variables created during canonicalization
+            self.fillInRegionsThrough(@as(Var, @enumFromInt(type_nodes - 1))) catch {
+                std.debug.panic(
+                    "Failed to sync arrays:\n type_nodes={}\n  region_nodes={}\n ",
+                    .{ type_nodes, region_nodes },
+                );
+            };
+        } else if (region_nodes != type_nodes) {
             std.debug.panic(
                 "Arrays out of sync:\n type_nodes={}\n  region_nodes={}\n ",
                 .{ type_nodes, region_nodes },
@@ -862,7 +880,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                                 // Look up the method in the origin module's exports
                                 const method_name_str = self.cir.idents.getText(dot_access.field_name);
 
-                                // Search through the module's exposed nodes
+                                // Search through the module's exposed items
                                 if (module.exposed_nodes.get(method_name_str)) |node_idx| {
                                     // Found the method!
                                     const target_expr_idx = @as(ModuleEnv.Expr.Idx, @enumFromInt(node_idx));

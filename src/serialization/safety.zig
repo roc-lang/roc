@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-/// TODO
+/// During deserialization, we align the base pointer to this number of bytes.
 pub const SERIALIZATION_ALIGNMENT = 16;
 
 /// Pattern used to detect uninitialized memory

@@ -51,6 +51,20 @@ pub const Store = struct {
         self.buffer.deinit(gpa);
     }
 
+    /// Relocate all pointers in this StringLiteral.Store by the given offset
+    /// Used for cache deserialization
+    pub fn relocate(self: *Store, offset: isize) void {
+        // Relocate buffer array
+        if (self.buffer.items.len > 0) {
+            const old_ptr = @intFromPtr(self.buffer.items.ptr);
+            // Skip relocation if this is a sentinel value
+            if (old_ptr != serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL) {
+                const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
+                self.buffer.items.ptr = @ptrFromInt(new_ptr);
+            }
+        }
+    }
+
     /// Insert a new string into a `StringLiteral.Store`.
     ///
     /// Does not deduplicate, as string literals are expected to be large and mostly unique.
@@ -84,59 +98,39 @@ pub const Store = struct {
         }
     }
 
-    /// Calculate the size needed to serialize this StringLiteral.Store
-    pub fn serializedSize(self: *const Store) usize {
-        // Header: 4 bytes for buffer length
-        // Data: buffer.items.len bytes
-        const raw_size = @sizeOf(u32) + self.buffer.items.len;
-        // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
-        return std.mem.alignForward(usize, raw_size, serialization.SERIALIZATION_ALIGNMENT);
-    }
+    /// Append this StringLiteral.Store to an iovec writer for serialization
+    pub fn appendToIovecs(self: *const Store, writer: anytype) !usize {
 
-    /// Serialize this StringLiteral.Store into the provided buffer
-    /// Buffer must be at least serializedSize() bytes
-    pub fn serializeInto(self: *const Store, buffer: []u8) ![]u8 {
-        const size = self.serializedSize();
-        if (buffer.len < size) return error.BufferTooSmall;
+        // Create a mutable copy of self that we can modify
+        var store_copy = self.*;
 
-        // Write buffer length
-        const len_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr)));
-        len_ptr.* = @intCast(self.buffer.items.len);
+        // Create a buffer for the final serialized struct
+        const store_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Store));
 
-        // Write buffer data
-        if (self.buffer.items.len > 0) {
-            @memcpy(buffer[@sizeOf(u32) .. @sizeOf(u32) + self.buffer.items.len], self.buffer.items);
-        }
+        // Track this allocation so it gets freed when writer is deinitialized
+        try writer.owned_buffers.append(store_copy_buffer);
 
-        // Zero out any padding bytes
-        const actual_size = @sizeOf(u32) + self.buffer.items.len;
-        if (actual_size < size) {
-            @memset(buffer[actual_size..size], 0);
-        }
+        // Serialize buffer data
+        const buffer_offset = if (self.buffer.items.len > 0) blk: {
+            const offset = try writer.appendBytes(u8, self.buffer.items);
+            break :blk offset;
+        } else 0;
 
-        return buffer[0..size];
-    }
+        // Update pointer in the copy to use offset
+        // For empty arrays, use sentinel value instead of 0 to avoid null pointer
+        store_copy.buffer.items.ptr = if (buffer_offset == 0)
+            @ptrFromInt(serialization.iovec_serialize.EMPTY_ARRAY_SENTINEL)
+        else
+            @ptrFromInt(buffer_offset);
+        store_copy.buffer.items.len = self.buffer.items.len;
 
-    /// Deserialize a StringLiteral.Store from the provided buffer
-    pub fn deserializeFrom(buffer: []const u8, gpa: std.mem.Allocator) !Store {
-        if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
+        // Copy the modified struct to the buffer
+        @memcpy(store_copy_buffer, std.mem.asBytes(&store_copy));
 
-        // Read buffer length
-        const buffer_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr))).*;
+        // Now that all pointers have been converted to offsets, add the copy to iovecs
+        const struct_offset = try writer.appendBytes(Store, store_copy_buffer);
 
-        const expected_size = @sizeOf(u32) + buffer_len;
-        if (buffer.len < expected_size) return error.BufferTooSmall;
-
-        // Create store with exact capacity
-        var store = try Store.initCapacityBytes(gpa, buffer_len);
-
-        // Copy buffer data
-        if (buffer_len > 0) {
-            const data_start = @sizeOf(u32);
-            store.buffer.appendSliceAssumeCapacity(buffer[data_start .. data_start + buffer_len]);
-        }
-
-        return store;
+        return struct_offset;
     }
 };
 

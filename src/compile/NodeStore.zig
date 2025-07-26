@@ -2960,85 +2960,25 @@ pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocat
     return try store.spanFrom("scratch_match_branch_patterns", ModuleEnv.Expr.Match.BranchPattern.Span, start);
 }
 
-/// Calculate the size needed to serialize this NodeStore
-pub fn serializedSize(self: *const NodeStore) usize {
-    // We only serialize nodes, regions, and extra_data (the scratch arrays are transient)
-    const raw_size = self.nodes.serializedSize() +
-        self.regions.serializedSize() +
-        self.extra_data.serializedSize();
-    // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
-    return std.mem.alignForward(usize, raw_size, SERIALIZATION_ALIGNMENT);
+/// Append this NodeStore to an iovec writer for serialization
+pub fn appendToIovecs(self: *const NodeStore, writer: anytype) !usize {
+    // Serialize all components of NodeStore
+    _ = try self.nodes.appendToIovecs(writer);
+    _ = try self.regions.appendToIovecs(writer);
+    _ = try self.extra_data.appendToIovecs(writer);
+
+    // Note: Scratch arrays are temporary and don't need to be serialized
+
+    // Return a placeholder offset
+    return 0;
 }
 
-/// Serialize this NodeStore into the provided buffer
-/// Buffer must be at least serializedSize() bytes and properly aligned
-pub fn serializeInto(self: *const NodeStore, buffer: []align(SERIALIZATION_ALIGNMENT) u8) ![]u8 {
-    const size = self.serializedSize();
-    if (buffer.len < size) return error.BufferTooSmall;
+/// Relocate all pointers in this NodeStore by the given offset
+pub fn relocate(self: *NodeStore, offset: isize) void {
+    // Relocate all components
+    self.nodes.relocate(offset);
+    self.regions.relocate(offset);
+    self.extra_data.relocate(offset);
 
-    var offset: usize = 0;
-
-    // Serialize nodes - cast to proper alignment for Node type
-    const nodes_slice = try self.nodes.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
-    offset += nodes_slice.len;
-
-    // Serialize regions
-    const regions_slice = try self.regions.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
-    offset += regions_slice.len;
-
-    // Serialize extra_data items
-    const extra_data_slice = try self.extra_data.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
-    offset += extra_data_slice.len;
-
-    // Zero out any padding bytes
-    if (offset < size) {
-        @memset(buffer[offset..size], 0);
-    }
-
-    return buffer[0..size];
-}
-
-/// Deserialize a NodeStore from the provided buffer
-pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.mem.Allocator) !NodeStore {
-    var offset: usize = 0;
-
-    // Deserialize nodes - cast to proper alignment for Node type
-    const nodes_buffer = @as([]align(@alignOf(Node)) const u8, @alignCast(buffer[offset..]));
-    const nodes = try Node.List.deserializeFrom(nodes_buffer, allocator);
-    offset += nodes.serializedSize();
-
-    // Deserialize regions
-    const regions_buffer = @as([]align(@alignOf(Region)) const u8, @alignCast(buffer[offset..]));
-    const regions = try Region.List.deserializeFrom(regions_buffer, allocator);
-    offset += regions.serializedSize();
-
-    // Deserialize extra_data items
-    const extra_data_buffer = @as([]align(@alignOf(u32)) const u8, @alignCast(buffer[offset..]));
-    const extra_data = try SafeList(u32).deserializeFrom(extra_data_buffer, allocator);
-    offset += extra_data.serializedSize();
-
-    // Create NodeStore with empty scratch arrays
-    return NodeStore{
-        .gpa = allocator,
-        .nodes = nodes,
-        .regions = regions,
-        .extra_data = extra_data, // This is now a SafeList
-        // All scratch arrays start empty
-        .scratch_statements = base.Scratch(ModuleEnv.Statement.Idx){ .items = .{} },
-        .scratch_exprs = base.Scratch(ModuleEnv.Expr.Idx){ .items = .{} },
-        .scratch_captures = base.Scratch(ModuleEnv.Expr.Capture.Idx){ .items = .{} },
-        .scratch_record_fields = base.Scratch(ModuleEnv.RecordField.Idx){ .items = .{} },
-        .scratch_match_branches = base.Scratch(ModuleEnv.Expr.Match.Branch.Idx){ .items = .{} },
-        .scratch_match_branch_patterns = base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx){ .items = .{} },
-        .scratch_if_branches = base.Scratch(ModuleEnv.Expr.IfBranch.Idx){ .items = .{} },
-        .scratch_where_clauses = base.Scratch(ModuleEnv.WhereClause.Idx){ .items = .{} },
-        .scratch_patterns = base.Scratch(ModuleEnv.Pattern.Idx){ .items = .{} },
-        .scratch_pattern_record_fields = base.Scratch(ModuleEnv.PatternRecordField.Idx){ .items = .{} },
-        .scratch_type_annos = base.Scratch(ModuleEnv.TypeAnno.Idx){ .items = .{} },
-        .scratch_anno_record_fields = base.Scratch(ModuleEnv.TypeAnno.RecordField.Idx){ .items = .{} },
-        .scratch_exposed_items = base.Scratch(ModuleEnv.ExposedItem.Idx){ .items = .{} },
-        .scratch_defs = base.Scratch(ModuleEnv.Def.Idx){ .items = .{} },
-        .scratch_diagnostics = base.Scratch(ModuleEnv.Diagnostic.Idx){ .items = .{} },
-        .scratch_record_destructs = base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx){ .items = .{} },
-    };
+    // Note: Scratch arrays are temporary and don't need relocation
 }

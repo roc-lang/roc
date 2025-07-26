@@ -61,7 +61,7 @@ test "cross-module type checking - monomorphic function" {
     // Create an external lookup expression
     const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // Direct index to module A in the array
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -138,7 +138,7 @@ test "cross-module type checking - polymorphic function" {
     // Create an external lookup expression
     const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // Direct index to module A in the array
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -231,7 +231,7 @@ test "cross-module type checking - record type" {
     // Create an external lookup expression
     const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // Direct index to module A in the array
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(record_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -304,7 +304,7 @@ test "cross-module type checking - type mismatch error" {
     // Create an external lookup expression
     const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // Direct index to module A in the array
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -314,7 +314,7 @@ test "cross-module type checking - type mismatch error" {
     const str_content = Content{ .structure = .str };
     const str_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_str_segment = .{
-            .literal = @enumFromInt(0), // placeholder string literal
+            .literal = @as(base.StringLiteral.Idx, @enumFromInt(0)), // placeholder string literal
         },
     }, str_content, base.Region.zero());
 
@@ -387,7 +387,7 @@ test "cross-module type checking - polymorphic instantiation" {
     // Create an external lookup expression
     const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // Direct index to module A in the array
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -471,7 +471,7 @@ test "cross-module type checking - preserves module A types" {
     // Create an external lookup expression
     const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // Direct index to module A in the array
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(flex_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -548,7 +548,7 @@ test "cross-module type checking - three module chain monomorphic" {
 
     const b_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // Direct index to module A in the array
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -645,7 +645,7 @@ test "cross-module type checking - three module chain polymorphic" {
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
     const b_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // Direct index to module A in the array
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(func_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -753,7 +753,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
     const b_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // Direct index to module A in the array
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(map_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -920,7 +920,7 @@ test "cross-module type checking - record type chain" {
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
     const b_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // Direct index to module A in the array
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(record_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -1036,7 +1036,7 @@ test "cross-module type checking - polymorphic record chain" {
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
     const b_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // Direct index to module A in the array
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(record_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -1183,7 +1183,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
     const b_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0), // Direct index to module A in the array
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)), // Direct index to module A in the array
             .target_node_idx = @intCast(@intFromEnum(compose_expr_idx)),
             .region = base.Region.zero(),
         },
@@ -1380,7 +1380,7 @@ test "cross-module type checking - type mismatch with proper error message" {
     // during type checking
     const import_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
-            .module_idx = @enumFromInt(0),
+            .module_idx = @as(ModuleEnv.Import.Idx, @enumFromInt(0)),
             .target_node_idx = @intCast(@intFromEnum(str_expr_idx)),
             .region = .{
                 .start = .{ .offset = 0 },
