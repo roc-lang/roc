@@ -1132,7 +1132,7 @@ fn processSnapshotContent(
         // incorrect pointer relocation during deserialization), causing index out of bounds
         // errors when trying to access nodes in the store.
         // The cache test is successful if we can restore without immediate errors.
-        
+
         // Uncomment once deserialization is fixed:
         // var restored_tree = SExprTree.init(allocator);
         // defer restored_tree.deinit();

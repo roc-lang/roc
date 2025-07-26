@@ -721,69 +721,69 @@ test "SafeMultiList empty list serialization framework test" {
 
 test "SafeMultiList internal pointer verification after serialization" {
     const gpa = testing.allocator;
-    
+
     const TestStruct = struct {
         a: u16,
         b: u32,
         c: u8,
     };
-    
+
     var list = try SafeMultiList(TestStruct).initCapacity(gpa, 5);
     defer list.deinit(gpa);
-    
+
     // Add test data with different values for each field
     _ = try list.append(gpa, TestStruct{ .a = 100, .b = 1000, .c = 10 });
     _ = try list.append(gpa, TestStruct{ .a = 200, .b = 2000, .c = 20 });
     _ = try list.append(gpa, TestStruct{ .a = 300, .b = 3000, .c = 30 });
-    
+
     // Serialize and deserialize
     var writer = serialization.IovecWriter.init(gpa);
     defer writer.deinit();
-    
+
     const list_offset = try list.appendToIovecs(&writer);
     const serialized_data = try writer.collectIntoBuffer();
     defer gpa.free(serialized_data);
-    
+
     // Get the deserialized list
     const base_addr = @intFromPtr(serialized_data.ptr);
     const restored_ptr = @as(*SafeMultiList(TestStruct), @ptrCast(@alignCast(@constCast(serialized_data[list_offset..].ptr))));
     var restored = restored_ptr.*;
-    
+
     // Relocate the pointers
     restored.relocate(@as(isize, @intCast(base_addr)));
-    
+
     // Verify basic properties
     try testing.expectEqual(@as(u32, 3), restored.len());
     try testing.expectEqual(restored.len(), restored.items.capacity); // Capacity should equal length
-    
+
     // Verify the internal pointers look reasonable
     const restored_slice = restored.items.slice();
-    
+
     // The bytes pointer should point within our serialized buffer
     const bytes_addr = @intFromPtr(restored.items.bytes);
     const buffer_start = @intFromPtr(serialized_data.ptr);
     const buffer_end = buffer_start + serialized_data.len;
     try testing.expect(bytes_addr >= buffer_start);
     try testing.expect(bytes_addr < buffer_end);
-    
+
     // Verify we can access the fields correctly through the slice
     const a_values = restored_slice.items(.a);
     const b_values = restored_slice.items(.b);
     const c_values = restored_slice.items(.c);
-    
+
     try testing.expectEqual(@as(usize, 3), a_values.len);
-    try testing.expectEqual(@as(usize, 3), b_values.len);  
+    try testing.expectEqual(@as(usize, 3), b_values.len);
     try testing.expectEqual(@as(usize, 3), c_values.len);
-    
+
     // Verify the data is correct
     try testing.expectEqual(@as(u16, 100), a_values[0]);
     try testing.expectEqual(@as(u32, 1000), b_values[0]);
     try testing.expectEqual(@as(u8, 10), c_values[0]);
-    
+
     try testing.expectEqual(@as(u16, 200), a_values[1]);
     try testing.expectEqual(@as(u32, 2000), b_values[1]);
     try testing.expectEqual(@as(u8, 20), c_values[1]);
-    
+
     try testing.expectEqual(@as(u16, 300), a_values[2]);
     try testing.expectEqual(@as(u32, 3000), b_values[2]);
     try testing.expectEqual(@as(u8, 30), c_values[2]);
