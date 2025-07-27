@@ -653,20 +653,13 @@ pub fn SafeMultiList(comptime T: type) type {
                 // necessary between the end of one field's elements and the beginning of
                 // the next. So we need to append entries to the writer for all fields.
                 const first_field_offset = writer.total_bytes;
-                var current_offset: usize = 0;
 
-                inline for (fields, 0..) |field_info, i| {
-                    const field_enum = @as(Field, @enumFromInt(i));
-                    const field_items = slice.items(field_enum);
-                    const field_type = field_info.type;
-                    const aligned_offset = std.mem.alignForward(usize, current_offset, @alignOf(field_type));
+                inline for (fields, 0..) |_, i| {
+                    const field_ptr = slice.items(@as(Field, @enumFromInt(i))).ptr;
 
                     // Write the field data (only len elements' worth).
                     // appendSlice will take care of alignment padding.
-                    _ = try writer.appendSlice(allocator, field_items.ptr, self.items.len);
-
-                    // Update offset for next field
-                    current_offset = aligned_offset + (@sizeOf(field_type) * self.items.len);
+                    _ = try writer.appendSlice(allocator, field_ptr, self.items.len);
                 }
 
                 break :blk first_field_offset;
