@@ -215,10 +215,10 @@ pub fn SafeList(comptime T: type) type {
 
         /// Add the given offset to the memory addresses of all pointers in `self`.
         pub fn relocate(self: *SafeList(T), offset: isize) void {
-            if (self.items.items.len > 0) {
-                const old_addr: isize = @intCast(@intFromPtr(self.items.items.ptr));
-                self.items.items.ptr = @ptrFromInt(@as(usize, @intCast(old_addr + offset)));
-            }
+            if (self.items.capacity == 0) return;
+
+            const old_addr: isize = @intCast(@intFromPtr(self.items.items.ptr));
+            self.items.items.ptr = @ptrFromInt(@as(usize, @intCast(old_addr + offset)));
         }
 
         /// Returns the size needed to serialize this list
