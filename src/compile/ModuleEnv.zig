@@ -68,12 +68,8 @@ idents: Ident.Store,
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 types: types_mod.Store,
-/// Map of exposed items by their string representation (not interned)
-/// This is built during canonicalization and preserved for later use
-exposed_by_str: collections.SafeStringHashMap(void),
-/// Map of exposed item names to their node indices (stored as u16)
-/// This is populated during canonicalization to allow cross-module lookups
-exposed_nodes: collections.SafeStringHashMap(u16),
+/// The items (a combination of types and values) that this module exposes
+exposed_items: collections.ExposedItems,
 
 /// Line starts for error reporting. We retain only start and offset positions in the IR
 /// and then use these line starts to calculate the line number and column number as required.
@@ -130,8 +126,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .ident_ids_for_slicing = try collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
         .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
         .types = try types_mod.Store.initCapacity(gpa, 2048, 512),
-        .exposed_by_str = try collections.SafeStringHashMap(void).initCapacity(gpa, 64),
-        .exposed_nodes = try collections.SafeStringHashMap(u16).initCapacity(gpa, 64),
+        .exposed_items = collections.ExposedItems.init(),
         .line_starts = try collections.SafeList(u32).initCapacity(gpa, 256),
         .source = source,
         // Initialize compilation fields with empty/default values
@@ -152,8 +147,7 @@ pub fn deinit(self: *Self) void {
     self.strings.deinit(self.gpa);
     self.types.deinit();
     self.line_starts.deinit(self.gpa);
-    self.exposed_by_str.deinit(self.gpa);
-    self.exposed_nodes.deinit(self.gpa);
+    self.exposed_items.deinit(self.gpa);
     // Clean up compilation fields
     self.external_decls.deinit(self.gpa);
     self.imports.deinit(self.gpa);

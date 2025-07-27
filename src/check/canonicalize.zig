@@ -623,17 +623,17 @@ pub fn canonicalizeFile(
                 last_type_anno = null; // Clear after successful use
 
                 // If this declaration successfully defined an exposed value, remove it from exposed_ident_texts
-                // and add it to exposed_nodes
+                // and add the node index to exposed_items
                 const pattern = self.parse_ir.store.getPattern(decl.pattern);
                 if (pattern == .ident) {
                     const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
                     const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
-                    // If this identifier is exposed, add it to exposed_nodes
+                    // If this identifier is exposed, add it to exposed_items
                     if (self.exposed_ident_texts.contains(ident_text)) {
-                        // Store the def index as u16 in exposed_nodes
+                        // Store the def index as u16 in exposed_items
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                        try self.env.exposed_nodes.put(self.env.gpa, ident_text, def_idx_u16);
+                        try self.env.exposed_items.setNodeIndex(self.env.gpa, ident_text, def_idx_u16);
                     }
 
                     _ = self.exposed_ident_texts.remove(ident_text);
@@ -904,8 +904,8 @@ fn createExposedScope(
                 const token_region = self.parse_ir.tokens.resolve(@intCast(ident.ident));
                 const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
-                // Add to exposed_by_str for permanent storage (unconditionally)
-                try self.env.exposed_by_str.put(gpa, ident_text, {});
+                // Add to exposed_items for permanent storage (unconditionally)
+                try self.env.exposed_items.addExposed(gpa, ident_text);
 
                 // Also build exposed_scope with proper identifiers
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
@@ -937,8 +937,8 @@ fn createExposedScope(
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_name.ident));
                 const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
-                // Add to exposed_by_str for permanent storage (unconditionally)
-                try self.env.exposed_by_str.put(gpa, type_text, {});
+                // Add to exposed_items for permanent storage (unconditionally)
+                try self.env.exposed_items.addExposed(gpa, type_text);
 
                 // Also build exposed_scope with proper identifiers
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
@@ -970,8 +970,8 @@ fn createExposedScope(
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_with_constructors.ident));
                 const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
-                // Add to exposed_by_str for permanent storage (unconditionally)
-                try self.env.exposed_by_str.put(gpa, type_text, {});
+                // Add to exposed_items for permanent storage (unconditionally)
+                try self.env.exposed_items.addExposed(gpa, type_text);
 
                 // Also build exposed_scope with proper identifiers
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
@@ -1368,7 +1368,7 @@ fn introduceExposedItemsIntoScope(
             return;
         }
 
-        // Get the module's exposed_by_str map
+        // Get the module's exposed_items
         const module_env = envs_map.get(module_name_text).?;
 
         // Validate each exposed item
@@ -1377,7 +1377,7 @@ fn introduceExposedItemsIntoScope(
             const item_name_text = self.env.idents.getText(exposed_item.name);
 
             // Check if the item is exposed by the module
-            if (!module_env.exposed_by_str.contains(item_name_text)) {
+            if (!module_env.exposed_items.contains(self.env.gpa, item_name_text)) {
                 // Determine if it's a type or value based on capitalization
                 const first_char = item_name_text[0];
 
@@ -1702,11 +1702,11 @@ pub fn canonicalizeExpr(
                                 };
                             };
 
-                            // Look up the target node index in the module's exposed_nodes
+                            // Look up the target node index in the module's exposed_items
                             const field_text = self.env.idents.getText(ident);
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
-                                    break :blk module_env.exposed_nodes.get(field_text) orelse 0;
+                                    break :blk module_env.exposed_items.getNodeIndex(self.env.gpa, field_text) orelse 0;
                                 } else {
                                     break :blk 0;
                                 }
@@ -1761,11 +1761,11 @@ pub fn canonicalizeExpr(
                                 };
                             };
 
-                            // Look up the target node index in the module's exposed_nodes
+                            // Look up the target node index in the module's exposed_items
                             const field_text = self.env.idents.getText(exposed_info.original_name);
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
-                                    break :blk module_env.exposed_nodes.get(field_text) orelse 0;
+                                    break :blk module_env.exposed_items.getNodeIndex(self.env.gpa, field_text) orelse 0;
                                 } else {
                                     break :blk 0;
                                 }
@@ -6541,11 +6541,11 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
     const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
 
-    // Look up the target node index in the module's exposed_nodes
+    // Look up the target node index in the module's exposed_items
     const field_text = self.env.idents.getText(field_name);
     const target_node_idx = if (self.module_envs) |envs_map| blk: {
         if (envs_map.get(module_text)) |module_env| {
-            break :blk module_env.exposed_nodes.get(field_text) orelse 0;
+            break :blk module_env.exposed_items.getNodeIndex(self.env.gpa, field_text) orelse 0;
         } else {
             break :blk 0;
         }
