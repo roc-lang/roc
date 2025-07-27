@@ -15,7 +15,7 @@ test "CompactWriter basic functionality" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(allocator);
+    defer writer.deinit(allocator);
 
     // Test appendAlloc
     const test_struct = struct {
@@ -44,16 +44,16 @@ test "CompactWriter appendSlice" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(allocator);
+    defer writer.deinit(allocator);
 
     // Create some test data
     const data = [_]u32{ 1, 2, 3, 4, 5 };
 
-    const offset = try writer.appendSlice(allocator, &data, data.len);
+    const slice = try writer.appendSlice(allocator, &data);
 
     // Verify the writer has tracked the slice
     try testing.expect(writer.iovecs.items.len > 0);
-    try testing.expect(offset > 0);
+    try testing.expect(@intFromPtr(slice.ptr) > 0);
     try testing.expect(writer.total_bytes >= @sizeOf(u32) * data.len);
 
     // Test that writer tracked the slice correctly
@@ -67,7 +67,7 @@ test "CompactWriter alignment padding" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(allocator);
+    defer writer.deinit(allocator);
 
     // First append a u8 (1-byte aligned)
     const byte_ptr = try writer.appendAlloc(allocator, u8);
@@ -94,7 +94,7 @@ test "CompactWriter multiple allocations" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(allocator);
+    defer writer.deinit(allocator);
 
     // Append multiple items
     const item1 = try writer.appendAlloc(allocator, u64);
@@ -123,7 +123,7 @@ test "CompactWriter up-front padding with various alignments" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(allocator);
+    defer writer.deinit(allocator);
 
     // Start with u8 (1-byte aligned)
     _ = try writer.appendAlloc(allocator, u8);
@@ -162,7 +162,7 @@ test "CompactWriter slice alignment" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(allocator);
+    defer writer.deinit(allocator);
 
     // Start with a u8
     _ = try writer.appendAlloc(allocator, u8);
@@ -170,13 +170,13 @@ test "CompactWriter slice alignment" {
 
     // Add a slice of u32s - should pad to 4-byte alignment first
     const data = [_]u32{ 10, 20, 30 };
-    _ = try writer.appendSlice(allocator, &data, data.len);
+    _ = try writer.appendSlice(allocator, &data);
     // 1 + 3 padding + (3 * 4) = 16
     try testing.expectEqual(@as(usize, 16), writer.total_bytes);
 
     // Add a slice of u64s - already at 16 (divisible by 8), no padding
     const data64 = [_]u64{ 100, 200 };
-    _ = try writer.appendSlice(allocator, &data64, data64.len);
+    _ = try writer.appendSlice(allocator, &data64);
     // 16 + (2 * 8) = 32
     try testing.expectEqual(@as(usize, 32), writer.total_bytes);
 }
@@ -200,7 +200,7 @@ test "CompactWriter brute-force appendSlice alignment" {
                 .iovecs = .{},
                 .total_bytes = 0,
             };
-            defer writer.iovecs.deinit(allocator);
+            defer writer.deinit(allocator);
 
             // Create test data
             var data: [8]T = undefined;
@@ -217,7 +217,7 @@ test "CompactWriter brute-force appendSlice alignment" {
 
             // Append the slice
             if (length > 0) {
-                const offset = try writer.appendSlice(allocator, &data, length);
+                const slice = try writer.appendSlice(allocator, data[0..length]);
 
                 // Verify padding was added correctly
                 const expected_padding = std.mem.alignForward(usize, start_bytes, @alignOf(T)) - start_bytes;
@@ -225,8 +225,8 @@ test "CompactWriter brute-force appendSlice alignment" {
                 const expected_bytes = expected_padding + @sizeOf(T) * length;
                 try testing.expectEqual(expected_bytes, actual_bytes_written);
 
-                // Verify offset is correct
-                try testing.expectEqual(writer.total_bytes, offset);
+                // Verify slice pointer is correct
+                try testing.expectEqual(writer.total_bytes - @sizeOf(T) * length, @intFromPtr(slice.ptr));
             }
 
             // Write to buffer and verify data integrity
