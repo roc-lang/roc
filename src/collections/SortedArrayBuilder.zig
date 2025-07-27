@@ -229,6 +229,25 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             return self.entries.items.len;
         }
 
+        /// Check if there are no duplicates (assumes sorted)
+        pub fn isDeduplicated(self: *const Self) bool {
+            const entries = self.entries.items;
+            if (entries.len <= 1) return true;
+            
+            for (1..entries.len) |i| {
+                const is_duplicate = if (K == []const u8)
+                    std.mem.eql(u8, entries[i-1].key, entries[i].key)
+                else
+                    entries[i-1].key == entries[i].key;
+                    
+                if (is_duplicate) {
+                    return false;
+                }
+            }
+            
+            return true;
+        }
+
         /// Append this SortedArrayBuilder to an iovec writer for serialization
         pub fn appendToIovecs(self: *const Self, writer: *IovecWriter) !usize {
 

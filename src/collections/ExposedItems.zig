@@ -113,12 +113,12 @@ pub const ExposedItems = struct {
         allocator: Allocator,
         writer: *@import("serialization").CompactWriter,
     ) Allocator.Error!*const Self {
+        // Items must be sorted and deduplicated before serialization
+        std.debug.assert(self.items.sorted);
+        std.debug.assert(self.items.isDeduplicated());
+
         // First, write the ExposedItems struct itself
         const offset_self = try writer.appendAlloc(allocator, Self);
-
-        // Ensure the items are sorted before serialization
-        var mutable_self = @constCast(self);
-        mutable_self.ensureSorted(allocator);
 
         // Serialize the SortedArrayBuilder's entries
         const entries = self.items.entries.items;
@@ -356,6 +356,9 @@ test "ExposedItems basic CompactWriter roundtrip" {
     try original.setNodeIndexById(allocator, id2, 84);
     // id3 left as 0 (exposed but not defined)
 
+    // Ensure sorted before serialization
+    original.ensureSorted(allocator);
+
     // Create a temp file
     const tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -412,6 +415,9 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     try original.addExposedById(allocator, id1); // duplicate
     try original.setNodeIndexById(allocator, id2, 84);
     try original.addExposedById(allocator, id2); // duplicate
+
+    // Ensure sorted before serialization (this will also deduplicate)
+    original.ensureSorted(allocator);
 
     // Create a temp file
     const tmp_dir = testing.tmpDir(.{});
@@ -479,6 +485,9 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
         }
     }
 
+    // Ensure sorted before serialization
+    original.ensureSorted(allocator);
+
     // Create a temp file
     const tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -536,13 +545,15 @@ test "ExposedItems multiple instances CompactWriter roundtrip" {
     // Populate differently
     try exposed1.addExposedById(allocator, 100);
     try exposed1.setNodeIndexById(allocator, 100, 42);
+    exposed1.ensureSorted(allocator);
 
     try exposed2.addExposedById(allocator, 200);
     try exposed2.addExposedById(allocator, 201);
     try exposed2.setNodeIndexById(allocator, 200, 84);
     try exposed2.setNodeIndexById(allocator, 201, 85);
+    exposed2.ensureSorted(allocator);
 
-    // exposed3 left empty
+    // exposed3 left empty - empty collections are already sorted
 
     // Create a temp file
     const tmp_dir = testing.tmpDir(.{});
