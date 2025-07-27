@@ -59,10 +59,15 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     }
 
     // Add exposed items to Json module
-    try json_env.exposed_by_str.put(allocator, "decode", {});
-    try json_env.exposed_by_str.put(allocator, "encode", {});
-    try json_env.exposed_by_str.put(allocator, "JsonError", {});
-    try json_env.exposed_by_str.put(allocator, "DecodeProblem", {});
+    const Ident = base.Ident;
+    const decode_idx = try json_env.idents.insert(allocator, Ident.for_text("decode"));
+    try json_env.exposed_items.addExposedById(allocator, @bitCast(decode_idx));
+    const encode_idx = try json_env.idents.insert(allocator, Ident.for_text("encode"));
+    try json_env.exposed_items.addExposedById(allocator, @bitCast(encode_idx));
+    const json_error_idx = try json_env.idents.insert(allocator, Ident.for_text("JsonError"));
+    try json_env.exposed_items.addExposedById(allocator, @bitCast(json_error_idx));
+    const decode_problem_idx = try json_env.idents.insert(allocator, Ident.for_text("DecodeProblem"));
+    try json_env.exposed_items.addExposedById(allocator, @bitCast(decode_problem_idx));
 
     try module_envs.put("Json", json_env);
 
@@ -75,9 +80,12 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     }
 
     // Add exposed items to Utils module
-    try utils_env.exposed_by_str.put(allocator, "map", {});
-    try utils_env.exposed_by_str.put(allocator, "filter", {});
-    try utils_env.exposed_by_str.put(allocator, "Result", {});
+    const map_idx = try utils_env.idents.insert(allocator, Ident.for_text("map"));
+    try utils_env.exposed_items.addExposedById(allocator, @bitCast(map_idx));
+    const filter_idx = try utils_env.idents.insert(allocator, Ident.for_text("filter"));
+    try utils_env.exposed_items.addExposedById(allocator, @bitCast(filter_idx));
+    const result_idx = try utils_env.idents.insert(allocator, Ident.for_text("Result"));
+    try utils_env.exposed_items.addExposedById(allocator, @bitCast(result_idx));
 
     try module_envs.put("Utils", utils_env);
 
@@ -502,7 +510,7 @@ test "module-qualified lookups with e_lookup_external" {
     try expectEqual(true, found_dict_empty);
 }
 
-test "exposed_nodes - tracking CIR node indices for exposed items" {
+test "exposed_items - tracking CIR node indices for exposed items" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
@@ -519,16 +527,20 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
         allocator.destroy(math_env);
     }
 
-    // Add exposed items
-    try math_env.exposed_by_str.put(allocator, "add", {});
-    try math_env.exposed_by_str.put(allocator, "multiply", {});
-    try math_env.exposed_by_str.put(allocator, "PI", {});
+    // Add exposed items and set their node indices
+    const Ident = base.Ident;
+    const add_idx = try math_env.idents.insert(allocator, Ident.for_text("add"));
+    try math_env.exposed_items.addExposedById(allocator, @bitCast(add_idx));
+    const multiply_idx = try math_env.idents.insert(allocator, Ident.for_text("multiply"));
+    try math_env.exposed_items.addExposedById(allocator, @bitCast(multiply_idx));
+    const pi_idx = try math_env.idents.insert(allocator, Ident.for_text("PI"));
+    try math_env.exposed_items.addExposedById(allocator, @bitCast(pi_idx));
 
     // Simulate having CIR node indices for these exposed items
     // In real usage, these would be set during canonicalization of MathUtils
-    try math_env.exposed_nodes.put(allocator, "add", 100);
-    try math_env.exposed_nodes.put(allocator, "multiply", 200);
-    try math_env.exposed_nodes.put(allocator, "PI", 300);
+    try math_env.exposed_items.setNodeIndexById(allocator, @bitCast(add_idx), 100);
+    try math_env.exposed_items.setNodeIndexById(allocator, @bitCast(multiply_idx), 200);
+    try math_env.exposed_items.setNodeIndexById(allocator, @bitCast(pi_idx), 300);
 
     try module_envs.put("MathUtils", math_env);
 
@@ -586,15 +598,16 @@ test "exposed_nodes - tracking CIR node indices for exposed items" {
     try expectEqual(true, found_multiply_with_idx_200);
     try expectEqual(true, found_pi_with_idx_300);
 
-    // Test case where exposed_nodes is not populated (should get 0)
+    // Test case where node index is not populated (should get 0)
     const empty_env = try allocator.create(ModuleEnv);
     empty_env.* = try ModuleEnv.init(allocator, "");
     defer {
         empty_env.deinit();
         allocator.destroy(empty_env);
     }
-    try empty_env.exposed_by_str.put(allocator, "undefined", {});
-    // Don't add to exposed_nodes - should default to 0
+    const undefined_idx = try empty_env.idents.insert(allocator, Ident.for_text("undefined"));
+    try empty_env.exposed_items.addExposedById(allocator, @bitCast(undefined_idx));
+    // Don't set node index - should default to 0
     try module_envs.put("EmptyModule", empty_env);
 
     const source2 =
