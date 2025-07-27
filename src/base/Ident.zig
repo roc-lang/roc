@@ -23,18 +23,9 @@ attributes: Attributes,
 
 /// Create a new identifier from a string.
 pub fn for_text(text: []const u8) Ident {
-    // Parse identifier attributes from the text
-    const is_ignored = std.mem.startsWith(u8, text, "_");
-    const is_effectful = std.mem.endsWith(u8, text, "!");
-    // TODO: parse reassignable attribute (var keyword handling)
-
     return Ident{
         .raw_text = text,
-        .attributes = Attributes{
-            .effectful = is_effectful,
-            .ignored = is_ignored,
-            .reassignable = false,
-        },
+        .attributes = Attributes.fromString(text),
     };
 }
 
@@ -68,18 +59,9 @@ pub fn from_bytes(bytes: []const u8) Error!Ident {
         }
     }
 
-    // Parse identifier attributes from the bytes
-    const is_ignored = std.mem.startsWith(u8, bytes, "_");
-    const is_effectful = std.mem.endsWith(u8, bytes, "!");
-    // TODO: parse reassignable attribute (var keyword handling)
-
     return Ident{
         .raw_text = bytes,
-        .attributes = Attributes{
-            .effectful = is_effectful,
-            .ignored = is_ignored,
-            .reassignable = false,
-        },
+        .attributes = Attributes.fromString(bytes),
     };
 }
 
@@ -96,6 +78,14 @@ pub const Attributes = packed struct(u3) {
     effectful: bool,
     ignored: bool,
     reassignable: bool,
+
+    pub fn fromString(text: []const u8) Attributes {
+        return .{
+            .effectful = std.mem.endsWith(u8, text, "!"),
+            .ignored = std.mem.startsWith(u8, text, "_"),
+            .reassignable = false,
+        };
+    }
 };
 
 /// An interner for identifier names.
@@ -179,13 +169,23 @@ pub const Store = struct {
         return self.interner.contains(text);
     }
 
+    /// Find an identifier by its string, returning its index if it exists.
+    /// This is different from insert in that it's guaranteed not to modify the store.
+    pub fn findByString(self: *const Store, text: []const u8) ?Idx {
+        // Look up in the interner without inserting
+        const interner_idx = self.interner.strings.get(text) orelse return null;
 
+        // Create an Idx with inferred attributes from the text
+        return Idx{
+            .attributes = Attributes.fromString(text),
+            .idx = @as(u29, @intCast(@intFromEnum(interner_idx))),
+        };
+    }
 
     /// Freeze the identifier store, preventing any new entries from being added.
     pub fn freeze(self: *Store) void {
         self.interner.freeze();
     }
-
     /// Calculate the size needed to serialize this Ident.Store
     pub fn serializedSize(self: *const Store) usize {
         var size: usize = 0;
