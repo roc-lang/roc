@@ -10,6 +10,7 @@ const std = @import("std");
 
 pub const testing = @import("testing.zig");
 pub const safety = @import("safety.zig");
+pub const CompactWriter = @import("CompactWriter.zig").CompactWriter;
 
 const Allocator = std.mem.Allocator;
 
@@ -171,4 +172,8 @@ test "serialization interface detection" {
     const std_testing = std.testing;
     try std_testing.expect(hasSerializationInterface(TestType));
     try std_testing.expect(!hasSerializationWithAllocatorInterface(TestType));
+}
+
+test {
+    _ = @import("test/compact_writer_test.zig");
 }
