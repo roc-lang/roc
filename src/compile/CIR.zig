@@ -314,9 +314,9 @@ pub const Import = struct {
         /// Map from module name string to Import.Idx
         map: std.StringHashMapUnmanaged(Import.Idx) = .{},
         /// List of imports indexed by Import.Idx
-        imports: std.ArrayListUnmanaged([]u8) = .{},
+        imports: collections.SafeList([]u8) = .{},
         /// Storage for module name strings
-        strings: std.ArrayListUnmanaged(u8) = .{},
+        strings: collections.SafeList(u8) = .{},
 
         pub fn init() Store {
             return .{};
@@ -324,7 +324,7 @@ pub const Import = struct {
 
         pub fn deinit(self: *Store, allocator: std.mem.Allocator) void {
             self.map.deinit(allocator);
-            for (self.imports.items) |import| {
+            for (self.imports.items.items) |import| {
                 allocator.free(import);
             }
             self.imports.deinit(allocator);
@@ -334,10 +334,10 @@ pub const Import = struct {
         pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, module_name: []const u8) !Import.Idx {
             const result = try self.map.getOrPut(allocator, module_name);
             if (!result.found_existing) {
-                const idx = @as(Import.Idx, @enumFromInt(self.imports.items.len));
+                const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
                 result.value_ptr.* = idx;
                 const owned_name = try allocator.dupe(u8, module_name);
-                try self.imports.append(allocator, owned_name);
+                _ = try self.imports.append(allocator, owned_name);
             }
             return result.value_ptr.*;
         }

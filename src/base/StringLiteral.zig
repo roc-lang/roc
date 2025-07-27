@@ -30,7 +30,7 @@ pub const Store = struct {
     /// sizes, encoded in reverse where for example,
     /// the first 7 bit would signal the length, the last bit would signal that the length
     /// continues to the previous byte
-    buffer: std.ArrayListUnmanaged(u8) = .{},
+    buffer: collections.SafeList(u8) = .{},
     /// When true, no new entries can be added to the store.
     /// This is set after canonicalization is complete, so that
     /// we know it's safe to serialize/deserialize the part of the interner
@@ -42,7 +42,7 @@ pub const Store = struct {
     /// The string `hello, world!` will use 14 bytes including the null terminator.
     pub fn initCapacityBytes(gpa: std.mem.Allocator, bytes: usize) std.mem.Allocator.Error!Store {
         return .{
-            .buffer = try std.ArrayListUnmanaged(u8).initCapacity(gpa, bytes),
+            .buffer = try collections.SafeList(u8).initCapacity(gpa, bytes),
         };
     }
 
@@ -61,11 +61,11 @@ pub const Store = struct {
         const str_len: u32 = @truncate(string.len);
 
         const str_len_bytes = std.mem.asBytes(&str_len);
-        try self.buffer.appendSlice(gpa, str_len_bytes);
+        _ = try self.buffer.appendSlice(gpa, str_len_bytes);
 
-        const string_content_start = self.buffer.items.len;
+        const string_content_start = self.buffer.len();
 
-        try self.buffer.appendSlice(gpa, string);
+        _ = try self.buffer.appendSlice(gpa, string);
 
         return @enumFromInt(@as(u32, @intCast(string_content_start)));
     }
@@ -73,8 +73,8 @@ pub const Store = struct {
     /// Get a string literal's text from this `Store`.
     pub fn get(self: *const Store, idx: Idx) []u8 {
         const idx_u32: u32 = @intCast(@intFromEnum(idx));
-        const str_len = std.mem.bytesAsValue(u32, self.buffer.items[idx_u32 - 4 .. idx_u32]).*;
-        return self.buffer.items[idx_u32 .. idx_u32 + str_len];
+        const str_len = std.mem.bytesAsValue(u32, self.buffer.items.items[idx_u32 - 4 .. idx_u32]).*;
+        return self.buffer.items.items[idx_u32 .. idx_u32 + str_len];
     }
 
     /// Freeze the store, preventing any new entries from being added.
@@ -88,7 +88,7 @@ pub const Store = struct {
     pub fn serializedSize(self: *const Store) usize {
         // Header: 4 bytes for buffer length
         // Data: buffer.items.len bytes
-        const raw_size = @sizeOf(u32) + self.buffer.items.len;
+        const raw_size = @sizeOf(u32) + self.buffer.len();
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
         return std.mem.alignForward(usize, raw_size, serialization.SERIALIZATION_ALIGNMENT);
     }
@@ -101,15 +101,15 @@ pub const Store = struct {
 
         // Write buffer length
         const len_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr)));
-        len_ptr.* = @intCast(self.buffer.items.len);
+        len_ptr.* = @intCast(self.buffer.len());
 
         // Write buffer data
-        if (self.buffer.items.len > 0) {
-            @memcpy(buffer[@sizeOf(u32) .. @sizeOf(u32) + self.buffer.items.len], self.buffer.items);
+        if (self.buffer.len() > 0) {
+            @memcpy(buffer[@sizeOf(u32) .. @sizeOf(u32) + self.buffer.len()], self.buffer.items.items);
         }
 
         // Zero out any padding bytes
-        const actual_size = @sizeOf(u32) + self.buffer.items.len;
+        const actual_size = @sizeOf(u32) + self.buffer.len();
         if (actual_size < size) {
             @memset(buffer[actual_size..size], 0);
         }
@@ -133,7 +133,7 @@ pub const Store = struct {
         // Copy buffer data
         if (buffer_len > 0) {
             const data_start = @sizeOf(u32);
-            store.buffer.appendSliceAssumeCapacity(buffer[data_start .. data_start + buffer_len]);
+            _ = try store.buffer.appendSlice(gpa, buffer[data_start .. data_start + buffer_len]);
         }
 
         return store;
