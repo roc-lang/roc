@@ -898,15 +898,10 @@ const SlotStore = struct {
         allocator: Allocator,
         writer: *serialization.CompactWriter,
     ) std.mem.Allocator.Error!*const Self {
-        // First, write the SlotStore struct itself
-        const offset_self = try writer.appendAlloc(allocator, Self);
-
-        // Then serialize the backing SafeList and update the struct
-        offset_self.* = .{
-            .backing = (try self.backing.serialize(allocator, writer)).*,
-        };
-
-        return @constCast(offset_self);
+        // Since SlotStore is just a wrapper around SafeList, serialize the backing directly
+        const serialized_backing = try self.backing.serialize(allocator, writer);
+        // Cast the serialized SafeList pointer to a SlotStore pointer
+        return @ptrCast(serialized_backing);
     }
 
     /// Add the given offset to the memory addresses of all pointers in `self`.
@@ -976,15 +971,10 @@ const DescStore = struct {
         allocator: Allocator,
         writer: *serialization.CompactWriter,
     ) std.mem.Allocator.Error!*const Self {
-        // First, write the DescStore struct itself
-        const offset_self = try writer.appendAlloc(allocator, Self);
-
-        // Then serialize the backing SafeMultiList and update the struct
-        offset_self.* = .{
-            .backing = (try self.backing.serialize(allocator, writer)).*,
-        };
-
-        return @constCast(offset_self);
+        // Since DescStore is just a wrapper around SafeMultiList, serialize the backing directly
+        const serialized_backing = try self.backing.serialize(allocator, writer);
+        // Cast the serialized SafeMultiList pointer to a DescStore pointer
+        return @ptrCast(serialized_backing);
     }
 
     /// Add the given offset to the memory addresses of all pointers in `self`.
