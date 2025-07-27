@@ -117,7 +117,7 @@ pub fn serialize(
 ) std.mem.Allocator.Error!*const Self {
     // First, serialize the bytes SafeList
     const bytes_ptr = try self.bytes.serialize(allocator, writer);
-    
+
     // Next, write the struct with an empty hash map
     const offset_self = try writer.appendAlloc(allocator, Self);
     offset_self.* = .{
@@ -125,7 +125,7 @@ pub fn serialize(
         .strings = .{}, // Always serialize an empty hash map
         .frozen = self.frozen,
     };
-    
+
     // Return the version of Self that's in the writer's buffer
     return @constCast(offset_self);
 }
@@ -134,7 +134,7 @@ pub fn serialize(
 pub fn relocate(self: *Self, offset: isize) void {
     // Relocate the bytes SafeList
     self.bytes.relocate(offset);
-    
+
     // The strings hash map is always empty after deserialization,
     // so there's nothing to relocate there
 }
@@ -142,42 +142,42 @@ pub fn relocate(self: *Self, offset: isize) void {
 test "SmallStringInterner empty CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    
+
     // Create an empty SmallStringInterner
     var original = Self{};
     defer original.deinit(gpa);
-    
+
     // Create a temp file
     const tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    
+
     const file = try tmp_dir.dir.createFile("test_empty_interner.dat", .{ .read = true });
     defer file.close();
-    
+
     // Serialize using CompactWriter
     var writer = collections.CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
     defer writer.iovecs.deinit(gpa);
-    
+
     _ = try original.serialize(gpa, &writer);
-    
+
     // Write to file
     try writer.writeGather(gpa, file);
-    
+
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
     defer gpa.free(buffer);
-    
+
     _ = try file.read(buffer);
-    
+
     // Cast and relocate - empty interner should still work
     const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-    
+
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.bytes.len());
     try testing.expectEqual(@as(usize, 0), deserialized.strings.count());
@@ -186,11 +186,11 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
 test "SmallStringInterner basic CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    
+
     // Create an interner with some strings
     var original = try Self.initCapacity(gpa, 10);
     defer original.deinit(gpa);
-    
+
     // Insert test strings
     const test_strings = [_][]const u8{
         "hello",
@@ -200,60 +200,60 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
         "baz",
         "test string",
         "another test",
-        "",  // empty string
+        "", // empty string
         "duplicate",
-        "duplicate",  // Should reuse the same index
+        "duplicate", // Should reuse the same index
     };
-    
+
     var indices = std.ArrayList(Idx).init(gpa);
     defer indices.deinit();
-    
+
     for (test_strings) |str| {
         const idx = try original.insert(gpa, str);
         try indices.append(idx);
     }
-    
+
     // Verify duplicate detection worked
     try testing.expectEqual(indices.items[8], indices.items[9]);
-    
+
     // Create a temp file
     const tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    
+
     const file = try tmp_dir.dir.createFile("test_basic_interner.dat", .{ .read = true });
     defer file.close();
-    
+
     // Serialize using CompactWriter
     var writer = collections.CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
     defer writer.iovecs.deinit(gpa);
-    
+
     _ = try original.serialize(gpa, &writer);
-    
+
     // Write to file
     try writer.writeGather(gpa, file);
-    
+
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
     defer gpa.free(buffer);
-    
+
     _ = try file.read(buffer);
-    
+
     // Cast and relocate
     const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-    
+
     // Verify all strings are accessible and correct
     for (test_strings[0..9], 0..) |expected_str, i| {
         const idx = indices.items[i];
         const actual_str = deserialized.getText(idx);
         try testing.expectEqualStrings(expected_str, actual_str);
     }
-    
+
     // Verify the strings hash map is empty after deserialization
     try testing.expectEqual(@as(usize, 0), deserialized.strings.count());
 }
@@ -261,11 +261,11 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
 test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    
+
     // Create interner and populate it
     var original = try Self.initCapacity(gpa, 20);
     defer original.deinit(gpa);
-    
+
     // Insert many strings to ensure the hash map is well populated
     const test_data = [_]struct { str: []const u8, expected_idx: u32 }{
         .{ .str = "first", .expected_idx = 0 },
@@ -279,50 +279,50 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
         .{ .str = "seventh", .expected_idx = 38 },
         .{ .str = "eighth", .expected_idx = 46 },
     };
-    
+
     for (test_data) |data| {
         const idx = try original.insert(gpa, data.str);
         try testing.expectEqual(@as(u32, data.expected_idx), @intFromEnum(idx));
     }
-    
+
     // Verify the hash map is populated
     try testing.expect(original.strings.count() > 0);
     const original_hashmap_count = original.strings.count();
-    
+
     // Create a temp file
     const tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    
+
     const file = try tmp_dir.dir.createFile("test_hashmap_interner.dat", .{ .read = true });
     defer file.close();
-    
+
     // Serialize
     var writer = collections.CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
     defer writer.iovecs.deinit(gpa);
-    
+
     _ = try original.serialize(gpa, &writer);
-    
+
     // Write to file
     try writer.writeGather(gpa, file);
-    
+
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
     defer gpa.free(buffer);
-    
+
     _ = try file.read(buffer);
-    
+
     // Cast and relocate
     const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-    
+
     // Verify the hash map is empty after deserialization
     try testing.expectEqual(@as(usize, 0), deserialized.strings.count());
-    
+
     // But all strings should still be accessible
     try testing.expectEqualStrings("first", deserialized.getText(@enumFromInt(0)));
     try testing.expectEqualStrings("second", deserialized.getText(@enumFromInt(6)));
@@ -332,7 +332,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     try testing.expectEqualStrings("sixth", deserialized.getText(@enumFromInt(32)));
     try testing.expectEqualStrings("seventh", deserialized.getText(@enumFromInt(38)));
     try testing.expectEqualStrings("eighth", deserialized.getText(@enumFromInt(46)));
-    
+
     // Log to confirm the original had a populated hash map
     if (original_hashmap_count == 0) {
         std.debug.panic("Test failed: original hash map should have been populated\n", .{});
@@ -342,58 +342,58 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
 test "SmallStringInterner frozen state CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    
+
     // Create and populate interner
     var original = try Self.initCapacity(gpa, 5);
     defer original.deinit(gpa);
-    
+
     _ = try original.insert(gpa, "test1");
     _ = try original.insert(gpa, "test2");
-    
+
     // Freeze the interner
     original.freeze();
-    
+
     // Verify it's frozen
     if (std.debug.runtime_safety) {
         try testing.expect(original.frozen);
     }
-    
+
     // Create a temp file
     const tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    
+
     const file = try tmp_dir.dir.createFile("test_frozen_interner.dat", .{ .read = true });
     defer file.close();
-    
+
     // Serialize
     var writer = collections.CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
     defer writer.iovecs.deinit(gpa);
-    
+
     _ = try original.serialize(gpa, &writer);
-    
+
     // Write to file
     try writer.writeGather(gpa, file);
-    
+
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
     defer gpa.free(buffer);
-    
+
     _ = try file.read(buffer);
-    
+
     // Cast and relocate
     const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-    
+
     // Verify frozen state is preserved
     if (std.debug.runtime_safety) {
         try testing.expect(deserialized.frozen);
     }
-    
+
     // Verify strings are still accessible
     try testing.expectEqualStrings("test1", deserialized.getText(@enumFromInt(0)));
     try testing.expectEqualStrings("test2", deserialized.getText(@enumFromInt(6)));
@@ -402,11 +402,11 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
 test "SmallStringInterner edge cases CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    
+
     // Test with strings of various lengths and special characters
     var original = try Self.initCapacity(gpa, 15);
     defer original.deinit(gpa);
-    
+
     const edge_cases = [_][]const u8{
         "", // empty string
         "a", // single char
@@ -419,46 +419,46 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
         "end_with_space ",
         " start_with_space",
     };
-    
+
     var indices = std.ArrayList(Idx).init(gpa);
     defer indices.deinit();
-    
+
     for (edge_cases) |str| {
         const idx = try original.insert(gpa, str);
         try indices.append(idx);
     }
-    
+
     // Create a temp file
     const tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    
+
     const file = try tmp_dir.dir.createFile("test_edge_interner.dat", .{ .read = true });
     defer file.close();
-    
+
     // Serialize
     var writer = collections.CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
     defer writer.iovecs.deinit(gpa);
-    
+
     _ = try original.serialize(gpa, &writer);
-    
+
     // Write to file
     try writer.writeGather(gpa, file);
-    
+
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
     defer gpa.free(buffer);
-    
+
     _ = try file.read(buffer);
-    
+
     // Cast and relocate
     const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-    
+
     // Verify all edge cases
     for (edge_cases, 0..) |expected_str, i| {
         const idx = indices.items[i];
@@ -470,79 +470,79 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
 test "SmallStringInterner multiple interners CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    
+
     // Create multiple interners to test alignment and offset handling
     var interner1 = try Self.initCapacity(gpa, 5);
     defer interner1.deinit(gpa);
-    
+
     var interner2 = try Self.initCapacity(gpa, 5);
     defer interner2.deinit(gpa);
-    
+
     var interner3 = try Self.initCapacity(gpa, 5);
     defer interner3.deinit(gpa);
-    
+
     // Populate with different strings
     const idx1_1 = try interner1.insert(gpa, "interner1_string1");
     const idx1_2 = try interner1.insert(gpa, "interner1_string2");
-    
+
     const idx2_1 = try interner2.insert(gpa, "interner2_string1");
     const idx2_2 = try interner2.insert(gpa, "interner2_string2");
     const idx2_3 = try interner2.insert(gpa, "interner2_string3");
-    
+
     const idx3_1 = try interner3.insert(gpa, "interner3_string1");
-    
+
     // Freeze the second one
     interner2.freeze();
-    
+
     // Create a temp file
     const tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    
+
     const file = try tmp_dir.dir.createFile("test_multiple_interners.dat", .{ .read = true });
     defer file.close();
-    
+
     // Serialize all three
     var writer = collections.CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
     defer writer.iovecs.deinit(gpa);
-    
+
     _ = try interner1.serialize(gpa, &writer);
     const offset1 = writer.total_bytes - @sizeOf(Self);
-    
+
     _ = try interner2.serialize(gpa, &writer);
     const offset2 = writer.total_bytes - @sizeOf(Self);
-    
+
     _ = try interner3.serialize(gpa, &writer);
     const offset3 = writer.total_bytes - @sizeOf(Self);
-    
+
     // Write to file
     try writer.writeGather(gpa, file);
-    
+
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
     defer gpa.free(buffer);
-    
+
     _ = try file.read(buffer);
-    
+
     // Cast and relocate all three
     const deserialized1 = @as(*Self, @ptrCast(@alignCast(buffer.ptr + offset1)));
     deserialized1.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-    
+
     const deserialized2 = @as(*Self, @ptrCast(@alignCast(buffer.ptr + offset2)));
     deserialized2.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-    
+
     const deserialized3 = @as(*Self, @ptrCast(@alignCast(buffer.ptr + offset3)));
     deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-    
+
     // Verify interner 1
     try testing.expectEqualStrings("interner1_string1", deserialized1.getText(idx1_1));
     try testing.expectEqualStrings("interner1_string2", deserialized1.getText(idx1_2));
     try testing.expectEqual(@as(usize, 0), deserialized1.strings.count());
-    
+
     // Verify interner 2 (frozen)
     try testing.expectEqualStrings("interner2_string1", deserialized2.getText(idx2_1));
     try testing.expectEqualStrings("interner2_string2", deserialized2.getText(idx2_2));
@@ -551,7 +551,7 @@ test "SmallStringInterner multiple interners CompactWriter roundtrip" {
     if (std.debug.runtime_safety) {
         try testing.expect(deserialized2.frozen);
     }
-    
+
     // Verify interner 3
     try testing.expectEqualStrings("interner3_string1", deserialized3.getText(idx3_1));
     try testing.expectEqual(@as(usize, 0), deserialized3.strings.count());
