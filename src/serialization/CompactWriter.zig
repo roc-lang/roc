@@ -1,5 +1,12 @@
+//! CompactWriter provides efficient serialization using scatter-gather I/O operations.
+//! It collects multiple memory regions into iovecs and writes them in a single system call
+//! using pwritev, minimizing system call overhead for serialization tasks.
+//! The writer handles alignment requirements and padding automatically to ensure
+//! proper deserialization of the written data.
+
 const std = @import("std");
 
+/// A writer that efficiently serializes data using scatter-gather I/O operations.
 pub const CompactWriter = struct {
     pub const ALIGNMENT = 16; // Buffer alignment requirement for deserialization
 

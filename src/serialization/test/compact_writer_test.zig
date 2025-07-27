@@ -1,3 +1,9 @@
+//! Tests for CompactWriter, verifying its scatter-gather I/O functionality,
+//! alignment handling, and serialization capabilities.
+//! These tests ensure that CompactWriter correctly manages iovecs, handles
+//! padding for different data alignments, and maintains data integrity
+//! when serializing various data types and slices.
+
 const std = @import("std");
 const CompactWriter = @import("../CompactWriter.zig").CompactWriter;
 const testing = std.testing;
