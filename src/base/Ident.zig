@@ -281,7 +281,7 @@ pub const Store = struct {
     ) std.mem.Allocator.Error!*const Store {
         // First, write the Store struct itself
         const offset_self = try writer.appendAlloc(allocator, Store);
-        
+
         // Then serialize the sub-structures and update the struct
         offset_self.* = .{
             .interner = (try self.interner.serialize(allocator, writer)).*,
@@ -294,10 +294,7 @@ pub const Store = struct {
 
     /// Add the given offset to the memory addresses of all pointers in `self`.
     pub fn relocate(self: *Store, offset: isize) void {
-        // Relocate the SmallStringInterner
         self.interner.relocate(offset);
-
-        // Relocate the attributes SafeList
         self.attributes.relocate(offset);
     }
 };
