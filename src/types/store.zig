@@ -1450,6 +1450,84 @@ test "Store multiple instances CompactWriter roundtrip" {
     try std.testing.expectEqual(@as(usize, 0), deserialized3.len());
 }
 
+test "SlotStore and DescStore serialization and deserialization" {
+    const gpa = std.testing.allocator;
+    const CompactWriter = serialization.CompactWriter;
+
+    var original = try Store.init(gpa);
+    defer original.deinit();
+
+    // Create several variables to populate SlotStore with roots
+    const var1 = try original.freshFromContent(Content{ .flex_var = null });
+    const var2 = try original.freshFromContent(Content{ .structure = .{ .str = {} } });
+    const var3 = try original.freshFromContent(Content{ .rigid_var = @bitCast(@as(u32, 123)) });
+
+    // Create redirects to populate SlotStore with redirects
+    const redirect1 = try original.freshRedirect(var1);
+    _ = try original.freshRedirect(var2);
+    const redirect3 = try original.freshRedirect(redirect1); // Chain of redirects
+
+    // Verify SlotStore has both root and redirect entries
+    try std.testing.expectEqual(@as(usize, 6), original.slots.backing.len());
+
+    // Verify DescStore has the descriptors
+    try std.testing.expectEqual(@as(usize, 3), original.descs.backing.backing.len());
+
+    // Create a temp file
+    const tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_explicit_stores.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Store))));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify SlotStore was correctly deserialized
+    try std.testing.expectEqual(@as(usize, 6), deserialized.slots.backing.len());
+
+    // Verify DescStore was correctly deserialized
+    try std.testing.expectEqual(@as(usize, 3), deserialized.descs.backing.backing.len());
+
+    // Verify we can resolve variables correctly
+    const resolved1 = deserialized.resolveVar(var1);
+    try std.testing.expectEqual(Content{ .flex_var = null }, resolved1.desc.content);
+
+    const resolved2 = deserialized.resolveVar(var2);
+    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, resolved2.desc.content);
+
+    const resolved3 = deserialized.resolveVar(var3);
+    try std.testing.expectEqual(Content{ .rigid_var = @bitCast(@as(u32, 123)) }, resolved3.desc.content);
+
+    // Verify redirects work
+    const resolved_redirect1 = deserialized.resolveVar(redirect1);
+    try std.testing.expectEqual(resolved1.desc_idx, resolved_redirect1.desc_idx);
+
+    const resolved_redirect3 = deserialized.resolveVar(redirect3);
+    try std.testing.expectEqual(resolved1.desc_idx, resolved_redirect3.desc_idx);
+}
+
 test "Store with path compression CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
     const CompactWriter = serialization.CompactWriter;
