@@ -115,7 +115,8 @@ pub const CompactWriter = struct {
         allocator: std.mem.Allocator,
         slice: anytype,
     ) std.mem.Allocator.Error!@TypeOf(slice) {
-        const T = std.meta.Child(@TypeOf(slice));
+        const SliceType = @TypeOf(slice);
+        const T = std.meta.Child(SliceType);
         const size = @sizeOf(T);
         const alignment = @alignOf(T);
         const len = slice.len;
@@ -123,13 +124,20 @@ pub const CompactWriter = struct {
         // Pad up front to the alignment of T
         try self.padToAlignment(allocator, alignment);
 
+        const offset = self.total_bytes;
+        
         try self.iovecs.append(allocator, .{
             .iov_base = @ptrCast(@as([*]const u8, @ptrCast(slice.ptr))),
             .iov_len = size * len,
         });
         self.total_bytes += size * len;
 
-        return @as([*]const T, @ptrFromInt(self.total_bytes))[0..len];
+        // Return the same slice type as the input
+        const info = @typeInfo(SliceType);
+        return if (info.pointer.is_const)
+            @as([*]const T, @ptrFromInt(offset))[0..len]
+        else
+            @as([*]T, @ptrFromInt(offset))[0..len];
     }
 
     fn padToAlignment(self: *@This(), allocator: std.mem.Allocator, alignment: usize) std.mem.Allocator.Error!void {

@@ -49,11 +49,11 @@ test "CompactWriter appendSlice" {
     // Create some test data
     const data = [_]u32{ 1, 2, 3, 4, 5 };
 
-    const offset = try writer.appendSlice(allocator, &data, data.len);
+    const slice = try writer.appendSlice(allocator, &data);
 
     // Verify the writer has tracked the slice
     try testing.expect(writer.iovecs.items.len > 0);
-    try testing.expect(offset > 0);
+    try testing.expect(@intFromPtr(slice.ptr) > 0);
     try testing.expect(writer.total_bytes >= @sizeOf(u32) * data.len);
 
     // Test that writer tracked the slice correctly
@@ -170,13 +170,13 @@ test "CompactWriter slice alignment" {
 
     // Add a slice of u32s - should pad to 4-byte alignment first
     const data = [_]u32{ 10, 20, 30 };
-    _ = try writer.appendSlice(allocator, &data, data.len);
+    _ = try writer.appendSlice(allocator, &data);
     // 1 + 3 padding + (3 * 4) = 16
     try testing.expectEqual(@as(usize, 16), writer.total_bytes);
 
     // Add a slice of u64s - already at 16 (divisible by 8), no padding
     const data64 = [_]u64{ 100, 200 };
-    _ = try writer.appendSlice(allocator, &data64, data64.len);
+    _ = try writer.appendSlice(allocator, &data64);
     // 16 + (2 * 8) = 32
     try testing.expectEqual(@as(usize, 32), writer.total_bytes);
 }
@@ -217,7 +217,7 @@ test "CompactWriter brute-force appendSlice alignment" {
 
             // Append the slice
             if (length > 0) {
-                const offset = try writer.appendSlice(allocator, &data, length);
+                const slice = try writer.appendSlice(allocator, data[0..length]);
 
                 // Verify padding was added correctly
                 const expected_padding = std.mem.alignForward(usize, start_bytes, @alignOf(T)) - start_bytes;
@@ -225,8 +225,8 @@ test "CompactWriter brute-force appendSlice alignment" {
                 const expected_bytes = expected_padding + @sizeOf(T) * length;
                 try testing.expectEqual(expected_bytes, actual_bytes_written);
 
-                // Verify offset is correct
-                try testing.expectEqual(writer.total_bytes, offset);
+                // Verify slice pointer is correct
+                try testing.expectEqual(writer.total_bytes - @sizeOf(T) * length, @intFromPtr(slice.ptr));
             }
 
             // Write to buffer and verify data integrity

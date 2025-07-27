@@ -650,7 +650,7 @@ pub fn SafeMultiList(comptime T: type) type {
 
                     // Write the field data (only len elements' worth).
                     // appendSlice will take care of alignment padding.
-                    _ = try writer.appendSlice(allocator, field_ptr, self.items.len);
+                    _ = try writer.appendSlice(allocator, field_ptr[0..self.items.len]);
                 }
 
                 break :blk first_field_offset;

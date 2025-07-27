@@ -279,17 +279,13 @@ pub const Store = struct {
         allocator: std.mem.Allocator,
         writer: *collections.CompactWriter,
     ) std.mem.Allocator.Error!*const Store {
-        // First, serialize the SmallStringInterner
-        const interner_ptr = try self.interner.serialize(allocator, writer);
-
-        // Next, serialize the attributes SafeList
-        const attributes_ptr = try self.attributes.serialize(allocator, writer);
-
-        // Finally, write the Store struct itself
+        // First, write the Store struct itself
         const offset_self = try writer.appendAlloc(allocator, Store);
+        
+        // Then serialize the sub-structures and update the struct
         offset_self.* = .{
-            .interner = interner_ptr.*,
-            .attributes = attributes_ptr.*,
+            .interner = (try self.interner.serialize(allocator, writer)).*,
+            .attributes = (try self.attributes.serialize(allocator, writer)).*,
             .next_unique_name = self.next_unique_name,
         };
 

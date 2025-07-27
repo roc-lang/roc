@@ -115,13 +115,12 @@ pub fn serialize(
     allocator: std.mem.Allocator,
     writer: *collections.CompactWriter,
 ) std.mem.Allocator.Error!*const Self {
-    // First, serialize the bytes SafeList
-    const bytes_ptr = try self.bytes.serialize(allocator, writer);
-
-    // Next, write the struct with an empty hash map
+    // First, write the struct with an empty hash map
     const offset_self = try writer.appendAlloc(allocator, Self);
+    
+    // Then serialize the bytes SafeList and update the struct
     offset_self.* = .{
-        .bytes = bytes_ptr.*,
+        .bytes = (try self.bytes.serialize(allocator, writer)).*,
         .strings = .{}, // Always serialize an empty hash map
         .frozen = self.frozen,
     };
