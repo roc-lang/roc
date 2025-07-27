@@ -193,23 +193,14 @@ pub fn SafeList(comptime T: type) type {
             writer: *CompactWriter,
         ) Allocator.Error!*const SafeList(T) {
             const items = self.items.items;
-
-            // First, write the backing elements. That will get us the byte offset in
-            // the file of the first backing element.
-            const offset = try writer.appendSlice(allocator, items.ptr, items.len);
-
-            // Next, write the struct (using the offset as the ArrayList's pointer)
             const offset_self = try writer.appendAlloc(allocator, SafeList(T));
-
             offset_self.* = .{
                 .items = .{
-                    .items = @as([*]T, @ptrFromInt(offset))[0..items.len],
+                    .items = try writer.appendSlice(allocator, items),
                     .capacity = items.len,
                 },
             };
 
-            // Finally, return the version of Self that's in the writer's buffer,
-            // which has offsets instead of pointers.
             return @constCast(offset_self);
         }
 
