@@ -77,7 +77,7 @@ pub const Attributes = packed struct(u3) {
     effectful: bool,
     ignored: bool,
     reassignable: bool,
-    
+
     pub fn fromString(text: []const u8) Attributes {
         return .{
             .effectful = std.mem.endsWith(u8, text, "!"),

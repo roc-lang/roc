@@ -14,8 +14,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 
-// We use u32 for the identifier index type to match Ident.Idx
-// This avoids needing to import base module but maintains type compatibility
+// We use u32 which is the bit representation of base.Ident.Idx
+// This includes both the 29-bit index AND the 3-bit attributes (effectful, ignored, reassignable)
+// This is critical because foo, foo!, and _foo are different identifiers
 const IdentIdx = u32;
 
 /// A collection that tracks exposed items by their names and associated CIR node indices
@@ -35,7 +36,7 @@ pub const ExposedItems = struct {
         self.items.deinit(allocator);
     }
 
-    /// Add an exposed item by its interned ID
+    /// Add an exposed item by its interned ID (pass @bitCast(base.Ident.Idx) to u32)
     pub fn addExposedById(self: *Self, allocator: Allocator, ident_idx: IdentIdx) !void {
         // Add with value 0 to indicate "exposed but not yet defined"
         // The SortedArrayBuilder will handle duplicates by keeping the last value,
@@ -51,11 +52,11 @@ pub const ExposedItems = struct {
         }
     }
 
-    /// Set the node index for an exposed item by its interned ID
+    /// Set the node index for an exposed item by its interned ID (pass @bitCast(base.Ident.Idx) to u32)
     pub fn setNodeIndexById(self: *Self, allocator: Allocator, ident_idx: IdentIdx, node_idx: u16) !void {
         // First ensure the array is sorted so we can search
         self.items.ensureSorted(allocator);
-        
+
         // Find the existing entry and update its value
         const entries = self.items.entries.items;
         for (entries) |*entry| {
@@ -64,18 +65,18 @@ pub const ExposedItems = struct {
                 return;
             }
         }
-        
+
         // If not found, add a new entry
         try self.items.put(allocator, ident_idx, node_idx);
     }
 
-    /// Check if an item is exposed by its interned ID
+    /// Check if an item is exposed by its interned ID (pass @bitCast(base.Ident.Idx) to u32)
     pub fn containsById(self: *const Self, allocator: Allocator, ident_idx: IdentIdx) bool {
         var mutable_self = @constCast(self);
         return mutable_self.items.get(allocator, ident_idx) != null;
     }
 
-    /// Get the node index for an exposed item by its interned ID
+    /// Get the node index for an exposed item by its interned ID (pass @bitCast(base.Ident.Idx) to u32)
     pub fn getNodeIndexById(self: *const Self, allocator: Allocator, ident_idx: IdentIdx) ?u16 {
         var mutable_self = @constCast(self);
         return mutable_self.items.get(allocator, ident_idx);
@@ -109,79 +110,81 @@ pub const ExposedItems = struct {
         // 1. The count of items (u32)
         // 2. For each item: key (u32) + value (u16)
         var size: usize = @sizeOf(u32); // count
-        
+
         for (self.items.entries.items) |_| {
             size += @sizeOf(u32); // key (interned ID)
             size += @sizeOf(u16); // value
         }
-        
+
         // Align to SERIALIZATION_ALIGNMENT
         const SERIALIZATION_ALIGNMENT = 16;
         return std.mem.alignForward(usize, size, SERIALIZATION_ALIGNMENT);
     }
-    
+
     /// Serialize this ExposedItems into the provided buffer
     pub fn serializeInto(self: *const Self, buffer: []u8) ![]u8 {
         const size = self.serializedSize();
         if (buffer.len < size) return error.BufferTooSmall;
-        
+
         var offset: usize = 0;
-        
+
         // Write count
         std.mem.writeInt(u32, buffer[offset..][0..4], @intCast(self.items.entries.items.len), .little);
         offset += @sizeOf(u32);
-        
+
         // Write entries
         for (self.items.entries.items) |entry| {
             // Write key (interned ID)
             std.mem.writeInt(u32, buffer[offset..][0..4], entry.key, .little);
             offset += @sizeOf(u32);
-            
+
             // Write value
             std.mem.writeInt(u16, buffer[offset..][0..2], entry.value, .little);
             offset += @sizeOf(u16);
         }
-        
+
         // Zero padding
         if (offset < size) {
             @memset(buffer[offset..size], 0);
         }
-        
+
         return buffer[0..size];
     }
-    
+
     /// Deserialize ExposedItems from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
         if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
-        
+
         var offset: usize = 0;
-        
+
         // Read count
         const entry_count = std.mem.readInt(u32, buffer[offset..][0..4], .little);
         offset += @sizeOf(u32);
-        
+
         var result = Self.init();
         errdefer result.deinit(allocator);
-        
+
         // Read entries
         for (0..entry_count) |_| {
             // Read key (interned ID)
             if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
-            const key = std.mem.readInt(u32, buffer[offset..][0..4], .little);
+            const key_u32 = std.mem.readInt(u32, buffer[offset..][0..4], .little);
+            // Use the full u32 (includes both index and attributes)
+            const key = key_u32;
             offset += @sizeOf(u32);
-            
+
             // Read value
             if (offset + @sizeOf(u16) > buffer.len) return error.BufferTooSmall;
             const value = std.mem.readInt(u16, buffer[offset..][0..2], .little);
             offset += @sizeOf(u16);
-            
+
             // Add to builder
             try result.items.put(allocator, key, value);
         }
-        
+
         return result;
     }
-    
+
     /// Append to iovec writer for serialization
     pub fn appendToIovecs(self: *const Self, writer: anytype) !usize {
         return self.items.appendToIovecs(writer);

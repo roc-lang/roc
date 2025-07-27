@@ -636,7 +636,7 @@ pub fn canonicalizeFile(
                         const idx = try self.env.idents.insert(self.env.gpa, ident);
                         // Store the def index as u16 in exposed_items
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                        try self.env.exposed_items.setNodeIndexById(self.env.gpa, idx.idx, def_idx_u16);
+                        try self.env.exposed_items.setNodeIndexById(self.env.gpa, @bitCast(idx), def_idx_u16);
                     }
 
                     _ = self.exposed_ident_texts.remove(ident_text);
@@ -910,7 +910,7 @@ fn createExposedScope(
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
                     // Add to exposed_items for permanent storage (unconditionally)
-                    try self.env.exposed_items.addExposedById(gpa, ident_idx.idx);
+                    try self.env.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
 
                     // Use a dummy pattern index - we just need to track that it's exposed
                     const dummy_idx = @as(Pattern.Idx, @enumFromInt(0));
@@ -943,7 +943,7 @@ fn createExposedScope(
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
                     // Add to exposed_items for permanent storage (unconditionally)
-                    try self.env.exposed_items.addExposedById(gpa, ident_idx.idx);
+                    try self.env.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
 
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
@@ -976,7 +976,7 @@ fn createExposedScope(
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
                     // Add to exposed_items for permanent storage (unconditionally)
-                    try self.env.exposed_items.addExposedById(gpa, ident_idx.idx);
+                    try self.env.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
 
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
@@ -1383,7 +1383,7 @@ fn introduceExposedItemsIntoScope(
             // We need to look up by string because the identifiers are from different modules
             // First, try to find this identifier in the target module's ident store
             const is_exposed = if (module_env.idents.findByString(item_name_text)) |target_ident|
-                module_env.exposed_items.containsById(self.env.gpa, target_ident.idx)
+                module_env.exposed_items.containsById(self.env.gpa, @bitCast(target_ident))
             else
                 false;
 
@@ -1718,7 +1718,7 @@ pub fn canonicalizeExpr(
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
                                     if (module_env.idents.findByString(field_text)) |target_ident| {
-                                        break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, target_ident.idx) orelse 0;
+                                        break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse 0;
                                     } else {
                                         break :blk 0;
                                     }
@@ -1782,7 +1782,7 @@ pub fn canonicalizeExpr(
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
                                     if (module_env.idents.findByString(field_text)) |target_ident| {
-                                        break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, target_ident.idx) orelse 0;
+                                        break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse 0;
                                     } else {
                                         break :blk 0;
                                     }
@@ -6567,7 +6567,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const target_node_idx = if (self.module_envs) |envs_map| blk: {
         if (envs_map.get(module_text)) |module_env| {
             if (module_env.idents.findByString(field_text)) |target_ident| {
-                break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, target_ident.idx) orelse 0;
+                break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse 0;
             } else {
                 break :blk 0;
             }

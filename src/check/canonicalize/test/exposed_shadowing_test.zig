@@ -371,15 +371,15 @@ test "exposed_items is populated correctly" {
 
     // Should have exactly 3 entries (duplicates not stored)
     try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
-    
+
     // Check that exposed_items contains all exposed items
     const foo_idx = env.idents.findByString("foo").?;
     const bar_idx = env.idents.findByString("bar").?;
     const mytype_idx = env.idents.findByString("MyType").?;
-    
-    try testing.expect(env.exposed_items.containsById(env.gpa, foo_idx.idx));
-    try testing.expect(env.exposed_items.containsById(env.gpa, bar_idx.idx));
-    try testing.expect(env.exposed_items.containsById(env.gpa, mytype_idx.idx));
+
+    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(foo_idx)));
+    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(bar_idx)));
+    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(mytype_idx)));
 }
 
 test "exposed_items persists after canonicalization" {
@@ -409,10 +409,10 @@ test "exposed_items persists after canonicalization" {
     const x_idx = env.idents.findByString("x").?;
     const y_idx = env.idents.findByString("y").?;
     const z_idx = env.idents.findByString("z").?;
-    
-    try testing.expect(env.exposed_items.containsById(env.gpa, x_idx.idx));
-    try testing.expect(env.exposed_items.containsById(env.gpa, y_idx.idx));
-    try testing.expect(env.exposed_items.containsById(env.gpa, z_idx.idx));
+
+    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(x_idx)));
+    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(y_idx)));
+    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(z_idx)));
 
     // Verify the map persists in env after canonicalization is complete
     try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
@@ -447,11 +447,51 @@ test "exposed_items never has entries removed" {
     const foo_idx = env.idents.findByString("foo").?;
     const bar_idx = env.idents.findByString("bar").?;
     const baz_idx = env.idents.findByString("baz").?;
-    
-    try testing.expect(env.exposed_items.containsById(env.gpa, foo_idx.idx));
-    try testing.expect(env.exposed_items.containsById(env.gpa, bar_idx.idx));
-    try testing.expect(env.exposed_items.containsById(env.gpa, baz_idx.idx));
+
+    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(foo_idx)));
+    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(bar_idx)));
+    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(baz_idx)));
 
     // Should have exactly 3 unique entries
     try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
+}
+
+test "exposed_items handles identifiers with different attributes" {
+    const allocator = testing.allocator;
+
+    // Module exposing foo and foo! - these should be treated as different identifiers
+    // Note: Using foo and foo! to test that attributes are properly included in the key
+    const source =
+        \\module [foo, foo!]
+        \\
+        \\foo = 42
+        \\foo! = \x -> x + 1
+    ;
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields(allocator, "Test");
+
+    var ast = try parse.parse(&env);
+    defer ast.deinit(allocator);
+
+    var canonicalizer = try canonicalize.init(&env, &ast, null);
+    defer canonicalizer.deinit();
+
+    try canonicalizer.canonicalizeFile();
+
+    // Both should be in exposed_items as separate entries
+    const foo_idx = env.idents.findByString("foo").?;
+    const foo_effectful_idx = env.idents.findByString("foo!").?;
+
+    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(foo_idx)));
+    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(foo_effectful_idx)));
+
+    // Should have exactly 2 entries - if we only used u29 without attributes, they might incorrectly merge
+    try testing.expectEqual(@as(usize, 2), env.exposed_items.count());
+
+    // Verify they have different full u32 values (index + attributes)
+    const foo_u32 = @as(u32, @bitCast(foo_idx));
+    const foo_effectful_u32 = @as(u32, @bitCast(foo_effectful_idx));
+    try testing.expect(foo_u32 != foo_effectful_u32);
 }

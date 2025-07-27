@@ -865,7 +865,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
 
                                 // Search through the module's exposed items
                                 const node_idx_opt = if (module.idents.findByString(method_name_str)) |target_ident|
-                                    module.exposed_items.getNodeIndexById(self.gpa, target_ident.idx)
+                                    module.exposed_items.getNodeIndexById(self.gpa, @bitCast(target_ident))
                                 else
                                     null;
 
