@@ -630,7 +630,12 @@ pub fn SafeMultiList(comptime T: type) type {
             return list;
         }
 
-        /// Returns a SafeMultiList that has had its pointers converted to offsets.
+        /// Returns a SafeMultiList that has had its pointers converted to offsets,
+        /// after appending pointers to the writer such that the result is only
+        /// the actual filled elements of the MultiList being written (plus possibly
+        /// some zeros for alignment padding), and none of its excess capacity
+        /// being written.
+        ///
         /// It's only safe to serialize this return value; attempting to call
         /// methods on it or dereference its internal "pointers" (which are now
         /// offsets) is illegal behavior!
@@ -639,15 +644,32 @@ pub fn SafeMultiList(comptime T: type) type {
             allocator: Allocator,
             writer: *CompactWriter,
         ) Allocator.Error!*const SafeMultiList(T) {
-            self.
-            
-            // First write the data
-            const data_offset = if (self.items.capacity > 0) blk: {
-                // Calculate bytes needed for the entire MultiArrayList storage
-                const bytes_needed = std.MultiArrayList(T).capacityInBytes(self.items.capacity);
+            // Write only len elements, not capacity, to avoid storing garbage memory.
+            const data_offset = if (self.items.len > 0) blk: {
+                const slice = self.items.slice();
+                const fields = std.meta.fields(T);
 
-                // Write the raw bytes
-                break :blk try writer.appendSlice(allocator, self.items.bytes, bytes_needed);
+                // MultiArrayList lays out fields in order, with alignment padding as
+                // necessary between the end of one field's elements and the beginning of
+                // the next. So we need to append entries to the writer for all fields.
+                const first_field_offset = writer.total_bytes;
+                var current_offset: usize = 0;
+
+                inline for (fields, 0..) |field_info, i| {
+                    const field_enum = @as(Field, @enumFromInt(i));
+                    const field_items = slice.items(field_enum);
+                    const field_type = field_info.type;
+                    const aligned_offset = std.mem.alignForward(usize, current_offset, @alignOf(field_type));
+
+                    // Write the field data (only len elements' worth).
+                    // appendSlice will take care of alignment padding.
+                    _ = try writer.appendSlice(allocator, field_items.ptr, self.items.len);
+
+                    // Update offset for next field
+                    current_offset = aligned_offset + (@sizeOf(field_type) * self.items.len);
+                }
+
+                break :blk first_field_offset;
             } else writer.total_bytes;
 
             // Write the SafeMultiList struct
@@ -658,7 +680,7 @@ pub fn SafeMultiList(comptime T: type) type {
                 .items = .{
                     .bytes = @ptrFromInt(data_offset),
                     .len = self.items.len,
-                    .capacity = self.items.capacity,
+                    .capacity = self.items.len, // capacity = len for compacted data
                 },
             };
 
@@ -2335,8 +2357,8 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
         const file = try tmp_dir.dir.createFile(filename, .{ .read = true });
         defer file.close();
 
-        // Create list with specific length
-        var list = SafeMultiList(TestType){};
+        // Create list with specific length but larger capacity to test compaction
+        var list = try SafeMultiList(TestType).initCapacity(gpa, length + 5);
         defer list.deinit(gpa);
 
         var i: usize = 0;
@@ -2347,6 +2369,9 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
                 .c = @as(u64, @intCast(i * 1000)),
             });
         }
+
+        // Verify we have extra capacity that shouldn't be serialized
+        try testing.expect(list.items.capacity >= length + 5);
 
         // Add another list to test alignment between lists
         var list2 = SafeMultiList(TestType){};
@@ -2406,6 +2431,340 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
             try testing.expectEqual(@as(usize, 0), d2.len());
         }
     }
+}
+
+test "SafeMultiList CompactWriter various field alignments and sizes" {
+    const gpa = testing.allocator;
+
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Test different field alignment combinations
+    const test_configs = .{
+        // Type with increasing alignments
+        struct { a: u8, b: u16, c: u32, d: u64 },
+        // Type with decreasing alignments
+        struct { a: u64, b: u32, c: u16, d: u8 },
+        // Type with mixed alignments
+        struct { a: u8, b: u64, c: u16, d: u32 },
+        // Type with same alignment different sizes
+        struct { a: u32, b: i32, c: f32 },
+        // Type with bool and padding
+        struct { flag: bool, value: u64, data: u8 },
+    };
+
+    inline for (test_configs) |TestType| {
+        // Test lengths 0, 1, 3, 7 to cover various cases
+        const test_lengths = [_]usize{ 0, 1, 3, 7 };
+
+        for (test_lengths) |len| {
+            var list = try SafeMultiList(TestType).initCapacity(gpa, len + 10);
+            defer list.deinit(gpa);
+
+            // Fill with test data
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                var item: TestType = undefined;
+                inline for (std.meta.fields(TestType), 0..) |field, fi| {
+                    const value = @as(field.type, @intCast(@min(i * (fi + 1) + 1, std.math.maxInt(field.type))));
+                    @field(item, field.name) = value;
+                }
+                _ = try list.append(gpa, item);
+            }
+
+            // Serialize and deserialize
+            const filename = try std.fmt.allocPrint(gpa, "align_test_{s}_{}.dat", .{ @typeName(TestType), len });
+            defer gpa.free(filename);
+
+            const file = try tmp_dir.dir.createFile(filename, .{ .read = true });
+            defer file.close();
+
+            var writer = CompactWriter{
+                .iovecs = .{},
+                .total_bytes = 0,
+            };
+            defer writer.iovecs.deinit(gpa);
+
+            _ = try list.serialize(gpa, &writer);
+            try writer.writeGather(gpa, file);
+
+            // Read back
+            try file.seekTo(0);
+            const file_size = try file.getEndPos();
+            const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+            defer gpa.free(buffer);
+
+            _ = try file.read(buffer);
+
+            // Deserialize
+            const offset = writer.total_bytes - @sizeOf(SafeMultiList(TestType));
+            const deserialized = @as(*SafeMultiList(TestType), @ptrCast(@alignCast(buffer.ptr + offset)));
+            deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+            // Verify
+            try testing.expectEqual(len, deserialized.len());
+
+            i = 0;
+            while (i < len) : (i += 1) {
+                const original_item = list.get(@enumFromInt(i));
+                const deser_item = deserialized.get(@enumFromInt(i));
+
+                inline for (std.meta.fields(TestType)) |field| {
+                    try testing.expectEqual(@field(original_item, field.name), @field(deser_item, field.name));
+                }
+            }
+            try testing.expectEqual(@as(usize, 0), deserialized.len());
+        }
+    }
+}
+
+test "SafeMultiList CompactWriter verify exact memory layout" {
+    const gpa = testing.allocator;
+
+    // Test that our serialization produces the exact memory layout that MultiArrayList expects
+    const TestStruct = struct {
+        a: u8,
+        b: u32,
+        c: u16,
+        d: u64,
+    };
+
+    // Test with various lengths to ensure layout is correct
+    const test_lengths = [_]usize{ 1, 2, 3, 5, 8 };
+
+    for (test_lengths) |len| {
+        // Create a list with test data
+        var original = try SafeMultiList(TestStruct).initCapacity(gpa, len + 10);
+        defer original.deinit(gpa);
+
+        var i: usize = 0;
+        while (i < len) : (i += 1) {
+            _ = try original.append(gpa, .{
+                .a = @as(u8, @intCast(i + 10)),
+                .b = @as(u32, @intCast(i + 100)),
+                .c = @as(u16, @intCast(i + 1000)),
+                .d = @as(u64, @intCast(i + 10000)),
+            });
+        }
+
+        // Manually create the expected memory layout
+        const expected_bytes = try gpa.alloc(u8, std.MultiArrayList(TestStruct).capacityInBytes(len));
+        defer gpa.free(expected_bytes);
+
+        // Calculate field offsets as MultiArrayList would
+        var offset: usize = 0;
+        const fields = std.meta.fields(TestStruct);
+
+        // Write each field array at its proper offset
+        inline for (fields, 0..) |field, field_idx| {
+            const field_type = field.type;
+            const field_align = @alignOf(field_type);
+            const field_size = @sizeOf(field_type);
+
+            // Align offset for this field
+            offset = std.mem.alignForward(usize, offset, field_align);
+
+            // Copy field data
+            const field_enum = @as(SafeMultiList(TestStruct).Field, @enumFromInt(field_idx));
+            const field_items = original.field(field_enum);
+            @memcpy(expected_bytes[offset..][0 .. field_size * len], std.mem.sliceAsBytes(field_items[0..len]));
+
+            offset += field_size * len;
+        }
+
+        // Now serialize using our implementation
+        const tmp_dir = testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+
+        const file = try tmp_dir.dir.createFile("layout_test.dat", .{ .read = true });
+        defer file.close();
+
+        var writer = CompactWriter{
+            .iovecs = .{},
+            .total_bytes = 0,
+        };
+        defer writer.iovecs.deinit(gpa);
+
+        _ = try original.serialize(gpa, &writer);
+        try writer.writeGather(gpa, file);
+
+        // Read back
+        try file.seekTo(0);
+        const file_size = try file.getEndPos();
+        const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+        defer gpa.free(buffer);
+
+        _ = try file.read(buffer);
+
+        // Extract the data portion (before the SafeMultiList struct)
+        const data_size = std.MultiArrayList(TestStruct).capacityInBytes(len);
+        const serialized_data = buffer[0..data_size];
+
+        // Verify byte-for-byte equality
+        try testing.expectEqualSlices(u8, expected_bytes, serialized_data);
+
+        // Also verify it deserializes correctly
+        const offset_struct = writer.total_bytes - @sizeOf(SafeMultiList(TestStruct));
+        const deserialized = @as(*SafeMultiList(TestStruct), @ptrCast(@alignCast(buffer.ptr + offset_struct)));
+        deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+        // Verify all data is accessible
+        i = 0;
+        while (i < len) : (i += 1) {
+            const item = deserialized.get(@enumFromInt(i));
+            try testing.expectEqual(@as(u8, @intCast(i + 10)), item.a);
+            try testing.expectEqual(@as(u32, @intCast(i + 100)), item.b);
+            try testing.expectEqual(@as(u16, @intCast(i + 1000)), item.c);
+            try testing.expectEqual(@as(u64, @intCast(i + 10000)), item.d);
+        }
+    }
+}
+
+test "SafeMultiList CompactWriter stress test many field types" {
+    const gpa = testing.allocator;
+
+    // Test with a complex struct with many fields of different types and alignments
+    const ComplexStruct = struct {
+        flag1: bool,
+        byte1: u8,
+        short1: u16,
+        int1: u32,
+        long1: u64,
+        byte2: u8,
+        flag2: bool,
+        short2: u16,
+        float1: f32,
+        long2: u64,
+        int2: u32,
+        double1: f64,
+    };
+
+    const test_lengths = [_]usize{ 0, 1, 4, 9 };
+
+    for (test_lengths) |len| {
+        var list = try SafeMultiList(ComplexStruct).initCapacity(gpa, len + 20);
+        defer list.deinit(gpa);
+
+        // Fill with data
+        var i: usize = 0;
+        while (i < len) : (i += 1) {
+            _ = try list.append(gpa, .{
+                .flag1 = (i % 2) == 0,
+                .byte1 = @as(u8, @intCast(i * 2)),
+                .short1 = @as(u16, @intCast(i * 10)),
+                .int1 = @as(u32, @intCast(i * 100)),
+                .long1 = @as(u64, @intCast(i * 1000)),
+                .byte2 = @as(u8, @intCast(i * 3)),
+                .flag2 = (i % 3) == 0,
+                .short2 = @as(u16, @intCast(i * 20)),
+                .float1 = @as(f32, @floatFromInt(i)) * 1.5,
+                .long2 = @as(u64, @intCast(i * 2000)),
+                .int2 = @as(u32, @intCast(i * 200)),
+                .double1 = @as(f64, @floatFromInt(i)) * 2.5,
+            });
+        }
+
+        const tmp_dir = testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+
+        const file = try tmp_dir.dir.createFile("complex_test.dat", .{ .read = true });
+        defer file.close();
+
+        var writer = CompactWriter{
+            .iovecs = .{},
+            .total_bytes = 0,
+        };
+        defer writer.iovecs.deinit(gpa);
+
+        _ = try list.serialize(gpa, &writer);
+        try writer.writeGather(gpa, file);
+
+        // Read back
+        try file.seekTo(0);
+        const file_size = try file.getEndPos();
+        const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+        defer gpa.free(buffer);
+
+        _ = try file.read(buffer);
+
+        // Deserialize
+        const offset = writer.total_bytes - @sizeOf(SafeMultiList(ComplexStruct));
+        const deserialized = @as(*SafeMultiList(ComplexStruct), @ptrCast(@alignCast(buffer.ptr + offset)));
+        deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+        // Verify
+        try testing.expectEqual(len, deserialized.len());
+
+        i = 0;
+        while (i < len) : (i += 1) {
+            const original_item = list.get(@enumFromInt(i));
+            const deser_item = deserialized.get(@enumFromInt(i));
+
+            try testing.expectEqual(original_item.flag1, deser_item.flag1);
+            try testing.expectEqual(original_item.byte1, deser_item.byte1);
+            try testing.expectEqual(original_item.short1, deser_item.short1);
+            try testing.expectEqual(original_item.int1, deser_item.int1);
+            try testing.expectEqual(original_item.long1, deser_item.long1);
+            try testing.expectEqual(original_item.byte2, deser_item.byte2);
+            try testing.expectEqual(original_item.flag2, deser_item.flag2);
+            try testing.expectEqual(original_item.short2, deser_item.short2);
+            try testing.expectEqual(original_item.float1, deser_item.float1);
+            try testing.expectEqual(original_item.long2, deser_item.long2);
+            try testing.expectEqual(original_item.int2, deser_item.int2);
+            try testing.expectEqual(original_item.double1, deser_item.double1);
+        }
+    }
+}
+
+test "SafeMultiList CompactWriter empty with capacity" {
+    const gpa = testing.allocator;
+
+    // Test that empty lists with capacity serialize correctly
+    const TestStruct = struct {
+        x: u32,
+        y: u64,
+        z: u8,
+    };
+
+    var list = try SafeMultiList(TestStruct).initCapacity(gpa, 50);
+    defer list.deinit(gpa);
+
+    // Verify it has capacity but no elements
+    try testing.expect(list.items.capacity >= 50);
+    try testing.expectEqual(@as(usize, 0), list.len());
+
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("empty_capacity.dat", .{ .read = true });
+    defer file.close();
+
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.iovecs.deinit(gpa);
+
+    _ = try list.serialize(gpa, &writer);
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Deserialize
+    const offset = writer.total_bytes - @sizeOf(SafeMultiList(TestStruct));
+    const deserialized = @as(*SafeMultiList(TestStruct), @ptrCast(@alignCast(buffer.ptr + offset)));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify it's still empty
+    try testing.expectEqual(@as(usize, 0), deserialized.len());
+    // Capacity should be 0 after compaction
+    try testing.expectEqual(@as(usize, 0), deserialized.items.capacity);
 }
 
 test "SafeList comprehensive serialization framework test" {

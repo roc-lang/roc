@@ -117,7 +117,7 @@ pub const CompactWriter = struct {
         try self.padToAlignment(allocator, alignment);
 
         try self.iovecs.append(allocator, .{
-            .iov_base = @ptrCast(@as([*]u8, @ptrCast(ptr))),
+            .iov_base = @ptrCast(@as([*]const u8, @ptrCast(ptr))),
             .iov_len = size * len,
         });
         self.total_bytes += size * len;
