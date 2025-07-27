@@ -1,26 +1,33 @@
-//! A specialized collection for tracking exposed items in modules using string keys.
+//! A specialized collection for tracking exposed items in modules using interned IDs.
 //!
 //! This combines the functionality of exposed_by_str and exposed_nodes into a single
-//! SortedArrayBuilder to save memory and simplify the API. It uses string keys
-//! (the exposed item names) and u16 values (the node indices).
+//! SortedArrayBuilder to save memory and simplify the API. It uses interned identifier
+//! indices (u32 matching Ident.Idx) as keys and u16 values (the node indices).
 //!
 //! A value of 0 means "exposed but not yet defined", while non-zero values
 //! are actual node indices.
+//!
+//! Note: This module only provides ID-based methods. String-to-ID conversion must be
+//! handled by the caller who has access to the Ident.Store.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 
+// We use u32 for the identifier index type to match Ident.Idx
+// This avoids needing to import base module but maintains type compatibility
+const IdentIdx = u32;
+
 /// A collection that tracks exposed items by their names and associated CIR node indices
 pub const ExposedItems = struct {
-    /// Maps item name -> CIR node index (0 means exposed but not defined)
-    items: SortedArrayBuilder([]const u8, u16),
+    /// Maps item name (as interned ID) -> CIR node index (0 means exposed but not defined)
+    items: SortedArrayBuilder(IdentIdx, u16),
 
     const Self = @This();
 
     pub fn init() Self {
         return .{
-            .items = SortedArrayBuilder([]const u8, u16).init(),
+            .items = SortedArrayBuilder(IdentIdx, u16).init(),
         };
     }
 
@@ -28,42 +35,50 @@ pub const ExposedItems = struct {
         self.items.deinit(allocator);
     }
 
-    /// Add an exposed item (equivalent to exposed_by_str.put)
-    /// If the item already exists, this is a no-op (keeping the existing value)
-    pub fn addExposed(self: *Self, allocator: Allocator, name: []const u8) !void {
+    /// Add an exposed item by its interned ID
+    pub fn addExposedById(self: *Self, allocator: Allocator, ident_idx: IdentIdx) !void {
         // Add with value 0 to indicate "exposed but not yet defined"
         // The SortedArrayBuilder will handle duplicates by keeping the last value,
         // but we don't want to overwrite an existing node index with 0
         if (self.items.sorted) {
             // If already sorted, check if it exists first
-            if (self.items.get(allocator, name) == null) {
-                try self.items.put(allocator, name, 0);
+            if (self.items.get(allocator, ident_idx) == null) {
+                try self.items.put(allocator, ident_idx, 0);
             }
         } else {
             // If not sorted yet, just add it - duplicates will be handled later
-            try self.items.put(allocator, name, 0);
+            try self.items.put(allocator, ident_idx, 0);
         }
     }
 
-    /// Set the node index for an exposed item (equivalent to exposed_nodes.put)
-    pub fn setNodeIndex(self: *Self, allocator: Allocator, name: []const u8, node_idx: u16) !void {
-        // This will overwrite any existing value (including 0)
-        try self.items.put(allocator, name, node_idx);
+    /// Set the node index for an exposed item by its interned ID
+    pub fn setNodeIndexById(self: *Self, allocator: Allocator, ident_idx: IdentIdx, node_idx: u16) !void {
+        // First ensure the array is sorted so we can search
+        self.items.ensureSorted(allocator);
+        
+        // Find the existing entry and update its value
+        const entries = self.items.entries.items;
+        for (entries) |*entry| {
+            if (entry.key == ident_idx) {
+                entry.value = node_idx;
+                return;
+            }
+        }
+        
+        // If not found, add a new entry
+        try self.items.put(allocator, ident_idx, node_idx);
     }
 
-    /// Check if an item is exposed (equivalent to exposed_by_str.contains)
-    pub fn contains(self: *const Self, allocator: Allocator, name: []const u8) bool {
-        // Cast away const for the lookup since SortedArrayBuilder.get may sort the array
+    /// Check if an item is exposed by its interned ID
+    pub fn containsById(self: *const Self, allocator: Allocator, ident_idx: IdentIdx) bool {
         var mutable_self = @constCast(self);
-        return mutable_self.items.get(allocator, name) != null;
+        return mutable_self.items.get(allocator, ident_idx) != null;
     }
 
-    /// Get the node index for an exposed item (equivalent to exposed_nodes.get)
-    /// Returns null if not exposed, or the node index (which may be 0)
-    pub fn getNodeIndex(self: *const Self, allocator: Allocator, name: []const u8) ?u16 {
-        // Cast away const for the lookup since SortedArrayBuilder.get may sort the array
+    /// Get the node index for an exposed item by its interned ID
+    pub fn getNodeIndexById(self: *const Self, allocator: Allocator, ident_idx: IdentIdx) ?u16 {
         var mutable_self = @constCast(self);
-        return mutable_self.items.get(allocator, name);
+        return mutable_self.items.get(allocator, ident_idx);
     }
 
     /// Get the number of exposed items
@@ -78,7 +93,8 @@ pub const ExposedItems = struct {
     }
 
     /// Detect duplicate exposed items for error reporting
-    pub fn detectDuplicates(self: *Self, allocator: Allocator) ![][]const u8 {
+    /// Returns the interned IDs of duplicates (caller must convert to strings)
+    pub fn detectDuplicates(self: *Self, allocator: Allocator) ![]IdentIdx {
         return self.items.detectDuplicates(allocator);
     }
 
@@ -91,12 +107,11 @@ pub const ExposedItems = struct {
     pub fn serializedSize(self: *const Self) usize {
         // We need to serialize:
         // 1. The count of items (u32)
-        // 2. For each item: key length (u32) + key bytes + value (u16)
+        // 2. For each item: key (u32) + value (u16)
         var size: usize = @sizeOf(u32); // count
         
-        for (self.items.entries.items) |entry| {
-            size += @sizeOf(u32); // key length
-            size += entry.key.len; // key bytes
+        for (self.items.entries.items) |_| {
+            size += @sizeOf(u32); // key (interned ID)
             size += @sizeOf(u16); // value
         }
         
@@ -118,13 +133,9 @@ pub const ExposedItems = struct {
         
         // Write entries
         for (self.items.entries.items) |entry| {
-            // Write key length
-            std.mem.writeInt(u32, buffer[offset..][0..4], @intCast(entry.key.len), .little);
+            // Write key (interned ID)
+            std.mem.writeInt(u32, buffer[offset..][0..4], entry.key, .little);
             offset += @sizeOf(u32);
-            
-            // Write key bytes
-            @memcpy(buffer[offset..offset + entry.key.len], entry.key);
-            offset += entry.key.len;
             
             // Write value
             std.mem.writeInt(u16, buffer[offset..][0..2], entry.value, .little);
@@ -154,15 +165,10 @@ pub const ExposedItems = struct {
         
         // Read entries
         for (0..entry_count) |_| {
-            // Read key length
+            // Read key (interned ID)
             if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
-            const key_len = std.mem.readInt(u32, buffer[offset..][0..4], .little);
+            const key = std.mem.readInt(u32, buffer[offset..][0..4], .little);
             offset += @sizeOf(u32);
-            
-            // Read key bytes
-            if (offset + key_len > buffer.len) return error.BufferTooSmall;
-            const key = buffer[offset..offset + key_len];
-            offset += key_len;
             
             // Read value
             if (offset + @sizeOf(u16) > buffer.len) return error.BufferTooSmall;
@@ -183,14 +189,14 @@ pub const ExposedItems = struct {
 
     /// Iterator for all exposed items
     pub const Iterator = struct {
-        items: []const SortedArrayBuilder([]const u8, u16).Entry,
+        items: []const SortedArrayBuilder(IdentIdx, u16).Entry,
         index: usize,
 
-        pub fn next(self: *Iterator) ?struct { name: []const u8, node_idx: u16 } {
+        pub fn next(self: *Iterator) ?struct { ident_idx: IdentIdx, node_idx: u16 } {
             if (self.index < self.items.len) {
                 const entry = self.items[self.index];
                 self.index += 1;
-                return .{ .name = entry.key, .node_idx = entry.value };
+                return .{ .ident_idx = entry.key, .node_idx = entry.value };
             }
             return null;
         }

@@ -631,9 +631,12 @@ pub fn canonicalizeFile(
 
                     // If this identifier is exposed, add it to exposed_items
                     if (self.exposed_ident_texts.contains(ident_text)) {
+                        // Get the interned identifier - it should already exist from parsing
+                        const ident = base.Ident.for_text(ident_text);
+                        const idx = try self.env.idents.insert(self.env.gpa, ident);
                         // Store the def index as u16 in exposed_items
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                        try self.env.exposed_items.setNodeIndex(self.env.gpa, ident_text, def_idx_u16);
+                        try self.env.exposed_items.setNodeIndexById(self.env.gpa, idx.idx, def_idx_u16);
                     }
 
                     _ = self.exposed_ident_texts.remove(ident_text);
@@ -900,15 +903,15 @@ fn createExposedScope(
         const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
         switch (exposed) {
             .lower_ident => |ident| {
-                // Get the text of the identifier token to use as key
+                // Get the text for tracking redundant exposures
                 const token_region = self.parse_ir.tokens.resolve(@intCast(ident.ident));
                 const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
-                // Add to exposed_items for permanent storage (unconditionally)
-                try self.env.exposed_items.addExposed(gpa, ident_text);
-
-                // Also build exposed_scope with proper identifiers
+                // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
+                    // Add to exposed_items for permanent storage (unconditionally)
+                    try self.env.exposed_items.addExposedById(gpa, ident_idx.idx);
+
                     // Use a dummy pattern index - we just need to track that it's exposed
                     const dummy_idx = @as(Pattern.Idx, @enumFromInt(0));
                     try self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
@@ -933,15 +936,15 @@ fn createExposedScope(
                 }
             },
             .upper_ident => |type_name| {
-                // Get the text of the identifier token to use as key
+                // Get the text for tracking redundant exposures
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_name.ident));
                 const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
-                // Add to exposed_items for permanent storage (unconditionally)
-                try self.env.exposed_items.addExposed(gpa, type_text);
-
-                // Also build exposed_scope with proper identifiers
+                // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
+                    // Add to exposed_items for permanent storage (unconditionally)
+                    try self.env.exposed_items.addExposedById(gpa, ident_idx.idx);
+
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
                     try self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
@@ -966,15 +969,15 @@ fn createExposedScope(
                 }
             },
             .upper_ident_star => |type_with_constructors| {
-                // Get the text of the identifier token to use as key
+                // Get the text for tracking redundant exposures
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_with_constructors.ident));
                 const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
-                // Add to exposed_items for permanent storage (unconditionally)
-                try self.env.exposed_items.addExposed(gpa, type_text);
-
-                // Also build exposed_scope with proper identifiers
+                // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
+                    // Add to exposed_items for permanent storage (unconditionally)
+                    try self.env.exposed_items.addExposedById(gpa, ident_idx.idx);
+
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
                     try self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
@@ -1377,7 +1380,14 @@ fn introduceExposedItemsIntoScope(
             const item_name_text = self.env.idents.getText(exposed_item.name);
 
             // Check if the item is exposed by the module
-            if (!module_env.exposed_items.contains(self.env.gpa, item_name_text)) {
+            // We need to look up by string because the identifiers are from different modules
+            // First, try to find this identifier in the target module's ident store
+            const is_exposed = if (module_env.idents.findByString(item_name_text)) |target_ident|
+                module_env.exposed_items.containsById(self.env.gpa, target_ident.idx)
+            else
+                false;
+
+            if (!is_exposed) {
                 // Determine if it's a type or value based on capitalization
                 const first_char = item_name_text[0];
 
@@ -1703,10 +1713,15 @@ pub fn canonicalizeExpr(
                             };
 
                             // Look up the target node index in the module's exposed_items
+                            // Need to convert identifier from current module to target module
                             const field_text = self.env.idents.getText(ident);
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
-                                    break :blk module_env.exposed_items.getNodeIndex(self.env.gpa, field_text) orelse 0;
+                                    if (module_env.idents.findByString(field_text)) |target_ident| {
+                                        break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, target_ident.idx) orelse 0;
+                                    } else {
+                                        break :blk 0;
+                                    }
                                 } else {
                                     break :blk 0;
                                 }
@@ -1762,10 +1777,15 @@ pub fn canonicalizeExpr(
                             };
 
                             // Look up the target node index in the module's exposed_items
+                            // Need to convert identifier from current module to target module
                             const field_text = self.env.idents.getText(exposed_info.original_name);
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
-                                    break :blk module_env.exposed_items.getNodeIndex(self.env.gpa, field_text) orelse 0;
+                                    if (module_env.idents.findByString(field_text)) |target_ident| {
+                                        break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, target_ident.idx) orelse 0;
+                                    } else {
+                                        break :blk 0;
+                                    }
                                 } else {
                                     break :blk 0;
                                 }
@@ -6542,10 +6562,15 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
 
     // Look up the target node index in the module's exposed_items
+    // Need to convert identifier from current module to target module
     const field_text = self.env.idents.getText(field_name);
     const target_node_idx = if (self.module_envs) |envs_map| blk: {
         if (envs_map.get(module_text)) |module_env| {
-            break :blk module_env.exposed_items.getNodeIndex(self.env.gpa, field_text) orelse 0;
+            if (module_env.idents.findByString(field_text)) |target_ident| {
+                break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, target_ident.idx) orelse 0;
+            } else {
+                break :blk 0;
+            }
         } else {
             break :blk 0;
         }

@@ -7,6 +7,7 @@
 const std = @import("std");
 const compile = @import("compile");
 const parse = @import("parse");
+const base = @import("base");
 
 const canonicalize = @import("../../canonicalize.zig");
 
@@ -365,13 +366,20 @@ test "exposed_items is populated correctly" {
 
     try canonicalizer.canonicalizeFile();
 
-    // Check that exposed_items contains all exposed items
-    try testing.expect(env.exposed_items.contains(env.gpa, "foo"));
-    try testing.expect(env.exposed_items.contains(env.gpa, "bar"));
-    try testing.expect(env.exposed_items.contains(env.gpa, "MyType"));
+    // Check that exposed_items contains the correct number of items
+    // The exposed items were added during canonicalization
 
     // Should have exactly 3 entries (duplicates not stored)
     try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
+    
+    // Check that exposed_items contains all exposed items
+    const foo_idx = env.idents.findByString("foo").?;
+    const bar_idx = env.idents.findByString("bar").?;
+    const mytype_idx = env.idents.findByString("MyType").?;
+    
+    try testing.expect(env.exposed_items.containsById(env.gpa, foo_idx.idx));
+    try testing.expect(env.exposed_items.containsById(env.gpa, bar_idx.idx));
+    try testing.expect(env.exposed_items.containsById(env.gpa, mytype_idx.idx));
 }
 
 test "exposed_items persists after canonicalization" {
@@ -398,9 +406,13 @@ test "exposed_items persists after canonicalization" {
     try canonicalizer.canonicalizeFile();
 
     // All exposed items should be in exposed_items, even those not implemented
-    try testing.expect(env.exposed_items.contains(env.gpa, "x"));
-    try testing.expect(env.exposed_items.contains(env.gpa, "y"));
-    try testing.expect(env.exposed_items.contains(env.gpa, "z"));
+    const x_idx = env.idents.findByString("x").?;
+    const y_idx = env.idents.findByString("y").?;
+    const z_idx = env.idents.findByString("z").?;
+    
+    try testing.expect(env.exposed_items.containsById(env.gpa, x_idx.idx));
+    try testing.expect(env.exposed_items.containsById(env.gpa, y_idx.idx));
+    try testing.expect(env.exposed_items.containsById(env.gpa, z_idx.idx));
 
     // Verify the map persists in env after canonicalization is complete
     try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
@@ -432,9 +444,13 @@ test "exposed_items never has entries removed" {
     // All exposed items should remain in exposed_items
     // Even though foo appears twice and baz is not implemented,
     // exposed_items should have all unique exposed identifiers
-    try testing.expect(env.exposed_items.contains(env.gpa, "foo"));
-    try testing.expect(env.exposed_items.contains(env.gpa, "bar"));
-    try testing.expect(env.exposed_items.contains(env.gpa, "baz"));
+    const foo_idx = env.idents.findByString("foo").?;
+    const bar_idx = env.idents.findByString("bar").?;
+    const baz_idx = env.idents.findByString("baz").?;
+    
+    try testing.expect(env.exposed_items.containsById(env.gpa, foo_idx.idx));
+    try testing.expect(env.exposed_items.containsById(env.gpa, bar_idx.idx));
+    try testing.expect(env.exposed_items.containsById(env.gpa, baz_idx.idx));
 
     // Should have exactly 3 unique entries
     try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
