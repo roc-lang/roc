@@ -15,7 +15,7 @@ test "CompactWriter basic functionality" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(allocator);
+    defer writer.deinit(allocator);
 
     // Test appendAlloc
     const test_struct = struct {
@@ -44,7 +44,7 @@ test "CompactWriter appendSlice" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(allocator);
+    defer writer.deinit(allocator);
 
     // Create some test data
     const data = [_]u32{ 1, 2, 3, 4, 5 };
@@ -67,7 +67,7 @@ test "CompactWriter alignment padding" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(allocator);
+    defer writer.deinit(allocator);
 
     // First append a u8 (1-byte aligned)
     const byte_ptr = try writer.appendAlloc(allocator, u8);
@@ -94,7 +94,7 @@ test "CompactWriter multiple allocations" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(allocator);
+    defer writer.deinit(allocator);
 
     // Append multiple items
     const item1 = try writer.appendAlloc(allocator, u64);
@@ -123,7 +123,7 @@ test "CompactWriter up-front padding with various alignments" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(allocator);
+    defer writer.deinit(allocator);
 
     // Start with u8 (1-byte aligned)
     _ = try writer.appendAlloc(allocator, u8);
@@ -162,7 +162,7 @@ test "CompactWriter slice alignment" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(allocator);
+    defer writer.deinit(allocator);
 
     // Start with a u8
     _ = try writer.appendAlloc(allocator, u8);
@@ -200,7 +200,7 @@ test "CompactWriter brute-force appendSlice alignment" {
                 .iovecs = .{},
                 .total_bytes = 0,
             };
-            defer writer.iovecs.deinit(allocator);
+            defer writer.deinit(allocator);
 
             // Create test data
             var data: [8]T = undefined;

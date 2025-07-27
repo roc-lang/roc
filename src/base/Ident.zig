@@ -370,7 +370,7 @@ test "Ident.Store empty CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -432,7 +432,7 @@ test "Ident.Store basic CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -500,7 +500,7 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -560,7 +560,7 @@ test "Ident.Store frozen state CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -637,7 +637,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -710,7 +710,7 @@ test "Ident.Store multiple stores CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try store1.serialize(gpa, &writer);
     const offset1 = writer.total_bytes - @sizeOf(Store);

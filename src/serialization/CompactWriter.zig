@@ -125,7 +125,7 @@ pub const CompactWriter = struct {
         try self.padToAlignment(allocator, alignment);
 
         const offset = self.total_bytes;
-        
+
         try self.iovecs.append(allocator, .{
             .iov_base = @ptrCast(@as([*]const u8, @ptrCast(slice.ptr))),
             .iov_len = size * len,
@@ -169,6 +169,11 @@ pub const CompactWriter = struct {
         }
 
         return buffer[0..self.total_bytes];
+    }
+
+    /// Deinitialize the CompactWriter, freeing all allocated memory
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.iovecs.deinit(allocator);
     }
 };
 

@@ -115,9 +115,9 @@ pub fn serialize(
     allocator: std.mem.Allocator,
     writer: *collections.CompactWriter,
 ) std.mem.Allocator.Error!*const Self {
-    // First, write the struct with an empty hash map
+    // First, write the struct
     const offset_self = try writer.appendAlloc(allocator, Self);
-    
+
     // Then serialize the bytes SafeList and update the struct
     offset_self.* = .{
         .bytes = (try self.bytes.serialize(allocator, writer)).*,
@@ -131,7 +131,6 @@ pub fn serialize(
 
 /// Add the given offset to the memory addresses of all pointers in `self`.
 pub fn relocate(self: *Self, offset: isize) void {
-    // Relocate the bytes SafeList
     self.bytes.relocate(offset);
 
     // The strings hash map is always empty after deserialization,
@@ -158,7 +157,7 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -227,7 +226,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -300,7 +299,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -369,7 +368,7 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -439,7 +438,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -505,7 +504,7 @@ test "SmallStringInterner multiple interners CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try interner1.serialize(gpa, &writer);
     const offset1 = writer.total_bytes - @sizeOf(Self);

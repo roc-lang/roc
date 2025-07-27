@@ -1369,7 +1369,7 @@ test "SafeList(u32) CompactWriter roundtrip with file" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -1428,7 +1428,7 @@ test "SafeList(struct) CompactWriter roundtrip with file" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -1476,7 +1476,7 @@ test "SafeList empty list CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -1539,7 +1539,7 @@ test "SafeList empty lists CompactWriter roundtrip multiple types" {
             .iovecs = .{},
             .total_bytes = 0,
         };
-        defer writer.iovecs.deinit(gpa);
+        defer writer.deinit(gpa);
 
         _ = try list1.serialize(gpa, &writer);
         const offset1 = writer.total_bytes - @sizeOf(SafeList(T));
@@ -1598,7 +1598,7 @@ test "SafeList CompactWriter verify offset calculation" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     const serialized_ptr = try list.serialize(gpa, &writer);
 
@@ -1631,7 +1631,7 @@ test "SafeList CompactWriter complete roundtrip example" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     // Step 3: Serialize - this writes data first, then the SafeList struct
     const serialized_ptr = try original.serialize(gpa, &writer);
@@ -1719,7 +1719,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     // Serialize all lists and track their positions
     const ptr_u8 = try list_u8.serialize(gpa, &writer);
@@ -1815,7 +1815,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     // Track offsets as we go
     var offsets = std.ArrayList(usize).init(gpa);
@@ -1964,7 +1964,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
                 .iovecs = .{},
                 .total_bytes = 0,
             };
-            defer writer.iovecs.deinit(gpa);
+            defer writer.deinit(gpa);
 
             // Serialize in pattern: list1, u8 list, list2
             // This tests alignment padding between different types
@@ -2055,7 +2055,7 @@ test "SafeMultiList CompactWriter roundtrip with file" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -2122,7 +2122,7 @@ test "SafeMultiList empty list CompactWriter roundtrip" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -2192,7 +2192,7 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     // Serialize all lists
     _ = try list1.serialize(gpa, &writer);
@@ -2272,7 +2272,7 @@ test "SafeMultiList CompactWriter field access after deserialization" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);
 
@@ -2369,7 +2369,7 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
             .iovecs = .{},
             .total_bytes = 0,
         };
-        defer writer.iovecs.deinit(gpa);
+        defer writer.deinit(gpa);
 
         _ = try list.serialize(gpa, &writer);
         const offset1 = writer.total_bytes - @sizeOf(SafeMultiList(TestType));
@@ -2467,7 +2467,7 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
                 .iovecs = .{},
                 .total_bytes = 0,
             };
-            defer writer.iovecs.deinit(gpa);
+            defer writer.deinit(gpa);
 
             _ = try list.serialize(gpa, &writer);
             try writer.writeGather(gpa, file);
@@ -2567,7 +2567,7 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
             .iovecs = .{},
             .total_bytes = 0,
         };
-        defer writer.iovecs.deinit(gpa);
+        defer writer.deinit(gpa);
 
         _ = try original.serialize(gpa, &writer);
         try writer.writeGather(gpa, file);
@@ -2658,7 +2658,7 @@ test "SafeMultiList CompactWriter stress test many field types" {
             .iovecs = .{},
             .total_bytes = 0,
         };
-        defer writer.iovecs.deinit(gpa);
+        defer writer.deinit(gpa);
 
         _ = try list.serialize(gpa, &writer);
         try writer.writeGather(gpa, file);
@@ -2727,7 +2727,7 @@ test "SafeMultiList CompactWriter empty with capacity" {
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.iovecs.deinit(gpa);
+    defer writer.deinit(gpa);
 
     _ = try list.serialize(gpa, &writer);
     try writer.writeGather(gpa, file);
