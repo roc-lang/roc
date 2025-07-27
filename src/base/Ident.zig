@@ -9,6 +9,7 @@ const std = @import("std");
 const mod = @import("mod.zig");
 const Region = @import("Region.zig");
 const serialization = @import("serialization");
+const collections = @import("collections");
 
 const SmallStringInterner = mod.SmallStringInterner;
 
@@ -100,7 +101,7 @@ pub const Attributes = packed struct(u3) {
 /// An interner for identifier names.
 pub const Store = struct {
     interner: SmallStringInterner,
-    attributes: std.ArrayListUnmanaged(Attributes) = .{},
+    attributes: collections.SafeList(Attributes) = .{},
     next_unique_name: u32 = 0,
 
     /// Initialize the memory for an `Ident.Store` with a specific capaicty.
@@ -113,6 +114,7 @@ pub const Store = struct {
     /// Deinitialize the memory for an `Ident.Store`.
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         self.interner.deinit(gpa);
+        self.attributes.deinit(gpa);
     }
 
     /// Insert a new identifier into the store.
@@ -151,7 +153,7 @@ pub const Store = struct {
 
         const name = str_buffer[digit_index + 1 ..];
 
-        const idx = try self.interner.insert(gpa, name, Region.zero());
+        const idx = try self.interner.insert(gpa, name);
 
         const attributes = Attributes{
             .effectful = false,
@@ -159,7 +161,7 @@ pub const Store = struct {
             .reassignable = false,
         };
 
-        try self.attributes.append(gpa, attributes);
+        _ = try self.attributes.append(gpa, attributes);
 
         return Idx{
             .attributes = attributes,
@@ -183,7 +185,7 @@ pub const Store = struct {
 
         // SmallStringInterner components
         size += @sizeOf(u32); // bytes_len
-        size += self.interner.bytes.items.len; // bytes data
+        size += self.interner.bytes.len(); // bytes data
         size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
 
         size += @sizeOf(u32); // next_unique_name
@@ -200,11 +202,11 @@ pub const Store = struct {
         var offset: usize = 0;
 
         // Serialize interner bytes
-        const bytes_len = @as(u32, @intCast(self.interner.bytes.items.len));
+        const bytes_len = @as(u32, @intCast(self.interner.bytes.len()));
         @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = bytes_len;
         offset += @sizeOf(u32);
         if (bytes_len > 0) {
-            @memcpy(buffer[offset .. offset + bytes_len], self.interner.bytes.items);
+            @memcpy(buffer[offset .. offset + bytes_len], self.interner.bytes.items.items);
             offset += bytes_len;
         }
         offset = std.mem.alignForward(usize, offset, @alignOf(u32));
@@ -232,10 +234,11 @@ pub const Store = struct {
         // Deserialize interner bytes
         const bytes_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
         offset += @sizeOf(u32);
-        var bytes = std.ArrayListUnmanaged(u8){};
+        var bytes = collections.SafeList(u8){};
         if (bytes_len > 0) {
             if (offset + bytes_len > buffer.len) return error.BufferTooSmall;
-            try bytes.appendSlice(gpa, buffer[offset .. offset + bytes_len]);
+            bytes = try collections.SafeList(u8).initCapacity(gpa, bytes_len);
+            _ = try bytes.appendSlice(gpa, buffer[offset .. offset + bytes_len]);
             offset += bytes_len;
         }
         offset = std.mem.alignForward(usize, offset, @alignOf(u32));
@@ -328,9 +331,9 @@ test "Ident.Store serialization round-trip" {
     const ident2 = Ident.for_text("world!");
     const ident3 = Ident.for_text("_ignored");
 
-    const idx1 = try original_store.insert(gpa, ident1, Region.zero());
-    const idx2 = try original_store.insert(gpa, ident2, Region.zero());
-    const idx3 = try original_store.insert(gpa, ident3, Region.zero());
+    const idx1 = try original_store.insert(gpa, ident1);
+    const idx2 = try original_store.insert(gpa, ident2);
+    const idx3 = try original_store.insert(gpa, ident3);
 
     // Serialize
     const serialized_size = original_store.serializedSize();
@@ -358,9 +361,9 @@ test "Ident.Store serialization round-trip" {
     try std.testing.expectEqual(original_store.next_unique_name, restored_store.next_unique_name);
 
     // Verify structural integrity
-    try std.testing.expectEqual(original_store.attributes.items.len, restored_store.attributes.items.len);
-    try std.testing.expectEqual(original_store.interner.bytes.items.len, restored_store.interner.bytes.items.len);
-    try std.testing.expectEqual(original_store.interner.outer_indices.items.len, restored_store.interner.outer_indices.items.len);
+    try std.testing.expectEqual(original_store.attributes.len(), restored_store.attributes.len());
+    try std.testing.expectEqual(original_store.interner.bytes.len(), restored_store.interner.bytes.len());
+    // Note: outer_indices was removed in previous changes
 }
 
 test "Ident.Store serialization comprehensive" {
@@ -375,13 +378,13 @@ test "Ident.Store serialization comprehensive" {
     const ident3 = Ident.for_text("_ignored");
     const ident4 = Ident.for_text("a"); // single character
     const ident5 = Ident.for_text("very_long_identifier_name_that_might_cause_issues"); // long name
-    const region = Region.zero();
+    // const region = Region.zero(); // No longer needed
 
-    _ = try store.insert(gpa, ident1, region);
-    _ = try store.insert(gpa, ident2, region);
-    _ = try store.insert(gpa, ident3, region);
-    _ = try store.insert(gpa, ident4, region);
-    _ = try store.insert(gpa, ident5, region);
+    _ = try store.insert(gpa, ident1);
+    _ = try store.insert(gpa, ident2);
+    _ = try store.insert(gpa, ident3);
+    _ = try store.insert(gpa, ident4);
+    _ = try store.insert(gpa, ident5);
 
     // Add some unique names
     _ = try store.genUnique(gpa);

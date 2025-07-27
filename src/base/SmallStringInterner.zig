@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const mod = @import("mod.zig");
+const collections = @import("collections");
 
 const Region = mod.Region;
 
@@ -16,7 +17,7 @@ const Self = @This();
 /// The raw underlying bytes for all strings.
 /// Since strings are small, they are simply null terminated.
 /// This uses only 1 byte to encode the size and is cheap to scan.
-bytes: std.ArrayListUnmanaged(u8) = .{},
+bytes: collections.SafeList(u8) = .{},
 /// A deduplicated set of strings mapping to their indices in bytes.
 /// Used for deduplication during insertion. May be empty after deserialization.
 strings: std.StringHashMapUnmanaged(Idx) = .{},
@@ -35,12 +36,12 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     const bytes_per_string = 4;
 
     var self = Self{
-        .bytes = std.ArrayListUnmanaged(u8){},
+        .bytes = collections.SafeList(u8){},
         .strings = std.StringHashMapUnmanaged(Idx){},
     };
 
     // Properly initialize the bytes array to ensure clean state
-    try self.bytes.ensureTotalCapacity(gpa, capacity * bytes_per_string);
+    self.bytes = try collections.SafeList(u8).initCapacity(gpa, capacity * bytes_per_string);
 
     try self.strings.ensureTotalCapacity(gpa, @intCast(capacity));
 
@@ -71,11 +72,10 @@ pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8) std.mem.A
         break :blk existing_offset;
     } else blk: {
         // String doesn't exist, add it to bytes
-        try self.bytes.ensureUnusedCapacity(gpa, string.len + 1);
-        const new_offset: Idx = @enumFromInt(self.bytes.items.len);
+        const new_offset: Idx = @enumFromInt(self.bytes.len());
 
-        self.bytes.appendSliceAssumeCapacity(string);
-        self.bytes.appendAssumeCapacity(0);
+        _ = try self.bytes.appendSlice(gpa, string);
+        _ = try self.bytes.append(gpa, 0);
 
         // Add to HashMap for future deduplication
         const owned_string = try gpa.dupe(u8, string);
@@ -95,7 +95,8 @@ pub fn contains(self: *const Self, string: []const u8) bool {
 
 /// Get a reference to the text for an interned string.
 pub fn getText(self: *const Self, idx: Idx) []u8 {
-    return std.mem.sliceTo(self.bytes.items[@intFromEnum(idx)..], 0);
+    const bytes_slice = self.bytes.items.items;
+    return std.mem.sliceTo(bytes_slice[@intFromEnum(idx)..], 0);
 }
 
 /// Freeze the interner, preventing any new entries from being added.
