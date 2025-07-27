@@ -1250,8 +1250,8 @@ pub const ReportBuilder = struct {
 
         // Get module name if available
         const module_idx = @intFromEnum(data.module_idx);
-        const module_name = if (module_idx < self.can_ir.imports.imports.items.len) blk: {
-            const import_name = self.can_ir.imports.imports.items[module_idx];
+        const module_name = if (module_idx < self.can_ir.imports.imports.len()) blk: {
+            const import_name = self.can_ir.imports.imports.items.items[module_idx];
             break :blk import_name;
         } else null;
 
