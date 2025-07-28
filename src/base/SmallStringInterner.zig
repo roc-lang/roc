@@ -18,15 +18,19 @@ const Self = @This();
 /// Since strings are small, they are simply null terminated.
 /// This uses only 1 byte to encode the size and is cheap to scan.
 bytes: collections.SafeList(u8) = .{},
-/// A deduplicated set of strings mapping to their indices in bytes.
-/// Used for deduplication during insertion. May be empty after deserialization.
-strings: std.StringHashMapUnmanaged(Idx) = .{},
+/// A hash table using linear probing to map hashes to string indices.
+/// Each slot contains an Idx pointing to the start of a string in bytes.
+/// A value of .unused (0) indicates an empty slot.
+hash_table: collections.SafeList(Idx) = .{},
+/// The current number of entries in the hash table.
+entry_count: u32 = 0,
 /// When true, no new entries can be added to the interner.
 /// This is set after parsing is complete.
 frozen: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) {
+    unused = 0,
     _,
 };
 
@@ -35,15 +39,28 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     // TODO: tune this. Rough assumption that average small string is 4 bytes.
     const bytes_per_string = 4;
 
+    // Calculate hash table size based on load factor of 80% (multiply by 5, divide by 4)
+    const hash_table_size = @as(u32, @intCast(((capacity * 5) / 4) + 1));
+    // Round up to next power of 2 for better modulo performance
+    const hash_table_capacity = std.math.ceilPowerOfTwo(u32, hash_table_size) catch hash_table_size;
+
     var self = Self{
         .bytes = collections.SafeList(u8){},
-        .strings = std.StringHashMapUnmanaged(Idx){},
+        .hash_table = collections.SafeList(Idx){},
+        .entry_count = 0,
     };
 
     // Properly initialize the bytes array to ensure clean state
     self.bytes = try collections.SafeList(u8).initCapacity(gpa, capacity * bytes_per_string);
 
-    try self.strings.ensureTotalCapacity(gpa, @intCast(capacity));
+    // Start with at least one byte to ensure Idx.unused (0) never points to valid data
+    _ = try self.bytes.append(gpa, 0);
+
+    // Initialize hash table with all zeros (Idx.unused)
+    self.hash_table = try collections.SafeList(Idx).initCapacity(gpa, hash_table_capacity);
+    try self.hash_table.items.ensureTotalCapacityPrecise(gpa, hash_table_capacity);
+    self.hash_table.items.items.len = hash_table_capacity;
+    @memset(self.hash_table.items.items, .unused);
 
     return self;
 }
@@ -52,13 +69,66 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 /// Will invalidate all slices referencing the interner.
 pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
     self.bytes.deinit(gpa);
+    self.hash_table.deinit(gpa);
+}
 
-    // Free all the string keys we allocated
-    var iterator = self.strings.iterator();
-    while (iterator.next()) |entry| {
-        gpa.free(entry.key_ptr.*);
+/// Find a string in the hash table using linear probing.
+/// Returns the Idx if found, or the slot index where it should be inserted if not found.
+pub fn findStringOrSlot(self: *const Self, string: []const u8) struct { idx: ?Idx, slot: u32 } {
+    const hash = std.hash.Fnv1a_32.hash(string);
+    const table_size = self.hash_table.len();
+    var slot = hash % table_size;
+
+    while (true) {
+        const idx_at_slot = self.hash_table.items.items[slot];
+
+        if (idx_at_slot == .unused) {
+            // Empty slot - string not found
+            return .{ .idx = null, .slot = slot };
+        }
+
+        // Check if this slot contains our string
+        const stored_idx = @intFromEnum(idx_at_slot);
+        const stored_end = stored_idx + string.len;
+
+        // If the stored string would have had to go past the end of bytes,
+        // they must not be equal. Also if there isn't a null terminator
+        // right where we expect, they must not be equal.
+        if (stored_end < self.bytes.len() and self.bytes.items.items[stored_end] == 0) {
+            // With that out of the way, we can safely compare the string contents.
+            if (std.mem.eql(u8, string, self.bytes.items.items[stored_idx..stored_end])) {
+                // Found the string!
+                return .{ .idx = idx_at_slot, .slot = slot };
+            }
+        }
+
+        // Linear probe to next slot (with wraparound)
+        slot = (slot + 1) % table_size;
     }
-    self.strings.deinit(gpa);
+}
+
+/// Resize the hash table when it gets too full.
+fn resizeHashTable(self: *Self, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
+    const old_table = self.hash_table;
+    const new_size = old_table.len() * 2;
+
+    // Create new hash table initialized to zeros
+    self.hash_table = try collections.SafeList(Idx).initCapacity(gpa, new_size);
+    try self.hash_table.items.ensureTotalCapacityPrecise(gpa, new_size);
+    self.hash_table.items.items.len = new_size;
+    @memset(self.hash_table.items.items, .unused);
+
+    // Rehash all existing entries
+    for (old_table.items.items) |idx| {
+        if (idx != .unused) {
+            // Get the string for this index
+            const string = self.getText(idx);
+            const result = self.findStringOrSlot(string);
+            self.hash_table.items.items[result.slot] = idx;
+        }
+    }
+
+    @constCast(&old_table).deinit(gpa);
 }
 
 /// Add a string to this interner, returning a unique, serial index.
@@ -67,30 +137,36 @@ pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8) std.mem.A
         std.debug.assert(!self.frozen); // Should not insert into a frozen interner
     }
 
-    // Check if string already exists for deduplication
-    const string_offset = if (self.strings.get(string)) |existing_offset| blk: {
-        break :blk existing_offset;
-    } else blk: {
+    // Check if we need to resize the hash table (when 80% full = entry_count * 5 >= hash_table.len() * 4)
+    if (self.entry_count * 5 >= self.hash_table.len() * 4) {
+        try self.resizeHashTable(gpa);
+    }
+
+    // Find the string or the slot where it should be inserted
+    const result = self.findStringOrSlot(string);
+
+    if (result.idx) |existing_idx| {
+        // String already exists
+        return existing_idx;
+    } else {
         // String doesn't exist, add it to bytes
         const new_offset: Idx = @enumFromInt(self.bytes.len());
 
         _ = try self.bytes.appendSlice(gpa, string);
         _ = try self.bytes.append(gpa, 0);
 
-        // Add to HashMap for future deduplication
-        const owned_string = try gpa.dupe(u8, string);
-        try self.strings.put(gpa, owned_string, new_offset);
+        // Add to hash table
+        self.hash_table.items.items[result.slot] = new_offset;
+        self.entry_count += 1;
 
-        break :blk new_offset;
-    };
-
-    return string_offset;
+        return new_offset;
+    }
 }
 
 /// Check if a string is already interned in this interner, used for generating unique names.
 pub fn contains(self: *const Self, string: []const u8) bool {
-    // Check if the string exists in the interner's map
-    return self.strings.get(string) != null;
+    const result = self.findStringOrSlot(string);
+    return result.idx != null;
 }
 
 /// Get a reference to the text for an interned string.
@@ -118,10 +194,11 @@ pub fn serialize(
     // First, write the struct
     const offset_self = try writer.appendAlloc(allocator, Self);
 
-    // Then serialize the bytes SafeList and update the struct
+    // Then serialize the bytes and hash_table SafeLists and update the struct
     offset_self.* = .{
         .bytes = (try self.bytes.serialize(allocator, writer)).*,
-        .strings = .{}, // Always serialize an empty hash map
+        .hash_table = (try self.hash_table.serialize(allocator, writer)).*,
+        .entry_count = self.entry_count,
         .frozen = self.frozen,
     };
 
@@ -132,9 +209,7 @@ pub fn serialize(
 /// Add the given offset to the memory addresses of all pointers in `self`.
 pub fn relocate(self: *Self, offset: isize) void {
     self.bytes.relocate(offset);
-
-    // The strings hash map is always empty after deserialization,
-    // so there's nothing to relocate there
+    self.hash_table.relocate(offset);
 }
 
 test "SmallStringInterner empty CompactWriter roundtrip" {
@@ -176,9 +251,9 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
-    // Verify empty
-    try testing.expectEqual(@as(usize, 0), deserialized.bytes.len());
-    try testing.expectEqual(@as(usize, 0), deserialized.strings.count());
+    // Verify empty - bytes starts with one zero byte, hash_table should be empty
+    try testing.expectEqual(@as(usize, 1), deserialized.bytes.len());
+    try testing.expectEqual(@as(u32, 0), deserialized.entry_count);
 }
 
 test "SmallStringInterner basic CompactWriter roundtrip" {
@@ -252,8 +327,8 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
         try testing.expectEqualStrings(expected_str, actual_str);
     }
 
-    // Verify the strings hash map is empty after deserialization
-    try testing.expectEqual(@as(usize, 0), deserialized.strings.count());
+    // Verify the entry count is preserved after deserialization
+    try testing.expectEqual(@as(u32, 9), deserialized.entry_count);
 }
 
 test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
@@ -283,9 +358,9 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
         try testing.expectEqual(@as(u32, data.expected_idx), @intFromEnum(idx));
     }
 
-    // Verify the hash map is populated
-    try testing.expect(original.strings.count() > 0);
-    const original_hashmap_count = original.strings.count();
+    // Verify the hash table is populated
+    try testing.expect(original.entry_count > 0);
+    const original_entry_count = original.entry_count;
 
     // Create a temp file
     const tmp_dir = testing.tmpDir(.{});
@@ -318,8 +393,8 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
-    // Verify the hash map is empty after deserialization
-    try testing.expectEqual(@as(usize, 0), deserialized.strings.count());
+    // Verify the entry count is preserved after deserialization
+    try testing.expectEqual(original_entry_count, deserialized.entry_count);
 
     // But all strings should still be accessible
     try testing.expectEqualStrings("first", deserialized.getText(@enumFromInt(0)));
@@ -331,9 +406,9 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     try testing.expectEqualStrings("seventh", deserialized.getText(@enumFromInt(38)));
     try testing.expectEqualStrings("eighth", deserialized.getText(@enumFromInt(46)));
 
-    // Log to confirm the original had a populated hash map
-    if (original_hashmap_count == 0) {
-        std.debug.panic("Test failed: original hash map should have been populated\n", .{});
+    // Log to confirm the original had entries
+    if (original_entry_count == 0) {
+        std.debug.panic("Test failed: original should have had entries\n", .{});
     }
 }
 
@@ -539,18 +614,18 @@ test "SmallStringInterner multiple interners CompactWriter roundtrip" {
     // Verify interner 1
     try testing.expectEqualStrings("interner1_string1", deserialized1.getText(idx1_1));
     try testing.expectEqualStrings("interner1_string2", deserialized1.getText(idx1_2));
-    try testing.expectEqual(@as(usize, 0), deserialized1.strings.count());
+    try testing.expectEqual(@as(u32, 2), deserialized1.entry_count);
 
     // Verify interner 2 (frozen)
     try testing.expectEqualStrings("interner2_string1", deserialized2.getText(idx2_1));
     try testing.expectEqualStrings("interner2_string2", deserialized2.getText(idx2_2));
     try testing.expectEqualStrings("interner2_string3", deserialized2.getText(idx2_3));
-    try testing.expectEqual(@as(usize, 0), deserialized2.strings.count());
+    try testing.expectEqual(@as(u32, 3), deserialized2.entry_count);
     if (std.debug.runtime_safety) {
         try testing.expect(deserialized2.frozen);
     }
 
     // Verify interner 3
     try testing.expectEqualStrings("interner3_string1", deserialized3.getText(idx3_1));
-    try testing.expectEqual(@as(usize, 0), deserialized3.strings.count());
+    try testing.expectEqual(@as(u32, 1), deserialized3.entry_count);
 }

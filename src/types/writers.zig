@@ -89,7 +89,7 @@ pub const TypeWriter = struct {
         // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
         // Skip any names that already exist in the identifier store
         // We need at most one more name than the number of existing identifiers
-        const max_attempts = self.env.idents.interner.strings.size + 1;
+        const max_attempts = self.env.idents.interner.entry_count + 1;
         var attempts: usize = 0;
         while (attempts < max_attempts) : (attempts += 1) {
             var n = self.next_name_index;
@@ -153,7 +153,7 @@ pub const TypeWriter = struct {
         var found = false;
 
         // We need at most as many attempts as there are existing identifiers
-        const max_attempts = self.env.idents.interner.strings.size;
+        const max_attempts = self.env.idents.interner.entry_count;
         var attempts: usize = 0;
         while (!found and attempts < max_attempts) : (attempts += 1) {
             var buf: [32]u8 = undefined;
