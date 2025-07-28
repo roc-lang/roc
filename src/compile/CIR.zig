@@ -325,12 +325,12 @@ pub const Import = struct {
             self.imports.deinit(allocator);
         }
 
-        pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, module_env: anytype, module_name: []const u8) !Import.Idx {
+        pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) !Import.Idx {
             // First check if we already have this module name
             const result = try self.map.getOrPut(allocator, module_name);
             if (!result.found_existing) {
                 // New import - intern the string and store it
-                const string_idx = try module_env.strings.insert(allocator, module_name);
+                const string_idx = try strings.insert(allocator, module_name);
                 const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
                 result.value_ptr.* = idx;
                 _ = try self.imports.append(allocator, string_idx);

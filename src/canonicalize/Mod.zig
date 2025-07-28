@@ -1199,7 +1199,7 @@ fn canonicalizeImportStatement(
 
     // 3. Get or create Import.Idx for this module
     const module_name_text = self.env.idents.getText(module_name);
-    const module_import_idx = try self.env.imports.getOrPut(self.env.gpa, self.env, module_name_text);
+    const module_import_idx = try self.env.imports.getOrPut(self.env.gpa, &self.env.strings, module_name_text);
 
     // 4. Add to scope: alias -> module_name mapping
     try self.scopeIntroduceModuleAlias(alias, module_name);
