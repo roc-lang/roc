@@ -1471,14 +1471,14 @@ fn setDetailIfTypeMismatch(self: *Self, result: unifier.Result, mismatch_detail:
 /// This allows us to show the user nice, more specific errors than a generic
 /// type mismatch
 fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, mismatch_detail: problem.TypeMismatchDetail) void {
-    switch (self.problems.problems.get(problem_idx)) {
+    switch (self.problems.problems.items[@intFromEnum(problem_idx)]) {
         .type_mismatch => |mismatch| {
-            self.problems.problems.set(problem_idx, .{
+            self.problems.problems.items[@intFromEnum(problem_idx)] = .{
                 .type_mismatch = .{
                     .types = mismatch.types,
                     .detail = mismatch_detail,
                 },
-            });
+            };
         },
         else => {
             // For other problem types (e.g., number_does_not_fit), the

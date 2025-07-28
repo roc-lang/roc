@@ -42,8 +42,7 @@ pub const Problem = union(enum) {
     invalid_tag_union_ext: VarProblem1,
     bug: Bug,
 
-    pub const SafeMultiList = MkSafeMultiList(@This());
-    pub const Idx = SafeMultiList.Idx;
+    pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
 };
 
@@ -1342,12 +1341,13 @@ pub const ReportBuilder = struct {
 /// Entry points are `appendProblem` and `deepCopyVar`
 pub const Store = struct {
     const Self = @This();
+    const ALIGNMENT = 16;
 
-    problems: Problem.SafeMultiList,
+    problems: std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT) = .{},
 
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
-            .problems = try Problem.SafeMultiList.initCapacity(gpa, capacity),
+            .problems = try std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT).initCapacity(gpa, capacity),
         };
     }
 
@@ -1356,7 +1356,9 @@ pub const Store = struct {
     }
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
-    pub fn appendProblem(self: *Self, gpa: Allocator, problem: Problem) std.mem.Allocator.Error!Problem.SafeMultiList.Idx {
-        return try self.problems.append(gpa, problem);
+    pub fn appendProblem(self: *Self, gpa: Allocator, problem: Problem) std.mem.Allocator.Error!Problem.Idx {
+        const idx: Problem.Idx = @enumFromInt(self.problems.items.len);
+        try self.problems.append(gpa, problem);
+        return idx;
     }
 };

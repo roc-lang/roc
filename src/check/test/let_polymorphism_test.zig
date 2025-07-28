@@ -10,7 +10,7 @@ const compile = @import("compile");
 
 const check_types = @import("check");
 
-const TypesStore = types.store.Store;
+const TypesStore = types.Store;
 const ModuleEnv = compile.ModuleEnv;
 const testing = std.testing;
 const test_allocator = testing.allocator;

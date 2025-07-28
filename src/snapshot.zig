@@ -473,9 +473,7 @@ fn generateAllReports(
     }
 
     // Generate type checking reports
-    var problems_itr = solver.problems.problems.iterIndices();
-    while (problems_itr.next()) |problem_idx| {
-        const problem = solver.problems.problems.get(problem_idx);
+    for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};
         var report_builder = types_problem_mod.ReportBuilder.init(
             allocator,

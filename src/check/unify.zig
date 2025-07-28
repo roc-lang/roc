@@ -100,7 +100,7 @@ pub const Result = union(enum) {
     const Self = @This();
 
     ok,
-    problem: Problem.SafeMultiList.Idx,
+    problem: Problem.Idx,
 
     pub fn isOk(self: Self) bool {
         return self == .ok;

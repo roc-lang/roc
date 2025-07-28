@@ -297,9 +297,7 @@ fn processSourceInternal(
     );
     defer report_builder.deinit();
 
-    var problems_itr = solver.problems.problems.iterIndices();
-    while (problems_itr.next()) |problem_idx| {
-        const problem = solver.problems.problems.get(problem_idx);
+    for (solver.problems.problems.items) |problem| {
         const report = report_builder.build(problem) catch continue;
         reports.append(report) catch continue;
     }
