@@ -32,7 +32,7 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:7
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:8
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:20
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - record_different_fields_reserved_error.md:3:11:3:12
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - record_different_fields_reserved_error.md:6:10:6:19
 UNDEFINED VARIABLE - record_different_fields_reserved_error.md:7:9:7:19

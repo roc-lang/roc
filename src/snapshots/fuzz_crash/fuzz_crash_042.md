@@ -9,6 +9,7 @@ module[]import u.R}g:r->R.a.E
 ~~~
 # EXPECTED
 OVER CLOSED BRACE - :0:0:0:0
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/fuzz_crash/fuzz_crash_042.md:0:0:0:0
 # PROBLEMS
 **OVER CLOSED BRACE**
 There are too many closing braces here.

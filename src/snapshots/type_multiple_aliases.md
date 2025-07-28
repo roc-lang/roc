@@ -24,7 +24,8 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_multiple_aliases.md:15:21:15:24
+TYPE MISMATCH - type_multiple_aliases.md:15:35:15:37
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

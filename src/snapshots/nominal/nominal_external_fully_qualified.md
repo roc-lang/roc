@@ -18,6 +18,7 @@ handleResult = |result| {
 }
 ~~~
 # EXPECTED
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/nominal/nominal_external_fully_qualified.md:0:0:0:0
 UNDEFINED VARIABLE - nominal_external_fully_qualified.md:8:23:8:36
 UNDEFINED VARIABLE - nominal_external_fully_qualified.md:9:23:9:36
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45

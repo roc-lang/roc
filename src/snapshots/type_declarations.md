@@ -26,6 +26,7 @@ UNDECLARED TYPE - type_declarations.md:5:8:5:11
 UNDECLARED TYPE - type_declarations.md:5:13:5:16
 UNDECLARED TYPE - type_declarations.md:7:19:7:21
 UNDECLARED TYPE - type_declarations.md:7:32:7:41
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/type_declarations.md:0:0:0:0
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:51:1:56
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:42:1:49
 # PROBLEMS
@@ -253,22 +254,22 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.41 (type "Map(a(r), b(r))")
+		(alias @3.1-3.41 (type "Map(a, b)")
 			(ty-header @3.1-3.10 (name "Map")
 				(ty-args
 					(ty-var @3.5-3.6 (name "a"))
 					(ty-var @3.8-3.9 (name "b")))))
 		(alias @5.1-5.17 (type "Foo")
 			(ty-header @5.1-5.4 (name "Foo")))
-		(alias @7.1-7.43 (type "Some(a(r))")
+		(alias @7.1-7.43 (type "Some(a)")
 			(ty-header @7.1-7.8 (name "Some")
 				(ty-args
 					(ty-var @7.6-7.7 (name "a")))))
-		(alias @9.1-9.27 (type "Maybe(a(r))")
+		(alias @9.1-9.27 (type "Maybe(a)")
 			(ty-header @9.1-9.9 (name "Maybe")
 				(ty-args
 					(ty-var @9.7-9.8 (name "a")))))
-		(alias @11.1-11.38 (type "SomeFunc(a(r))")
+		(alias @11.1-11.38 (type "SomeFunc(a)")
 			(ty-header @11.1-11.12 (name "SomeFunc")
 				(ty-args
 					(ty-var @11.10-11.11 (name "a")))))

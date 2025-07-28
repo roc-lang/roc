@@ -14,7 +14,8 @@ sort : List(elem) -> List(elem) where module(elem).Sort
 sort = ...
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - where_clauses_alias_constraint.md:4:27:4:28
+UNDEFINED VARIABLE - where_clauses_alias_constraint.md:4:30:4:31
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
@@ -134,7 +135,7 @@ NO CHANGE
 	(defs
 		(patt @7.1-7.5 (type "Error -> Error")))
 	(type_decls
-		(alias @3.1-4.48 (type "Sort(a(r))")
+		(alias @3.1-4.48 (type "Sort(a)")
 			(ty-header @3.1-3.8 (name "Sort")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))))))

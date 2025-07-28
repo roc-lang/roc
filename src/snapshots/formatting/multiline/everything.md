@@ -117,6 +117,14 @@ h = |x, y| {
 }
 ~~~
 # EXPECTED
+UNDEFINED VARIABLE - everything.md:17:4:17:5
+UNDEFINED VARIABLE - everything.md:18:4:18:5
+UNDEFINED VARIABLE - everything.md:21:4:21:5
+UNDEFINED VARIABLE - everything.md:22:4:22:5
+UNDEFINED VARIABLE - everything.md:27:4:27:5
+UNDEFINED VARIABLE - everything.md:28:4:28:5
+UNDEFINED VARIABLE - everything.md:31:4:31:5
+UNDEFINED VARIABLE - everything.md:32:4:32:5
 UNUSED VARIABLE - everything.md:90:5:90:6
 UNUSED VARIABLE - everything.md:95:4:95:5
 UNUSED VARIABLE - everything.md:100:5:100:6
@@ -786,20 +794,20 @@ NO CHANGE
 	(defs
 		(patt @60.1-60.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
-		(alias @14.1-23.11 (type "A(a(r))")
+		(alias @14.1-23.11 (type "A(a)")
 			(ty-header @14.1-14.5 (name "A")
 				(ty-args
 					(ty-var @14.3-14.4 (name "a")))))
-		(alias @24.1-33.11 (type "B(b(r))")
+		(alias @24.1-33.11 (type "B(b)")
 			(ty-header @24.1-24.5 (name "B")
 				(ty-args
 					(ty-var @24.3-24.4 (name "b")))))
-		(alias @35.1-41.2 (type "C(a(r), b(r))")
+		(alias @35.1-41.2 (type "C(a, b)")
 			(ty-header @35.1-38.2 (name "C")
 				(ty-args
 					(ty-var @36.2-36.3 (name "a"))
 					(ty-var @37.2-37.3 (name "b")))))
-		(alias @42.1-48.2 (type "D(a(r), b(r))")
+		(alias @42.1-48.2 (type "D(a, b)")
 			(ty-header @42.1-45.2 (name "D")
 				(ty-args
 					(ty-var @43.2-43.3 (name "a"))

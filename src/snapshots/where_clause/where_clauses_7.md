@@ -23,7 +23,9 @@ Decode(a) : a
 		) -> a
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - where_clauses_7.md:7:22:7:28
+UNDEFINED VARIABLE - where_clauses_7.md:9:7:9:13
+UNDEFINED VARIABLE - where_clauses_7.md:16:8:16:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `hasher` in this scope.
@@ -159,12 +161,12 @@ Decode(a) : a
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-10.26 (type "Hash(a(r), hasher(r))")
+		(alias @3.1-10.26 (type "Hash(a, hasher)")
 			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.15 (name "hasher")))))
-		(alias @12.1-16.9 (type "Decode(a(r))")
+		(alias @12.1-16.9 (type "Decode(a)")
 			(ty-header @12.1-12.10 (name "Decode")
 				(ty-args
 					(ty-var @12.8-12.9 (name "a"))))))

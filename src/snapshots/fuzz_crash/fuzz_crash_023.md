@@ -251,7 +251,7 @@ UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
 UNDEFINED VARIABLE - fuzz_crash_023.md:147:9:147:13
 UNDEFINED VARIABLE - fuzz_crash_023.md:158:2:158:11
 NOT IMPLEMENTED - :0:0:0:0
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - fuzz_crash_023.md:178:52:178:71
 UNDEFINED VARIABLE - fuzz_crash_023.md:179:42:179:48
 UNDEFINED VARIABLE - fuzz_crash_023.md:183:3:183:7
 UNDEFINED VARIABLE - fuzz_crash_023.md:185:4:185:10
@@ -270,6 +270,7 @@ UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 TYPE MISMATCH - fuzz_crash_023.md:67:11:67:14
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
 TYPE MISMATCH - fuzz_crash_023.md:155:2:155:12
+INCOMPATIBLE LIST ELEMENTS - fuzz_crash_023.md:167:3:167:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_record_field_name`
@@ -2426,12 +2427,12 @@ expect {
 		(patt @144.1-144.6 (type "Error -> Error"))
 		(patt @199.1-199.6 (type "{}")))
 	(type_decls
-		(alias @22.1-22.41 (type "Map(a(r), b(r))")
+		(alias @22.1-22.41 (type "Map(a, b)")
 			(ty-header @22.1-22.10 (name "Map")
 				(ty-args
 					(ty-var @22.5-22.6 (name "a"))
 					(ty-var @22.8-22.9 (name "b")))))
-		(alias @23.1-34.5 (type "MapML(a(r), b(r))")
+		(alias @23.1-34.5 (type "MapML(a, b)")
 			(ty-header @23.1-26.2 (name "MapML")
 				(ty-args
 					(ty-var @24.2-24.3 (name "a"))
@@ -2440,27 +2441,27 @@ expect {
 			(ty-header @36.1-36.4 (name "Foo")))
 		(alias @38.1-41.2 (type "FooMultiline")
 			(ty-header @38.1-38.13 (name "FooMultiline")))
-		(alias @43.1-43.43 (type "Some(a(r))")
+		(alias @43.1-43.43 (type "Some(a)")
 			(ty-header @43.1-43.8 (name "Some")
 				(ty-args
 					(ty-var @43.6-43.7 (name "a")))))
-		(alias @44.1-47.2 (type "SomeMl(a(r))")
+		(alias @44.1-47.2 (type "SomeMl(a)")
 			(ty-header @44.1-44.10 (name "SomeMl")
 				(ty-args
 					(ty-var @44.8-44.9 (name "a")))))
-		(alias @49.1-54.2 (type "SomeMultiline(a(r))")
+		(alias @49.1-54.2 (type "SomeMultiline(a)")
 			(ty-header @49.1-49.17 (name "SomeMultiline")
 				(ty-args
 					(ty-var @49.15-49.16 (name "a")))))
-		(alias @56.1-56.27 (type "Maybe(a(r))")
+		(alias @56.1-56.27 (type "Maybe(a)")
 			(ty-header @56.1-56.9 (name "Maybe")
 				(ty-args
 					(ty-var @56.7-56.8 (name "a")))))
-		(alias @58.1-61.2 (type "MaybeMultiline(a(r))")
+		(alias @58.1-61.2 (type "MaybeMultiline(a)")
 			(ty-header @58.1-58.18 (name "MaybeMultiline")
 				(ty-args
 					(ty-var @58.16-58.17 (name "a")))))
-		(alias @63.1-63.38 (type "SomeFunc(a(r))")
+		(alias @63.1-63.38 (type "SomeFunc(a)")
 			(ty-header @63.1-63.12 (name "SomeFunc")
 				(ty-args
 					(ty-var @63.10-63.11 (name "a"))))))

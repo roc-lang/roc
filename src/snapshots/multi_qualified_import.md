@@ -31,7 +31,9 @@ INVALID STATEMENT - multi_qualified_import.md:3:23:3:31
 INVALID STATEMENT - multi_qualified_import.md:3:32:3:41
 UNDECLARED TYPE - multi_qualified_import.md:5:16:5:23
 UNDEFINED VARIABLE - multi_qualified_import.md:6:16:6:45
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/multi_qualified_import.md:0:0:0:0
 UNUSED VARIABLE - multi_qualified_import.md:10:12:10:19
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/multi_qualified_import.md:0:0:0:0
 UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
 INVALID STATEMENT - multi_qualified_import.md:14:12:14:17
 INVALID STATEMENT - multi_qualified_import.md:14:17:14:22

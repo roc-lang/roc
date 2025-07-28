@@ -35,12 +35,12 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:6:29
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:10:7:17
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:17:7:18
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:7:31
-MALFORMED TYPE - :0:0:0:0
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - record_different_fields_error.md:2:20:2:21
+MALFORMED TYPE - record_different_fields_error.md:3:13:3:14
 UNDEFINED VARIABLE - record_different_fields_error.md:5:5:5:10
 UNDEFINED VARIABLE - record_different_fields_error.md:5:11:5:15
 UNDEFINED VARIABLE - record_different_fields_error.md:6:5:6:10
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - record_different_fields_error.md:6:20:6:21
 UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**

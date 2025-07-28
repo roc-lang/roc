@@ -13,6 +13,7 @@ red : Color.RGB
 red = Color.RGB.Red
 ~~~
 # EXPECTED
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/nominal/nominal_import_type.md:0:0:0:0
 UNDEFINED VARIABLE - nominal_import_type.md:6:12:6:16
 # PROBLEMS
 **COMPILER DIAGNOSTIC**

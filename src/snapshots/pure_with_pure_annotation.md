@@ -18,7 +18,8 @@ double = |x| add(x, x)
 main! = add(1, 2)
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - pure_with_pure_annotation.md:11:13:11:14
+TYPE MISMATCH - pure_with_pure_annotation.md:11:16:11:17
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

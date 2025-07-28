@@ -27,8 +27,6 @@ WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:8
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:6:5:6:24
 INVALID STATEMENT - where_clauses_error_cases.md:6:25:6:26
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:10:3:10:8
-UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:24:15:25
-UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:29:15:30
 EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:9:1:19
 EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:21:1:31
 EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:33:1:43

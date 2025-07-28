@@ -20,7 +20,11 @@ some2 = |a| Maybe.Some(a)
 none2 = Maybe.None
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_tag_payload.md:6:13:6:18
+INVALID NOMINAL TAG - nominal_tag_payload.md:6:13:6:13
+TYPE MISMATCH - nominal_tag_payload.md:9:9:9:14
+TYPE MISMATCH - nominal_tag_payload.md:11:13:11:18
+TYPE MISMATCH - nominal_tag_payload.md:13:9:13:14
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -224,7 +228,7 @@ NO CHANGE
 		(patt @11.1-11.6 (type "_arg -> Error"))
 		(patt @13.1-13.6 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.28 (type "Maybe(a(r))")
+		(nominal @3.1-3.28 (type "Maybe(a)")
 			(ty-header @3.1-3.9 (name "Maybe")
 				(ty-args
 					(ty-var @3.7-3.8 (name "a"))))))

@@ -34,6 +34,8 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
+TYPE MISMATCH - lambda_parameter_unused.md:20:19:20:20
+TYPE MISMATCH - lambda_parameter_unused.md:22:23:22:24
 TYPE MISMATCH - lambda_parameter_unused.md:24:25:24:42
 TYPE MISMATCH - lambda_parameter_unused.md:24:15:24:42
 TYPE MISMATCH - lambda_parameter_unused.md:24:5:24:42

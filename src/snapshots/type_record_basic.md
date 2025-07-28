@@ -13,7 +13,7 @@ getName = |_person| "hello"
 main! = |_| getName({name: "luke", age:21})
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_record_basic.md:6:21:6:43
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

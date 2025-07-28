@@ -13,7 +13,7 @@ empty : ConsList(_a)
 empty = ConsList.Nil
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_tag_recursive_payload.md:6:9:6:17
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -96,7 +96,7 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.6 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.40 (type "ConsList(a(r))")
+		(nominal @3.1-3.40 (type "ConsList(a)")
 			(ty-header @3.1-3.12 (name "ConsList")
 				(ty-args
 					(ty-var @3.10-3.11 (name "a"))))))

@@ -12,7 +12,7 @@ Cache(k, v) := Dict(U64, v)
 		module(k).hash : k -> U64
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - where_clauses_nominal_type.md:5:20:5:21
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `k` in this scope.

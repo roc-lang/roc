@@ -15,7 +15,9 @@ Hash(a, hasher) : a
 Decode(a) : a where module(a).decode : List(U8) -> a
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - where_clauses_1.md:5:20:5:26
+UNDEFINED VARIABLE - where_clauses_1.md:5:30:5:36
+UNDEFINED VARIABLE - where_clauses_1.md:8:52:8:53
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `hasher` in this scope.
@@ -131,12 +133,12 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-6.24 (type "Hash(a(r), hasher(r))")
+		(alias @3.1-6.24 (type "Hash(a, hasher)")
 			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.15 (name "hasher")))))
-		(alias @8.1-8.53 (type "Decode(a(r))")
+		(alias @8.1-8.53 (type "Decode(a)")
 			(ty-header @8.1-8.10 (name "Decode")
 				(ty-args
 					(ty-var @8.8-8.9 (name "a"))))))

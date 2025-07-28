@@ -15,6 +15,7 @@ blue : CC.RGB
 blue = CC.Color.RGB(0,0,255)
 ~~~
 # EXPECTED
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/nominal/nominal_tag_package_import.md:0:0:0:0
 UNDEFINED VARIABLE - nominal_tag_package_import.md:8:10:8:16
 # PROBLEMS
 **COMPILER DIAGNOSTIC**

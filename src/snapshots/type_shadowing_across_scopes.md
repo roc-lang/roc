@@ -24,7 +24,7 @@ PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:31
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:11:32
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:12:1:12:2
 TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - type_shadowing_across_scopes.md:11:24:11:31
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
 INVALID STATEMENT - type_shadowing_across_scopes.md:11:31:11:32
 INVALID STATEMENT - type_shadowing_across_scopes.md:12:1:12:2
@@ -240,7 +240,7 @@ InnerModule :
 	(defs
 		(patt @6.1-6.12 (type "Str -> Str")))
 	(type_decls
-		(alias @3.1-3.31 (type "Result(a(r), b(r))")
+		(alias @3.1-3.31 (type "Result(a, b)")
 			(ty-header @3.1-3.13 (name "Result")
 				(ty-args
 					(ty-var @3.8-3.9 (name "a"))

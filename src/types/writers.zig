@@ -349,7 +349,6 @@ pub const TypeWriter = struct {
                     },
                     .rigid_var => |ident_idx| {
                         _ = try self.buf.writer().write(self.idents.getText(ident_idx));
-                        _ = try self.buf.writer().write("(r)");
                     },
                     .alias => |alias| {
                         try self.writeAlias(alias, root_var);

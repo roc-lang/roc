@@ -74,6 +74,7 @@ UNDECLARED TYPE - can_import_exposing_types.md:22:50:22:55
 UNDECLARED TYPE - can_import_exposing_types.md:22:58:22:63
 UNDEFINED VARIABLE - can_import_exposing_types.md:24:5:24:16
 UNDECLARED TYPE - can_import_exposing_types.md:37:16:37:22
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_exposing_types.md:0:0:0:0
 UNDECLARED TYPE - can_import_exposing_types.md:41:18:41:26
 UNDEFINED VARIABLE - can_import_exposing_types.md:45:23:45:37
 UNDECLARED TYPE - can_import_exposing_types.md:49:25:49:30

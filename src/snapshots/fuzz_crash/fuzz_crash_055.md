@@ -9,7 +9,7 @@ module[]r:a	where
 module(a).h:s
 ~~~
 # EXPECTED
-UNDECLARED TYPE VARIABLE - fuzz_crash_055.md:2:13:2:14
+NIL
 # PROBLEMS
 NIL
 # TOKENS

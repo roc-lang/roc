@@ -15,7 +15,7 @@ getUser = |id| if (id > 10) "big" else "small"
 main! = |_| getUser(100)
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_alias_simple.md:8:21:8:24
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

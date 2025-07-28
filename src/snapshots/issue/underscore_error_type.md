@@ -39,9 +39,6 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:23:14:23:14
-TYPE MISMATCH - underscore_error_type.md:15:7:15:16
-TYPE MISMATCH - underscore_error_type.md:20:7:20:18
-TYPE MISMATCH - underscore_error_type.md:25:8:25:16
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -108,48 +105,6 @@ BadTuple := (_, U32)
              
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_type.md:15:7:15:16:**
-```roc
-baz : BadRecord
-```
-      ^^^^^^^^^
-
-It is of type:
-    _BadRecord_
-
-But you are trying to use it as:
-    _{ field: Str, other: Num(_size) }_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_type.md:20:7:20:18:**
-```roc
-qux : BadFunction
-```
-      ^^^^^^^^^^^
-
-It is of type:
-    _BadFunction_
-
-But you are trying to use it as:
-    __arg -> _ret_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_type.md:25:8:25:16:**
-```roc
-quux : BadTuple
-```
-       ^^^^^^^^
-
-It is of type:
-    _BadTuple_
-
-But you are trying to use it as:
-    _(Str, Num(_size))_
 
 # TOKENS
 ~~~zig
@@ -365,11 +320,11 @@ quux = ("hello", 42)
 			(ty-header @3.1-3.8 (name "BadType")))
 		(nominal @8.1-8.19 (type "Error")
 			(ty-header @8.1-8.8 (name "BadList")))
-		(nominal @13.1-13.38 (type "BadRecord")
+		(nominal @13.1-13.38 (type "Error")
 			(ty-header @13.1-13.10 (name "BadRecord")))
-		(nominal @18.1-18.22 (type "BadFunction")
+		(nominal @18.1-18.22 (type "Error")
 			(ty-header @18.1-18.12 (name "BadFunction")))
-		(nominal @23.1-23.21 (type "BadTuple")
+		(nominal @23.1-23.21 (type "Error")
 			(ty-header @23.1-23.9 (name "BadTuple"))))
 	(expressions
 		(expr @6.7-6.9 (type "Error"))

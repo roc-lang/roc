@@ -12,7 +12,7 @@ module[]C:k||match 0{0|#
 # EXPECTED
 UNCLOSED STRING - :0:0:0:0
 PARSE ERROR - fuzz_crash_060.md:2:2:2:2
-UNDECLARED TYPE VARIABLE - fuzz_crash_060.md:1:11:1:12
+UNDEFINED VARIABLE - fuzz_crash_060.md:1:11:1:12
 INVALID STATEMENT - fuzz_crash_060.md:1:12:3:2
 # PROBLEMS
 **UNCLOSED STRING**

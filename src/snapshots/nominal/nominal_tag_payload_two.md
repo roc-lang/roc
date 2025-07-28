@@ -19,7 +19,11 @@ is_ok = |result| match result {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_tag_payload_two.md:6:10:6:18
+INVALID NOMINAL TAG - nominal_tag_payload_two.md:6:10:6:10
+INCOMPATIBLE MATCH PATTERNS - nominal_tag_payload_two.md:9:18:9:18
+INVALID NOMINAL TAG - nominal_tag_payload_two.md:10:5:10:5
+INVALID NOMINAL TAG - nominal_tag_payload_two.md:11:5:11:5
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -260,7 +264,7 @@ is_ok = |result| match result {
 		(patt @6.1-6.3 (type "ok -> Error"))
 		(patt @9.1-9.6 (type "Error -> Bool")))
 	(type_decls
-		(nominal @3.1-3.40 (type "MyResult(ok(r), err(r))")
+		(nominal @3.1-3.40 (type "MyResult(ok, err)")
 			(ty-header @3.1-3.18 (name "MyResult")
 				(ty-args
 					(ty-var @3.10-3.12 (name "ok"))

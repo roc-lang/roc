@@ -30,6 +30,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:15:13:15
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:15:18:15:18
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -259,13 +260,13 @@ TagType := [Some(_), None]
 			(ty-header @5.1-5.10 (name "OtherType")))
 		(nominal @7.1-7.23 (type "Error")
 			(ty-header @7.1-7.12 (name "ComplexType")))
-		(nominal @9.1-9.39 (type "RecordType")
+		(nominal @9.1-9.39 (type "Error")
 			(ty-header @9.1-9.11 (name "RecordType")))
-		(nominal @11.1-11.23 (type "FunctionType")
+		(nominal @11.1-11.23 (type "Error")
 			(ty-header @11.1-11.13 (name "FunctionType")))
-		(nominal @13.1-13.25 (type "TupleType")
+		(nominal @13.1-13.25 (type "Error")
 			(ty-header @13.1-13.10 (name "TupleType")))
-		(nominal @15.1-15.27 (type "TagType")
+		(nominal @15.1-15.27 (type "Error")
 			(ty-header @15.1-15.8 (name "TagType"))))
 	(expressions))
 ~~~

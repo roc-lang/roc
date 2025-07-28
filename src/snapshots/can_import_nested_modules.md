@@ -48,11 +48,18 @@ INVALID STATEMENT - can_import_nested_modules.md:5:13:5:20
 INVALID STATEMENT - can_import_nested_modules.md:5:20:5:27
 INVALID STATEMENT - can_import_nested_modules.md:5:28:5:36
 INVALID STATEMENT - can_import_nested_modules.md:5:37:5:46
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
 UNDEFINED VARIABLE - can_import_nested_modules.md:9:26:9:41
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
 UNDEFINED VARIABLE - can_import_nested_modules.md:13:29:13:43
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
 UNDEFINED VARIABLE - can_import_nested_modules.md:18:5:18:37
 UNDEFINED VARIABLE - can_import_nested_modules.md:22:23:22:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:22:37:22:58
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
+COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
 UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**

@@ -136,10 +136,11 @@ PARSE ERROR - fuzz_crash_020.md:62:5:62:5
 PARSE ERROR - fuzz_crash_020.md:63:7:63:7
 PARSE ERROR - fuzz_crash_020.md:66:12:66:12
 UNDECLARED TYPE - fuzz_crash_020.md:13:13:13:16
-UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:13:19:13:21
-UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:19:4:19:6
+UNDEFINED VARIABLE - fuzz_crash_020.md:13:19:13:21
+UNDEFINED VARIABLE - fuzz_crash_020.md:19:4:19:6
+UNDEFINED VARIABLE - fuzz_crash_020.md:20:12:20:13
 UNDECLARED TYPE - fuzz_crash_020.md:24:15:24:16
-UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:24:24:24:25
+UNDEFINED VARIABLE - fuzz_crash_020.md:24:24:24:25
 UNDECLARED TYPE - fuzz_crash_020.md:37:7:37:9
 UNDEFINED VARIABLE - fuzz_crash_020.md:40:5:40:8
 UNDEFINED VARIABLE - fuzz_crash_020.md:42:4:42:5
@@ -1777,7 +1778,7 @@ expect {
 		(patt @75.1-75.3 (type "_arg -> [Stdo!(Str)]_others"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
-		(alias @13.1-13.33 (type "Map(a(r), b(r))")
+		(alias @13.1-13.33 (type "Map(a, b)")
 			(ty-header @13.1-13.10 (name "Map")
 				(ty-args
 					(ty-var @13.5-13.6 (name "a"))
@@ -1786,19 +1787,19 @@ expect {
 			(ty-header @14.1-15.2 (name "MapML")))
 		(alias @24.1-24.27 (type "Som")
 			(ty-header @24.1-24.4 (name "Som")))
-		(alias @25.1-26.2 (type "Ml(a(r))")
+		(alias @25.1-26.2 (type "Ml(a)")
 			(ty-header @25.1-25.6 (name "Ml")
 				(ty-args
 					(ty-var @25.4-25.5 (name "a")))))
-		(alias @28.1-29.2 (type "Soine(a(r))")
+		(alias @28.1-29.2 (type "Soine(a)")
 			(ty-header @28.1-28.9 (name "Soine")
 				(ty-args
 					(ty-var @28.7-28.8 (name "a")))))
-		(alias @30.1-30.19 (type "Maybe(a(r))")
+		(alias @30.1-30.19 (type "Maybe(a)")
 			(ty-header @30.1-30.9 (name "Maybe")
 				(ty-args
 					(ty-var @30.7-30.8 (name "a")))))
-		(alias @32.1-33.2 (type "Mayine(a(r))")
+		(alias @32.1-33.2 (type "Mayine(a)")
 			(ty-header @32.1-32.10 (name "Mayine")
 				(ty-args
 					(ty-var @32.8-32.9 (name "a"))))))

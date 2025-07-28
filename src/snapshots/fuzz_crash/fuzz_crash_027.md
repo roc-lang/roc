@@ -181,7 +181,7 @@ PARSE ERROR - fuzz_crash_027.md:159:2:159:2
 UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
 UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
 UNDECLARED TYPE - fuzz_crash_027.md:32:19:32:21
-UNDECLARED TYPE VARIABLE - fuzz_crash_027.md:32:32:32:33
+UNDEFINED VARIABLE - fuzz_crash_027.md:32:32:32:33
 UNDECLARED TYPE - fuzz_crash_027.md:34:8:34:11
 UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
 UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
@@ -2139,33 +2139,33 @@ main! = |_| { # Yeah Ie
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error")))
 	(type_decls
-		(alias @15.1-15.41 (type "Map(a(r), b(r))")
+		(alias @15.1-15.41 (type "Map(a, b)")
 			(ty-header @15.1-15.10 (name "Map")
 				(ty-args
 					(ty-var @15.5-15.6 (name "a"))
 					(ty-var @15.8-15.9 (name "b")))))
-		(alias @16.1-24.15 (type "MapML(a(r), b(r))")
+		(alias @16.1-24.15 (type "MapML(a, b)")
 			(ty-header @16.1-19.2 (name "MapML")
 				(ty-args
 					(ty-var @17.2-17.3 (name "a"))
 					(ty-var @18.2-18.3 (name "b")))))
 		(alias @26.1-26.17 (type "Foo")
 			(ty-header @26.1-26.4 (name "Foo")))
-		(alias @32.1-32.35 (type "Some(a(r))")
+		(alias @32.1-32.35 (type "Some(a)")
 			(ty-header @32.1-32.8 (name "Some")
 				(ty-args
 					(ty-var @32.6-32.7 (name "a")))))
-		(alias @33.1-35.2 (type "Ml(a(r))")
+		(alias @33.1-35.2 (type "Ml(a)")
 			(ty-header @33.1-33.6 (name "Ml")
 				(ty-args
 					(ty-var @33.4-33.5 (name "a")))))
-		(alias @37.1-39.2 (type "Soine(a(r))")
+		(alias @37.1-39.2 (type "Soine(a)")
 			(ty-header @37.1-37.9 (name "Soine")
 				(ty-args
 					(ty-var @37.7-37.8 (name "a")))))
 		(alias @40.1-41.2 (type "Maya")
 			(ty-header @40.1-40.5 (name "Maya")))
-		(alias @43.1-43.34 (type "Func(a(r))")
+		(alias @43.1-43.34 (type "Func(a)")
 			(ty-header @43.1-43.8 (name "Func")
 				(ty-args
 					(ty-var @43.6-43.7 (name "a"))))))
