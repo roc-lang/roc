@@ -12,10 +12,81 @@
 
 If you want to debug the rust compiler instead of a roc program, you need to comment out [this line](https://github.com/roc-lang/roc/blob/bba2103882a8124f3887da6adaaa44cf2b728c3e/Cargo.toml#L240) to be able to see variable contents with lldb or gdb.
 
+## zig build signal 11
+
+Example:
+
+```
+❯ zig build test
+test
+└─ run echo
+   └─ run test failure
+error: while executing test 'test.test_0', the following command terminated with signal 11 (expected exited with code 0):
+/home/username/gitrepos/roc2/roc/.zig-cache/o/c001d6b7d92a5fb63e64be83c43d0d57/test --seed=0x5772e400 --cache-dir=/home/username/gitrepos/roc2/roc/.zig-cache --listen=- 
+Build Summary: 4/7 steps succeeded; 1 failed; 361/361 tests passed
+test transitive failure
+├─ run test failure
+└─ run echo transitive failure
+   └─ run test (+1 more reused dependencies)
+error: the following build command failed with exit code 1:
+/home/username/gitrepos/roc2/roc/.zig-cache/o/6e344dd24cd22c7b75f5c380fe9169ed/build /home/username/Downloads/zig-x86_64-linux-0.14.1/zig /home/username/Downloads/zig-x86_64-linux-0.14.1/lib /home/username/gitrepos/roc2/roc /home/username/gitrepos/roc2/roc/.zig-cache /home/username/.cache/zig --seed 0x5772e400 -Z47c7adeb63ed8ed2 test
+```
+
+The key is to remove the listen flag from the command that zig provided, so:
+```
+❯ /home/username/gitrepos/roc2/roc/.zig-cache/o/c001d6b7d92a5fb63e64be83c43d0d57/test --seed=0x5772e400 --cache-dir=/home/username/gitrepos/roc2/roc/.zig-cache
+Segmentation fault (core dumped)
+```
+Then use gdb to get a backtrace:
+```
+❯ gdb --ex run --ex bt --args /home/username/gitrepos/roc2/roc/.zig-cache/o/c001d6b7d92a5fb63e64be83c43d0d57/test --seed=0x8532821a --cache-dir=/home/username/gitrepos/roc2/roc/.zig-cache
+GNU gdb (Ubuntu 15.0.50.20240403-0ubuntu1) 15.0.50.20240403-git
+Copyright (C) 2024 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Type "show copying" and "show warranty" for details.
+This GDB was configured as "x86_64-linux-gnu".
+Type "show configuration" for configuration details.
+For bug reporting instructions, please see:
+<https://www.gnu.org/software/gdb/bugs/>.
+Find the GDB manual and other documentation resources online at:
+    <http://www.gnu.org/software/gdb/documentation/>.
+
+For help, type "help".
+Type "apropos word" to search for commands related to "word"...
+Reading symbols from /home/username/gitrepos/roc2/roc/.zig-cache/o/c001d6b7d92a5fb63e64be83c43d0d57/test...
+Starting program: /home/username/gitrepos/roc2/roc/.zig-cache/o/c001d6b7d92a5fb63e64be83c43d0d57/test --seed=0x8532821a --cache-dir=/home/username/gitrepos/roc2/roc/.zig-cache
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) y
+Debuginfod has been enabled.
+To make this setting permanent, add 'set debuginfod enabled on' to .gdbinit.
+Downloading separate debug info for system-supplied DSO at 0x7ffff7ffd000
+[New LWP 73692]                                                                                                                                                                        
+
+Thread 1 "test" received signal SIGSEGV, Segmentation fault.
+testing.refAllDeclsRecursive__anon_13463 () at /home/username/Downloads/zig-x86_64-linux-0.14.1/lib/std/testing.zig:1158
+1158                    .@"struct", .@"enum", .@"union", .@"opaque" => refAllDeclsRecursive(@field(T, decl.name)),
+#0  testing.refAllDeclsRecursive__anon_13463 () at /home/username/Downloads/zig-x86_64-linux-0.14.1/lib/std/testing.zig:1158
+#1  0x0000000001206d71 in testing.refAllDeclsRecursive__anon_28897 () at /home/username/Downloads/zig-x86_64-linux-0.14.1/lib/std/testing.zig:1158
+#2  0x00000000011505f1 in testing.refAllDeclsRecursive__anon_13463 () at /home/username/Downloads/zig-x86_64-linux-0.14.1/lib/std/testing.zig:1158
+#3  0x0000000001206d71 in testing.refAllDeclsRecursive__anon_28897 () at /home/username/Downloads/zig-x86_64-linux-0.14.1/lib/std/testing.zig:1158
+#4  0x00000000011505f1 in testing.refAllDeclsRecursive__anon_13463 () at /home/username/Downloads/zig-x86_64-linux-0.14.1/lib/std/testing.zig:1158
+#5  0x0000000001206d71 in testing.refAllDeclsRecursive__anon_28897 () at /home/username/Downloads/zig-x86_64-linux-0.14.1/lib/std/testing.zig:1158
+#6  0x00000000011505f1 in testing.refAllDeclsRecursive__anon_13463 () at /home/username/Downloads/zig-x86_64-linux-0.14.1/lib/std/testing.zig:1158
+#7  0x0000000001206d71 in testing.refAllDeclsRecursive__anon_28897 () at /home/username/Downloads/zig-x86_64-linux-0.14.1/lib/std/testing.zig:1158
+#8  0x00000000011505f1 in testing.refAllDeclsRecursive__anon_13463 () at /home/username/Downloads/zig-x86_64-linux-0.14.1/lib/std/testing.zig:1158
+#9  0x0000000001206d71 in testing.refAllDeclsRecursive__anon_28897 () at /home/username/Downloads/zig-x86_64-linux-0.14.1/lib/std/testing.zig:1158
+...
+```
+Here we have a case of infinite recursion.
+
 ## Segmentation Faults
 
 - In general we recommend using linux to investigate, it has better tools for this. 
-- If your segfault also happens when using `--linker=legacy`, use it to improve valgrind output. For example: `roc build myApp.roc --linker=legacy` followed by `valgrind ./myApp`.
+- (old rust compiler) If your segfault also happens when using `--linker=legacy`, use it to improve valgrind output. For example: `roc build myApp.roc --linker=legacy` followed by `valgrind ./myApp`.
 - A very quick way to get a backtrace at the point of segfault is:
 ```
 $ gdb --batch --ex run --ex bt --args roc check myApp.roc
