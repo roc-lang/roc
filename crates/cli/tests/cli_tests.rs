@@ -361,6 +361,36 @@ mod cli_tests {
                 .run()
                 .assert_stdout_and_stderr_ends_with(expected_out);
         }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        // https://github.com/roc-lang/roc/issues/8111
+        fn issue8111_minimal() {
+            let cli_check = ExecCli::new(
+                CMD_CHECK,
+                file_from_root("crates/cli/tests/test-projects/", "issue8111_minimal.roc"),
+            );
+
+            let expected_out = "0 errors and 0 warnings found in <ignored for test> ms.\n\n";
+
+            cli_check.run().assert_clean_stdout(expected_out);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        // https://github.com/roc-lang/roc/issues/8111
+        fn issue8111() {
+            let cli_test = ExecCli::new(
+                CMD_TEST,
+                file_from_root("crates/cli/tests/test-projects/", "issue8111.roc"),
+            );
+
+            let expected_out = "0 failed and 1 passed in <ignored for test> ms.\n";
+
+            cli_test
+                .run()
+                .assert_stdout_and_stderr_ends_with(expected_out);
+        }
     }
 
     mod test_platform_basic_cli {
