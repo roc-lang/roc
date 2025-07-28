@@ -6,8 +6,8 @@ const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
 const Can = @import("can");
+const check_types = @import("check");
 
-const check_types = @import("../check/check_types.zig");
 const layout_store = @import("../layout/store.zig");
 const layout = @import("../layout/layout.zig");
 const eval = @import("../eval/interpreter.zig");

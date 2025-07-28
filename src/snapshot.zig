@@ -13,9 +13,8 @@ const compile = @import("compile");
 const types = @import("types");
 const reporting = @import("reporting");
 const Can = @import("can");
+const Solver = @import("check");
 
-const Solver = @import("check/check_types.zig");
-const types_problem_mod = @import("check/check_types/problem.zig");
 const cache = @import("cache/mod.zig");
 const fmt = @import("fmt.zig");
 const repl = @import("repl/eval.zig");
@@ -25,6 +24,7 @@ const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const AST = parse.AST;
 const Report = reporting.Report;
+const types_problem_mod = Solver.problem;
 const tokenize = parse.tokenize;
 const parallel = base.parallel;
 

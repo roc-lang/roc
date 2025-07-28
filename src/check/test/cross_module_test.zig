@@ -4,19 +4,18 @@ const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types");
 const compile = @import("compile");
+const check_types = @import("check");
 
-const check_types = @import("../check_types.zig");
-const unifier = @import("unify.zig");
-const problem = @import("problem.zig");
-const snapshot = @import("snapshot.zig");
-const occurs = @import("occurs.zig");
-
-const testing = std.testing;
 const ModuleEnv = compile.ModuleEnv;
 const CIR = ModuleEnv.CIR;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
 const Ident = base.Ident;
+const unifier = check_types.unifier;
+const problem = check_types.problem;
+const snapshot = check_types.snapshot;
+const occurs = check_types.occurs;
+const testing = std.testing;
 
 test "cross-module type checking - monomorphic function" {
     const allocator = testing.allocator;

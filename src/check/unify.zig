@@ -40,16 +40,16 @@
 //! subsequent unification runs.
 
 const std = @import("std");
-
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const compile = @import("compile");
+const check = @import("check");
 
-const problem_mod = @import("./problem.zig");
-const occurs = @import("./occurs.zig");
-const snapshot_mod = @import("./snapshot.zig");
+const problem_mod = check.problem;
+const occurs = check.occurs;
+const snapshot_mod = check.snapshot;
 
 const ModuleEnv = compile.ModuleEnv;
 

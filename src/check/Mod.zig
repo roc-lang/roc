@@ -10,12 +10,18 @@ const types_mod = @import("types");
 const Can = @import("can");
 const compile = @import("compile");
 
-const unifier = @import("check_types/unify.zig");
-const occurs = @import("check_types/occurs.zig");
-const problem = @import("check_types/problem.zig");
-const snapshot = @import("check_types/snapshot.zig");
-const instantiate = @import("check_types/instantiate.zig");
-const copy_import = @import("check_types/copy_import.zig");
+const copy_import = @import("copy_import.zig");
+
+/// **Hindley-Milner+ Unification**
+pub const unifier = @import("unify.zig");
+/// **Type Instantiation**
+pub const instantiate = @import("instantiate.zig");
+/// **Type Snapshot**
+pub const snapshot = @import("snapshot.zig");
+/// **Recursion Checking**
+pub const occurs = @import("occurs.zig");
+/// **Problem Reporting**
+pub const problem = @import("problem.zig");
 
 const ModuleEnv = compile.ModuleEnv;
 const testing = std.testing;
@@ -27,6 +33,16 @@ const Var = types_mod.Var;
 const Content = types_mod.Content;
 
 const Self = @This();
+
+test {
+    _ = @import("test/cross_module_test.zig");
+    _ = @import("test/let_polymorphism_integration_test.zig");
+    _ = @import("test/let_polymorphism_test.zig");
+    _ = @import("test/literal_size_test.zig");
+    _ = @import("test/nominal_type_origin_test.zig");
+    _ = @import("test/static_dispatch_test.zig");
+    _ = @import("test/test_rigid_instantiation.zig");
+}
 
 /// Key for the import cache: module index + expression index in that module
 const ImportCacheKey = struct {
@@ -1995,8 +2011,4 @@ test "call site unification order matters for concrete vs flexible types" {
             else => return error.TestUnexpectedResult,
         }
     }
-}
-
-test {
-    _ = @import("check_types/cross_module_test.zig");
 }

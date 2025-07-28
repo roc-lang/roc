@@ -4,20 +4,23 @@ const std = @import("std");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
-
 const types_mod = @import("types");
-const snapshot = @import("./snapshot.zig");
 const compile = @import("compile");
 const reporting = @import("reporting");
+const check = @import("check");
+
+const snapshot = check.snapshot;
+
+const Allocator = std.mem.Allocator;
+
+const ModuleEnv = compile.ModuleEnv;
 
 const Report = reporting.Report;
 const Document = reporting.Document;
 const UnderlineRegion = reporting.UnderlineRegion;
 const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
 
-const ModuleEnv = compile.ModuleEnv;
 const TypesStore = types_mod.Store;
-const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 
 const MkSafeMultiList = collections.SafeMultiList;

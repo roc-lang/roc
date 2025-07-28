@@ -6,12 +6,11 @@ const base = @import("base");
 const parse = @import("parse");
 const Can = @import("can");
 const compile = @import("compile");
+const check_types = @import("check");
 
-const check_types = @import("check_types.zig");
-
-const testing = std.testing;
 const ModuleEnv = compile.ModuleEnv;
 const CanonicalizedExpr = Can.CanonicalizedExpr;
+const testing = std.testing;
 const test_allocator = testing.allocator;
 
 /// Helper to run parsing, canonicalization, and type checking on an expression

@@ -20,15 +20,15 @@ const reporting = @import("reporting");
 const types = @import("types");
 const compile = @import("compile");
 const Can = @import("can");
+const check_types = @import("check");
 
-const check_types = @import("check/check_types.zig");
 const WasmFilesystem = @import("playground/WasmFilesystem.zig");
 const snapshot = @import("snapshot.zig");
-const problem = @import("check/check_types/problem.zig");
 
 const SExprTree = base.SExprTree;
 const ModuleEnv = compile.ModuleEnv;
 const Allocator = std.mem.Allocator;
+const problem = check_types.problem;
 
 const allocator: Allocator = .{
     .ptr = undefined,

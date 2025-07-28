@@ -8,10 +8,9 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 const compile = @import("compile");
 const Can = @import("can");
-
+const Solver = @import("check");
 const tracy = @import("tracy");
-const Solver = @import("check/check_types.zig");
-const types_problem_mod = @import("check/check_types/problem.zig");
+
 const Filesystem = @import("fs/Filesystem.zig");
 const cache_mod = @import("cache/mod.zig");
 
@@ -21,6 +20,7 @@ const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
 const CacheResult = cache_mod.CacheResult;
 const CacheHit = cache_mod.CacheHit;
+const types_problem_mod = Solver.problem;
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 

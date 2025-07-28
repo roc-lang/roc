@@ -5,9 +5,9 @@ const types = @import("types");
 const base = @import("base");
 const compile = @import("compile");
 const Can = @import("can");
+const check_types = @import("check");
 
 const eval = @import("../interpreter.zig");
-const check_types = @import("../../check/check_types.zig");
 const stack = @import("../stack.zig");
 const layout_store = @import("../../layout/store.zig");
 const layout = @import("../../layout/layout.zig");
