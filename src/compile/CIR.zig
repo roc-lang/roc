@@ -311,12 +311,10 @@ pub const Import = struct {
     pub const Idx = enum(u32) { _ };
 
     pub const Store = struct {
-        /// Map from module name string to Import.Idx
+        /// Map from module name string to Import.Idx for deduplication
         map: std.StringHashMapUnmanaged(Import.Idx) = .{},
-        /// List of imports indexed by Import.Idx
-        imports: collections.SafeList([]u8) = .{},
-        /// Storage for module name strings
-        strings: collections.SafeList(u8) = .{},
+        /// List of interned string IDs indexed by Import.Idx
+        imports: collections.SafeList(base.StringLiteral.Idx) = .{},
 
         pub fn init() Store {
             return .{};
@@ -324,20 +322,18 @@ pub const Import = struct {
 
         pub fn deinit(self: *Store, allocator: std.mem.Allocator) void {
             self.map.deinit(allocator);
-            for (self.imports.items.items) |import| {
-                allocator.free(import);
-            }
             self.imports.deinit(allocator);
-            self.strings.deinit(allocator);
         }
 
-        pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, module_name: []const u8) !Import.Idx {
+        pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, module_env: anytype, module_name: []const u8) !Import.Idx {
+            // First check if we already have this module name
             const result = try self.map.getOrPut(allocator, module_name);
             if (!result.found_existing) {
+                // New import - intern the string and store it
+                const string_idx = try module_env.strings.insert(allocator, module_name);
                 const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
                 result.value_ptr.* = idx;
-                const owned_name = try allocator.dupe(u8, module_name);
-                _ = try self.imports.append(allocator, owned_name);
+                _ = try self.imports.append(allocator, string_idx);
             }
             return result.value_ptr.*;
         }
@@ -358,7 +354,6 @@ pub const Import = struct {
             offset_self.* = .{
                 .map = .{}, // Map will be empty after deserialization (only used for deduplication during insertion)
                 .imports = (try self.imports.serialize(allocator, writer)).*,
-                .strings = (try self.strings.serialize(allocator, writer)).*,
             };
 
             return @constCast(offset_self);
@@ -369,7 +364,6 @@ pub const Import = struct {
             // Note: self.map is a hash map that we don't serialize/deserialize
             // It's only used for deduplication during insertion
             self.imports.relocate(offset);
-            self.strings.relocate(offset);
         }
     };
 };
@@ -524,7 +518,6 @@ test "Import.Store empty CompactWriter roundtrip" {
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.imports.len());
-    try testing.expectEqual(@as(usize, 0), deserialized.strings.len());
     try testing.expectEqual(@as(usize, 0), deserialized.map.count());
 }
 
@@ -532,13 +525,22 @@ test "Import.Store basic CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
+    // Create a mock module env with string store
+    var string_store = try base.StringLiteral.Store.initCapacityBytes(gpa, 1024);
+    defer string_store.deinit(gpa);
+    
+    const MockEnv = struct {
+        strings: *base.StringLiteral.Store,
+    };
+    var mock_env = MockEnv{ .strings = &string_store };
+
     // Create original store and add some imports
     var original = Import.Store.init();
     defer original.deinit(gpa);
 
-    const idx1 = try original.getOrPut(gpa, "json.Json");
-    const idx2 = try original.getOrPut(gpa, "core.List");
-    const idx3 = try original.getOrPut(gpa, "my.Module");
+    const idx1 = try original.getOrPut(gpa, &mock_env, "json.Json");
+    const idx2 = try original.getOrPut(gpa, &mock_env, "core.List");
+    const idx3 = try original.getOrPut(gpa, &mock_env, "my.Module");
 
     // Verify indices
     try testing.expectEqual(@as(u32, 0), @intFromEnum(idx1));
@@ -578,9 +580,15 @@ test "Import.Store basic CompactWriter roundtrip" {
 
     // Verify the imports are accessible
     try testing.expectEqual(@as(usize, 3), deserialized.imports.len());
-    try testing.expectEqualStrings("json.Json", deserialized.imports.items.items[0]);
-    try testing.expectEqualStrings("core.List", deserialized.imports.items.items[1]);
-    try testing.expectEqualStrings("my.Module", deserialized.imports.items.items[2]);
+    
+    // Verify the interned string IDs are stored correctly
+    const str_idx1 = deserialized.imports.items.items[0];
+    const str_idx2 = deserialized.imports.items.items[1];
+    const str_idx3 = deserialized.imports.items.items[2];
+    
+    try testing.expectEqualStrings("json.Json", string_store.get(str_idx1));
+    try testing.expectEqualStrings("core.List", string_store.get(str_idx2));
+    try testing.expectEqualStrings("my.Module", string_store.get(str_idx3));
 
     // Verify the map is empty after deserialization
     try testing.expectEqual(@as(usize, 0), deserialized.map.count());
@@ -590,13 +598,22 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
+    // Create a mock module env with string store
+    var string_store = try base.StringLiteral.Store.initCapacityBytes(gpa, 1024);
+    defer string_store.deinit(gpa);
+    
+    const MockEnv = struct {
+        strings: *base.StringLiteral.Store,
+    };
+    var mock_env = MockEnv{ .strings = &string_store };
+
     // Create store with duplicate imports
     var original = Import.Store.init();
     defer original.deinit(gpa);
 
-    const idx1 = try original.getOrPut(gpa, "test.Module");
-    const idx2 = try original.getOrPut(gpa, "another.Module");
-    const idx3 = try original.getOrPut(gpa, "test.Module"); // duplicate
+    const idx1 = try original.getOrPut(gpa, &mock_env, "test.Module");
+    const idx2 = try original.getOrPut(gpa, &mock_env, "another.Module");
+    const idx3 = try original.getOrPut(gpa, &mock_env, "test.Module"); // duplicate
 
     // Verify deduplication worked
     try testing.expectEqual(idx1, idx3);
@@ -635,6 +652,11 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
 
     // Verify correct number of imports
     try testing.expectEqual(@as(usize, 2), deserialized.imports.len());
-    try testing.expectEqualStrings("test.Module", deserialized.imports.items.items[@intFromEnum(idx1)]);
-    try testing.expectEqualStrings("another.Module", deserialized.imports.items.items[@intFromEnum(idx2)]);
+    
+    // Get the string IDs and verify the strings
+    const str_idx1 = deserialized.imports.items.items[@intFromEnum(idx1)];
+    const str_idx2 = deserialized.imports.items.items[@intFromEnum(idx2)];
+    
+    try testing.expectEqualStrings("test.Module", string_store.get(str_idx1));
+    try testing.expectEqualStrings("another.Module", string_store.get(str_idx2));
 }

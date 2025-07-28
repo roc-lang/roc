@@ -261,7 +261,7 @@ test "import interner - Import.Idx functionality" {
     _ = try result.can.canonicalizeFile();
 
     // Check that we have the correct number of unique imports
-    // Expected: List, Dict, Json.Decode (stored as Json), Set (4 unique)
+    // Expected: List, Dict, Json.Decode, Set (4 unique)
     try expectEqual(@as(usize, 4), result.parse_env.imports.imports.len());
 
     // Verify each unique module has an Import.Idx
@@ -270,8 +270,8 @@ test "import interner - Import.Idx functionality" {
     var found_json_decode = false;
     var found_set = false;
 
-    for (result.parse_env.imports.imports.items.items) |import_name| {
-        const module_name = import_name;
+    for (result.parse_env.imports.imports.items.items) |import_string_idx| {
+        const module_name = result.parse_env.strings.get(import_string_idx);
 
         if (std.mem.eql(u8, module_name, "List")) {
             found_list = true;
@@ -293,8 +293,8 @@ test "import interner - Import.Idx functionality" {
     // Test the lookup functionality
     // Get the Import.Idx for "List" (should be used twice)
     var list_import_idx: ?ModuleEnv.Import.Idx = null;
-    for (result.parse_env.imports.imports.items.items, 0..) |import_name, idx| {
-        if (std.mem.eql(u8, import_name, "List")) {
+    for (result.parse_env.imports.imports.items.items, 0..) |import_string_idx, idx| {
+        if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "List")) {
             list_import_idx = @enumFromInt(idx);
             break;
         }
@@ -350,13 +350,13 @@ test "import interner - comprehensive usage example" {
     var found_dict = false;
     var found_result = false;
 
-    for (result.parse_env.imports.imports.items.items, 0..) |import_name, idx| {
-        if (std.mem.eql(u8, import_name, "List")) {
+    for (result.parse_env.imports.imports.items.items, 0..) |import_string_idx, idx| {
+        if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "List")) {
             found_list = true;
             // Note: We can't verify exposed items count here as Import.Store only stores module names
-        } else if (std.mem.eql(u8, import_name, "Dict")) {
+        } else if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "Dict")) {
             found_dict = true;
-        } else if (std.mem.eql(u8, import_name, "Result")) {
+        } else if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "Result")) {
             found_result = true;
         }
 
@@ -431,7 +431,8 @@ test "module scopes - imports work in module scope" {
 
     var has_list = false;
     var has_dict = false;
-    for (imports.items.items) |import_name| {
+    for (imports.items.items) |import_string_idx| {
+        const import_name = result.parse_env.strings.get(import_string_idx);
         if (std.mem.eql(u8, import_name, "List")) has_list = true;
         if (std.mem.eql(u8, import_name, "Dict")) has_dict = true;
     }
@@ -487,7 +488,8 @@ test "module-qualified lookups with e_lookup_external" {
     // Verify the module names are correct
     var has_list = false;
     var has_dict = false;
-    for (imports_list.items.items) |import_name| {
+    for (imports_list.items.items) |import_string_idx| {
+        const import_name = result.parse_env.strings.get(import_string_idx);
         if (std.mem.eql(u8, import_name, "List")) has_list = true;
         if (std.mem.eql(u8, import_name, "Dict")) has_dict = true;
     }
@@ -579,7 +581,8 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     // For now, let's verify the imports were registered
     const imports_list = result.parse_env.imports.imports;
     var has_mathutils = false;
-    for (imports_list.items.items) |import_name| {
+    for (imports_list.items.items) |import_string_idx| {
+        const import_name = result.parse_env.strings.get(import_string_idx);
         if (std.mem.eql(u8, import_name, "MathUtils")) {
             has_mathutils = true;
             break;
@@ -636,7 +639,8 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     // Verify EmptyModule was imported
     const imports_list2 = result2.parse_env.imports.imports;
     var has_empty_module = false;
-    for (imports_list2.items.items) |import_name| {
+    for (imports_list2.items.items) |import_string_idx| {
+        const import_name = result2.parse_env.strings.get(import_string_idx);
         if (std.mem.eql(u8, import_name, "EmptyModule")) {
             has_empty_module = true;
             break;
