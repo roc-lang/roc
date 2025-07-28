@@ -55,7 +55,7 @@ test "cross-module type checking - monomorphic function" {
     const module_b_cir = &module_b_env;
 
     // Register the import of module A
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    _ = try module_b_cir.imports.getOrPut(allocator, &module_b_cir.strings, "ModuleA");
 
     // Create an external lookup expression
     const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
@@ -132,7 +132,7 @@ test "cross-module type checking - polymorphic function" {
     const module_b_cir = &module_b_env;
 
     // Register the import of module A
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    _ = try module_b_cir.imports.getOrPut(allocator, &module_b_cir.strings, "ModuleA");
 
     // Create an external lookup expression
     const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
@@ -225,7 +225,7 @@ test "cross-module type checking - record type" {
     const module_b_cir = &module_b_env;
 
     // Register the import of module A
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    _ = try module_b_cir.imports.getOrPut(allocator, &module_b_cir.strings, "ModuleA");
 
     // Create an external lookup expression
     const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
@@ -298,7 +298,7 @@ test "cross-module type checking - type mismatch error" {
     const module_b_cir = &module_b_env;
 
     // Register the import of module A
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    _ = try module_b_cir.imports.getOrPut(allocator, &module_b_cir.strings, "ModuleA");
 
     // Create an external lookup expression
     const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
@@ -381,7 +381,7 @@ test "cross-module type checking - polymorphic instantiation" {
     const module_b_cir = &module_b_env;
 
     // Register the import of module A
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    _ = try module_b_cir.imports.getOrPut(allocator, &module_b_cir.strings, "ModuleA");
 
     // Create an external lookup expression
     const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
@@ -465,7 +465,7 @@ test "cross-module type checking - preserves module A types" {
     const module_b_cir = &module_b_env;
 
     // Register the import of module A
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    _ = try module_b_cir.imports.getOrPut(allocator, &module_b_cir.strings, "ModuleA");
 
     // Create an external lookup expression
     const external_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
@@ -543,7 +543,7 @@ test "cross-module type checking - three module chain monomorphic" {
     const module_b_cir = &module_b_env;
 
     // Module B imports A's function
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    _ = try module_b_cir.imports.getOrPut(allocator, &module_b_cir.strings, "ModuleA");
 
     const b_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
@@ -561,7 +561,7 @@ test "cross-module type checking - three module chain monomorphic" {
     const module_c_cir = &module_c_env;
 
     // Module C imports from B (not A)
-    _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
+    _ = try module_c_cir.imports.getOrPut(allocator, &module_c_cir.strings, "ModuleB");
     const c_lookup_expr = try module_c_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(1), // Direct index to module B in the array
@@ -641,7 +641,7 @@ test "cross-module type checking - three module chain polymorphic" {
     const module_b_cir = &module_b_env;
 
     // Module B imports from A
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    _ = try module_b_cir.imports.getOrPut(allocator, &module_b_cir.strings, "ModuleA");
     const b_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
@@ -658,7 +658,7 @@ test "cross-module type checking - three module chain polymorphic" {
     const module_c_cir = &module_c_env;
 
     // Module C imports from B
-    _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
+    _ = try module_c_cir.imports.getOrPut(allocator, &module_c_cir.strings, "ModuleB");
     const c_lookup_expr = try module_c_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(1), // Direct index to module B in the array
@@ -749,7 +749,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     const module_b_cir = &module_b_env;
 
     // Module B imports from A
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    _ = try module_b_cir.imports.getOrPut(allocator, &module_b_cir.strings, "ModuleA");
     const b_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
@@ -787,7 +787,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     const module_c_cir = &module_c_env;
 
     // Module C imports from B and uses the partially specialized function
-    _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
+    _ = try module_c_cir.imports.getOrPut(allocator, &module_c_cir.strings, "ModuleB");
     const c_lookup_expr = try module_c_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(1), // Direct index to module B in the array
@@ -916,7 +916,7 @@ test "cross-module type checking - record type chain" {
     const module_b_cir = &module_b_env;
 
     // Module B imports from A and partially specializes
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    _ = try module_b_cir.imports.getOrPut(allocator, &module_b_cir.strings, "ModuleA");
     const b_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
@@ -933,7 +933,7 @@ test "cross-module type checking - record type chain" {
     const module_c_cir = &module_c_env;
 
     // Module C imports from B
-    _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
+    _ = try module_c_cir.imports.getOrPut(allocator, &module_c_cir.strings, "ModuleB");
     const c_lookup_expr = try module_c_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(1), // Direct index to module B in the array
@@ -1032,7 +1032,7 @@ test "cross-module type checking - polymorphic record chain" {
     const module_b_cir = &module_b_env;
 
     // Module B imports from A
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    _ = try module_b_cir.imports.getOrPut(allocator, &module_b_cir.strings, "ModuleA");
     const b_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
@@ -1075,7 +1075,7 @@ test "cross-module type checking - polymorphic record chain" {
     const module_c_cir = &module_c_env;
 
     // Module C imports from B
-    _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
+    _ = try module_c_cir.imports.getOrPut(allocator, &module_c_cir.strings, "ModuleB");
     const c_lookup_expr = try module_c_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(1), // Direct index to module B in the array
@@ -1179,7 +1179,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     // Module B imports from A and makes a new record type
     // This is initially a flex var, but the type will be copied from module A
     // during type checking
-    _ = try module_b_cir.imports.getOrPut(allocator, "ModuleA");
+    _ = try module_b_cir.imports.getOrPut(allocator, &module_b_cir.strings, "ModuleA");
     const b_lookup_expr = try module_b_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0), // Direct index to module A in the array
@@ -1224,7 +1224,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     // Module C imports from B and uses the wrapper
     // This is initially a flex var, but the type will be copied from module B
     // during type checking
-    _ = try module_c_cir.imports.getOrPut(allocator, "ModuleB");
+    _ = try module_c_cir.imports.getOrPut(allocator, &module_c_cir.strings, "ModuleB");
     const c_lookup_expr = try module_c_cir.addExprAndTypeVar(.{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(1), // Direct index to module B in the array
