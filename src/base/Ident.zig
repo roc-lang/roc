@@ -94,6 +94,58 @@ pub const Store = struct {
     attributes: collections.SafeList(Attributes) = .{},
     next_unique_name: u32 = 0,
 
+    /// Serialized representation of a Store
+    pub const Serialized = struct {
+        interner: SmallStringInterner,
+        attributes: collections.SafeList(Attributes).Serialized,
+        next_unique_name: u32,
+
+        /// Serialize a Store into this Serialized struct, appending data to the writer
+        pub fn serialize(
+            self: *Serialized,
+            store: *const Store,
+            allocator: std.mem.Allocator,
+            writer: *collections.CompactWriter,
+        ) std.mem.Allocator.Error!void {
+            // Serialize the interner
+            self.interner = (try store.interner.serialize(allocator, writer)).*;
+
+            // Serialize the attributes SafeList
+            const attributes_serialized = try writer.appendAlloc(allocator, collections.SafeList(Attributes).Serialized);
+            try attributes_serialized.serialize(&store.attributes, allocator, writer);
+            self.attributes = attributes_serialized.*;
+
+            // Copy next_unique_name directly
+            self.next_unique_name = store.next_unique_name;
+        }
+
+        /// Deserialize this Serialized struct into a Store
+        pub fn deserialize(self: *Serialized, offset: i64) *Store {
+            // Debug assert that Serialized is at least as big as Store
+            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
+
+            // Apply relocations
+            self.interner.relocate(@intCast(offset));
+
+            // Deserialize the attributes SafeList
+            const attributes = self.attributes.deserialize(offset);
+
+            // Build the Store
+            const store = Store{
+                .interner = self.interner,
+                .attributes = attributes.*,
+                .next_unique_name = self.next_unique_name,
+            };
+
+            // Write the Store to our memory location
+            const self_ptr = @intFromPtr(self);
+            const store_ptr = @as(*Store, @ptrFromInt(self_ptr));
+            store_ptr.* = store;
+
+            return store_ptr;
+        }
+    };
+
     /// Initialize the memory for an `Ident.Store` with a specific capaicty.
     pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!Store {
         return .{
