@@ -89,6 +89,9 @@ pub fn position(source: []const u8, line_starts: []const u32, begin: u32, end: u
     if (end > source.len) {
         return error.EndTooLarge;
     }
+    if (line_starts.len == 0) {
+        return error.NoLineStarts;
+    }
 
     const start_line_idx = lineIdx(line_starts, begin);
     const start_col_idx = try columnIdx(line_starts, start_line_idx, begin);

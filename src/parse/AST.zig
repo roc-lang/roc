@@ -97,7 +97,8 @@ pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const 
 /// Append region information to an S-expression node for diagnostics
 pub fn appendRegionInfoToSexprTree(self: *AST, env: ModuleEnv, tree: *SExprTree, region: TokenizedRegion) std.mem.Allocator.Error!void {
     const start = self.tokens.resolve(region.start);
-    const end = self.tokens.resolve(region.end - 1);
+    const region_end_idx = if (region.end > 0) region.end - 1 else region.end;
+    const end = self.tokens.resolve(region_end_idx);
     const info: base.RegionInfo = base.RegionInfo.position(self.env.source, env.line_starts.items.items, start.start.offset, end.end.offset) catch .{
         .start_line_idx = 0,
         .start_col_idx = 0,
@@ -156,14 +157,14 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
     else
         tokenized_region.start;
 
-    const safe_end_idx = if (tokenized_region.end >= token_count)
-        token_count - 1
+    const safe_end_idx = if (tokenized_region.end > token_count)
+        token_count
     else
         tokenized_region.end;
 
     // Ensure end is at least start to prevent invalid regions
     const final_end_idx = if (safe_end_idx < safe_start_idx)
-        safe_start_idx
+        safe_start_idx + 1
     else
         safe_end_idx;
 
