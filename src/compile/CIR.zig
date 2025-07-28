@@ -325,10 +325,12 @@ pub const Import = struct {
             self.imports.deinit(allocator);
         }
 
+        /// Get or create an Import.Idx for the given module name.
+        /// The module name is first interned in the provided string store, then used for deduplication.
         pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) !Import.Idx {
             // First intern the string
             const string_idx = try strings.insert(allocator, module_name);
-            
+
             // Then check if we already have this interned string in our map
             const result = try self.map.getOrPut(allocator, string_idx);
             if (!result.found_existing) {
@@ -670,14 +672,14 @@ test "Import.Store uses interned string deduplication" {
     // Create two separate string stores that will intern the same string differently
     var string_store1 = try base.StringLiteral.Store.initCapacityBytes(gpa, 1024);
     defer string_store1.deinit(gpa);
-    
+
     var string_store2 = try base.StringLiteral.Store.initCapacityBytes(gpa, 1024);
     defer string_store2.deinit(gpa);
-    
+
     // Intern some strings in the first store
     _ = try string_store1.insert(gpa, "foo");
     _ = try string_store1.insert(gpa, "bar");
-    
+
     // Create import store
     var store = Import.Store.init();
     defer store.deinit(gpa);
@@ -685,19 +687,19 @@ test "Import.Store uses interned string deduplication" {
     // Add the same module name multiple times - should deduplicate based on interned string
     const idx1 = try store.getOrPut(gpa, &string_store1, "test.Module");
     const idx2 = try store.getOrPut(gpa, &string_store1, "test.Module");
-    
+
     // Should get the same index
     try testing.expectEqual(idx1, idx2);
     try testing.expectEqual(@as(usize, 1), store.imports.len());
-    
+
     // Now if we use a different string store, we might get a different interned string index
     // but the Import.Store should still deduplicate based on the string content
     const idx3 = try store.getOrPut(gpa, &string_store2, "test.Module");
-    
+
     // Should still get the same import index because the string content is the same
     try testing.expectEqual(idx1, idx3);
     try testing.expectEqual(@as(usize, 1), store.imports.len());
-    
+
     // But if we add a different module, it should create a new entry
     const idx4 = try store.getOrPut(gpa, &string_store1, "other.Module");
     try testing.expect(idx4 != idx1);
